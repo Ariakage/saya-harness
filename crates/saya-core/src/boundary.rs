@@ -119,7 +119,7 @@ pub enum StoreChange {
     Event(Event),
 }
 
-/// Storage boundary; no implementation is provided here.
+/// Storage boundary. The available in-memory implementation is not durable.
 pub trait Store: Send + Sync {
     /// Read the saved session and its ordered history. Returns `None` if absent;
     /// errors include inaccessible or invalid data. This never replays tools.

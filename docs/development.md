@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库已有固定 Rust 1.99.1 的最小 workspace、`saya-core` 与 `saya-cli`；核心契约已定义；Agent 循环和 CLI 产品功能尚未实现。CI 在此前提交上已通过四平台验证，当前未提交改动仅有本机检查记录。`saya` 当前仅输出未实现提示并以非零状态退出。实际验证见[开发进度](progress.md)。
+仓库已有固定 Rust 1.99.1 的最小 workspace、`saya-core` 与 `saya-cli`；核心契约与测试专用假模型循环已实现；真实 Agent 循环和 CLI 产品功能尚未实现。CI 在此前提交上已通过四平台验证，当前未提交改动仅有本机检查记录。`saya` 当前仅输出未实现提示并以非零状态退出。实际验证见[开发进度](progress.md)。
 
 ## 开发流程
 
@@ -38,7 +38,7 @@ cargo build --workspace --release --locked
 
 GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner：Ubuntu 22.04 x86_64／aarch64（`ubuntu-22.04`／`ubuntu-22.04-arm`），macOS 15 aarch64／x86_64（`macos-15`／`macos-15-intel`）；macOS 构建设置最低部署版本 13.0。runner 的可用性和 CI 结果须以实际运行记录为准，发布前仍需验证最低运行环境。
 
-核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
+核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 目前仅作为测试依赖运行异步替身。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
 
 CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明；未构建或未 smoke 验证的产物不标记已支持。
 
