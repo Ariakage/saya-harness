@@ -1,0 +1,5 @@
+# macOS metadata
+.DS_Store
+
+# Rust build output; Cargo.lock remains tracked.
+/target/
