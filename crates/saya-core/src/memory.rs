@@ -20,10 +20,13 @@ pub struct MemoryStore {
 }
 
 fn failure(message: &str) -> BoundaryError {
-    BoundaryError(ErrorInfo {
-        code: "storage_error".into(),
-        message: message.into(),
-    })
+    BoundaryError(
+        ErrorInfo {
+            code: "storage_error".into(),
+            message: message.into(),
+        },
+        None,
+    )
 }
 
 impl Store for MemoryStore {

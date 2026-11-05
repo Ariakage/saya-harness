@@ -89,6 +89,8 @@ pub enum ModelProtocol {
 pub enum HistoryItem {
     UserText(String),
     AssistantText(String),
+    /// Partial visible output retained after an interrupted model stream.
+    AssistantPartial(String),
     ToolCall(ToolCall),
     ToolResult {
         call_id: String,
@@ -138,9 +140,10 @@ pub struct ErrorInfo {
     pub message: String,
 }
 
-/// Runtime failures are returned across adapter boundaries, never treated as success.
+/// Runtime failure plus an optional provider Retry-After delay. The delay is
+/// adapter metadata and is not part of the schema-v1 error object.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BoundaryError(pub ErrorInfo);
+pub struct BoundaryError(pub ErrorInfo, pub Option<std::time::Duration>);
 impl std::fmt::Display for BoundaryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.0.code, self.0.message)

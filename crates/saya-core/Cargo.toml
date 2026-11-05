@@ -7,7 +7,7 @@ license.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tokio = { version = "1.54.1", features = ["macros", "rt"] }
+tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time", "test-util"] }
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
