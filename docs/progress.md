@@ -9,8 +9,8 @@
 - 产品基线：已完成文档定案，D-027。
 - 仓库基础文件：MIT、.gitignore、Rust 1.99.1 workspace、两个 crate 与 Cargo.lock 已建立。
 - 开发计划：已准备，包含 P0 至 P7、DEV-001 至 DEV-032；工作量估算不是发布日期承诺。
-- 产品功能、行为测试、CI、真实联调与发行尚未开始；空骨架已在本机通过构建检查。
-- 下一项任务：DEV-002，建立 CI 与测试基础。
+- 本地统一检查与临时工作区测试已通过；CI 已配置但尚无远端运行记录。产品功能、真实联调与发行尚未开始。
+- 下一项工作：获取 DEV-002 的 CI 运行证据；可独立继续 DEV-003 核心边界设计与实现。
 - 当前阻碍：没有待决产品需求；工具链、账户与平台环境的可用性在相应执行任务中核实。
 - 后续能力：Sandbox、MCP 等 F-01 至 F-18 已形成[功能规划](capability-roadmap.md)，均未实现；不计入当前 32 项 MVP 任务。
 
@@ -18,7 +18,7 @@
 
 | 阶段 | 状态 | 退出证据 |
 | --- | --- | --- |
-| P0 工程基础 | 进行中 | DEV-001 已完成；DEV-002 待开始 |
+| P0 工程基础 | 进行中 | DEV-001 完成；DEV-002 本地通过，CI 运行待验证 |
 | P1 核心循环 | 待开始 | — |
 | P2 工具与权限 | 待开始 | — |
 | P3 模型协议 | 待开始 | — |
@@ -32,7 +32,7 @@
 | 任务 | 阶段 | 状态 | 证据／阻碍 |
 | --- | --- | --- | --- |
 | DEV-001 | P0 | 完成 | workspace、固定工具链与锁文件已建立；本机检查与构建通过，见下方记录 |
-| DEV-002 | P0 | 待开始 | — |
+| DEV-002 | P0 | 待验证 | 本地脚本及临时工作区测试通过；四目标 CI 已配置，尚无远端运行证据 |
 | DEV-003 | P1 | 待开始 | — |
 | DEV-004 | P1 | 待开始 | — |
 | DEV-005 | P1 | 待开始 | — |
@@ -71,6 +71,14 @@
 - 验证环境：本机 macOS aarch64，Rust 1.99.1；执行 `cargo check --workspace --locked`、`cargo build --workspace --locked`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`、`cargo build --workspace --release --locked` 均通过。测试执行了 0 个用例，不代表产品行为已验证。
 - 未验证：其他目标平台、CI 与产品功能；DEV-002 仍待建立测试基础和 CI。
 - 下一任务：DEV-002。
+
+## DEV-002 交付记录
+
+- 日期：2026-11-06；状态：待验证（远端 CI 尚未运行）。
+- 变更：`scripts/check.sh` 统一格式、Clippy、测试及 release 构建；`.github/workflows/ci.yml` 配置四个原生 runner；`crates/saya-core/tests` 提供基于 `tempfile` 的临时工作区辅助与模型、核查、协议夹具目录。夹具目录尚无实现或协议数据。
+- 本地验证：macOS 27.2 aarch64、Rust 1.99.1 下运行 `./scripts/check.sh` 通过，临时工作区隔离和自动清理测试 1 项通过；`go run github.com/rhysd/actionlint/cmd/actionlint@latest .github/workflows/ci.yml`（actionlint 1.7.12）通过；其余产品行为尚无测试。
+- 未验证：GitHub Actions 远端运行和另外三个目标平台；macOS 13 最低运行环境、发行产物及 smoke 测试仍由 DEV-031 验证。runner 需账户具备对应可用性。
+- 后续：取得四目标 CI 运行记录并确认结果，再按实际证据更新 DEV-002／P0；可独立推进 DEV-003。
 
 ## 更新规则
 
