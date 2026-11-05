@@ -53,7 +53,7 @@
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
-需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-002 的本地检查与测试基础已建立，CI 运行结果待验证；后续实现从 DEV-003 开始。
+需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-002 的本地检查、测试基础与四平台 CI 已验证；后续实现从 DEV-003 开始。
 
 CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
 

@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库已有固定 Rust 1.99.1 的最小 workspace、`saya-core` 与 `saya-cli`；核心和 CLI 产品功能尚未实现；CI 已配置，远端运行待验证。`saya` 当前仅输出未实现提示并以非零状态退出。实际验证见[开发进度](progress.md)。
+仓库已有固定 Rust 1.99.1 的最小 workspace、`saya-core` 与 `saya-cli`；核心和 CLI 产品功能尚未实现；CI 已配置并通过四平台验证。`saya` 当前仅输出未实现提示并以非零状态退出。实际验证见[开发进度](progress.md)。
 
 ## 开发流程
 
