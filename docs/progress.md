@@ -1,16 +1,16 @@
 # 开发进度
 
-**记录日期：2026-11-06；当前阶段：计划已准备，Rust 实现未开始。**
+**记录日期：2026-11-06；当前阶段：P0 工程基础进行中。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
 ## 当前状态
 
 - 产品基线：已完成文档定案，D-027。
-- 仓库基础文件：MIT 许可证与 .gitignore 已补齐；Rust workspace 仍未建立，DEV-001 保持待开始并复用这些文件。
+- 仓库基础文件：MIT、.gitignore、Rust 1.99.1 workspace、两个 crate 与 Cargo.lock 已建立。
 - 开发计划：已准备，包含 P0 至 P7、DEV-001 至 DEV-032；工作量估算不是发布日期承诺。
-- 实现／测试／CI／联调／发行：未开始。
-- 下一项任务：DEV-001，建立最小 Rust workspace。
+- 产品功能、行为测试、CI、真实联调与发行尚未开始；空骨架已在本机通过构建检查。
+- 下一项任务：DEV-002，建立 CI 与测试基础。
 - 当前阻碍：没有待决产品需求；工具链、账户与平台环境的可用性在相应执行任务中核实。
 - 后续能力：Sandbox、MCP 等 F-01 至 F-18 已形成[功能规划](capability-roadmap.md)，均未实现；不计入当前 32 项 MVP 任务。
 
@@ -18,7 +18,7 @@
 
 | 阶段 | 状态 | 退出证据 |
 | --- | --- | --- |
-| P0 工程基础 | 待开始 | — |
+| P0 工程基础 | 进行中 | DEV-001 已完成；DEV-002 待开始 |
 | P1 核心循环 | 待开始 | — |
 | P2 工具与权限 | 待开始 | — |
 | P3 模型协议 | 待开始 | — |
@@ -31,7 +31,7 @@
 
 | 任务 | 阶段 | 状态 | 证据／阻碍 |
 | --- | --- | --- | --- |
-| DEV-001 | P0 | 待开始 | — |
+| DEV-001 | P0 | 完成 | workspace、固定工具链与锁文件已建立；本机检查与构建通过，见下方记录 |
 | DEV-002 | P0 | 待开始 | — |
 | DEV-003 | P1 | 待开始 | — |
 | DEV-004 | P1 | 待开始 | — |
@@ -63,6 +63,14 @@
 | DEV-030 | P7 | 待开始 | — |
 | DEV-031 | P7 | 待开始 | — |
 | DEV-032 | P7 | 待开始 | — |
+
+## DEV-001 交付记录
+
+- 日期：2026-11-06；状态：完成。
+- 变更：根目录 Cargo workspace、`rust-toolchain.toml`、`Cargo.lock`，以及 `crates/saya-core` 和 `crates/saya-cli`。CLI 仅输出未实现提示并返回失败，不提供产品命令。已有 MIT 许可证保留。
+- 验证环境：本机 macOS aarch64，Rust 1.99.1；执行 `cargo check --workspace --locked`、`cargo build --workspace --locked`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`、`cargo build --workspace --release --locked` 均通过。测试执行了 0 个用例，不代表产品行为已验证。
+- 未验证：其他目标平台、CI 与产品功能；DEV-002 仍待建立测试基础和 CI。
+- 下一任务：DEV-002。
 
 ## 更新规则
 

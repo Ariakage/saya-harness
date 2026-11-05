@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库目前仅有项目文档，尚无 `Cargo.toml`、Rust 源码、工具链固定版本或 CI 配置。此时不能声称项目已经构建、通过 Rust 检查或能够运行。
+仓库已有固定 Rust 1.99.1 的最小 workspace、`saya-core` 与 `saya-cli`；核心和 CLI 产品功能尚未实现，CI 尚未建立。`saya` 当前仅输出未实现提示并以非零状态退出。实际验证见[开发进度](progress.md)。
 
 ## 开发流程
 
@@ -14,7 +14,7 @@
 
 工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，workspace 为 saya-core＋saya-cli，二进制 saya，许可证 MIT。具体依赖补丁版本在初始化时按兼容性选择并提交 Cargo.lock，不重新提出偏好问题。
 
-根目录 [LICENSE](../LICENSE) 与 .gitignore 已补齐。进入实现任务后再建立工程和安装工具链；许可证文件存在不表示 workspace 已建立。B-23 的顺序已细化为路线图 P0 至 P7、DEV-001 至 DEV-032；核心与 CLI 的依赖边界遵循 B-02。工作量估算与任务完成状态分别维护，不把计划日程当作已完成证据。
+根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。B-23 的顺序已细化为路线图 P0 至 P7、DEV-001 至 DEV-032；核心与 CLI 的依赖边界遵循 B-02。工作量估算与任务完成状态分别维护，不把计划日程当作已完成证据。
 
 提交信息遵循 [AGENTS.md](../AGENTS.md) 中的 Conventional Commits 约定。
 
@@ -27,7 +27,7 @@
 
 ## Rust 工程建立后的检查
 
-下面是已确定的工程检查，**仅在 workspace 已存在时适用**，目前尚未执行：
+下面是工程检查命令；本机执行记录见[开发进度](progress.md)：
 
 ```sh
 cargo fmt --all -- --check
@@ -36,7 +36,7 @@ cargo test --workspace --locked
 cargo build --workspace --release --locked
 ```
 
-建立工程后提供与 B-03 一致的安装、配置和启动说明。CI 与发行按 B-23 的平台基线执行；未构建或未 smoke 验证的产物不标记已支持。
+CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明。CI 与发行按 B-23 的平台基线执行；未构建或未 smoke 验证的产物不标记已支持。
 
 ## 核心验证要求
 

@@ -1,6 +1,6 @@
 # 项目文档
 
-Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目负责人整套确认，尚无对应代码实现。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 为准。
+Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目负责人整套确认，已建立最小 Rust workspace，产品功能尚未实现。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 为准。
 
 | 文档 | 用途 | 当前状态 |
 | --- | --- | --- |

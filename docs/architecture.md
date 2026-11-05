@@ -92,4 +92,4 @@ flowchart TD
 
 所有产品与接口阻塞项已由[完整基线](mvp-baseline.md) B-01 至 B-24 收敛；具体内部 Rust 类型和模块文件名由开发者在保持行为的前提下处理。Tokio、clap、reqwest＋rustls、serde／toml、thiserror、tracing 与 rusqlite 的职责按 B-02 实现。
 
-当前没有对应 crate、依赖锁或平台验证结果。实现必须通过 B-23 的协议、权限、恢复、输出与平台检查，不能以文档定案替代证据。
+最小 core／CLI crate 和锁文件已建立；产品功能及完整平台验证尚未完成。实现必须通过 B-23 的协议、权限、恢复、输出与平台检查，不能以文档定案替代证据。

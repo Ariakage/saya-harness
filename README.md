@@ -2,7 +2,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
 
-**当前状态：规划与文档建立阶段。仓库尚无 `Cargo.toml`、Rust 实现或可运行命令。**
+**当前状态：最小 Rust workspace 已建立；Agent 运行时和 CLI 功能尚未实现。**
 
 ## 已确认方向
 
@@ -32,7 +32,7 @@
 3. 工具执行结果返回模型，运行时继续下一轮。
 4. CLI 展示结果并保存会话，后续可列出或恢复；失败、取消或达到运行限制时明确结束。
 
-已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。上述行为尚无对应实现；完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
+已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。产品行为尚无对应实现；完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
 
 ## 文档
 
@@ -53,7 +53,7 @@
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
-需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；下一任务为 DEV-001，建立最小 Rust workspace。
+需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；下一任务为 DEV-002，建立 CI 与测试基础。
 
 CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
 

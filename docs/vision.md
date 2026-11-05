@@ -21,7 +21,7 @@ CLI MVP 同时面向编程任务与通用任务，包含 PLAN、BUILD、CODE、W
 - 提供流式交互、JSON 最终结果与 JSONL 事件输出。
 - 单次命令支持显式预授权；需要确认但无法询问且未获授权时，返回需要确认并退出。
 
-以上方向及下文 MVP 范围、验收和工程基础均已由项目负责人整套确认，见[完整基线](mvp-baseline.md) B-01 至 B-24、[决策记录](decisions.md) D-027、[工作模式](modes.md)和[执行契约](execution.md)。尚无对应代码实现。
+以上方向及下文 MVP 范围、验收和工程基础均已由项目负责人整套确认，见[完整基线](mvp-baseline.md) B-01 至 B-24、[决策记录](decisions.md) D-027、[工作模式](modes.md)和[执行契约](execution.md)。最小 Rust workspace 已建立，产品功能尚未实现。
 
 ## MVP 目标
 

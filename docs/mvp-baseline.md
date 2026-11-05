@@ -45,7 +45,7 @@
 ## B-02 工程与分发
 
 - 命令名 `saya`，首个版本 `0.1.0`，Cargo workspace 包含 `saya-core` 与 `saya-cli`；CLI 产生 `saya` 二进制。核心包含运行时、模型适配、工具、权限和存储，不依赖终端渲染。
-- 固定 Rust `1.99.1`、edition `2024`，最低支持版本同为 `1.99.1`；提交 `Cargo.lock`。本机目前为 1.95.0，建立工程时再安装所需工具链，本次文档工作不修改工具链。版本依据见 [Rust 官方发布](https://blog.rust-lang.org/2026/10/15/Rust-1.99.1/)。
+- 固定 Rust `1.99.1`、edition `2024`，最低支持版本同为 `1.99.1`；提交 `Cargo.lock`。workspace 通过 `rust-toolchain.toml` 固定该版本。版本依据见 [Rust 官方发布](https://blog.rust-lang.org/2026/10/15/Rust-1.99.1/)。
 - 首批支持 macOS 13+、Linux glibc 2.35+，均覆盖 x86_64 和 aarch64；Windows、musl、移动端与浏览器构建不进入 0.1。
 - 依赖职责确定为 Tokio（异步）、clap（CLI）、reqwest＋rustls（HTTP／TLS）、serde／serde_json／toml（序列化）、thiserror（核心错误）、tracing（日志）、rusqlite bundled（SQLite）。搜索、哈希和标识等辅助依赖按实际需要加入；初始化时选择与工具链兼容的稳定版本并锁定，不为补丁版本另开需求讨论。
 - 许可证为 [MIT](../LICENSE)，已写入仓库根目录，版权行为 `Copyright (c) 2026 Saya Harness contributors`；标准文本参见 [SPDX](https://spdx.org/licenses/MIT.html)。
