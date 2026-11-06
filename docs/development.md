@@ -50,7 +50,7 @@ CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明；未�
 
 `crates/saya-core/src/tools/exec.rs` 提供直接 argv 进程适配器，依赖 Tokio process 与 nix 信号；仅在受控测试中与内存存储配合使用。命令启动前仍需完整权限和持久化调度。进程组清理并不构成文件系统、网络或主动脱离进程组的后代隔离。
 
-`crates/saya-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。实际核查和单次许可在后续任务接入，调用者仍需在派发前重查。
+`crates/saya-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。`crates/saya-core/src/review.rs` 已提供与模型替身验证的独立核查组件；真实模型协议及单次许可仍待接入，调用者需共享运行预算并在派发前重查。
 
 ## 核心验证要求
 

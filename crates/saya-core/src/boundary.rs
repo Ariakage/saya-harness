@@ -29,6 +29,8 @@ pub struct ModelRequest {
     pub purpose: ModelPurpose,
     pub profile: String,
     pub instructions: String,
+    /// Provider output token limit; `None` uses the execution profile.
+    pub max_output_tokens: Option<u32>,
     pub history: Vec<HistoryItem>,
     pub tools: Vec<ToolDefinition>,
 }

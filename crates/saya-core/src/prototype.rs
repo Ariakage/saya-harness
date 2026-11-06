@@ -220,6 +220,7 @@ async fn model_turn(
             purpose: ModelPurpose::Execution,
             profile: session.profile.clone(),
             instructions: mode_instruction(snap.current).into(),
+            max_output_tokens: None,
             history: session.history.clone(),
             tools: tools
                 .0

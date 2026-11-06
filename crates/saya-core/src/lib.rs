@@ -10,6 +10,7 @@ pub mod contract;
 pub mod memory;
 pub mod mode;
 pub mod permissions;
+pub mod review;
 pub mod tools;
 
 #[cfg(test)]

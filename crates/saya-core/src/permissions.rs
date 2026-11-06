@@ -137,6 +137,55 @@ impl Operation {
             },
         })
     }
+    /// Tool name associated with this normalized operation.
+    pub fn tool_name(&self) -> &str {
+        &self.tool
+    }
+
+    /// Replace target fields in model-supplied arguments with normalized data.
+    /// Other argument fields remain untrusted data and must not be instructions.
+    pub fn normalized_arguments(
+        &self,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, BoundaryError> {
+        let map = args
+            .as_object_mut()
+            .ok_or_else(|| failure("invalid_args", "tool arguments must be an object"))?;
+        match &self.target {
+            Target::File(path) => {
+                map.insert(
+                    "path".into(),
+                    serde_json::to_value(path)
+                        .map_err(|e| failure("invalid_path", e.to_string()))?,
+                );
+            }
+            Target::Exec {
+                cwd,
+                executable,
+                args,
+            } => {
+                let executable = executable
+                    .to_str()
+                    .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?;
+                let argv: Vec<_> = std::iter::once(executable.to_owned())
+                    .chain(args.iter().cloned())
+                    .collect();
+                map.insert(
+                    "cwd".into(),
+                    serde_json::to_value(cwd)
+                        .map_err(|e| failure("invalid_path", e.to_string()))?,
+                );
+                map.insert(
+                    "argv".into(),
+                    serde_json::to_value(argv)
+                        .map_err(|e| failure("invalid_args", e.to_string()))?,
+                );
+            }
+            Target::Input => {}
+        }
+        Ok(serde_json::Value::Object(map.clone()))
+    }
+
     /// Construct the user input control operation.
     pub fn ask_user() -> Self {
         Self {
