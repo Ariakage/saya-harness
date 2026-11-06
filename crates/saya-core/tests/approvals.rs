@@ -194,7 +194,7 @@ async fn one_approval_executes_one_exact_write_and_cannot_be_reused()
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::default(),
@@ -257,7 +257,7 @@ async fn noninteractive_confirmation_is_saved_and_does_not_grant()
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::default(),
@@ -291,7 +291,7 @@ async fn changed_operation_mode_permission_and_cancellation_invalidate_grant()
     let store = store_for(&session, &run).await?;
     for case in 0..4 {
         let modes = ModeController::new(WorkMode::Work);
-        let revision = PermissionRevision::new(modes.clone());
+        let revision = PermissionRevision::new(modes.clone(), run.permissions);
         let signal = Arc::new(Signal::default());
         let manager = manager(
             policy(temp.path(), "")?,
@@ -324,7 +324,7 @@ async fn changed_operation_mode_permission_and_cancellation_invalidate_grant()
         match case {
             0 => changed = write_call(&call.call_id, "changed"),
             1 => modes.request(WorkMode::Plan)?,
-            2 => assert!(revision.change_if_idle()?),
+            2 => assert!(revision.change_if_idle(PermissionMode::Bypass)?),
             _ => signal.0.store(true, Ordering::Release),
         }
         assert!(!WriteGate::authorize(
@@ -348,7 +348,7 @@ async fn denial_is_remembered_across_mode_change_and_cancelled_pending_cannot_ap
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::default(),
@@ -461,7 +461,7 @@ async fn preauthorization_matches_exact_command_once_and_drives_real_adapter()
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         preauth,
@@ -533,7 +533,7 @@ async fn preauthorization_never_bypasses_plan_deny_or_initial_mode_binding()
     let denied = manager(
         policy(temp.path(), "[[rules]]\neffect='deny'\ntool='exec'")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::from_json(&json, temp.path())?,
@@ -554,7 +554,7 @@ async fn preauthorization_never_bypasses_plan_deny_or_initial_mode_binding()
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::from_json(&json, temp.path())?,
@@ -614,7 +614,7 @@ async fn permit_binds_command_arguments_working_directory_and_environment()
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store,
         &run,
         Preauthorizations::default(),
@@ -669,13 +669,13 @@ fn permission_changes_are_rejected_while_call_active_and_approval_file_is_strict
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
     let modes = ModeController::new(WorkMode::Work);
-    let version = PermissionRevision::new(modes.clone());
+    let version = PermissionRevision::new(modes.clone(), PermissionMode::Auto);
     assert!(modes.begin(modes.snapshot()?.revision)?);
-    assert!(!version.change_if_idle()?);
-    assert_eq!(version.current(), 0);
+    assert!(!version.change_if_idle(PermissionMode::Bypass)?);
+    assert_eq!(version.current()?, 0);
     modes.finish()?;
-    assert!(version.change_if_idle()?);
-    assert_eq!(version.current(), 1);
+    assert!(version.change_if_idle(PermissionMode::Bypass)?);
+    assert_eq!(version.current()?, 1);
     for bad in [
         r#"{"schema_version":2,"commands":[]}"#,
         r#"{"schema_version":1,"commands":[{"argv":["/bin/echo","*"],"cwd":"."}]}"#,
@@ -714,7 +714,7 @@ async fn active_command_queues_mode_switch_and_rejects_permission_change()
     let plan = inspect.plan(&call, &context)?;
     let operation = Operation::exec(&plan)?;
     let modes = ModeController::new(WorkMode::Work);
-    let revision = PermissionRevision::new(modes.clone());
+    let revision = PermissionRevision::new(modes.clone(), run.permissions);
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
@@ -748,7 +748,7 @@ async fn active_command_queues_mode_switch_and_rejects_permission_change()
                 let snapshot = modes.snapshot()?;
                 assert_eq!(snapshot.current, WorkMode::Work);
                 assert_eq!(snapshot.pending, Some(WorkMode::Plan));
-                assert!(!revision.change_if_idle()?);
+                assert!(!revision.change_if_idle(PermissionMode::Bypass)?);
                 return Ok::<(), BoundaryError>(());
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -767,7 +767,7 @@ async fn active_command_queues_mode_switch_and_rejects_permission_change()
     control?;
     assert!(result?.ok);
     assert_eq!(modes.snapshot()?.current, WorkMode::Plan);
-    assert!(revision.change_if_idle()?);
+    assert!(revision.change_if_idle(PermissionMode::Bypass)?);
     Ok(())
 }
 
@@ -799,7 +799,7 @@ async fn preauthorization_requires_exact_argv_and_cwd() -> Result<(), Box<dyn st
     let manager = manager(
         policy,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store,
         &run,
         preauth,
@@ -911,7 +911,7 @@ async fn symlink_swap_after_authorization_cannot_redirect_a_write()
     let manager = manager(
         policy(temp.path(), &rules)?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::default(),
@@ -978,7 +978,7 @@ async fn waiting_confirmation_is_invalidated_by_mode_or_policy_change()
     let store = store_for(&session, &run).await?;
     for change_mode in [true, false] {
         let modes = ModeController::new(WorkMode::Work);
-        let revision = PermissionRevision::new(modes.clone());
+        let revision = PermissionRevision::new(modes.clone(), run.permissions);
         let manager = manager(
             policy(temp.path(), "")?,
             modes.clone(),
@@ -1005,7 +1005,7 @@ async fn waiting_confirmation_is_invalidated_by_mode_or_policy_change()
         if change_mode {
             modes.request(WorkMode::Code)?;
         } else {
-            assert!(revision.change_if_idle()?);
+            assert!(revision.change_if_idle(PermissionMode::Bypass)?);
         }
         assert!(matches!(
             manager.resolve(&request.approval_id, true)?,
@@ -1027,7 +1027,7 @@ async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants(
     let manager = ApprovalManager::new(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         ApprovalSetup {
             run_id: run.id,
@@ -1072,7 +1072,7 @@ async fn duplicate_pending_is_reused_and_denial_invalidates_other_unspent_permit
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes.clone()),
+        PermissionRevision::new(modes.clone(), run.permissions),
         store.clone(),
         &run,
         Preauthorizations::default(),
@@ -1146,7 +1146,7 @@ async fn concurrent_identical_requests_share_one_confirmation()
     let manager = manager(
         policy(temp.path(), "")?,
         modes.clone(),
-        PermissionRevision::new(modes),
+        PermissionRevision::new(modes, run.permissions),
         store.clone(),
         &run,
         Preauthorizations::default(),
@@ -1180,7 +1180,7 @@ async fn permission_revision_cannot_use_another_run_controller()
     let result = manager(
         policy(temp.path(), "")?,
         modes,
-        PermissionRevision::new(unrelated),
+        PermissionRevision::new(unrelated, run.permissions),
         store,
         &run,
         Preauthorizations::default(),
@@ -1220,7 +1220,7 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
             let manager = manager(
                 policy.clone(),
                 modes.clone(),
-                PermissionRevision::new(modes),
+                PermissionRevision::new(modes, run.permissions),
                 store.clone(),
                 &run,
                 Preauthorizations::default(),
@@ -1301,5 +1301,50 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
             }
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn changing_context_alone_cannot_elevate_permission_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Review);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let revision = PermissionRevision::new(modes.clone(), run.permissions);
+    let manager = manager(
+        policy(temp.path(), "")?,
+        modes,
+        revision.clone(),
+        store,
+        &run,
+        Preauthorizations::default(),
+        Arc::new(Signal::default()),
+    )?;
+    let call = write_call("write", "hello");
+    let op = Operation::file(temp.path(), "write_file", Path::new("out.txt"))?;
+    context.run.permissions = PermissionMode::Bypass;
+    let result = manager
+        .authorize(
+            input(&op, &call, &context, true),
+            &deny_model(),
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(!temp.path().join("out.txt").exists());
+    assert!(revision.change_if_idle(PermissionMode::Bypass)?);
+    assert!(matches!(
+        manager
+            .authorize(
+                input(&op, &call, &context, true),
+                &deny_model(),
+                &SharedBudget::default(),
+                &config()
+            )
+            .await?,
+        Authorization::Permit(_)
+    ));
     Ok(())
 }

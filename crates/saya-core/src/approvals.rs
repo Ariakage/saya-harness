@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
 
@@ -42,25 +42,39 @@ fn locked() -> BoundaryError {
 /// previously issued approvals. Bound to the run's mode controller.
 #[derive(Clone)]
 pub struct PermissionRevision {
-    value: Arc<AtomicU64>,
+    value: Arc<Mutex<(PermissionMode, u64)>>,
     modes: ModeController,
 }
 impl PermissionRevision {
-    pub fn new(modes: ModeController) -> Self {
+    pub fn new(modes: ModeController, initial: PermissionMode) -> Self {
         Self {
-            value: Arc::new(AtomicU64::new(0)),
+            value: Arc::new(Mutex::new((initial, 0))),
             modes,
         }
     }
-    pub fn current(&self) -> u64 {
-        self.value.load(Ordering::Acquire)
+    fn snapshot(&self) -> Result<(PermissionMode, u64), BoundaryError> {
+        Ok(*self.value.lock().map_err(|_| locked())?)
+    }
+    pub fn current(&self) -> Result<u64, BoundaryError> {
+        Ok(self.snapshot()?.1)
     }
     /// Update permission settings only while no model or tool call is active.
     /// Returns false if a call is in progress; a successful update invalidates grants.
-    pub fn change_if_idle(&self) -> Result<bool, BoundaryError> {
-        self.modes.while_idle(|| {
-            self.value.fetch_add(1, Ordering::AcqRel);
-        })
+    pub fn change_if_idle(&self, permissions: PermissionMode) -> Result<bool, BoundaryError> {
+        let mut result = Ok(());
+        let changed = self.modes.while_idle(|| match self.value.lock() {
+            Ok(mut value) => {
+                if let Some(next) = value.1.checked_add(1) {
+                    value.0 = permissions;
+                    value.1 = next;
+                } else {
+                    result = Err(failure("permission_error", "permission revision exhausted"));
+                }
+            }
+            Err(_) => result = Err(locked()),
+        })?;
+        result?;
+        Ok(changed)
     }
 }
 #[derive(Debug, Deserialize)]
@@ -258,7 +272,13 @@ impl ApprovalManager {
             ));
         }
         let initial_mode_revision = modes.snapshot()?.revision;
-        let initial_permission_revision = permissions.current();
+        let (initial_permission_mode, initial_permission_revision) = permissions.snapshot()?;
+        if initial_permission_mode != setup.initial_permissions {
+            return Err(failure(
+                "invalid_permissions",
+                "initial permission mode differs from revision",
+            ));
+        }
         Ok(Self {
             policy,
             modes,
@@ -280,6 +300,13 @@ impl ApprovalManager {
         })
     }
     fn bind(&self, input: &AuthorizationInput<'_>) -> Result<Binding, BoundaryError> {
+        let (permission_mode, permission_revision) = self.permissions.snapshot()?;
+        if input.context.run.permissions != permission_mode {
+            return Err(failure(
+                "stale_approval",
+                "permission mode differs from current settings",
+            ));
+        }
         if input.context.run.id != self.run_id
             || input.context.run.session_id != self.session_id
             || input.call.name != input.operation.tool_name()
@@ -320,7 +347,7 @@ impl ApprovalManager {
             mode: mode.current,
             permissions: input.context.run.permissions,
             mode_revision: mode.revision,
-            permission_revision: self.permissions.current(),
+            permission_revision,
         })
     }
     fn current(&self, binding: &Binding) -> Result<bool, BoundaryError> {
@@ -328,7 +355,7 @@ impl ApprovalManager {
         Ok(snapshot.current == binding.mode
             && snapshot.pending.is_none()
             && snapshot.revision == binding.mode_revision
-            && self.permissions.current() == binding.permission_revision
+            && self.permissions.snapshot()? == (binding.permissions, binding.permission_revision)
             && self.modes.approval_is_current(binding.mode_revision)?)
     }
     /// Decide rules, perform isolated model review only when required, and create
@@ -606,7 +633,8 @@ impl OneShotPermit {
             || self.binding.mode != snapshot.current
             || snapshot.pending.is_some()
             || self.binding.mode_revision != snapshot.revision
-            || self.binding.permission_revision != self.permissions.current()
+            || self.permissions.snapshot()?
+                != (self.binding.permissions, self.binding.permission_revision)
         {
             return Ok(false);
         }
@@ -646,7 +674,8 @@ impl OneShotPermit {
                 let snapshot = self.modes.snapshot()?;
                 if self.cancellation.is_cancelled()
                     || snapshot.pending.is_some()
-                    || self.binding.permission_revision != self.permissions.current()
+                    || self.permissions.snapshot()?
+                        != (self.binding.permissions, self.binding.permission_revision)
                 {
                     self.end()?;
                     return Ok(false);
