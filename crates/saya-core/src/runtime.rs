@@ -723,7 +723,19 @@ impl AgentRuntime {
                         .ok_or_else(|| error("invalid_args", "missing approval request"))?,
                 )
                 .map_err(|_| error("invalid_args", "invalid approval request"))?;
-                if let Some(answer) = self.confirm(&request).await? {
+                let answer = match self.confirm(&request).await {
+                    Err(e) if e.0.code == "stale_approval" => {
+                        return self
+                            .save_local(
+                                session,
+                                call,
+                                failed("stale_approval", "mode changed while awaiting approval"),
+                            )
+                            .await;
+                    }
+                    other => other?,
+                };
+                if let Some(answer) = answer {
                     if let Some(state) = &self.project_context
                         && !project_context_is_current(state, call)?
                     {
@@ -779,9 +791,11 @@ impl AgentRuntime {
             Err(e) => return Err(e),
         };
         let authorization = match authorization {
-            Authorization::Pending(request) => match self.confirm(&request).await? {
-                Some(answer) => self.dispatcher.resolve(&request.approval_id, answer)?,
-                None => {
+            Authorization::Pending(request) => match self.confirm(&request).await {
+                Ok(Some(answer)) => self.dispatcher.resolve(&request.approval_id, answer)?,
+                Err(e) if e.0.code == "stale_approval" => Authorization::Stale,
+                Err(e) => return Err(e),
+                Ok(None) => {
                     return self
                         .save_local(
                             session,

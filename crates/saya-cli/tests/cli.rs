@@ -471,3 +471,132 @@ fn all_protocols_receive_project_context_as_history_data() {
         );
     }
 }
+
+#[test]
+fn prompt_file_is_submitted_and_invalid_approval_file_fails_before_network() {
+    let temp = TempDir::new().unwrap();
+    let (url, requests) = fixture::server(vec![(
+        "application/json",
+        response(json!({"role":"assistant","content":"done"}), "stop"),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let prompt = temp.path().join("task.txt");
+    fs::write(&prompt, "FILE_PROMPT\n").unwrap();
+    let invalid = temp.path().join("approval.json");
+    fs::write(&invalid, "{}\n").unwrap();
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--prompt-file"])
+        .arg(&prompt)
+        .arg("--approval-file")
+        .arg(&invalid)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        requests.try_recv().is_err(),
+        "invalid preauthorization must fail before network"
+    );
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--prompt-file"])
+        .arg(&prompt)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        request["messages"].as_array().unwrap().last().unwrap()["content"],
+        "FILE_PROMPT\n"
+    );
+}
+
+#[test]
+fn chat_without_controlling_terminal_is_a_configuration_error() {
+    use std::os::unix::process::CommandExt;
+    let temp = TempDir::new().unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
+    let mut cmd = command(temp.path());
+    cmd.arg("--config")
+        .arg(cfg)
+        .arg("chat")
+        .stdin(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and creates a session without a controlling terminal.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let output = cmd.output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("controlling terminal"));
+}
+
+#[test]
+fn interactive_run_without_controlling_tty_falls_back_to_confirmation_required() {
+    use std::os::unix::process::CommandExt;
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("input.txt"), "data").unwrap();
+    let (url, _) = fixture::server(vec![("application/json", read_call())]).unwrap();
+    let cfg = config(temp.path(), &url, "manual");
+    let mut cmd = command(temp.path());
+    cmd.arg("--config")
+        .arg(cfg)
+        .args(["run", "--interactive", "read"])
+        .stdin(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and ensures no controlling terminal.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let output = cmd.output().unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("needs_confirmation"));
+}
+
+#[test]
+fn valid_exact_command_preauthorization_file_is_accepted() {
+    let temp = TempDir::new().unwrap();
+    let (url, _) = fixture::server(vec![(
+        "application/json",
+        response(json!({"role":"assistant","content":"done"}), "stop"),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let path = temp.path().join("approved.json");
+    fs::write(
+        &path,
+        json!({"schema_version":1,"commands":[{"argv":["/bin/echo","hello"],"cwd":temp.path()}]})
+            .to_string(),
+    )
+    .unwrap();
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "--approval-file"])
+        .arg(path)
+        .arg("task")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

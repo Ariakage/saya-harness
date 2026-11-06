@@ -1,7 +1,9 @@
+mod chat;
+
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use saya_core::{
     approvals::Preauthorizations,
-    boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
+    boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store},
     config::{self, Auth, Config, Environment, Output, Overrides, Profile, Protocol},
     contract::{
         ApprovalRequest, BoundaryError, HistoryItem, ModelProtocol, ModelPurpose, PermissionMode,
@@ -156,7 +158,7 @@ fn init(overrides: &Overrides, env: &Environment) -> Result<(), Box<dyn std::err
     Ok(())
 }
 fn prompt(args: &RunArgs) -> Result<String, Box<dyn std::error::Error>> {
-    let mut text = if let Some(v) = &args.prompt {
+    let text = if let Some(v) = &args.prompt {
         v.clone()
     } else if let Some(path) = &args.prompt_file {
         std::fs::read_to_string(path)?
@@ -167,12 +169,6 @@ fn prompt(args: &RunArgs) -> Result<String, Box<dyn std::error::Error>> {
     };
     if text.trim().is_empty() {
         return Err("prompt is empty".into());
-    }
-    if text.ends_with('\n') {
-        text.pop();
-        if text.ends_with('\r') {
-            text.pop();
-        }
     }
     Ok(text)
 }
@@ -415,62 +411,53 @@ fn cli_error(code: &str, message: &str) -> BoundaryError {
         None,
     )
 }
-async fn run(
-    config: Config,
-    args: &RunArgs,
-    text: String,
-) -> Result<u8, Box<dyn std::error::Error>> {
-    if config.output != Output::Text {
-        return Err("JSON and JSONL output are not available until P6".into());
-    }
-    let terminal = if args.interactive {
-        match Terminal::open() {
-            Ok(t) => Some(Arc::new(t)),
-            Err(e) => {
-                eprintln!("terminal unavailable: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let confirmation: Option<Arc<dyn ApprovalHandler>> = terminal
-        .as_ref()
-        .map(|t| t.clone() as Arc<dyn ApprovalHandler>);
-    let profile = config
-        .profile
-        .as_ref()
-        .ok_or("no profile selected for run")?
-        .clone();
-    let p = config.profiles.get(&profile).ok_or("profile not found")?;
-    let protocol = match p.protocol {
+struct Launch {
+    permissions: PermissionMode,
+    store: Arc<dyn Store>,
+    cancellation: Arc<dyn Cancellation>,
+    confirmation: Option<Arc<dyn ApprovalHandler>>,
+    input: Option<Arc<dyn InputHandler>>,
+    approvals: Preauthorizations,
+}
+fn new_session(config: &Config) -> Result<Session, Box<dyn std::error::Error>> {
+    let profile = config.profile.as_ref().ok_or("no profile selected")?;
+    let selected = config.profiles.get(profile).ok_or("profile not found")?;
+    let protocol = match selected.protocol {
         Protocol::ChatCompletions => ModelProtocol::ChatCompletions,
         Protocol::Responses => ModelProtocol::Responses,
         Protocol::AnthropicMessages => ModelProtocol::AnthropicMessages,
     };
-    let workspace = std::fs::canonicalize(&config.cwd)?;
-    let mut session = Session {
+    Ok(Session {
         id: SessionId::new(),
-        workspace: workspace.clone(),
+        workspace: std::fs::canonicalize(&config.cwd)?,
         work_mode: config.mode,
         profile: profile.clone(),
         protocol,
-        model: p.model.clone(),
-        history: vec![HistoryItem::UserText(text.clone())],
-    };
+        model: selected.model.clone(),
+        history: vec![],
+    })
+}
+fn build_runtime(
+    config: &Config,
+    session: &Session,
+    summary: &str,
+    launch: Launch,
+) -> Result<(AgentRuntime, bool), Box<dyn std::error::Error>> {
+    let profile = &session.profile;
+    let selected = config.profiles.get(profile).ok_or("profile not found")?;
     let run = Run {
         id: RunId::new(),
         session_id: session.id,
-        work_mode: config.mode,
-        permissions: config.permissions_mode,
+        work_mode: session.work_mode,
+        permissions: launch.permissions,
     };
     let models = config
         .profiles
         .iter()
-        .map(|(name, p)| Ok((name.clone(), model(&config, name, p)?)))
+        .map(|(name, p)| Ok((name.clone(), model(config, name, p)?)))
         .collect::<Result<BTreeMap<_, _>, BoundaryError>>()?;
     let router = Arc::new(ProfileRouter::new(profile.clone(), models)?);
-    let streamed = p.stream;
+    let streamed = selected.stream;
     let model: Arc<dyn Model> = if streamed {
         Arc::new(PrintModel(router))
     } else {
@@ -479,19 +466,14 @@ async fn run(
     let secrets = config.secret_env_names();
     let known_secrets = secrets
         .iter()
-        .map(|n| config.secret(n).map(str::to_owned))
+        .map(|name| config.secret(name).map(str::to_owned))
         .collect::<Result<Vec<_>, _>>()?;
-    let approvals = if let Some(path) = &args.approval_file {
-        Preauthorizations::from_file(path, &workspace)?
-    } else {
-        Preauthorizations::default()
-    };
-    let policy = Arc::new(Policy::new(&workspace, config.permissions.clone())?);
+    let policy = Arc::new(Policy::new(&session.workspace, config.permissions.clone())?);
     let lim = &config.limits;
     let files = Arc::new(ReadTools::new(
-        &workspace,
+        &session.workspace,
         &config.permissions.additional_roots,
-        config.permissions_mode == PermissionMode::Bypass,
+        launch.permissions == PermissionMode::Bypass,
         ReadLimits {
             read_return_bytes: lim.read_return_max_bytes,
             file_bytes: lim.read_file_max_bytes,
@@ -522,49 +504,39 @@ async fn run(
         background_jobs: lim.max_background_jobs,
         ..Default::default()
     };
-    let mut review = ReviewConfig::new(profile);
+    let mut review = ReviewConfig::new(profile.clone());
     review.review_profile = config.review.profile.clone();
     review.max_output_tokens = config.review.max_output_tokens;
     review.connect_timeout = limits.model_connect;
     review.idle_timeout = limits.model_idle;
     review.total_timeout = limits.model_total;
     review.known_secrets = known_secrets.clone();
-    let cancel = Arc::new(Cancel(tokio::sync::watch::channel(false).0));
-    let signal = cancel.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal.0.send_replace(true);
-        }
-    });
     let mut runtime = AgentRuntime::new_read_only(RuntimeSetup {
         run,
         model,
-        store: Arc::new(MemoryStore::default()),
+        store: launch.store,
         policy,
         files,
-        cancellation: cancel,
+        cancellation: launch.cancellation,
         review,
         exec,
-        preauthorizations: approvals,
+        preauthorizations: launch.approvals,
         known_secrets,
-        summary: text,
-        confirmation,
+        summary: summary.to_owned(),
+        confirmation: launch.confirmation,
         limits,
     })?;
     let home = std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    runtime = runtime.with_project_context(ProjectContext::new(&workspace, home.as_deref())?)?;
-    if let Some(terminal) = terminal {
-        runtime = runtime.with_input_handler(terminal);
+    runtime =
+        runtime.with_project_context(ProjectContext::new(&session.workspace, home.as_deref())?)?;
+    if let Some(input) = launch.input {
+        runtime = runtime.with_input_handler(input);
     }
-    let result = match runtime.run(&mut session).await {
-        Ok(result) => result,
-        Err(error) => {
-            eprintln!("saya: {error}");
-            return Ok(1);
-        }
-    };
+    Ok((runtime, streamed))
+}
+fn report_result(result: &saya_core::contract::RunResult, session: &Session, streamed: bool) -> u8 {
     if streamed {
         println!();
     } else if let Some(text) = &result.text {
@@ -591,14 +563,76 @@ async fn run(
     if let Some(e) = &result.error {
         eprintln!("saya: {}: {}", e.code, e.message);
     }
-    Ok(match result.status {
+    match result.status {
         RunStatus::Completed => 0,
         RunStatus::Failed => 1,
         RunStatus::NeedsConfirmation => 3,
         RunStatus::NeedsInput => 4,
         RunStatus::LimitReached => 5,
         RunStatus::Cancelled => 130,
-    })
+    }
+}
+async fn run(
+    config: Config,
+    args: &RunArgs,
+    text: String,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    if config.output != Output::Text {
+        return Err("JSON and JSONL output are not available until P6".into());
+    }
+    let terminal = if args.interactive {
+        match Terminal::open() {
+            Ok(t) => Some(Arc::new(t)),
+            Err(e) => {
+                eprintln!("terminal unavailable: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut session = new_session(&config)?;
+    session.history.push(HistoryItem::UserText(text.clone()));
+    let approvals = if let Some(path) = &args.approval_file {
+        Preauthorizations::from_file(path, &session.workspace)?
+    } else {
+        Preauthorizations::default()
+    };
+    let cancel = Arc::new(Cancel(tokio::sync::watch::channel(false).0));
+    let signal = cancel.clone();
+    let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    tokio::spawn(async move {
+        if interrupts.recv().await.is_some() {
+            signal.0.send_replace(true);
+            if interrupts.recv().await.is_some() {
+                std::process::exit(130);
+            }
+        }
+    });
+    let confirmation = terminal
+        .as_ref()
+        .map(|t| t.clone() as Arc<dyn ApprovalHandler>);
+    let input = terminal.map(|t| t as Arc<dyn InputHandler>);
+    let (mut runtime, streamed) = build_runtime(
+        &config,
+        &session,
+        &text,
+        Launch {
+            permissions: config.permissions_mode,
+            store: Arc::new(MemoryStore::default()),
+            cancellation: cancel,
+            confirmation,
+            input,
+            approvals,
+        },
+    )?;
+    match runtime.run(&mut session).await {
+        Ok(result) => Ok(report_result(&result, &session, streamed)),
+        Err(error) => {
+            eprintln!("saya: {error}");
+            Ok(1)
+        }
+    }
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
@@ -640,7 +674,16 @@ async fn main() -> std::process::ExitCode {
                 },
             },
         },
-        Some(Command::Chat) | None => fail("interactive chat is not available yet"),
+        Some(Command::Chat) | None => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
+        {
+            Err(e) => fail(e),
+            Ok(config) => match chat::chat(config).await {
+                Ok(code) => code,
+                Err(e) => fail(e),
+            },
+        },
     };
     std::process::ExitCode::from(code)
 }
