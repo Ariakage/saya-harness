@@ -1,6 +1,7 @@
 //! HTTP transport and provider adapters for the supported model protocols.
 
 pub mod chat;
+pub mod responses;
 pub mod transport;
 
 use crate::{

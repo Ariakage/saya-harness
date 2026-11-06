@@ -1,6 +1,6 @@
 # 模型协议接入
 
-**状态：共享 HTTP／SSE 与 Chat Completions 适配器已通过本地夹具验证；Responses、Anthropic 与真实模型联调仍在开发。**
+**状态：共享 HTTP／SSE、Chat Completions 和 Responses 适配器已通过本地夹具验证；Anthropic 与真实模型联调仍在开发。**
 
 `crates/saya-core/src/provider/transport.rs` 为适配器提供异步 JSON 请求、完整 JSON 响应和增量 SSE 事件读取。它保留 `base_url` 的自定义路径前缀；接口路径由适配器固定提供。配置需要显式提供鉴权方式、额外请求头的环境变量引用及连接／空闲／总超时。密钥不进入错误信息。
 
@@ -14,4 +14,10 @@
 
 profile 明确选择 strict 时，无法在不改变工具语义的情况下转换的开放对象或可选字段会报配置错误；兼容网关可显式关闭 strict。兼容选项可改用 `max_tokens` 或省略流式 usage 请求。上下文保护使用本地估算加输出预留，不等同于供应商实际 token 计数，不自动删除历史。
 
-Responses、Anthropic、profile 核查和三协议后台工具映射分别由 DEV-015 至 DEV-017、DEV-034 完成；真实服务联调不能由本地夹具代替。
+## Responses
+
+`provider::responses::ResponsesModel` 显式发送 `store: false`，按本地历史回传原始 output items；不使用 `previous_response_id`。加密 reasoning、消息和函数调用按顺序保存，文本与工具调用作为独立运行时语义项关联到对应原始项；回传前会校验二者一致，避免重复或伪造调用。函数结果通过 `call_id` 与调用关联。
+
+适配器支持完整 JSON 与 typed SSE，交叉检查分片参数、完成项和最终 output；响应完成且流结束后才返回工具调用。拒绝、截断、未完成流、冲突项及未支持的服务端工具不会被当作成功。可显式关闭 `reasoning.encrypted_content` 的 include 字段，以兼容不接受它的网关。
+
+Anthropic、profile 核查和三协议后台工具映射分别由 DEV-016、DEV-017、DEV-034 完成；真实服务联调不能由本地夹具代替。
