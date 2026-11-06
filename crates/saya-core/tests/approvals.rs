@@ -1699,3 +1699,126 @@ async fn dispatcher_rejects_foreign_permit_and_noninteractive_never_executes()
     assert!(matches!(denied, Authorization::Denied(_)));
     Ok(())
 }
+
+#[tokio::test]
+async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::dispatch::{DispatchReview, ToolDispatcher};
+    for mode in [
+        WorkMode::Plan,
+        WorkMode::Build,
+        WorkMode::Code,
+        WorkMode::Work,
+    ] {
+        for permissions in [
+            PermissionMode::Auto,
+            PermissionMode::Review,
+            PermissionMode::Bypass,
+        ] {
+            let temp = support::temp_workspace()?;
+            std::fs::write(temp.path().join("input.txt"), "readable")?;
+            let (mut session, mut run, mut context) = fixture(temp.path(), permissions);
+            session.work_mode = mode;
+            run.work_mode = mode;
+            context.run = run.clone();
+            let store = store_for(&session, &run).await?;
+            let modes = ModeController::new(mode);
+            let files = Arc::new(ReadTools::new(
+                temp.path(),
+                &[],
+                permissions == PermissionMode::Bypass,
+                ReadLimits::default(),
+            )?);
+            let dispatch = ToolDispatcher::new(
+                policy(temp.path(), "")?,
+                modes.clone(),
+                PermissionRevision::new(modes, permissions),
+                store,
+                ApprovalSetup {
+                    run_id: run.id,
+                    session_id: session.id,
+                    initial_permissions: permissions,
+                    preauthorizations: Preauthorizations::default(),
+                    known_secrets: vec![],
+                    cancellation: Arc::new(Signal::default()),
+                },
+                files,
+                ExecConfig::default(),
+            )?;
+            let read = ToolCall {
+                call_id: "read".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path":"input.txt","start_line":1,"line_count":1})
+                    .to_string(),
+            };
+            assert!(dispatch_call(&dispatch, &read, &context, false).await?.ok);
+            let write = write_call("write", "done");
+            let command = ToolCall {
+                call_id: "cmd".into(),
+                name: "exec".into(),
+                arguments: serde_json::json!({"argv":["/bin/echo","ok"]}).to_string(),
+            };
+            let model = deny_model();
+            let budget = SharedBudget::default();
+            let config = config();
+            let auth = dispatch
+                .authorize(
+                    &write,
+                    &context,
+                    "task",
+                    false,
+                    DispatchReview {
+                        model: &model,
+                        budget: &budget,
+                        config: &config,
+                    },
+                )
+                .await?;
+            match (mode, permissions, auth) {
+                (WorkMode::Plan, _, Authorization::Denied(_)) => {}
+                (_, PermissionMode::Review, Authorization::NeedsConfirmation(_)) => {}
+                (
+                    _,
+                    PermissionMode::Auto | PermissionMode::Bypass,
+                    Authorization::Permit(permit),
+                ) => assert!(dispatch.execute(&write, &context, permit).await?.ok),
+                _ => {
+                    return Err(
+                        format!("unexpected write decision {mode:?}/{permissions:?}").into(),
+                    );
+                }
+            }
+            let auth = dispatch
+                .authorize(
+                    &command,
+                    &context,
+                    "task",
+                    false,
+                    DispatchReview {
+                        model: &model,
+                        budget: &budget,
+                        config: &config,
+                    },
+                )
+                .await?;
+            match (mode, permissions, auth) {
+                (WorkMode::Plan, _, Authorization::Denied(_)) => {}
+                (
+                    _,
+                    PermissionMode::Review | PermissionMode::Auto,
+                    Authorization::NeedsConfirmation(_),
+                ) => {}
+                (_, PermissionMode::Bypass, Authorization::Permit(permit)) => {
+                    assert!(dispatch.execute(&command, &context, permit).await?.ok)
+                }
+                _ => {
+                    return Err(format!("unexpected exec decision {mode:?}/{permissions:?}").into());
+                }
+            }
+            if mode == WorkMode::Plan || permissions == PermissionMode::Review {
+                assert!(!temp.path().join("out.txt").exists());
+            }
+        }
+    }
+    Ok(())
+}
