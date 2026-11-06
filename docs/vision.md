@@ -11,7 +11,7 @@ CLI MVP 同时面向编程任务与通用任务，包含 PLAN、BUILD、CODE、W
 已确认的 MVP 能力还包括：
 
 - CLI 提供交互会话与单次命令，分别支持持续对话和脚本调用。
-- 权限有 `auto`、`bypass permissions`、要求核查三种模式，默认 `auto`。
+- 权限有 `auto`、`bypass permissions`、`Manual Approval` 三种模式，默认 `auto`。
 - PLAN 在三种权限模式下均只读调查并输出计划，不修改工作区文件。
 - 用户手动切换工作模式，Agent 可以建议；当前调用完成后、下一次调用前生效，同一会话保留上下文。
 - 接入 OpenAI Chat Completions、OpenAI Responses API、Anthropic Messages 三类模型协议。

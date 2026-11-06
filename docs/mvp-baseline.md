@@ -64,7 +64,7 @@
 | `saya session list`／`show SESSION_ID` | 列出会话或查看记录，支持 text／json 输出 |
 | `saya config init`／`check` | 显式建立无密钥配置模板，或验证配置；已有配置不覆盖 |
 
-- 运行入口参数为 `--config`、`--profile`、`--mode plan|build|code|work`、`--permissions auto|bypass|review`、`--cwd`、`--data-dir`、`--output text|json|jsonl`。`--approval-file` 仅用于 run，`--accept-config-change` 仅用于恢复既有会话。`bypass` 和 `review` 分别是已确认权限名称的 CLI 写法。
+- 运行入口参数为 `--config`、`--profile`、`--mode plan|build|code|work`、`--permissions auto|bypass|manual`、`--cwd`、`--data-dir`、`--output text|json|jsonl`。`--approval-file` 仅用于 run，`--accept-config-change` 仅用于恢复既有会话。`bypass` 和 `manual` 分别是已确认权限名称的 CLI 写法；历史序列化值 `review` 可读取为 `manual`。
 - `run` 可用位置参数、`--prompt-file PATH` 或 `--stdin` 提供任务，三者互斥。没有输入或输入为空时报错；不暗中读取管道输入。
 - 默认 text 输出；交互文本实时流式展示。JSON 与 JSONL 用于单次运行和会话查询，不把 REPL 的连续输入混入一个 JSON 结果。
 - REPL 控制命令为 `/mode`、`/permissions`、`/status`、`/cancel`、`/help`、`/exit`；以 `//` 开头表示普通文本中的 `/`。工作模式可在运行中请求切换，权限模式只在运行空闲时修改。
@@ -183,10 +183,10 @@ model_timeout_seconds = 180
 
 ## B-09 权限边界
 
-- `auto`、`bypass`、`review` 分别对应已确认的三种权限模式；默认 `auto`。
+- `auto`、`bypass`、`manual` 分别对应已确认的三种权限模式；默认 `auto`。Manual Approval 的每次工具调用均须人工批准，包括读取、搜索和后台启动／查询／取消；模型请求不单独确认。
 - 权限模式允许在会话空闲时由用户修改，运行中直接拒绝修改并提示取消或等待。修改清空本运行外可重用的临时许可；0.1 不自动持久化授权。
 - PLAN 仅启用只读文件／搜索工具及人工交互，禁用写工具和通用 `exec`。这条限制在三种权限模式与显式预授权下均不能绕过。
-- auto／review 的文件工具默认只访问规范化工作区及用户明确配置的 additional roots；范围外直接拒绝，用户可显式扩充根。bypass 跳过这些路径范围检查。
+- auto／manual 的文件工具默认只访问规范化工作区及用户明确配置的 additional roots；范围外直接拒绝，用户可显式扩充根。bypass 跳过这些路径范围检查。
 - 用户明确配置的 deny 规则、工作模式限制、参数校验、取消和运行预算仍然生效；bypass 跳过人工确认、路径规则和 auto 模型核查，不生成虚假的核查记录。
 - 路径约束落实在文件工具及命令启动目录校验。通用命令是本机进程，MVP 不提供操作系统沙箱，不把 cwd 或参数审批宣称为子进程文件系统隔离。真正的沙箱明确列入后续能力。
 
@@ -194,7 +194,7 @@ model_timeout_seconds = 180
 
 - 规则可产生 `allow`、`ask`、`deny`，通过工具名、规范化路径 glob、解析后的可执行文件绝对路径和 argv 前缀匹配。优先级为 deny ＞ask ＞allow；匹配多个冲突规则时按此顺序合并，不依赖文件排序。
 - 规则键固定为 `effect`、`tool`、`path_glob`、`executable`、`args_prefix`；effect 必填，其余省略表示不限制该维度，已填写条件必须全部匹配。path_glob 匹配规范化绝对路径；后两项只适用于 exec；路径根检查先于普通规则，不被 allow 覆盖。
-- 工作区内原生读写／搜索工具默认 allow；无命中规则的 exec 进入模型核查，明确 ask 直接询问，deny 直接拒绝。review 下 allow 不免除写入／命令的人工确认，适用的显式预授权可满足确认要求。
+- 工作区内原生读写／搜索工具默认 allow；无命中规则的 exec 进入模型核查，明确 ask 直接询问，deny 直接拒绝。manual 下 allow 不免除任何工具调用的人工确认，适用的精确命令预授权可满足对应确认。
 - 核查默认复用执行 profile，但使用独立、无历史任务执行上下文、无工具的请求；可用 `review.profile` 指定其他已配置 profile。输出上限 1024 tokens，不向核查模型提供密钥。
 - 输入为操作目标、工具名、完整规范化参数、工作／权限模式和必要用户目标摘要；工具参数始终作为待核查数据，不作为核查系统指令。
 - 输出固定为 `{ "decision": "allow|ask|deny", "reason": "简短原因" }`。解析失败、服务失败、不支持所需核查或无法判定一律转人工确认；不能自动扩大权限。
@@ -205,7 +205,7 @@ model_timeout_seconds = 180
 - 人工确认只对一次具体操作有效，展示工具、完整命令或目标路径、cwd、工作模式与变更摘要。拒绝返回工具拒绝结果，不自动换一个等价命令绕过拒绝。
 - 许可绑定规范化参数、执行目录、工作模式和权限设置版本；任一改变就重新判断。0.1 没有“记住全部授权”或全局 `--yes`。
 - 非交互预授权使用 `--approval-file PATH`，文件 JSON 的 `schema_version = 1`，包含 `commands` 数组，每项有完整 `argv` 与 `cwd`；仅匹配本次运行，规范化后精确匹配，不接受通配符或仅程序名前缀。载入时绑定本次运行初始工作模式与权限设置版本，切换后失效。
-- 显式预授权可以满足命令确认，但不能覆盖 PLAN、显式 deny 或 auto／review 的路径边界。文件写入的批量预授权不进入 0.1，可选择 auto 或交互确认。
+- 显式预授权可以满足命令确认，但不能覆盖 PLAN、显式 deny 或 auto／manual 的路径边界。文件写入的批量预授权不进入 0.1，可选择 auto 或交互确认。
 - 所有模式下需要人工确认但无法交互且没有适用授权时，保存确认请求，返回 `needs_confirmation` 并退出；待确认操作不执行。
 
 ## B-12 文件操作

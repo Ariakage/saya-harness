@@ -996,7 +996,7 @@ fn plan_allows_only_read_and_user_input_for_each_permission_mode() {
     for _permissions in [
         PermissionMode::Auto,
         PermissionMode::Bypass,
-        PermissionMode::Review,
+        PermissionMode::Manual,
     ] {
         assert!(allowed(WorkMode::Plan, ToolClass::Read));
         assert!(allowed(WorkMode::Plan, ToolClass::AskUser));
@@ -1393,7 +1393,7 @@ async fn plan_blocks_write_and_command_in_every_permission_mode()
     for permission in [
         PermissionMode::Auto,
         PermissionMode::Bypass,
-        PermissionMode::Review,
+        PermissionMode::Manual,
     ] {
         for class in [ToolClass::Write, ToolClass::Command] {
             let (mut session, mut id) = setup();
@@ -1818,7 +1818,7 @@ async fn background_noninteractive_confirmation_stops_loop_without_execution()
     let temp = tempfile::tempdir()?;
     let (mut session, mut run) = setup();
     session.workspace = temp.path().to_path_buf();
-    run.permissions = PermissionMode::Review;
+    run.permissions = PermissionMode::Manual;
     let store = Arc::new(MemoryStore::default());
     let modes = Modes::new(WorkMode::Work);
     let dispatcher = Arc::new(ToolDispatcher::new(

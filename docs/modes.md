@@ -6,7 +6,7 @@
 
 Saya 同时支持编程任务与通用任务，并提供四个可切换的工作模式。新会话默认 WORK；恢复会话时恢复原工作模式。
 
-工作模式与 `auto`、`bypass permissions`、要求核查三种权限模式分别配置，权限规则见[执行与恢复契约](execution.md)。
+工作模式与 `auto`、`bypass permissions`、`Manual Approval` 三种权限模式分别配置，权限规则见[执行与恢复契约](execution.md)。
 
 | 模式 | 已确认的职责 | 完成标准 |
 | --- | --- | --- |

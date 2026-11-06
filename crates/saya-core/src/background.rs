@@ -466,7 +466,15 @@ pub struct BackgroundTools {
     review: crate::review::ReviewConfig,
     summary: String,
     interactive: bool,
-    pending: Mutex<HashMap<String, PendingJob>>,
+    pending: Mutex<HashMap<String, PendingBackground>>,
+}
+enum PendingBackground {
+    Job(PendingJob),
+    Control {
+        call: ToolCall,
+        context: ToolContext,
+        kind: BackgroundToolKind,
+    },
 }
 impl BackgroundTools {
     pub fn new(
@@ -487,21 +495,70 @@ impl BackgroundTools {
             pending: Mutex::new(HashMap::new()),
         }
     }
-    /// Resolve a human confirmation returned by `background_start`.
-    pub fn resolve(
-        &self,
-        approval_id: &str,
-        approve: bool,
-    ) -> Result<JobSubmission, BoundaryError> {
+    /// Resolve a human confirmation for one background tool invocation.
+    pub fn resolve(&self, approval_id: &str, approve: bool) -> Result<ToolResult, BoundaryError> {
         let pending = self
             .pending
             .lock()
             .map_err(|_| failure("background_error", "approval lock poisoned"))?
             .remove(approval_id);
         match pending {
-            Some(pending) => self.jobs.resolve(pending, approve),
-            None => Ok(JobSubmission::Stale),
+            Some(PendingBackground::Job(pending)) => {
+                Ok(match self.jobs.resolve(pending, approve)? {
+                    JobSubmission::Started { job_id } => {
+                        tool_result(serde_json::json!({"status":"started","job_id":job_id}))
+                    }
+                    JobSubmission::Denied(_) => {
+                        tool_error("permission_denied", "user denied background operation")
+                    }
+                    _ => tool_error("stale_approval", "background authorization changed"),
+                })
+            }
+            Some(PendingBackground::Control {
+                call,
+                context,
+                kind,
+            }) => Ok(match self.jobs.dispatcher.resolve(approval_id, approve)? {
+                Authorization::Permit(permit) => {
+                    self.execute_control(kind, &call, &context, &permit)?
+                }
+                Authorization::Denied(_) => {
+                    tool_error("permission_denied", "user denied background operation")
+                }
+                _ => tool_error("stale_approval", "background authorization changed"),
+            }),
+            None => Ok(tool_error(
+                "stale_approval",
+                "background authorization changed",
+            )),
         }
+    }
+    fn execute_control(
+        &self,
+        kind: BackgroundToolKind,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: &Arc<OneShotPermit>,
+    ) -> Result<ToolResult, BoundaryError> {
+        if !self.jobs.dispatcher.owns_permit(permit) {
+            return Err(failure(
+                "permission_denied",
+                "permit belongs to another dispatcher",
+            ));
+        }
+        let args: JobArgs = serde_json::from_str(&call.arguments)
+            .map_err(|_| failure("invalid_args", "invalid background job ID"))?;
+        permit.with_background_control(call, context, || {
+            if matches!(kind, BackgroundToolKind::Cancel) {
+                return Ok(tool_result(serde_json::json!({"found":self.jobs.cancel(&args.job_id)?})));
+            }
+            Ok(match self.jobs.status(&args.job_id)? {
+                None => tool_result(serde_json::json!({"status":"not_found"})),
+                Some(JobStatus::Running) => tool_result(serde_json::json!({"status":"running"})),
+                Some(JobStatus::Finished(result)) => tool_result(serde_json::json!({"status":"finished","result":result})),
+                Some(JobStatus::Failed(error)) => tool_result(serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2})),
+            })
+        })
     }
     pub fn tool(self: &Arc<Self>, kind: BackgroundToolKind) -> BackgroundTool {
         BackgroundTool {
@@ -611,6 +668,7 @@ impl crate::boundary::Tool for BackgroundTool {
                     if !args.arguments.is_object() {
                         return Ok(tool_error("invalid_args", "arguments must be an object"));
                     }
+                    let summary = format!("Background execution: {}", self.shared.summary);
                     let result = self
                         .shared
                         .jobs
@@ -619,7 +677,7 @@ impl crate::boundary::Tool for BackgroundTool {
                                 tool: &args.tool,
                                 arguments: args.arguments,
                                 context,
-                                summary: &self.shared.summary,
+                                summary: &summary,
                                 interactive: self.shared.interactive,
                             },
                             DispatchReview {
@@ -644,7 +702,10 @@ impl crate::boundary::Tool for BackgroundTool {
                                 .pending
                                 .lock()
                                 .map_err(|_| failure("background_error", "approval lock poisoned"))?
-                                .insert(request.approval_id.clone(), pending);
+                                .insert(
+                                    request.approval_id.clone(),
+                                    PendingBackground::Job(pending),
+                                );
                             ToolResult {
                                 ok: false,
                                 data: Some(
@@ -664,28 +725,62 @@ impl crate::boundary::Tool for BackgroundTool {
                     })
                 }
                 BackgroundToolKind::Status | BackgroundToolKind::Cancel => {
-                    let args: JobArgs = match serde_json::from_str(&call.arguments) {
-                        Ok(args) => args,
+                    match serde_json::from_str::<JobArgs>(&call.arguments) {
+                        Ok(_) => {}
                         Err(_) => {
                             return Ok(tool_error("invalid_args", "invalid background job ID"));
                         }
-                    };
-                    if matches!(self.kind, BackgroundToolKind::Cancel) {
-                        return Ok(tool_result(
-                            serde_json::json!({"found":self.shared.jobs.cancel(&args.job_id)?}),
-                        ));
                     }
-                    Ok(match self.shared.jobs.status(&args.job_id)? {
-                        None => tool_result(serde_json::json!({"status":"not_found"})),
-                        Some(JobStatus::Running) => {
-                            tool_result(serde_json::json!({"status":"running"}))
+                    let auth = self
+                        .shared
+                        .jobs
+                        .dispatcher
+                        .authorize(
+                            call,
+                            context,
+                            &self.shared.summary,
+                            self.shared.interactive,
+                            DispatchReview {
+                                model: self.shared.model.as_ref(),
+                                budget: &self.shared.budget,
+                                config: &self.shared.review,
+                            },
+                        )
+                        .await?;
+                    Ok(match auth {
+                        Authorization::Permit(permit) => self
+                            .shared
+                            .execute_control(self.kind, call, context, &permit)?,
+                        Authorization::Pending(request)
+                        | Authorization::NeedsConfirmation(request) => {
+                            self.shared
+                                .pending
+                                .lock()
+                                .map_err(|_| failure("background_error", "approval lock poisoned"))?
+                                .insert(
+                                    request.approval_id.clone(),
+                                    PendingBackground::Control {
+                                        call: call.clone(),
+                                        context: context.clone(),
+                                        kind: self.kind,
+                                    },
+                                );
+                            ToolResult {
+                                ok: false,
+                                data: Some(
+                                    serde_json::json!({"status":"needs_confirmation","request":request}),
+                                ),
+                                error: Some(ErrorInfo {
+                                    code: "needs_confirmation".into(),
+                                    message: "background control requires confirmation".into(),
+                                }),
+                                truncated: false,
+                            }
                         }
-                        Some(JobStatus::Finished(result)) => {
-                            tool_result(serde_json::json!({"status":"finished","result":result}))
+                        Authorization::Denied(reason) => tool_error("permission_denied", reason),
+                        Authorization::Stale => {
+                            tool_error("stale_approval", "background authorization is stale")
                         }
-                        Some(JobStatus::Failed(error)) => tool_result(
-                            serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2}),
-                        ),
                     })
                 }
             }

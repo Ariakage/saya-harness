@@ -98,6 +98,7 @@ enum Target {
         environment_digest: String,
     },
     Input,
+    BackgroundControl,
 }
 impl Operation {
     /// Construct a file operation. Existing targets and existing parents of new
@@ -189,7 +190,7 @@ impl Operation {
                         .map_err(|e| failure("invalid_args", e.to_string()))?,
                 );
             }
-            Target::Input => {}
+            Target::Input | Target::BackgroundControl => {}
         }
         Ok(serde_json::Value::Object(map.clone()))
     }
@@ -221,6 +222,16 @@ impl Operation {
             tool: "ask_user".into(),
             target: Target::Input,
         }
+    }
+    /// Construct a model-facing background status or cancellation operation.
+    pub fn background_control(tool: &str) -> Result<Self, BoundaryError> {
+        if !matches!(tool, "background_status" | "background_cancel") {
+            return Err(failure("invalid_args", "unsupported background control"));
+        }
+        Ok(Self {
+            tool: tool.into(),
+            target: Target::BackgroundControl,
+        })
     }
 }
 fn normalize_target(workspace: &Path, path: &Path) -> Result<PathBuf, BoundaryError> {
@@ -290,6 +301,8 @@ impl Policy {
                         | "apply_patch"
                         | "exec"
                         | "ask_user"
+                        | "background_status"
+                        | "background_cancel"
                 ) {
                     return Err(failure("invalid_config", "unknown rule tool"));
                 }
@@ -345,13 +358,14 @@ impl Policy {
             "read_file" | "list_dir" | "find_files" | "search_text"
         );
         let input = op.tool == "ask_user";
-        if mode == WorkMode::Plan && !read && !input {
+        let control = matches!(op.target, Target::BackgroundControl);
+        if mode == WorkMode::Plan && !read && !input && !control {
             return decision(Decision::Deny, "plan_read_only");
         }
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input => None,
+            Target::Input | Target::BackgroundControl => None,
         };
         if permissions != PermissionMode::Bypass
             && path.is_some_and(|path| !self.roots.iter().any(|root| path.starts_with(root)))
@@ -376,10 +390,15 @@ impl Policy {
         if ask {
             return decision(Decision::Ask, "explicit_ask");
         }
-        if permissions == PermissionMode::Review && !read && !input {
-            return decision(Decision::Ask, "review_mode");
+        if permissions == PermissionMode::Manual {
+            return decision(Decision::Ask, "manual_approval");
         }
-        if allow || read || input || matches!(op.tool.as_str(), "write_file" | "apply_patch") {
+        if allow
+            || read
+            || input
+            || control
+            || matches!(op.tool.as_str(), "write_file" | "apply_patch")
+        {
             return decision(
                 Decision::Allow,
                 if allow {
@@ -405,7 +424,7 @@ impl Rule {
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input => None,
+            Target::Input | Target::BackgroundControl => None,
         };
         if let Some(pattern) = &self.path
             && !path.is_some_and(|path| pattern.is_match(path))

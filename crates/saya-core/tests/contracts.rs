@@ -147,3 +147,18 @@ fn unknown_tool_state_is_preserved_for_recovery() -> Result<(), Box<dyn std::err
     );
     Ok(())
 }
+
+#[test]
+fn manual_permission_uses_new_name_and_reads_legacy_review()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::contract::PermissionMode;
+    assert_eq!(
+        serde_json::to_string(&PermissionMode::Manual)?,
+        "\"manual\""
+    );
+    assert_eq!(
+        serde_json::from_str::<PermissionMode>("\"review\"")?,
+        PermissionMode::Manual
+    );
+    Ok(())
+}

@@ -34,7 +34,7 @@ pub fn work_mode_instructions(mode: WorkMode) -> &'static str {
 fn permission_instructions(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Auto => include_str!("../prompts/v1/permissions/auto.md"),
-        PermissionMode::Review => include_str!("../prompts/v1/permissions/review.md"),
+        PermissionMode::Manual => include_str!("../prompts/v1/permissions/manual.md"),
         PermissionMode::Bypass => include_str!("../prompts/v1/permissions/bypass.md"),
     }
 }

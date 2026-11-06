@@ -210,6 +210,25 @@ impl ToolDispatcher {
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| failure("invalid_args", "path must be a string"))?;
             Operation::file(&context.workspace, &call.name, Path::new(path))?
+        } else if matches!(
+            call.name.as_str(),
+            "background_status" | "background_cancel"
+        ) {
+            let args: serde_json::Value = serde_json::from_str(&call.arguments)
+                .map_err(|_| failure("invalid_args", "invalid background control arguments"))?;
+            if args.as_object().is_none_or(|map| {
+                map.len() != 1
+                    || map
+                        .get("job_id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none()
+            }) {
+                return Err(failure(
+                    "invalid_args",
+                    "background control requires a job ID",
+                ));
+            }
+            Operation::background_control(&call.name)?
         } else {
             return Err(failure("unknown_tool", "unsupported local tool"));
         };

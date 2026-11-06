@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: prompt_preview plan|build|code|work auto|review|bypass [tool_names...] OR --review",
+        "usage: prompt_preview plan|build|code|work auto|manual|bypass [tool_names...] OR --review",
     )?;
     let output = if mode == "--review" {
         if args.next().is_some() {
@@ -32,9 +32,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let permissions = match args.next().as_deref() {
             Some("auto") => PermissionMode::Auto,
-            Some("review") => PermissionMode::Review,
+            Some("manual") => PermissionMode::Manual,
             Some("bypass") => PermissionMode::Bypass,
-            _ => return Err("expected auto|review|bypass".into()),
+            _ => return Err("expected auto|manual|bypass".into()),
         };
         // Names are inspection inputs; these placeholder schemas do not expose tools.
         let tools: Vec<_> = args

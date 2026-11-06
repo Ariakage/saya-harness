@@ -13,7 +13,7 @@
 | CODE | [code.md](../crates/saya-core/prompts/v1/modes/code.md) | 聚焦代码修改、诊断、回归验证 |
 | WORK | [work.md](../crates/saya-core/prompts/v1/modes/work.md) | 本地通用任务、原件保留、结果核对 |
 | auto | [auto.md](../crates/saya-core/prompts/v1/permissions/auto.md) | 常规推进、规则优先、独立核查和人工兜底 |
-| review | [review.md](../crates/saya-core/prompts/v1/permissions/review.md) | 写入／命令确认和精确预授权 |
+| manual | [manual.md](../crates/saya-core/prompts/v1/permissions/manual.md) | 每次工具调用确认和精确命令预授权 |
 | bypass | [bypass.md](../crates/saya-core/prompts/v1/permissions/bypass.md) | 说明跳过项及仍有效的硬限制 |
 | 后台任务 | [background.md](../crates/saya-core/prompts/v1/background.md) | 启动回执、依赖与冲突、查询、取消及清理 |
 | 独立审核器 | [review.md](../crates/saya-core/prompts/v1/review.md) | 数据边界、完整效果、allow／ask／deny 和输出契约 |
@@ -37,7 +37,7 @@
 
 [审核组件](../crates/saya-core/src/review.rs)使用独立英文审核 prompt，保留现有一个数据消息、无工具、1024 输出 token 默认上限、严格 JSON 解析与失败转人工逻辑。它不接收执行 prompt、项目说明或完整执行历史；数据仍为 `tool/arguments/work_mode/permissions/goal_summary`。尤其不把 `goal_summary` 中“用户已授权”的说法当成原始用户证据。
 
-权限执行逻辑没有因这次 prompt 定制而更换：原生文件工具默认放行，auto 的未命中 exec 才触发模型核查；显式 allow 仍可按现有基线跳过核查。英文审核提示词不是对所有文件和命令新增的扫描层，不能覆盖硬 deny、PLAN 或已有人工拒绝。需要精确用户证据的高影响操作，在当前审核输入不足时建议 ask，再由真实确认或已有规则处理。
+权限执行逻辑没有因这次 prompt 定制而更换：auto 的原生文件工具默认放行、未命中 exec 才触发模型核查；manual 对每次工具调用要求人工批准；显式 allow 仍可按现有基线跳过核查。英文审核提示词不是对所有文件和命令新增的扫描层，不能覆盖硬 deny、PLAN 或已有人工拒绝。需要精确用户证据的高影响操作，在当前审核输入不足时建议 ask，再由真实确认或已有规则处理。
 
 ## 相比所提供的 Claude Code 素材
 

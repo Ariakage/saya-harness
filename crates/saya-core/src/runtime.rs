@@ -2,7 +2,7 @@
 //! supplied by callers. Memory-backed side effects are suitable only for tests.
 use crate::{
     approvals::{ApprovalSetup, Authorization, PermissionRevision, Preauthorizations},
-    background::{BackgroundJobs, BackgroundToolKind, BackgroundTools, JobSubmission},
+    background::{BackgroundJobs, BackgroundToolKind, BackgroundTools},
     boundary::{
         Cancellation, Model, ModelRequest, ModelUpdate, Operation, Store, StoreChange, Tool,
         ToolContext, ToolDefinition,
@@ -617,19 +617,7 @@ impl AgentRuntime {
                 )
                 .map_err(|_| error("invalid_args", "invalid approval request"))?;
                 if let Some(answer) = self.confirm(&request).await? {
-                    let resolved = self.background.resolve(&request.approval_id, answer)?;
-                    let result = match resolved {
-                        JobSubmission::Started { job_id } => ToolResult {
-                            ok: true,
-                            data: Some(serde_json::json!({"status":"started","job_id":job_id})),
-                            error: None,
-                            truncated: false,
-                        },
-                        JobSubmission::Denied(_) => {
-                            failed("permission_denied", "user denied background operation")
-                        }
-                        _ => failed("stale_approval", "background authorization changed"),
-                    };
+                    let result = self.background.resolve(&request.approval_id, answer)?;
                     return self.save_local(session, call, result).await;
                 }
             }

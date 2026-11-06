@@ -59,7 +59,10 @@ pub enum PermissionMode {
     #[default]
     Auto,
     Bypass,
-    Review,
+    /// Each tool invocation requires an individual human approval.
+    /// `review` remains readable for sessions saved by older versions.
+    #[serde(alias = "review")]
+    Manual,
 }
 
 /// A persisted session's identity and configuration references, never grants.

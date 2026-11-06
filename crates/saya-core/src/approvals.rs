@@ -625,6 +625,24 @@ pub struct OneShotPermit {
     lease_active: AtomicBool,
 }
 impl OneShotPermit {
+    /// Use an exact, one-shot permit around one run-local background control.
+    pub(crate) fn with_background_control<T>(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        action: impl FnOnce() -> Result<T, BoundaryError>,
+    ) -> Result<T, BoundaryError> {
+        let operation = Operation::background_control(&call.name)?;
+        if !self.check(call, context, &operation)? || !self.check(call, context, &operation)? {
+            return Err(failure(
+                "stale_approval",
+                "background control approval is stale",
+            ));
+        }
+        let result = action();
+        self.end()?;
+        result
+    }
     fn check(
         &self,
         call: &ToolCall,

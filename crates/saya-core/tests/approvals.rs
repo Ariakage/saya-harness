@@ -188,7 +188,7 @@ fn config() -> ReviewConfig {
 async fn one_approval_executes_one_exact_write_and_cannot_be_reused()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let manager = manager(
@@ -251,7 +251,7 @@ async fn one_approval_executes_one_exact_write_and_cannot_be_reused()
 async fn noninteractive_confirmation_is_saved_and_does_not_grant()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let manager = manager(
@@ -287,7 +287,7 @@ async fn noninteractive_confirmation_is_saved_and_does_not_grant()
 async fn changed_operation_mode_permission_and_cancellation_invalidate_grant()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     for case in 0..4 {
         let modes = ModeController::new(WorkMode::Work);
@@ -341,7 +341,7 @@ async fn changed_operation_mode_permission_and_cancellation_invalidate_grant()
 async fn denial_is_remembered_across_mode_change_and_cancelled_pending_cannot_approve()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let signal = Arc::new(Signal::default());
@@ -439,7 +439,7 @@ fn command_input(root: &Path, argument: &str) -> String {
 async fn preauthorization_matches_exact_command_once_and_drives_real_adapter()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -511,7 +511,7 @@ async fn preauthorization_matches_exact_command_once_and_drives_real_adapter()
 async fn preauthorization_never_bypasses_plan_deny_or_initial_mode_binding()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -593,7 +593,7 @@ async fn preauthorization_never_bypasses_plan_deny_or_initial_mode_binding()
 async fn permit_binds_command_arguments_working_directory_and_environment()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -691,7 +691,7 @@ fn permission_changes_are_rejected_while_call_active_and_approval_file_is_strict
 async fn active_command_queues_mode_switch_and_rejects_permission_change()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -775,7 +775,7 @@ async fn active_command_queues_mode_switch_and_rejects_permission_change()
 async fn preauthorization_requires_exact_argv_and_cwd() -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
     let other = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -894,7 +894,7 @@ async fn symlink_swap_after_authorization_cannot_redirect_a_write()
     std::fs::write(temp.path().join("good.txt"), "same")?;
     std::fs::write(temp.path().join("secret.txt"), "same")?;
     std::os::unix::fs::symlink("good.txt", temp.path().join("link.txt"))?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -974,7 +974,7 @@ async fn symlink_swap_after_authorization_cannot_redirect_a_write()
 async fn waiting_confirmation_is_invalidated_by_mode_or_policy_change()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     for change_mode in [true, false] {
         let modes = ModeController::new(WorkMode::Work);
@@ -1020,7 +1020,7 @@ async fn waiting_confirmation_is_invalidated_by_mode_or_policy_change()
 async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let signal = Arc::new(Signal::default());
     let modes = ModeController::new(WorkMode::Work);
@@ -1066,7 +1066,7 @@ async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants(
 async fn duplicate_pending_is_reused_and_denial_invalidates_other_unspent_permit()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let manager = manager(
@@ -1140,7 +1140,7 @@ async fn duplicate_pending_is_reused_and_denial_invalidates_other_unspent_permit
 async fn concurrent_identical_requests_share_one_confirmation()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let manager = manager(
@@ -1173,7 +1173,7 @@ async fn concurrent_identical_requests_share_one_confirmation()
 async fn permission_revision_cannot_use_another_run_controller()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, _) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, _) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let unrelated = ModeController::new(WorkMode::Work);
@@ -1205,7 +1205,7 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
     ] {
         for permissions in [
             PermissionMode::Auto,
-            PermissionMode::Review,
+            PermissionMode::Manual,
             PermissionMode::Bypass,
         ] {
             let temp = support::temp_workspace()?;
@@ -1241,7 +1241,11 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
             let read_op = Operation::file(temp.path(), "read_file", Path::new("input.txt"))?;
             assert_eq!(
                 policy.evaluate(mode, permissions, &read_op).decision,
-                Decision::Allow
+                if permissions == PermissionMode::Manual {
+                    Decision::Ask
+                } else {
+                    Decision::Allow
+                }
             );
             let read_permit = match manager
                 .authorize(
@@ -1253,6 +1257,12 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
                 .await?
             {
                 Authorization::Permit(permit) => permit,
+                Authorization::Pending(request) if permissions == PermissionMode::Manual => {
+                    match manager.resolve(&request.approval_id, true)? {
+                        Authorization::Permit(permit) => permit,
+                        _ => return Err("read approval failed".into()),
+                    }
+                }
                 _ => return Err("read should be allowed".into()),
             };
             assert!(
@@ -1273,7 +1283,7 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
                 .await?;
             let permit = match (mode, permissions, auth) {
                 (WorkMode::Plan, _, Authorization::Denied(_)) => None,
-                (_, PermissionMode::Review, Authorization::Pending(request)) => {
+                (_, PermissionMode::Manual, Authorization::Pending(request)) => {
                     match manager.resolve(&request.approval_id, true)? {
                         Authorization::Permit(permit) => Some(permit),
                         _ => return Err("approval failed".into()),
@@ -1320,7 +1330,7 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
 async fn changing_context_alone_cannot_elevate_permission_mode()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, mut context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let revision = PermissionRevision::new(modes.clone(), run.permissions);
@@ -1370,7 +1380,7 @@ async fn read_gate_enforces_ask_one_shot_and_explicit_deny()
     };
     let temp = support::temp_workspace()?;
     std::fs::write(temp.path().join("secret.txt"), "private")?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let rules = "[[rules]]\neffect='ask'\ntool='read_file'";
@@ -1528,7 +1538,7 @@ async fn dispatcher_integrates_all_seven_tools_and_confirmation()
     use saya_core::dispatch::ToolDispatcher;
     let temp = support::temp_workspace()?;
     std::fs::write(temp.path().join("source.txt"), "old\n")?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let files = Arc::new(ReadTools::new(
@@ -1578,7 +1588,7 @@ async fn dispatcher_integrates_all_seven_tools_and_confirmation()
             arguments: args.to_string(),
         };
         assert!(
-            dispatch_call(&dispatch, &call, &context, false).await?.ok,
+            dispatch_call(&dispatch, &call, &context, true).await?.ok,
             "{name}"
         );
     }
@@ -1619,7 +1629,7 @@ async fn dispatcher_rejects_foreign_permit_and_noninteractive_never_executes()
 -> Result<(), Box<dyn std::error::Error>> {
     use saya_core::dispatch::ToolDispatcher;
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let files = Arc::new(ReadTools::new(
         temp.path(),
@@ -1712,7 +1722,7 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
     ] {
         for permissions in [
             PermissionMode::Auto,
-            PermissionMode::Review,
+            PermissionMode::Manual,
             PermissionMode::Bypass,
         ] {
             let temp = support::temp_workspace()?;
@@ -1751,7 +1761,16 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
                 arguments: serde_json::json!({"path":"input.txt","start_line":1,"line_count":1})
                     .to_string(),
             };
-            assert!(dispatch_call(&dispatch, &read, &context, false).await?.ok);
+            assert!(
+                dispatch_call(
+                    &dispatch,
+                    &read,
+                    &context,
+                    permissions == PermissionMode::Manual
+                )
+                .await?
+                .ok
+            );
             let write = write_call("write", "done");
             let command = ToolCall {
                 call_id: "cmd".into(),
@@ -1776,7 +1795,7 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
                 .await?;
             match (mode, permissions, auth) {
                 (WorkMode::Plan, _, Authorization::Denied(_)) => {}
-                (_, PermissionMode::Review, Authorization::NeedsConfirmation(_)) => {}
+                (_, PermissionMode::Manual, Authorization::NeedsConfirmation(_)) => {}
                 (
                     _,
                     PermissionMode::Auto | PermissionMode::Bypass,
@@ -1805,7 +1824,7 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
                 (WorkMode::Plan, _, Authorization::Denied(_)) => {}
                 (
                     _,
-                    PermissionMode::Review | PermissionMode::Auto,
+                    PermissionMode::Manual | PermissionMode::Auto,
                     Authorization::NeedsConfirmation(_),
                 ) => {}
                 (_, PermissionMode::Bypass, Authorization::Permit(permit)) => {
@@ -1815,7 +1834,7 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
                     return Err(format!("unexpected exec decision {mode:?}/{permissions:?}").into());
                 }
             }
-            if mode == WorkMode::Plan || permissions == PermissionMode::Review {
+            if mode == WorkMode::Plan || permissions == PermissionMode::Manual {
                 assert!(!temp.path().join("out.txt").exists());
             }
         }
@@ -2066,7 +2085,7 @@ async fn background_submit_needs_approval_then_returns_queryable_result()
         dispatch::{DispatchReview, ToolDispatcher},
     };
     let temp = support::temp_workspace()?;
-    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let modes = ModeController::new(WorkMode::Work);
     let files = Arc::new(ReadTools::new(
@@ -2393,5 +2412,153 @@ async fn background_jobs_enforce_limits_and_reject_new_work_after_shutdown()
     assert!(!matches!(jobs.status(&id)?, Some(JobStatus::Running)));
     assert!(jobs.start(second, context, b).is_err());
     assert!(jobs.status("not-a-job")?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn manual_background_tools_each_require_one_user_approval()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, BackgroundToolKind, BackgroundTools, JobStatus},
+        dispatch::ToolDispatcher,
+    };
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        ExecConfig::default(),
+    )?);
+    let jobs = Arc::new(BackgroundJobs::new(dispatcher, 4, 16)?);
+    let bridge = Arc::new(BackgroundTools::new(
+        jobs.clone(),
+        Arc::new(deny_model()),
+        SharedBudget::default(),
+        config(),
+        "task".into(),
+        true,
+    ));
+    let marker = temp.path().join("started");
+    let start = ToolCall { call_id: "start".into(), name: "background_start".into(), arguments: serde_json::json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","printf ready > \"$1\"; sleep 30","sh",marker]}}).to_string() };
+    let start_result = bridge
+        .tool(BackgroundToolKind::Start)
+        .execute(&start, &context, &Signal::default())
+        .await?;
+    assert_eq!(
+        start_result.error.as_ref().map(|e| e.code.as_str()),
+        Some("needs_confirmation")
+    );
+    assert!(!marker.exists());
+    let start_approval = start_result
+        .data
+        .as_ref()
+        .and_then(|v| v["request"]["approval_id"].as_str())
+        .ok_or("missing approval")?;
+    let start_result = bridge.resolve(start_approval, true)?;
+    let id = start_result
+        .data
+        .as_ref()
+        .and_then(|v| v["job_id"].as_str())
+        .ok_or("missing job ID")?
+        .to_owned();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !marker.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let status = ToolCall {
+        call_id: "status".into(),
+        name: "background_status".into(),
+        arguments: serde_json::json!({"job_id":id}).to_string(),
+    };
+    let pending = bridge
+        .tool(BackgroundToolKind::Status)
+        .execute(&status, &context, &Signal::default())
+        .await?;
+    assert_eq!(
+        pending.error.as_ref().map(|e| e.code.as_str()),
+        Some("needs_confirmation")
+    );
+    let approval = pending
+        .data
+        .as_ref()
+        .and_then(|v| v["request"]["approval_id"].as_str())
+        .ok_or("missing status approval")?;
+    assert_eq!(
+        bridge
+            .resolve(approval, true)?
+            .data
+            .as_ref()
+            .and_then(|v| v["status"].as_str()),
+        Some("running")
+    );
+    let second_status = ToolCall {
+        call_id: "status-again".into(),
+        ..status.clone()
+    };
+    let pending = bridge
+        .tool(BackgroundToolKind::Status)
+        .execute(&second_status, &context, &Signal::default())
+        .await?;
+    assert_eq!(
+        pending.error.as_ref().map(|e| e.code.as_str()),
+        Some("needs_confirmation")
+    );
+    let approval = pending
+        .data
+        .as_ref()
+        .and_then(|v| v["request"]["approval_id"].as_str())
+        .ok_or("missing repeated status approval")?;
+    assert_eq!(
+        bridge
+            .resolve(approval, false)?
+            .error
+            .as_ref()
+            .map(|e| e.code.as_str()),
+        Some("permission_denied")
+    );
+    let cancel = ToolCall {
+        call_id: "cancel".into(),
+        name: "background_cancel".into(),
+        arguments: serde_json::json!({"job_id":id}).to_string(),
+    };
+    let pending = bridge
+        .tool(BackgroundToolKind::Cancel)
+        .execute(&cancel, &context, &Signal::default())
+        .await?;
+    assert_eq!(
+        pending.error.as_ref().map(|e| e.code.as_str()),
+        Some("needs_confirmation")
+    );
+    assert!(matches!(jobs.status(&id)?, Some(JobStatus::Running)));
+    let approval = pending
+        .data
+        .as_ref()
+        .and_then(|v| v["request"]["approval_id"].as_str())
+        .ok_or("missing cancel approval")?;
+    assert!(bridge.resolve(approval, true)?.ok);
+    let finished =
+        tokio::time::timeout(std::time::Duration::from_secs(8), jobs.wait(&id)).await??;
+    assert!(!matches!(finished, Some(JobStatus::Running)));
+    jobs.shutdown().await?;
     Ok(())
 }

@@ -24,7 +24,7 @@ fn all_mode_permission_combinations_keep_one_mode_and_one_permission()
     ] {
         for permissions in [
             PermissionMode::Auto,
-            PermissionMode::Review,
+            PermissionMode::Manual,
             PermissionMode::Bypass,
         ] {
             let prompt = prompt::execution(mode, permissions, &tools(&["read_file"]))?;
@@ -164,14 +164,14 @@ fn runtime_facts_stay_in_data_and_do_not_promote_untrusted_strings()
         id: RunId::new(),
         session_id: session.id,
         work_mode: WorkMode::Plan,
-        permissions: PermissionMode::Review,
+        permissions: PermissionMode::Manual,
     };
     let HistoryItem::UserText(data) = prompt::runtime_context(&session, &run)? else {
         return Err("not data".into());
     };
     let data: serde_json::Value = serde_json::from_str(&data)?;
     assert_eq!(data["saya_runtime_context_v1"]["work_mode"], "plan");
-    assert_eq!(data["saya_runtime_context_v1"]["permission_mode"], "review");
+    assert_eq!(data["saya_runtime_context_v1"]["permission_mode"], "manual");
     assert_eq!(data["saya_runtime_context_v1"]["model"], session.model);
     assert!(data.get("history").is_none());
     let execution = prompt::execution(run.work_mode, run.permissions, &[])?;
@@ -202,7 +202,7 @@ fn runtime_prompts_are_english_without_a_fixed_communication_language()
     ] {
         for permissions in [
             PermissionMode::Auto,
-            PermissionMode::Review,
+            PermissionMode::Manual,
             PermissionMode::Bypass,
         ] {
             let bundle = prompt::execution(

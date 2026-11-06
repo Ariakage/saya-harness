@@ -14,7 +14,7 @@
 - 模式分工：PLAN 负责需求分析与规划；BUILD 负责端到端实现和交付；CODE 聚焦代码编写、修改与调试；WORK 负责通用任务执行。
 - CLI 交互：同时支持连续对话的交互会话和用于脚本调用的单次命令。
 - 模式规则：用户手动切换，Agent 可建议；当前调用完成后、下一次调用前生效，同一会话保留上下文。
-- 权限模式：`auto`、`bypass permissions`、要求核查，默认 `auto`。PLAN 在三种权限模式下均只读，不修改工作区文件。
+- 权限模式：`auto`、`bypass permissions`、`Manual Approval`，默认 `auto`。Manual Approval 对每次工具调用要求人工批准；PLAN 在三种权限模式下均只读，不修改工作区文件。
 - 模型协议：OpenAI Chat Completions、OpenAI Responses API、Anthropic Messages。
 - 首批工具：本地文件读写、目录／内容搜索、命令执行；可显式在当前运行内后台启动、查询与取消。运行结束时清理未完成任务。
 - 输出：流式交互、JSON 最终结果与 JSONL 事件输出。

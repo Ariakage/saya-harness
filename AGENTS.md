@@ -10,7 +10,7 @@
 - 同时支持编程任务与通用任务，提供 PLAN、BUILD、CODE、WORK 四个可切换的运行模式。
 - PLAN 负责需求分析与规划；BUILD 负责端到端实现和交付；CODE 聚焦代码编写、修改与调试；WORK 负责通用任务执行。具体规则见[工作模式](docs/modes.md)。
 - 新会话默认 WORK。模式由用户手动切换，Agent 可以建议；当前调用完成后、下一次调用前生效，同一会话保留上下文。
-- 权限模式分别为 `auto`、`bypass permissions`、要求核查，默认 `auto`。PLAN 在三种权限模式下均只读调查并输出计划，不修改工作区文件。
+- 权限模式分别为 `auto`、`bypass permissions`、`Manual Approval`，默认 `auto`。Manual Approval 对每次工具调用要求人工批准，模型请求不单独确认。PLAN 在三种权限模式下均只读调查并输出计划，不修改工作区文件。
 - 权限、预授权、输出与会话恢复的具体规则见[执行与恢复契约](docs/execution.md)。工作模式和权限模式分别处理，不混用。
 - MVP 的确定接口、默认值、边界与工程选型以[完整基线](docs/mvp-baseline.md) B-01 至 B-24 为准，已由项目负责人整套确认，见 D-027。
 - Sandbox、MCP 等后续新增功能见[能力路线图](docs/capability-roadmap.md)。功能规划与 MVP 实施任务分别处理，不将规划清单当作已实现或自动扩入 0.1。

@@ -36,19 +36,27 @@ fn all_modes_and_permissions_enforce_plan_and_defaults() -> Result<(), Box<dyn s
         for permission in [
             PermissionMode::Auto,
             PermissionMode::Bypass,
-            PermissionMode::Review,
+            PermissionMode::Manual,
         ] {
             assert_eq!(
                 policy.evaluate(mode, permission, &read).decision,
-                Decision::Allow
+                if permission == PermissionMode::Manual {
+                    Decision::Ask
+                } else {
+                    Decision::Allow
+                }
             );
             assert_eq!(
                 policy.evaluate(mode, permission, &input).decision,
-                Decision::Allow
+                if permission == PermissionMode::Manual {
+                    Decision::Ask
+                } else {
+                    Decision::Allow
+                }
             );
             let expected_write = if mode == WorkMode::Plan {
                 Decision::Deny
-            } else if permission == PermissionMode::Review {
+            } else if permission == PermissionMode::Manual {
                 Decision::Ask
             } else {
                 Decision::Allow
@@ -58,7 +66,7 @@ fn all_modes_and_permissions_enforce_plan_and_defaults() -> Result<(), Box<dyn s
             } else {
                 match permission {
                     PermissionMode::Auto => Decision::ModelReview,
-                    PermissionMode::Review => Decision::Ask,
+                    PermissionMode::Manual => Decision::Ask,
                     PermissionMode::Bypass => Decision::Allow,
                 }
             };
@@ -103,7 +111,7 @@ path_glob="{}"
     let operation = Operation::file(root.path(), "write_file", Path::new("a.txt"))?;
     for permission in [
         PermissionMode::Auto,
-        PermissionMode::Review,
+        PermissionMode::Manual,
         PermissionMode::Bypass,
     ] {
         let result = policy.evaluate(WorkMode::Work, permission, &operation);
@@ -197,7 +205,7 @@ fn executable_and_argv_prefix_must_all_match_and_review_still_asks()
     );
     assert_eq!(
         policy
-            .evaluate(WorkMode::Work, PermissionMode::Review, &op)
+            .evaluate(WorkMode::Work, PermissionMode::Manual, &op)
             .decision,
         Decision::Ask
     );
@@ -268,7 +276,7 @@ fn gate_never_treats_ask_or_model_review_as_authorization() -> Result<(), Box<dy
         &context,
         &root.path().join("a.txt")
     )?);
-    context.run.permissions = PermissionMode::Review;
+    context.run.permissions = PermissionMode::Manual;
     assert!(!WriteGate::authorize(
         &gate,
         &file,

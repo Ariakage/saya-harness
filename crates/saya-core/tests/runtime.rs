@@ -220,7 +220,7 @@ async fn malformed_write_is_paired_and_model_can_continue() -> Result<(), Box<dy
 #[tokio::test]
 async fn noninteractive_review_stops_before_write() -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (mut session, run) = fixture(temp.path(), PermissionMode::Review);
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
     let model = Arc::new(FakeModel::new(vec![vec![call(
         "write",
         "write_file",
@@ -454,7 +454,7 @@ impl saya_core::runtime::ApprovalHandler for Approve {
 async fn interactive_confirmation_allows_only_requested_write()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (mut session, run) = fixture(temp.path(), PermissionMode::Review);
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
     let model = Arc::new(FakeModel::new(vec![
         vec![call(
             "write",
@@ -506,7 +506,7 @@ async fn interactive_confirmation_allows_only_requested_write()
 async fn confirmation_stop_closes_remaining_tool_calls_without_execution()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
-    let (mut session, run) = fixture(temp.path(), PermissionMode::Review);
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
     let model = Arc::new(FakeModel::new(vec![vec![
         call(
             "first",
@@ -955,7 +955,7 @@ async fn runtime_enforces_all_work_and_permission_combinations()
     ] {
         for permissions in [
             PermissionMode::Auto,
-            PermissionMode::Review,
+            PermissionMode::Manual,
             PermissionMode::Bypass,
         ] {
             let temp = support::temp_workspace()?;
@@ -979,7 +979,7 @@ async fn runtime_enforces_all_work_and_permission_combinations()
                     assert!(!temp.path().join("out.txt").exists());
                     assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult {call_id,result} if call_id=="write" && !result.ok)));
                 }
-                (_, PermissionMode::Review) => {
+                (_, PermissionMode::Manual) => {
                     assert_eq!(result.status, RunStatus::NeedsConfirmation);
                     assert!(!temp.path().join("out.txt").exists());
                 }
@@ -1192,5 +1192,44 @@ async fn active_time_budget_starts_when_run_begins_not_when_constructed()
     tokio::time::advance(std::time::Duration::from_secs(3600)).await;
     let result = runtime.run(&mut session).await?;
     assert_eq!(result.status, RunStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn manual_noninteractive_read_stops_before_revealing_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("input.txt"), "private-fixture")?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
+    let model = Arc::new(FakeModel::new(vec![vec![call(
+        "read",
+        "read_file",
+        serde_json::json!({"path":"input.txt"}),
+    )]]));
+    let store = Arc::new(MemoryStore::default());
+    let mut runtime = runtime(temp.path(), run, model.clone(), store, Arc::new(NoCancel))?;
+    let result = runtime.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::NeedsConfirmation);
+    assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 1);
+    assert!(!serde_json::to_string(&session.history)?.contains("private-fixture"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn manual_noninteractive_background_status_requires_confirmation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
+    let model = Arc::new(FakeModel::new(vec![vec![call(
+        "status",
+        "background_status",
+        serde_json::json!({"job_id":"unknown-job"}),
+    )]]));
+    let store = Arc::new(MemoryStore::default());
+    let mut runtime = runtime(temp.path(), run, model.clone(), store, Arc::new(NoCancel))?;
+    let result = runtime.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::NeedsConfirmation);
+    assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 1);
+    assert!(session.history.iter().any(|item| matches!(item, HistoryItem::ToolResult {call_id, result} if call_id == "status" && result.error.as_ref().is_some_and(|e| e.code == "needs_confirmation"))));
     Ok(())
 }

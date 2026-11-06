@@ -34,7 +34,7 @@
 | DEV-007 | read_file、list_dir、find_files、search_text | DEV-003 | UTF-8、稳定排序、忽略项、分页／截断、版本与允许根；临时目录验证链接与路径边界 |
 | DEV-008 | write_file、apply_patch、冲突检查和单文件替换 | DEV-004、DEV-007 | 新建前提、expected_version、补丁上下文、权限保留与大小限制；保存意图失败时无写入 |
 | DEV-009 | exec 的 argv、cwd、环境、输出、超时与进程组清理 | DEV-004、DEV-005 | 无隐式 shell／PTY；两路输出上限、排空管道、5 秒清理；仅使用受控测试进程与临时文件 |
-| DEV-010 | auto／bypass／review 与 TOML 规则、路径与硬限制 | DEV-006、DEV-007、DEV-008、DEV-009 | deny＞ask＞allow；四工作模式×三权限模式；PLAN 禁用写入与 exec；bypass 不解除硬限制 |
+| DEV-010 | auto／bypass／manual 与 TOML 规则、路径与硬限制 | DEV-006、DEV-007、DEV-008、DEV-009 | deny＞ask＞allow；四工作模式×三权限模式；PLAN 禁用写入与 exec；bypass 不解除硬限制 |
 | DEV-011 | 独立核查请求构造、结构化结论和用户兜底，先使用替身 | DEV-003、DEV-005、DEV-010 | 核查无工具／不递归；解析或服务失败转人工；请求与重试计入预算，模型参数作为数据 |
 | DEV-012 | 一次性人工许可、预授权文件、精确匹配、拒绝记忆与失效 | DEV-006、DEV-010 | argv／cwd／模式／版本绑定；切换失效；不存历史授权；无许可不派发 |
 
