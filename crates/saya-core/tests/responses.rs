@@ -453,3 +453,68 @@ async fn completed_event_followed_by_eof_is_a_valid_stream_end()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn multiple_function_calls_preserve_order_and_each_call_id()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first_call = call_item("first", "read_file", "{\"path\":\"a\"}");
+    let second_call = call_item("second", "list_dir", "{\"path\":\".\"}");
+    let first = fixture::sse(&[
+        event(
+            "response.output_item.done",
+            json!({"output_index":0,"item":first_call}),
+        ),
+        event(
+            "response.output_item.done",
+            json!({"output_index":1,"item":second_call}),
+        ),
+        done(vec![first_call, second_call]),
+    ]);
+    let second = fixture::sse(&[done(vec![message("done")])]);
+    let (url, requests) = fixture::server(vec![
+        ("text/event-stream", first),
+        ("text/event-stream", second),
+    ])?;
+    let model = ResponsesModel::new(
+        transport(url)?,
+        settings(true),
+        ResponsesCompatibility::default(),
+    );
+    let mut req = request();
+    let (items, _, _) = collect(&model, &req).await?;
+    let ids: Vec<_> = items
+        .iter()
+        .filter_map(|item| {
+            if let HistoryItem::ToolCall(call) = item {
+                Some(call.call_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(ids, ["first", "second"]);
+    req.history.extend(items);
+    for id in ids {
+        req.history.push(HistoryItem::ToolResult {
+            call_id: id,
+            result: ToolResult {
+                ok: true,
+                data: None,
+                error: None,
+                truncated: false,
+            },
+        });
+    }
+    collect(&model, &req).await?;
+    let _ = requests.recv_timeout(Duration::from_secs(1))?;
+    let replay = requests.recv_timeout(Duration::from_secs(1))?;
+    let output_ids: Vec<_> = replay["input"]
+        .as_array()
+        .ok_or("missing input")?
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .filter_map(|item| item["call_id"].as_str())
+        .collect();
+    assert_eq!(output_ids, ["first", "second"]);
+    Ok(())
+}

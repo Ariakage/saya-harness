@@ -198,6 +198,12 @@ impl RuntimeHandle {
     pub fn cancel_background(&self, id: &str) -> Result<bool, BoundaryError> {
         self.jobs.cancel(id)
     }
+    /// Snapshot background lifecycle transitions in the order observed by this run.
+    pub fn background_events(
+        &self,
+    ) -> Result<Vec<crate::background::BackgroundEvent>, BoundaryError> {
+        self.jobs.events()
+    }
 }
 impl AgentRuntime {
     pub fn new(setup: RuntimeSetup) -> Result<Self, BoundaryError> {

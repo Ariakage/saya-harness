@@ -1846,7 +1846,10 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
 async fn background_jobs_run_concurrently_and_plan_cancels_mutations()
 -> Result<(), Box<dyn std::error::Error>> {
     use saya_core::{
-        background::{BackgroundJobs, JobStatus},
+        background::{
+            BackgroundCancelReason, BackgroundEventKind, BackgroundJobs, BackgroundOutcome,
+            JobStatus,
+        },
         dispatch::{DispatchReview, ToolDispatcher},
     };
     let temp = support::temp_workspace()?;
@@ -1948,6 +1951,37 @@ async fn background_jobs_run_concurrently_and_plan_cancels_mutations()
     tokio::time::timeout(std::time::Duration::from_secs(8), jobs.shutdown()).await??;
     assert!(!matches!(jobs.status(&exec_id)?, Some(JobStatus::Running)));
     assert_eq!(modes.snapshot()?.current, WorkMode::Plan);
+    let events = jobs.events()?;
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[1].sequence == pair[0].sequence + 1)
+    );
+    let read_finish = events
+        .iter()
+        .position(|event| {
+            event.job_id == read_id
+                && matches!(
+                    event.kind,
+                    BackgroundEventKind::Finished {
+                        outcome: BackgroundOutcome::Succeeded
+                    }
+                )
+        })
+        .ok_or("missing read completion")?;
+    let plan_cancel = events
+        .iter()
+        .position(|event| {
+            event.job_id == exec_id
+                && matches!(
+                    event.kind,
+                    BackgroundEventKind::CancellationRequested {
+                        reason: BackgroundCancelReason::Plan
+                    }
+                )
+        })
+        .ok_or("missing PLAN cancellation")?;
+    assert!(read_finish < plan_cancel);
     assert!(
         store
             .load_session(session.id)
@@ -2054,6 +2088,12 @@ async fn background_storage_failure_stops_new_dispatch_and_preserves_error()
         jobs.fatal_error()?.as_ref().map(|e| e.code.as_str()),
         Some("storage_error")
     );
+    assert!(jobs.events()?.iter().any(|event| {
+        event.job_id == id
+            && matches!(&event.kind, saya_core::background::BackgroundEventKind::Finished {
+            outcome: saya_core::background::BackgroundOutcome::Failed { code }
+        } if code == "storage_error")
+    }));
     assert!(!temp.path().join("out.txt").exists());
     let auth = dispatch
         .authorize(

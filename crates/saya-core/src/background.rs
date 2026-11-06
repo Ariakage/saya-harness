@@ -73,6 +73,41 @@ pub enum JobStatus {
     Finished(ToolResult),
     Failed(BoundaryError),
 }
+/// Run-local observation of a background job transition. This is an in-memory
+/// control-plane record, not the durable schema-v1 event stream delivered in P6.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundEvent {
+    pub sequence: u64,
+    pub job_id: String,
+    pub kind: BackgroundEventKind,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackgroundEventKind {
+    /// The job was accepted for scheduling; its tool has not necessarily begun.
+    Accepted {
+        call_id: String,
+        tool: String,
+    },
+    CancellationRequested {
+        reason: BackgroundCancelReason,
+    },
+    Finished {
+        outcome: BackgroundOutcome,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundCancelReason {
+    User,
+    Plan,
+    Shutdown,
+    Failure,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackgroundOutcome {
+    Succeeded,
+    Failed { code: String },
+    Cancelled,
+}
 /// Authorization result for an explicitly requested background operation.
 pub enum JobSubmission {
     Started { job_id: String },
@@ -102,6 +137,25 @@ struct State {
     closed: bool,
     fatal: Option<BoundaryError>,
     jobs: HashMap<String, Job>,
+    events: Vec<BackgroundEvent>,
+}
+impl State {
+    fn event(&mut self, job_id: &str, kind: BackgroundEventKind) {
+        self.events.push(BackgroundEvent {
+            sequence: self.events.len() as u64 + 1,
+            job_id: job_id.into(),
+            kind,
+        });
+    }
+    fn request_cancellation(&mut self, id: &str, reason: BackgroundCancelReason) {
+        if let Some(job) = self.jobs.get(id)
+            && matches!(job.status, JobStatus::Running)
+            && !job.cancel.is_cancelled()
+        {
+            job.cancel.cancel();
+            self.event(id, BackgroundEventKind::CancellationRequested { reason });
+        }
+    }
 }
 struct Shared {
     state: Mutex<State>,
@@ -141,6 +195,7 @@ impl BackgroundJobs {
                     closed: false,
                     fatal: None,
                     jobs: HashMap::new(),
+                    events: Vec::new(),
                 }),
                 changed: Notify::new(),
             }),
@@ -272,6 +327,13 @@ impl BackgroundJobs {
                 status: JobStatus::Running,
             },
         );
+        state.event(
+            &id,
+            BackgroundEventKind::Accepted {
+                call_id: call.call_id.clone(),
+                tool: call.name.clone(),
+            },
+        );
         let shared = self.shared.clone();
         let dispatcher = self.dispatcher.clone();
         let job_id = id.clone();
@@ -297,19 +359,46 @@ impl BackgroundJobs {
                 {
                     state.closed = true;
                     state.fatal = Some(error.clone());
-                    for job in state
+                    let ids: Vec<_> = state
                         .jobs
-                        .values()
-                        .filter(|job| matches!(job.status, JobStatus::Running))
-                    {
-                        job.cancel.cancel();
+                        .keys()
+                        .filter(|id| *id != &job_id)
+                        .cloned()
+                        .collect();
+                    for id in ids {
+                        state.request_cancellation(&id, BackgroundCancelReason::Failure);
                     }
                 }
                 if let Some(job) = state.jobs.get_mut(&job_id) {
-                    job.status = match outcome {
-                        Ok(value) => JobStatus::Finished(value),
-                        Err(error) => JobStatus::Failed(error),
+                    let (status, outcome) = match outcome {
+                        Ok(value) => {
+                            let outcome = if value.ok {
+                                BackgroundOutcome::Succeeded
+                            } else if value.error.as_ref().is_some_and(|e| e.code == "cancelled") {
+                                BackgroundOutcome::Cancelled
+                            } else {
+                                BackgroundOutcome::Failed {
+                                    code: value
+                                        .error
+                                        .as_ref()
+                                        .map_or_else(|| "tool_error".into(), |e| e.code.clone()),
+                                }
+                            };
+                            (JobStatus::Finished(value), outcome)
+                        }
+                        Err(error) => {
+                            let outcome = if error.0.code == "cancelled" {
+                                BackgroundOutcome::Cancelled
+                            } else {
+                                BackgroundOutcome::Failed {
+                                    code: error.0.code.clone(),
+                                }
+                            };
+                            (JobStatus::Failed(error), outcome)
+                        }
                     };
+                    job.status = status;
+                    state.event(&job_id, BackgroundEventKind::Finished { outcome });
                 }
             }
             shared.changed.notify_waiters();
@@ -323,6 +412,16 @@ impl BackgroundJobs {
             .lock()
             .map_err(|_| failure("background_error", "job lock poisoned"))?;
         Ok(state.jobs.get(id).map(|job| job.status.clone()))
+    }
+    /// Return a consistent snapshot of run-local transitions in observed order.
+    pub fn events(&self) -> Result<Vec<BackgroundEvent>, BoundaryError> {
+        Ok(self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?
+            .events
+            .clone())
     }
     pub(crate) fn running_count(&self) -> Result<usize, BoundaryError> {
         let state = self
@@ -370,23 +469,21 @@ impl BackgroundJobs {
             .clone())
     }
     pub fn cancel(&self, id: &str) -> Result<bool, BoundaryError> {
-        let state = self
+        let mut state = self
             .shared
             .state
             .lock()
             .map_err(|_| failure("background_error", "job lock poisoned"))?;
-        let Some(job) = state.jobs.get(id) else {
+        if !state.jobs.contains_key(id) {
             return Ok(false);
-        };
-        if matches!(job.status, JobStatus::Running) {
-            job.cancel.cancel();
         }
+        state.request_cancellation(id, BackgroundCancelReason::User);
         Ok(true)
     }
     /// Queue a mode request. PLAN cancels active mutating jobs; the mode
     /// controller applies the change only when in-flight calls have drained.
     pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
-        let state = self
+        let mut state = self
             .shared
             .state
             .lock()
@@ -396,12 +493,14 @@ impl BackgroundJobs {
         }
         self.dispatcher.mode_controller().request(mode)?;
         if mode == WorkMode::Plan {
-            for job in state
+            let ids: Vec<_> = state
                 .jobs
-                .values()
-                .filter(|job| job.mutating && matches!(job.status, JobStatus::Running))
-            {
-                job.cancel.cancel();
+                .iter()
+                .filter(|(_, job)| job.mutating)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in ids {
+                state.request_cancellation(&id, BackgroundCancelReason::Plan);
             }
         }
         Ok(())
@@ -415,12 +514,9 @@ impl BackgroundJobs {
                 .lock()
                 .map_err(|_| failure("background_error", "job lock poisoned"))?;
             state.closed = true;
-            for job in state
-                .jobs
-                .values()
-                .filter(|job| matches!(job.status, JobStatus::Running))
-            {
-                job.cancel.cancel();
+            let ids: Vec<_> = state.jobs.keys().cloned().collect();
+            for id in ids {
+                state.request_cancellation(&id, BackgroundCancelReason::Shutdown);
             }
         }
         loop {
