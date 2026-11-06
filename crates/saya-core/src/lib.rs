@@ -15,6 +15,7 @@ pub mod memory;
 pub mod mode;
 pub mod permissions;
 pub mod prompt;
+pub mod provider;
 pub mod review;
 pub mod runtime;
 pub mod tools;
