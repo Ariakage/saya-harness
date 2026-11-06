@@ -1,0 +1,965 @@
+//! Reusable, UI-independent run loop. Network providers and durable storage are
+//! supplied by callers. Memory-backed side effects are suitable only for tests.
+use crate::{
+    approvals::{ApprovalSetup, Authorization, PermissionRevision, Preauthorizations},
+    background::{BackgroundJobs, BackgroundToolKind, BackgroundTools, JobSubmission},
+    boundary::{
+        Cancellation, Model, ModelRequest, ModelUpdate, Operation, Store, StoreChange, Tool,
+        ToolContext, ToolDefinition,
+    },
+    contract::{
+        ApprovalRequest, BoundaryError, ErrorInfo, HistoryItem, ModelPurpose, Persistence, Run,
+        RunResult, RunStatus, SCHEMA_VERSION, Session, ToolCall, ToolResult, WorkMode,
+    },
+    dispatch::{DispatchReview, ToolDispatcher},
+    mode::ModeController,
+    permissions::Policy,
+    review::{ReviewConfig, SharedBudget},
+    tools::{exec::ExecConfig, read::ReadTools},
+};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+use tokio::time::{Instant, sleep};
+
+fn error(code: &str, message: &str) -> BoundaryError {
+    BoundaryError(
+        ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        },
+        None,
+        None,
+    )
+}
+fn failed(code: &str, message: &str) -> ToolResult {
+    ToolResult {
+        ok: false,
+        data: None,
+        error: Some(ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        }),
+        truncated: false,
+    }
+}
+struct RuntimeStore(Arc<dyn Store>);
+impl Store for RuntimeStore {
+    fn load_session<'a>(
+        &'a self,
+        id: crate::contract::SessionId,
+    ) -> Operation<'a, Option<Session>> {
+        Box::pin(async move {
+            self.0
+                .load_session(id)
+                .await
+                .map_err(normalize_storage_error)
+        })
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            self.0
+                .commit(changes)
+                .await
+                .map_err(normalize_storage_error)
+        })
+    }
+}
+fn normalize_storage_error(mut error: BoundaryError) -> BoundaryError {
+    error.0.code = "storage_error".into();
+    error
+}
+
+struct CallCancel {
+    root: Arc<dyn Cancellation>,
+    signal: tokio::sync::watch::Sender<bool>,
+}
+impl CallCancel {
+    fn new(root: Arc<dyn Cancellation>) -> Self {
+        Self {
+            root,
+            signal: tokio::sync::watch::channel(false).0,
+        }
+    }
+    fn stop(&self) {
+        self.signal.send_replace(true);
+    }
+}
+impl Cancellation for CallCancel {
+    fn is_cancelled(&self) -> bool {
+        self.root.is_cancelled() || *self.signal.borrow()
+    }
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let mut receiver = self.signal.subscribe();
+            tokio::select! { () = self.root.cancelled() => (), () = async { while !*receiver.borrow_and_update() { if receiver.changed().await.is_err() { break; } } } => () }
+        })
+    }
+}
+
+/// Callback for one explicit human confirmation. `None` means no answer.
+pub trait ApprovalHandler: Send + Sync {
+    fn confirm<'a>(
+        &'a self,
+        request: &'a ApprovalRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Option<bool>>;
+}
+/// Host-controlled run budgets and timeouts. Values cannot be increased by tools.
+#[derive(Debug, Clone)]
+pub struct RuntimeLimits {
+    pub model_requests: usize,
+    pub tool_calls: usize,
+    pub active_time: Duration,
+    pub model_connect: Duration,
+    pub model_idle: Duration,
+    pub model_total: Duration,
+    pub tool_timeout: Duration,
+    pub retry_jitter_max: Duration,
+    pub background_running: usize,
+    pub background_jobs: usize,
+}
+impl Default for RuntimeLimits {
+    fn default() -> Self {
+        Self {
+            model_requests: 64,
+            tool_calls: 256,
+            active_time: Duration::from_secs(1800),
+            model_connect: Duration::from_secs(10),
+            model_idle: Duration::from_secs(60),
+            model_total: Duration::from_secs(180),
+            tool_timeout: Duration::from_secs(120),
+            retry_jitter_max: Duration::from_millis(250),
+            background_running: 4,
+            background_jobs: 256,
+        }
+    }
+}
+/// Dependencies for a single run. Use a new runtime after resuming a session;
+/// grants, rejection memory and background jobs are never restored.
+pub struct RuntimeSetup {
+    pub run: Run,
+    pub model: Arc<dyn Model>,
+    pub store: Arc<dyn Store>,
+    pub policy: Arc<Policy>,
+    pub files: Arc<ReadTools>,
+    pub cancellation: Arc<dyn Cancellation>,
+    pub review: ReviewConfig,
+    pub exec: ExecConfig,
+    pub preauthorizations: Preauthorizations,
+    pub known_secrets: Vec<String>,
+    pub summary: String,
+    pub confirmation: Option<Arc<dyn ApprovalHandler>>,
+    pub limits: RuntimeLimits,
+}
+/// A single-run coordinator. Construction and mode requests do not execute tools.
+pub struct AgentRuntime {
+    run: Run,
+    model: Arc<dyn Model>,
+    store: Arc<dyn Store>,
+    cancel: Arc<dyn Cancellation>,
+    dispatcher: Arc<ToolDispatcher>,
+    modes: ModeController,
+    jobs: Arc<BackgroundJobs>,
+    background: Arc<BackgroundTools>,
+    review: ReviewConfig,
+    budget: SharedBudget,
+    summary: String,
+    confirmation: Option<Arc<dyn ApprovalHandler>>,
+    limits: RuntimeLimits,
+    used: bool,
+    started: AtomicBool,
+}
+/// Handle usable while the run future owns the runtime.
+#[derive(Clone)]
+pub struct RuntimeHandle {
+    jobs: Arc<BackgroundJobs>,
+    modes: ModeController,
+}
+impl RuntimeHandle {
+    pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
+        self.jobs.request_mode(mode)
+    }
+    pub fn mode(&self) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
+        self.modes.snapshot()
+    }
+    pub fn background_status(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::background::JobStatus>, BoundaryError> {
+        self.jobs.status(id)
+    }
+    pub fn cancel_background(&self, id: &str) -> Result<bool, BoundaryError> {
+        self.jobs.cancel(id)
+    }
+}
+impl AgentRuntime {
+    pub fn new(setup: RuntimeSetup) -> Result<Self, BoundaryError> {
+        let limits = setup.limits;
+        if limits.model_requests == 0
+            || limits.tool_calls == 0
+            || limits.active_time.is_zero()
+            || limits.model_connect.is_zero()
+            || limits.model_idle.is_zero()
+            || limits.model_total.is_zero()
+            || limits.tool_timeout.is_zero()
+        {
+            return Err(error(
+                "invalid_config",
+                "runtime budgets and timeouts must be positive",
+            ));
+        }
+        let store: Arc<dyn Store> = Arc::new(RuntimeStore(setup.store));
+        let modes = ModeController::new(setup.run.work_mode);
+        let permission_revision = PermissionRevision::new(modes.clone(), setup.run.permissions);
+        let budget = SharedBudget::new(limits.model_requests, limits.active_time);
+        let dispatcher = Arc::new(ToolDispatcher::new(
+            setup.policy,
+            modes.clone(),
+            permission_revision,
+            store.clone(),
+            ApprovalSetup {
+                run_id: setup.run.id,
+                session_id: setup.run.session_id,
+                initial_permissions: setup.run.permissions,
+                preauthorizations: setup.preauthorizations,
+                known_secrets: setup.known_secrets,
+                cancellation: setup.cancellation.clone(),
+            },
+            setup.files,
+            setup.exec,
+        )?);
+        let jobs = Arc::new(BackgroundJobs::new(
+            dispatcher.clone(),
+            limits.background_running,
+            limits.background_jobs,
+        )?);
+        let background = Arc::new(BackgroundTools::new(
+            jobs.clone(),
+            setup.model.clone(),
+            budget.clone(),
+            setup.review.clone(),
+            setup.summary.clone(),
+            setup.confirmation.is_some(),
+        ));
+        Ok(Self {
+            run: setup.run,
+            model: setup.model,
+            store,
+            cancel: setup.cancellation,
+            dispatcher,
+            modes,
+            jobs,
+            background,
+            review: setup.review,
+            budget,
+            summary: setup.summary,
+            confirmation: setup.confirmation,
+            limits,
+            used: false,
+            started: AtomicBool::new(false),
+        })
+    }
+    pub fn handle(&self) -> RuntimeHandle {
+        RuntimeHandle {
+            jobs: self.jobs.clone(),
+            modes: self.modes.clone(),
+        }
+    }
+    /// Queue a user-selected mode; PLAN first cancels mutating background jobs.
+    pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
+        self.jobs.request_mode(mode)
+    }
+    /// Snapshot current and pending mode. This never changes authorization.
+    pub fn mode(&self) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
+        self.modes.snapshot()
+    }
+    fn definitions(&self, mode: WorkMode) -> Vec<ToolDefinition> {
+        let mut tools = self.dispatcher.definitions();
+        if mode == WorkMode::Plan {
+            tools.retain(|d| {
+                matches!(
+                    d.name.as_str(),
+                    "read_file" | "list_dir" | "find_files" | "search_text"
+                )
+            });
+        }
+        for kind in [
+            BackgroundToolKind::Start,
+            BackgroundToolKind::Status,
+            BackgroundToolKind::Cancel,
+        ] {
+            tools.push(self.background.tool(kind).definition());
+        }
+        tools
+    }
+    fn context(&self, session: &Session, mode: WorkMode) -> ToolContext {
+        let mut run = self.run.clone();
+        run.work_mode = mode;
+        ToolContext {
+            run,
+            workspace: session.workspace.clone(),
+        }
+    }
+    async fn sync_mode(
+        &self,
+        session: &mut Session,
+    ) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
+        loop {
+            let snap = self.modes.snapshot()?;
+            if session.work_mode != snap.current {
+                let mut update = session.clone();
+                update.work_mode = snap.current;
+                self.store.commit(&[StoreChange::Session(update)]).await?;
+                session.work_mode = snap.current;
+            }
+            let now = self.modes.snapshot()?;
+            if now.revision == snap.revision && now.pending == snap.pending {
+                return Ok(now);
+            }
+        }
+    }
+    fn check(&self) -> Result<(), BoundaryError> {
+        if self.cancel.is_cancelled() {
+            return Err(error("cancelled", "run cancelled"));
+        }
+        if let Some(error) = self.jobs.fatal_failure()? {
+            return Err(error);
+        }
+        if self.budget.remaining()?.is_zero() {
+            return Err(error("limit_reached", "active time budget exceeded"));
+        }
+        Ok(())
+    }
+    async fn bounded<T>(
+        &self,
+        operation: impl Future<Output = Result<T, BoundaryError>>,
+        timeout: Duration,
+        code: &'static str,
+    ) -> Result<T, BoundaryError> {
+        self.check()?;
+        tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), () = sleep(self.budget.remaining()?) => Err(error("limit_reached", "active time budget exceeded")), () = sleep(timeout) => Err(error(code, "operation timed out")), result = operation => result }
+    }
+    async fn model_turn(&self, session: &mut Session) -> Result<Vec<HistoryItem>, BoundaryError> {
+        for attempt in 0..=2u32 {
+            self.check()?;
+            self.budget.consume()?;
+            let snap = loop {
+                let snap = self.sync_mode(session).await?;
+                self.check()?;
+                if self.modes.begin_shared(snap.revision)? {
+                    break snap;
+                }
+                sleep(Duration::from_millis(10)).await;
+            };
+            let request = (|| {
+                let tools = self.definitions(snap.current);
+                let instructions =
+                    crate::prompt::execution(snap.current, self.run.permissions, &tools)?
+                        .instructions;
+                let mut run = self.run.clone();
+                run.work_mode = snap.current;
+                let mut history = vec![crate::prompt::runtime_context(session, &run)?];
+                history.extend(session.history.iter().cloned());
+                Ok::<_, BoundaryError>(ModelRequest {
+                    request_id: uuid::Uuid::now_v7().to_string(),
+                    purpose: ModelPurpose::Execution,
+                    profile: session.profile.clone(),
+                    instructions,
+                    max_output_tokens: None,
+                    history,
+                    tools,
+                })
+            })();
+            let request = match request {
+                Ok(v) => v,
+                Err(e) => {
+                    self.modes.finish()?;
+                    return Err(e);
+                }
+            };
+            let start = Instant::now();
+            let mut partial = String::new();
+            let mut received = false;
+            let response: Result<Vec<HistoryItem>, BoundaryError> = async {
+                let mut stream = self
+                    .bounded(
+                        self.model.start(&request, self.cancel.as_ref()),
+                        self.limits.model_connect.min(self.limits.model_total),
+                        "model_connect_timeout",
+                    )
+                    .await?;
+                loop {
+                    let left = self.limits.model_total.saturating_sub(start.elapsed());
+                    match self
+                        .bounded(
+                            stream.next(self.cancel.as_ref()),
+                            self.limits.model_idle.min(left),
+                            "model_timeout",
+                        )
+                        .await?
+                    {
+                        Some(ModelUpdate::TextDelta(text)) => {
+                            received = true;
+                            partial.push_str(&text);
+                        }
+                        Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
+                        None => {
+                            return Err(error(
+                                "incomplete_model_response",
+                                "stream ended before completion",
+                            ));
+                        }
+                    }
+                }
+            }
+            .await;
+            self.modes.finish()?;
+            match response {
+                Ok(items) => {
+                    if !items.iter().any(|item| {
+                        matches!(
+                            item,
+                            HistoryItem::AssistantText(_) | HistoryItem::ToolCall(_)
+                        )
+                    }) {
+                        return Err(error(
+                            "invalid_model_response",
+                            "model completed without text or tool calls",
+                        ));
+                    }
+                    return Ok(items);
+                }
+                Err(err) => {
+                    if received {
+                        let item = HistoryItem::AssistantPartial(partial);
+                        self.store
+                            .commit(&[StoreChange::History {
+                                session_id: session.id,
+                                item: item.clone(),
+                            }])
+                            .await?;
+                        session.history.push(item);
+                    }
+                    if !received
+                        && attempt < 2
+                        && matches!(
+                            err.0.code.as_str(),
+                            "transient_connection" | "rate_limited" | "server_error"
+                        )
+                    {
+                        let jitter_max =
+                            self.limits
+                                .retry_jitter_max
+                                .as_millis()
+                                .min(u128::from(u64::MAX)) as u64;
+                        let jitter = if jitter_max == 0 {
+                            Duration::ZERO
+                        } else {
+                            Duration::from_millis(
+                                (uuid::Uuid::now_v7().as_u128() as u64)
+                                    % jitter_max.saturating_add(1),
+                            )
+                        };
+                        let delay = (Duration::from_secs(1u64 << attempt) + jitter)
+                            .max(err.1.unwrap_or_default().min(Duration::from_secs(30)));
+                        self.bounded(
+                            async {
+                                sleep(delay).await;
+                                Ok(())
+                            },
+                            self.limits.active_time,
+                            "retry_timeout",
+                        )
+                        .await?;
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        Err(error("model_error", "retry attempts exhausted"))
+    }
+    async fn confirm(&self, request: &ApprovalRequest) -> Result<Option<bool>, BoundaryError> {
+        let Some(handler) = &self.confirmation else {
+            return Ok(None);
+        };
+        self.budget.pause()?;
+        let answer = tokio::select! { biased; ()=self.cancel.cancelled()=>Err(error("cancelled","run cancelled")), answer=handler.confirm(request,self.cancel.as_ref())=>answer };
+        self.budget.resume()?;
+        answer
+    }
+    async fn save_local(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        result: ToolResult,
+    ) -> Result<ToolResult, BoundaryError> {
+        let item = HistoryItem::ToolResult {
+            call_id: call.call_id.clone(),
+            result: result.clone(),
+        };
+        let mut changes = vec![
+            StoreChange::ToolIntent {
+                run_id: self.run.id,
+                call: call.clone(),
+            },
+            StoreChange::ToolFinished {
+                run_id: self.run.id,
+                call_id: call.call_id.clone(),
+                result: result.clone(),
+            },
+            StoreChange::History {
+                session_id: session.id,
+                item: item.clone(),
+            },
+        ];
+        if let Some(code) = result.error.as_ref().map(|error| error.code.as_str()) {
+            let state = match code {
+                "permission_denied" | "mode_denied" => Some(crate::contract::ToolState::Denied),
+                "needs_confirmation" => Some(crate::contract::ToolState::WaitingConfirmation),
+                _ => None,
+            };
+            if let Some(state) = state {
+                changes.push(StoreChange::ToolState {
+                    run_id: self.run.id,
+                    call_id: call.call_id.clone(),
+                    state,
+                });
+            }
+        }
+        self.store.commit(&changes).await?;
+        session.history.push(item);
+        Ok(result)
+    }
+    async fn close_calls(
+        &self,
+        session: &mut Session,
+        calls: &[ToolCall],
+        first_unknown: bool,
+    ) -> Result<(), BoundaryError> {
+        let mut changes = Vec::new();
+        let mut items = Vec::new();
+        for (index, call) in calls.iter().enumerate() {
+            if session.history.iter().any(|item| matches!(item, HistoryItem::ToolResult { call_id, .. } if call_id == &call.call_id)) { continue; }
+            let result = if index == 0 && first_unknown {
+                failed(
+                    "outcome_unknown",
+                    "operation may have started; do not replay automatically",
+                )
+            } else {
+                failed(
+                    "not_executed",
+                    "run ended before this operation was dispatched",
+                )
+            };
+            let item = HistoryItem::ToolResult {
+                call_id: call.call_id.clone(),
+                result,
+            };
+            changes.push(StoreChange::History {
+                session_id: session.id,
+                item: item.clone(),
+            });
+            items.push(item);
+        }
+        if !changes.is_empty() {
+            self.store.commit(&changes).await?;
+            session.history.extend(items);
+        }
+        Ok(())
+    }
+    async fn execute(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+    ) -> Result<ToolResult, BoundaryError> {
+        self.check()?;
+        let snap = loop {
+            let snap = self.sync_mode(session).await?;
+            self.check()?;
+            if snap.pending.is_none() {
+                break snap;
+            }
+            sleep(Duration::from_millis(10)).await;
+        };
+        let context = self.context(session, snap.current);
+        let control = match call.name.as_str() {
+            "background_start" => Some(BackgroundToolKind::Start),
+            "background_status" => Some(BackgroundToolKind::Status),
+            "background_cancel" => Some(BackgroundToolKind::Cancel),
+            _ => None,
+        };
+        if let Some(kind) = control {
+            let result = self
+                .background
+                .tool(kind)
+                .execute(call, &context, self.cancel.as_ref())
+                .await?;
+            if result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.code == "needs_confirmation")
+            {
+                let request: ApprovalRequest = serde_json::from_value(
+                    result
+                        .data
+                        .as_ref()
+                        .and_then(|v| v.get("request"))
+                        .cloned()
+                        .ok_or_else(|| error("invalid_args", "missing approval request"))?,
+                )
+                .map_err(|_| error("invalid_args", "invalid approval request"))?;
+                if let Some(answer) = self.confirm(&request).await? {
+                    let resolved = self.background.resolve(&request.approval_id, answer)?;
+                    let result = match resolved {
+                        JobSubmission::Started { job_id } => ToolResult {
+                            ok: true,
+                            data: Some(serde_json::json!({"status":"started","job_id":job_id})),
+                            error: None,
+                            truncated: false,
+                        },
+                        JobSubmission::Denied(_) => {
+                            failed("permission_denied", "user denied background operation")
+                        }
+                        _ => failed("stale_approval", "background authorization changed"),
+                    };
+                    return self.save_local(session, call, result).await;
+                }
+            }
+            return self.save_local(session, call, result).await;
+        }
+        let review = DispatchReview {
+            model: self.model.as_ref(),
+            budget: &self.budget,
+            config: &self.review,
+        };
+        let authorization = match self
+            .dispatcher
+            .authorize(
+                call,
+                &context,
+                &self.summary,
+                self.confirmation.is_some(),
+                review,
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(e)
+                if matches!(
+                    e.0.code.as_str(),
+                    "unknown_tool"
+                        | "invalid_args"
+                        | "invalid_path"
+                        | "path_denied"
+                        | "stale_approval"
+                ) =>
+            {
+                return self
+                    .save_local(session, call, failed(&e.0.code, &e.0.message))
+                    .await;
+            }
+            Err(e) => return Err(e),
+        };
+        let authorization = match authorization {
+            Authorization::Pending(request) => match self.confirm(&request).await? {
+                Some(answer) => self.dispatcher.resolve(&request.approval_id, answer)?,
+                None => {
+                    return self
+                        .save_local(
+                            session,
+                            call,
+                            failed("needs_confirmation", "confirmation unavailable"),
+                        )
+                        .await;
+                }
+            },
+            other => other,
+        };
+        match authorization {
+            Authorization::Permit(permit) => {
+                let cancel = CallCancel::new(self.cancel.clone());
+                let operation = self
+                    .dispatcher
+                    .execute_with_cancel(call, &context, permit, &cancel, false);
+                tokio::pin!(operation);
+                let interrupted = tokio::select! {
+                    biased;
+                    () = self.cancel.cancelled() => Some(error("cancelled", "run cancelled")),
+                    () = sleep(self.budget.remaining()?) => Some(error("limit_reached", "active time budget exceeded")),
+                    () = sleep(self.limits.tool_timeout), if call.name != "exec" => Some(error("tool_timeout", "tool timed out")),
+                    result = &mut operation => {
+                        let result = result?;
+                        session.history.push(HistoryItem::ToolResult { call_id:call.call_id.clone(), result:result.clone() });
+                        return Ok(result);
+                    }
+                };
+                cancel.stop();
+                let result = operation.await;
+                if let Err(err) = &result
+                    && err.0.code != "cancelled"
+                {
+                    return Err(err.clone());
+                }
+                if let Ok(result) = result {
+                    session.history.push(HistoryItem::ToolResult {
+                        call_id: call.call_id.clone(),
+                        result,
+                    });
+                } else if let Some(saved) = self.store.load_session(session.id).await? {
+                    session.history = saved.history;
+                }
+                Err(interrupted.unwrap_or_else(|| error("cancelled", "run interrupted")))
+            }
+            Authorization::NeedsConfirmation(_) | Authorization::Pending(_) => {
+                self.save_local(
+                    session,
+                    call,
+                    failed("needs_confirmation", "confirmation required"),
+                )
+                .await
+            }
+            Authorization::Denied(_) => {
+                self.save_local(
+                    session,
+                    call,
+                    failed("permission_denied", "operation denied"),
+                )
+                .await
+            }
+            Authorization::Stale => {
+                self.save_local(
+                    session,
+                    call,
+                    failed("stale_approval", "mode or permission changed"),
+                )
+                .await
+            }
+        }
+    }
+    async fn run_inner(&self, session: &mut Session) -> Result<String, BoundaryError> {
+        self.check()?;
+        if session.id != self.run.session_id || session.work_mode != self.run.work_mode {
+            return Err(error("invalid_run", "session or mode mismatch"));
+        }
+        let existing = self.store.load_session(session.id).await?;
+        if existing.as_ref().is_some_and(|saved| saved != session) {
+            return Err(error(
+                "session_conflict",
+                "saved session differs from provided session",
+            ));
+        }
+        let mut start = Vec::new();
+        if existing.is_none() {
+            start.push(StoreChange::Session(session.clone()));
+        }
+        start.push(StoreChange::RunStarted(self.run.clone()));
+        self.store.commit(&start).await?;
+        self.started.store(true, Ordering::Release);
+        let mut calls_used = 0usize;
+        let mut previous: Option<(String, serde_json::Value, u8)> = None;
+        loop {
+            self.check()?;
+            let items = self.model_turn(session).await?;
+            self.check()?;
+            let mut seen_ids: std::collections::HashSet<&str> = session
+                .history
+                .iter()
+                .filter_map(|item| {
+                    if let HistoryItem::ToolCall(call) = item {
+                        Some(call.call_id.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for item in &items {
+                match item {
+                    HistoryItem::ToolCall(call)
+                        if call.call_id.is_empty() || !seen_ids.insert(call.call_id.as_str()) =>
+                    {
+                        return Err(error(
+                            "invalid_model_response",
+                            "tool call IDs must be nonempty and unique",
+                        ));
+                    }
+                    HistoryItem::UserText(_)
+                    | HistoryItem::ToolResult { .. }
+                    | HistoryItem::AssistantPartial(_) => {
+                        return Err(error(
+                            "invalid_model_response",
+                            "unexpected item in model response",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            let changes: Vec<_> = items
+                .iter()
+                .cloned()
+                .map(|item| StoreChange::History {
+                    session_id: session.id,
+                    item,
+                })
+                .collect();
+            self.store.commit(&changes).await?;
+            session.history.extend(items.iter().cloned());
+            let calls: Vec<_> = items
+                .iter()
+                .filter_map(|item| {
+                    if let HistoryItem::ToolCall(call) = item {
+                        Some(call.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if calls.is_empty() {
+                return Ok(items
+                    .iter()
+                    .filter_map(|item| {
+                        if let HistoryItem::AssistantText(text) = item {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect());
+            }
+            for (index, call) in calls.iter().enumerate() {
+                if let Err(err) = self.check() {
+                    self.close_calls(session, &calls[index..], false).await?;
+                    return Err(err);
+                }
+                calls_used += 1;
+                if calls_used > self.limits.tool_calls {
+                    self.close_calls(session, &calls[index..], false).await?;
+                    return Err(error("limit_reached", "tool call budget exceeded"));
+                }
+                let result = match self.execute(session, call).await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        if err.0.code != "storage_error" && err.2.is_none() {
+                            self.close_calls(session, &calls[index..], true).await?;
+                        }
+                        return Err(err);
+                    }
+                };
+                if result
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == "needs_confirmation")
+                {
+                    self.close_calls(session, &calls[index + 1..], false)
+                        .await?;
+                    return Err(error("needs_confirmation", "confirmation required"));
+                }
+                let args = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                    .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));
+                if !result.ok {
+                    let count = match &previous {
+                        Some((name, old, count)) if name == &call.name && old == &args => {
+                            count.saturating_add(1)
+                        }
+                        _ => 1,
+                    };
+                    previous = Some((call.name.clone(), args, count));
+                    if count >= 3 {
+                        self.close_calls(session, &calls[index + 1..], false)
+                            .await?;
+                        return Err(error(
+                            "repeated_tool_failure",
+                            "same tool and arguments failed three times",
+                        ));
+                    }
+                } else {
+                    previous = None;
+                }
+            }
+        }
+    }
+    /// Run once, then cancel and await all background work. Execution returns
+    /// typed status; storage failures return errors retaining observed results.
+    pub async fn run(&mut self, session: &mut Session) -> Result<RunResult, BoundaryError> {
+        if self.used {
+            return Err(error("invalid_run", "runtime is single-use"));
+        }
+        self.budget.start_run()?;
+        self.used = true;
+        let initial = session.history.len();
+        let outcome = self.run_inner(session).await;
+        let unfinished = self.jobs.running_count()?;
+        let cleanup = self.jobs.shutdown().await;
+        cleanup?;
+        if let Some(error) = self.jobs.fatal_failure()? {
+            return Err(error);
+        }
+        if let Err(e) = &outcome
+            && (e.0.code == "storage_error" || e.2.is_some())
+        {
+            return Err(e.clone());
+        }
+        if self.started.load(Ordering::Acquire) {
+            self.sync_mode(session).await?;
+        }
+        let (status, reason, text, info) = match outcome {
+            Ok(text) => (
+                RunStatus::Completed,
+                if unfinished == 0 {
+                    "completed"
+                } else {
+                    "completed_with_background_cleanup"
+                }
+                .into(),
+                Some(text),
+                None,
+            ),
+            Err(err) => {
+                let status = match err.0.code.as_str() {
+                    "cancelled" => RunStatus::Cancelled,
+                    "limit_reached" => RunStatus::LimitReached,
+                    "needs_confirmation" => RunStatus::NeedsConfirmation,
+                    "needs_input" => RunStatus::NeedsInput,
+                    _ => RunStatus::Failed,
+                };
+                let text = session.history[initial..].iter().rev().find_map(|item| {
+                    if let HistoryItem::AssistantPartial(text) = item {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                });
+                (status, err.0.code.clone(), text, Some(err.0))
+            }
+        };
+        let started = self.started.load(Ordering::Acquire);
+        let result = RunResult {
+            schema_version: SCHEMA_VERSION,
+            session_id: Some(session.id),
+            run_id: Some(self.run.id),
+            status,
+            stop_reason: Some(reason),
+            text,
+            error: info,
+            usage: None,
+            artifacts: vec![],
+            persistence: Some(Persistence {
+                saved: started,
+                error: None,
+            }),
+        };
+        if started {
+            self.store
+                .commit(&[StoreChange::RunFinished(result.clone())])
+                .await?;
+        }
+        Ok(result)
+    }
+}

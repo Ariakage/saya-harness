@@ -102,7 +102,9 @@ flowchart TD
 
 Saya 自身对外提供 MCP Server 放在 F-13 的集成方向中，不与首轮 MCP Client 混成一个交付项。
 
-## F-03 Skills 与插件包
+## F-03 Skills 与插件包（saya-plugin）
+
+未来插件系统命名为 `saya-plugin`；边界、分阶段方案及验收草案见 [saya-plugin 规划](saya-plugin.md)。当前仅规划，不属于 MVP 已实现能力。
 
 **价值**：将领域指令、工作流、工具连接与资源打包复用。
 

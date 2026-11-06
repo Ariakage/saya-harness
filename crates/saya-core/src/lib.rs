@@ -2,8 +2,8 @@
 //!
 //! These development-stage interfaces are not a stable SDK. They define data
 //! and boundaries plus a volatile store and a permission-checked local tool
-//! dispatcher. The loop prototype is test-only; no production agent loop or
-//! durable store is provided.
+//! dispatcher and reusable run coordinator. Provider protocols, durable storage,
+//! CLI task execution, and the stable SDK are not yet implemented.
 
 pub mod approvals;
 pub mod background;
@@ -16,6 +16,7 @@ pub mod mode;
 pub mod permissions;
 pub mod prompt;
 pub mod review;
+pub mod runtime;
 pub mod tools;
 
 #[cfg(test)]

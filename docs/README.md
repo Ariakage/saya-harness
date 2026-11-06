@@ -9,11 +9,13 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [完整基线](mvp-baseline.md) | 全部 24 组决定及具体契约 | 已整套确认，D-027 |
 | [工作模式](modes.md) | 四种工作模式的职责与切换规则 | 已确认，未实现／验证 |
 | [执行与恢复契约](execution.md) | 权限模式、切换边界、脚本输出与恢复策略 | 已确认，按完整基线实现 |
+| [运行时接口](runtime.md) | 可复用 core 循环和调用边界 | 受控验证通过；真实服务待接入 |
 | [架构设计](architecture.md) | 运行流程、职责划分与实现约束 | 已确定方案，未验证实现 |
 | [开发指南](development.md) | 协作流程、Rust 检查与文档维护 | 初版约定 |
+| [saya-plugin 规划](saya-plugin.md) | 未来插件系统的边界、阶段与验收草案 | 规划中，未实现 |
 | [后续能力路线图](capability-roadmap.md) | Sandbox、MCP 等 18 个功能模块、优先级与依赖 | 后续功能规划，未实现 |
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | 计划已准备，未执行 |
-| [实施任务](implementation-plan.md) | 36 项任务、依赖与验收覆盖 | 状态见开发进度 |
+| [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
 | [开发进度](progress.md) | 阶段／任务状态与证据 | 持续维护 |
 | [提示词定制](prompts.md) | 英文 prompt、装配与来源对照 | 组件与受控接线，真实模型效果未评测 |
 | [决策记录](decisions.md) | 方向确认、基线与变更历史 | 持续维护 |

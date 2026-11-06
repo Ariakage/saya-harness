@@ -2,7 +2,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
 
-**当前状态：核心契约、本地工具、后台任务组件和测试专用的假模型循环已建立；完整运行时、真实模型协议与 CLI 功能尚未实现。**
+**当前状态：可复用 core 运行循环、本地工具、权限与后台任务已在模型替身和受控夹具下验证；真实模型协议、持久化与 CLI 功能尚未实现。**
 
 ## 已确认方向
 
@@ -45,16 +45,18 @@
 | [完整基线](docs/mvp-baseline.md) | 已整套确认的 24 组决定与具体契约 |
 | [工作模式](docs/modes.md) | PLAN、BUILD、CODE、WORK 的职责与切换规则 |
 | [执行与恢复契约](docs/execution.md) | 三种权限模式、切换边界、预授权、输出与会话恢复 |
+| [运行时接口](docs/runtime.md) | 可复用 Agent 循环、调用边界和验证范围 |
 | [架构设计](docs/architecture.md) | Agent 循环、模块边界与实现约束 |
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
+| [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |
 | [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
 | [MVP 实施路线图](docs/roadmap.md) | 8 个 MVP 里程碑、工作量估算与交付条件 |
-| [实施任务](docs/implementation-plan.md) | 36 个任务、依赖、交付与基线／验收覆盖 |
+| [实施任务](docs/implementation-plan.md) | 37 个任务、依赖、交付与基线／验收覆盖 |
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |
 | [提示词定制](docs/prompts.md) | 英文提示词、模式与审核装配、来源取舍对照和离线预览 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
-需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-006 的模式状态机已在普通构建提供，切换行为已在测试专用原型中验证；核心循环仍需成为可复用的运行时，才能完成 P1。
+需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-006 的模式状态机已在普通构建提供，切换行为已在测试专用原型中验证；可复用 core 循环已在受控测试中完成 P1；真实协议和 CLI 仍属后续阶段。
 
 CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
 

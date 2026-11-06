@@ -41,6 +41,19 @@ pub struct SharedBudget {
     active_limit: Duration,
 }
 impl SharedBudget {
+    /// Start timing when a newly constructed runtime actually begins its run.
+    pub(crate) fn start_run(&self) -> Result<(), BoundaryError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| failure("budget_error", "budget lock poisoned"))?;
+        if state.count != 0 || state.paused_at.is_some() {
+            return Err(failure("budget_error", "budget has already been used"));
+        }
+        state.started = Instant::now();
+        state.paused = Duration::ZERO;
+        Ok(())
+    }
     pub fn new(max_requests: usize, active_limit: Duration) -> Self {
         Self {
             state: Arc::new(Mutex::new(BudgetState {

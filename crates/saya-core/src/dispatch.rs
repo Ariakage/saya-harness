@@ -20,7 +20,42 @@ use crate::{
         write::{DEFAULT_WRITE_MAX_BYTES, WriteTool, WriteToolKind, save_result},
     },
 };
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+struct ObservedStore {
+    inner: Arc<dyn Store>,
+    call_id: String,
+    intent: AtomicBool,
+    finished: AtomicBool,
+}
+impl Store for ObservedStore {
+    fn load_session(&self, id: SessionId) -> StoreOperation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> StoreOperation<'a, ()> {
+        Box::pin(async move {
+            self.inner.commit(changes).await?;
+            for change in changes {
+                match change {
+                    StoreChange::ToolIntent { call, .. } if call.call_id == self.call_id => {
+                        self.intent.store(true, Ordering::Release)
+                    }
+                    StoreChange::ToolFinished { call_id, .. } if call_id == &self.call_id => {
+                        self.finished.store(true, Ordering::Release)
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        })
+    }
+}
 
 fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
     BoundaryError(
@@ -71,6 +106,41 @@ pub struct DispatchReview<'a> {
     pub config: &'a ReviewConfig,
 }
 impl ToolDispatcher {
+    /// Return native tool schemas without executing or authorizing a call.
+    pub fn definitions(&self) -> Vec<crate::boundary::ToolDefinition> {
+        use crate::tools::read::ReadToolKind;
+        let mut definitions = Vec::new();
+        for kind in [
+            ReadToolKind::ReadFile,
+            ReadToolKind::ListDir,
+            ReadToolKind::FindFiles,
+            ReadToolKind::SearchText,
+        ] {
+            definitions.push(ReadTool::new(self.files.clone(), kind).definition());
+        }
+        for kind in [WriteToolKind::WriteFile, WriteToolKind::ApplyPatch] {
+            definitions.push(
+                WriteTool::new(
+                    self.files.clone(),
+                    self.store.clone(),
+                    Arc::new(PolicyGate::new(self.policy.clone())),
+                    kind,
+                    DEFAULT_WRITE_MAX_BYTES,
+                )
+                .definition(),
+            );
+        }
+        definitions.push(
+            ExecTool::new(
+                self.files.clone(),
+                self.store.clone(),
+                Arc::new(PolicyGate::new(self.policy.clone())),
+                self.exec_config.clone(),
+            )
+            .definition(),
+        );
+        definitions
+    }
     pub fn new(
         policy: Arc<Policy>,
         modes: ModeController,
@@ -234,26 +304,49 @@ impl ToolDispatcher {
                     }
                 }
             }
-            "write_file" | "apply_patch" => {
-                let kind = if call.name == "write_file" {
-                    WriteToolKind::WriteFile
-                } else {
-                    WriteToolKind::ApplyPatch
+            "write_file" | "apply_patch" | "exec" => {
+                let observed = Arc::new(ObservedStore {
+                    inner: store.clone(),
+                    call_id: call.call_id.clone(),
+                    intent: AtomicBool::new(false),
+                    finished: AtomicBool::new(false),
+                });
+                let tool: Box<dyn Tool> = match call.name.as_str() {
+                    "exec" => Box::new(ExecTool::new(
+                        self.files.clone(),
+                        observed.clone(),
+                        permit,
+                        self.exec_config.clone(),
+                    )),
+                    name => Box::new(WriteTool::new(
+                        self.files.clone(),
+                        observed.clone(),
+                        permit,
+                        if name == "write_file" {
+                            WriteToolKind::WriteFile
+                        } else {
+                            WriteToolKind::ApplyPatch
+                        },
+                        DEFAULT_WRITE_MAX_BYTES,
+                    )),
                 };
-                WriteTool::new(
-                    self.files.clone(),
-                    store.clone(),
-                    permit,
-                    kind,
-                    DEFAULT_WRITE_MAX_BYTES,
-                )
-                .execute(call, context, cancel)
-                .await
-            }
-            "exec" => {
-                ExecTool::new(self.files.clone(), store, permit, self.exec_config.clone())
-                    .execute(call, context, cancel)
-                    .await
+                let result = tool.execute(call, context, cancel).await?;
+                if !observed.intent.load(Ordering::Acquire) {
+                    // No side effect was dispatched. Avoid storing unvalidated,
+                    // potentially credential-bearing arguments in this record.
+                    let mut redacted = call.clone();
+                    redacted.arguments = "{\"redacted\":true}".into();
+                    observed
+                        .commit(&[StoreChange::ToolIntent {
+                            run_id: context.run.id,
+                            call: redacted,
+                        }])
+                        .await?;
+                }
+                if !observed.finished.load(Ordering::Acquire) {
+                    save_result(observed.as_ref(), call, context, &result).await?;
+                }
+                Ok(result)
             }
             _ => Err(failure("unknown_tool", "unsupported local tool")),
         }

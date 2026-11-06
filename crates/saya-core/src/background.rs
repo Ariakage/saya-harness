@@ -100,7 +100,7 @@ struct Job {
 }
 struct State {
     closed: bool,
-    fatal: Option<ErrorInfo>,
+    fatal: Option<BoundaryError>,
     jobs: HashMap<String, Job>,
 }
 struct Shared {
@@ -296,7 +296,7 @@ impl BackgroundJobs {
                     && error.0.code != "cancelled"
                 {
                     state.closed = true;
-                    state.fatal = Some(error.0.clone());
+                    state.fatal = Some(error.clone());
                     for job in state
                         .jobs
                         .values()
@@ -324,6 +324,18 @@ impl BackgroundJobs {
             .map_err(|_| failure("background_error", "job lock poisoned"))?;
         Ok(state.jobs.get(id).map(|job| job.status.clone()))
     }
+    pub(crate) fn running_count(&self) -> Result<usize, BoundaryError> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        Ok(state
+            .jobs
+            .values()
+            .filter(|job| matches!(job.status, JobStatus::Running))
+            .count())
+    }
     /// Wait for a job to finish; returns `None` for an unknown job ID.
     pub async fn wait(&self, id: &str) -> Result<Option<JobStatus>, BoundaryError> {
         loop {
@@ -339,6 +351,16 @@ impl BackgroundJobs {
     }
     /// Returns the failure that stopped further background dispatch, if any.
     pub fn fatal_error(&self) -> Result<Option<ErrorInfo>, BoundaryError> {
+        Ok(self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?
+            .fatal
+            .as_ref()
+            .map(|error| error.0.clone()))
+    }
+    pub(crate) fn fatal_failure(&self) -> Result<Option<BoundaryError>, BoundaryError> {
         Ok(self
             .shared
             .state
@@ -369,6 +391,9 @@ impl BackgroundJobs {
             .state
             .lock()
             .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        if state.closed {
+            return Err(failure("invalid_run", "run is stopping or has ended"));
+        }
         self.dispatcher.mode_controller().request(mode)?;
         if mode == WorkMode::Plan {
             for job in state

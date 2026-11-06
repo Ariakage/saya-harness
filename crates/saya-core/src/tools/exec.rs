@@ -369,11 +369,71 @@ fn signal_group(pid: Pid, signal: Signal) -> Result<(), BoundaryError> {
         Err(e) => Err(failure("process_cleanup_error", e.to_string())),
     }
 }
-struct ProcessGroup(Pid);
+struct ProcessGroup(Option<Pid>);
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
-        let _ = signal_group(self.0, Signal::SIGKILL);
+        if let Some(pid) = self.0
+            && leader_exited(pid).is_ok()
+        {
+            let _ = signal_group(pid, Signal::SIGKILL);
+        }
     }
+}
+
+// Observe the leader without reaping it. Keeping its PID reserved until after
+// signaling the group prevents signaling an unrelated reused process group.
+fn leader_exited(pid: Pid) -> Result<bool, BoundaryError> {
+    // SAFETY: siginfo is initialized, points to writable storage, and the
+    // PID identifies our child. WNOHANG keeps this call nonblocking;
+    // WNOWAIT leaves the child for tokio's Child::wait to reap.
+    unsafe {
+        let mut info: libc::siginfo_t = std::mem::zeroed();
+        if libc::waitid(
+            libc::P_PID,
+            pid.as_raw() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        ) == -1
+        {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                Ok(false)
+            } else {
+                Err(failure("process_error", error.to_string()))
+            }
+        } else {
+            Ok(info.si_pid() != 0)
+        }
+    }
+}
+async fn wait_leader(pid: Pid) -> Result<(), BoundaryError> {
+    loop {
+        if leader_exited(pid)? {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+// On macOS, a group containing only zombies can return EPERM. If no signal
+// could be sent, verify its disappearance after reaping; a group that remains
+// inaccessible is a cleanup failure, not an assumed success.
+async fn confirm_group_gone(pid: Pid) -> Result<(), BoundaryError> {
+    let check = async {
+        loop {
+            match killpg(pid, None) {
+                Err(Errno::ESRCH) => return Ok(()),
+                Ok(()) | Err(Errno::EPERM) => sleep(Duration::from_millis(10)).await,
+                Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+            }
+        }
+    };
+    timeout(Duration::from_secs(1), check).await.map_err(|_| {
+        failure(
+            "process_cleanup_error",
+            "could not confirm process group cleanup",
+        )
+    })?
 }
 
 async fn run_process(
@@ -413,7 +473,8 @@ async fn run_process(
     let pid = child
         .id()
         .ok_or_else(|| failure("spawn_error", "child PID unavailable"))?;
-    let group = ProcessGroup(Pid::from_raw(pid as i32));
+    let pid = Pid::from_raw(pid as i32);
+    let mut group = ProcessGroup(Some(pid));
     let stdout = child
         .stdout
         .take()
@@ -428,29 +489,46 @@ async fn run_process(
     let mut err_task = tokio::spawn(drain(stderr, config.stderr_max, err.clone()));
     let mut timed_out = false;
     let mut cancelled = false;
-    let status = tokio::select! {
+    let exited = tokio::select! {
         biased;
-        _ = cancel.cancelled() => { cancelled = true; None },
-        _ = sleep(plan.timeout) => { timed_out = true; None },
-        status = child.wait() => Some(status.map_err(|e| failure("process_error", e.to_string()))?),
+        _ = cancel.cancelled() => { cancelled = true; false },
+        _ = sleep(plan.timeout) => { timed_out = true; false },
+        result = wait_leader(pid) => { result?; true },
     };
-    let status = if let Some(status) = status {
-        status
-    } else {
-        signal_group(group.0, Signal::SIGTERM)?;
-        match timeout(Duration::from_secs(5), child.wait()).await {
-            Ok(result) => result.map_err(|e| failure("process_error", e.to_string()))?,
+    if !exited {
+        match killpg(pid, Signal::SIGTERM) {
+            Ok(()) | Err(Errno::ESRCH) | Err(Errno::EPERM) => {}
+            Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+        }
+        match timeout(Duration::from_secs(5), wait_leader(pid)).await {
+            Ok(result) => result?,
             Err(_) => {
-                signal_group(group.0, Signal::SIGKILL)?;
-                child
-                    .wait()
+                match killpg(pid, Signal::SIGKILL) {
+                    Ok(()) | Err(Errno::ESRCH) | Err(Errno::EPERM) => {}
+                    Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+                }
+                timeout(Duration::from_secs(5), wait_leader(pid))
                     .await
-                    .map_err(|e| failure("process_error", e.to_string()))?
+                    .map_err(|_| {
+                        failure("process_cleanup_error", "process did not exit after kill")
+                    })??;
             }
         }
+    }
+    // Signal while the unreaped leader still reserves this process-group ID.
+    let needs_confirmation = match killpg(pid, Signal::SIGKILL) {
+        Ok(()) | Err(Errno::ESRCH) => false,
+        Err(Errno::EPERM) => true,
+        Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
     };
-    // Do not leave children of an exited leader running in the process group.
-    signal_group(group.0, Signal::SIGKILL)?;
+    group.0 = None;
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| failure("process_error", e.to_string()))?;
+    if needs_confirmation {
+        confirm_group_gone(pid).await?;
+    }
     for task in [&mut out_task, &mut err_task] {
         match timeout(Duration::from_secs(5), &mut *task).await {
             Ok(Ok(Ok(()))) => {}

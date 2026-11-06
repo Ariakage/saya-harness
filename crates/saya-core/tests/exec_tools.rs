@@ -274,6 +274,28 @@ async fn plan_intent_failure_and_outside_cwd_never_spawn() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
+async fn exited_leader_cleans_up_descendant_with_closed_pipes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run) = fixture(temp.path());
+    let store = store_for(&session, &run).await?;
+    let tool = tool(temp.path(), store, ExecConfig::default())?;
+    let ctx = ToolContext {
+        run,
+        workspace: temp.path().into(),
+    };
+    let result = tool.execute(
+        &call("descendant", serde_json::json!({"argv":["/bin/sh","-c","(sleep 1; printf escaped > marker) >/dev/null 2>&1 & exit 0"]})),
+        &ctx,
+        &NeverCancel,
+    ).await?;
+    assert!(result.ok, "{result:?}");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(!temp.path().join("marker").exists());
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancellation_terminates_process_group_and_records_result()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
