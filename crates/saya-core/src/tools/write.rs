@@ -321,7 +321,7 @@ enum WriteAction {
     Patch(PatchArgs),
 }
 
-async fn save_result(
+pub(crate) async fn save_result(
     store: &dyn crate::boundary::Store,
     call: &crate::contract::ToolCall,
     context: &crate::boundary::ToolContext,
