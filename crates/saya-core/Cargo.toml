@@ -11,6 +11,7 @@ tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time", "test-
 
 [dependencies]
 cap-std = "4.0.3"
+diffy = "0.5.2"
 globset = "0.4.21"
 ignore = "0.4.34"
 libc = "0.2.191"

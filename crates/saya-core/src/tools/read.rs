@@ -52,16 +52,16 @@ impl std::fmt::Display for ReadError {
     }
 }
 impl std::error::Error for ReadError {}
-fn err(code: &'static str, message: impl Into<String>) -> ReadError {
+pub(crate) fn err(code: &'static str, message: impl Into<String>) -> ReadError {
     ReadError {
         code,
         message: message.into(),
     }
 }
-fn io_err(e: io::Error) -> ReadError {
+pub(crate) fn io_err(e: io::Error) -> ReadError {
     err("io_error", e.to_string())
 }
-fn check_cancel(cancel: Option<&AtomicBool>) -> Result<(), ReadError> {
+pub(crate) fn check_cancel(cancel: Option<&AtomicBool>) -> Result<(), ReadError> {
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         Err(err("cancelled", "tool cancelled"))
     } else {
@@ -69,17 +69,17 @@ fn check_cancel(cancel: Option<&AtomicBool>) -> Result<(), ReadError> {
     }
 }
 
-struct Root {
-    path: PathBuf,
-    dir: Dir,
+pub(crate) struct Root {
+    pub(crate) path: PathBuf,
+    pub(crate) dir: Dir,
 }
 /// Roots are resolved and opened once. In bypass mode `/` is used; this is not
 /// an OS sandbox and does not restrict subprocesses or external APIs.
 pub struct ReadTools {
-    workspace: PathBuf,
+    pub(crate) workspace: PathBuf,
     roots: Vec<Root>,
-    limits: ReadLimits,
-    bypass: bool,
+    pub(crate) limits: ReadLimits,
+    pub(crate) bypass: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,7 +147,7 @@ impl ReadTools {
         })
     }
 
-    fn resolve(&self, path: &Path) -> Result<(PathBuf, &Root, PathBuf), ReadError> {
+    pub(crate) fn resolve(&self, path: &Path) -> Result<(PathBuf, &Root, PathBuf), ReadError> {
         let input = if path.is_absolute() {
             path.to_owned()
         } else {
@@ -167,7 +167,11 @@ impl ReadTools {
         Err(err("path_denied", "target is outside permitted roots"))
     }
 
-    fn read_bytes(&self, path: &Path, cancel: Option<&AtomicBool>) -> Result<Vec<u8>, ReadError> {
+    pub(crate) fn read_bytes(
+        &self,
+        path: &Path,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<Vec<u8>, ReadError> {
         check_cancel(cancel)?;
         let (_, root, relative) = self.resolve(path)?;
         let mut options = OpenOptions::new();
@@ -789,6 +793,7 @@ impl crate::boundary::Tool for ReadTool {
                         message: "tool cancelled".into(),
                     },
                     None,
+                    None,
                 ));
             }
             let handle = tokio::runtime::Handle::try_current().map_err(|_| {
@@ -797,6 +802,7 @@ impl crate::boundary::Tool for ReadTool {
                         code: "runtime_error".into(),
                         message: "Tokio runtime required for file tools".into(),
                     },
+                    None,
                     None,
                 )
             })?;
@@ -815,9 +821,9 @@ impl crate::boundary::Tool for ReadTool {
                 _ = cancel.cancelled() => {
                     flag.store(true, Ordering::Relaxed);
                     let _ = task.await;
-                    return Err(BoundaryError(ErrorInfo { code: "cancelled".into(), message: "tool cancelled".into() }, None));
+                    return Err(BoundaryError(ErrorInfo { code: "cancelled".into(), message: "tool cancelled".into() }, None, None));
                 }
-                outcome = &mut task => outcome.map_err(|e| BoundaryError(ErrorInfo { code: "tool_error".into(), message: e.to_string() }, None))?,
+                outcome = &mut task => outcome.map_err(|e| BoundaryError(ErrorInfo { code: "tool_error".into(), message: e.to_string() }, None, None))?,
             };
             if cancel.is_cancelled() {
                 return Err(BoundaryError(
@@ -825,6 +831,7 @@ impl crate::boundary::Tool for ReadTool {
                         code: "cancelled".into(),
                         message: "tool cancelled".into(),
                     },
+                    None,
                     None,
                 ));
             }

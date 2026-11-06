@@ -26,6 +26,7 @@ fn failure(message: &str) -> BoundaryError {
             message: message.into(),
         },
         None,
+        None,
     )
 }
 

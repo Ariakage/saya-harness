@@ -344,7 +344,7 @@ async fn model_failure_is_not_reported_as_completion() {
     )
     .await;
     assert!(
-        matches!(result, Err(BoundaryError(ErrorInfo { code, .. }, _)) if code == "model_error")
+        matches!(result, Err(BoundaryError(ErrorInfo { code, .. }, _, _)) if code == "model_error")
     );
 }
 
@@ -860,6 +860,7 @@ impl Model for RetryAfterModel {
                         message: "busy".into(),
                     },
                     Some(Duration::from_secs(60)),
+                    None,
                 ));
             }
             Ok(Box::new(FakeStream(Some(answer()))) as Box<dyn ModelStream>)

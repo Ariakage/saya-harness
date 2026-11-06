@@ -112,7 +112,7 @@ pub struct ToolCall {
 }
 
 /// Structured tool outcome. Unknown outcomes must not be replayed automatically.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub ok: bool,
     pub data: Option<Value>,
@@ -141,9 +141,14 @@ pub struct ErrorInfo {
 }
 
 /// Runtime failure plus an optional provider Retry-After delay. The delay is
-/// adapter metadata and is not part of the schema-v1 error object.
+/// adapter metadata and is not part of the schema-v1 error object. When a
+/// result cannot be saved after a side effect, the third field preserves it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BoundaryError(pub ErrorInfo, pub Option<std::time::Duration>);
+pub struct BoundaryError(
+    pub ErrorInfo,
+    pub Option<std::time::Duration>,
+    pub Option<Box<ToolResult>>,
+);
 impl std::fmt::Display for BoundaryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.0.code, self.0.message)

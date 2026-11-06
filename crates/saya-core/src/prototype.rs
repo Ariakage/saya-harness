@@ -23,6 +23,7 @@ fn error(code: &str, message: &str) -> BoundaryError {
             message: message.into(),
         },
         None,
+        None,
     )
 }
 fn failed(code: &str, message: &str) -> ToolResult {
