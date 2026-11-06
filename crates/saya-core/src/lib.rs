@@ -8,6 +8,7 @@ pub mod boundary;
 pub mod contract;
 
 pub mod memory;
+pub mod mode;
 
 #[cfg(test)]
 mod prototype;

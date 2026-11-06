@@ -962,3 +962,660 @@ async fn failure_never_returns_partial_text_from_an_earlier_run() {
     assert_eq!(result.status, crate::contract::RunStatus::Failed);
     assert_eq!(result.text, None);
 }
+
+#[test]
+fn mode_requests_queue_last_value_and_invalidate_approval() -> Result<(), Box<dyn std::error::Error>>
+{
+    let modes = Modes::new(WorkMode::Work);
+    let original = modes.snapshot()?;
+    assert!(modes.approval_is_current(original.revision)?);
+    assert!(modes.begin(original.revision)?);
+    modes.request(WorkMode::Build)?;
+    modes.request(WorkMode::Code)?;
+    modes.request(WorkMode::Plan)?;
+    let during = modes.snapshot()?;
+    assert_eq!(during.current, WorkMode::Work);
+    assert_eq!(during.pending, Some(WorkMode::Plan));
+    modes.finish()?;
+    let after = modes.snapshot()?;
+    assert_eq!(after.current, WorkMode::Plan);
+    assert_eq!(after.pending, None);
+    assert!(!modes.approval_is_current(original.revision)?);
+    assert!(modes.approval_is_current(after.revision)?);
+    // In the absence of a call (e.g. waiting for confirmation), switching is immediate.
+    modes.request(WorkMode::Build)?;
+    assert_eq!(modes.snapshot()?.current, WorkMode::Build);
+    assert!(!modes.approval_is_current(after.revision)?);
+    Ok(())
+}
+
+#[test]
+fn plan_allows_only_read_and_user_input_for_each_permission_mode() {
+    for _permissions in [
+        PermissionMode::Auto,
+        PermissionMode::Bypass,
+        PermissionMode::Review,
+    ] {
+        assert!(allowed(WorkMode::Plan, ToolClass::Read));
+        assert!(allowed(WorkMode::Plan, ToolClass::AskUser));
+        assert!(!allowed(WorkMode::Plan, ToolClass::Write));
+        assert!(!allowed(WorkMode::Plan, ToolClass::Command));
+        for mode in [WorkMode::Build, WorkMode::Code, WorkMode::Work] {
+            assert!(allowed(mode, ToolClass::Write));
+            assert!(allowed(mode, ToolClass::Command));
+        }
+    }
+}
+
+type ObservedRequest = (String, Vec<String>, Vec<HistoryItem>);
+struct SwitchingModel {
+    modes: Modes,
+    calls: Mutex<usize>,
+    seen: Mutex<Vec<ObservedRequest>>,
+}
+impl Model for SwitchingModel {
+    fn start<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            self.seen.lock().map_err(|_| error("test", "lock"))?.push((
+                request.instructions.clone(),
+                request.tools.iter().map(|t| t.name.clone()).collect(),
+                request.history.clone(),
+            ));
+            let mut calls = self.calls.lock().map_err(|_| error("test", "lock"))?;
+            *calls += 1;
+            let items = if *calls == 1 {
+                self.modes.request(WorkMode::Plan)?;
+                let snapshot = self.modes.snapshot()?;
+                assert_eq!(snapshot.current, WorkMode::Work);
+                assert_eq!(snapshot.pending, Some(WorkMode::Plan));
+                vec![call("write", "fake", "{}")]
+            } else {
+                answer()
+            };
+            Ok(Box::new(FakeStream(Some(items))) as Box<dyn ModelStream>)
+        })
+    }
+}
+#[tokio::test]
+async fn switch_during_model_rechecks_previously_generated_write()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, run_id) = setup();
+    let modes = Modes::new(WorkMode::Work);
+    let model = SwitchingModel {
+        modes: modes.clone(),
+        calls: Mutex::new(0),
+        seen: Mutex::new(vec![]),
+    };
+    let scheduler = Scheduler {
+        modes,
+        limits: Limits::default(),
+    };
+    let seen = Arc::new(Mutex::new(vec![]));
+    let store = MemoryStore::default();
+    assert_eq!(
+        run_with_modes(
+            &mut session,
+            &run_id,
+            &model,
+            &registry(seen.clone(), false)?,
+            &store,
+            &NoCancel,
+            &scheduler
+        )
+        .await?,
+        "done"
+    );
+    assert!(seen.lock().map_err(|_| "lock")?.is_empty());
+    assert_eq!(session.work_mode, WorkMode::Plan);
+    assert_eq!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing")?
+            .work_mode,
+        WorkMode::Plan
+    );
+    assert!(session.history.iter().any(|h| matches!(h, HistoryItem::ToolResult { call_id, result } if call_id == "write" && result.error.as_ref().is_some_and(|e| e.code == "mode_denied"))));
+    let observed = model.seen.lock().map_err(|_| "lock")?;
+    assert_eq!(observed[0].0, mode_instruction(WorkMode::Work));
+    assert_eq!(observed[0].1, vec!["fake"]);
+    assert_eq!(observed[1].0, mode_instruction(WorkMode::Plan));
+    assert!(observed[1].1.is_empty());
+    assert!(
+        observed[1]
+            .2
+            .iter()
+            .any(|h| matches!(h, HistoryItem::UserText(t) if t == "hello"))
+    );
+    Ok(())
+}
+
+struct SwitchingTool {
+    modes: Modes,
+    called: Arc<Mutex<Vec<(String, WorkMode)>>>,
+}
+impl Tool for SwitchingTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "switching".into(),
+            description: "test".into(),
+            input_schema: json!({"type":"object"}),
+        }
+    }
+    fn execute<'a>(
+        &'a self,
+        call: &'a ToolCall,
+        ctx: &'a ToolContext,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, ToolResult> {
+        Box::pin(async move {
+            self.called
+                .lock()
+                .map_err(|_| error("test", "lock"))?
+                .push((call.call_id.clone(), ctx.run.work_mode));
+            self.modes.request(WorkMode::Plan)?;
+            Ok(ToolResult {
+                ok: true,
+                data: Some(json!({})),
+                error: None,
+                truncated: false,
+            })
+        })
+    }
+}
+#[tokio::test]
+async fn switch_during_tool_takes_effect_after_it_before_next_tool()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits::default(),
+    };
+    let called = Arc::new(Mutex::new(vec![]));
+    let mut tools = ToolRegistry::default();
+    tools.register_as(
+        Box::new(SwitchingTool {
+            modes: scheduler.modes.clone(),
+            called: called.clone(),
+        }),
+        ToolClass::Write,
+    )?;
+    let model = FakeModel::new(vec![
+        vec![
+            call("first", "switching", "{}"),
+            call("second", "switching", "{}"),
+        ],
+        answer(),
+    ]);
+    run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &tools,
+        &MemoryStore::default(),
+        &NoCancel,
+        &scheduler,
+    )
+    .await?;
+    assert_eq!(
+        *called.lock().map_err(|_| "lock")?,
+        vec![("first".into(), WorkMode::Work)]
+    );
+    assert!(session.history.iter().any(|h| matches!(h, HistoryItem::ToolResult { call_id, result } if call_id == "second" && !result.ok)));
+    assert_eq!(session.work_mode, WorkMode::Plan);
+    Ok(())
+}
+
+struct SwitchingThenWait {
+    modes: Modes,
+    count: Mutex<usize>,
+}
+impl Model for SwitchingThenWait {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            *self.count.lock().map_err(|_| error("test", "lock"))? += 1;
+            self.modes.request(WorkMode::Code)?;
+            self.modes.request(WorkMode::Plan)?;
+            pending().await
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn cancellation_wins_and_pending_mode_is_saved_for_next_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits::default(),
+    };
+    let model = SwitchingThenWait {
+        modes: scheduler.modes.clone(),
+        count: Mutex::new(0),
+    };
+    let store = MemoryStore::default();
+    let err = run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &ToolRegistry::default(),
+        &store,
+        &DelayedCancel,
+        &scheduler,
+    )
+    .await
+    .expect_err("must cancel");
+    assert_eq!(err.0.code, "cancelled");
+    assert_eq!(*model.count.lock().map_err(|_| "lock")?, 1);
+    assert_eq!(session.work_mode, WorkMode::Plan);
+    assert_eq!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing")?
+            .work_mode,
+        WorkMode::Plan
+    );
+    assert_eq!(scheduler.modes.snapshot()?.pending, None);
+    Ok(())
+}
+
+struct SwitchOnRetry {
+    modes: Modes,
+    seen: Mutex<Vec<String>>,
+}
+impl Model for SwitchOnRetry {
+    fn start<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            let mut seen = self.seen.lock().map_err(|_| error("test", "lock"))?;
+            seen.push(request.instructions.clone());
+            if seen.len() == 1 {
+                self.modes.request(WorkMode::Plan)?;
+                return Err(error("transient_connection", "retry"));
+            }
+            Ok(Box::new(FakeStream(Some(answer()))) as Box<dyn ModelStream>)
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn failed_model_call_applies_pending_mode_before_retry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits {
+            retry_jitter_max: Duration::ZERO,
+            ..Limits::default()
+        },
+    };
+    let model = SwitchOnRetry {
+        modes: scheduler.modes.clone(),
+        seen: Mutex::new(vec![]),
+    };
+    run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &ToolRegistry::default(),
+        &MemoryStore::default(),
+        &NoCancel,
+        &scheduler,
+    )
+    .await?;
+    assert_eq!(
+        *model.seen.lock().map_err(|_| "lock")?,
+        vec![
+            mode_instruction(WorkMode::Work),
+            mode_instruction(WorkMode::Plan)
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_suggestion_does_not_switch_work_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits::default(),
+    };
+    let model = FakeModel::new(vec![vec![HistoryItem::AssistantText(
+        "建议切换到 PLAN".into(),
+    )]]);
+    run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &ToolRegistry::default(),
+        &MemoryStore::default(),
+        &NoCancel,
+        &scheduler,
+    )
+    .await?;
+    assert_eq!(session.work_mode, WorkMode::Work);
+    assert_eq!(scheduler.modes.snapshot()?.current, WorkMode::Work);
+    Ok(())
+}
+
+struct SwitchDuringIntent {
+    inner: MemoryStore,
+    modes: Modes,
+}
+impl Store for SwitchDuringIntent {
+    fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            self.inner.commit(changes).await?;
+            if changes
+                .iter()
+                .any(|c| matches!(c, StoreChange::ToolIntent { .. }))
+            {
+                self.modes.request(WorkMode::Plan)?;
+            }
+            Ok(())
+        })
+    }
+}
+#[tokio::test]
+async fn mode_is_rechecked_after_intent_is_saved_before_dispatch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits::default(),
+    };
+    let store = SwitchDuringIntent {
+        inner: MemoryStore::default(),
+        modes: scheduler.modes.clone(),
+    };
+    let called = Arc::new(Mutex::new(vec![]));
+    let model = FakeModel::new(vec![vec![call("a", "fake", "{}")], answer()]);
+    run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &registry(called.clone(), false)?,
+        &store,
+        &NoCancel,
+        &scheduler,
+    )
+    .await?;
+    assert!(called.lock().map_err(|_| "lock")?.is_empty());
+    assert!(session.history.iter().any(|h| matches!(h, HistoryItem::ToolResult { result, .. } if result.error.as_ref().is_some_and(|e| e.code == "mode_denied"))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_blocks_write_and_command_in_every_permission_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    for permission in [
+        PermissionMode::Auto,
+        PermissionMode::Bypass,
+        PermissionMode::Review,
+    ] {
+        for class in [ToolClass::Write, ToolClass::Command] {
+            let (mut session, mut id) = setup();
+            session.work_mode = WorkMode::Plan;
+            id.work_mode = WorkMode::Plan;
+            id.permissions = permission;
+            let called = Arc::new(Mutex::new(vec![]));
+            let mut tools = ToolRegistry::default();
+            tools.register_as(
+                Box::new(FakeTool {
+                    seen: called.clone(),
+                    fail: false,
+                }),
+                class,
+            )?;
+            let model = FakeModel::new(vec![vec![call("a", "fake", "{}")], answer()]);
+            run(
+                &mut session,
+                &id,
+                &model,
+                &tools,
+                &MemoryStore::default(),
+                &NoCancel,
+            )
+            .await?;
+            assert!(called.lock().map_err(|_| "lock")?.is_empty());
+            assert!(session.history.iter().any(|h| matches!(h, HistoryItem::ToolResult { result, .. } if result.error.as_ref().is_some_and(|e| e.code == "mode_denied"))));
+        }
+    }
+    Ok(())
+}
+
+struct FailPlanSave {
+    inner: MemoryStore,
+}
+impl Store for FailPlanSave {
+    fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            if changes
+                .iter()
+                .any(|c| matches!(c, StoreChange::Session(s) if s.work_mode == WorkMode::Plan))
+            {
+                return Err(error("storage_error", "mode save failed"));
+            }
+            self.inner.commit(changes).await
+        })
+    }
+}
+#[tokio::test]
+async fn failed_mode_save_stops_before_tool_dispatch() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits::default(),
+    };
+    let model = SwitchingModel {
+        modes: scheduler.modes.clone(),
+        calls: Mutex::new(0),
+        seen: Mutex::new(vec![]),
+    };
+    let store = FailPlanSave {
+        inner: MemoryStore::default(),
+    };
+    let called = Arc::new(Mutex::new(vec![]));
+    let failure = run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &registry(called.clone(), false)?,
+        &store,
+        &NoCancel,
+        &scheduler,
+    )
+    .await
+    .expect_err("mode save failure must stop dispatch");
+    assert_eq!(failure.0.code, "storage_error");
+    assert!(called.lock().map_err(|_| "lock")?.is_empty());
+    assert_eq!(session.work_mode, WorkMode::Work);
+    assert_eq!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing")?
+            .work_mode,
+        WorkMode::Work
+    );
+    Ok(())
+}
+
+struct SwitchDuringBackoff {
+    modes: Modes,
+}
+impl Cancellation for SwitchDuringBackoff {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            // The first model call completes before this deadline; cancellation
+            // and the switch happen while the retry delay is in progress.
+            sleep(Duration::from_millis(100)).await;
+            let _ = self.modes.request(WorkMode::Plan);
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn cancelling_retry_wait_saves_the_last_requested_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits {
+            retry_jitter_max: Duration::ZERO,
+            ..Limits::default()
+        },
+    };
+    let model = RetryModel {
+        starts: Mutex::new(0),
+    };
+    let cancel = SwitchDuringBackoff {
+        modes: scheduler.modes.clone(),
+    };
+    let store = MemoryStore::default();
+    let err = run_with_modes(
+        &mut session,
+        &id,
+        &model,
+        &ToolRegistry::default(),
+        &store,
+        &cancel,
+        &scheduler,
+    )
+    .await
+    .expect_err("retry must be cancelled");
+    assert_eq!(err.0.code, "cancelled");
+    assert_eq!(session.work_mode, WorkMode::Plan);
+    assert_eq!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing")?
+            .work_mode,
+        WorkMode::Plan
+    );
+    assert_eq!(*model.starts.lock().map_err(|_| "lock")?, 1);
+    Ok(())
+}
+
+struct BlockingModel {
+    arrived: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    calls: Mutex<usize>,
+}
+impl Model for BlockingModel {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            let first = {
+                let mut count = self.calls.lock().map_err(|_| error("test", "lock"))?;
+                *count += 1;
+                *count == 1
+            };
+            if first {
+                self.arrived.notify_one();
+                self.release.notified().await;
+            }
+            Ok(Box::new(FakeStream(Some(if first {
+                vec![call("a", "fake", "{}")]
+            } else {
+                answer()
+            }))) as Box<dyn ModelStream>)
+        })
+    }
+}
+#[tokio::test]
+async fn independent_user_request_during_inflight_model_is_applied_at_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, id) = setup();
+    let scheduler = Scheduler {
+        modes: Modes::new(WorkMode::Work),
+        limits: Limits::default(),
+    };
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let model = BlockingModel {
+        arrived: arrived.clone(),
+        release: release.clone(),
+        calls: Mutex::new(0),
+    };
+    let called = Arc::new(Mutex::new(vec![]));
+    let tools = registry(called.clone(), false)?;
+    let store = MemoryStore::default();
+    let user = async {
+        arrived.notified().await;
+        scheduler.modes.request(WorkMode::Build)?;
+        scheduler.modes.request(WorkMode::Plan)?;
+        let snap = scheduler.modes.snapshot()?;
+        assert_eq!(snap.current, WorkMode::Work);
+        assert_eq!(snap.pending, Some(WorkMode::Plan));
+        release.notify_one();
+        Ok::<(), BoundaryError>(())
+    };
+    let (result, requested) = tokio::join!(
+        run_with_modes(
+            &mut session,
+            &id,
+            &model,
+            &tools,
+            &store,
+            &NoCancel,
+            &scheduler
+        ),
+        user
+    );
+    requested?;
+    assert_eq!(result?, "done");
+    assert!(called.lock().map_err(|_| "lock")?.is_empty());
+    assert_eq!(session.work_mode, WorkMode::Plan);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_can_dispatch_read_only_tool() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut session, mut id) = setup();
+    session.work_mode = WorkMode::Plan;
+    id.work_mode = WorkMode::Plan;
+    let called = Arc::new(Mutex::new(vec![]));
+    let mut tools = ToolRegistry::default();
+    tools.register_as(
+        Box::new(FakeTool {
+            seen: called.clone(),
+            fail: false,
+        }),
+        ToolClass::Read,
+    )?;
+    let model = FakeModel::new(vec![vec![call("read", "fake", "{}")], answer()]);
+    run(
+        &mut session,
+        &id,
+        &model,
+        &tools,
+        &MemoryStore::default(),
+        &NoCancel,
+    )
+    .await?;
+    assert_eq!(*called.lock().map_err(|_| "lock")?, vec!["read"]);
+    Ok(())
+}

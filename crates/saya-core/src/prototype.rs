@@ -6,12 +6,14 @@ use crate::boundary::{
 };
 use crate::contract::{
     BoundaryError, ErrorInfo, HistoryItem, ModelPurpose, Run, Session, ToolCall, ToolResult,
+    WorkMode,
 };
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
 mod control;
+use crate::mode::{ModeController as Modes, ModeSnapshot};
 use control::{Budget, Limits, retry_delay};
 
 fn error(code: &str, message: &str) -> BoundaryError {
@@ -35,10 +37,24 @@ fn failed(code: &str, message: &str) -> ToolResult {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolClass {
+    Read,
+    Write,
+    Command,
+    AskUser,
+}
+struct RegisteredTool {
+    tool: Box<dyn Tool>,
+    class: ToolClass,
+}
 #[derive(Default)]
-struct ToolRegistry(BTreeMap<String, Box<dyn Tool>>);
+struct ToolRegistry(BTreeMap<String, RegisteredTool>);
 impl ToolRegistry {
     fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), BoundaryError> {
+        self.register_as(tool, ToolClass::Write)
+    }
+    fn register_as(&mut self, tool: Box<dyn Tool>, class: ToolClass) -> Result<(), BoundaryError> {
         let name = tool.definition().name;
         if name.is_empty() || self.0.contains_key(&name) {
             return Err(error(
@@ -46,8 +62,48 @@ impl ToolRegistry {
                 "tool name is empty or already registered",
             ));
         }
-        self.0.insert(name, tool);
+        self.0.insert(name, RegisteredTool { tool, class });
         Ok(())
+    }
+}
+fn allowed(mode: WorkMode, class: ToolClass) -> bool {
+    mode != WorkMode::Plan || matches!(class, ToolClass::Read | ToolClass::AskUser)
+}
+fn mode_instruction(mode: WorkMode) -> &'static str {
+    match mode {
+        WorkMode::Plan => {
+            "Investigate read-only, clarify requirements, and produce a plan and acceptance criteria."
+        }
+        WorkMode::Build => {
+            "Implement and deliver the task end-to-end, including appropriate verification."
+        }
+        WorkMode::Code => {
+            "Focus on writing, changing, and debugging code with appropriate verification."
+        }
+        WorkMode::Work => "Complete the general task and explain results and outstanding work.",
+    }
+}
+struct Scheduler {
+    modes: Modes,
+    limits: Limits,
+}
+async fn sync_mode(
+    session: &mut Session,
+    store: &dyn Store,
+    modes: &Modes,
+) -> Result<ModeSnapshot, BoundaryError> {
+    loop {
+        let snap = modes.snapshot()?;
+        if session.work_mode != snap.current {
+            let mut updated = session.clone();
+            updated.work_mode = snap.current;
+            store.commit(&[StoreChange::Session(updated)]).await?;
+            session.work_mode = snap.current;
+        }
+        let now = modes.snapshot()?;
+        if now.revision == snap.revision && now.pending == snap.pending {
+            return Ok(now);
+        }
     }
 }
 
@@ -139,8 +195,9 @@ async fn model_turn(
     store: &dyn Store,
     cancel: &dyn Cancellation,
     budget: &mut Budget,
-    limits: &Limits,
+    scheduler: &Scheduler,
 ) -> Result<Vec<HistoryItem>, BoundaryError> {
+    let limits = &scheduler.limits;
     for attempt in 0..=2 {
         if cancel.is_cancelled() {
             return Err(error("cancelled", "run cancelled"));
@@ -148,13 +205,27 @@ async fn model_turn(
         if !budget.request() {
             return Err(error("limit_reached", "model request budget exceeded"));
         }
+        let snap = loop {
+            let snap = sync_mode(session, store, &scheduler.modes).await?;
+            if cancel.is_cancelled() {
+                return Err(error("cancelled", "run cancelled"));
+            }
+            if scheduler.modes.begin(snap.revision)? {
+                break snap;
+            }
+        };
         let request = ModelRequest {
             request_id: uuid::Uuid::now_v7().to_string(),
             purpose: ModelPurpose::Execution,
             profile: session.profile.clone(),
-            instructions: String::new(),
+            instructions: mode_instruction(snap.current).into(),
             history: session.history.clone(),
-            tools: tools.0.values().map(|tool| tool.definition()).collect(),
+            tools: tools
+                .0
+                .values()
+                .filter(|tool| allowed(snap.current, tool.class))
+                .map(|tool| tool.tool.definition())
+                .collect(),
         };
         let started = Instant::now();
         let mut partial = String::new();
@@ -194,6 +265,7 @@ async fn model_turn(
             }
         }
         .await;
+        scheduler.modes.finish()?;
         match response {
             Ok(items) => return Ok(items),
             Err(err) => {
@@ -207,6 +279,7 @@ async fn model_turn(
                         .await?;
                     session.history.push(item);
                 }
+                sync_mode(session, store, &scheduler.modes).await?;
                 if let Some(delay) = retry_delay(
                     &err.0.code,
                     attempt,
@@ -255,6 +328,41 @@ async fn run_with_limits(
     cancel: &dyn Cancellation,
     limits: Limits,
 ) -> Result<String, BoundaryError> {
+    let scheduler = Scheduler {
+        modes: Modes::new(session.work_mode),
+        limits,
+    };
+    run_with_modes(session, run, model, tools, store, cancel, &scheduler).await
+}
+
+async fn run_with_modes(
+    session: &mut Session,
+    run: &Run,
+    model: &dyn Model,
+    tools: &ToolRegistry,
+    store: &dyn Store,
+    cancel: &dyn Cancellation,
+    scheduler: &Scheduler,
+) -> Result<String, BoundaryError> {
+    let outcome = run_inner(session, run, model, tools, store, cancel, scheduler).await;
+    if store.load_session(session.id).await?.is_some() {
+        sync_mode(session, store, &scheduler.modes).await?;
+    } else {
+        session.work_mode = scheduler.modes.snapshot()?.current;
+    }
+    outcome
+}
+
+async fn run_inner(
+    session: &mut Session,
+    run: &Run,
+    model: &dyn Model,
+    tools: &ToolRegistry,
+    store: &dyn Store,
+    cancel: &dyn Cancellation,
+    scheduler: &Scheduler,
+) -> Result<String, BoundaryError> {
+    let limits = &scheduler.limits;
     if session.id != run.session_id {
         return Err(error("invalid_run", "session ID mismatch"));
     }
@@ -270,7 +378,8 @@ async fn run_with_limits(
     let mut budget = Budget::new(limits.clone());
     let mut last_failure: Option<(String, serde_json::Value, u8)> = None;
     loop {
-        let items = model_turn(session, model, tools, store, cancel, &mut budget, &limits).await?;
+        let items =
+            model_turn(session, model, tools, store, cancel, &mut budget, scheduler).await?;
         let changes: Vec<_> = items
             .iter()
             .cloned()
@@ -281,6 +390,10 @@ async fn run_with_limits(
             .collect();
         store.commit(&changes).await?;
         session.history.extend(items.iter().cloned());
+        sync_mode(session, store, &scheduler.modes).await?;
+        if cancel.is_cancelled() {
+            return Err(error("cancelled", "run cancelled"));
+        }
         let calls: Vec<ToolCall> = items
             .iter()
             .filter_map(|item| match item {
@@ -297,11 +410,8 @@ async fn run_with_limits(
                 })
                 .collect());
         }
-        let context = ToolContext {
-            run: run.clone(),
-            workspace: session.workspace.clone(),
-        };
         for call in calls {
+            sync_mode(session, store, &scheduler.modes).await?;
             if cancel.is_cancelled() {
                 return Err(error("cancelled", "run cancelled"));
             }
@@ -318,39 +428,64 @@ async fn run_with_limits(
                 .is_ok_and(|value| value.is_object());
             let outcome = if !valid_object {
                 failed("invalid_args", "tool arguments must be a JSON object")
-            } else if let Some(tool) = tools.0.get(&call.name) {
-                match tool_call(
-                    tool.as_ref(),
-                    &call,
-                    &context,
-                    cancel,
-                    budget.remaining(),
-                    limits.tool_timeout,
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(err)
-                        if matches!(
-                            err.0.code.as_str(),
-                            "cancelled" | "limit_reached" | "tool_timeout"
-                        ) =>
-                    {
-                        store
-                            .commit(&[StoreChange::ToolState {
-                                run_id: run.id,
-                                call_id: call.call_id.clone(),
-                                state: crate::contract::ToolState::Unknown,
-                            }])
-                            .await?;
-                        return Err(err);
+            } else if let Some(registered) = tools.0.get(&call.name) {
+                let dispatch = loop {
+                    let snap = sync_mode(session, store, &scheduler.modes).await?;
+                    if cancel.is_cancelled() {
+                        return Err(error("cancelled", "run cancelled"));
                     }
-                    Err(err) => ToolResult {
-                        ok: false,
-                        data: None,
-                        error: Some(err.0),
-                        truncated: false,
-                    },
+                    if scheduler.modes.begin(snap.revision)? {
+                        if allowed(snap.current, registered.class) {
+                            break Some(snap.current);
+                        }
+                        scheduler.modes.finish()?;
+                        break None;
+                    }
+                };
+                if let Some(mode) = dispatch {
+                    let mut current_run = run.clone();
+                    current_run.work_mode = mode;
+                    let context = ToolContext {
+                        run: current_run,
+                        workspace: session.workspace.clone(),
+                    };
+                    let result = tool_call(
+                        registered.tool.as_ref(),
+                        &call,
+                        &context,
+                        cancel,
+                        budget.remaining(),
+                        limits.tool_timeout,
+                    )
+                    .await;
+                    scheduler.modes.finish()?;
+                    match result {
+                        Ok(result) => result,
+                        Err(err)
+                            if matches!(
+                                err.0.code.as_str(),
+                                "cancelled" | "limit_reached" | "tool_timeout"
+                            ) =>
+                        {
+                            store
+                                .commit(&[StoreChange::ToolState {
+                                    run_id: run.id,
+                                    call_id: call.call_id.clone(),
+                                    state: crate::contract::ToolState::Unknown,
+                                }])
+                                .await?;
+                            sync_mode(session, store, &scheduler.modes).await?;
+                            return Err(err);
+                        }
+                        Err(err) => ToolResult {
+                            ok: false,
+                            data: None,
+                            error: Some(err.0),
+                            truncated: false,
+                        },
+                    }
+                } else {
+                    failed("mode_denied", "tool is not allowed in PLAN")
                 }
             } else {
                 failed("unknown_tool", "tool is not registered")
@@ -376,6 +511,10 @@ async fn run_with_limits(
                 ])
                 .await?;
             session.history.push(item);
+            sync_mode(session, store, &scheduler.modes).await?;
+            if cancel.is_cancelled() {
+                return Err(error("cancelled", "run cancelled"));
+            }
             if failed {
                 let count = match &last_failure {
                     Some((name, args, count)) if name == &call.name && args == &normalized => {
