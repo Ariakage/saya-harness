@@ -738,6 +738,12 @@ impl AgentRuntime {
         if session.id != self.run.session_id || session.work_mode != self.run.work_mode {
             return Err(error("invalid_run", "session or mode mismatch"));
         }
+        if self.review.execution_profile != session.profile {
+            return Err(error(
+                "invalid_config",
+                "review execution profile differs from the session",
+            ));
+        }
         self.model.validate_session(session)?;
         let existing = self.store.load_session(session.id).await?;
         if existing.as_ref().is_some_and(|saved| saved != session) {
