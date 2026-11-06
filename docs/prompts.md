@@ -77,7 +77,7 @@ DSH 的具体实现信息在这里仅来自 session 第 842 行等记录，本�
 | in-history 追加高优先级 system 更新与 provider 缓存管理 | 不照搬；使用现有 `ModelRequest.instructions` 接口，动态事实是独立数据，历史不被重写 |
 | sandbox × approval 的两个旋钮 | 不替换 Saya 权限契约；保留四工作模式与三权限模式正交，并明确本地命令没有 OS 沙箱 |
 | risk／decision 分类器协议 | 改为 Saya 已有的 allow／ask／deny 与 reason，不宣称共享相同 classifier |
-| 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | 不引入；按工作区作用域与已实现工具提供上下文，DEV-021 仍待接线 |
+| 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | D-033 后纳入用户级／工作区约定指令与 Skill 元数据发现，DEV-021 待接线；不引入 scratchpad 或自动记忆 |
 | 移植草案的计划文件、exit_plan、固定中文输出与来源工具占位符 | 移除或按 Saya 重写；所有 runtime prompt 为英文，沟通语言跟随用户而不固定中文 |
 | 将所有缺乏授权结果统称 denied 或建议改规则重试 | 区分拒绝、模式禁止、许可失效、需要确认、存储故障和未知结果，不指示 Agent 降权规避 |
 | 来源 session 外层的人设、无条件服从／放行、工具和环境指令 | 完全不进入 Saya prompt |
@@ -102,4 +102,4 @@ cargo run -p saya-core --example prompt_preview -- --review
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 
-三协议映射、项目指令装配与 CLI 仍需对应开发任务完成；提示词已接入可复用 core 循环与审核组件，不代表真实服务已完成联调。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。
+三协议适配已有 core 级受控验证，CLI 有只读开发预览；用户级／项目指令与 Skill 发现仍待 DEV-021。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。
