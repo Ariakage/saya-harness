@@ -1707,3 +1707,126 @@ async fn human_approval_wait_does_not_consume_active_run_budget()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn sqlite_intent_failure_prevents_a_real_workspace_write()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::sqlite::SqliteStore;
+    let temp = support::temp_workspace()?;
+    let store = Arc::new(SqliteStore::open(&temp.path().join("state"), vec![])?);
+    let connection = rusqlite::Connection::open(store.path())?;
+    connection.execute_batch("CREATE TRIGGER reject_intent BEFORE INSERT ON tool_calls BEGIN SELECT RAISE(FAIL, 'fixture failure'); END;")?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![vec![call(
+        "write",
+        "write_file",
+        serde_json::json!({"path":"never.txt","content":"should not appear","expected_version":null}),
+    )]]));
+    let mut runtime = runtime(temp.path(), run, model, store.clone(), Arc::new(NoCancel))?;
+    let failure = runtime
+        .run(&mut session)
+        .await
+        .expect_err("intent failure must stop the run");
+    assert_eq!(failure.0.code, "storage_error");
+    assert!(!temp.path().join("never.txt").exists());
+    let persisted = store
+        .load_session(session.id)
+        .await?
+        .ok_or("session missing")?;
+    assert!(
+        persisted
+            .history
+            .iter()
+            .any(|item| matches!(item,HistoryItem::ToolCall(call) if call.call_id=="write"))
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn sqlite_records_actual_tool_result_and_session_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::sqlite::SqliteStore;
+    let temp = support::temp_workspace()?;
+    let data = temp.path().join("state");
+    let store = Arc::new(SqliteStore::open(&data, vec![])?);
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![
+        vec![call(
+            "write",
+            "write_file",
+            serde_json::json!({"path":"created.txt","content":"fixture","expected_version":null}),
+        )],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let mut runtime = runtime(
+        temp.path(),
+        run.clone(),
+        model,
+        store.clone(),
+        Arc::new(NoCancel),
+    )?;
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("created.txt"))?,
+        "fixture"
+    );
+    drop(runtime);
+    drop(store);
+    let reopened = SqliteStore::open(&data, vec![])?;
+    assert_eq!(reopened.load_session(session.id).await?, Some(session));
+    let conn = rusqlite::Connection::open(reopened.path())?;
+    let state: String = conn.query_row(
+        "SELECT state FROM tool_calls WHERE run_id=?1 AND call_id='write'",
+        [run.id.0.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(state, "succeeded");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_result_failure_preserves_observed_write_and_stops_loop()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::sqlite::SqliteStore;
+    let temp = support::temp_workspace()?;
+    let data = temp.path().join("state");
+    let store = Arc::new(SqliteStore::open(&data, vec![])?);
+    let conn = rusqlite::Connection::open(store.path())?;
+    conn.execute_batch("CREATE TRIGGER reject_result BEFORE UPDATE OF result ON tool_calls BEGIN SELECT RAISE(FAIL, 'fixture failure'); END;")?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![
+        vec![call(
+            "write",
+            "write_file",
+            serde_json::json!({"path":"written.txt","content":"once","expected_version":null}),
+        )],
+        vec![HistoryItem::AssistantText("must not be called".into())],
+    ]));
+    let mut runtime = runtime(
+        temp.path(),
+        run.clone(),
+        model.clone(),
+        store.clone(),
+        Arc::new(NoCancel),
+    )?;
+    let failure = runtime
+        .run(&mut session)
+        .await
+        .expect_err("result failure must stop the run");
+    assert_eq!(failure.0.code, "storage_error");
+    assert!(failure.2.as_ref().is_some_and(|result| result.ok));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("written.txt"))?,
+        "once"
+    );
+    assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 1);
+    let state: String = conn.query_row(
+        "SELECT state FROM tool_calls WHERE run_id=?1 AND call_id='write'",
+        [run.id.0.to_string()],
+        |r| r.get(0),
+    )?;
+    assert_eq!(state, "running");
+    Ok(())
+}

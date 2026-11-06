@@ -15,6 +15,7 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [开发指南](development.md) | 协作流程、Rust 检查与文档维护 | 初版约定 |
 | [CLI 开发预览](cli-preview.md) | 只读单次运行和当前限制 | 开发中 |
 | [项目指令与 Skill 发现](project-context.md) | 来源、优先级与刷新规则 | 受控验证通过 |
+| [SQLite 存储组件](storage.md) | 事务、事件序号与持久化边界 | DEV-022 受控验证 |
 | [saya-plugin 规划](saya-plugin.md) | 未来插件系统的边界、阶段与验收草案 | 规划中，未实现 |
 | [后续能力路线图](capability-roadmap.md) | Sandbox、MCP 等 18 个功能模块、优先级与依赖 | 后续功能规划，未实现 |
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | 计划已准备，未执行 |
