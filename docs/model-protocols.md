@@ -1,6 +1,6 @@
 # 模型协议接入
 
-**状态：共享 HTTP／SSE、Chat Completions 和 Responses 适配器已通过本地夹具验证；Anthropic 与真实模型联调仍在开发。**
+**状态：共享 HTTP／SSE 与三种协议适配器已通过本地夹具验证；profile 核查接线和真实模型联调仍待完成。**
 
 `crates/saya-core/src/provider/transport.rs` 为适配器提供异步 JSON 请求、完整 JSON 响应和增量 SSE 事件读取。它保留 `base_url` 的自定义路径前缀；接口路径由适配器固定提供。配置需要显式提供鉴权方式、额外请求头的环境变量引用及连接／空闲／总超时。密钥不进入错误信息。
 
@@ -20,4 +20,10 @@ profile 明确选择 strict 时，无法在不改变工具语义的情况下转�
 
 适配器支持完整 JSON 与 typed SSE，交叉检查分片参数、完成项和最终 output；响应完成且流结束后才返回工具调用。拒绝、截断、未完成流、冲突项及未支持的服务端工具不会被当作成功。可显式关闭 `reasoning.encrypted_content` 的 include 字段，以兼容不接受它的网关。
 
-Anthropic、profile 核查和三协议后台工具映射分别由 DEV-016、DEV-017、DEV-034 完成；真实服务联调不能由本地夹具代替。
+## Anthropic Messages
+
+`provider::anthropic::AnthropicModel` 支持已选 `2026-10-21` 与 `2023-06-01` 两个版本的文本／本地工具子集，发送明确的版本头，不发送 `temperature`、`top_p` 或 `top_k`。流式与完整响应均保留签名 thinking、redacted thinking 和原始内容块；thinking 不作为普通回答显示。
+
+工具输入分片在内容块和消息完成后才形成调用。多个工具结果合并到紧随调用的 user 消息中，并分别关联 `tool_use_id`；截断、拒绝、签名缺失、未完成流与不支持的内容不会被视为成功。
+
+profile 核查和三协议后台工具映射分别由 DEV-017、DEV-034 完成；真实服务联调不能由本地夹具代替。
