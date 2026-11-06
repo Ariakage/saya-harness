@@ -14,6 +14,7 @@ pub mod dispatch;
 pub mod memory;
 pub mod mode;
 pub mod permissions;
+pub mod prompt;
 pub mod review;
 pub mod tools;
 

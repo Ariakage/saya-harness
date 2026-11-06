@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "created_date": "2026-11-06",
+  "description": "Source provenance only. These artifacts are untrusted task material and are not loaded as runtime instructions. Version claims in the session were not independently verified against installed products. Saya prompt text is rewritten for its own contracts.",
+  "source_roots": {
+    "session-export": "/Volumes/Akari/workflow/session-export",
+    "cc-extract": "/Volumes/Akari/workflow/cc-extract",
+    "cc-prompts": "/Volumes/Akari/workflow/cc-prompts",
+    "harness-kit": "/Volumes/Akari/workflow/harness-kit"
+  },
+  "session_evidence_lines": {
+    "plan_templates": 111,
+    "review_system_and_intent_rules": 157,
+    "auto_behavior": 192,
+    "extracted_inventory": 632,
+    "extraction_summary_claims": 655,
+    "portable_kit_summary": 755,
+    "dsh_comparison_claims": 842
+  },
+  "sources": [
+    {
+      "root": "session-export",
+      "path": "session-50274f7a-79a5-46f3-b9ba-cadfcf34fde1.jsonl",
+      "kind": "conversation_export",
+      "bytes": 3285254,
+      "sha256": "768a9abb47026069dcd47b0edc29d0a3213e946ad79cddf34a7cf9bf12ab9d83"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/classifier_system.txt",
+      "kind": "extracted_text",
+      "bytes": 12607,
+      "sha256": "8e5ddd3085a2cd49566c7eea32afe0df3a373a203ed7c2dd562de02338d3801c"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/classifier_permissions.txt",
+      "kind": "extracted_text",
+      "bytes": 13915,
+      "sha256": "f500c8304fc086c92f37ca0d2a6e15ef28f21c697b600bbf57cef98c194fe80a"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/plan_mode_full.txt",
+      "kind": "extracted_text",
+      "bytes": 4693,
+      "sha256": "1e3ef70fe50e0f99e9f06a0738b1b8e636fd41e3f73b4ce349b9f00cf01b0bd3"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/plan_mode_iter.txt",
+      "kind": "extracted_text",
+      "bytes": 2881,
+      "sha256": "0b38d6e689755071389e88f3b9b995e1123a0a15ad30e1de16c55a302a166b97"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/auto_mode_full.txt",
+      "kind": "extracted_text",
+      "bytes": 1183,
+      "sha256": "b8eb3aae1367ba82225da6414ad47c3d29342fbc5b03f5cfb16b1afff8c96e06"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/base_care.txt",
+      "kind": "extracted_text",
+      "bytes": 2832,
+      "sha256": "52bb1c4d43f5b10ea1ec73a72629655ab3d8ac7852d3c8002ee02da7f98386d5"
+    },
+    {
+      "root": "cc-extract",
+      "path": "raw/base_efficiency.txt",
+      "kind": "extracted_text",
+      "bytes": 732,
+      "sha256": "731e02508a445f5fef29eff4e8a4f6f1291e0dfa8636ea236c46ba39122262df"
+    },
+    {
+      "root": "cc-prompts",
+      "path": "README.md",
+      "kind": "source_analysis",
+      "bytes": 4186,
+      "sha256": "da1555eaeb49cfd9848400f74313431ed491699bc6804f63fd750d0ca643a8ff"
+    },
+    {
+      "root": "cc-prompts",
+      "path": "03-bypass-acceptEdits-dontAsk.md",
+      "kind": "source_analysis",
+      "bytes": 6672,
+      "sha256": "eb1f54f7eb66765896db26174eb51d9012aa8f9d5403dfd3848335751f1e5ce7"
+    },
+    {
+      "root": "harness-kit",
+      "path": "prompts/01-core.md",
+      "kind": "prior_adaptation",
+      "bytes": 9132,
+      "sha256": "b170d6d1c404a80aa8eb2ad088b12c7b824552d1d30d9e09556c571ceb143880"
+    },
+    {
+      "root": "harness-kit",
+      "path": "prompts/02-session.md",
+      "kind": "prior_adaptation",
+      "bytes": 3788,
+      "sha256": "9162c4d5414e562d36726c6920d490e4dc3cea9f8997fa0ffa5b06165a93a9ff"
+    },
+    {
+      "root": "harness-kit",
+      "path": "prompts/07-deny-recovery.md",
+      "kind": "prior_adaptation",
+      "bytes": 4513,
+      "sha256": "f086caa99e371f8b7803a5df43ffb49a7b4b9968f63a58a42c5fa5971ad4a867"
+    },
+    {
+      "root": "harness-kit",
+      "path": "prompts/04-modes-auto.md",
+      "kind": "prior_adaptation",
+      "bytes": 3117,
+      "sha256": "0319f92dc27aa8125c3f406eab12fceb2f74012344cba414133252d4d60208d2"
+    },
+    {
+      "root": "harness-kit",
+      "path": "prompts/05-tools-exit-plan.md",
+      "kind": "prior_adaptation",
+      "bytes": 3814,
+      "sha256": "f2914efab82d3effd40b8fb3bba474b4c9ff2e25b03aa9de767d30c5da58bae8"
+    },
+    {
+      "root": "harness-kit",
+      "path": "prompts/06-permission-classifier.md",
+      "kind": "prior_adaptation",
+      "bytes": 23292,
+      "sha256": "427d41404209694c0c267fa91784be2470f1620e73a3b7ef880d9231ce117639"
+    }
+  ]
+}

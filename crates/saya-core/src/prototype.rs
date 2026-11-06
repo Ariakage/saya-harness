@@ -70,20 +70,7 @@ impl ToolRegistry {
 fn allowed(mode: WorkMode, class: ToolClass) -> bool {
     mode != WorkMode::Plan || matches!(class, ToolClass::Read | ToolClass::AskUser)
 }
-fn mode_instruction(mode: WorkMode) -> &'static str {
-    match mode {
-        WorkMode::Plan => {
-            "Investigate read-only, clarify requirements, and produce a plan and acceptance criteria."
-        }
-        WorkMode::Build => {
-            "Implement and deliver the task end-to-end, including appropriate verification."
-        }
-        WorkMode::Code => {
-            "Focus on writing, changing, and debugging code with appropriate verification."
-        }
-        WorkMode::Work => "Complete the general task and explain results and outstanding work.",
-    }
-}
+
 struct Scheduler {
     modes: Modes,
     limits: Limits,
@@ -199,6 +186,10 @@ async fn tool_call(
     Err(interrupted)
 }
 
+struct ModelTurnControl<'a> {
+    scheduler: &'a Scheduler,
+    run: &'a Run,
+}
 async fn model_turn(
     session: &mut Session,
     model: &dyn Model,
@@ -206,8 +197,9 @@ async fn model_turn(
     store: &dyn Store,
     cancel: &dyn Cancellation,
     budget: &mut Budget,
-    scheduler: &Scheduler,
+    control: ModelTurnControl<'_>,
 ) -> Result<Vec<HistoryItem>, BoundaryError> {
+    let scheduler = control.scheduler;
     let limits = &scheduler.limits;
     for attempt in 0..=2 {
         if cancel.is_cancelled() {
@@ -226,19 +218,41 @@ async fn model_turn(
             }
             tokio::task::yield_now().await;
         };
+        let available_tools: Vec<_> = tools
+            .0
+            .values()
+            .filter(|tool| allowed(snap.current, tool.class))
+            .map(|tool| tool.tool.definition())
+            .collect();
+        let prompt =
+            match crate::prompt::execution(snap.current, control.run.permissions, &available_tools)
+            {
+                Ok(prompt) => prompt,
+                Err(error) => {
+                    scheduler.modes.finish()?;
+                    return Err(error);
+                }
+            };
+        let mut effective_run = control.run.clone();
+        effective_run.work_mode = snap.current;
+        let context = match crate::prompt::runtime_context(session, &effective_run) {
+            Ok(context) => context,
+            Err(error) => {
+                scheduler.modes.finish()?;
+                return Err(error);
+            }
+        };
+        let mut history = Vec::with_capacity(session.history.len() + 1);
+        history.push(context);
+        history.extend(session.history.iter().cloned());
         let request = ModelRequest {
             request_id: uuid::Uuid::now_v7().to_string(),
             purpose: ModelPurpose::Execution,
             profile: session.profile.clone(),
-            instructions: mode_instruction(snap.current).into(),
+            instructions: prompt.instructions,
             max_output_tokens: None,
-            history: session.history.clone(),
-            tools: tools
-                .0
-                .values()
-                .filter(|tool| allowed(snap.current, tool.class))
-                .map(|tool| tool.tool.definition())
-                .collect(),
+            history,
+            tools: available_tools,
         };
         let started = Instant::now();
         let mut partial = String::new();
@@ -413,8 +427,16 @@ async fn run_inner(
     let mut last_failure: Option<(String, serde_json::Value, u8)> = None;
     loop {
         check_background(scheduler)?;
-        let items =
-            model_turn(session, model, tools, store, cancel, &mut budget, scheduler).await?;
+        let items = model_turn(
+            session,
+            model,
+            tools,
+            store,
+            cancel,
+            &mut budget,
+            ModelTurnControl { scheduler, run },
+        )
+        .await?;
         check_background(scheduler)?;
         let changes: Vec<_> = items
             .iter()

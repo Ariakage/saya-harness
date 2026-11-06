@@ -166,6 +166,11 @@ async fn review_is_isolated_tool_free_normalized_and_profile_scoped()
     assert_eq!(seen.len(), 1);
     let request = &seen[0];
     assert_eq!(request.purpose, ModelPurpose::Review);
+    assert_eq!(
+        request.instructions,
+        saya_core::prompt::review_instructions()
+    );
+    assert!(!request.instructions.contains("# Work mode:"));
     assert_eq!(request.profile, "review");
     assert_eq!(request.max_output_tokens, Some(1024));
     assert!(request.tools.is_empty());

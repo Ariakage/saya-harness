@@ -49,8 +49,9 @@
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
 | [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
 | [MVP 实施路线图](docs/roadmap.md) | 8 个 MVP 里程碑、工作量估算与交付条件 |
-| [实施任务](docs/implementation-plan.md) | 35 个任务、依赖、交付与基线／验收覆盖 |
+| [实施任务](docs/implementation-plan.md) | 36 个任务、依赖、交付与基线／验收覆盖 |
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |
+| [提示词定制](docs/prompts.md) | 英文提示词、模式与审核装配、来源取舍对照和离线预览 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
 需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-006 的模式状态机已在普通构建提供，切换行为已在测试专用原型中验证；核心循环仍需成为可复用的运行时，才能完成 P1。
