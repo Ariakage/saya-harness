@@ -281,6 +281,7 @@ async fn model_turn(
                         received = true;
                         partial.push_str(&text);
                     }
+                    Some(ModelUpdate::Progress) => received = true,
                     Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
                     None => {
                         return Err(error(

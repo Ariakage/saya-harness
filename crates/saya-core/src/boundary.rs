@@ -47,6 +47,9 @@ pub struct ToolDefinition {
 #[derive(Debug, Clone)]
 pub enum ModelUpdate {
     TextDelta(String),
+    /// A provider response event with no visible text. A later failure must
+    /// not be retried after receiving any part of the response.
+    Progress,
     Finished {
         items: Vec<HistoryItem>,
         usage: Option<Usage>,
@@ -62,6 +65,11 @@ pub trait ModelStream: Send {
 
 /// Starts a provider request. Review calls must not be supplied executable tools.
 pub trait Model: Send + Sync {
+    /// Verify that a persisted execution session still matches its provider,
+    /// profile and model. Test doubles may use the default implementation.
+    fn validate_session(&self, _session: &Session) -> Result<(), BoundaryError> {
+        Ok(())
+    }
     /// Start a request, possibly making network calls. Failures and cancellation
     /// return errors; retries and budgets are coordinated by the runtime.
     fn start<'a>(

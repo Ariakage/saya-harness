@@ -1233,3 +1233,84 @@ async fn manual_noninteractive_background_status_requires_confirmation()
     assert!(session.history.iter().any(|item| matches!(item, HistoryItem::ToolResult {call_id, result} if call_id == "status" && result.error.as_ref().is_some_and(|e| e.code == "needs_confirmation"))));
     Ok(())
 }
+
+struct ProgressThenFailure(std::sync::atomic::AtomicUsize);
+struct ProgressStream(bool);
+impl ModelStream for ProgressStream {
+    fn next<'a>(&'a mut self, _: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
+        Box::pin(async move {
+            if !self.0 {
+                self.0 = true;
+                Ok(Some(ModelUpdate::Progress))
+            } else {
+                Err(err("transient_connection"))
+            }
+        })
+    }
+}
+impl Model for ProgressThenFailure {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(ProgressStream(false)) as Box<dyn ModelStream>)
+        })
+    }
+}
+#[tokio::test]
+async fn non_text_provider_event_prevents_retry_after_connection_failure()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(ProgressThenFailure(std::sync::atomic::AtomicUsize::new(0)));
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?;
+    let result = runtime.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Failed);
+    assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        session
+            .history
+            .iter()
+            .any(|item| matches!(item, HistoryItem::AssistantPartial(_)))
+    );
+    Ok(())
+}
+
+struct LimitedModel(&'static str);
+impl Model for LimitedModel {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move { Err(err(self.0)) })
+    }
+}
+#[tokio::test]
+async fn provider_context_and_output_limits_have_distinct_limit_reasons()
+-> Result<(), Box<dyn std::error::Error>> {
+    for code in ["context_budget", "output_limit"] {
+        let temp = support::temp_workspace()?;
+        let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+        let mut runtime = runtime(
+            temp.path(),
+            run,
+            Arc::new(LimitedModel(code)),
+            Arc::new(MemoryStore::default()),
+            Arc::new(NoCancel),
+        )?;
+        let result = runtime.run(&mut session).await?;
+        assert_eq!(result.status, RunStatus::LimitReached);
+        assert_eq!(result.stop_reason.as_deref(), Some(code));
+    }
+    Ok(())
+}

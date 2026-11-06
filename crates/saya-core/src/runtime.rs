@@ -409,6 +409,7 @@ impl AgentRuntime {
                             received = true;
                             partial.push_str(&text);
                         }
+                        Some(ModelUpdate::Progress) => received = true,
                         Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
                         None => {
                             return Err(error(
@@ -737,6 +738,7 @@ impl AgentRuntime {
         if session.id != self.run.session_id || session.work_mode != self.run.work_mode {
             return Err(error("invalid_run", "session or mode mismatch"));
         }
+        self.model.validate_session(session)?;
         let existing = self.store.load_session(session.id).await?;
         if existing.as_ref().is_some_and(|saved| saved != session) {
             return Err(error(
@@ -912,7 +914,7 @@ impl AgentRuntime {
             Err(err) => {
                 let status = match err.0.code.as_str() {
                     "cancelled" => RunStatus::Cancelled,
-                    "limit_reached" => RunStatus::LimitReached,
+                    "limit_reached" | "context_budget" | "output_limit" => RunStatus::LimitReached,
                     "needs_confirmation" => RunStatus::NeedsConfirmation,
                     "needs_input" => RunStatus::NeedsInput,
                     _ => RunStatus::Failed,
