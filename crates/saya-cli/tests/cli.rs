@@ -3,7 +3,7 @@ mod fixture;
 use serde_json::json;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
     time::Duration,
@@ -599,4 +599,38 @@ fn valid_exact_command_preauthorization_file_is_accepted() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
+    use std::net::TcpListener;
+    let temp = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut data = [0u8; 2048];
+            let _ = stream.read(&mut data);
+            let _ = entered_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        }
+    });
+    let cfg = config(temp.path(), &format!("http://{address}/v1"), "auto");
+    let child = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "wait"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // SAFETY: this PID refers to the live subprocess owned by the test.
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let output = child.wait_with_output().unwrap();
+    let _ = release_tx.send(());
+    assert_eq!(output.status.code(), Some(130));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cancelled"));
 }

@@ -206,6 +206,12 @@ struct ProjectState {
     target: Option<PathBuf>,
     provided_fingerprint: Option<String>,
 }
+#[derive(Clone, Copy)]
+enum CallProgress {
+    NotDispatched,
+    Dispatched,
+    WaitingInput,
+}
 fn project_context_is_current(
     state: &Mutex<ProjectState>,
     call: &ToolCall,
@@ -643,22 +649,25 @@ impl AgentRuntime {
         &self,
         session: &mut Session,
         calls: &[ToolCall],
-        first_unknown: bool,
+        first_progress: CallProgress,
     ) -> Result<(), BoundaryError> {
         let mut changes = Vec::new();
         let mut items = Vec::new();
         for (index, call) in calls.iter().enumerate() {
             if session.history.iter().any(|item| matches!(item, HistoryItem::ToolResult { call_id, .. } if call_id == &call.call_id)) { continue; }
-            let result = if index == 0 && first_unknown {
-                failed(
+            let result = match (index == 0, first_progress) {
+                (true, CallProgress::Dispatched) => failed(
                     "outcome_unknown",
                     "operation may have started; do not replay automatically",
-                )
-            } else {
-                failed(
+                ),
+                (true, CallProgress::WaitingInput) => failed(
+                    "input_interrupted",
+                    "clarification ended before an answer was received",
+                ),
+                _ => failed(
                     "not_executed",
                     "run ended before this operation was dispatched",
-                )
+                ),
             };
             let item = HistoryItem::ToolResult {
                 call_id: call.call_id.clone(),
@@ -680,6 +689,7 @@ impl AgentRuntime {
         &self,
         session: &mut Session,
         call: &ToolCall,
+        progress: &mut CallProgress,
     ) -> Result<ToolResult, BoundaryError> {
         self.check()?;
         if let Some(state) = &self.project_context {
@@ -704,11 +714,42 @@ impl AgentRuntime {
             _ => None,
         };
         if let Some(kind) = control {
-            let result = self
+            let accepted_before = self
+                .jobs
+                .events()?
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.kind,
+                        crate::background::BackgroundEventKind::Accepted { .. }
+                    )
+                })
+                .count();
+            if matches!(kind, BackgroundToolKind::Cancel) {
+                *progress = CallProgress::Dispatched;
+            }
+            let outcome = self
                 .background
                 .tool(kind)
                 .execute(call, &context, self.cancel.as_ref())
-                .await?;
+                .await;
+            if matches!(kind, BackgroundToolKind::Start)
+                && self
+                    .jobs
+                    .events()?
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event.kind,
+                            crate::background::BackgroundEventKind::Accepted { .. }
+                        )
+                    })
+                    .count()
+                    > accepted_before
+            {
+                *progress = CallProgress::Dispatched;
+            }
+            let result = outcome?;
             if result
                 .error
                 .as_ref()
@@ -834,6 +875,7 @@ impl AgentRuntime {
                     permit.consume_input(call, &context)?;
                     let answer = if let Some(handler) = &self.input {
                         self.budget.pause()?;
+                        *progress = CallProgress::WaitingInput;
                         let result = tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), result = handler.ask(&request, self.cancel.as_ref()) => result };
                         self.budget.resume()?;
                         result?
@@ -864,6 +906,7 @@ impl AgentRuntime {
                     return self.save_local(session, call, result).await;
                 }
                 let cancel = CallCancel::new(self.cancel.clone());
+                *progress = CallProgress::Dispatched;
                 let operation = self
                     .dispatcher
                     .execute_with_cancel(call, &context, permit, &cancel, false);
@@ -1025,19 +1068,22 @@ impl AgentRuntime {
             }
             for (index, call) in calls.iter().enumerate() {
                 if let Err(err) = self.check() {
-                    self.close_calls(session, &calls[index..], false).await?;
+                    self.close_calls(session, &calls[index..], CallProgress::NotDispatched)
+                        .await?;
                     return Err(err);
                 }
                 calls_used += 1;
                 if calls_used > self.limits.tool_calls {
-                    self.close_calls(session, &calls[index..], false).await?;
+                    self.close_calls(session, &calls[index..], CallProgress::NotDispatched)
+                        .await?;
                     return Err(error("limit_reached", "tool call budget exceeded"));
                 }
-                let result = match self.execute(session, call).await {
+                let mut progress = CallProgress::NotDispatched;
+                let result = match self.execute(session, call, &mut progress).await {
                     Ok(result) => result,
                     Err(err) => {
                         if err.0.code != "storage_error" && err.2.is_none() {
-                            self.close_calls(session, &calls[index..], true).await?;
+                            self.close_calls(session, &calls[index..], progress).await?;
                         }
                         return Err(err);
                     }
@@ -1047,7 +1093,7 @@ impl AgentRuntime {
                     .as_ref()
                     .is_some_and(|e| e.code == "needs_confirmation")
                 {
-                    self.close_calls(session, &calls[index + 1..], false)
+                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
                         .await?;
                     return Err(error("needs_confirmation", "confirmation required"));
                 }
@@ -1056,7 +1102,7 @@ impl AgentRuntime {
                     .as_ref()
                     .is_some_and(|e| e.code == "needs_input")
                 {
-                    self.close_calls(session, &calls[index + 1..], false)
+                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
                         .await?;
                     return Err(error("needs_input", "user input required"));
                 }
@@ -1065,7 +1111,7 @@ impl AgentRuntime {
                     .as_ref()
                     .is_some_and(|e| e.code == "project_context_changed")
                 {
-                    self.close_calls(session, &calls[index + 1..], false)
+                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
                         .await?;
                     break;
                 }
@@ -1080,7 +1126,7 @@ impl AgentRuntime {
                     };
                     previous = Some((call.name.clone(), args, count));
                     if count >= 3 {
-                        self.close_calls(session, &calls[index + 1..], false)
+                        self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
                             .await?;
                         return Err(error(
                             "repeated_tool_failure",

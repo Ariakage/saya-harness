@@ -158,6 +158,15 @@ struct Active {
     streamed: bool,
     cancelling: bool,
 }
+/// Returns true when a second interrupt must force the process to exit.
+fn interrupt_active(cancelling: &mut bool, cancel: &Cancel) -> bool {
+    if *cancelling {
+        return true;
+    }
+    *cancelling = true;
+    cancel.0.send_replace(true);
+    false
+}
 fn work_mode(input: &str) -> Option<WorkMode> {
     match input.to_ascii_lowercase().as_str() {
         "plan" => Some(WorkMode::Plan),
@@ -325,11 +334,9 @@ pub async fn chat(mut config: Config) -> Result<u8, Box<dyn std::error::Error>> 
                     return Err("signal listener closed".into());
                 }
                 if let Some(run) = active.as_mut() {
-                    if run.cancelling {
+                    if interrupt_active(&mut run.cancelling, &run.cancel) {
                         std::process::exit(130);
                     }
-                    run.cancelling = true;
-                    run.cancel.0.send_replace(true);
                     pending = None;
                     console.print("\nCancelling run...\n")?;
                 } else {
@@ -339,7 +346,13 @@ pub async fn chat(mut config: Config) -> Result<u8, Box<dyn std::error::Error>> 
             }
             Event::Finished(result) => {
                 let old = active.take().ok_or("missing active run")?;
-                let (outcome, finished) = result.map_err(|_| "run task failed")?;
+                let (outcome, finished) = match result {
+                    Ok(result) => result,
+                    Err(_) => {
+                        eprintln!("saya: run task failed");
+                        return Ok(1);
+                    }
+                };
                 pending = None;
                 match outcome {
                     Ok(result) => {
@@ -400,8 +413,16 @@ pub async fn chat(mut config: Config) -> Result<u8, Box<dyn std::error::Error>> 
                     let mut words = text.split_whitespace();
                     let command = words.next().unwrap_or("");
                     let arg = words.next();
-                    if words.next().is_some() {
-                        console.print("Too many command arguments.\n")?;
+                    if words.next().is_some()
+                        || (arg.is_some()
+                            && matches!(command, "/help" | "/status" | "/cancel" | "/exit"))
+                    {
+                        console.print("Invalid command arguments.\n")?;
+                        if active.is_none() {
+                            console.print("> ")?;
+                        } else if let Some(request) = pending.as_ref() {
+                            show_prompt(&mut console, request)?;
+                        }
                         continue;
                     }
                     match command {
@@ -580,5 +601,18 @@ pub async fn chat(mut config: Config) -> Result<u8, Box<dyn std::error::Error>> 
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn first_interrupt_cancels_and_second_forces_exit() {
+        let cancel = Cancel(tokio::sync::watch::channel(false).0);
+        let mut cancelling = false;
+        assert!(!interrupt_active(&mut cancelling, &cancel));
+        assert!(cancel.is_cancelled());
+        assert!(interrupt_active(&mut cancelling, &cancel));
     }
 }

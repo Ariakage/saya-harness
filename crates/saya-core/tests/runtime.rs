@@ -1651,3 +1651,59 @@ async fn context_change_during_approval_requires_a_new_model_turn_before_dispatc
     }
     Ok(())
 }
+
+struct SlowApproval;
+impl saya_core::runtime::ApprovalHandler for SlowApproval {
+    fn confirm<'a>(
+        &'a self,
+        _: &'a saya_core::contract::ApprovalRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Option<bool>> {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_secs(2000)).await;
+            Ok(Some(true))
+        })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn human_approval_wait_does_not_consume_active_run_budget()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("data.txt"), "content")?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
+    let model = Arc::new(FakeModel::new(vec![
+        vec![call(
+            "read",
+            "read_file",
+            serde_json::json!({"path":"data.txt","start_line":1,"line_count":1}),
+        )],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let policy = Arc::new(Policy::new(temp.path(), PermissionConfig::default())?);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let mut runtime = AgentRuntime::new(RuntimeSetup {
+        run,
+        model,
+        store: Arc::new(MemoryStore::default()),
+        policy,
+        files,
+        cancellation: Arc::new(NoCancel),
+        review: ReviewConfig::new("fake".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "task".into(),
+        confirmation: Some(Arc::new(SlowApproval)),
+        limits: RuntimeLimits::default(),
+    })?;
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    Ok(())
+}

@@ -313,6 +313,8 @@ fn running_controls_queue_mode_and_cancel_returns_to_the_same_session() {
     pty.until("> ");
     pty.send("long task\n");
     entered.recv_timeout(Duration::from_secs(3)).unwrap();
+    pty.send("/mode code\n");
+    pty.until("pending code");
     pty.send("/mode plan\n");
     pty.until("pending plan");
     pty.send("/permissions bypass\n");
@@ -361,4 +363,120 @@ fn ctrl_c_cancels_an_active_run_then_exits_when_idle() {
     };
     let _ = release.send(());
     assert_eq!(status.code(), Some(130));
+}
+
+#[test]
+fn cancelling_during_approval_records_tool_as_not_executed() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("input.txt"), "data").unwrap();
+    let (url, requests) = fixture::server(vec![
+        ("application/json", read_call()),
+        ("application/json", answer("continued")),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "manual", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
+    pty.until("> ");
+    pty.send("inspect\n");
+    pty.until("Allow this call? [y/N] ");
+    pty.send("/cancel\n");
+    pty.until("Cancelling run...");
+    pty.until("> ");
+    pty.send("continue\n");
+    pty.until("continued");
+    pty.until("> ");
+    assert!(pty.finish().success());
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let second = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(second.to_string().contains("not_executed"));
+    assert!(!second.to_string().contains("outcome_unknown"));
+}
+#[test]
+fn idle_permission_change_applies_to_subsequent_runs() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("input.txt"), "data").unwrap();
+    let second_call = read_call().replace("\"id\":\"read\"", "\"id\":\"read-second\"");
+    let (url, _) = fixture::server(vec![
+        ("application/json", read_call()),
+        ("application/json", answer("first done")),
+        ("application/json", second_call),
+        ("application/json", answer("second done")),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
+    pty.until("> ");
+    pty.send("/permissions manual\n");
+    pty.until("Permissions: manual");
+    pty.until("> ");
+    pty.send("first\n");
+    pty.until("Allow this call? [y/N] ");
+    pty.send("y\n");
+    pty.until("first done");
+    pty.until("> ");
+    pty.send("/permissions bypass\n");
+    pty.until("Permissions: bypass");
+    pty.until("> ");
+    pty.send("second\n");
+    let output = pty.until("second done");
+    assert!(!output.contains("Allow this call?"));
+    pty.until("> ");
+    assert!(pty.finish().success());
+}
+
+#[test]
+fn help_and_control_commands_report_errors_without_ending_session() {
+    let temp = TempDir::new().unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
+    pty.until("> ");
+    pty.send("/help\n");
+    let help = pty.until("Use //");
+    assert!(help.contains("/mode"));
+    assert!(help.contains("/cancel"));
+    pty.until("> ");
+    pty.send("/exit extra\n");
+    pty.until("Invalid command arguments.");
+    pty.until("> ");
+    pty.send("/unknown\n");
+    pty.until("Unknown command");
+    pty.until("> ");
+    pty.send("/cancel\n");
+    pty.until("No active run.");
+    pty.until("> ");
+    pty.send("/mode\n");
+    pty.until("Mode: work");
+    pty.until("> ");
+    assert!(pty.finish().success());
+}
+
+#[test]
+fn cancelling_while_awaiting_clarification_records_interrupted_input() {
+    let temp = TempDir::new().unwrap();
+    let args = json!({"question":"Which option?"}).to_string();
+    let ask=json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"ask","type":"function","function":{"name":"ask_user","arguments":args}}]}}]}).to_string();
+    let (url, requests) = fixture::server(vec![
+        ("application/json", ask),
+        ("application/json", answer("continued")),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
+    pty.until("> ");
+    pty.send("choose\n");
+    pty.until("Answer: ");
+    pty.send("/cancel\n");
+    pty.until("Cancelling run...");
+    pty.until("> ");
+    pty.send("continue\n");
+    pty.until("continued");
+    pty.until("> ");
+    assert!(pty.finish().success());
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let second = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    assert!(second.contains("input_interrupted"));
+    assert!(!second.contains("outcome_unknown"));
 }
