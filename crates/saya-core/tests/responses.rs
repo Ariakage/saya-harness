@@ -115,6 +115,14 @@ async fn preserves_reasoning_and_tool_items_in_original_order_on_replay()
     let first = fixture::sse(&[
         event("response.created", json!({})),
         event(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":0,"delta":"not-visible"}),
+        ),
+        event(
+            "response.reasoning_text.done",
+            json!({"output_index":0,"content_index":0,"text":"not-visible"}),
+        ),
+        event(
             "response.output_item.done",
             json!({"output_index":0,"item":reasoning}),
         ),
@@ -159,7 +167,8 @@ async fn preserves_reasoning_and_tool_items_in_original_order_on_replay()
     );
     let mut req = request();
     req.tools.push(ToolDefinition {name:"read_file".into(),description:"read".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})});
-    let (items, usage, _) = collect(&model, &req).await?;
+    let (items, usage, visible) = collect(&model, &req).await?;
+    assert!(visible.is_empty());
     assert_eq!(usage.ok_or("missing usage")?.input_tokens, Some(12));
     assert!(
         matches!(&items[..],[HistoryItem::ProviderItem {value:a,..},HistoryItem::ProviderItem {value:b,..},HistoryItem::ToolCall(c)] if *a==reasoning && *b==call && c.call_id=="call_1")

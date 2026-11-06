@@ -421,3 +421,29 @@ async fn anthropic_key_version_and_environment_headers_are_separate()
     assert!(!request.contains("authorization:"));
     Ok(())
 }
+
+#[tokio::test]
+async fn total_timeout_stops_a_stream_even_if_bytes_keep_arriving()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut parts = vec![chunk(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+    )];
+    for _ in 0..12 {
+        parts.push((Duration::from_millis(25), b": keepalive\n\n".to_vec()));
+    }
+    let (url, _) = server(parts)?;
+    let mut cfg = config(url);
+    cfg.idle_timeout = Duration::from_millis(200);
+    cfg.total_timeout = Duration::from_millis(100);
+    let transport = HttpTransport::new(cfg)?;
+    let mut events = transport
+        .post("responses", &serde_json::json!({}), None, &NeverCancel)
+        .await?
+        .events()?;
+    let error = events
+        .next(&NeverCancel)
+        .await
+        .expect_err("total timeout should stop the stream");
+    assert_eq!(error.0.code, "model_timeout");
+    Ok(())
+}

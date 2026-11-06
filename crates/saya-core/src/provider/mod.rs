@@ -66,8 +66,8 @@ impl ModelSettings {
         Ok(output)
     }
 
-    // Conservative, model-independent heuristic; it is not provider usage or
-    // an exact tokenizer. It is deliberately separate from billed token counts.
+    // Model-independent heuristic; it is neither provider usage nor an exact
+    // or guaranteed upper-bound tokenizer. Keep it separate from billed counts.
     fn check_context(&self, request_body: &Value, output: u32) -> Result<(), BoundaryError> {
         let text = request_body.to_string();
         let mut ascii = 0u64;

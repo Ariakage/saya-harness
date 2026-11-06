@@ -610,7 +610,9 @@ impl StreamState {
             | "response.reasoning_summary_text.delta"
             | "response.reasoning_summary_text.done"
             | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_part.done" => Ok(None),
+            | "response.reasoning_summary_part.done"
+            | "response.reasoning_text.delta"
+            | "response.reasoning_text.done" => Ok(None),
             _ => Err(failure(
                 "invalid_model_response",
                 "unsupported provider stream event",
