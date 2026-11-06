@@ -1189,3 +1189,117 @@ async fn permission_revision_cannot_use_another_run_controller()
     assert!(result.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn mode_permission_matrix_drives_real_read_and_write_adapters()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        permissions::Decision,
+        tools::read::{ReadTool, ReadToolKind},
+    };
+    for mode in [
+        WorkMode::Plan,
+        WorkMode::Build,
+        WorkMode::Code,
+        WorkMode::Work,
+    ] {
+        for permissions in [
+            PermissionMode::Auto,
+            PermissionMode::Review,
+            PermissionMode::Bypass,
+        ] {
+            let temp = support::temp_workspace()?;
+            std::fs::write(temp.path().join("input.txt"), "visible")?;
+            let (mut session, mut run, mut context) = fixture(temp.path(), permissions);
+            session.work_mode = mode;
+            run.work_mode = mode;
+            context.run = run.clone();
+            let store = store_for(&session, &run).await?;
+            let modes = ModeController::new(mode);
+            let policy = policy(temp.path(), "")?;
+            let manager = manager(
+                policy.clone(),
+                modes.clone(),
+                PermissionRevision::new(modes),
+                store.clone(),
+                &run,
+                Preauthorizations::default(),
+                Arc::new(Signal::default()),
+            )?;
+            let files = Arc::new(ReadTools::new(
+                temp.path(),
+                &[],
+                permissions == PermissionMode::Bypass,
+                ReadLimits::default(),
+            )?);
+            let read = ToolCall {
+                call_id: "read".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path":"input.txt", "start_line":1,"line_count":1})
+                    .to_string(),
+            };
+            let read_op = Operation::file(temp.path(), "read_file", Path::new("input.txt"))?;
+            assert_eq!(
+                policy.evaluate(mode, permissions, &read_op).decision,
+                Decision::Allow
+            );
+            assert!(
+                ReadTool::new(files.clone(), ReadToolKind::ReadFile)
+                    .execute(&read, &context, &Signal::default())
+                    .await?
+                    .ok
+            );
+            let write = write_call("write", "written");
+            let write_op = Operation::file(temp.path(), "write_file", Path::new("out.txt"))?;
+            let auth = manager
+                .authorize(
+                    input(&write_op, &write, &context, true),
+                    &deny_model(),
+                    &SharedBudget::default(),
+                    &config(),
+                )
+                .await?;
+            let permit = match (mode, permissions, auth) {
+                (WorkMode::Plan, _, Authorization::Denied(_)) => None,
+                (_, PermissionMode::Review, Authorization::Pending(request)) => {
+                    match manager.resolve(&request.approval_id, true)? {
+                        Authorization::Permit(permit) => Some(permit),
+                        _ => return Err("approval failed".into()),
+                    }
+                }
+                (
+                    _,
+                    PermissionMode::Auto | PermissionMode::Bypass,
+                    Authorization::Permit(permit),
+                ) => Some(permit),
+                _ => {
+                    return Err(
+                        format!("unexpected authorization for {mode:?}/{permissions:?}").into(),
+                    );
+                }
+            };
+            if let Some(permit) = permit {
+                let adapter = WriteTool::new(
+                    files,
+                    store,
+                    permit,
+                    WriteToolKind::WriteFile,
+                    DEFAULT_WRITE_MAX_BYTES,
+                );
+                assert!(
+                    adapter
+                        .execute(&write, &context, &Signal::default())
+                        .await?
+                        .ok
+                );
+                assert_eq!(
+                    std::fs::read_to_string(temp.path().join("out.txt"))?,
+                    "written"
+                );
+            } else {
+                assert!(!temp.path().join("out.txt").exists());
+            }
+        }
+    }
+    Ok(())
+}
