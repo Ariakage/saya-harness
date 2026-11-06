@@ -1,0 +1,669 @@
+//! Run-scoped background tool jobs. This supervisor does not outlive its run;
+//! it never restores or replays a job and is not an operating-system sandbox.
+use crate::{
+    approvals::{Authorization, OneShotPermit},
+    boundary::{Cancellation, ToolContext},
+    contract::{ApprovalRequest, BoundaryError, ErrorInfo, ToolCall, ToolResult, WorkMode},
+    dispatch::{DispatchReview, ToolDispatcher},
+};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
+use tokio::sync::{Notify, watch};
+
+pub const DEFAULT_MAX_BACKGROUND_RUNNING: usize = 4;
+pub const DEFAULT_MAX_BACKGROUND_JOBS: usize = 256;
+
+fn failure(code: &str, message: &str) -> BoundaryError {
+    BoundaryError(
+        ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        },
+        None,
+        None,
+    )
+}
+#[derive(Clone)]
+struct JobCancel(watch::Sender<bool>);
+impl JobCancel {
+    fn new() -> Self {
+        Self(watch::channel(false).0)
+    }
+    fn cancel(&self) {
+        self.0.send_replace(true);
+    }
+}
+impl Cancellation for JobCancel {
+    fn is_cancelled(&self) -> bool {
+        *self.0.borrow()
+    }
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let mut rx = self.0.subscribe();
+            while !*rx.borrow_and_update() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+}
+struct Combined {
+    root: Arc<dyn Cancellation>,
+    job: JobCancel,
+}
+impl Cancellation for Combined {
+    fn is_cancelled(&self) -> bool {
+        self.root.is_cancelled() || self.job.is_cancelled()
+    }
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {
+            tokio::select! { () = self.root.cancelled() => (), () = self.job.cancelled() => () }
+        })
+    }
+}
+/// A snapshot of a run-local job. Errors retain any observed tool result.
+#[derive(Debug, Clone)]
+pub enum JobStatus {
+    Running,
+    Finished(ToolResult),
+    Failed(BoundaryError),
+}
+/// Authorization result for an explicitly requested background operation.
+pub enum JobSubmission {
+    Started { job_id: String },
+    Pending(PendingJob),
+    NeedsConfirmation(PendingJob),
+    Denied(&'static str),
+    Stale,
+}
+pub struct PendingJob {
+    pub request: ApprovalRequest,
+    call: ToolCall,
+    context: ToolContext,
+}
+pub struct BackgroundRequest<'a> {
+    pub tool: &'a str,
+    pub arguments: serde_json::Value,
+    pub context: &'a ToolContext,
+    pub summary: &'a str,
+    pub interactive: bool,
+}
+struct Job {
+    cancel: JobCancel,
+    mutating: bool,
+    status: JobStatus,
+}
+struct State {
+    closed: bool,
+    fatal: Option<ErrorInfo>,
+    jobs: HashMap<String, Job>,
+}
+struct Shared {
+    state: Mutex<State>,
+    changed: Notify,
+}
+/// Owns background calls for one dispatcher/run. Limits count all retained jobs
+/// and concurrent running jobs. The caller must call `shutdown` before run end.
+pub struct BackgroundJobs {
+    dispatcher: Arc<ToolDispatcher>,
+    shared: Arc<Shared>,
+    max_running: usize,
+    max_jobs: usize,
+}
+impl BackgroundJobs {
+    pub fn with_defaults(dispatcher: Arc<ToolDispatcher>) -> Result<Self, BoundaryError> {
+        Self::new(
+            dispatcher,
+            DEFAULT_MAX_BACKGROUND_RUNNING,
+            DEFAULT_MAX_BACKGROUND_JOBS,
+        )
+    }
+    pub fn new(
+        dispatcher: Arc<ToolDispatcher>,
+        max_running: usize,
+        max_jobs: usize,
+    ) -> Result<Self, BoundaryError> {
+        if max_running == 0 || max_jobs == 0 {
+            return Err(failure(
+                "invalid_config",
+                "background limits must be positive",
+            ));
+        }
+        Ok(Self {
+            dispatcher,
+            shared: Arc::new(Shared {
+                state: Mutex::new(State {
+                    closed: false,
+                    fatal: None,
+                    jobs: HashMap::new(),
+                }),
+                changed: Notify::new(),
+            }),
+            max_running,
+            max_jobs,
+        })
+    }
+    /// Authorize an explicitly requested background operation. Its internal
+    /// call ID is distinct from the model-facing launch call ID.
+    pub async fn submit(
+        &self,
+        request: BackgroundRequest<'_>,
+        review: DispatchReview<'_>,
+    ) -> Result<JobSubmission, BoundaryError> {
+        let call = ToolCall {
+            call_id: format!("background-{}", uuid::Uuid::now_v7()),
+            name: request.tool.into(),
+            arguments: request.arguments.to_string(),
+        };
+        let auth = self
+            .dispatcher
+            .authorize(
+                &call,
+                request.context,
+                request.summary,
+                request.interactive,
+                review,
+            )
+            .await?;
+        let context = request.context.clone();
+        Ok(match auth {
+            Authorization::Permit(permit) => JobSubmission::Started {
+                job_id: self.start(call, context, permit)?,
+            },
+            Authorization::Pending(request) => JobSubmission::Pending(PendingJob {
+                request,
+                call,
+                context,
+            }),
+            Authorization::NeedsConfirmation(request) => {
+                JobSubmission::NeedsConfirmation(PendingJob {
+                    request,
+                    call,
+                    context,
+                })
+            }
+            Authorization::Denied(reason) => JobSubmission::Denied(reason),
+            Authorization::Stale => JobSubmission::Stale,
+        })
+    }
+    /// Resolve one pending request; an approval is consumed for this operation only.
+    pub fn resolve(
+        &self,
+        pending: PendingJob,
+        approve: bool,
+    ) -> Result<JobSubmission, BoundaryError> {
+        Ok(
+            match self
+                .dispatcher
+                .resolve(&pending.request.approval_id, approve)?
+            {
+                Authorization::Permit(permit) => JobSubmission::Started {
+                    job_id: self.start(pending.call, pending.context, permit)?,
+                },
+                Authorization::Denied(reason) => JobSubmission::Denied(reason),
+                _ => JobSubmission::Stale,
+            },
+        )
+    }
+    /// Start a previously authorized operation and immediately return a job ID.
+    /// A pending confirmation is never treated as a permit. Execution and its
+    /// intent/result are handled by the same dispatcher as foreground calls.
+    pub fn start(
+        &self,
+        call: ToolCall,
+        context: ToolContext,
+        permit: Arc<OneShotPermit>,
+    ) -> Result<String, BoundaryError> {
+        if !self.dispatcher.owns_permit(&permit) {
+            return Err(failure(
+                "permission_denied",
+                "permit belongs to another dispatcher",
+            ));
+        }
+        if !matches!(
+            call.name.as_str(),
+            "read_file"
+                | "list_dir"
+                | "find_files"
+                | "search_text"
+                | "write_file"
+                | "apply_patch"
+                | "exec"
+        ) {
+            return Err(failure("unknown_tool", "unsupported background tool"));
+        }
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| failure("runtime_error", "Tokio runtime required"))?;
+        let cancel = JobCancel::new();
+        let id = uuid::Uuid::now_v7().to_string();
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        if state.closed || self.dispatcher.root_cancellation().is_cancelled() {
+            return Err(failure("cancelled", "run is stopping"));
+        }
+        if state.jobs.len() >= self.max_jobs
+            || state
+                .jobs
+                .values()
+                .filter(|job| matches!(job.status, JobStatus::Running))
+                .count()
+                >= self.max_running
+        {
+            return Err(failure("limit_reached", "background job limit reached"));
+        }
+        let mode = self.dispatcher.mode_controller().snapshot()?;
+        if mode.pending.is_some() || mode.current != context.run.work_mode {
+            return Err(failure("stale_approval", "work mode changed"));
+        }
+        let mutating = matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec");
+        state.jobs.insert(
+            id.clone(),
+            Job {
+                cancel: cancel.clone(),
+                mutating,
+                status: JobStatus::Running,
+            },
+        );
+        let shared = self.shared.clone();
+        let dispatcher = self.dispatcher.clone();
+        let job_id = id.clone();
+        let task = runtime.spawn(async move {
+            let signal = Combined {
+                root: dispatcher.root_cancellation(),
+                job: cancel,
+            };
+            dispatcher
+                .execute_with_cancel(&call, &context, permit, &signal, true)
+                .await
+        });
+        runtime.spawn(async move {
+            let outcome = task.await.unwrap_or_else(|_| {
+                Err(failure(
+                    "background_error",
+                    "background task failed unexpectedly",
+                ))
+            });
+            if let Ok(mut state) = shared.state.lock() {
+                if let Err(error) = &outcome
+                    && error.0.code != "cancelled"
+                {
+                    state.closed = true;
+                    state.fatal = Some(error.0.clone());
+                    for job in state
+                        .jobs
+                        .values()
+                        .filter(|job| matches!(job.status, JobStatus::Running))
+                    {
+                        job.cancel.cancel();
+                    }
+                }
+                if let Some(job) = state.jobs.get_mut(&job_id) {
+                    job.status = match outcome {
+                        Ok(value) => JobStatus::Finished(value),
+                        Err(error) => JobStatus::Failed(error),
+                    };
+                }
+            }
+            shared.changed.notify_waiters();
+        });
+        Ok(id)
+    }
+    pub fn status(&self, id: &str) -> Result<Option<JobStatus>, BoundaryError> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        Ok(state.jobs.get(id).map(|job| job.status.clone()))
+    }
+    /// Wait for a job to finish; returns `None` for an unknown job ID.
+    pub async fn wait(&self, id: &str) -> Result<Option<JobStatus>, BoundaryError> {
+        loop {
+            let notified = self.shared.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let status = self.status(id)?;
+            if !matches!(status, Some(JobStatus::Running)) {
+                return Ok(status);
+            }
+            notified.await;
+        }
+    }
+    /// Returns the failure that stopped further background dispatch, if any.
+    pub fn fatal_error(&self) -> Result<Option<ErrorInfo>, BoundaryError> {
+        Ok(self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?
+            .fatal
+            .clone())
+    }
+    pub fn cancel(&self, id: &str) -> Result<bool, BoundaryError> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        let Some(job) = state.jobs.get(id) else {
+            return Ok(false);
+        };
+        if matches!(job.status, JobStatus::Running) {
+            job.cancel.cancel();
+        }
+        Ok(true)
+    }
+    /// Queue a mode request. PLAN cancels active mutating jobs; the mode
+    /// controller applies the change only when in-flight calls have drained.
+    pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        self.dispatcher.mode_controller().request(mode)?;
+        if mode == WorkMode::Plan {
+            for job in state
+                .jobs
+                .values()
+                .filter(|job| job.mutating && matches!(job.status, JobStatus::Running))
+            {
+                job.cancel.cancel();
+            }
+        }
+        Ok(())
+    }
+    /// Prevent new work, cancel all unfinished jobs and await their cleanup.
+    pub async fn shutdown(&self) -> Result<(), BoundaryError> {
+        {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .map_err(|_| failure("background_error", "job lock poisoned"))?;
+            state.closed = true;
+            for job in state
+                .jobs
+                .values()
+                .filter(|job| matches!(job.status, JobStatus::Running))
+            {
+                job.cancel.cancel();
+            }
+        }
+        loop {
+            let notified = self.shared.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let state = self
+                    .shared
+                    .state
+                    .lock()
+                    .map_err(|_| failure("background_error", "job lock poisoned"))?;
+                if state
+                    .jobs
+                    .values()
+                    .all(|job| !matches!(job.status, JobStatus::Running))
+                {
+                    return Ok(());
+                }
+            }
+            notified.await;
+        }
+    }
+}
+impl Drop for BackgroundJobs {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.shared.state.lock() {
+            state.closed = true;
+            for job in state.jobs.values() {
+                job.cancel.cancel();
+            }
+        }
+    }
+}
+
+/// Shared bridge for model-facing start/status/cancel tools. The enclosing
+/// runtime must count each call toward its tool budget, handle confirmation
+/// requests, and call `BackgroundJobs::shutdown` before finishing a run.
+pub struct BackgroundTools {
+    jobs: Arc<BackgroundJobs>,
+    model: Arc<dyn crate::boundary::Model>,
+    budget: crate::review::SharedBudget,
+    review: crate::review::ReviewConfig,
+    summary: String,
+    interactive: bool,
+    pending: Mutex<HashMap<String, PendingJob>>,
+}
+impl BackgroundTools {
+    pub fn new(
+        jobs: Arc<BackgroundJobs>,
+        model: Arc<dyn crate::boundary::Model>,
+        budget: crate::review::SharedBudget,
+        review: crate::review::ReviewConfig,
+        summary: String,
+        interactive: bool,
+    ) -> Self {
+        Self {
+            jobs,
+            model,
+            budget,
+            review,
+            summary,
+            interactive,
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+    /// Resolve a human confirmation returned by `background_start`.
+    pub fn resolve(
+        &self,
+        approval_id: &str,
+        approve: bool,
+    ) -> Result<JobSubmission, BoundaryError> {
+        let pending = self
+            .pending
+            .lock()
+            .map_err(|_| failure("background_error", "approval lock poisoned"))?
+            .remove(approval_id);
+        match pending {
+            Some(pending) => self.jobs.resolve(pending, approve),
+            None => Ok(JobSubmission::Stale),
+        }
+    }
+    pub fn tool(self: &Arc<Self>, kind: BackgroundToolKind) -> BackgroundTool {
+        BackgroundTool {
+            shared: self.clone(),
+            kind,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub enum BackgroundToolKind {
+    Start,
+    Status,
+    Cancel,
+}
+pub struct BackgroundTool {
+    shared: Arc<BackgroundTools>,
+    kind: BackgroundToolKind,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartArgs {
+    tool: String,
+    arguments: serde_json::Value,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobArgs {
+    job_id: String,
+}
+fn tool_result(data: serde_json::Value) -> ToolResult {
+    ToolResult {
+        ok: true,
+        data: Some(data),
+        error: None,
+        truncated: false,
+    }
+}
+fn tool_error(code: &str, message: &str) -> ToolResult {
+    ToolResult {
+        ok: false,
+        data: None,
+        error: Some(ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        }),
+        truncated: false,
+    }
+}
+impl crate::boundary::Tool for BackgroundTool {
+    fn definition(&self) -> crate::boundary::ToolDefinition {
+        let (name, description, properties, required) = match self.kind {
+            BackgroundToolKind::Start => (
+                "background_start",
+                "Start one authorized local tool in the current run; return a job ID without waiting for completion.",
+                serde_json::json!({"tool":{"type":"string","enum":["read_file","list_dir","find_files","search_text","write_file","apply_patch","exec"]},"arguments":{"type":"object"}}),
+                serde_json::json!(["tool", "arguments"]),
+            ),
+            BackgroundToolKind::Status => (
+                "background_status",
+                "Get a background job's status and any completed result without waiting.",
+                serde_json::json!({"job_id":{"type":"string"}}),
+                serde_json::json!(["job_id"]),
+            ),
+            BackgroundToolKind::Cancel => (
+                "background_cancel",
+                "Request cancellation of a job in the current run.",
+                serde_json::json!({"job_id":{"type":"string"}}),
+                serde_json::json!(["job_id"]),
+            ),
+        };
+        crate::boundary::ToolDefinition {
+            name: name.into(),
+            description: description.into(),
+            input_schema: serde_json::json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+        }
+    }
+    fn execute<'a>(
+        &'a self,
+        call: &'a ToolCall,
+        context: &'a ToolContext,
+        cancel: &'a dyn Cancellation,
+    ) -> crate::boundary::Operation<'a, ToolResult> {
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(failure("cancelled", "background control cancelled"));
+            }
+            if !self.shared.jobs.dispatcher.owns_context(context) {
+                return Err(failure(
+                    "invalid_run",
+                    "background tools belong to another run",
+                ));
+            }
+            if call.name != self.definition().name {
+                return Ok(tool_error(
+                    "invalid_args",
+                    "tool name does not match adapter",
+                ));
+            }
+            match self.kind {
+                BackgroundToolKind::Start => {
+                    let args: StartArgs = match serde_json::from_str(&call.arguments) {
+                        Ok(args) => args,
+                        Err(_) => {
+                            return Ok(tool_error("invalid_args", "invalid background request"));
+                        }
+                    };
+                    if !args.arguments.is_object() {
+                        return Ok(tool_error("invalid_args", "arguments must be an object"));
+                    }
+                    let result = self
+                        .shared
+                        .jobs
+                        .submit(
+                            BackgroundRequest {
+                                tool: &args.tool,
+                                arguments: args.arguments,
+                                context,
+                                summary: &self.shared.summary,
+                                interactive: self.shared.interactive,
+                            },
+                            DispatchReview {
+                                model: self.shared.model.as_ref(),
+                                budget: &self.shared.budget,
+                                config: &self.shared.review,
+                            },
+                        )
+                        .await?;
+                    Ok(match result {
+                        JobSubmission::Started { job_id } => {
+                            if cancel.is_cancelled() {
+                                self.shared.jobs.cancel(&job_id)?;
+                                return Err(failure("cancelled", "background control cancelled"));
+                            }
+                            tool_result(serde_json::json!({"status":"started","job_id":job_id}))
+                        }
+                        JobSubmission::Pending(pending)
+                        | JobSubmission::NeedsConfirmation(pending) => {
+                            let request = pending.request.clone();
+                            self.shared
+                                .pending
+                                .lock()
+                                .map_err(|_| failure("background_error", "approval lock poisoned"))?
+                                .insert(request.approval_id.clone(), pending);
+                            ToolResult {
+                                ok: false,
+                                data: Some(
+                                    serde_json::json!({"status":"needs_confirmation","request":request}),
+                                ),
+                                error: Some(ErrorInfo {
+                                    code: "needs_confirmation".into(),
+                                    message: "background operation requires confirmation".into(),
+                                }),
+                                truncated: false,
+                            }
+                        }
+                        JobSubmission::Denied(reason) => tool_error("permission_denied", reason),
+                        JobSubmission::Stale => {
+                            tool_error("stale_approval", "background authorization is stale")
+                        }
+                    })
+                }
+                BackgroundToolKind::Status | BackgroundToolKind::Cancel => {
+                    let args: JobArgs = match serde_json::from_str(&call.arguments) {
+                        Ok(args) => args,
+                        Err(_) => {
+                            return Ok(tool_error("invalid_args", "invalid background job ID"));
+                        }
+                    };
+                    if matches!(self.kind, BackgroundToolKind::Cancel) {
+                        return Ok(tool_result(
+                            serde_json::json!({"found":self.shared.jobs.cancel(&args.job_id)?}),
+                        ));
+                    }
+                    Ok(match self.shared.jobs.status(&args.job_id)? {
+                        None => tool_result(serde_json::json!({"status":"not_found"})),
+                        Some(JobStatus::Running) => {
+                            tool_result(serde_json::json!({"status":"running"}))
+                        }
+                        Some(JobStatus::Finished(result)) => {
+                            tool_result(serde_json::json!({"status":"finished","result":result}))
+                        }
+                        Some(JobStatus::Failed(error)) => tool_result(
+                            serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2}),
+                        ),
+                    })
+                }
+            }
+        })
+    }
+}

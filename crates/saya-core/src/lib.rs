@@ -6,6 +6,7 @@
 //! durable store is provided.
 
 pub mod approvals;
+pub mod background;
 pub mod boundary;
 pub mod contract;
 pub mod dispatch;

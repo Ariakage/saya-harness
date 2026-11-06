@@ -259,6 +259,9 @@ pub struct ApprovalManager {
     authorize_lock: tokio::sync::Mutex<()>,
 }
 impl ApprovalManager {
+    pub(crate) fn owns_context(&self, context: &ToolContext) -> bool {
+        self.run_id == context.run.id && self.session_id == context.run.session_id
+    }
     pub(crate) fn owns_permit(&self, permit: &OneShotPermit) -> bool {
         Arc::ptr_eq(&self.state, &permit.state)
     }
@@ -323,7 +326,7 @@ impl ApprovalManager {
         let mode = self.modes.snapshot()?;
         if mode.current != input.context.run.work_mode
             || mode.pending.is_some()
-            || !self.modes.approval_is_current(mode.revision)?
+            || !self.modes.shared_approval_is_current(mode.revision)?
         {
             return Err(failure(
                 "stale_approval",
@@ -360,7 +363,9 @@ impl ApprovalManager {
             && snapshot.pending.is_none()
             && snapshot.revision == binding.mode_revision
             && self.permissions.snapshot()? == (binding.permissions, binding.permission_revision)
-            && self.modes.approval_is_current(binding.mode_revision)?)
+            && self
+                .modes
+                .shared_approval_is_current(binding.mode_revision)?)
     }
     /// Decide rules, perform isolated model review only when required, and create
     /// an exact one-use permit or a stored confirmation request. No tool runs.
@@ -671,7 +676,7 @@ impl OneShotPermit {
             }) {
             Ok(0) => Ok(true),
             Ok(1) => {
-                if !self.modes.begin(self.binding.mode_revision)? {
+                if !self.modes.begin_shared(self.binding.mode_revision)? {
                     return Ok(false);
                 }
                 self.lease_active.store(true, Ordering::Release);

@@ -1328,7 +1328,7 @@ async fn changing_context_alone_cannot_elevate_permission_mode()
         policy(temp.path(), "")?,
         modes,
         revision.clone(),
-        store,
+        store.clone(),
         &run,
         Preauthorizations::default(),
         Arc::new(Signal::default()),
@@ -1820,5 +1820,578 @@ async fn dispatcher_enforces_full_mode_matrix_for_real_adapters()
             }
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_jobs_run_concurrently_and_plan_cancels_mutations()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, JobStatus},
+        dispatch::{DispatchReview, ToolDispatcher},
+    };
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("input.txt"), "content")?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Bypass);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let revision = PermissionRevision::new(modes.clone(), run.permissions);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        true,
+        ReadLimits::default(),
+    )?);
+    let dispatch = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        revision.clone(),
+        store.clone(),
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        files,
+        ExecConfig::default(),
+    )?);
+    let jobs = BackgroundJobs::new(dispatch.clone(), 4, 16)?;
+    let marker = temp.path().join("started");
+    let exec = ToolCall { call_id: "slow".into(), name: "exec".into(), arguments: serde_json::json!({"argv":["/bin/sh","-c","printf started > \"$1\"; sleep 30","sh",marker]}).to_string() };
+    let model = deny_model();
+    let budget = SharedBudget::default();
+    let cfg = config();
+    let auth = dispatch
+        .authorize(
+            &exec,
+            &context,
+            "task",
+            true,
+            DispatchReview {
+                model: &model,
+                budget: &budget,
+                config: &cfg,
+            },
+        )
+        .await?;
+    let permit = match auth {
+        Authorization::Permit(p) => p,
+        _ => return Err("expected command permit".into()),
+    };
+    let exec_id = jobs.start(exec, context.clone(), permit)?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !marker.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(matches!(jobs.status(&exec_id)?, Some(JobStatus::Running)));
+    assert!(!revision.change_if_idle(PermissionMode::Auto)?);
+    let read = ToolCall {
+        call_id: "read-while-running".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path":"input.txt", "start_line":1, "line_count":1})
+            .to_string(),
+    };
+    let auth = dispatch
+        .authorize(
+            &read,
+            &context,
+            "task",
+            true,
+            DispatchReview {
+                model: &model,
+                budget: &budget,
+                config: &cfg,
+            },
+        )
+        .await?;
+    let permit = match auth {
+        Authorization::Permit(p) => p,
+        _ => return Err("expected read permit".into()),
+    };
+    let read_id = jobs.start(read, context.clone(), permit)?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Ok(Some(JobStatus::Finished(result))) = jobs.status(&read_id) {
+                assert!(result.ok);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert!(matches!(jobs.status(&exec_id)?, Some(JobStatus::Running)));
+    jobs.request_mode(WorkMode::Plan)?;
+    tokio::time::timeout(std::time::Duration::from_secs(8), jobs.shutdown()).await??;
+    assert!(!matches!(jobs.status(&exec_id)?, Some(JobStatus::Running)));
+    assert_eq!(modes.snapshot()?.current, WorkMode::Plan);
+    assert!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing session")?
+            .history
+            .is_empty()
+    );
+    Ok(())
+}
+
+struct RejectToolIntent(Arc<RecordingStore>);
+impl Store for RejectToolIntent {
+    fn load_session(&self, id: SessionId) -> ModelOperation<'_, Option<Session>> {
+        self.0.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> ModelOperation<'a, ()> {
+        if changes
+            .iter()
+            .any(|change| matches!(change, StoreChange::ToolIntent { .. }))
+        {
+            Box::pin(async {
+                Err(BoundaryError(
+                    ErrorInfo {
+                        code: "storage_error".into(),
+                        message: "injected".into(),
+                    },
+                    None,
+                    None,
+                ))
+            })
+        } else {
+            self.0.commit(changes)
+        }
+    }
+}
+
+#[tokio::test]
+async fn background_storage_failure_stops_new_dispatch_and_preserves_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, JobStatus},
+        dispatch::{DispatchReview, ToolDispatcher},
+    };
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Auto);
+    let store = Arc::new(RejectToolIntent(store_for(&session, &run).await?));
+    let modes = ModeController::new(WorkMode::Work);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let dispatch = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        files,
+        ExecConfig::default(),
+    )?);
+    let jobs = BackgroundJobs::new(dispatch.clone(), 2, 8)?;
+    let call = write_call("failed-save", "must not write");
+    let model = deny_model();
+    let budget = SharedBudget::default();
+    let cfg = config();
+    let auth = dispatch
+        .authorize(
+            &call,
+            &context,
+            "task",
+            true,
+            DispatchReview {
+                model: &model,
+                budget: &budget,
+                config: &cfg,
+            },
+        )
+        .await?;
+    let permit = match auth {
+        Authorization::Permit(p) => p,
+        _ => return Err("expected permit".into()),
+    };
+    let id = jobs.start(call.clone(), context.clone(), permit)?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if matches!(jobs.status(&id), Ok(Some(JobStatus::Failed(_)))) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        jobs.fatal_error()?.as_ref().map(|e| e.code.as_str()),
+        Some("storage_error")
+    );
+    assert!(!temp.path().join("out.txt").exists());
+    let auth = dispatch
+        .authorize(
+            &call,
+            &context,
+            "task",
+            true,
+            DispatchReview {
+                model: &model,
+                budget: &budget,
+                config: &cfg,
+            },
+        )
+        .await?;
+    let permit = match auth {
+        Authorization::Permit(p) => p,
+        _ => return Err("expected permit".into()),
+    };
+    assert!(jobs.start(call, context, permit).is_err());
+    jobs.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_submit_needs_approval_then_returns_queryable_result()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, BackgroundRequest, JobStatus, JobSubmission},
+        dispatch::{DispatchReview, ToolDispatcher},
+    };
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let dispatch = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store.clone(),
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: run.session_id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        files,
+        ExecConfig::default(),
+    )?);
+    let jobs = BackgroundJobs::new(dispatch, 4, 16)?;
+    let model = deny_model();
+    let budget = SharedBudget::default();
+    let cfg = config();
+    let submission = jobs.submit(BackgroundRequest { tool:"write_file", arguments:serde_json::json!({"path":"out.txt", "content":"hello", "expected_version":null}), context:&context, summary:"create file", interactive:true }, DispatchReview { model:&model, budget:&budget, config:&cfg }).await?;
+    let pending = match submission {
+        JobSubmission::Pending(p) => p,
+        _ => return Err("expected pending approval".into()),
+    };
+    assert!(!temp.path().join("out.txt").exists());
+    let id = match jobs.resolve(pending, true)? {
+        JobSubmission::Started { job_id } => job_id,
+        _ => return Err("expected started job".into()),
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), jobs.wait(&id)).await??;
+    assert!(matches!(result, Some(JobStatus::Finished(result)) if result.ok));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("out.txt"))?,
+        "hello"
+    );
+    assert!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing session")?
+            .history
+            .is_empty()
+    );
+    jobs.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_submit_supports_every_local_tool() -> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, BackgroundRequest, JobStatus, JobSubmission},
+        dispatch::{DispatchReview, ToolDispatcher},
+    };
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("source.txt"), "old\n")?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Bypass);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        true,
+        ReadLimits::default(),
+    )?);
+    let version = files.read_file(Path::new("source.txt"), 1, 1)?.version;
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        files,
+        ExecConfig::default(),
+    )?);
+    let jobs = BackgroundJobs::new(dispatcher, 4, 16)?;
+    let model = deny_model();
+    let budget = SharedBudget::default();
+    let cfg = config();
+    let cases = [
+        (
+            "read_file",
+            serde_json::json!({"path":"source.txt","start_line":1,"line_count":1}),
+        ),
+        ("list_dir", serde_json::json!({"path":"."})),
+        ("find_files", serde_json::json!({"path":".","glob":"*.txt"})),
+        (
+            "search_text",
+            serde_json::json!({"path":".","pattern":"old"}),
+        ),
+        (
+            "write_file",
+            serde_json::json!({"path":"out.txt","content":"new","expected_version":null}),
+        ),
+        (
+            "apply_patch",
+            serde_json::json!({"path":"source.txt","patch":"--- a/source.txt\n+++ b/source.txt\n@@ -1 +1 @@\n-old\n+new\n","expected_version":version}),
+        ),
+        ("exec", serde_json::json!({"argv":["/bin/echo","done"]})),
+    ];
+    for (tool, arguments) in cases {
+        let submission = jobs
+            .submit(
+                BackgroundRequest {
+                    tool,
+                    arguments,
+                    context: &context,
+                    summary: "test",
+                    interactive: false,
+                },
+                DispatchReview {
+                    model: &model,
+                    budget: &budget,
+                    config: &cfg,
+                },
+            )
+            .await?;
+        let id = match submission {
+            JobSubmission::Started { job_id } => job_id,
+            _ => return Err(format!("{tool} was not started").into()),
+        };
+        let status =
+            tokio::time::timeout(std::time::Duration::from_secs(3), jobs.wait(&id)).await??;
+        assert!(
+            matches!(status, Some(JobStatus::Finished(result)) if result.ok),
+            "{tool}"
+        );
+    }
+    jobs.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_facing_background_tools_return_before_completion_and_can_cancel()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, BackgroundToolKind, BackgroundTools, JobStatus},
+        dispatch::ToolDispatcher,
+    };
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Bypass);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        true,
+        ReadLimits::default(),
+    )?);
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        files,
+        ExecConfig::default(),
+    )?);
+    let jobs = Arc::new(BackgroundJobs::new(dispatcher, 4, 16)?);
+    let bridge = Arc::new(BackgroundTools::new(
+        jobs.clone(),
+        Arc::new(deny_model()),
+        SharedBudget::default(),
+        config(),
+        "task".into(),
+        false,
+    ));
+    let marker = temp.path().join("started");
+    let start = ToolCall { call_id:"model-start".into(), name:"background_start".into(), arguments:serde_json::json!({"tool":"exec", "arguments":{"argv":["/bin/sh","-c","printf started > \"$1\"; sleep 30","sh",marker]}}).to_string() };
+    let result = bridge
+        .tool(BackgroundToolKind::Start)
+        .execute(&start, &context, &Signal::default())
+        .await?;
+    let data = result.data.ok_or("missing data")?;
+    assert_eq!(data["status"], "started");
+    let id = data["job_id"].as_str().ok_or("missing job id")?;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !marker.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let status = ToolCall {
+        call_id: "model-status".into(),
+        name: "background_status".into(),
+        arguments: serde_json::json!({"job_id":id}).to_string(),
+    };
+    let response = bridge
+        .tool(BackgroundToolKind::Status)
+        .execute(&status, &context, &Signal::default())
+        .await?;
+    assert_eq!(response.data.ok_or("missing status")?["status"], "running");
+    let mut other = context.clone();
+    other.run.id = RunId::new();
+    assert!(
+        bridge
+            .tool(BackgroundToolKind::Status)
+            .execute(&status, &other, &Signal::default())
+            .await
+            .is_err()
+    );
+    let cancel = ToolCall {
+        call_id: "model-cancel".into(),
+        name: "background_cancel".into(),
+        arguments: serde_json::json!({"job_id":id}).to_string(),
+    };
+    assert!(
+        bridge
+            .tool(BackgroundToolKind::Cancel)
+            .execute(&cancel, &context, &Signal::default())
+            .await?
+            .ok
+    );
+    let done = tokio::time::timeout(std::time::Duration::from_secs(8), jobs.wait(id)).await??;
+    assert!(!matches!(done, Some(JobStatus::Running)));
+    jobs.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_jobs_enforce_limits_and_reject_new_work_after_shutdown()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundJobs, JobStatus},
+        dispatch::{DispatchReview, ToolDispatcher},
+    };
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Bypass);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            true,
+            ReadLimits::default(),
+        )?),
+        ExecConfig::default(),
+    )?);
+    let jobs = BackgroundJobs::new(dispatcher.clone(), 1, 2)?;
+    let model = deny_model();
+    let budget = SharedBudget::default();
+    let cfg = config();
+    let first = ToolCall {
+        call_id: "first".into(),
+        name: "exec".into(),
+        arguments: serde_json::json!({"argv":["/bin/sleep","30"]}).to_string(),
+    };
+    let second = ToolCall {
+        call_id: "second".into(),
+        name: "exec".into(),
+        arguments: first.arguments.clone(),
+    };
+    let a = dispatcher
+        .authorize(
+            &first,
+            &context,
+            "task",
+            false,
+            DispatchReview {
+                model: &model,
+                budget: &budget,
+                config: &cfg,
+            },
+        )
+        .await?;
+    let b = dispatcher
+        .authorize(
+            &second,
+            &context,
+            "task",
+            false,
+            DispatchReview {
+                model: &model,
+                budget: &budget,
+                config: &cfg,
+            },
+        )
+        .await?;
+    let (Authorization::Permit(a), Authorization::Permit(b)) = (a, b) else {
+        return Err("expected permits".into());
+    };
+    let id = jobs.start(first, context.clone(), a)?;
+    let error = jobs
+        .start(second.clone(), context.clone(), b.clone())
+        .err()
+        .ok_or("expected limit")?;
+    assert_eq!(error.0.code, "limit_reached");
+    tokio::time::timeout(std::time::Duration::from_secs(8), jobs.shutdown()).await??;
+    assert!(!matches!(jobs.status(&id)?, Some(JobStatus::Running)));
+    assert!(jobs.start(second, context, b).is_err());
+    assert!(jobs.status("not-a-job")?.is_none());
     Ok(())
 }

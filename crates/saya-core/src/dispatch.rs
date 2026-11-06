@@ -7,8 +7,10 @@ use crate::{
         ApprovalManager, ApprovalSetup, Authorization, AuthorizationInput, OneShotPermit,
         PermissionRevision,
     },
-    boundary::{Cancellation, Model, Store, StoreChange, Tool, ToolContext},
-    contract::{BoundaryError, ErrorInfo, ToolCall, ToolResult},
+    boundary::{
+        Cancellation, Model, Operation as StoreOperation, Store, StoreChange, Tool, ToolContext,
+    },
+    contract::{BoundaryError, ErrorInfo, HistoryItem, Session, SessionId, ToolCall, ToolResult},
     mode::ModeController,
     permissions::{Operation, Policy, PolicyGate},
     review::{ReviewConfig, SharedBudget},
@@ -30,6 +32,25 @@ fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
         None,
     )
 }
+/// A background child operation is not a provider tool call. Persist its
+/// intent/result but never inject its synthetic call ID into model history.
+struct BackgroundStore {
+    inner: Arc<dyn Store>,
+    call_id: String,
+}
+impl Store for BackgroundStore {
+    fn load_session(&self, id: SessionId) -> StoreOperation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> StoreOperation<'a, ()> {
+        Box::pin(async move {
+            let filtered: Vec<_> = changes.iter().filter(|change| !matches!(change,
+                StoreChange::History { item: HistoryItem::ToolResult { call_id, .. }, .. } if call_id == &self.call_id
+            )).cloned().collect();
+            self.inner.commit(&filtered).await
+        })
+    }
+}
 
 /// Tool components for one run. Approval grants are never persisted or reused
 /// on resume. The surrounding runtime must enforce durability before exposing
@@ -41,6 +62,7 @@ pub struct ToolDispatcher {
     store: Arc<dyn Store>,
     cancel: Arc<dyn Cancellation>,
     exec_config: ExecConfig,
+    modes: ModeController,
 }
 /// Review dependencies shared with the surrounding execution loop.
 pub struct DispatchReview<'a> {
@@ -59,8 +81,13 @@ impl ToolDispatcher {
         exec_config: ExecConfig,
     ) -> Result<Self, BoundaryError> {
         let cancel = setup.cancellation.clone();
-        let manager =
-            ApprovalManager::new(policy.clone(), modes, permissions, store.clone(), setup)?;
+        let manager = ApprovalManager::new(
+            policy.clone(),
+            modes.clone(),
+            permissions,
+            store.clone(),
+            setup,
+        )?;
         Ok(Self {
             manager,
             policy,
@@ -68,7 +95,20 @@ impl ToolDispatcher {
             store,
             cancel,
             exec_config,
+            modes,
         })
+    }
+    pub(crate) fn mode_controller(&self) -> ModeController {
+        self.modes.clone()
+    }
+    pub(crate) fn root_cancellation(&self) -> Arc<dyn Cancellation> {
+        self.cancel.clone()
+    }
+    pub(crate) fn owns_permit(&self, permit: &OneShotPermit) -> bool {
+        self.manager.owns_permit(permit)
+    }
+    pub(crate) fn owns_context(&self, context: &ToolContext) -> bool {
+        self.manager.owns_context(context)
     }
     /// Normalize and authorize a single call. A `Pending` or
     /// `NeedsConfirmation` result never executes the operation. The caller
@@ -137,12 +177,31 @@ impl ToolDispatcher {
         context: &ToolContext,
         permit: Arc<OneShotPermit>,
     ) -> Result<ToolResult, BoundaryError> {
+        self.execute_with_cancel(call, context, permit, self.cancel.as_ref(), false)
+            .await
+    }
+    pub(crate) async fn execute_with_cancel(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: Arc<OneShotPermit>,
+        cancel: &dyn Cancellation,
+        background: bool,
+    ) -> Result<ToolResult, BoundaryError> {
         if !self.manager.owns_permit(&permit) {
             return Err(failure(
                 "permission_denied",
                 "permit belongs to another dispatcher",
             ));
         }
+        let store: Arc<dyn Store> = if background {
+            Arc::new(BackgroundStore {
+                inner: self.store.clone(),
+                call_id: call.call_id.clone(),
+            })
+        } else {
+            self.store.clone()
+        };
         match call.name.as_str() {
             "read_file" | "list_dir" | "find_files" | "search_text" => {
                 let kind = match call.name.as_str() {
@@ -151,16 +210,16 @@ impl ToolDispatcher {
                     "find_files" => ReadToolKind::FindFiles,
                     _ => ReadToolKind::SearchText,
                 };
-                self.store
+                store
                     .commit(&[StoreChange::ToolIntent {
                         run_id: context.run.id,
                         call: call.clone(),
                     }])
                     .await?;
                 let tool = ReadTool::with_gate(self.files.clone(), kind, permit);
-                match tool.execute(call, context, self.cancel.as_ref()).await {
+                match tool.execute(call, context, cancel).await {
                     Ok(result) => {
-                        save_result(self.store.as_ref(), call, context, &result).await?;
+                        save_result(store.as_ref(), call, context, &result).await?;
                         Ok(result)
                     }
                     Err(error) => {
@@ -170,7 +229,7 @@ impl ToolDispatcher {
                             error: Some(error.0.clone()),
                             truncated: false,
                         };
-                        save_result(self.store.as_ref(), call, context, &result).await?;
+                        save_result(store.as_ref(), call, context, &result).await?;
                         Err(error)
                     }
                 }
@@ -183,23 +242,18 @@ impl ToolDispatcher {
                 };
                 WriteTool::new(
                     self.files.clone(),
-                    self.store.clone(),
+                    store.clone(),
                     permit,
                     kind,
                     DEFAULT_WRITE_MAX_BYTES,
                 )
-                .execute(call, context, self.cancel.as_ref())
+                .execute(call, context, cancel)
                 .await
             }
             "exec" => {
-                ExecTool::new(
-                    self.files.clone(),
-                    self.store.clone(),
-                    permit,
-                    self.exec_config.clone(),
-                )
-                .execute(call, context, self.cancel.as_ref())
-                .await
+                ExecTool::new(self.files.clone(), store, permit, self.exec_config.clone())
+                    .execute(call, context, cancel)
+                    .await
             }
             _ => Err(failure("unknown_tool", "unsupported local tool")),
         }

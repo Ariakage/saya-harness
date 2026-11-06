@@ -8,7 +8,8 @@ pub struct ModeController(Arc<Mutex<State>>);
 struct State {
     current: WorkMode,
     pending: Option<WorkMode>,
-    in_call: bool,
+    active: usize,
+    exclusive: bool,
     revision: u64,
 }
 #[derive(Clone, Copy)]
@@ -37,7 +38,8 @@ impl ModeController {
         Self(Arc::new(Mutex::new(State {
             current: initial,
             pending: None,
-            in_call: false,
+            active: 0,
+            exclusive: false,
             revision: 0,
         })))
     }
@@ -46,7 +48,7 @@ impl ModeController {
     /// not invoke this method without an explicit user request.
     pub fn request(&self, target: WorkMode) -> Result<(), BoundaryError> {
         let mut s = self.0.lock().map_err(|_| poisoned())?;
-        if s.in_call {
+        if s.active != 0 {
             s.pending = Some(target);
         } else if s.current != target {
             s.current = target;
@@ -69,10 +71,24 @@ impl ModeController {
     /// The caller must persist the mode and check authorization before dispatch.
     pub fn begin(&self, revision: u64) -> Result<bool, BoundaryError> {
         let mut s = self.0.lock().map_err(|_| poisoned())?;
-        if s.in_call || s.revision != revision || s.pending.is_some() {
+        if s.active != 0 || s.revision != revision || s.pending.is_some() {
             return Ok(false);
         }
-        s.in_call = true;
+        s.active = 1;
+        s.exclusive = true;
+        Ok(true)
+    }
+    /// Begin a concurrently dispatched call at the same mode revision.
+    /// Pending mode changes and exclusive calls prevent new dispatch.
+    pub fn begin_shared(&self, revision: u64) -> Result<bool, BoundaryError> {
+        let mut s = self.0.lock().map_err(|_| poisoned())?;
+        if s.exclusive || s.revision != revision || s.pending.is_some() {
+            return Ok(false);
+        }
+        let Some(active) = s.active.checked_add(1) else {
+            return Ok(false);
+        };
+        s.active = active;
         Ok(true)
     }
     /// Mark an invocation complete, including on failure, timeout or cancel,
@@ -80,7 +96,14 @@ impl ModeController {
     /// before dispatching again; lock poisoning returns an error.
     pub fn finish(&self) -> Result<(), BoundaryError> {
         let mut s = self.0.lock().map_err(|_| poisoned())?;
-        s.in_call = false;
+        if s.active == 0 {
+            return Err(poisoned());
+        }
+        s.active -= 1;
+        if s.active != 0 {
+            return Ok(());
+        }
+        s.exclusive = false;
         if let Some(mode) = s.pending.take()
             && s.current != mode
         {
@@ -92,7 +115,7 @@ impl ModeController {
     /// Execute an internal permission-setting change only while no call is active.
     pub(crate) fn while_idle(&self, action: impl FnOnce()) -> Result<bool, BoundaryError> {
         let state = self.0.lock().map_err(|_| poisoned())?;
-        if state.in_call {
+        if state.active != 0 {
             return Ok(false);
         }
         action();
@@ -103,6 +126,10 @@ impl ModeController {
     /// check alone does not grant authorization.
     pub fn approval_is_current(&self, revision: u64) -> Result<bool, BoundaryError> {
         let s = self.0.lock().map_err(|_| poisoned())?;
-        Ok(!s.in_call && s.pending.is_none() && s.revision == revision)
+        Ok(s.active == 0 && s.pending.is_none() && s.revision == revision)
+    }
+    pub(crate) fn shared_approval_is_current(&self, revision: u64) -> Result<bool, BoundaryError> {
+        let s = self.0.lock().map_err(|_| poisoned())?;
+        Ok(!s.exclusive && s.pending.is_none() && s.revision == revision)
     }
 }

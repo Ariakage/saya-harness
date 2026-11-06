@@ -87,6 +87,16 @@ fn mode_instruction(mode: WorkMode) -> &'static str {
 struct Scheduler {
     modes: Modes,
     limits: Limits,
+    shared_budget: Option<crate::review::SharedBudget>,
+    background: Option<std::sync::Arc<crate::background::BackgroundJobs>>,
+}
+fn check_background(scheduler: &Scheduler) -> Result<(), BoundaryError> {
+    if let Some(jobs) = &scheduler.background
+        && let Some(info) = jobs.fatal_error()?
+    {
+        return Err(BoundaryError(info, None, None));
+    }
+    Ok(())
 }
 async fn sync_mode(
     session: &mut Session,
@@ -211,9 +221,10 @@ async fn model_turn(
             if cancel.is_cancelled() {
                 return Err(error("cancelled", "run cancelled"));
             }
-            if scheduler.modes.begin(snap.revision)? {
+            if scheduler.modes.begin_shared(snap.revision)? {
                 break snap;
             }
+            tokio::task::yield_now().await;
         };
         let request = ModelRequest {
             request_id: uuid::Uuid::now_v7().to_string(),
@@ -333,6 +344,8 @@ async fn run_with_limits(
     let scheduler = Scheduler {
         modes: Modes::new(session.work_mode),
         limits,
+        shared_budget: None,
+        background: None,
     };
     run_with_modes(session, run, model, tools, store, cancel, &scheduler).await
 }
@@ -353,6 +366,22 @@ async fn run_with_modes(
         session.work_mode = scheduler.modes.snapshot()?.current;
     }
     outcome
+}
+
+/// Test-only integration wrapper: no run may finish while its background jobs
+/// are still executing. A real runtime must additionally share budgets/events.
+async fn run_with_background(
+    session: &mut Session,
+    run: &Run,
+    model: &dyn Model,
+    tools: &ToolRegistry,
+    store: &dyn Store,
+    cancel: &dyn Cancellation,
+    orchestration: (&Scheduler, &crate::background::BackgroundJobs),
+) -> Result<String, BoundaryError> {
+    let result = run_with_modes(session, run, model, tools, store, cancel, orchestration.0).await;
+    orchestration.1.shutdown().await?;
+    result
 }
 
 async fn run_inner(
@@ -378,10 +407,15 @@ async fn run_inner(
         ])
         .await?;
     let mut budget = Budget::new(limits.clone());
+    if let Some(shared) = &scheduler.shared_budget {
+        budget = budget.with_shared(shared.clone());
+    }
     let mut last_failure: Option<(String, serde_json::Value, u8)> = None;
     loop {
+        check_background(scheduler)?;
         let items =
             model_turn(session, model, tools, store, cancel, &mut budget, scheduler).await?;
+        check_background(scheduler)?;
         let changes: Vec<_> = items
             .iter()
             .cloned()
@@ -413,6 +447,7 @@ async fn run_inner(
                 .collect());
         }
         for call in calls {
+            check_background(scheduler)?;
             sync_mode(session, store, &scheduler.modes).await?;
             if cancel.is_cancelled() {
                 return Err(error("cancelled", "run cancelled"));
@@ -436,13 +471,14 @@ async fn run_inner(
                     if cancel.is_cancelled() {
                         return Err(error("cancelled", "run cancelled"));
                     }
-                    if scheduler.modes.begin(snap.revision)? {
+                    if scheduler.modes.begin_shared(snap.revision)? {
                         if allowed(snap.current, registered.class) {
                             break Some(snap.current);
                         }
                         scheduler.modes.finish()?;
                         break None;
                     }
+                    tokio::task::yield_now().await;
                 };
                 if let Some(mode) = dispatch {
                     let mut current_run = run.clone();
@@ -493,6 +529,10 @@ async fn run_inner(
                 failed("unknown_tool", "tool is not registered")
             };
             let failed = !outcome.ok;
+            let needs_confirmation = outcome
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "needs_confirmation");
             let normalized = serde_json::from_str::<serde_json::Value>(&call.arguments)
                 .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));
             let item = HistoryItem::ToolResult {
@@ -513,7 +553,14 @@ async fn run_inner(
                 ])
                 .await?;
             session.history.push(item);
+            check_background(scheduler)?;
             sync_mode(session, store, &scheduler.modes).await?;
+            if needs_confirmation {
+                return Err(error(
+                    "needs_confirmation",
+                    "background operation requires confirmation",
+                ));
+            }
             if cancel.is_cancelled() {
                 return Err(error("cancelled", "run cancelled"));
             }
@@ -565,6 +612,7 @@ async fn run_outcome(
             let status = match err.0.code.as_str() {
                 "cancelled" => RunStatus::Cancelled,
                 "limit_reached" => RunStatus::LimitReached,
+                "needs_confirmation" => RunStatus::NeedsConfirmation,
                 _ => RunStatus::Failed,
             };
             let text = session.history[initial_history_len..]

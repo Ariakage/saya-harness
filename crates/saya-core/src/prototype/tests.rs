@@ -1052,6 +1052,8 @@ async fn switch_during_model_rechecks_previously_generated_write()
         seen: Mutex::new(vec![]),
     };
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes,
         limits: Limits::default(),
     };
@@ -1133,6 +1135,8 @@ async fn switch_during_tool_takes_effect_after_it_before_next_tool()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits::default(),
     };
@@ -1194,6 +1198,8 @@ async fn cancellation_wins_and_pending_mode_is_saved_for_next_input()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits::default(),
     };
@@ -1254,6 +1260,8 @@ async fn failed_model_call_applies_pending_mode_before_retry()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits {
             retry_jitter_max: Duration::ZERO,
@@ -1288,6 +1296,8 @@ async fn failed_model_call_applies_pending_mode_before_retry()
 async fn model_suggestion_does_not_switch_work_mode() -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits::default(),
     };
@@ -1335,6 +1345,8 @@ async fn mode_is_rechecked_after_intent_is_saved_before_dispatch()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits::default(),
     };
@@ -1421,6 +1433,8 @@ impl Store for FailPlanSave {
 async fn failed_mode_save_stops_before_tool_dispatch() -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits::default(),
     };
@@ -1479,6 +1493,8 @@ async fn cancelling_retry_wait_saves_the_last_requested_mode()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits {
             retry_jitter_max: Duration::ZERO,
@@ -1551,6 +1567,8 @@ async fn independent_user_request_during_inflight_model_is_applied_at_boundary()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut session, id) = setup();
     let scheduler = Scheduler {
+        background: None,
+        shared_budget: None,
         modes: Modes::new(WorkMode::Work),
         limits: Limits::default(),
     };
@@ -1619,4 +1637,244 @@ async fn plan_can_dispatch_read_only_tool() -> Result<(), Box<dyn std::error::Er
     .await?;
     assert_eq!(*called.lock().map_err(|_| "lock")?, vec!["read"]);
     Ok(())
+}
+
+#[tokio::test]
+async fn model_continues_while_background_tool_is_running() -> Result<(), Box<dyn std::error::Error>>
+{
+    use crate::{
+        approvals::{ApprovalSetup, PermissionRevision, Preauthorizations},
+        background::{BackgroundJobs, BackgroundToolKind, BackgroundTools, JobStatus},
+        dispatch::ToolDispatcher,
+        permissions::{PermissionConfig, Policy},
+        review::{ReviewConfig, SharedBudget},
+        tools::{
+            exec::ExecConfig,
+            read::{ReadLimits, ReadTools},
+        },
+    };
+    let temp = tempfile::tempdir()?;
+    let (mut session, mut run_id) = setup();
+    session.workspace = temp.path().to_path_buf();
+    run_id.permissions = PermissionMode::Bypass;
+    let store = Arc::new(MemoryStore::default());
+    let modes = Modes::new(WorkMode::Work);
+    let policy = Arc::new(Policy::new(temp.path(), PermissionConfig::default())?);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        true,
+        ReadLimits::default(),
+    )?);
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        policy,
+        modes.clone(),
+        PermissionRevision::new(modes.clone(), run_id.permissions),
+        store.clone(),
+        ApprovalSetup {
+            run_id: run_id.id,
+            session_id: session.id,
+            initial_permissions: run_id.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(NoCancel),
+        },
+        files,
+        ExecConfig::default(),
+    )?);
+    let jobs = Arc::new(BackgroundJobs::new(dispatcher, 4, 16)?);
+    let review_model = Arc::new(FakeModel::new(vec![]));
+    let shared_budget = SharedBudget::default();
+    let bridge = Arc::new(BackgroundTools::new(
+        jobs.clone(),
+        review_model,
+        shared_budget.clone(),
+        ReviewConfig::new("fake".into()),
+        "task".into(),
+        false,
+    ));
+    let mut tools = ToolRegistry::default();
+    tools.register_as(
+        Box::new(bridge.tool(BackgroundToolKind::Start)),
+        ToolClass::Read,
+    )?;
+    let marker = temp.path().join("started");
+    let args = serde_json::json!({"tool":"exec", "arguments":{"argv":["/bin/sh","-c","printf started > \"$1\"; sleep 30","sh",marker]}}).to_string();
+    struct ObservedModel {
+        inner: FakeModel,
+        jobs: Arc<BackgroundJobs>,
+        observed: std::sync::atomic::AtomicBool,
+        marker: std::path::PathBuf,
+    }
+    impl Model for ObservedModel {
+        fn start<'a>(
+            &'a self,
+            request: &'a ModelRequest,
+            cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn ModelStream>> {
+            Box::pin(async move {
+                if let Some(id) = request.history.iter().find_map(|item| match item {
+                    HistoryItem::ToolResult { call_id, result } if call_id == "start" => {
+                        result.data.as_ref()?.get("job_id")?.as_str()
+                    }
+                    _ => None,
+                }) {
+                    tokio::time::timeout(Duration::from_secs(3), async {
+                        while !self.marker.exists() {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .map_err(|_| error("test", "background process did not start"))?;
+                    if !matches!(self.jobs.status(id)?, Some(JobStatus::Running)) {
+                        return Err(error(
+                            "test",
+                            "job was not running during the next model request",
+                        ));
+                    }
+                    self.observed
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+                self.inner.start(request, cancel).await
+            })
+        }
+    }
+    let model = ObservedModel {
+        inner: FakeModel::new(vec![
+            vec![call("start", "background_start", &args)],
+            answer(),
+        ]),
+        jobs: jobs.clone(),
+        observed: std::sync::atomic::AtomicBool::new(false),
+        marker,
+    };
+    let scheduler = Scheduler {
+        background: Some(jobs.clone()),
+        shared_budget: Some(shared_budget.clone()),
+        modes,
+        limits: Limits::default(),
+    };
+    let result = run_with_background(
+        &mut session,
+        &run_id,
+        &model,
+        &tools,
+        store.as_ref(),
+        &NoCancel,
+        (&scheduler, &jobs),
+    )
+    .await?;
+    assert_eq!(result, "done");
+    assert_eq!(shared_budget.used()?, 2);
+    assert!(model.observed.load(std::sync::atomic::Ordering::Acquire));
+    let seen = model.inner.seen.lock().map_err(|_| "lock")?;
+    let id = seen[1]
+        .iter()
+        .find_map(|item| match item {
+            HistoryItem::ToolResult { call_id, result } if call_id == "start" => result
+                .data
+                .as_ref()?
+                .get("job_id")?
+                .as_str()
+                .map(str::to_owned),
+            _ => None,
+        })
+        .ok_or("missing start result")?;
+    assert!(!matches!(jobs.status(&id)?, Some(JobStatus::Running)));
+    drop(seen);
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_noninteractive_confirmation_stops_loop_without_execution()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        approvals::{ApprovalSetup, PermissionRevision, Preauthorizations},
+        background::{BackgroundJobs, BackgroundToolKind, BackgroundTools},
+        dispatch::ToolDispatcher,
+        permissions::{PermissionConfig, Policy},
+        review::{ReviewConfig, SharedBudget},
+        tools::{
+            exec::ExecConfig,
+            read::{ReadLimits, ReadTools},
+        },
+    };
+    let temp = tempfile::tempdir()?;
+    let (mut session, mut run) = setup();
+    session.workspace = temp.path().to_path_buf();
+    run.permissions = PermissionMode::Review;
+    let store = Arc::new(MemoryStore::default());
+    let modes = Modes::new(WorkMode::Work);
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        Arc::new(Policy::new(temp.path(), PermissionConfig::default())?),
+        modes.clone(),
+        PermissionRevision::new(modes.clone(), run.permissions),
+        store.clone(),
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: session.id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(NoCancel),
+        },
+        Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        ExecConfig::default(),
+    )?);
+    let jobs = Arc::new(BackgroundJobs::new(dispatcher, 4, 16)?);
+    let bridge = Arc::new(BackgroundTools::new(
+        jobs.clone(),
+        Arc::new(FakeModel::new(vec![])),
+        SharedBudget::default(),
+        ReviewConfig::new("fake".into()),
+        "task".into(),
+        false,
+    ));
+    let mut tools = ToolRegistry::default();
+    tools.register_as(
+        Box::new(bridge.tool(BackgroundToolKind::Start)),
+        ToolClass::Read,
+    )?;
+    let args = serde_json::json!({"tool":"write_file","arguments":{"path":"should-not-exist","content":"data","expected_version":null}}).to_string();
+    let model = FakeModel::new(vec![
+        vec![call("start", "background_start", &args)],
+        answer(),
+    ]);
+    let scheduler = Scheduler {
+        background: Some(jobs.clone()),
+        shared_budget: None,
+        modes,
+        limits: Limits::default(),
+    };
+    let result = run_with_background(
+        &mut session,
+        &run,
+        &model,
+        &tools,
+        store.as_ref(),
+        &NoCancel,
+        (&scheduler, &jobs),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(BoundaryError(ErrorInfo { code, .. }, _, _)) if code == "needs_confirmation")
+    );
+    assert!(!temp.path().join("should-not-exist").exists());
+    assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn execution_and_background_review_share_the_model_request_budget() {
+    let shared = crate::review::SharedBudget::new(2, Duration::from_secs(60));
+    let mut budget = Budget::new(Limits::default()).with_shared(shared.clone());
+    assert!(budget.request());
+    assert!(shared.consume().is_ok());
+    assert!(!budget.request());
+    assert_eq!(shared.used().ok(), Some(2));
 }

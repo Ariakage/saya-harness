@@ -35,6 +35,7 @@ pub(super) struct Budget {
     paused_total: Duration,
     requests: usize,
     tools: usize,
+    shared: Option<crate::review::SharedBudget>,
 }
 impl Budget {
     pub fn new(limits: Limits) -> Self {
@@ -45,17 +46,32 @@ impl Budget {
             paused_total: Duration::ZERO,
             requests: 0,
             tools: 0,
+            shared: None,
         }
+    }
+    pub fn with_shared(mut self, shared: crate::review::SharedBudget) -> Self {
+        self.shared = Some(shared);
+        self
     }
     pub fn remaining(&self) -> Duration {
         let now = self.paused_at.unwrap_or_else(Instant::now);
-        self.limits.active_time.saturating_sub(
+        let remaining = self.limits.active_time.saturating_sub(
             now.duration_since(self.started)
                 .saturating_sub(self.paused_total),
-        )
+        );
+        self.shared.as_ref().map_or(remaining, |shared| {
+            remaining.min(shared.remaining().unwrap_or(Duration::ZERO))
+        })
     }
     pub fn request(&mut self) -> bool {
         if self.requests >= self.limits.model_requests || self.remaining().is_zero() {
+            return false;
+        }
+        if self
+            .shared
+            .as_ref()
+            .is_some_and(|shared| shared.consume().is_err())
+        {
             return false;
         }
         self.requests += 1;
@@ -69,11 +85,17 @@ impl Budget {
         true
     }
     pub fn pause(&mut self) {
+        if let Some(shared) = &self.shared {
+            let _ = shared.pause();
+        }
         if self.paused_at.is_none() {
             self.paused_at = Some(Instant::now());
         }
     }
     pub fn resume(&mut self) {
+        if let Some(shared) = &self.shared {
+            let _ = shared.resume();
+        }
         if let Some(since) = self.paused_at.take() {
             self.paused_total += since.elapsed();
         }

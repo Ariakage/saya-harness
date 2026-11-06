@@ -17,7 +17,7 @@
 | B-05 | 模型接入 | 三种独立适配器；自定义地址；明确版本、鉴权与流式行为 |
 | B-06 | 上下文 | 本地管理完整协议上下文；预算检查；MVP 不自动摘要或跨协议迁移 |
 | B-07 | 工作模式交付 | 明确四种模式的输出与完成标准，支持向用户澄清 |
-| B-08 | 调度与切换 | 串行工具；最后一次切换请求优先；取消优先 |
+| B-08 | 调度与切换 | 默认串行，显式后台任务支持并发；最后一次切换请求优先；取消优先 |
 | B-09 | 权限边界 | 权限可在空闲时修改；PLAN 禁用通用命令；bypass 保留硬限制 |
 | B-10 | auto 与核查 | 固定规则优先级；默认复用执行模型作独立核查；不确定则询问 |
 | B-11 | 人工确认与预授权 | 单操作授权；精确匹配预授权；无全局 yes 开关 |
@@ -146,7 +146,7 @@ model_timeout_seconds = 180
 - OpenAI 两种协议显式发送 `store: false`；Responses 由本地回传所需 output items，不依赖 `previous_response_id` 才能恢复。函数调用结果与原始调用标识关联，协议类型与必要的不透明状态保存在适配层。依据 [OpenAI 官方迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)。
 - Anthropic 默认 `anthropic-version: 2026-10-21`，另支持显式选 `2023-06-01` 的文本／本地工具子集。默认不发送 temperature、top_p、top_k；新版本已移除这些参数。鉴权支持 `bearer`、`x-api-key` 和显式 `none`。依据 [Anthropic 版本说明](https://platform.claude.com/docs/en/api/versioning)与[迁移说明](https://platform.claude.com/docs/en/api/migration-2026-10-21)。
 - 默认使用 HTTPS 并验证证书；本机回环地址允许 HTTP，远程 HTTP 需要配置显式启用。无自动跨站重定向；沿用系统代理环境设置。
-- 支持 profile 的 `headers_env` 映射，以请求头名对应环境变量名，不能覆盖专用鉴权与版本字段；不开放覆盖协议保留字段的任意请求体透传。默认不启用 beta、服务端工具、后台任务和多候选回答。
+- 支持 profile 的 `headers_env` 映射，以请求头名对应环境变量名，不能覆盖专用鉴权与版本字段；不开放覆盖协议保留字段的任意请求体透传。默认不启用 beta、服务端工具、provider 侧后台任务和多候选回答；Saya 本地运行内后台工具由 B-08 管理。
 - 工具 schema 使用明确类型与运行时校验；支持 strict 的协议显式设置，兼容配置可关闭。流结束、参数 JSON 完整且响应可用于工具调度后才派发，不消费半段参数。依据 [OpenAI 函数调用](https://developers.openai.com/api/docs/guides/function-calling)与 [Anthropic 工具流](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)。
 
 ## B-06 上下文
@@ -173,7 +173,9 @@ model_timeout_seconds = 180
 
 ## B-08 调度与切换
 
-- 每个会话同时只有一次运行；模型和工具串行调度。同一模型响应的多个工具按返回顺序执行，每次派发都重新检查状态和权限。
+- 每个会话同时只有一次运行。工具默认按返回顺序串行派发；七项本地工具可显式请求当前运行内后台执行，获得任务标识后模型可继续工作并查询状态／结果。每次派发仍检查状态与权限。后台任务有并发上限，启动、查询和取消受运行预算约束；结果不得伪装成已经完成。
+- 后台任务不跨运行、不随恢复重放；运行正常结束或取消时，停止新任务并取消、等待清理未完成任务。切换到 PLAN 时，先取消并清理后台写入与命令，然后才应用 PLAN；已发生的副作用据实记录。
+- 后台调用以启动结果闭合原工具调用，后续通过查询工具返回任务结果；每次模型协议的调用／结果配对仍按协议要求保持完整。
 - 连续工作模式切换请求采用最后一次有效请求；已在执行的调用完成后、下一次调用前应用，当前与待切换模式分别展示。
 - 等待确认时没有工具正在执行，可立即应用工作模式切换；原确认失效，对待执行操作按新模式重新判断。
 - 取消优先于切换。取消时停止新调度、清理当前调用；保留用户最后请求的工作模式供下一次输入使用，但不因此发起新运行。
@@ -220,7 +222,7 @@ model_timeout_seconds = 180
 - `exec` 接收 argv 数组、cwd、超时和显式环境变量引用，直接启动程序，不隐式拼接 shell 字符串。需要 shell 时，模型必须显式请求对应程序及 `-c` 参数，按完整操作核查。
 - 记录退出码、stdout、stderr、截断和超时／取消标记。工作目录默认工作区，默认继承 PATH、HOME、TMPDIR、LANG 与 LC_* 等基础环境；不继承模型配置引用的凭据变量。其他继承变量通过用户配置 `commands.inherit_env` 明确允许，工具可设置非敏感字面环境值或引用已允许的变量，不接收任意宿主凭据。
 - 默认 120 秒，配置的最大值初始为 600 秒；默认值与最大值均可由用户配置调整，模型单次请求不能超过已配置最大值。输出达到保留上限后继续排空管道，避免卡住，但不继续保留无限数据。
-- 取消／超时先终止进程组，等待 5 秒后强制清理；无后台常驻进程、交互式 PTY 或终端程序托管。需要输入的命令不继承用户终端，避免永久等待。
+- 取消／超时先终止进程组，等待 5 秒后强制清理；显式后台命令仅存活于当前运行，无跨运行常驻进程、交互式 PTY 或终端程序托管。需要输入的命令不继承用户终端，避免永久等待。
 - 原生命令的副作用按真实执行结果记录，进程失败不代表此前文件修改已撤销。
 
 ## B-14 首批工具接口
@@ -235,6 +237,9 @@ model_timeout_seconds = 180
 | `apply_patch` | path、patch、expected_version | 单文件上下文补丁结果、新版本；不隐式删除文件 |
 | `exec` | argv、cwd、timeout、环境引用 | 退出码、两路输出、截断／超时／取消信息 |
 | `ask_user` | question、可选选项 | 用户回答，或非交互 needs_input |
+| `background_start` | tool、arguments | 获批后立即返回 `started` 与运行内 job_id；需确认时返回 `needs_confirmation`，不执行操作 |
+| `background_status` | job_id | 返回运行中、完成结果、失败或不存在；不等待任务完成 |
+| `background_cancel` | job_id | 请求取消当前运行的任务，调用方仍可查询最终状态 |
 
 工具请求使用 JSON Schema，均有调用 ID。统一结果含 `ok`、`data`、`error`、`truncated`；错误含稳定 code 与可读 message，协议适配器再映射到各家工具消息。未启用或未知工具返回错误而不执行。
 
@@ -243,7 +248,8 @@ model_timeout_seconds = 180
 | 项目 | limits 配置键 | 默认值／规则 |
 | --- | --- | --- |
 | 模型请求 | max_model_requests | 每次运行 64 次，含执行、核查和重试 |
-| 工具调用 | max_tool_calls | 每次运行 256 次，拒绝与无效请求也计数 |
+| 工具调用 | max_tool_calls | 每次运行 256 次，后台启动、查询与取消以及拒绝与无效请求均计数 |
+| 后台任务 | max_background_running／max_background_jobs | 默认最多同时运行 4 个，保留本运行最多 256 个任务结果；由运行时配置，均不能绕过整体预算 |
 | 活跃运行时间 | active_run_timeout_seconds | 1800 秒；等待人工确认／澄清时暂停计时 |
 | 模型连接超时 | model_connect_timeout_seconds | 10 秒 |
 | 模型流空闲超时 | model_idle_timeout_seconds | 60 秒 |
