@@ -23,7 +23,7 @@ use crate::{
 use std::{
     path::Path,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -99,7 +99,9 @@ pub struct ToolDispatcher {
     exec_config: ExecConfig,
     modes: ModeController,
     read_only: bool,
+    context_guard: OnceLock<Arc<ContextGuard>>,
 }
+type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
 /// Review dependencies shared with the surrounding execution loop.
 pub struct DispatchReview<'a> {
     pub model: &'a dyn Model,
@@ -171,6 +173,15 @@ impl ToolDispatcher {
             exec_config,
             modes,
             read_only: false,
+            context_guard: OnceLock::new(),
+        })
+    }
+    pub(crate) fn set_context_guard(&self, guard: Arc<ContextGuard>) -> Result<(), BoundaryError> {
+        self.context_guard.set(guard).map_err(|_| {
+            failure(
+                "project_context_error",
+                "project context is already configured",
+            )
         })
     }
     /// Remove side-effecting operations before exposing a non-durable store.
@@ -296,6 +307,14 @@ impl ToolDispatcher {
         cancel: &dyn Cancellation,
         background: bool,
     ) -> Result<ToolResult, BoundaryError> {
+        if let Some(guard) = self.context_guard.get()
+            && !guard(call)?
+        {
+            return Err(failure(
+                "project_context_changed",
+                "applicable project context changed before dispatch",
+            ));
+        }
         if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
             return Err(failure(
                 "durability_required",

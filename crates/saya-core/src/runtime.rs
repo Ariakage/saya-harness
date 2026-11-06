@@ -15,14 +15,16 @@ use crate::{
     input::{InputHandler, InputRequest},
     mode::ModeController,
     permissions::Policy,
+    project_context::ProjectContext,
     review::{ReviewConfig, SharedBudget},
     tools::{exec::ExecConfig, read::ReadTools},
 };
 use std::{
     future::Future,
+    path::PathBuf,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -48,6 +50,25 @@ fn failed(code: &str, message: &str) -> ToolResult {
             message: message.into(),
         }),
         truncated: false,
+    }
+}
+fn context_target(call: &ToolCall) -> Option<PathBuf> {
+    let value: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
+    let (tool, args) = if call.name == "background_start" {
+        (value.get("tool")?.as_str()?, value.get("arguments")?)
+    } else {
+        (call.name.as_str(), &value)
+    };
+    match tool {
+        "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch" => {
+            args.get("path")?.as_str().map(PathBuf::from)
+        }
+        "exec" => Some(
+            args.get("cwd")
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(|| PathBuf::from("."), PathBuf::from),
+        ),
+        _ => None,
     }
 }
 struct RuntimeStore(Arc<dyn Store>);
@@ -174,10 +195,29 @@ pub struct AgentRuntime {
     summary: String,
     confirmation: Option<Arc<dyn ApprovalHandler>>,
     input: Option<Arc<dyn InputHandler>>,
+    project_context: Option<Arc<Mutex<ProjectState>>>,
     limits: RuntimeLimits,
     read_only: bool,
     used: bool,
     started: AtomicBool,
+}
+struct ProjectState {
+    loader: ProjectContext,
+    target: Option<PathBuf>,
+    provided_fingerprint: Option<String>,
+}
+fn project_context_is_current(
+    state: &Mutex<ProjectState>,
+    call: &ToolCall,
+) -> Result<bool, BoundaryError> {
+    let mut state = state
+        .lock()
+        .map_err(|_| error("project_context_error", "project context lock failed"))?;
+    let target = context_target(call).or_else(|| state.target.clone());
+    let snapshot = state.loader.snapshot(target.as_deref())?;
+    let fingerprint = snapshot.fingerprint()?;
+    state.target = target;
+    Ok(state.provided_fingerprint.as_deref() == Some(fingerprint.as_str()))
 }
 /// Handle usable while the run future owns the runtime.
 #[derive(Clone)]
@@ -284,6 +324,7 @@ impl AgentRuntime {
             summary: setup.summary,
             confirmation: setup.confirmation,
             input: None,
+            project_context: None,
             limits,
             read_only,
             used: false,
@@ -300,6 +341,20 @@ impl AgentRuntime {
     pub fn with_input_handler(mut self, handler: Arc<dyn InputHandler>) -> Self {
         self.input = Some(handler);
         self
+    }
+    /// Supply scoped project context as untrusted data for each model request.
+    pub fn with_project_context(mut self, loader: ProjectContext) -> Result<Self, BoundaryError> {
+        let state = Arc::new(Mutex::new(ProjectState {
+            loader,
+            target: None,
+            provided_fingerprint: None,
+        }));
+        let guard = state.clone();
+        self.dispatcher.set_context_guard(Arc::new(move |call| {
+            project_context_is_current(&guard, call)
+        }))?;
+        self.project_context = Some(state);
+        Ok(self)
     }
     /// Queue a user-selected mode; PLAN first cancels mutating background jobs.
     pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
@@ -401,6 +456,16 @@ impl AgentRuntime {
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
                 let mut history = vec![crate::prompt::runtime_context(session, &run)?];
+                if let Some(state) = &self.project_context {
+                    let mut state = state.lock().map_err(|_| {
+                        error("project_context_error", "project context lock failed")
+                    })?;
+                    let snapshot = state.loader.snapshot(state.target.as_deref())?;
+                    state.provided_fingerprint = Some(snapshot.fingerprint()?);
+                    history.push(HistoryItem::UserText(
+                        serde_json::json!({"saya_project_context_v1": snapshot}).to_string(),
+                    ));
+                }
                 history.extend(session.history.iter().cloned());
                 Ok::<_, BoundaryError>(ModelRequest {
                     request_id: uuid::Uuid::now_v7().to_string(),
@@ -617,6 +682,12 @@ impl AgentRuntime {
         call: &ToolCall,
     ) -> Result<ToolResult, BoundaryError> {
         self.check()?;
+        if let Some(state) = &self.project_context {
+            let changed = !project_context_is_current(state, call)?;
+            if changed {
+                return self.save_local(session, call, failed("project_context_changed", "applicable project context changed; review it before requesting this operation again")).await;
+            }
+        }
         let snap = loop {
             let snap = self.sync_mode(session).await?;
             self.check()?;
@@ -653,6 +724,20 @@ impl AgentRuntime {
                 )
                 .map_err(|_| error("invalid_args", "invalid approval request"))?;
                 if let Some(answer) = self.confirm(&request).await? {
+                    if let Some(state) = &self.project_context
+                        && !project_context_is_current(state, call)?
+                    {
+                        return self
+                            .save_local(
+                                session,
+                                call,
+                                failed(
+                                    "project_context_changed",
+                                    "project context changed while awaiting approval",
+                                ),
+                            )
+                            .await;
+                    }
                     let result = self.background.resolve(&request.approval_id, answer)?;
                     return self.save_local(session, call, result).await;
                 }
@@ -710,6 +795,20 @@ impl AgentRuntime {
         };
         match authorization {
             Authorization::Permit(permit) => {
+                if let Some(state) = &self.project_context
+                    && !project_context_is_current(state, call)?
+                {
+                    return self
+                        .save_local(
+                            session,
+                            call,
+                            failed(
+                                "project_context_changed",
+                                "project context changed while awaiting approval",
+                            ),
+                        )
+                        .await;
+                }
                 if call.name == "ask_user" {
                     if !self.dispatcher.owns_permit(&permit) {
                         return Err(error(
@@ -761,7 +860,12 @@ impl AgentRuntime {
                     () = sleep(self.budget.remaining()?) => Some(error("limit_reached", "active time budget exceeded")),
                     () = sleep(self.limits.tool_timeout), if call.name != "exec" => Some(error("tool_timeout", "tool timed out")),
                     result = &mut operation => {
-                        let result = result?;
+                        let result = match result {
+                            Err(err) if err.0.code == "project_context_changed" => {
+                                return self.save_local(session, call, failed("project_context_changed", "project context changed before dispatch")).await;
+                            }
+                            other => other?,
+                        };
                         session.history.push(HistoryItem::ToolResult { call_id:call.call_id.clone(), result:result.clone() });
                         return Ok(result);
                     }
@@ -941,6 +1045,15 @@ impl AgentRuntime {
                     self.close_calls(session, &calls[index + 1..], false)
                         .await?;
                     return Err(error("needs_input", "user input required"));
+                }
+                if result
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == "project_context_changed")
+                {
+                    self.close_calls(session, &calls[index + 1..], false)
+                        .await?;
+                    break;
                 }
                 let args = serde_json::from_str::<serde_json::Value>(&call.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));

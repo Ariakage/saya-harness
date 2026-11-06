@@ -10,6 +10,7 @@ use saya_core::{
     input::{InputHandler, InputRequest},
     memory::MemoryStore,
     permissions::Policy,
+    project_context::ProjectContext,
     provider::{
         ModelSettings,
         anthropic::{AnthropicModel, AnthropicVersion},
@@ -550,6 +551,10 @@ async fn run(
         confirmation,
         limits,
     })?;
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    runtime = runtime.with_project_context(ProjectContext::new(&workspace, home.as_deref())?)?;
     if let Some(terminal) = terminal {
         runtime = runtime.with_input_handler(terminal);
     }

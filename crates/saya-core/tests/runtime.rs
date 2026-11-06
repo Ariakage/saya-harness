@@ -1480,3 +1480,174 @@ async fn manual_mode_requires_approval_even_for_a_clarification()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn scoped_project_context_is_supplied_as_data_before_nested_tool_dispatch()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::project_context::ProjectContext;
+    let temp = support::temp_workspace()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("AGENTS.md"), "ROOT_CONVENTION")?;
+    std::fs::write(temp.path().join("src/AGENTS.md"), "NESTED_CONVENTION")?;
+    std::fs::write(temp.path().join("src/data.txt"), "useful data")?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let read = serde_json::json!({"path":"src/data.txt","start_line":1,"line_count":3});
+    let model = Arc::new(FakeModel::new(vec![
+        vec![
+            call("first", "read_file", read.clone()),
+            call("second", "read_file", read.clone()),
+        ],
+        vec![call("retry", "read_file", read)],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?
+    .with_project_context(ProjectContext::new(temp.path(), None)?)?;
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    let seen = model.seen.lock().map_err(|_| "lock")?;
+    assert_eq!(seen.len(), 3);
+    let initial = serde_json::to_string(&seen[0].history)?;
+    assert!(initial.contains("ROOT_CONVENTION"));
+    assert!(!initial.contains("NESTED_CONVENTION"));
+    assert!(!seen[0].instructions.contains("ROOT_CONVENTION"));
+    let second = serde_json::to_string(&seen[1].history)?;
+    assert!(second.contains("NESTED_CONVENTION"));
+    assert!(second.contains("project_context_changed"));
+    assert!(second.contains("not_executed"));
+    assert!(seen[2].history.iter().any(|item|matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="retry" && result.ok)));
+    Ok(())
+}
+
+struct ChangeContextModel {
+    inner: FakeModel,
+    path: std::path::PathBuf,
+}
+impl Model for ChangeContextModel {
+    fn start<'a>(
+        &'a self,
+        req: &'a ModelRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            if self.inner.seen.lock().map_err(|_| err("test"))?.is_empty() {
+                std::fs::write(&self.path, "CHANGED_CONVENTION").map_err(|_| err("test"))?;
+            }
+            self.inner.start(req, cancel).await
+        })
+    }
+}
+#[tokio::test]
+async fn changed_instruction_during_model_call_forces_context_refresh_before_tool()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::project_context::ProjectContext;
+    let temp = support::temp_workspace()?;
+    let source = temp.path().join("AGENTS.md");
+    std::fs::write(&source, "ORIGINAL_CONVENTION")?;
+    std::fs::write(temp.path().join("data.txt"), "content")?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let args = serde_json::json!({"path":"data.txt","start_line":1,"line_count":1});
+    let model = Arc::new(ChangeContextModel {
+        path: source,
+        inner: FakeModel::new(vec![
+            vec![call("first", "read_file", args.clone())],
+            vec![call("retry", "read_file", args)],
+            vec![HistoryItem::AssistantText("done".into())],
+        ]),
+    });
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?
+    .with_project_context(ProjectContext::new(temp.path(), None)?)?;
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    let seen = model.inner.seen.lock().map_err(|_| "lock")?;
+    assert!(serde_json::to_string(&seen[0].history)?.contains("ORIGINAL_CONVENTION"));
+    assert!(serde_json::to_string(&seen[1].history)?.contains("CHANGED_CONVENTION"));
+    assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="first" && result.error.as_ref().is_some_and(|e|e.code=="project_context_changed"))));
+    Ok(())
+}
+
+struct ChangeAtApproval(std::path::PathBuf);
+impl saya_core::runtime::ApprovalHandler for ChangeAtApproval {
+    fn confirm<'a>(
+        &'a self,
+        _: &'a saya_core::contract::ApprovalRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Option<bool>> {
+        Box::pin(async move {
+            std::fs::write(&self.0, "UPDATED_DURING_APPROVAL").map_err(|_| err("test"))?;
+            Ok(Some(true))
+        })
+    }
+}
+#[tokio::test]
+async fn context_change_during_approval_requires_a_new_model_turn_before_dispatch()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::project_context::ProjectContext;
+    for background in [false, true] {
+        let temp = support::temp_workspace()?;
+        let source = temp.path().join("AGENTS.md");
+        std::fs::write(&source, "BEFORE_APPROVAL")?;
+        std::fs::write(temp.path().join("data.txt"), "content")?;
+        let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
+        let read = serde_json::json!({"path":"data.txt","start_line":1,"line_count":1});
+        let (tool, args) = if background {
+            (
+                "background_start",
+                serde_json::json!({"tool":"read_file","arguments":read}),
+            )
+        } else {
+            ("read_file", read)
+        };
+        let model = Arc::new(FakeModel::new(vec![
+            vec![call("first", tool, args.clone())],
+            vec![call("retry", tool, args)],
+            vec![HistoryItem::AssistantText("done".into())],
+        ]));
+        let policy = Arc::new(Policy::new(temp.path(), PermissionConfig::default())?);
+        let files = Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?);
+        let mut runtime = AgentRuntime::new(RuntimeSetup {
+            run,
+            model: model.clone(),
+            store: Arc::new(MemoryStore::default()),
+            policy,
+            files,
+            cancellation: Arc::new(NoCancel),
+            review: ReviewConfig::new("fake".into()),
+            exec: ExecConfig::default(),
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            summary: "task".into(),
+            confirmation: Some(Arc::new(ChangeAtApproval(source))),
+            limits: RuntimeLimits::default(),
+        })?
+        .with_project_context(ProjectContext::new(temp.path(), None)?)?;
+        assert_eq!(
+            runtime.run(&mut session).await?.status,
+            RunStatus::Completed
+        );
+        assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="first" && result.error.as_ref().is_some_and(|e|e.code=="project_context_changed"))),"background={background}");
+        let seen = model.seen.lock().map_err(|_| "lock")?;
+        assert!(serde_json::to_string(&seen[1].history)?.contains("UPDATED_DURING_APPROVAL"));
+    }
+    Ok(())
+}

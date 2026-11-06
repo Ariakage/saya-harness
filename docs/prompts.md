@@ -35,7 +35,7 @@
 
 [可复用 core 循环](../crates/saya-core/src/runtime.rs)及假模型原型已使用完整装配器，取代每模式的一句指令。每次请求都按生效模式、权限与过滤后的工具重新装配；切换后不残留旧模式段。稳定核心保持相同前缀，但没有虚构 provider 缓存命中保证，也没有引入某产品专用的动态分隔标记。
 
-已知运行事实由 `runtime_context` 编成独立 JSON 数据项放在请求历史开头，内容仅为工作区、profile、model、协议、实际工作模式与权限模式；不混入高优先级 instructions，不包含凭据、原始配置或整份历史，不探测和猜测 Git／平台状态，也不持续向会话存储追加此临时快照。模型名称只是配置值，不是对真实上游身份的认证。项目 AGENTS.md 的查找、哈希、刷新与完整提示词组装仍属 DEV-021 的后续接线。
+已知运行事实由 `runtime_context` 编成独立 JSON 数据项放在请求历史开头，内容仅为工作区、profile、model、协议、实际工作模式与权限模式；不混入高优先级 instructions，不包含凭据、原始配置或整份历史，不探测和猜测 Git／平台状态，也不持续向会话存储追加此临时快照。模型名称只是配置值，不是对真实上游身份的认证。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史的 user 消息中，来源、哈希、范围与刷新见[项目上下文](project-context.md)；它不是系统指令，不会改变运行时权限，但模型仍可能受内容影响。
 
 [审核组件](../crates/saya-core/src/review.rs)使用独立英文审核 prompt，保留现有一个数据消息、无工具、1024 输出 token 默认上限、严格 JSON 解析与失败转人工逻辑。它不接收执行 prompt、项目说明或完整执行历史；数据仍为 `tool/arguments/work_mode/permissions/goal_summary`。尤其不把 `goal_summary` 中“用户已授权”的说法当成原始用户证据。
 
@@ -102,4 +102,4 @@ cargo run -p saya-core --example prompt_preview -- --review
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 
-三协议适配已有 core 级受控验证，CLI 有只读开发预览；用户级／项目指令与 Skill 发现仍待 DEV-021。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。
+三协议适配已有 core 级受控验证，CLI 有只读开发预览；用户级／项目指令与 Skill 发现的验证范围见[开发进度](progress.md)。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。

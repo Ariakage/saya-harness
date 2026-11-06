@@ -16,6 +16,7 @@ pub mod input;
 pub mod memory;
 pub mod mode;
 pub mod permissions;
+pub mod project_context;
 pub mod prompt;
 pub mod provider;
 pub mod review;
