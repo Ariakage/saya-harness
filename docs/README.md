@@ -19,6 +19,7 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
 | [开发进度](progress.md) | 阶段／任务状态与证据 | 持续维护 |
 | [提示词定制](prompts.md) | 英文 prompt、装配与来源对照 | 组件与受控接线，真实模型效果未评测 |
+| [当前提示词快照](prompt/README.md) | 核心、工具、模式、权限与审核提示词正文 | `saya-prompts-v1`，运行时来源见目录说明 |
 | [决策记录](decisions.md) | 方向确认、基线与变更历史 | 持续维护 |
 | [根目录 AGENTS.md](../AGENTS.md) | 编码 Agent 的执行约定 | 初版约定 |
 | [MIT 许可证](../LICENSE) | 项目许可与版权声明 | 已添加 |
