@@ -117,6 +117,8 @@ pub enum StoreChange {
         call_id: String,
         state: crate::contract::ToolState,
     },
+    /// Confirmation request only; decisions or reusable grants are not restored.
+    ApprovalRequested(crate::contract::ApprovalRequest),
     RunFinished(RunResult),
     Event(Event),
 }

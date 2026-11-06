@@ -94,6 +94,7 @@ enum Target {
         cwd: PathBuf,
         executable: PathBuf,
         args: Vec<String>,
+        environment_digest: String,
     },
     Input,
 }
@@ -134,6 +135,7 @@ impl Operation {
                 cwd,
                 executable: exe,
                 args: plan.argv[1..].to_vec(),
+                environment_digest: plan.environment_digest.clone(),
             },
         })
     }
@@ -163,6 +165,7 @@ impl Operation {
                 cwd,
                 executable,
                 args,
+                environment_digest,
             } => {
                 let executable = executable
                     .to_str()
@@ -170,6 +173,10 @@ impl Operation {
                 let argv: Vec<_> = std::iter::once(executable.to_owned())
                     .chain(args.iter().cloned())
                     .collect();
+                map.insert(
+                    "environment_digest".into(),
+                    serde_json::Value::String(environment_digest.clone()),
+                );
                 map.insert(
                     "cwd".into(),
                     serde_json::to_value(cwd)
@@ -184,6 +191,27 @@ impl Operation {
             Target::Input => {}
         }
         Ok(serde_json::Value::Object(map.clone()))
+    }
+
+    /// Return the normalized command identity when this is an exec operation.
+    pub fn command_identity(&self) -> Option<(Vec<String>, PathBuf)> {
+        match &self.target {
+            Target::Exec {
+                cwd,
+                executable,
+                args,
+                ..
+            } => {
+                let executable = executable.to_str()?;
+                Some((
+                    std::iter::once(executable.to_owned())
+                        .chain(args.iter().cloned())
+                        .collect(),
+                    cwd.clone(),
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// Construct the user input control operation.
@@ -422,13 +450,12 @@ impl PolicyGate {
     }
 }
 impl WriteGate for PolicyGate {
-    fn authorize(&self, call: &ToolCall, context: &ToolContext) -> Result<bool, BoundaryError> {
-        let value: serde_json::Value = serde_json::from_str(&call.arguments)
-            .map_err(|e| failure("invalid_args", e.to_string()))?;
-        let path = value
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| failure("invalid_args", "missing path"))?;
+    fn authorize(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        normalized_target: &Path,
+    ) -> Result<bool, BoundaryError> {
         if std::fs::canonicalize(&context.workspace)
             .map_err(|e| failure("invalid_path", e.to_string()))?
             != self.policy.workspace
@@ -438,7 +465,7 @@ impl WriteGate for PolicyGate {
                 "policy workspace differs from run",
             ));
         }
-        let operation = Operation::file(&context.workspace, &call.name, Path::new(path))?;
+        let operation = Operation::file(&context.workspace, &call.name, normalized_target)?;
         Ok(self
             .policy
             .evaluate(context.run.work_mode, context.run.permissions, &operation)

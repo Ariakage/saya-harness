@@ -15,6 +15,7 @@ fn exec(root: &Path) -> Result<Operation, Box<dyn std::error::Error>> {
         argv: vec![exe.to_string_lossy().into_owned(), "hello".into()],
         cwd: root.to_path_buf(),
         timeout: Duration::from_secs(10),
+        environment_digest: "test-environment".into(),
     })?)
 }
 #[test]
@@ -261,12 +262,27 @@ fn gate_never_treats_ask_or_model_review_as_authorization() -> Result<(), Box<dy
         arguments: serde_json::json!({"path":"a.txt","content":"x","expected_version":null})
             .to_string(),
     };
-    assert!(WriteGate::authorize(&gate, &file, &context)?);
+    assert!(WriteGate::authorize(
+        &gate,
+        &file,
+        &context,
+        &root.path().join("a.txt")
+    )?);
     context.run.permissions = PermissionMode::Review;
-    assert!(!WriteGate::authorize(&gate, &file, &context)?);
+    assert!(!WriteGate::authorize(
+        &gate,
+        &file,
+        &context,
+        &root.path().join("a.txt")
+    )?);
     context.run.permissions = PermissionMode::Bypass;
     context.run.work_mode = WorkMode::Plan;
-    assert!(!WriteGate::authorize(&gate, &file, &context)?);
+    assert!(!WriteGate::authorize(
+        &gate,
+        &file,
+        &context,
+        &root.path().join("a.txt")
+    )?);
     context.run.work_mode = WorkMode::Work;
     context.run.permissions = PermissionMode::Auto;
     let exe = std::fs::canonicalize("/bin/echo")?;
@@ -274,6 +290,7 @@ fn gate_never_treats_ask_or_model_review_as_authorization() -> Result<(), Box<dy
         argv: vec![exe.to_string_lossy().into_owned(), "hello".into()],
         cwd: root.path().canonicalize()?,
         timeout: Duration::from_secs(1),
+        environment_digest: "test-environment".into(),
     };
     let command = ToolCall {
         call_id: "c".into(),

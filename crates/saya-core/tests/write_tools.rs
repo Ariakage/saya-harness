@@ -35,7 +35,7 @@ struct Gate {
     allowed_checks: usize,
 }
 impl WriteGate for Gate {
-    fn authorize(&self, _: &ToolCall, _: &ToolContext) -> Result<bool, BoundaryError> {
+    fn authorize(&self, _: &ToolCall, _: &ToolContext, _: &Path) -> Result<bool, BoundaryError> {
         Ok(self.count.fetch_add(1, Ordering::SeqCst) < self.allowed_checks)
     }
 }

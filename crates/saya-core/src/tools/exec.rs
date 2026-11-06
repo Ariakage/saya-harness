@@ -17,7 +17,7 @@ use std::{
     ffi::{OsStr, OsString},
     io,
     os::fd::AsRawFd,
-    os::unix::fs::PermissionsExt,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, Mutex},
@@ -75,6 +75,8 @@ pub struct ExecPlan {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
     pub timeout: Duration,
+    /// SHA-256 of the exact filtered environment; values are never displayed.
+    pub environment_digest: String,
 }
 /// The runtime must provide an authorization decision bound to the operation.
 pub trait ExecGate: Send + Sync {
@@ -84,6 +86,16 @@ pub trait ExecGate: Send + Sync {
         call: &ToolCall,
         context: &ToolContext,
     ) -> Result<bool, BoundaryError>;
+    /// Release any dispatch lease after completion, cancellation or error.
+    fn finish(&self) -> Result<(), BoundaryError> {
+        Ok(())
+    }
+}
+struct ExecLease<'a>(&'a dyn ExecGate);
+impl Drop for ExecLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.finish();
+    }
 }
 /// Result of a local command. stdout and stderr are decoded with UTF-8 loss
 /// replacement; truncation flags describe retained bytes.
@@ -145,6 +157,31 @@ fn valid_env_name(name: &str) -> bool {
 }
 
 impl ExecTool {
+    /// Resolve command identity without spawning or authorizing it. This lets
+    /// the policy and one-shot approval bind the exact command and environment.
+    pub fn plan(&self, call: &ToolCall, context: &ToolContext) -> Result<ExecPlan, BoundaryError> {
+        if call.name != "exec" {
+            return Err(failure("invalid_args", "tool name does not match adapter"));
+        }
+        if std::fs::canonicalize(&context.workspace)
+            .map_err(|e| failure("invalid_workspace", e.to_string()))?
+            != self.files.workspace
+        {
+            return Err(failure(
+                "invalid_workspace",
+                "tool workspace differs from run",
+            ));
+        }
+        if self.files.bypass && context.run.permissions != PermissionMode::Bypass {
+            return Err(failure(
+                "path_denied",
+                "unrestricted roots require bypass permissions",
+            ));
+        }
+        let args: ExecArgs = serde_json::from_str(&call.arguments)
+            .map_err(|e| failure("invalid_args", e.to_string()))?;
+        Ok(self.prepare(&args, context)?.0)
+    }
     fn prepare(
         &self,
         args: &ExecArgs,
@@ -232,18 +269,34 @@ impl ExecTool {
             .to_str()
             .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?
             .to_owned();
+        let mut digest = sha2::Sha256::new();
+        use sha2::Digest;
+        for (key, value) in &env {
+            let key = key.as_bytes();
+            let value = value.as_bytes();
+            digest.update((key.len() as u64).to_be_bytes());
+            digest.update(key);
+            digest.update((value.len() as u64).to_be_bytes());
+            digest.update(value);
+        }
+        let environment_digest: String = digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         Ok((
             ExecPlan {
                 argv,
                 cwd,
                 timeout: command_timeout,
+                environment_digest,
             },
             cwd_dir,
             env,
         ))
     }
 }
-fn resolve_executable(
+pub(crate) fn resolve_executable(
     program: &str,
     cwd: &Path,
     path: Option<&OsString>,
@@ -531,6 +584,7 @@ impl Tool for ExecTool {
                     "command not authorized",
                 )));
             }
+            let _lease = ExecLease(self.gate.as_ref());
             // Explicitly supplied arguments can contain configured credential
             // values; redact known values before persisting the intent.
             let secrets: Vec<String> = self

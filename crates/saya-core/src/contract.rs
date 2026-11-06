@@ -165,6 +165,19 @@ pub struct Run {
     pub permissions: PermissionMode,
 }
 
+/// Persistable confirmation request, not an authorization or reusable grant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub approval_id: String,
+    pub call_id: String,
+    pub run_id: RunId,
+    pub tool: String,
+    pub operation_summary: String,
+    pub arguments: Value,
+    pub cwd: PathBuf,
+    pub work_mode: WorkMode,
+}
+
 /// User-facing final status; CLI configuration failures also use `failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

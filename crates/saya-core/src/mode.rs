@@ -29,6 +29,9 @@ fn poisoned() -> BoundaryError {
     )
 }
 impl ModeController {
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     /// Create a controller with the selected initial mode and no pending request.
     pub fn new(initial: WorkMode) -> Self {
         Self(Arc::new(Mutex::new(State {
@@ -85,6 +88,15 @@ impl ModeController {
             s.revision += 1;
         }
         Ok(())
+    }
+    /// Execute an internal permission-setting change only while no call is active.
+    pub(crate) fn while_idle(&self, action: impl FnOnce()) -> Result<bool, BoundaryError> {
+        let state = self.0.lock().map_err(|_| poisoned())?;
+        if state.in_call {
+            return Ok(false);
+        }
+        action();
+        Ok(true)
     }
     /// Check whether a confirmation revision still matches, with no call or
     /// pending change. Returns an error if the state lock is poisoned; this

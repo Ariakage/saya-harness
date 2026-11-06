@@ -145,6 +145,7 @@ impl WriteTools {
         path: &Path,
         content: &str,
         expected_version: Option<&str>,
+        bound_target: &Path,
         cancel: Option<&AtomicBool>,
     ) -> Result<WriteResult, ReadError> {
         check_cancel(cancel)?;
@@ -155,6 +156,9 @@ impl WriteTools {
             return Err(err("invalid_text", "binary content is not supported"));
         }
         let (target, dir, name) = self.destination(path, expected_version)?;
+        if target != bound_target {
+            return Err(err("conflict", "target changed after authorization"));
+        }
         let old_permissions = if let Some(expected) = expected_version {
             Some(self.check_in_directory(&dir, &name, expected)?)
         } else {
@@ -205,6 +209,7 @@ impl WriteTools {
         path: &Path,
         patch_text: &str,
         expected_version: &str,
+        bound_target: &Path,
         cancel: Option<&AtomicBool>,
     ) -> Result<WriteResult, ReadError> {
         check_cancel(cancel)?;
@@ -212,7 +217,11 @@ impl WriteTools {
         if patch_text.len() > self.max_bytes {
             return Err(err("write_too_large", "patch exceeds configured limit"));
         }
-        let bytes = self.check_existing(path, expected_version)?;
+        let (current, _, _) = self.destination(path, Some(expected_version))?;
+        if current != bound_target {
+            return Err(err("conflict", "target changed after authorization"));
+        }
+        let bytes = self.check_existing(bound_target, expected_version)?;
         let original =
             std::str::from_utf8(&bytes).map_err(|_| err("invalid_text", "file is not UTF-8"))?;
         let patches: Vec<_> = PatchSet::parse(patch_text, ParseOptions::unidiff())
@@ -248,7 +257,7 @@ impl WriteTools {
         }
         let updated =
             diffy::apply(original, patch).map_err(|e| err("patch_conflict", e.to_string()))?;
-        self.write_file(path, &updated, Some(expected_version), cancel)
+        self.write_file(path, &updated, Some(expected_version), bound_target, cancel)
     }
 }
 
@@ -259,7 +268,18 @@ pub trait WriteGate: Send + Sync {
         &self,
         call: &crate::contract::ToolCall,
         context: &crate::boundary::ToolContext,
+        normalized_target: &Path,
     ) -> Result<bool, crate::contract::BoundaryError>;
+    /// Release any dispatch lease after completion, cancellation or error.
+    fn finish(&self) -> Result<(), crate::contract::BoundaryError> {
+        Ok(())
+    }
+}
+struct WriteLease<'a>(&'a dyn WriteGate);
+impl Drop for WriteLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.finish();
+    }
 }
 
 /// Native write operation selected by the tool registry.
@@ -462,9 +482,22 @@ impl crate::boundary::Tool for WriteTool {
                 Ok(v) => v,
                 Err(e) => return Ok(failure("invalid_args", e.to_string())),
             };
-            if !self.gate.authorize(call, context)? {
+            let path_and_version = match &action {
+                WriteAction::Write(args) => (args.path.as_path(), args.expected_version.as_deref()),
+                WriteAction::Patch(args) => {
+                    (args.path.as_path(), Some(args.expected_version.as_str()))
+                }
+            };
+            let bound_target = match WriteTools::new(self.files.clone(), self.max_bytes)
+                .destination(path_and_version.0, path_and_version.1)
+            {
+                Ok((target, _, _)) => target,
+                Err(error) => return Ok(failure(error.code, error.message)),
+            };
+            if !self.gate.authorize(call, context, &bound_target)? {
                 return Ok(failure("permission_denied", "write not authorized".into()));
             }
+            let _lease = WriteLease(self.gate.as_ref());
             let handle = tokio::runtime::Handle::try_current().map_err(|_| {
                 BoundaryError(
                     ErrorInfo {
@@ -486,7 +519,7 @@ impl crate::boundary::Tool for WriteTool {
                 save_result(self.store.as_ref(), call, context, &result).await?;
                 return Err(cancelled());
             }
-            match self.gate.authorize(call, context) {
+            match self.gate.authorize(call, context, &bound_target) {
                 Ok(true) => {}
                 Ok(false) => {
                     let result = failure(
@@ -513,12 +546,14 @@ impl crate::boundary::Tool for WriteTool {
                         &a.path,
                         &a.content,
                         a.expected_version.as_deref(),
+                        &bound_target,
                         Some(&worker_flag),
                     ),
                     WriteAction::Patch(a) => tools.apply_patch(
                         &a.path,
                         &a.patch,
                         &a.expected_version,
+                        &bound_target,
                         Some(&worker_flag),
                     ),
                 }

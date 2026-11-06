@@ -114,7 +114,7 @@ impl Store for MemoryStore {
                             return Err(failure("run not found"));
                         }
                     }
-                    StoreChange::Event(_) => {}
+                    StoreChange::ApprovalRequested(_) | StoreChange::Event(_) => {}
                 }
                 next.changes.push(change.clone());
             }

@@ -122,6 +122,7 @@ fn setup(root: &Path) -> Result<(Policy, Operation), Box<dyn std::error::Error>>
         argv: vec![exe.to_string_lossy().into_owned(), "hello".into()],
         cwd: root.to_path_buf(),
         timeout: Duration::from_secs(5),
+        environment_digest: "test-environment".into(),
     })?;
     Ok((policy, operation))
 }

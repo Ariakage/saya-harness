@@ -4,6 +4,7 @@
 //! and boundaries plus a volatile store. The loop prototype is test-only; no
 //! production agent loop or permission enforcement is provided.
 
+pub mod approvals;
 pub mod boundary;
 pub mod contract;
 
