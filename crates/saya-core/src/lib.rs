@@ -2,12 +2,13 @@
 //!
 //! These development-stage interfaces are not a stable SDK. They define data
 //! and boundaries plus a volatile store and a permission-checked local tool
-//! dispatcher and reusable run coordinator. Provider protocols, durable storage,
+//! dispatcher, provider adapters and reusable run coordinator. Durable storage,
 //! CLI task execution, and the stable SDK are not yet implemented.
 
 pub mod approvals;
 pub mod background;
 pub mod boundary;
+pub mod config;
 pub mod contract;
 pub mod dispatch;
 

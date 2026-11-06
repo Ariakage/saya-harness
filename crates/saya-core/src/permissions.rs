@@ -53,7 +53,7 @@ enum Effect {
     Ask,
     Deny,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RuleConfig {
     effect: Effect,
@@ -63,7 +63,7 @@ struct RuleConfig {
     args_prefix: Option<Vec<String>>,
 }
 /// TOML permission fragment. Unknown fields and unsupported rules are errors.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionConfig {
     #[serde(default)]
