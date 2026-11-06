@@ -10,6 +10,7 @@ use crate::{
     review::{ReviewConfig, ReviewInput, SharedBudget, review_operation},
     tools::{
         exec::{ExecGate, ExecPlan, resolve_executable},
+        read::ReadGate,
         write::WriteGate,
     },
 };
@@ -701,6 +702,23 @@ impl WriteGate for OneShotPermit {
     ) -> Result<bool, BoundaryError> {
         let op = Operation::file(&context.workspace, &call.name, normalized_target)?;
         self.check(call, context, &op)
+    }
+    fn finish(&self) -> Result<(), BoundaryError> {
+        self.end()
+    }
+}
+impl ReadGate for OneShotPermit {
+    fn authorize(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        target: &Path,
+    ) -> Result<bool, BoundaryError> {
+        self.check(
+            call,
+            context,
+            &Operation::file(&context.workspace, &call.name, target)?,
+        )
     }
     fn finish(&self) -> Result<(), BoundaryError> {
         self.end()

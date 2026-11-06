@@ -6,6 +6,7 @@ use crate::{
     contract::{BoundaryError, ErrorInfo, PermissionMode, ToolCall, WorkMode},
     tools::{
         exec::{ExecGate, ExecPlan},
+        read::ReadGate,
         write::WriteGate,
     },
 };
@@ -471,6 +472,16 @@ impl WriteGate for PolicyGate {
             .evaluate(context.run.work_mode, context.run.permissions, &operation)
             .decision
             == Decision::Allow)
+    }
+}
+impl ReadGate for PolicyGate {
+    fn authorize(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        normalized_target: &Path,
+    ) -> Result<bool, BoundaryError> {
+        WriteGate::authorize(self, call, context, normalized_target)
     }
 }
 impl ExecGate for PolicyGate {

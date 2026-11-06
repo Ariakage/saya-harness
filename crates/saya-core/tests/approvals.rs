@@ -1243,8 +1243,20 @@ async fn mode_permission_matrix_drives_real_read_and_write_adapters()
                 policy.evaluate(mode, permissions, &read_op).decision,
                 Decision::Allow
             );
+            let read_permit = match manager
+                .authorize(
+                    input(&read_op, &read, &context, true),
+                    &deny_model(),
+                    &SharedBudget::default(),
+                    &config(),
+                )
+                .await?
+            {
+                Authorization::Permit(permit) => permit,
+                _ => return Err("read should be allowed".into()),
+            };
             assert!(
-                ReadTool::new(files.clone(), ReadToolKind::ReadFile)
+                ReadTool::with_gate(files.clone(), ReadToolKind::ReadFile, read_permit)
                     .execute(&read, &context, &Signal::default())
                     .await?
                     .ok
@@ -1346,5 +1358,134 @@ async fn changing_context_alone_cannot_elevate_permission_mode()
             .await?,
         Authorization::Permit(_)
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_gate_enforces_ask_one_shot_and_explicit_deny()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        permissions::PolicyGate,
+        tools::read::{ReadTool, ReadToolKind},
+    };
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("secret.txt"), "private")?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let rules = "[[rules]]\neffect='ask'\ntool='read_file'";
+    let manager = manager(
+        policy(temp.path(), rules)?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        &run,
+        Preauthorizations::default(),
+        Arc::new(Signal::default()),
+    )?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let call = ToolCall {
+        call_id: "read".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path":"secret.txt", "start_line":1,"line_count":1})
+            .to_string(),
+    };
+    let op = Operation::file(temp.path(), "read_file", Path::new("secret.txt"))?;
+    let request = match manager
+        .authorize(
+            input(&op, &call, &context, true),
+            &deny_model(),
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await?
+    {
+        Authorization::Pending(request) => request,
+        _ => return Err("expected read confirmation".into()),
+    };
+    let permit = match manager.resolve(&request.approval_id, true)? {
+        Authorization::Permit(permit) => permit,
+        _ => return Err("expected read permit".into()),
+    };
+    let tool = ReadTool::with_gate(files.clone(), ReadToolKind::ReadFile, permit);
+    assert!(tool.execute(&call, &context, &Signal::default()).await?.ok);
+    let second = tool.execute(&call, &context, &Signal::default()).await?;
+    assert_eq!(
+        second.error.as_ref().map(|e| e.code.as_str()),
+        Some("permission_denied")
+    );
+    let deny = Arc::new(PolicyGate::new(policy(
+        temp.path(),
+        "[[rules]]\neffect='deny'\ntool='read_file'",
+    )?));
+    let tool = ReadTool::with_gate(files, ReadToolKind::ReadFile, deny);
+    let blocked = tool.execute(&call, &context, &Signal::default()).await?;
+    assert_eq!(
+        blocked.error.as_ref().map(|e| e.code.as_str()),
+        Some("permission_denied")
+    );
+    assert!(blocked.data.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn read_permit_rejects_a_retargeted_symlink() -> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::tools::read::{ReadTool, ReadToolKind};
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("a.txt"), "allowed")?;
+    std::fs::write(temp.path().join("b.txt"), "secret")?;
+    std::os::unix::fs::symlink("a.txt", temp.path().join("link.txt"))?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Auto);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let manager = manager(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        &run,
+        Preauthorizations::default(),
+        Arc::new(Signal::default()),
+    )?;
+    let call = ToolCall {
+        call_id: "read".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path":"link.txt", "start_line":1,"line_count":1})
+            .to_string(),
+    };
+    let op = Operation::file(temp.path(), "read_file", Path::new("link.txt"))?;
+    let permit = match manager
+        .authorize(
+            input(&op, &call, &context, true),
+            &deny_model(),
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await?
+    {
+        Authorization::Permit(permit) => permit,
+        _ => return Err("expected permit".into()),
+    };
+    std::fs::remove_file(temp.path().join("link.txt"))?;
+    std::os::unix::fs::symlink("b.txt", temp.path().join("link.txt"))?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let tool = ReadTool::with_gate(files, ReadToolKind::ReadFile, permit);
+    let blocked = tool.execute(&call, &context, &Signal::default()).await?;
+    assert_eq!(
+        blocked.error.as_ref().map(|e| e.code.as_str()),
+        Some("permission_denied")
+    );
+    assert!(blocked.data.is_none());
     Ok(())
 }

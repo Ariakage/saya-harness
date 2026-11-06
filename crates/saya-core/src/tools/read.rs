@@ -631,10 +631,47 @@ pub enum ReadToolKind {
 pub struct ReadTool {
     files: std::sync::Arc<ReadTools>,
     kind: ReadToolKind,
+    gate: Option<std::sync::Arc<dyn ReadGate>>,
+}
+/// Permission gate for a normalized read target. A dispatch integration must
+/// supply a gate rather than treating root checks as a permission decision.
+pub trait ReadGate: Send + Sync {
+    fn authorize(
+        &self,
+        call: &crate::contract::ToolCall,
+        context: &crate::boundary::ToolContext,
+        target: &Path,
+    ) -> Result<bool, crate::contract::BoundaryError>;
+    fn finish(&self) -> Result<(), crate::contract::BoundaryError> {
+        Ok(())
+    }
+}
+struct ReadLease<'a>(&'a dyn ReadGate);
+impl Drop for ReadLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.finish();
+    }
 }
 impl ReadTool {
+    /// Low-level adapter; the caller must enforce permissions before dispatch.
     pub fn new(files: std::sync::Arc<ReadTools>, kind: ReadToolKind) -> Self {
-        Self { files, kind }
+        Self {
+            files,
+            kind,
+            gate: None,
+        }
+    }
+    /// Create a gated adapter. The gate is checked twice immediately before I/O.
+    pub fn with_gate(
+        files: std::sync::Arc<ReadTools>,
+        kind: ReadToolKind,
+        gate: std::sync::Arc<dyn ReadGate>,
+    ) -> Self {
+        Self {
+            files,
+            kind,
+            gate: Some(gate),
+        }
     }
 }
 impl ReadTool {
@@ -666,6 +703,35 @@ impl ReadTool {
             fn value<T: Serialize>(v: T) -> Result<serde_json::Value, ReadError> {
                 serde_json::to_value(v).map_err(|e| err("serialization_error", e.to_string()))
             }
+            let _lease;
+            let mut normalized_call;
+            let call = if let Some(gate) = &self.gate {
+                let mut arguments: serde_json::Value = parse(&call.arguments)?;
+                let path = arguments
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| err("invalid_args", "path must be a string"))?;
+                let (target, _, _) = self.files.resolve(Path::new(path))?;
+                _lease = ReadLease(gate.as_ref());
+                for _ in 0..2 {
+                    if !gate
+                        .authorize(call, context, &target)
+                        .map_err(|e| err("permission_error", e.0.message))?
+                    {
+                        return Err(err(
+                            "permission_denied",
+                            "read authorization denied or stale",
+                        ));
+                    }
+                }
+                arguments["path"] = serde_json::to_value(&target)
+                    .map_err(|e| err("invalid_path", e.to_string()))?;
+                normalized_call = call.clone();
+                normalized_call.arguments = arguments.to_string();
+                &normalized_call
+            } else {
+                call
+            };
             match self.kind {
                 ReadToolKind::ReadFile => {
                     let a: ReadArgs = parse(&call.arguments)?;
@@ -811,6 +877,7 @@ impl crate::boundary::Tool for ReadTool {
             let adapter = ReadTool {
                 files: self.files.clone(),
                 kind: self.kind,
+                gate: self.gate.clone(),
             };
             let call = call.clone();
             let context = context.clone();
