@@ -1489,3 +1489,213 @@ async fn read_permit_rejects_a_retargeted_symlink() -> Result<(), Box<dyn std::e
     assert!(blocked.data.is_none());
     Ok(())
 }
+
+async fn dispatch_call(
+    dispatch: &saya_core::dispatch::ToolDispatcher,
+    call: &ToolCall,
+    context: &ToolContext,
+    should_ask: bool,
+) -> Result<saya_core::contract::ToolResult, Box<dyn std::error::Error>> {
+    let auth = dispatch
+        .authorize(
+            call,
+            context,
+            "test task",
+            true,
+            saya_core::dispatch::DispatchReview {
+                model: &deny_model(),
+                budget: &SharedBudget::default(),
+                config: &config(),
+            },
+        )
+        .await?;
+    let permit = match auth {
+        Authorization::Permit(p) if !should_ask => p,
+        Authorization::Pending(request) if should_ask => {
+            match dispatch.resolve(&request.approval_id, true)? {
+                Authorization::Permit(p) => p,
+                _ => return Err("expected approved permit".into()),
+            }
+        }
+        _ => return Err("unexpected authorization".into()),
+    };
+    Ok(dispatch.execute(call, context, permit).await?)
+}
+
+#[tokio::test]
+async fn dispatcher_integrates_all_seven_tools_and_confirmation()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::dispatch::ToolDispatcher;
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("source.txt"), "old\n")?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let version = files.read_file(Path::new("source.txt"), 1, 1)?.version;
+    let dispatch = ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store.clone(),
+        ApprovalSetup {
+            run_id: run.id,
+            session_id: run.session_id,
+            initial_permissions: run.permissions,
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            cancellation: Arc::new(Signal::default()),
+        },
+        files,
+        ExecConfig::default(),
+    )?;
+    for (id, name, args) in [
+        (
+            "r",
+            "read_file",
+            serde_json::json!({"path":"source.txt","start_line":1,"line_count":1}),
+        ),
+        ("l", "list_dir", serde_json::json!({"path":"."})),
+        (
+            "f",
+            "find_files",
+            serde_json::json!({"path":".","glob":"*.txt"}),
+        ),
+        (
+            "s",
+            "search_text",
+            serde_json::json!({"path":".","pattern":"old"}),
+        ),
+    ] {
+        let call = ToolCall {
+            call_id: id.into(),
+            name: name.into(),
+            arguments: args.to_string(),
+        };
+        assert!(
+            dispatch_call(&dispatch, &call, &context, false).await?.ok,
+            "{name}"
+        );
+    }
+    let write = write_call("w", "new file");
+    assert!(dispatch_call(&dispatch, &write, &context, true).await?.ok);
+    let patch = ToolCall { call_id: "p".into(), name: "apply_patch".into(), arguments: serde_json::json!({"path":"source.txt", "patch":"--- a/source.txt\n+++ b/source.txt\n@@ -1 +1 @@\n-old\n+new\n", "expected_version":version}).to_string() };
+    assert!(dispatch_call(&dispatch, &patch, &context, true).await?.ok);
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("source.txt"))?,
+        "new\n"
+    );
+    let command = ToolCall {
+        call_id: "x".into(),
+        name: "exec".into(),
+        arguments: serde_json::json!({"argv":["/bin/echo","ok"]}).to_string(),
+    };
+    let result = dispatch_call(&dispatch, &command, &context, true).await?;
+    assert!(result.ok);
+    assert_eq!(
+        result
+            .data
+            .as_ref()
+            .and_then(|v| v.get("stdout"))
+            .and_then(|v| v.as_str()),
+        Some("ok\n")
+    );
+    let history = store
+        .load_session(session.id)
+        .await?
+        .ok_or("missing session")?
+        .history;
+    assert_eq!(history.len(), 7);
+    Ok(())
+}
+
+#[tokio::test]
+async fn dispatcher_rejects_foreign_permit_and_noninteractive_never_executes()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::dispatch::ToolDispatcher;
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Review);
+    let store = store_for(&session, &run).await?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let modes = ModeController::new(WorkMode::Work);
+    let revision = PermissionRevision::new(modes.clone(), run.permissions);
+    let setup = || ApprovalSetup {
+        run_id: run.id,
+        session_id: run.session_id,
+        initial_permissions: run.permissions,
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        cancellation: Arc::new(Signal::default()),
+    };
+    let first = ToolDispatcher::new(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        revision.clone(),
+        store.clone(),
+        setup(),
+        files.clone(),
+        ExecConfig::default(),
+    )?;
+    let second = ToolDispatcher::new(
+        policy(temp.path(), "[[rules]]\neffect='deny'\ntool='write_file'")?,
+        modes,
+        revision,
+        store,
+        setup(),
+        files,
+        ExecConfig::default(),
+    )?;
+    let call = write_call("unattended", "should not exist");
+    let auth = first
+        .authorize(
+            &call,
+            &context,
+            "task",
+            false,
+            saya_core::dispatch::DispatchReview {
+                model: &deny_model(),
+                budget: &SharedBudget::default(),
+                config: &config(),
+            },
+        )
+        .await?;
+    let request = match auth {
+        Authorization::NeedsConfirmation(request) => request,
+        _ => return Err("expected needs confirmation".into()),
+    };
+    assert!(!temp.path().join("out.txt").exists());
+    let permit = match first.resolve(&request.approval_id, true)? {
+        Authorization::Permit(p) => p,
+        _ => return Err("expected permit".into()),
+    };
+    let result = second.execute(&call, &context, permit).await;
+    assert!(
+        matches!(result, Err(BoundaryError(ErrorInfo { code, .. }, _, _)) if code == "permission_denied")
+    );
+    assert!(!temp.path().join("out.txt").exists());
+    let denied = second
+        .authorize(
+            &call,
+            &context,
+            "task",
+            true,
+            saya_core::dispatch::DispatchReview {
+                model: &deny_model(),
+                budget: &SharedBudget::default(),
+                config: &config(),
+            },
+        )
+        .await?;
+    assert!(matches!(denied, Authorization::Denied(_)));
+    Ok(())
+}

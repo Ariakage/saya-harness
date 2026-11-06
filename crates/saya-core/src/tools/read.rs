@@ -712,17 +712,24 @@ impl ReadTool {
                     .and_then(serde_json::Value::as_str)
                     .ok_or_else(|| err("invalid_args", "path must be a string"))?;
                 let (target, _, _) = self.files.resolve(Path::new(path))?;
+                if !gate
+                    .authorize(call, context, &target)
+                    .map_err(|e| err("permission_error", e.0.message))?
+                {
+                    return Err(err(
+                        "permission_denied",
+                        "read authorization denied or stale",
+                    ));
+                }
                 _lease = ReadLease(gate.as_ref());
-                for _ in 0..2 {
-                    if !gate
-                        .authorize(call, context, &target)
-                        .map_err(|e| err("permission_error", e.0.message))?
-                    {
-                        return Err(err(
-                            "permission_denied",
-                            "read authorization denied or stale",
-                        ));
-                    }
+                if !gate
+                    .authorize(call, context, &target)
+                    .map_err(|e| err("permission_error", e.0.message))?
+                {
+                    return Err(err(
+                        "permission_denied",
+                        "read authorization denied or stale",
+                    ));
                 }
                 arguments["path"] = serde_json::to_value(&target)
                     .map_err(|e| err("invalid_path", e.to_string()))?;

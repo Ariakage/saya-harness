@@ -259,6 +259,9 @@ pub struct ApprovalManager {
     authorize_lock: tokio::sync::Mutex<()>,
 }
 impl ApprovalManager {
+    pub(crate) fn owns_permit(&self, permit: &OneShotPermit) -> bool {
+        Arc::ptr_eq(&self.state, &permit.state)
+    }
     pub fn new(
         policy: Arc<Policy>,
         modes: ModeController,
