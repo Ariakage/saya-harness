@@ -12,6 +12,12 @@ saya --permissions manual run --interactive --stdin < task.txt
 saya chat
 ```
 
+系统提示词在每次模型请求时注入系统时钟采样（UTC、本地时间及当时的 UTC 偏移）、宿主操作系统和架构、工作区及当前工作／权限模式。时钟可能随请求耗时变旧；不会推断用户地理位置或提供独立 `date` 工具。项目指令和 Skill 仍以带来源的数据提供。
+
+可通过 `--preferences-file PATH` 和 `--memory-file PATH` 显式向本次调用提供用户偏好及长期记忆文本，例如 `saya --preferences-file prefs.md --memory-file memory.md run 'Continue'`。各文件必须为 UTF-8、最多 64 KiB；内容会发送给所选模型，包含已配置凭据时拒绝发送。Saya 不自动发现、维护或保存这些文件，内容属于低信任上下文，不能授予权限。
+
+对明确支持 Anthropic Messages `cache_control` 的服务，可用 `--anthropic-prompt-cache` 在静态系统提示词末尾设置 5 分钟 ephemeral 缓存断点；兼容服务默认不启用此标记。OpenAI 格式和 DeepSeek 使用服务端自动前缀缓存，不发送 Anthropic 专用字段。缓存命中取决于厂商、模型、最小 token 阈值、请求顺序和缓存可用性，不能保证命中或节省费用。动态时间之后的内容不能复用为跨请求静态前缀。
+
 三种单次输入方式互斥，没有隐式读取 stdin。`--interactive` 通过控制终端逐次确认工具调用，并回答 `ask_user` 澄清；无法打开控制终端时按非交互处理。非交互场景需要确认时返回退出码 3，需要澄清时显示问题并返回退出码 4。也可传入 `--approval-file PATH`；命令预授权在持久化前不会启用命令执行。
 
 `saya` 和 `saya chat` 启动连续对话；没有默认 profile 时可在终端选择已配置的 profile。交互命令为 `/mode`、`/permissions`、`/status`、`/cancel`、`/help`、`/exit`；使用 `//` 输入以 `/` 开头的普通文本。工作模式可在运行中请求切换，权限模式仅能在空闲时修改。第一次 Ctrl-C 取消当前运行并返回提示符；再次按 Ctrl-C 可强制退出，空闲时 Ctrl-C 退出。

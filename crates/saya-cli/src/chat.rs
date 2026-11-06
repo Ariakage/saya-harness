@@ -287,7 +287,11 @@ fn help(console: &mut Console) -> io::Result<()> {
     console.print("/mode [plan|build|code|work]  /permissions [auto|bypass|manual]\n/status  /cancel  /help  /exit\nUse // to send text beginning with /.\n")
 }
 /// Start a terminal-only, in-memory session. Worktree mutations remain disabled.
-pub async fn chat(mut config: Config) -> Result<u8, Box<dyn std::error::Error>> {
+pub async fn chat(
+    mut config: Config,
+    personal_context: PersonalContext,
+    anthropic_prompt_cache: bool,
+) -> Result<u8, Box<dyn std::error::Error>> {
     if config.output != Output::Text {
         return Err("chat requires text output".into());
     }
@@ -574,6 +578,8 @@ pub async fn chat(mut config: Config) -> Result<u8, Box<dyn std::error::Error>> 
                     confirmation: Some(ui.clone()),
                     input: Some(ui.clone()),
                     approvals: Preauthorizations::default(),
+                    personal_context: personal_context.clone(),
+                    anthropic_prompt_cache,
                 };
                 let (mut runtime, streamed) = match build_runtime(&config, &current, &text, launch)
                 {

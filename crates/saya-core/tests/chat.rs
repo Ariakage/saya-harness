@@ -67,6 +67,7 @@ fn request() -> ModelRequest {
         purpose: ModelPurpose::Execution,
         profile: "test".into(),
         instructions: "be helpful".into(),
+        dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![HistoryItem::UserText("hi".into())],
         tools: vec![],
@@ -357,8 +358,19 @@ async fn chat_adapter_drives_runtime_tool_loop() -> Result<(), Box<dyn std::erro
             .history,
         session.history
     );
-    let _first = requests.recv_timeout(Duration::from_secs(1))?;
+    let first = requests.recv_timeout(Duration::from_secs(1))?;
     let second = requests.recv_timeout(Duration::from_secs(1))?;
+    let first_system = first["messages"][0]["content"]
+        .as_str()
+        .ok_or("missing system")?;
+    let second_system = second["messages"][0]["content"]
+        .as_str()
+        .ok_or("missing system")?;
+    assert_eq!(
+        first_system.split("# Dynamic request context").next(),
+        second_system.split("# Dynamic request context").next()
+    );
+    assert!(second_system.contains("\"captured_at\""));
     assert!(
         second["messages"]
             .as_array()

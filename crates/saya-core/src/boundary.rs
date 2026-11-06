@@ -29,10 +29,22 @@ pub struct ModelRequest {
     pub purpose: ModelPurpose,
     pub profile: String,
     pub instructions: String,
+    /// Per-request system suffix. Keep it after reusable static instructions.
+    pub dynamic_instructions: Option<String>,
     /// Provider output token limit; `None` uses the execution profile.
     pub max_output_tokens: Option<u32>,
     pub history: Vec<HistoryItem>,
     pub tools: Vec<ToolDefinition>,
+}
+impl ModelRequest {
+    /// Combine system instructions for providers without content-block support.
+    pub fn combined_instructions(&self) -> String {
+        let mut text = self.instructions.clone();
+        if let Some(suffix) = &self.dynamic_instructions {
+            text.push_str(suffix);
+        }
+        text
+    }
 }
 
 /// Model-facing tool declaration; execution must still validate arguments.

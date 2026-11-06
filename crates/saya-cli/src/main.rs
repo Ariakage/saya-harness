@@ -22,7 +22,7 @@ use saya_core::{
         transport::{Authentication, HttpConfig, HttpTransport},
     },
     review::ReviewConfig,
-    runtime::{AgentRuntime, ApprovalHandler, RuntimeLimits, RuntimeSetup},
+    runtime::{AgentRuntime, ApprovalHandler, PersonalContext, RuntimeLimits, RuntimeSetup},
     tools::{
         exec::ExecConfig,
         read::{ReadLimits, ReadTools},
@@ -56,6 +56,15 @@ struct Cli {
     data_dir: Option<PathBuf>,
     #[arg(long, global = true, value_enum)]
     output: Option<OutputOption>,
+    /// Explicitly provide user preferences for this invocation.
+    #[arg(long, global = true)]
+    preferences_file: Option<PathBuf>,
+    /// Explicitly provide long-term memory for this invocation.
+    #[arg(long, global = true)]
+    memory_file: Option<PathBuf>,
+    /// Enable Anthropic ephemeral prompt caching on endpoints that support it.
+    #[arg(long, global = true)]
+    anthropic_prompt_cache: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -308,7 +317,12 @@ impl InputHandler for Terminal {
         })
     }
 }
-fn model(config: &Config, name: &str, p: &Profile) -> Result<Arc<dyn Model>, BoundaryError> {
+fn model(
+    config: &Config,
+    name: &str,
+    p: &Profile,
+    anthropic_prompt_cache: bool,
+) -> Result<Arc<dyn Model>, BoundaryError> {
     let auth = match p.auth {
         Auth::None => Authentication::None,
         Auth::Bearer => Authentication::Bearer(
@@ -355,15 +369,18 @@ fn model(config: &Config, name: &str, p: &Profile) -> Result<Arc<dyn Model>, Bou
                 omit_reasoning_include: p.omit_reasoning_include,
             },
         )),
-        Protocol::AnthropicMessages => Arc::new(AnthropicModel::new(
-            t,
-            settings,
-            if p.api_version == "2023-06-01" {
-                AnthropicVersion::V20230601
-            } else {
-                AnthropicVersion::V20261021
-            },
-        )),
+        Protocol::AnthropicMessages => Arc::new(
+            AnthropicModel::new(
+                t,
+                settings,
+                if p.api_version == "2023-06-01" {
+                    AnthropicVersion::V20230601
+                } else {
+                    AnthropicVersion::V20261021
+                },
+            )
+            .with_prompt_cache(anthropic_prompt_cache),
+        ),
     })
 }
 struct PrintModel(Arc<dyn Model>);
@@ -418,6 +435,50 @@ struct Launch {
     confirmation: Option<Arc<dyn ApprovalHandler>>,
     input: Option<Arc<dyn InputHandler>>,
     approvals: Preauthorizations,
+    personal_context: PersonalContext,
+    anthropic_prompt_cache: bool,
+}
+fn personal_context(
+    cli: &Cli,
+    config: &Config,
+) -> Result<PersonalContext, Box<dyn std::error::Error>> {
+    fn read(
+        path: &Option<PathBuf>,
+        secrets: &[String],
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let Some(path) = path else { return Ok(None) };
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|_| "cannot open personal context file")?;
+        if !file.metadata()?.is_file() {
+            return Err("personal context must be a regular file".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(65_537).read_to_end(&mut bytes)?;
+        if bytes.len() > 65_536 {
+            return Err("personal context file exceeds 64 KiB".into());
+        }
+        let content = String::from_utf8(bytes).map_err(|_| "personal context must be UTF-8")?;
+        if secrets
+            .iter()
+            .any(|secret| !secret.is_empty() && content.contains(secret))
+        {
+            return Err("personal context contains a configured secret".into());
+        }
+        Ok(Some(content))
+    }
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PersonalContext {
+        preferences: read(&cli.preferences_file, &secrets)?,
+        memory: read(&cli.memory_file, &secrets)?,
+    })
 }
 fn new_session(config: &Config) -> Result<Session, Box<dyn std::error::Error>> {
     let profile = config.profile.as_ref().ok_or("no profile selected")?;
@@ -454,7 +515,17 @@ fn build_runtime(
     let models = config
         .profiles
         .iter()
-        .map(|(name, p)| Ok((name.clone(), model(config, name, p)?)))
+        .map(|(name, p)| {
+            Ok((
+                name.clone(),
+                model(
+                    config,
+                    name,
+                    p,
+                    launch.anthropic_prompt_cache && name == profile,
+                )?,
+            ))
+        })
         .collect::<Result<BTreeMap<_, _>, BoundaryError>>()?;
     let router = Arc::new(ProfileRouter::new(profile.clone(), models)?);
     let streamed = selected.stream;
@@ -534,6 +605,7 @@ fn build_runtime(
     if let Some(input) = launch.input {
         runtime = runtime.with_input_handler(input);
     }
+    runtime = runtime.with_personal_context(launch.personal_context);
     Ok((runtime, streamed))
 }
 fn report_result(result: &saya_core::contract::RunResult, session: &Session, streamed: bool) -> u8 {
@@ -576,6 +648,8 @@ async fn run(
     config: Config,
     args: &RunArgs,
     text: String,
+    personal_context: PersonalContext,
+    anthropic_prompt_cache: bool,
 ) -> Result<u8, Box<dyn std::error::Error>> {
     if config.output != Output::Text {
         return Err("JSON and JSONL output are not available until P6".into());
@@ -624,6 +698,8 @@ async fn run(
             confirmation,
             input,
             approvals,
+            personal_context,
+            anthropic_prompt_cache,
         },
     )?;
     match runtime.run(&mut session).await {
@@ -668,9 +744,14 @@ async fn main() -> std::process::ExitCode {
                 .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
             {
                 Err(e) => fail(e),
-                Ok(c) => match run(c, args, text).await {
-                    Ok(code) => code,
+                Ok(c) => match personal_context(&cli, &c) {
                     Err(e) => fail(e),
+                    Ok(personal) => {
+                        match run(c, args, text, personal, cli.anthropic_prompt_cache).await {
+                            Ok(code) => code,
+                            Err(e) => fail(e),
+                        }
+                    }
                 },
             },
         },
@@ -679,9 +760,14 @@ async fn main() -> std::process::ExitCode {
             .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
         {
             Err(e) => fail(e),
-            Ok(config) => match chat::chat(config).await {
-                Ok(code) => code,
+            Ok(config) => match personal_context(&cli, &config) {
                 Err(e) => fail(e),
+                Ok(personal) => {
+                    match chat::chat(config, personal, cli.anthropic_prompt_cache).await {
+                        Ok(code) => code,
+                        Err(e) => fail(e),
+                    }
+                }
             },
         },
     };

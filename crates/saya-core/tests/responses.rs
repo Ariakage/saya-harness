@@ -66,6 +66,7 @@ fn request() -> ModelRequest {
         purpose: ModelPurpose::Execution,
         profile: "test".into(),
         instructions: "be helpful".into(),
+        dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![HistoryItem::UserText("hi".into())],
         tools: vec![],
@@ -431,8 +432,15 @@ async fn responses_adapter_drives_runtime_and_replays_tool_result()
             .history,
         session.history
     );
-    let _ = requests.recv_timeout(Duration::from_secs(1))?;
+    let first = requests.recv_timeout(Duration::from_secs(1))?;
     let next = requests.recv_timeout(Duration::from_secs(1))?;
+    let first_system = first["instructions"].as_str().ok_or("missing system")?;
+    let next_system = next["instructions"].as_str().ok_or("missing system")?;
+    assert_eq!(
+        first_system.split("# Dynamic request context").next(),
+        next_system.split("# Dynamic request context").next()
+    );
+    assert!(next_system.contains("\"captured_at\""));
     let input = next["input"].as_array().ok_or("missing input")?;
     assert!(input.contains(&raw));
     assert!(

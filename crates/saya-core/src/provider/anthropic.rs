@@ -8,10 +8,13 @@ use crate::{
     contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BLOCKS: usize = 256;
@@ -34,6 +37,8 @@ pub struct AnthropicModel {
     transport: Arc<HttpTransport>,
     settings: ModelSettings,
     version: AnthropicVersion,
+    prompt_cache: bool,
+    warmups: Mutex<BTreeMap<String, Arc<AsyncMutex<Option<Instant>>>>>,
 }
 impl AnthropicModel {
     pub fn new(
@@ -45,12 +50,48 @@ impl AnthropicModel {
             transport,
             settings,
             version,
+            prompt_cache: false,
+            warmups: Mutex::new(BTreeMap::new()),
         }
+    }
+    /// Enable Anthropic ephemeral caching when the endpoint explicitly supports it.
+    pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
+        self.prompt_cache = enabled;
+        self
+    }
+    fn warmup_slot(&self, body: &Value) -> Option<Arc<AsyncMutex<Option<Instant>>>> {
+        let key = json!({"tools":body.get("tools"),"static_system":body["system"][0]["text"]})
+            .to_string();
+        let key: String = Sha256::digest(key.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let mut slots = self.warmups.lock().ok()?;
+        if !slots.contains_key(&key) && slots.len() >= 128 {
+            slots.retain(|_, slot| Arc::strong_count(slot) > 1);
+            if slots.len() >= 128 {
+                return None;
+            }
+        }
+        Some(
+            slots
+                .entry(key)
+                .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
+                .clone(),
+        )
     }
     fn request_body(&self, request: &ModelRequest) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
         let messages = history(&request.history)?;
-        let mut body = json!({"model":self.settings.model,"system":request.instructions,"messages":messages,"max_tokens":output,"stream":self.settings.stream});
+        let system = if self.prompt_cache
+            && request.purpose == crate::contract::ModelPurpose::Execution
+            && request.dynamic_instructions.is_some()
+        {
+            json!([{"type":"text","text":request.instructions,"cache_control":{"type":"ephemeral"}},{"type":"text","text":request.dynamic_instructions}])
+        } else {
+            json!(request.combined_instructions())
+        };
+        let mut body = json!({"model":self.settings.model,"system":system,"messages":messages,"max_tokens":output,"stream":self.settings.stream});
         let map = body
             .as_object_mut()
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;
@@ -82,24 +123,62 @@ impl Model for AnthropicModel {
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
             let body = self.request_body(request)?;
+            let mut warmup = if body["system"].is_array() {
+                if let Some(slot) = self.warmup_slot(&body) {
+                    let guard = tokio::select! { biased; () = cancel.cancelled() => return Err(failure("cancelled", "request cancelled")), guard = slot.lock_owned() => guard };
+                    if guard.is_some_and(|at| at.elapsed() < Duration::from_secs(240)) {
+                        None
+                    } else {
+                        Some(guard)
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let response = self
                 .transport
                 .post("messages", &body, Some(self.version.header()), cancel)
                 .await?;
             if self.settings.stream {
-                Ok(Box::new(AnthropicStream {
+                let stream = AnthropicStream {
                     events: response.events()?,
                     state: StreamState::default(),
                     finished: false,
+                };
+                Ok(Box::new(WarmStream {
+                    inner: stream,
+                    warmup,
                 }) as Box<dyn ModelStream>)
             } else {
                 let value = response.json(cancel).await?;
                 let (items, usage) = parse_message(&value)?;
+                if let Some(mut guard) = warmup.take() {
+                    *guard = Some(Instant::now());
+                }
                 Ok(
                     Box::new(Ready(Some(ModelUpdate::Finished { items, usage })))
                         as Box<dyn ModelStream>,
                 )
             }
+        })
+    }
+}
+struct WarmStream {
+    inner: AnthropicStream,
+    warmup: Option<OwnedMutexGuard<Option<Instant>>>,
+}
+impl ModelStream for WarmStream {
+    fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
+        Box::pin(async move {
+            let result = self.inner.next(cancel).await;
+            if let Some(mut guard) = self.warmup.take()
+                && matches!(result, Ok(Some(_)))
+            {
+                *guard = Some(Instant::now());
+            }
+            result
         })
     }
 }

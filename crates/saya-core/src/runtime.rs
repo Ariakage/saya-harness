@@ -196,10 +196,18 @@ pub struct AgentRuntime {
     confirmation: Option<Arc<dyn ApprovalHandler>>,
     input: Option<Arc<dyn InputHandler>>,
     project_context: Option<Arc<Mutex<ProjectState>>>,
+    personal_context: PersonalContext,
     limits: RuntimeLimits,
     read_only: bool,
     used: bool,
     started: AtomicBool,
+}
+/// Explicitly supplied personal information, included as lower-trust request
+/// data. It is neither discovered automatically nor saved by the runtime.
+#[derive(Clone, Default)]
+pub struct PersonalContext {
+    pub preferences: Option<String>,
+    pub memory: Option<String>,
 }
 struct ProjectState {
     loader: ProjectContext,
@@ -331,6 +339,7 @@ impl AgentRuntime {
             confirmation: setup.confirmation,
             input: None,
             project_context: None,
+            personal_context: PersonalContext::default(),
             limits,
             read_only,
             used: false,
@@ -346,6 +355,11 @@ impl AgentRuntime {
     /// Install a UI clarification handler before starting this single-use run.
     pub fn with_input_handler(mut self, handler: Arc<dyn InputHandler>) -> Self {
         self.input = Some(handler);
+        self
+    }
+    /// Attach explicitly supplied preferences and memory for this run only.
+    pub fn with_personal_context(mut self, context: PersonalContext) -> Self {
+        self.personal_context = context;
         self
     }
     /// Supply scoped project context as untrusted data for each model request.
@@ -461,6 +475,13 @@ impl AgentRuntime {
                         .instructions;
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
+                let dynamic_instructions = Some(crate::prompt::system_context(
+                    session,
+                    &run,
+                    self.project_context.is_some(),
+                    self.personal_context.preferences.is_some(),
+                    self.personal_context.memory.is_some(),
+                )?);
                 let mut history = vec![crate::prompt::runtime_context(session, &run)?];
                 if let Some(state) = &self.project_context {
                     let mut state = state.lock().map_err(|_| {
@@ -472,12 +493,18 @@ impl AgentRuntime {
                         serde_json::json!({"saya_project_context_v1": snapshot}).to_string(),
                     ));
                 }
+                if self.personal_context.preferences.is_some()
+                    || self.personal_context.memory.is_some()
+                {
+                    history.push(HistoryItem::UserText(serde_json::json!({"saya_personal_context_v1": {"preferences": self.personal_context.preferences, "memory": self.personal_context.memory}}).to_string()));
+                }
                 history.extend(session.history.iter().cloned());
                 Ok::<_, BoundaryError>(ModelRequest {
                     request_id: uuid::Uuid::now_v7().to_string(),
                     purpose: ModelPurpose::Execution,
                     profile: session.profile.clone(),
                     instructions,
+                    dynamic_instructions,
                     max_output_tokens: None,
                     history,
                     tools,

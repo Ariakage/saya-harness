@@ -51,6 +51,100 @@ fn read_call() -> String {
 }
 
 #[test]
+fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("AGENTS.md"), "PROJECT_CONVENTION").unwrap();
+    let preferences = temp.path().join("prefs.txt");
+    let memory = temp.path().join("memory.txt");
+    fs::write(&preferences, "PREF_CONTENT").unwrap();
+    fs::write(&memory, "MEMORY_CONTENT").unwrap();
+    let (url, requests) = fixture::server(vec![(
+        "application/json",
+        response(json!({"role":"assistant","content":"ok"}), "stop"),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let result = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .arg("--preferences-file")
+        .arg(preferences)
+        .arg("--memory-file")
+        .arg(memory)
+        .args(["run", "hello"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let messages = request["messages"].as_array().unwrap();
+    let system = messages[0]["content"].as_str().unwrap();
+    assert!(system.contains("# Dynamic request context"));
+    let facts: serde_json::Value = serde_json::from_str(system.lines().last().unwrap()).unwrap();
+    assert_eq!(facts["host"]["os"], std::env::consts::OS);
+    assert_eq!(facts["host"]["architecture"], std::env::consts::ARCH);
+    assert!(facts["captured_at"]["utc"].as_str().unwrap().ends_with('Z'));
+    assert!(facts["captured_at"]["utc_offset_seconds"].is_number());
+    assert_eq!(facts["project_context_available"], true);
+    assert_eq!(facts["user_preferences_supplied"], true);
+    assert_eq!(facts["long_term_memory_supplied"], true);
+    assert!(!system.contains("PROJECT_CONVENTION"));
+    assert!(!system.contains("PREF_CONTENT"));
+    assert!(!system.contains("MEMORY_CONTENT"));
+    let serialized = request.to_string();
+    assert!(serialized.contains("PROJECT_CONVENTION"));
+    assert!(serialized.contains("PREF_CONTENT"));
+    assert!(serialized.contains("MEMORY_CONTENT"));
+}
+
+#[test]
+fn oversized_personal_context_is_rejected_before_model_call() {
+    let temp = TempDir::new().unwrap();
+    let memory = temp.path().join("memory.txt");
+    fs::write(&memory, vec![b'x'; 65_537]).unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
+    let result = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .arg("--memory-file")
+        .arg(memory)
+        .args(["run", "hello"])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("exceeds 64 KiB"));
+}
+
+#[test]
+fn personal_context_containing_configured_credential_is_rejected() {
+    let temp = TempDir::new().unwrap();
+    let memory = temp.path().join("memory.txt");
+    fs::write(&memory, "fake-test-key-in-memory").unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
+    let content = fs::read_to_string(&cfg).unwrap().replace(
+        "auth = \"none\"",
+        "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
+    );
+    fs::write(&cfg, content).unwrap();
+    let result = command(temp.path())
+        .env("TEST_KEY", "fake-test-key-in-memory")
+        .arg("--config")
+        .arg(cfg)
+        .arg("--memory-file")
+        .arg(memory)
+        .args(["run", "hello"])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("contains a configured secret"));
+    assert!(!stderr.contains("fake-test-key-in-memory"));
+}
+
+#[test]
 fn config_init_never_overwrites_and_check_accepts_empty_template() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("config.toml");

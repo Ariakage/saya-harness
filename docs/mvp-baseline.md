@@ -65,6 +65,7 @@
 | `saya config init`／`check` | 显式建立无密钥配置模板，或验证配置；已有配置不覆盖 |
 
 - 运行入口参数为 `--config`、`--profile`、`--mode plan|build|code|work`、`--permissions auto|bypass|manual`、`--cwd`、`--data-dir`、`--output text|json|jsonl`。`--approval-file` 仅用于 run，`--accept-config-change` 仅用于恢复既有会话。`bypass` 和 `manual` 分别是已确认权限名称的 CLI 写法；历史序列化值 `review` 可读取为 `manual`。
+- D-034 增加本次调用显式个人上下文文件 `--preferences-file`、`--memory-file`，以及兼容端点的可选 `--anthropic-prompt-cache`；实际行为、数据边界与缓存限制见[CLI 预览](cli-preview.md)和[提示词文档](prompts.md)。
 - `run` 可用位置参数、`--prompt-file PATH` 或 `--stdin` 提供任务，三者互斥。没有输入或输入为空时报错；不暗中读取管道输入。
 - 默认 text 输出；交互文本实时流式展示。JSON 与 JSONL 用于单次运行和会话查询，不把 REPL 的连续输入混入一个 JSON 结果。
 - REPL 控制命令为 `/mode`、`/permissions`、`/status`、`/cancel`、`/help`、`/exit`；以 `//` 开头表示普通文本中的 `/`。工作模式可在运行中请求切换，权限模式只在运行空闲时修改。
@@ -355,6 +356,7 @@ error 为 null 或 `{ "code": "稳定标识", "message": "可读说明" }`；art
 - D-030 定制提示词正文使用英文，不固定用户沟通语言；遵循用户明确语言偏好，否则跟随当前请求。提示词版本、装配和来源取舍见[提示词定制](prompts.md)。
 
 - 运行时提示词由核心约束、当前工作模式、用户任务和适用项目说明组成；工具结果单独作为工具数据，不拼进高优先级指令。
+- 按 D-034，每次模型请求向静态系统前缀后追加当前时钟、宿主和工作区等描述性事实；用户显式提供的偏好和记忆与项目文件一样作为有来源的低信任上下文，不构成权限。静态前缀与动态后缀分离，并按协议提供缓存优化。
 - 按 D-033，默认读取用户主目录 `~/.agents/AGENTS.md`、`~/.saya/AGENTS.md` 以及工作区根 `AGENTS.md`、`.agents/AGENTS.md`、`.saya/AGENTS.md` 中存在的约定指令；操作子路径时继续适用从工作区根至该路径的 `AGENTS.md`，按由外到内提供上下文。不扫描工作区外的任意父目录或其他项目。
 - 发现用户主目录和工作区中 `.agents/skills/*/SKILL.md`、`.saya/skills/*/SKILL.md` 的 Skill 元数据；同名时工作区优先于用户级，同一作用域 `.saya` 优先于 `.agents`。发现只提供能力线索，不自动执行或安装 Skill、脚本或插件。Skill 正文按需处理，具体实现与权限接线见 DEV-021；完整安装与插件生命周期仍属 F-03。
 - 工作区指令在冲突时优先于用户级指令；它们均是项目上下文，不能覆盖用户明确要求或运行时硬限制，也不能切换工作模式、权限模式、服务地址或自动授予许可。记录指令来源路径与哈希；文件变更在下一次调用前重新读取。

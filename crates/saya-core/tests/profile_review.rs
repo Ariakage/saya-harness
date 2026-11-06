@@ -208,6 +208,7 @@ async fn missing_review_profile_falls_back_and_execution_switch_is_rejected()
         purpose: ModelPurpose::Execution,
         profile: "other".into(),
         instructions: String::new(),
+        dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![],
         tools: vec![],

@@ -49,7 +49,7 @@ impl ChatModel {
 
     fn request_body(&self, request: &ModelRequest) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let messages = chat_history(&request.instructions, &request.history)?;
+        let messages = chat_history(&request.combined_instructions(), &request.history)?;
         let mut body = json!({"model":self.settings.model, "messages":messages, "store":false, "stream":self.settings.stream});
         let map = body
             .as_object_mut()

@@ -67,6 +67,7 @@ fn request() -> ModelRequest {
         purpose: ModelPurpose::Execution,
         profile: "test".into(),
         instructions: "be helpful".into(),
+        dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![HistoryItem::UserText("hi".into())],
         tools: vec![],
@@ -132,6 +133,120 @@ async fn collect(
             None => return Err("missing completion".into()),
         }
     }
+}
+
+#[tokio::test]
+async fn explicit_cache_breakpoint_precedes_dynamic_context_and_is_opt_in()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut events = vec![
+        start(),
+        block_start(0, json!({"type":"text","text":"ok"})),
+        block_stop(0),
+    ];
+    events.extend(stop("end_turn"));
+    let body = sse(&events);
+    let (url, requests) = fixture::server(vec![
+        ("text/event-stream", body.clone()),
+        ("text/event-stream", body.clone()),
+        ("text/event-stream", body),
+    ])?;
+    let transport = transport(url)?;
+    let model = AnthropicModel::new(
+        transport.clone(),
+        settings(true),
+        AnthropicVersion::default(),
+    )
+    .with_prompt_cache(true);
+    let mut req = request();
+    req.dynamic_instructions = Some("dynamic one".into());
+    collect(&model, &req).await?;
+    req.dynamic_instructions = Some("dynamic two".into());
+    collect(&model, &req).await?;
+    let fallback = AnthropicModel::new(transport, settings(true), AnthropicVersion::default());
+    collect(&fallback, &req).await?;
+    let first = requests.recv_timeout(Duration::from_secs(1))?;
+    let second = requests.recv_timeout(Duration::from_secs(1))?;
+    let third = requests.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(first["system"][0], second["system"][0]);
+    assert_eq!(first["system"][0]["cache_control"]["type"], "ephemeral");
+    assert_eq!(first["system"][1]["text"], "dynamic one");
+    assert_eq!(second["system"][1]["text"], "dynamic two");
+    assert!(second["system"][1].get("cache_control").is_none());
+    assert_eq!(third["system"], "be helpfuldynamic two");
+    assert!(third.get("cache_control").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_cold_prefix_waits_for_first_stream_event()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut events = vec![
+        start(),
+        block_start(0, json!({"type":"text","text":"ok"})),
+        block_stop(0),
+    ];
+    events.extend(stop("end_turn"));
+    let body = sse(&events);
+    let (url, requests) = fixture::server(vec![
+        ("text/event-stream", body.clone()),
+        ("text/event-stream", body),
+    ])?;
+    let model = Arc::new(
+        AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default())
+            .with_prompt_cache(true),
+    );
+    let mut req = request();
+    req.dynamic_instructions = Some("time one".into());
+    let mut first = model.start(&req, &Never).await?;
+    let _ = requests.recv_timeout(Duration::from_secs(1))?;
+    req.dynamic_instructions = Some("time two".into());
+    let other = model.clone();
+    let mut second = tokio::spawn(async move { other.start(&req, &Never).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut second)
+            .await
+            .is_err()
+    );
+    assert!(requests.try_recv().is_err());
+    assert!(matches!(
+        first.next(&Never).await?,
+        Some(ModelUpdate::Progress)
+    ));
+    let _stream = tokio::time::timeout(Duration::from_secs(2), &mut second).await???;
+    let _ = requests.recv_timeout(Duration::from_secs(1))?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_cold_stream_releases_waiting_request() -> Result<(), Box<dyn std::error::Error>> {
+    let mut events = vec![
+        start(),
+        block_start(0, json!({"type":"text","text":"ok"})),
+        block_stop(0),
+    ];
+    events.extend(stop("end_turn"));
+    let body = sse(&events);
+    let (url, _) = fixture::server(vec![
+        ("text/event-stream", body.clone()),
+        ("text/event-stream", body),
+    ])?;
+    let model = Arc::new(
+        AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default())
+            .with_prompt_cache(true),
+    );
+    let mut req = request();
+    req.dynamic_instructions = Some("time".into());
+    let first = model.start(&req, &Never).await?;
+    let other = model.clone();
+    let mut second = tokio::spawn(async move { other.start(&req, &Never).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut second)
+            .await
+            .is_err()
+    );
+    drop(first);
+    let _stream = tokio::time::timeout(Duration::from_secs(2), &mut second).await???;
+    Ok(())
 }
 #[tokio::test]
 async fn both_versions_stream_text_without_sampling_parameters()

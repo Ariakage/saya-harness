@@ -250,6 +250,7 @@ async fn model_turn(
             purpose: ModelPurpose::Execution,
             profile: session.profile.clone(),
             instructions: prompt.instructions,
+            dynamic_instructions: None,
             max_output_tokens: None,
             history,
             tools: available_tools,

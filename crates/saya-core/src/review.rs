@@ -325,6 +325,7 @@ pub async fn review_operation(
             purpose: ModelPurpose::Review,
             profile: profile.clone(),
             instructions: instructions.into(),
+            dynamic_instructions: None,
             max_output_tokens: Some(config.max_output_tokens),
             history: vec![HistoryItem::UserText(data.to_string())],
             tools: vec![],

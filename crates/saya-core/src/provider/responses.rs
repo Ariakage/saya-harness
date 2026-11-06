@@ -41,7 +41,7 @@ impl ResponsesModel {
     fn request_body(&self, request: &ModelRequest) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
         let input = history(&request.history)?;
-        let mut body = json!({"model":self.settings.model,"instructions":request.instructions,"input":input,"store":false,"stream":self.settings.stream,"max_output_tokens":output});
+        let mut body = json!({"model":self.settings.model,"instructions":request.combined_instructions(),"input":input,"store":false,"stream":self.settings.stream,"max_output_tokens":output});
         let map = body
             .as_object_mut()
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;

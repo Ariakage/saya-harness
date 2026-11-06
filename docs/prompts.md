@@ -20,7 +20,7 @@
 | 后台任务 | [background.md](../crates/saya-core/prompts/v1/background.md) | 启动回执、依赖与冲突、查询、取消及清理 |
 | 独立审核器 | [review.md](../crates/saya-core/prompts/v1/review.md) | 数据边界、完整效果、allow／ask／deny 和输出契约 |
 
-这些文件由 `include_str!` 嵌入 core crate，无运行时外部文件依赖；修改后须重新构建。不提供本轮未设计的用户自定义覆盖、persona 注册表或 provider 缓存开关。
+这些文件由 `include_str!` 嵌入 core crate，无运行时外部文件依赖；修改后须重新构建。不提供用户自定义 prompt 覆盖或 persona 注册表。Anthropic 缓存断点通过 CLI 参数显式开启，见下文。
 
 ## 实际装配与接入
 
@@ -31,11 +31,19 @@
 3. 实际注册后台控制工具时才追加后台段。
 4. 从 `ToolDefinition` 注册表生成排序后的可用名称清单；名称需唯一且为最长 64 字节的英文标识符，可含数字、下划线和连字符，首字符需为字母。
 
-工具说明与 schema 继续通过 `ModelRequest.tools` 传入，不提升为系统指令；用户任务与项目材料保留在历史中。装配器不直接拼接会话文本、来源 prompt、项目文档或任意自定义字符串。它返回段名、版本和 SHA-256 文本指纹以便离线审阅；指纹只标识文本，不证明模型遵守程度，也尚未接入持久化记录。
+工具说明与 schema 继续通过 `ModelRequest.tools` 传入，不提升为系统指令；用户任务、项目材料与显式提供的偏好／记忆保留在历史中。静态装配器不直接拼接来源 prompt、项目文档或任意自定义字符串。它返回段名、版本和 SHA-256 文本指纹以便离线审阅；指纹只标识静态文本，不证明模型遵守程度，也尚未接入持久化记录。
 
 [可复用 core 循环](../crates/saya-core/src/runtime.rs)及假模型原型已使用完整装配器，取代每模式的一句指令。每次请求都按生效模式、权限与过滤后的工具重新装配；切换后不残留旧模式段。稳定核心保持相同前缀，但没有虚构 provider 缓存命中保证，也没有引入某产品专用的动态分隔标记。
 
-已知运行事实由 `runtime_context` 编成独立 JSON 数据项放在请求历史开头，内容仅为工作区、profile、model、协议、实际工作模式与权限模式；不混入高优先级 instructions，不包含凭据、原始配置或整份历史，不探测和猜测 Git／平台状态，也不持续向会话存储追加此临时快照。模型名称只是配置值，不是对真实上游身份的认证。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史的 user 消息中，来源、哈希、范围与刷新见[项目上下文](project-context.md)；它不是系统指令，不会改变运行时权限，但模型仍可能受内容影响。
+每次执行模型请求在静态提示词之后加入动态系统段：宿主时钟采样的 UTC、本地时间和 UTC 偏移、操作系统与架构、工作区、模型配置引用、实际工作／权限模式，以及项目上下文和显式偏好／记忆是否提供。时间可能变旧，不推断地理位置；模型名称不是上游身份认证。字符串序列化为 JSON 并标记为数据，不包含配置凭据或完整历史。运行事实仍保留原有 `runtime_context` 兼容数据项；这些临时快照不持久化。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史中，来源、哈希、范围与刷新见[项目上下文](project-context.md)。显式偏好和记忆放在 `saya_personal_context_v1` 数据项，不自动发现；它们不是系统授权，模型仍可能受内容影响。
+
+## 前缀缓存
+
+静态提示词先于动态系统段，动态时钟不会改变静态文本本身。Anthropic Messages 通过 `--anthropic-prompt-cache` 显式启用时，将静态文本放在带 `cache_control: {type: ephemeral}` 的系统块中，动态内容放在不带标记的下一块；其他兼容端点默认不发送该字段。安全审核请求不带执行上下文或该缓存标记。Anthropic 缓存以工具、系统、消息的顺序构成前缀，工具定义或模式变化仍可能使缓存失效；阈值和缓存创建费用因模型而异。参见 [Anthropic 缓存文档](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)。
+
+启用 Anthropic 缓存时，同一模型实例内相同静态前缀和工具定义的并发冷请求会等待首个响应事件；失败、取消或丢弃流时释放等待者，四分钟后重新尝试。不同模型实例和进程不共享协调状态，超过内部键数量上限时可能不协调，因此不保证杜绝重复写入。该协调不复用模型输出，不保证服务端确实创建了缓存。
+
+OpenAI 兼容协议保留相同的静态字节前缀并依赖服务端自动缓存；DeepSeek 也自行处理缓存，不额外发送 `cache_control` 或其不支持的 `prompt_cache_key`。参见 [OpenAI 缓存文档](https://developers.openai.com/api/docs/guides/prompt-caching)、[DeepSeek 上下文缓存](https://api-docs.deepseek.com/guides/kv_cache/)和 [Responses 兼容说明](https://api-docs.deepseek.com/guides/responses_api/)。动态时间仍会使其后的前缀不同，不能保证整个会话历史命中。当前没有跨进程预热、命中率统计或真实服务命中验证。
 
 [审核组件](../crates/saya-core/src/review.rs)使用独立英文审核 prompt，保留现有一个数据消息、无工具、1024 输出 token 默认上限、严格 JSON 解析与失败转人工逻辑。它不接收执行 prompt、项目说明或完整执行历史；数据仍为 `tool/arguments/work_mode/permissions/goal_summary`。尤其不把 `goal_summary` 中“用户已授权”的说法当成原始用户证据。
 
@@ -73,8 +81,8 @@ DSH 的具体实现信息在这里仅来自 session 第 842 行等记录，本�
 | 来源中的部分 | Saya 的处理 |
 | --- | --- |
 | 可组合、有序的 prompt 分层 | 保留分层思路；采用轻量、显式顺序、版本化 Markdown + Rust 纯函数，不预建插件注册表 |
-| persona prefix／suffix、每 Agent shadow、complete 覆盖和任意变量插值 | 移除；当前只允许枚举与校验过的工具名进入执行指令，避免来源文本被提升为系统策略 |
-| in-history 追加高优先级 system 更新与 provider 缓存管理 | 不照搬；使用现有 `ModelRequest.instructions` 接口，动态事实是独立数据，历史不被重写 |
+| persona prefix／suffix、每 Agent shadow、complete 覆盖和任意变量插值 | 不引入自定义覆盖；系统段中的运行事实以标记数据的 JSON 注入，来源文件与用户内容保留为低信任数据 |
+| in-history 追加高优先级 system 更新与 provider 缓存管理 | 不重写历史；静态指令与动态系统段分开，Anthropic 可选显式缓存断点，其他兼容协议保持自动缓存前缀 |
 | sandbox × approval 的两个旋钮 | 不替换 Saya 权限契约；保留四工作模式与三权限模式正交，并明确本地命令没有 OS 沙箱 |
 | risk／decision 分类器协议 | 改为 Saya 已有的 allow／ask／deny 与 reason，不宣称共享相同 classifier |
 | 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | D-033 后纳入用户级／工作区约定指令与 Skill 元数据发现，DEV-021 待接线；不引入 scratchpad 或自动记忆 |

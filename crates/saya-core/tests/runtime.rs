@@ -194,6 +194,45 @@ async fn model_tool_loop_returns_results_and_persists_once()
     assert!(seen[0].instructions.contains("# Work mode: WORK"));
     Ok(())
 }
+
+#[tokio::test]
+async fn personal_context_is_request_only_and_not_stored_as_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![vec![HistoryItem::AssistantText(
+        "done".into(),
+    )]]));
+    let store = Arc::new(MemoryStore::default());
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        store.clone(),
+        Arc::new(NoCancel),
+    )?
+    .with_personal_context(saya_core::runtime::PersonalContext {
+        preferences: Some("TEST_PREFERENCES".into()),
+        memory: Some("TEST_MEMORY".into()),
+    });
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    {
+        let seen = model.seen.lock().map_err(|_| "lock")?;
+        let dynamic = seen[0]
+            .dynamic_instructions
+            .as_ref()
+            .ok_or("missing dynamic context")?;
+        assert!(dynamic.contains("\"long_term_memory_supplied\":true"));
+        assert!(!dynamic.contains("TEST_MEMORY"));
+        assert!(serde_json::to_string(&seen[0].history)?.contains("TEST_MEMORY"));
+    }
+    let saved = store.load_session(session.id).await?.ok_or("missing")?;
+    assert!(!serde_json::to_string(&saved.history)?.contains("TEST_MEMORY"));
+    Ok(())
+}
 #[tokio::test]
 async fn malformed_write_is_paired_and_model_can_continue() -> Result<(), Box<dyn std::error::Error>>
 {

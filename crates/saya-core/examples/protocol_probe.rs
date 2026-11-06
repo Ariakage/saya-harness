@@ -97,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         purpose: ModelPurpose::Execution,
         profile: "probe".into(),
         instructions: "Follow the user request. Use the named tool when explicitly asked.".into(),
+        dynamic_instructions: None,
         max_output_tokens: Some(128),
         history: vec![HistoryItem::UserText("Reply with OK.".into())],
         tools: vec![],
