@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库已有固定 Rust 1.99.1 的最小 workspace、`saya-core` 与 `saya-cli`；核心契约与模式状态机已在普通构建提供，假模型循环、控制逻辑及模式接线仅在测试构建中实现；真实 Agent 循环和 CLI 产品功能尚未实现。CI 在此前提交上已通过四平台验证，当前未提交改动仅有本机检查记录。`saya` 当前仅输出未实现提示并以非零状态退出。实际验证见[开发进度](progress.md)。
+仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具。CLI 当前提供[只读单次运行开发预览](cli-preview.md)；交互会话、持久化和真实工作区副作用仍未完成。CI 在此前提交上已通过四平台验证，当前证据见[开发进度](progress.md)。
 
 ## 开发流程
 
@@ -38,19 +38,19 @@ cargo build --workspace --release --locked
 
 GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner：Ubuntu 22.04 x86_64／aarch64（`ubuntu-22.04`／`ubuntu-22.04-arm`），macOS 15 aarch64／x86_64（`macos-15`／`macos-15-intel`）；macOS 构建设置最低部署版本 13.0。runner 的可用性和 CI 结果须以实际运行记录为准，发布前仍需验证最低运行环境。
 
-核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 目前仅作为测试依赖运行异步替身。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
+核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 用于运行时、异步 HTTP、工具与 CLI。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
 
 CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明；未构建或未 smoke 验证的产物不标记已支持。
 
 ## 只读工具开发状态
 
-`crates/saya-core/src/tools/read.rs` 提供只读文件／目录与搜索 API、`Tool` 适配器和可配置上限。它使用 cap-std 根目录句柄、ignore／globset、regex、sha2 及 Tokio 阻塞线程池；具体版本见 Cargo.lock。搜索读取 `.gitignore` 时同样受路径根约束。工具执行前仍需由后续调度和权限层授权，当前尚未接入 CLI 或持久化运行时。根检查不限制子进程，也不等同于操作系统沙箱。
+`crates/saya-core/src/tools/read.rs` 提供只读文件／目录与搜索 API、`Tool` 适配器和可配置上限。它使用 cap-std 根目录句柄、ignore／globset、regex、sha2 及 Tokio 阻塞线程池；具体版本见 Cargo.lock。搜索读取 `.gitignore` 时同样受路径根约束。工具执行前由调度和权限层授权，已接入只读 CLI 预览；持久化尚未接入。根检查不限制子进程，也不等同于操作系统沙箱。
 
 `crates/saya-core/src/tools/write.rs` 实现受授权钩子保护的单文件写入与统一补丁，使用 diffy 校验单文件补丁，要求执行前记录意图。现阶段内存存储仅供受控测试；真实工作区副作用必须等后续持久化和权限调度接入。版本检查在替换前执行；现有文件的检查与替换之间不具备对任意外部并发写入的原子比较交换保证。
 
 `crates/saya-core/src/tools/exec.rs` 提供直接 argv 进程适配器，依赖 Tokio process 与 nix 信号；仅在受控测试中与内存存储配合使用。命令启动前仍需完整权限和持久化调度。进程组清理并不构成文件系统、网络或主动脱离进程组的后代隔离。
 
-`crates/saya-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。`crates/saya-core/src/review.rs` 已提供与模型替身验证的独立核查组件；真实模型协议及单次许可仍待接入，调用者需共享运行预算并在派发前重查。
+`crates/saya-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。`crates/saya-core/src/review.rs` 已提供与模型替身验证的独立核查组件；三协议和单次许可已接入 core，调用者共享运行预算并在派发前重查。
 
 ## 核心验证要求
 

@@ -2,7 +2,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
 
-**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。持久化与 CLI 任务执行仍在后续阶段。**
+**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。CLI 已提供只读单次运行开发预览；持久化、工作区副作用与交互会话仍在后续阶段。**
 
 ## 已确认方向
 
@@ -32,7 +32,7 @@
 3. 工具执行结果返回模型，运行时继续下一轮。
 4. CLI 展示结果并保存会话，后续可列出或恢复；失败、取消或达到运行限制时明确结束。
 
-已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心数据与接口及受控测试循环已实现，真实产品行为尚未实现；完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
+已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时和只读 CLI 开发预览已实现，持久化与完整产品行为尚未完成；完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
 
 ## 文档
 
@@ -48,6 +48,7 @@
 | [运行时接口](docs/runtime.md) | 可复用 Agent 循环、调用边界和验证范围 |
 | [架构设计](docs/architecture.md) | Agent 循环、模块边界与实现约束 |
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
+| [CLI 开发预览](docs/cli-preview.md) | 只读单次运行、配置和当前限制 |
 | [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |
 | [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
 | [MVP 实施路线图](docs/roadmap.md) | 8 个 MVP 里程碑、工作量估算与交付条件 |
@@ -56,7 +57,7 @@
 | [提示词定制](docs/prompts.md) | 英文提示词、模式与审核装配、来源取舍对照和离线预览 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
-需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-006 的模式状态机已在普通构建提供，切换行为已在测试专用原型中验证；可复用 core 循环已在受控测试中完成 P1；真实协议和 CLI 仍属后续阶段。
+需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-006 的模式状态机已在普通构建提供，切换行为已在测试专用原型中验证；可复用 core 循环已在受控测试中完成 P1；真实协议适配已完成受控验证；CLI 仍在开发。
 
 CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
 

@@ -103,6 +103,7 @@ fn loads_selected_file_and_resolves_precedence_without_implicit_project_config()
     assert_eq!(c.data_dir, home.join(".local/share/saya"));
     assert_eq!(c.profiles["chat"].protocol, Protocol::ChatCompletions);
     assert_eq!(c.profiles["chat"].max_output_tokens, 8192);
+    assert!(!c.profiles["chat"].strict_tools);
     assert_eq!(c.review.max_output_tokens, 1024);
     assert_eq!(c.limits.max_model_requests, 10);
     assert_eq!(

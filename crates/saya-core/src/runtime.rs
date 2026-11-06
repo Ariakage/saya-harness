@@ -173,6 +173,7 @@ pub struct AgentRuntime {
     summary: String,
     confirmation: Option<Arc<dyn ApprovalHandler>>,
     limits: RuntimeLimits,
+    read_only: bool,
     used: bool,
     started: AtomicBool,
 }
@@ -207,6 +208,14 @@ impl RuntimeHandle {
 }
 impl AgentRuntime {
     pub fn new(setup: RuntimeSetup) -> Result<Self, BoundaryError> {
+        Self::with_read_only(setup, false)
+    }
+    /// Construct a runtime that cannot dispatch writes or commands, even when
+    /// a model fabricates an unregistered foreground or background tool call.
+    pub fn new_read_only(setup: RuntimeSetup) -> Result<Self, BoundaryError> {
+        Self::with_read_only(setup, true)
+    }
+    fn with_read_only(setup: RuntimeSetup, read_only: bool) -> Result<Self, BoundaryError> {
         let limits = setup.limits;
         if limits.model_requests == 0
             || limits.tool_calls == 0
@@ -225,7 +234,7 @@ impl AgentRuntime {
         let modes = ModeController::new(setup.run.work_mode);
         let permission_revision = PermissionRevision::new(modes.clone(), setup.run.permissions);
         let budget = SharedBudget::new(limits.model_requests, limits.active_time);
-        let dispatcher = Arc::new(ToolDispatcher::new(
+        let dispatcher = ToolDispatcher::new(
             setup.policy,
             modes.clone(),
             permission_revision,
@@ -240,7 +249,12 @@ impl AgentRuntime {
             },
             setup.files,
             setup.exec,
-        )?);
+        )?;
+        let dispatcher = Arc::new(if read_only {
+            dispatcher.restrict_to_read_only()
+        } else {
+            dispatcher
+        });
         let jobs = Arc::new(BackgroundJobs::new(
             dispatcher.clone(),
             limits.background_running,
@@ -268,6 +282,7 @@ impl AgentRuntime {
             summary: setup.summary,
             confirmation: setup.confirmation,
             limits,
+            read_only,
             used: false,
             started: AtomicBool::new(false),
         })
@@ -301,7 +316,12 @@ impl AgentRuntime {
             BackgroundToolKind::Status,
             BackgroundToolKind::Cancel,
         ] {
-            tools.push(self.background.tool(kind).definition());
+            let mut definition = self.background.tool(kind).definition();
+            if self.read_only && matches!(kind, BackgroundToolKind::Start) {
+                definition.input_schema["properties"]["tool"]["enum"] =
+                    serde_json::json!(["read_file", "list_dir", "find_files", "search_text"]);
+            }
+            tools.push(definition);
         }
         tools
     }
@@ -651,6 +671,7 @@ impl AgentRuntime {
                 if matches!(
                     e.0.code.as_str(),
                     "unknown_tool"
+                        | "durability_required"
                         | "invalid_args"
                         | "invalid_path"
                         | "path_denied"

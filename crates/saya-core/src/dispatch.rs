@@ -98,6 +98,7 @@ pub struct ToolDispatcher {
     cancel: Arc<dyn Cancellation>,
     exec_config: ExecConfig,
     modes: ModeController,
+    read_only: bool,
 }
 /// Review dependencies shared with the surrounding execution loop.
 pub struct DispatchReview<'a> {
@@ -117,6 +118,9 @@ impl ToolDispatcher {
             ReadToolKind::SearchText,
         ] {
             definitions.push(ReadTool::new(self.files.clone(), kind).definition());
+        }
+        if self.read_only {
+            return definitions;
         }
         for kind in [WriteToolKind::WriteFile, WriteToolKind::ApplyPatch] {
             definitions.push(
@@ -166,7 +170,13 @@ impl ToolDispatcher {
             cancel,
             exec_config,
             modes,
+            read_only: false,
         })
+    }
+    /// Remove side-effecting operations before exposing a non-durable store.
+    pub(crate) fn restrict_to_read_only(mut self) -> Self {
+        self.read_only = true;
+        self
     }
     pub(crate) fn mode_controller(&self) -> ModeController {
         self.modes.clone()
@@ -191,6 +201,12 @@ impl ToolDispatcher {
         interactive: bool,
         review: DispatchReview<'_>,
     ) -> Result<Authorization, BoundaryError> {
+        if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
+            return Err(failure(
+                "durability_required",
+                "side effects require durable storage",
+            ));
+        }
         let operation = if call.name == "exec" {
             let planner = ExecTool::new(
                 self.files.clone(),
@@ -277,6 +293,12 @@ impl ToolDispatcher {
         cancel: &dyn Cancellation,
         background: bool,
     ) -> Result<ToolResult, BoundaryError> {
+        if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
+            return Err(failure(
+                "durability_required",
+                "side effects require durable storage",
+            ));
+        }
         if !self.manager.owns_permit(&permit) {
             return Err(failure(
                 "permission_denied",

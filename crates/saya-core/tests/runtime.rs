@@ -1314,3 +1314,73 @@ async fn provider_context_and_output_limits_have_distinct_limit_reasons()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn read_only_runtime_blocks_fabricated_foreground_and_background_mutations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    for (name, args) in [
+        (
+            "write_file",
+            serde_json::json!({"path":"forbidden","content":"x","expected_version":null}),
+        ),
+        (
+            "exec",
+            serde_json::json!({"argv":["/usr/bin/touch",temp.path().join("forbidden").to_str().ok_or("path")?]}),
+        ),
+        (
+            "background_start",
+            serde_json::json!({"tool":"write_file","arguments":{"path":"forbidden","content":"x","expected_version":null}}),
+        ),
+    ] {
+        let (mut session, run) = fixture(temp.path(), PermissionMode::Bypass);
+        let model = Arc::new(FakeModel::new(vec![
+            vec![call("bad", name, args)],
+            vec![HistoryItem::AssistantText("done".into())],
+        ]));
+        let policy = Arc::new(Policy::new(temp.path(), PermissionConfig::default())?);
+        let files = Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            true,
+            ReadLimits::default(),
+        )?);
+        let mut runtime = AgentRuntime::new_read_only(RuntimeSetup {
+            run,
+            model: model.clone(),
+            store: Arc::new(MemoryStore::default()),
+            policy,
+            files,
+            cancellation: Arc::new(NoCancel),
+            review: ReviewConfig::new("fake".into()),
+            exec: ExecConfig::default(),
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            summary: "task".into(),
+            confirmation: None,
+            limits: RuntimeLimits::default(),
+        })?;
+        let _ = runtime.run(&mut session).await?;
+        assert!(
+            !temp.path().join("forbidden").exists(),
+            "{name} mutated the workspace"
+        );
+        let seen = model.seen.lock().map_err(|_| "lock")?;
+        assert!(
+            seen[0]
+                .tools
+                .iter()
+                .all(|t| !matches!(t.name.as_str(), "write_file" | "apply_patch" | "exec"))
+        );
+        let background = seen[0]
+            .tools
+            .iter()
+            .find(|t| t.name == "background_start")
+            .ok_or("background missing")?;
+        assert_eq!(
+            background.input_schema["properties"]["tool"]["enum"],
+            serde_json::json!(["read_file", "list_dir", "find_files", "search_text"])
+        );
+    }
+    Ok(())
+}

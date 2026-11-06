@@ -135,7 +135,7 @@ pub struct Profile {
     pub allow_remote_http: bool,
     #[serde(default)]
     pub headers_env: BTreeMap<String, String>,
-    #[serde(default = "yes")]
+    #[serde(default)]
     pub strict_tools: bool,
     #[serde(default = "yes")]
     pub stream: bool,
