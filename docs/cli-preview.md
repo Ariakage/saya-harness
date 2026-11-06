@@ -11,4 +11,4 @@ printf 'Inspect this workspace\n' | saya run --stdin
 saya --permissions manual run --interactive --stdin < task.txt
 ```
 
-三种输入方式互斥，没有隐式读取 stdin。`--interactive` 通过控制终端逐次确认工具调用，无法打开控制终端时按非交互处理；非交互场景需要确认时返回退出码 3。也可传入 `--approval-file PATH`；命令预授权在持久化前不会启用命令执行。默认 text 输出；JSON、JSONL、持久化、恢复和 `chat` REPL 仍未完成。
+三种输入方式互斥，没有隐式读取 stdin。`--interactive` 通过控制终端逐次确认工具调用，并回答 `ask_user` 澄清；无法打开控制终端时按非交互处理。非交互场景需要确认时返回退出码 3，需要澄清时显示问题并返回退出码 4。也可传入 `--approval-file PATH`；命令预授权在持久化前不会启用命令执行。默认 text 输出；JSON、JSONL、持久化、恢复和 `chat` REPL 仍未完成。

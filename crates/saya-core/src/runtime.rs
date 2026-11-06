@@ -12,6 +12,7 @@ use crate::{
         RunResult, RunStatus, SCHEMA_VERSION, Session, ToolCall, ToolResult, WorkMode,
     },
     dispatch::{DispatchReview, ToolDispatcher},
+    input::{InputHandler, InputRequest},
     mode::ModeController,
     permissions::Policy,
     review::{ReviewConfig, SharedBudget},
@@ -172,6 +173,7 @@ pub struct AgentRuntime {
     budget: SharedBudget,
     summary: String,
     confirmation: Option<Arc<dyn ApprovalHandler>>,
+    input: Option<Arc<dyn InputHandler>>,
     limits: RuntimeLimits,
     read_only: bool,
     used: bool,
@@ -281,6 +283,7 @@ impl AgentRuntime {
             budget,
             summary: setup.summary,
             confirmation: setup.confirmation,
+            input: None,
             limits,
             read_only,
             used: false,
@@ -292,6 +295,11 @@ impl AgentRuntime {
             jobs: self.jobs.clone(),
             modes: self.modes.clone(),
         }
+    }
+    /// Install a UI clarification handler before starting this single-use run.
+    pub fn with_input_handler(mut self, handler: Arc<dyn InputHandler>) -> Self {
+        self.input = Some(handler);
+        self
     }
     /// Queue a user-selected mode; PLAN first cancels mutating background jobs.
     pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
@@ -311,6 +319,7 @@ impl AgentRuntime {
                 )
             });
         }
+        tools.push(crate::input::definition());
         for kind in [
             BackgroundToolKind::Start,
             BackgroundToolKind::Status,
@@ -701,6 +710,46 @@ impl AgentRuntime {
         };
         match authorization {
             Authorization::Permit(permit) => {
+                if call.name == "ask_user" {
+                    if !self.dispatcher.owns_permit(&permit) {
+                        return Err(error(
+                            "permission_denied",
+                            "permit belongs to another dispatcher",
+                        ));
+                    }
+                    let request = InputRequest::parse(call)?;
+                    permit.consume_input(call, &context)?;
+                    let answer = if let Some(handler) = &self.input {
+                        self.budget.pause()?;
+                        let result = tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), result = handler.ask(&request, self.cancel.as_ref()) => result };
+                        self.budget.resume()?;
+                        result?
+                    } else {
+                        None
+                    };
+                    let result = match answer {
+                        Some(answer) if !answer.trim().is_empty() && answer.len() <= 65536 => {
+                            ToolResult {
+                                ok: true,
+                                data: Some(serde_json::json!({"answer": answer})),
+                                error: None,
+                                truncated: false,
+                            }
+                        }
+                        _ => ToolResult {
+                            ok: false,
+                            data: Some(
+                                serde_json::json!({"question": request.question, "options": request.options}),
+                            ),
+                            error: Some(ErrorInfo {
+                                code: "needs_input".into(),
+                                message: "user input required".into(),
+                            }),
+                            truncated: false,
+                        },
+                    };
+                    return self.save_local(session, call, result).await;
+                }
                 let cancel = CallCancel::new(self.cancel.clone());
                 let operation = self
                     .dispatcher
@@ -883,6 +932,15 @@ impl AgentRuntime {
                     self.close_calls(session, &calls[index + 1..], false)
                         .await?;
                     return Err(error("needs_confirmation", "confirmation required"));
+                }
+                if result
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == "needs_input")
+                {
+                    self.close_calls(session, &calls[index + 1..], false)
+                        .await?;
+                    return Err(error("needs_input", "user input required"));
                 }
                 let args = serde_json::from_str::<serde_json::Value>(&call.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));

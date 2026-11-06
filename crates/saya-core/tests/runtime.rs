@@ -1384,3 +1384,99 @@ async fn read_only_runtime_blocks_fabricated_foreground_and_background_mutations
     }
     Ok(())
 }
+
+struct AnswerInput {
+    answer: &'static str,
+    delay: std::time::Duration,
+}
+impl saya_core::input::InputHandler for AnswerInput {
+    fn ask<'a>(
+        &'a self,
+        request: &'a saya_core::input::InputRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Option<String>> {
+        Box::pin(async move {
+            assert_eq!(request.question, "Which option?");
+            assert_eq!(request.options, ["one", "two"]);
+            tokio::time::sleep(self.delay).await;
+            Ok(Some(self.answer.into()))
+        })
+    }
+}
+fn ask_call() -> HistoryItem {
+    call(
+        "ask",
+        "ask_user",
+        serde_json::json!({"question":"Which option?","options":["one","two"]}),
+    )
+}
+
+#[tokio::test]
+async fn noninteractive_clarification_preserves_question_and_stops()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![vec![ask_call()]]));
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?;
+    let result = runtime.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::NeedsInput);
+    assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 1);
+    assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="ask" && result.data.as_ref().is_some_and(|v|v["question"]=="Which option?"))));
+    Ok(())
+}
+#[tokio::test(start_paused = true)]
+async fn clarification_answer_returns_to_model_and_human_wait_does_not_consume_active_budget()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![
+        vec![ask_call()],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?
+    .with_input_handler(Arc::new(AnswerInput {
+        answer: "two",
+        delay: std::time::Duration::from_secs(2000),
+    }));
+    let result = runtime.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Completed);
+    let seen = model.seen.lock().map_err(|_| "lock")?;
+    assert!(seen[0].tools.iter().any(|t| t.name == "ask_user"));
+    assert!(seen[1].history.iter().any(|item|matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="ask" && result.data.as_ref().is_some_and(|v|v["answer"]=="two"))));
+    Ok(())
+}
+#[tokio::test]
+async fn manual_mode_requires_approval_even_for_a_clarification()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Manual);
+    let model = Arc::new(FakeModel::new(vec![vec![ask_call()]]));
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model,
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?
+    .with_input_handler(Arc::new(AnswerInput {
+        answer: "two",
+        delay: std::time::Duration::ZERO,
+    }));
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::NeedsConfirmation
+    );
+    Ok(())
+}

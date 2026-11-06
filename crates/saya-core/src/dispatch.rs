@@ -215,6 +215,9 @@ impl ToolDispatcher {
                 self.exec_config.clone(),
             );
             Operation::exec(&planner.plan(call, context)?)?
+        } else if call.name == "ask_user" {
+            crate::input::InputRequest::parse(call)?;
+            Operation::ask_user()
         } else if matches!(
             call.name.as_str(),
             "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"

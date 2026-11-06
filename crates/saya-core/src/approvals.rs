@@ -625,6 +625,17 @@ pub struct OneShotPermit {
     lease_active: AtomicBool,
 }
 impl OneShotPermit {
+    pub(crate) fn consume_input(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<(), BoundaryError> {
+        let operation = Operation::ask_user();
+        if !self.check(call, context, &operation)? || !self.check(call, context, &operation)? {
+            return Err(failure("stale_approval", "input approval is stale"));
+        }
+        self.end()
+    }
     /// Use an exact, one-shot permit around one run-local background control.
     pub(crate) fn with_background_control<T>(
         &self,

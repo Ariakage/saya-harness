@@ -11,6 +11,7 @@ pub mod boundary;
 pub mod config;
 pub mod contract;
 pub mod dispatch;
+pub mod input;
 
 pub mod memory;
 pub mod mode;

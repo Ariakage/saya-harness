@@ -179,8 +179,14 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
     };
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "data").unwrap();
+    let ask_args = json!({"question":"Which option?","options":["one","two"]}).to_string();
+    let ask = response(
+        json!({"role":"assistant","content":null,"tool_calls":[{"id":"ask","type":"function","function":{"name":"ask_user","arguments":ask_args}}]}),
+        "tool_calls",
+    );
     let (url, requests) = fixture::server(vec![
         ("application/json", read_call()),
+        ("application/json", ask),
         (
             "application/json",
             response(json!({"role":"assistant","content":"approved"}), "stop"),
@@ -260,6 +266,46 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
         drop(master);
         panic!("approved operation did not reach the next model request");
     }
+    fn next_prompt(master: &mut fs::File, marker: &str) -> std::io::Result<String> {
+        let mut data = Vec::new();
+        while !String::from_utf8_lossy(&data).contains(marker) {
+            let mut poll = libc::pollfd {
+                fd: master.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: the descriptor is owned by master and the timeout is finite.
+            if unsafe { libc::poll(&mut poll, 1, 5000) } <= 0 {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            let mut buf = [0u8; 1024];
+            let n = master.read(&mut buf)?;
+            if n == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
+            data.extend_from_slice(&buf[..n]);
+        }
+        Ok(String::from_utf8_lossy(&data).into_owned())
+    }
+    let second_prompt = next_prompt(&mut master, "[y/N]").unwrap_or_else(|e| {
+        let _ = child.kill();
+        panic!("ask approval: {e}")
+    });
+    assert!(second_prompt.contains("ask_user"));
+    master.write_all(b"y\n").unwrap();
+    let question = next_prompt(&mut master, "Answer:").unwrap_or_else(|e| {
+        let _ = child.kill();
+        panic!("question: {e}")
+    });
+    assert!(question.contains("Which option?"));
+    master.write_all(b"two\n").unwrap();
+    let third = requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|e| {
+            let _ = child.kill();
+            panic!("answer not returned to model: {e}")
+        });
+    assert!(third.to_string().contains("two"));
     let mut stdout = child.stdout.take().unwrap();
     let mut poll = libc::pollfd {
         fd: stdout.as_raw_fd(),
@@ -312,4 +358,23 @@ fn streamed_text_is_displayed_without_duplicate_final_answer() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "hello world\n");
+}
+
+#[test]
+fn noninteractive_clarification_exits_with_the_question() {
+    let temp = TempDir::new().unwrap();
+    let args = json!({"question":"Which option?","options":["one","two"]}).to_string();
+    let message = json!({"role":"assistant","content":null,"tool_calls":[{"id":"ask","type":"function","function":{"name":"ask_user","arguments":args}}]});
+    let (url, _) =
+        fixture::server(vec![("application/json", response(message, "tool_calls"))]).unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "choose"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Which option?"));
 }

@@ -7,6 +7,7 @@ use saya_core::{
         ApprovalRequest, BoundaryError, HistoryItem, ModelProtocol, ModelPurpose, PermissionMode,
         Run, RunId, RunStatus, Session, SessionId, WorkMode,
     },
+    input::{InputHandler, InputRequest},
     memory::MemoryStore,
     permissions::Policy,
     provider::{
@@ -197,6 +198,17 @@ impl Drop for PollGuard {
         self.0.store(true, std::sync::atomic::Ordering::Release);
     }
 }
+fn safe_terminal_text(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '\u{fffd}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
 impl Terminal {
     fn open() -> io::Result<Self> {
         use std::os::unix::fs::OpenOptionsExt;
@@ -207,6 +219,54 @@ impl Terminal {
             .open("/dev/tty")?;
         Ok(Self(tokio::sync::Mutex::new(file)))
     }
+    async fn read_line(
+        &self,
+        prompt: &str,
+        cancel: &dyn Cancellation,
+    ) -> Result<Option<String>, BoundaryError> {
+        let mut tty = self.0.lock().await;
+        write!(tty, "{prompt}")
+            .map_err(|_| cli_error("terminal_error", "cannot write to controlling terminal"))?;
+        let mut input = tty
+            .try_clone()
+            .map_err(|_| cli_error("terminal_error", "cannot read controlling terminal"))?;
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let _guard = PollGuard(stopped.clone());
+        let mut task = tokio::task::spawn_blocking(move || {
+            use std::{os::fd::AsRawFd, sync::atomic::Ordering};
+            let mut answer = Vec::new();
+            while !stopped.load(Ordering::Acquire) {
+                let mut descriptor = libc::pollfd {
+                    fd: input.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: descriptor is a live pollfd for the owned File; timeout is bounded.
+                let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
+                if ready < 0 {
+                    return None;
+                }
+                if ready == 0 {
+                    continue;
+                }
+                let mut byte = [0u8; 1];
+                match input.read(&mut byte) {
+                    Ok(0) => return None,
+                    Ok(_) if byte[0] == b'\n' => {
+                        return String::from_utf8(answer)
+                            .ok()
+                            .map(|v| v.trim_end_matches('\r').to_owned());
+                    }
+                    Ok(_) if answer.len() < 65536 => answer.push(byte[0]),
+                    Ok(_) => return None,
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                    Err(_) => return None,
+                }
+            }
+            None
+        });
+        tokio::select! { biased; () = cancel.cancelled() => Ok(None), result = &mut task => result.map_err(|_| cli_error("terminal_error", "terminal reader failed")) }
+    }
 }
 impl ApprovalHandler for Terminal {
     fn confirm<'a>(
@@ -215,55 +275,39 @@ impl ApprovalHandler for Terminal {
         cancel: &'a dyn Cancellation,
     ) -> Operation<'a, Option<bool>> {
         Box::pin(async move {
-            let mut tty = self.0.lock().await;
             let args = serde_json::to_string(&request.arguments)
                 .map_err(|_| cli_error("terminal_error", "cannot format approval"))?;
-            write!(tty, "\nApproval required\nTool: {}\nArguments: {}\nWorking directory: {}\nMode: {:?}\nAllow this call? [y/N] ", request.tool, args, request.cwd.display(), request.work_mode)
-                .map_err(|_| cli_error("terminal_error", "cannot write to controlling terminal"))?;
-            let mut input = tty
-                .try_clone()
-                .map_err(|_| cli_error("terminal_error", "cannot read controlling terminal"))?;
-            let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let _guard = PollGuard(stopped.clone());
-            let mut task = tokio::task::spawn_blocking(move || {
-                use std::{os::fd::AsRawFd, sync::atomic::Ordering};
-                let mut answer = Vec::new();
-                while !stopped.load(Ordering::Acquire) {
-                    let mut descriptor = libc::pollfd {
-                        fd: input.as_raw_fd(),
-                        events: libc::POLLIN,
-                        revents: 0,
-                    };
-                    // SAFETY: descriptor is a live pollfd for the owned File; timeout is bounded.
-                    let ready = unsafe { libc::poll(&mut descriptor, 1, 100) };
-                    if ready < 0 {
-                        return None;
-                    }
-                    if ready == 0 {
-                        continue;
-                    }
-                    let mut byte = [0u8; 1];
-                    match input.read(&mut byte) {
-                        Ok(0) => return None,
-                        Ok(_) if byte[0] == b'\n' => {
-                            return Some(matches!(
-                                std::str::from_utf8(&answer)
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_ascii_lowercase()
-                                    .as_str(),
-                                "y" | "yes"
-                            ));
-                        }
-                        Ok(_) if answer.len() < 32 => answer.push(byte[0]),
-                        Ok(_) => return None,
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                        Err(_) => return None,
-                    }
-                }
-                None
-            });
-            tokio::select! { biased; () = cancel.cancelled() => Ok(None), result = &mut task => result.map_err(|_| cli_error("terminal_error", "approval reader failed")) }
+            let prompt = format!(
+                "\nApproval required\nTool: {}\nArguments: {}\nWorking directory: {}\nMode: {:?}\nAllow this call? [y/N] ",
+                safe_terminal_text(&request.tool),
+                args,
+                safe_terminal_text(&request.cwd.to_string_lossy()),
+                request.work_mode
+            );
+            Ok(self
+                .read_line(&prompt, cancel)
+                .await?
+                .map(|answer| matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")))
+        })
+    }
+}
+impl InputHandler for Terminal {
+    fn ask<'a>(
+        &'a self,
+        request: &'a InputRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Option<String>> {
+        Box::pin(async move {
+            let mut prompt = format!("\n{}\n", safe_terminal_text(&request.question));
+            for (index, option) in request.options.iter().enumerate() {
+                prompt.push_str(&format!(
+                    "  {}. {}\n",
+                    index + 1,
+                    safe_terminal_text(option)
+                ));
+            }
+            prompt.push_str("Answer: ");
+            self.read_line(&prompt, cancel).await
         })
     }
 }
@@ -378,9 +422,9 @@ async fn run(
     if config.output != Output::Text {
         return Err("JSON and JSONL output are not available until P6".into());
     }
-    let confirmation: Option<Arc<dyn ApprovalHandler>> = if args.interactive {
+    let terminal = if args.interactive {
         match Terminal::open() {
-            Ok(t) => Some(Arc::new(t) as Arc<dyn ApprovalHandler>),
+            Ok(t) => Some(Arc::new(t)),
             Err(e) => {
                 eprintln!("terminal unavailable: {e}");
                 None
@@ -389,6 +433,9 @@ async fn run(
     } else {
         None
     };
+    let confirmation: Option<Arc<dyn ApprovalHandler>> = terminal
+        .as_ref()
+        .map(|t| t.clone() as Arc<dyn ApprovalHandler>);
     let profile = config
         .profile
         .as_ref()
@@ -503,6 +550,9 @@ async fn run(
         confirmation,
         limits,
     })?;
+    if let Some(terminal) = terminal {
+        runtime = runtime.with_input_handler(terminal);
+    }
     let result = match runtime.run(&mut session).await {
         Ok(result) => result,
         Err(error) => {
@@ -514,6 +564,24 @@ async fn run(
         println!();
     } else if let Some(text) = &result.text {
         println!("{text}");
+    }
+    if result.status == RunStatus::NeedsInput
+        && let Some(question) = session.history.iter().rev().find_map(|item| match item {
+            HistoryItem::ToolResult { result, .. }
+                if result
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == "needs_input") =>
+            {
+                result.data.as_ref()
+            }
+            _ => None,
+        })
+    {
+        eprintln!(
+            "saya: clarification: {}",
+            safe_terminal_text(&question.to_string())
+        );
     }
     if let Some(e) = &result.error {
         eprintln!("saya: {}: {}", e.code, e.message);
