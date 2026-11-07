@@ -67,3 +67,9 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 ## 文档随实现更新
 
 建立 Rust 工程后更新“当前状态”；实现 CLI 后补充真实命令、配置和退出行为；公共接口稳定后再补接口说明。尚未实现或验证的 TUI、GUI 能力继续保留为计划。
+
+## 授权后的发行构建
+
+[Release candidates](../.github/workflows/release-candidates.yml) 由操作者手动触发，在 Ubuntu 22.04 ARM／Intel 和 macOS 15 ARM／Intel 原生构建同一提交。各 job 执行完整 Rust 检查，生成单目标候选压缩包，并对解包程序执行工具、交互和审查回归。Linux 验证实际 glibc 2.35 与符号上限，macOS 验证实际系统主版本 15 和部署目标 15.0。
+
+通过验证的候选、校验和及环境／二进制证据上传为 Actions artifacts，保留 14 天，供已获授权的发行操作下载核验。日常 CI 执行构建与测试。发行操作者汇总四个包的 SHA256SUMS，检查源码和二进制关联，再发布固定提交的 Git 标签与 GitHub Release。发布后的下载文件应与通过验收的包逐字节一致。

@@ -33,6 +33,7 @@ def main():
     parser.add_argument('--source-commit', required=True, help='commit used to build every supplied binary')
     parser.add_argument('--output', required=True, type=Path, help='new candidate directory')
     parser.add_argument('--binary', action='append', required=True, metavar='TARGET=PATH')
+    parser.add_argument('--target', choices=TARGETS, help='package one native target instead of all four')
     args = parser.parse_args()
     try:
         if not re.fullmatch(r'[0-9a-f]{40}', args.source_commit):
@@ -47,17 +48,18 @@ def main():
         license_data = git('show', commit + ':LICENSE')
         readme = git('show', commit + ':README.md')
         binaries = {}
+        targets = (args.target,) if args.target else TARGETS
         for item in args.binary:
             target, separator, path = item.partition('=')
-            if not separator or target not in TARGETS or target in binaries:
-                parser.error('provide each supported target exactly once')
+            if not separator or target not in targets or target in binaries:
+                parser.error('provide each requested target exactly once')
             binaries[target] = Path(path).read_bytes()
-        if set(binaries) != set(TARGETS) or any(not architecture_matches(target, data) for target, data in binaries.items()):
-            parser.error('four matching 64-bit target binaries are required')
+        if set(binaries) != set(targets) or any(not architecture_matches(target, data) for target, data in binaries.items()):
+            parser.error('matching 64-bit binaries are required for every requested target')
         # mkdir refuses to replace a previous candidate or its checksum file.
         args.output.mkdir(parents=True, exist_ok=False)
         checksums = []
-        for target in TARGETS:
+        for target in targets:
             payload = binaries[target]
             name = 'saya-' + version + '-' + target + '.tar.gz'
             info = {'schema_version': 1, 'version': version, 'target': target,
@@ -78,7 +80,7 @@ def main():
                         tar.addfile(header, io.BytesIO(data))
             checksums.append(hashlib.sha256(archive.read_bytes()).hexdigest() + '  ' + name)
         (args.output / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n', encoding='ascii')
-        print('Created four local candidate archives and SHA256SUMS in', args.output)
+        print('Created', len(targets), 'candidate archives and SHA256SUMS in', args.output)
         return 0
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print('Packaging failed:', type(error).__name__)

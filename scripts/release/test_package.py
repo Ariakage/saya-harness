@@ -59,6 +59,32 @@ class CandidatePackageTest(unittest.TestCase):
             self.assertNotEqual(package(invalid).returncode, 0)
             self.assertFalse(invalid.exists())
 
+    def test_single_target_matches_the_same_archive_in_the_full_package(self):
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binaries = {'linux-x86_64': elf(62), 'linux-aarch64': elf(183),
+                        'macos-x86_64': macho(0x01000007), 'macos-aarch64': macho(0x0100000c)}
+            all_args = []
+            for target, data in binaries.items():
+                (root / target).write_bytes(data)
+                all_args += ['--binary', target + '=' + str(root / target)]
+            base = [sys.executable, str(PACKAGE), '--source-commit', commit]
+            subprocess.run(base + ['--output', str(root / 'all'), *all_args], cwd=ROOT,
+                           capture_output=True, check=True)
+            for target in binaries:
+                single = root / ('only-' + target)
+                subprocess.run(base + ['--output', str(single), '--target', target,
+                    '--binary', target + '=' + str(root / target)], cwd=ROOT,
+                    capture_output=True, check=True)
+                archive = next(single.glob('*.tar.gz'))
+                self.assertEqual(archive.read_bytes(), (root / 'all' / archive.name).read_bytes())
+            invalid = root / 'mismatched'
+            result = subprocess.run(base + ['--output', str(invalid), '--target', 'linux-x86_64',
+                '--binary', 'linux-aarch64=' + str(root / 'linux-aarch64')], cwd=ROOT, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(invalid.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
