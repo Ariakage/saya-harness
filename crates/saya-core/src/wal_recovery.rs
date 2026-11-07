@@ -22,7 +22,8 @@ fn fail(code: &str, message: &str) -> BoundaryError {
 }
 fn read_file(
     path: &Path,
-    max_bytes: u64,
+    file_limit: u64,
+    remaining: u64,
     check: &dyn Fn() -> Result<(), BoundaryError>,
 ) -> Result<Vec<u8>, BoundaryError> {
     check()?;
@@ -34,14 +35,20 @@ fn read_file(
     let metadata = file
         .metadata()
         .map_err(|_| fail("storage_error", "cannot inspect stranded database snapshot"))?;
-    if !metadata.is_file() || metadata.len() > max_bytes {
+    if !metadata.is_file() || metadata.len() > file_limit {
         return Err(fail(
             "storage_error",
             "stranded database snapshot is too large or not a regular file",
         ));
     }
+    if metadata.len() > remaining {
+        return Err(fail(
+            "snapshot_limit",
+            "database and WAL exceed snapshot source limit",
+        ));
+    }
     let mut data = Vec::new();
-    let mut input = file.take(max_bytes + 1);
+    let mut input = file.take(file_limit.min(remaining) + 1);
     let mut buffer = [0u8; 65_536];
     loop {
         check()?;
@@ -53,10 +60,16 @@ fn read_file(
         }
         data.extend_from_slice(&buffer[..count]);
     }
-    if data.len() as u64 > max_bytes {
+    if data.len() as u64 > file_limit {
         return Err(fail(
             "storage_error",
             "stranded database snapshot is too large",
+        ));
+    }
+    if data.len() as u64 > remaining {
+        return Err(fail(
+            "snapshot_limit",
+            "database and WAL exceed snapshot source limit",
         ));
     }
     Ok(data)
@@ -220,7 +233,14 @@ fn build_image(
 /// Obtain a stable, checksum-verified in-memory SQLite image. No filesystem
 /// writes or SQLite -shm creation occur, including for interrupted WALs.
 pub(crate) fn snapshot(root: &Path) -> Result<Connection, BoundaryError> {
-    snapshot_checked(root, MAX_SNAPSHOT, Arc::new(|| Ok(())))
+    // Legacy recovery permits each source file to reach the historical limit.
+    snapshot_with_limits(
+        root,
+        MAX_SNAPSHOT,
+        MAX_SNAPSHOT * 2,
+        MAX_SNAPSHOT,
+        Arc::new(|| Ok(())),
+    )
 }
 
 /// Stable source image with cooperative checks during I/O. Supports an empty
@@ -230,34 +250,44 @@ pub(crate) fn snapshot_checked(
     max_bytes: u64,
     check: SnapshotCheck,
 ) -> Result<Connection, BoundaryError> {
+    snapshot_with_limits(root, max_bytes, max_bytes, max_bytes, check)
+}
+fn snapshot_with_limits(
+    root: &Path,
+    file_limit: u64,
+    total_limit: u64,
+    image_limit: u64,
+    check: SnapshotCheck,
+) -> Result<Connection, BoundaryError> {
     let db_path = root.join("sessions.sqlite3");
     let wal_path = root.join("sessions.sqlite3-wal");
-    let wal_bytes = || -> Result<Vec<u8>, BoundaryError> {
+    let wal_bytes = |remaining| -> Result<Vec<u8>, BoundaryError> {
         match std::fs::symlink_metadata(&wal_path) {
-            Ok(_) => read_file(&wal_path, max_bytes, check.as_ref()),
+            Ok(_) => read_file(&wal_path, file_limit, remaining, check.as_ref()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(_) => Err(fail("storage_error", "cannot inspect database WAL")),
         }
     };
     for _ in 0..3 {
         check()?;
-        let db = read_file(&db_path, max_bytes, check.as_ref())?;
-        let wal = wal_bytes()?;
-        if (db.len() as u64).saturating_add(wal.len() as u64) > max_bytes {
-            return Err(fail(
-                "snapshot_limit",
-                "database and WAL exceed snapshot source limit",
-            ));
-        }
+        let db = read_file(&db_path, file_limit, total_limit, check.as_ref())?;
+        let remaining = total_limit.saturating_sub(db.len() as u64);
+        let wal = wal_bytes(remaining)?;
         let db_hash = Sha256::digest(&db);
         let wal_hash = Sha256::digest(&wal);
-        if db_hash != hash_file(&db_path, max_bytes, check.as_ref())?
-            || wal_hash != Sha256::digest(wal_bytes()?)
+        if db_hash != hash_file(&db_path, file_limit.min(total_limit), check.as_ref())?
+            || wal_hash != Sha256::digest(wal_bytes(remaining)?)
         {
             continue;
         }
         let image = if wal.is_empty() {
             let mut db = db;
+            if db.len() as u64 > image_limit {
+                return Err(fail(
+                    "snapshot_limit",
+                    "database image exceeds snapshot source limit",
+                ));
+            }
             if db.len() < 100 || &db[..16] != b"SQLite format 3\0" {
                 return Err(fail("storage_corrupt", "invalid database snapshot header"));
             }
@@ -265,7 +295,7 @@ pub(crate) fn snapshot_checked(
             db[19] = 1;
             db
         } else {
-            build_image(db, &wal, max_bytes, check.as_ref())?
+            build_image(db, &wal, image_limit, check.as_ref())?
         };
         check()?;
         let mut conn = Connection::open_in_memory()
@@ -448,6 +478,72 @@ mod tests {
         assert_eq!(
             error.sqlite_error_code(),
             Some(rusqlite::ErrorCode::OperationInterrupted)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_per_file_limits_and_export_combined_limits_remain_distinct()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let store = SqliteStore::open(temp.path(), vec![])?;
+        let session = Session {
+            id: SessionId::new(),
+            workspace: temp.path().into(),
+            work_mode: WorkMode::Work,
+            profile: "test".into(),
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fake".into(),
+            history: vec![],
+        };
+        store.create_session(&session, "hash").await?;
+        store
+            .commit(&[StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::UserText("bounded fixture".into()),
+            }])
+            .await?;
+        let db = std::fs::read(temp.path().join("sessions.sqlite3"))?;
+        let wal = std::fs::read(temp.path().join("sessions.sqlite3-wal"))?;
+        let image = build_image(db.clone(), &wal, MAX_SNAPSHOT, &|| Ok(()))?;
+        let file_limit = db.len().max(wal.len()).max(image.len()) as u64;
+        let total = (db.len() + wal.len()) as u64;
+        assert!(total > file_limit);
+        assert!(total < 1024 * 1024);
+        let legacy = snapshot_with_limits(
+            temp.path(),
+            file_limit,
+            file_limit * 2,
+            file_limit,
+            Arc::new(|| Ok(())),
+        )?;
+        let stored: String = legacy.query_row(
+            "SELECT item FROM messages WHERE session_id=?1",
+            [session.id.0.to_string()],
+            |r| r.get(0),
+        )?;
+        assert_eq!(
+            serde_json::from_str::<HistoryItem>(&stored)?,
+            HistoryItem::UserText("bounded fixture".into()),
+        );
+        assert_eq!(
+            snapshot_checked(temp.path(), file_limit, Arc::new(|| Ok(())))
+                .unwrap_err()
+                .0
+                .code,
+            "snapshot_limit"
+        );
+        assert_eq!(
+            snapshot_checked(temp.path(), total - 1, Arc::new(|| Ok(())))
+                .unwrap_err()
+                .0
+                .code,
+            "snapshot_limit"
+        );
+        let export = snapshot_checked(temp.path(), total, Arc::new(|| Ok(())))?;
+        assert_eq!(
+            export.query_row("SELECT count(*) FROM messages", [], |r| r.get::<_, i64>(0))?,
+            1
         );
         Ok(())
     }
