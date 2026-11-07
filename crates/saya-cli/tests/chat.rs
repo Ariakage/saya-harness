@@ -681,3 +681,64 @@ fn running_background_command_can_be_cancelled_from_chat() {
     pty.until("> ");
     assert!(pty.finish().success());
 }
+
+#[test]
+fn model_suggestion_never_switches_plan_mode_without_user_action() {
+    let temp = TempDir::new().unwrap();
+    let (url, _) = fixture::server(vec![(
+        "application/json",
+        answer("I recommend switching to BUILD for implementation."),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["--mode", "plan", "chat"]);
+    pty.until("> ");
+    pty.send("Prepare a plan\n");
+    pty.until("recommend switching to BUILD");
+    pty.until("> ");
+    pty.send("/status\n");
+    let status = pty.until("permissions: auto");
+    assert!(status.contains("mode: plan"), "{status}");
+    pty.until("> ");
+    assert!(pty.finish().success());
+}
+
+#[test]
+fn switching_from_build_to_plan_during_model_call_blocks_generated_write() {
+    let temp = TempDir::new().unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (url,requests)=fixture::server_dynamic(2,move |index,_| {
+        if index==0 {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+            let args=json!({"path":"blocked.txt","content":"no","expected_version":null}).to_string();
+            ("application/json",json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"write","type":"function","function":{"name":"write_file","arguments":args}}]}}]}).to_string())
+        } else {("application/json",answer("Plan retained; write was denied."))}
+    }).unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["--mode", "build", "chat"]);
+    pty.until("> ");
+    pty.send("Implement a file\n");
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    pty.send("/mode plan\n");
+    pty.until("pending plan");
+    release_tx.send(()).unwrap();
+    pty.until("Plan retained; write was denied.");
+    pty.until("> ");
+    pty.send("/status\n");
+    let status = pty.until("permissions: auto");
+    assert!(status.contains("mode: plan"));
+    pty.until("> ");
+    assert!(!temp.path().join("blocked.txt").exists());
+    assert!(pty.finish().success());
+    let _ = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+    let second = requests
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .to_string();
+    assert!(
+        second.contains("mode_denied") || second.contains("permission_denied"),
+        "{second}"
+    );
+}

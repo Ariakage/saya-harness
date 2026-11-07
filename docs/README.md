@@ -20,6 +20,7 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [后续能力路线图](capability-roadmap.md) | Sandbox、MCP 等 18 个功能模块、优先级与依赖 | 后续功能规划，未实现 |
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | 计划已准备，未执行 |
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
+| [MVP 验收证据](acceptance.md) | AC-01 至 AC-23 的测试映射与限制 | 本机受控验证 |
 | [开发进度](progress.md) | 阶段／任务状态与证据 | 持续维护 |
 | [提示词定制](prompts.md) | 英文 prompt、装配与来源对照 | 组件与受控接线，真实模型效果未评测 |
 | [当前提示词快照](prompt/README.md) | 核心、工具、模式、权限与审核提示词正文 | `saya-prompts-v1`，运行时来源见目录说明 |
