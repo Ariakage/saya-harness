@@ -8,7 +8,8 @@ use reqwest::{
     Url,
     header::{HeaderName, HeaderValue},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
@@ -88,7 +89,7 @@ pub enum Output {
     Json,
     Jsonl,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Protocol {
     #[serde(rename = "openai-chat-completions")]
     ChatCompletions,
@@ -97,7 +98,7 @@ pub enum Protocol {
     #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Auth {
     #[serde(rename = "bearer")]
     Bearer,
@@ -120,7 +121,7 @@ fn default_version() -> String {
 }
 
 /// Provider settings contain reference names, never API key values.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub protocol: Protocol,
@@ -147,6 +148,16 @@ pub struct Profile {
     pub omit_stream_usage: bool,
     #[serde(default)]
     pub omit_reasoning_include: bool,
+}
+impl Profile {
+    /// Fingerprint profile settings and credential reference names, never credential values.
+    pub fn fingerprint(&self) -> Result<String, BoundaryError> {
+        let encoded = serde_json::to_vec(self).map_err(|_| invalid("cannot serialize profile"))?;
+        Ok(Sha256::digest(encoded)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
 }
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]

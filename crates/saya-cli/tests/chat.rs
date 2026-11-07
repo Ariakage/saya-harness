@@ -29,9 +29,11 @@ struct Pty {
     master: Option<fs::File>,
     child: Child,
     buffer: Vec<u8>,
+    _storage: TempDir,
 }
 impl Pty {
     fn start(root: &Path, cfg: &Path, extra: &[&str]) -> Self {
+        let storage = TempDir::new().unwrap();
         let mut master = -1;
         let mut slave = -1;
         // SAFETY: arguments point to valid descriptors; ownership moves to File below.
@@ -53,6 +55,9 @@ impl Pty {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_saya"));
         cmd.env_clear()
             .env("HOME", root)
+            .env("XDG_DATA_HOME", storage.path().join("data"))
+            .env("XDG_STATE_HOME", storage.path().join("state"))
+            .env("XDG_CACHE_HOME", storage.path().join("cache"))
             .env("PATH", "/usr/bin:/bin")
             .current_dir(root)
             .arg("--config")
@@ -76,6 +81,7 @@ impl Pty {
             master: Some(master),
             child,
             buffer: vec![],
+            _storage: storage,
         }
     }
     fn send(&mut self, line: &str) {

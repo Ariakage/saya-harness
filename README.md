@@ -32,7 +32,7 @@
 3. 工具执行结果返回模型，运行时继续下一轮。
 4. CLI 展示结果并保存会话，后续可列出或恢复；失败、取消或达到运行限制时明确结束。
 
-已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时和只读 CLI 开发预览已实现，持久化与完整产品行为尚未完成；完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
+已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、只读 CLI 和本地持久会话预览已实现；并发和崩溃恢复等完整产品行为尚未完成。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
 
 ## 文档
 

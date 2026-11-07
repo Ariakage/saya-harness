@@ -1,4 +1,5 @@
 mod chat;
+mod session;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use saya_core::{
@@ -10,7 +11,6 @@ use saya_core::{
         Run, RunId, RunStatus, Session, SessionId, WorkMode,
     },
     input::{InputHandler, InputRequest},
-    memory::MemoryStore,
     permissions::Policy,
     project_context::ProjectContext,
     provider::{
@@ -119,9 +119,28 @@ impl From<OutputOption> for Output {
 enum Command {
     Run(RunArgs),
     Chat,
+    Resume {
+        session_id: String,
+        #[arg(long)]
+        accept_config_change: bool,
+    },
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+}
+#[derive(Subcommand)]
+enum SessionAction {
+    List {
+        #[arg(long, default_value_t = 1)]
+        page: u64,
+    },
+    Show {
+        session_id: String,
     },
 }
 #[derive(Subcommand)]
@@ -141,6 +160,10 @@ struct RunArgs {
     interactive: bool,
     #[arg(long)]
     approval_file: Option<PathBuf>,
+    #[arg(long)]
+    session: Option<String>,
+    #[arg(long, requires = "session")]
+    accept_config_change: bool,
 }
 fn overrides(cli: &Cli) -> Overrides {
     Overrides {
@@ -650,6 +673,8 @@ async fn run(
     text: String,
     personal_context: PersonalContext,
     anthropic_prompt_cache: bool,
+    cwd_explicit: bool,
+    profile_explicit: bool,
 ) -> Result<u8, Box<dyn std::error::Error>> {
     if config.output != Output::Text {
         return Err("JSON and JSONL output are not available until P6".into());
@@ -665,8 +690,20 @@ async fn run(
     } else {
         None
     };
-    let mut session = new_session(&config)?;
-    session.history.push(HistoryItem::UserText(text.clone()));
+    let mut prepared = if let Some(id) = &args.session {
+        session::resume(
+            &config,
+            id,
+            args.accept_config_change,
+            cwd_explicit,
+            profile_explicit,
+        )
+        .await?
+    } else {
+        session::create(&config, new_session(&config)?).await?
+    };
+    session::append(&mut prepared, text.clone()).await?;
+    let mut session = prepared.session.clone();
     let approvals = if let Some(path) = &args.approval_file {
         Preauthorizations::from_file(path, &session.workspace)?
     } else {
@@ -693,7 +730,7 @@ async fn run(
         &text,
         Launch {
             permissions: config.permissions_mode,
-            store: Arc::new(MemoryStore::default()),
+            store: prepared.store.clone(),
             cancellation: cancel,
             confirmation,
             input,
@@ -709,6 +746,32 @@ async fn run(
             Ok(1)
         }
     }
+}
+async fn query_sessions(
+    config: &Config,
+    action: &SessionAction,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    session::check_roots(config, &config.cwd, config.mode)?;
+    let store = session::open(config)?;
+    let data = match action {
+        SessionAction::List { page } => {
+            let offset = page
+                .checked_sub(1)
+                .and_then(|v| v.checked_mul(20))
+                .ok_or("invalid page")?;
+            serde_json::to_value(store.list_sessions(offset, 20).await?)?
+        }
+        SessionAction::Show { session_id } => {
+            let id = session::parse_id(session_id)?;
+            serde_json::to_value(store.load_session(id).await?.ok_or("session not found")?)?
+        }
+    };
+    match config.output {
+        Output::Text => println!("{}", serde_json::to_string_pretty(&data)?),
+        Output::Json => println!("{}", serde_json::json!({"schema_version":1,"data":data})),
+        Output::Jsonl => return Err("session queries support text or JSON output".into()),
+    }
+    Ok(0)
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
@@ -747,7 +810,17 @@ async fn main() -> std::process::ExitCode {
                 Ok(c) => match personal_context(&cli, &c) {
                     Err(e) => fail(e),
                     Ok(personal) => {
-                        match run(c, args, text, personal, cli.anthropic_prompt_cache).await {
+                        match run(
+                            c,
+                            args,
+                            text,
+                            personal,
+                            cli.anthropic_prompt_cache,
+                            cli.cwd.is_some(),
+                            cli.profile.is_some(),
+                        )
+                        .await
+                        {
                             Ok(code) => code,
                             Err(e) => fail(e),
                         }
@@ -763,11 +836,55 @@ async fn main() -> std::process::ExitCode {
             Ok(config) => match personal_context(&cli, &config) {
                 Err(e) => fail(e),
                 Ok(personal) => {
-                    match chat::chat(config, personal, cli.anthropic_prompt_cache).await {
+                    match chat::chat(config, personal, cli.anthropic_prompt_cache, None).await {
                         Ok(code) => code,
                         Err(e) => fail(e),
                     }
                 }
+            },
+        },
+        Some(Command::Session { action }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
+        {
+            Err(e) => fail(e),
+            Ok(config) => match query_sessions(&config, action).await {
+                Ok(code) => code,
+                Err(e) => fail(e),
+            },
+        },
+        Some(Command::Resume {
+            session_id,
+            accept_config_change,
+        }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
+        {
+            Err(e) => fail(e),
+            Ok(config) => match personal_context(&cli, &config) {
+                Err(e) => fail(e),
+                Ok(personal) => match session::resume(
+                    &config,
+                    session_id,
+                    *accept_config_change,
+                    cli.cwd.is_some(),
+                    cli.profile.is_some(),
+                )
+                .await
+                {
+                    Err(e) => fail(e),
+                    Ok(prepared) => match chat::chat(
+                        config,
+                        personal,
+                        cli.anthropic_prompt_cache,
+                        Some(prepared),
+                    )
+                    .await
+                    {
+                        Ok(code) => code,
+                        Err(e) => fail(e),
+                    },
+                },
             },
         },
     };

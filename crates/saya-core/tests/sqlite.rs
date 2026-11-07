@@ -73,6 +73,44 @@ fn tool_result() -> ToolResult {
 }
 
 #[tokio::test]
+async fn session_creation_listing_and_config_are_atomic() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp = TempDir::new()?;
+    let (session, run) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec!["secret-value".into()])?;
+    assert!(
+        store
+            .create_session(&session, "secret-value")
+            .await
+            .is_err()
+    );
+    assert!(store.load_session(session.id).await?.is_none());
+    store.create_session(&session, "profile-hash").await?;
+    assert!(store.create_session(&session, "other").await.is_err());
+    assert_eq!(store.fingerprint(session.id).await?, "profile-hash");
+    let listed = store.list_sessions(0, 20).await?;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, session.id);
+    assert_eq!(listed[0].title.as_deref(), Some("task"));
+    assert!(!store.has_unfinished_run(session.id).await?);
+    store.commit(&[StoreChange::RunStarted(run)]).await?;
+    assert!(store.has_unfinished_run(session.id).await?);
+    let mut modified = session.clone();
+    modified.work_mode = WorkMode::Plan;
+    assert!(
+        store
+            .update_session_config(&modified, "secret-value")
+            .await
+            .is_err()
+    );
+    assert_eq!(store.load_session(session.id).await?, Some(session));
+    store.update_session_config(&modified, "new-hash").await?;
+    assert_eq!(store.fingerprint(modified.id).await?, "new-hash");
+    assert_eq!(store.load_session(modified.id).await?, Some(modified));
+    Ok(())
+}
+
+#[tokio::test]
 async fn wal_transactions_and_history_survive_reopen() -> Result<(), Box<dyn std::error::Error>> {
     let temp = TempDir::new()?;
     let (session, run) = fixture(temp.path());
@@ -297,5 +335,24 @@ fn database_is_private_and_symlinks_are_never_followed() -> Result<(), Box<dyn s
     symlink(&other, linked.join("sessions.sqlite3"))?;
     assert!(SqliteStore::open(&linked, vec![]).is_err());
     assert_eq!(fs::read(&other)?, b"preserve");
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_lock_rejects_other_writer_but_allows_reads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let first = SqliteStore::open(temp.path(), vec![])?;
+    first.create_session(&session, "hash").await?;
+    let second = SqliteStore::open(temp.path(), vec![])?;
+    let guard = first.lock_session(session.id)?;
+    assert!(second.lock_session(session.id).is_err());
+    assert_eq!(
+        second.load_session(session.id).await?,
+        Some(session.clone())
+    );
+    drop(guard);
+    let _next = second.lock_session(session.id)?;
     Ok(())
 }

@@ -51,6 +51,206 @@ fn read_call() -> String {
 }
 
 #[test]
+fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
+    let temp = TempDir::new().unwrap();
+    let (url, requests) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"first reply"}), "stop"),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"second reply"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let first = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "first question"])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    assert_eq!(list["data"][0]["title"], "first question");
+    let show = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "show", id])
+        .output()
+        .unwrap();
+    assert!(
+        show.status.success(),
+        "{}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    assert!(String::from_utf8_lossy(&show.stdout).contains("first reply"));
+    let second = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "second question"])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    assert!(request.contains("first question"));
+    assert!(request.contains("first reply"));
+    assert!(request.contains("second question"));
+}
+
+#[test]
+fn resume_requires_explicit_acceptance_for_profile_changes() {
+    let temp = TempDir::new().unwrap();
+    let (url, _) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"one"}), "stop"),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"two"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    assert!(
+        command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["run", "start"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let old = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        old.replace("stream = false", "stream = false\nmax_output_tokens = 1024"),
+    )
+    .unwrap();
+    let rejected = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "continue"])
+        .output()
+        .unwrap();
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("--accept-config-change"));
+    let accepted = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "--accept-config-change", "continue"])
+        .output()
+        .unwrap();
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    let current = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        current.replace("model = \"fake\"", "model = \"different\""),
+    )
+    .unwrap();
+    let incompatible = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "--accept-config-change", "continue"])
+        .output()
+        .unwrap();
+    assert_eq!(incompatible.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&incompatible.stderr).contains("start a new session"));
+}
+
+#[test]
+fn resuming_plan_checks_workspace_before_creating_sqlite_side_files() {
+    use saya_core::{
+        boundary::{Store, StoreChange},
+        contract::{ModelProtocol, Session, SessionId, WorkMode},
+        sqlite::SqliteStore,
+    };
+    let temp = TempDir::new().unwrap();
+    let root = fs::canonicalize(temp.path()).unwrap();
+    let data = root.join(".local/share/saya");
+    let id = SessionId::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let store = SqliteStore::open(&data, vec![]).unwrap();
+        let session = Session {
+            id,
+            workspace: root.clone(),
+            work_mode: WorkMode::Plan,
+            profile: "test".into(),
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fake".into(),
+            history: vec![],
+        };
+        store
+            .commit(&[StoreChange::Session(session)])
+            .await
+            .unwrap();
+    });
+    let db = data.join("sessions.sqlite3");
+    let before = fs::read(&db).unwrap();
+    let before_names: std::collections::BTreeSet<_> = fs::read_dir(&data)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
+    let result = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "--session", &id.0.to_string(), "inspect"])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("PLAN storage directories overlap"));
+    assert_eq!(fs::read(db).unwrap(), before);
+    let after_names: std::collections::BTreeSet<_> = fs::read_dir(data)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(before_names, after_names);
+}
+
+#[test]
 fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("AGENTS.md"), "PROJECT_CONVENTION").unwrap();

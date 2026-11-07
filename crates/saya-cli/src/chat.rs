@@ -291,30 +291,34 @@ pub async fn chat(
     mut config: Config,
     personal_context: PersonalContext,
     anthropic_prompt_cache: bool,
+    existing: Option<session::Prepared>,
 ) -> Result<u8, Box<dyn std::error::Error>> {
     if config.output != Output::Text {
         return Err("chat requires text output".into());
     }
     let mut console = Console::open().map_err(|_| "chat requires a controlling terminal")?;
     let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    match choose_profile(&mut config, &mut console, &mut interrupts).await? {
-        ProfileSelection::Selected => {}
-        ProfileSelection::Exit => return Ok(0),
-        ProfileSelection::Interrupted => return Ok(130),
-    }
-    let mut session = Some(new_session(&config)?);
-    let store = Arc::new(MemoryStore::default());
-    store
-        .commit(&[StoreChange::Session(
-            session.as_ref().ok_or("session missing")?.clone(),
-        )])
-        .await?;
+    let prepared = if let Some(existing) = existing {
+        config.profile = Some(existing.session.profile.clone());
+        existing
+    } else {
+        match choose_profile(&mut config, &mut console, &mut interrupts).await? {
+            ProfileSelection::Selected => {}
+            ProfileSelection::Exit => return Ok(0),
+            ProfileSelection::Interrupted => return Ok(130),
+        }
+        session::create(&config, new_session(&config)?).await?
+    };
+    let workspace = prepared.session.workspace.clone();
+    let mut session = Some(prepared.session);
+    let store = prepared.store;
+    let _session_lock = prepared._lock;
     let mut permissions = config.permissions_mode;
     let mut active: Option<Active> = None;
     let mut pending: Option<UiRequest> = None;
     let mut exit_after_run: Option<u8> = None;
     let mut terminal_open = true;
-    console.print("Saya chat (in-memory, read-only preview). Type /help for commands.\n> ")?;
+    console.print("Saya chat (persistent, read-only preview). Type /help for commands.\n> ")?;
     loop {
         enum Event {
             Line(Option<Result<String, &'static str>>),
@@ -456,6 +460,14 @@ pub async fn chat(
                         "/mode" => {
                             if let Some(arg) = arg {
                                 if let Some(mode) = work_mode(arg) {
+                                    if let Err(e) = session::check_roots(&config, &workspace, mode)
+                                    {
+                                        console.print(&format!(
+                                            "saya: {}\n> ",
+                                            safe_terminal_text(&e.to_string())
+                                        ))?;
+                                        continue;
+                                    }
                                     if let Some(run) = active.as_ref() {
                                         let before = run.handle.mode()?;
                                         run.handle.request_mode(mode)?;
