@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/saya-core", "crates/saya-cli", "crates/saya-app"]
+members = ["crates/saya-core", "crates/saya-cli", "crates/saya-app", "crates/saya-tui"]
 resolver = "3"
 
 [workspace.package]

@@ -12,7 +12,7 @@
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
-- DEV-038 至 DEV-046 已完成并分别提交，N0 全量本机验收通过。下一任务为 DEV-047 TUI 终端生命周期。
+- DEV-038 至 DEV-046 已完成并分别提交，N0 全量本机验收通过。下一任务为 DEV-048 TUI聊天、编辑与内容呈现。
 
 ## 后续开发状态
 
@@ -21,11 +21,17 @@
 | 阶段 | 任务 | 实际状态 | 已有基础与下一入口 |
 | --- | --- | --- | --- |
 | N0 共享基础 | DEV-038 至 DEV-046 | 完成（本机验收） | 共享应用、日志／追踪与会话导出均通过正常 CLI 入口及故障回归，见下表 |
-| N1 默认 TUI | DEV-047 至 DEV-053 | 待开始 | 已记录默认入口方向，界面与新 crate 均待开发 |
+| N1 默认 TUI | DEV-047 至 DEV-053 | 进行中 | saya-tui终端生命周期已建立，输入／显示／运行控制按依赖推进 |
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 待开始 | Linux 采用 Bubblewrap + Seccomp + socat，macOS 为独立 SeatbeltBackend，能力与性能待实测 |
 | N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078 | 待开始 | 已有指令／Skill 发现，OutputStore、Compact、插件 loader、检查点及 Hooks 待开发 |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 待开始 | 先做目标数据和手动步骤，后续自动阶段依赖持久调度等能力 |
 | N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
+
+### N1 实施记录
+
+| 任务 | 状态 | 证据 |
+| --- | --- | --- |
+| DEV-047 | 完成 | saya-tui library、Ratatui0.30.2／Crossterm0.29.0已锁定。3项真实PTY生命周期测试、Clippy及格式检查通过，覆盖normal/error/panic/重复进入及termios与屏幕恢复。日志为target/n1-dev047-*.log |
 
 ### N0 实施记录
 

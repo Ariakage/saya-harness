@@ -71,7 +71,7 @@ PLAN、BUILD、CODE、WORK 的选择来自用户操作。UI 同时展示当前�
 
 ## 技术与终端恢复
 
-候选技术采用 Ratatui、Crossterm 和已有 Tokio，输入／状态更新与绘制分离。具体库版本、编辑组件、Markdown 呈现和 feature flags 在 DEV-047 的验证中选定。Ratatui 提供多种应用组织方式，Crossterm 的 `EventStream` 支持异步事件输入，需要启用对应 feature。[Ratatui 应用模式](https://ratatui.rs/concepts/application-patterns/)、[Crossterm EventStream](https://docs.rs/crossterm/latest/crossterm/event/struct.EventStream.html)
+DEV-047 已锁定 Ratatui0.30.2、Crossterm0.29.0 和已有 Tokio，输入／状态更新与绘制分离。Ratatui只启用Crossterm与layout-cache，Crossterm启用事件流及bracketed paste。编辑与呈现在 DEV-048 接入。Ratatui 提供多种应用组织方式，Crossterm 的 `EventStream` 支持异步事件输入，需要启用对应 feature。[Ratatui 应用模式](https://ratatui.rs/concepts/application-patterns/)、[Crossterm EventStream](https://docs.rs/crossterm/latest/crossterm/event/struct.EventStream.html)
 
 终端 guard 管理 raw mode、alternate screen 和光标。正常返回、可恢复错误、panic unwind 及受处理信号走统一恢复路径，panic hook 链保留原诊断。强制终止场景记录尽力清理边界和终端恢复方法。初始化与恢复设计参考 [Ratatui panic hooks](https://ratatui.rs/recipes/apps/panic-hooks/)。
 
