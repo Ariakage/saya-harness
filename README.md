@@ -2,7 +2,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
 
-**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。CLI 已接入本地持久会话、恢复与受权限控制的真实文件和命令工具；单次运行支持 JSON／JSONL；已知凭据遮蔽、结构化日志和用量记录已通过本机受控验证；四类任务、三协议和模式权限矩阵已通过本机受控端到端验证；P7 最低环境验收已完成，0.1.0 正式发行构建进行中。**
+**0.1.0 已发布。** 提供 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64 CLI 安装包。中英双语说明、校验和及四平台最低环境验收证据见 [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。
 
 ## 已确认方向
 
@@ -25,7 +25,7 @@
 
 项目负责人已整套确认[完整基线](docs/mvp-baseline.md) B-01 至 B-24，并在 D-029 补充运行内后台工具调用、D-033 纳入用户级与工作区的指令及 Skill 发现，D-035 将最低支持系统调整为 macOS 15；当前没有尚待选择的 MVP 产品阻塞项。
 
-首阶段拟完成一条可验证的执行路径：
+0.1.0 提供以下执行路径。
 
 1. 用户通过交互会话或单次命令选择模式、输入任务，并提供模型配置。
 2. 运行时调用模型，处理最终回答或工具调用。
@@ -50,7 +50,8 @@
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
 | [CLI 使用指南](docs/usage.md) | 构建、配置、使用示例与故障处理 |
 | [CLI 开发预览](docs/cli-preview.md) | 单次运行、交互、会话和当前限制 |
-| [MVP 验收证据](docs/acceptance.md) | AC-01 至 AC-23 的测试映射与限制 |
+| [MVP 验收证据](docs/acceptance.md) | AC-01 至 AC-24 的测试与发行验收映射 |
+| [0.1.0 双语版本说明](docs/release-notes-0.1.0.md) | 功能、安装、兼容性与已知限制 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |
@@ -61,7 +62,7 @@
 | [提示词定制](docs/prompts.md) | 英文提示词、模式与审核装配、来源取舍对照和离线预览 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
-当前实现、验证证据与剩余发行工作见[开发进度](docs/progress.md)；[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
+当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
 CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
 

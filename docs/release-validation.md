@@ -1,8 +1,31 @@
 # 0.1.0 发行验证记录
 
-**P7 验收完成，正式发布构建进行中。** 授权后的最终候选验收来自源码 `2840cbbd52bc7cd03d8953c1837f43540928a290`，其运行时代码、提示词和 Cargo 依赖与审查修复 `854be1b` 内容一致。
+**0.1.0 已发布，P7 验收完成。** 标签 `v0.1.0` 固定到源码 `eaade53649ffffa013e2503b894825e1b72f3dc1`，运行时代码、提示词和 Cargo 依赖与审查修复 `854be1b` 内容一致。
+
+## 正式发行与下载复核
+
+[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0) 于 2026-11-07 发布，状态为正式版和 Latest。四个平台安装包、`SHA256SUMS`、`release-evidence.json` 与中英双语 `RELEASE-NOTES.md` 共七项资产已公开上传。Release 正文与附件中的双语说明一致。
+
+[正式构建与验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600) 在四个原生架构分别通过格式检查、Clippy、342 项 Rust 测试、四项发行工具测试和 `saya 0.1.0` 版本断言。工作流对每个包解出的二进制执行工具往返、交互会话恢复及五项审查回归。
+
+| 目标 | 实际原生验收环境 | 正式包 SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | Ubuntu 22.04，glibc 2.35 | `db4c419736a33b114b58783b57c41fc2f12a59d76ac902a163837bdbbe88e887` |
+| linux-aarch64 | Ubuntu 22.04，glibc 2.35 | `2142de68b382c0bb8293d90d9674ef8cc5205118fe51bec26cc82572c0562973` |
+| macos-x86_64 | macOS 15.7.9 | `30767ac2194ba2d8fdca9ca3ce30119928a8bae126877efe77f9b877802d3117` |
+| macos-aarch64 | macOS 15.8.2 | `188af0747e24bb3c1f9f96002d9e1917d001f9b8c24c61866d9411ec7ef3cd52` |
+
+四个包的源码声明、二进制哈希、归档成员、执行权限和测试脚本哈希均与工作流记录一致。macOS 部署目标为 15.0，Linux 的最高 GLIBC 符号版本均为 2.34。逐目标环境、包与二进制哈希和演练结果已作为 [release-evidence.json](https://github.com/Ariakage/saya-harness/releases/download/v0.1.0/release-evidence.json) 随正式版公开保存。
+
+七项正式资产全部回下载到本机 `target/release-0.1.0-download-check/`，逐字节比较通过，GitHub 返回的资产 SHA-256 也全部一致。四个安装包通过 `shasum -a 256 -c SHA256SUMS`，远端附注标签解引用到上述固定源码，公开 Release 页面返回 HTTP 200。
+
+回下载的两个 macOS 程序在 macOS 27.2 ARM 主机再次通过版本断言和三项演练，Intel 程序经 Rosetta 执行。macOS 15 的最低环境证据来自正式构建的原生 job。ARM 包带链接器 ad-hoc 签名，Intel 包未签名，两个包均未作开发者身份签名或 Apple 公证。
+
+发布目录和归档成员经过本地测试凭据精确值检查，未发现该凭据。凭据文件继续位于 Git 忽略的私有目录。完整能力与已知限制见[中英双语说明](release-notes-0.1.0.md)。
 
 ## P7 最终候选验收
+
+本节验收源码为 `2840cbbd52bc7cd03d8953c1837f43540928a290`，对应正式发布前的候选包。
 
 [Release candidates 42381963924](https://github.com/Ariakage/saya-harness/actions/runs/42381963924) 在四个原生目标全部通过。每项执行格式检查、Clippy、342 个 Rust 测试与 release 构建，随后对压缩包内的程序执行 PLAN 工具往返、人工批准与会话恢复、五项审查回归。三个发行工具测试组共四项通过。
 
@@ -13,7 +36,7 @@
 | macos-x86_64 | 15.7.9 | x86_64 | `ce5e4a50b3028658233b78cb21a87ed3f756d7ec3b5c1d67b58dcca33546e2c2` |
 | macos-aarch64 | 15.8.2 | arm64 | `68b9ae6bf2d0f6452cbc4a67ff58cfc002e9a328fa0a2b71fe9795e05f53752e` |
 
-下载到本机 `target/p7-acceptance-2840cbb/verified/` 的四个包逐一核对包哈希、二进制哈希、源码声明、测试脚本哈希、文件成员和执行权限，与各 job 保存的 `verification.json` 一致。完整汇总为同目录 `release-evidence.json`。用户授权的后续正式构建将从包含最终双语说明的固定提交生成，并再次执行相同验收后发布。
+下载到本机 `target/p7-acceptance-2840cbb/verified/` 的四个包逐一核对包哈希、二进制哈希、源码声明、测试脚本哈希、文件成员和执行权限，与各 job 保存的 `verification.json` 一致。完整汇总为同目录 `release-evidence.json`。正式构建已从包含最终双语说明的固定提交重新生成，通过相同验收并发布，见上方记录。
 
 审查修复后的三协议真实模型复测共六项通过，版本和服务样本见[真实模型记录](live-model-validation.md)。B-01 至 B-24 与 AC-01 至 AC-24 的覆盖见[发行检查](release-checklist.md)和[验收索引](acceptance.md)。
 

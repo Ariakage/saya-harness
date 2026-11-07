@@ -1,6 +1,6 @@
 # MVP 验收证据索引
 
-本索引将[需求规格](requirements.md) AC-01 至 AC-23 对应到可运行的受控测试。测试使用本地 HTTP 模型替身、临时目录和受控子进程；替身验证 Saya 的协议、权限及持久化行为，不证明真实模型能完成相同任务。四个任务夹具会实际读写临时工作区；BUILD／CODE 使用当前固定工具链的 `rustc` 编译并独立运行程序。
+本索引将[需求规格](requirements.md) AC-01 至 AC-24 对应到受控测试及发行验收证据。受控测试使用本地 HTTP 模型替身、临时目录和受控子进程，覆盖 Saya 的协议、权限及持久化行为。真实模型样本见[联调记录](live-model-validation.md)。四个任务夹具实际读写临时工作区，BUILD／CODE 使用固定工具链的 `rustc` 编译并独立运行程序。
 
 运行全部检查：
 
@@ -41,6 +41,6 @@ cargo test -p saya-cli --test acceptance --locked
 | AC-21 | [CLI 交互测试](../crates/saya-cli/tests/chat.rs) `running_controls_queue_mode_and_cancel_returns_to_the_same_session`、`changing_mode_invalidates_pending_approval`；[授权测试](../crates/saya-core/tests/approvals.rs) `waiting_confirmation_is_invalidated_by_mode_or_policy_change` |
 | AC-22 | [CLI 测试](../crates/saya-cli/tests/cli.rs) `background_launch_intent_failure_prevents_command_execution`、`failed_write_result_is_reported_and_recovery_never_replays_it`、`crashed_background_command_is_reported_unknown_and_never_replayed`、`busy_session_does_not_prevent_resuming_another_session`；[SQLite 测试](../crates/saya-core/tests/sqlite.rs) `real_process_lock_and_readonly_live_wal_preflight` |
 | AC-23 | [CLI 测试](../crates/saya-cli/tests/cli.rs) `crashed_run_is_recovered_with_unknown_result_without_replay`；[后台协议测试](../crates/saya-core/tests/background_protocols.rs) `recovered_tool_pairs_remain_valid_for_all_three_provider_protocols` |
-| AC-24 | [四原生目标最终候选验收](https://github.com/Ariakage/saya-harness/actions/runs/42381963924)；[发行验证记录](release-validation.md)，包含最低环境、包与二进制哈希及三项解包演练 |
+| AC-24 | [四原生目标正式发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)；[发行验证记录](release-validation.md)，包含最低环境、包与二进制哈希、三项解包演练及公开下载复核 |
 
 当前审查修复后共有 342 项 Rust 测试，最终候选在 Ubuntu 22.04 和 macOS 15 的两个原生架构执行完整检查并通过。[配置与预授权示例测试](../crates/saya-cli/tests/documented_examples.rs)验证文档示例，AC-24 的包哈希、实际环境和解包演练证据见[发行验证记录](release-validation.md)。

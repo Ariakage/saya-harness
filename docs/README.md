@@ -1,6 +1,6 @@
 # 项目文档
 
-Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目负责人整套确认；core 运行时、CLI、持久化和三协议已通过本机受控验证，P7 验收已完成，正式发行构建进行中。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 为准。
+Saya Harness 的说明文档默认使用中文，发行说明提供中英双语。CLI MVP 已完成 P0 至 P7 验收并发布 [v0.1.0](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 及后续决策为准。
 
 | 文档 | 用途 | 当前状态 |
 | --- | --- | --- |
@@ -14,8 +14,8 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [模型协议接入](model-protocols.md) | HTTP／SSE、协议适配与验证边界 | 三协议受控验证及指定模型小规模联调通过 |
 | [架构设计](architecture.md) | 运行流程、职责划分与实现约束 | 已接入运行时；范围见开发进度 |
 | [开发指南](development.md) | 协作流程、Rust 检查与文档维护 | 初版约定 |
-| [CLI 使用指南](usage.md) | 构建、配置、示例与故障处理 | 开发预览；配置和预授权示例经本机验证 |
-| [CLI 开发预览](cli-preview.md) | 单次运行、持久会话和当前限制 | 开发中 |
+| [CLI 使用指南](usage.md) | 构建、配置、示例与故障处理 | 0.1.0 使用指南，示例经验证 |
+| [CLI 开发预览](cli-preview.md) | 单次运行、持久会话和当前限制 | 实现记录，当前发行行为见使用指南 |
 | [项目指令与 Skill 发现](project-context.md) | 来源、优先级与刷新规则 | 受控验证通过 |
 | [SQLite 存储组件](storage.md) | 事务、事件序号与持久化边界 | 本机受控验证，恢复见开发进度 |
 | [saya-plugin 规划](saya-plugin.md) | 未来插件系统的边界、阶段与验收草案 | 规划中，未实现 |
@@ -23,9 +23,9 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P7 验收完成 |
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
 | [发行检查](release-checklist.md) | 24 组基线、验收与已知限制 | P7 验收完成 |
-| [0.1.0 双语版本说明](release-notes-0.1.0.md) | 候选功能、迁移与平台限制 | 双语说明，发行构建中 |
-| [发行候选验证记录](release-validation.md) | 构建产物、校验和、平台与待验证项 | P7 验收完成 |
-| [MVP 验收证据](acceptance.md) | AC-01 至 AC-23 的测试映射与限制 | 本机受控验证 |
+| [0.1.0 双语版本说明](release-notes-0.1.0.md) | 功能、安装、迁移与平台限制 | 已发布，中英双语 |
+| [发行验证记录](release-validation.md) | 构建产物、校验和、最低环境与下载复核 | v0.1.0 发布及复核完成 |
+| [MVP 验收证据](acceptance.md) | AC-01 至 AC-24 的测试与发行验收映射 | 受控测试与四平台发行验收通过 |
 | [开发进度](progress.md) | 阶段／任务状态与证据 | 持续维护 |
 | [提示词定制](prompts.md) | 英文 prompt、装配与来源对照 | 组件与受控接线，真实模型效果未评测 |
 | [当前提示词快照](prompt/README.md) | 核心、工具、模式、权限与审核提示词正文 | `saya-prompts-v1`，运行时来源见目录说明 |

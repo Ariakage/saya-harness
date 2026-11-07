@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具。CLI 已提供[运行与持久会话预览](cli-preview.md)，真实工作区副作用经权限和持久化调度；崩溃恢复已通过本机受控验证。CI 在此前提交上已通过四平台验证，当前证据见[开发进度](progress.md)。
+仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具，CLI MVP 已发布 0.1.0。正式源码通过四平台 CI，四个包在原生最低环境完成验收，实际范围及下载复核见[开发进度](progress.md)和[发行记录](release-validation.md)。CLI 用法见[使用指南](usage.md)。
 
 ## 开发流程
 
