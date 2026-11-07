@@ -518,6 +518,12 @@ fn apply(
             let record = json(record, secrets)?;
             journal(tx, &session, Some(&run), "project_context", Some(&record))?;
         }
+        StoreChange::Activity { run_id, payload } => {
+            let run = id(run_id.0);
+            let session = run_session(tx, &run)?;
+            let record = json(payload, secrets)?;
+            journal(tx, &session, Some(&run), "activity", Some(&record))?;
+        }
         StoreChange::History { session_id, item } => {
             let key = id(session_id.0);
             let data = json(item, secrets)?;
@@ -611,7 +617,7 @@ fn apply(
             }
             journal(tx, &session, Some(&run), "run_finished", None)?;
         }
-        StoreChange::Event(event) => {
+        StoreChange::Event(event) | StoreChange::ReservedEvent(event) => {
             if event.schema_version != SCHEMA_VERSION
                 || event.seq == 0
                 || matches!(event.payload, EventPayload::ModelTextDelta { .. })
@@ -627,9 +633,19 @@ fn apply(
             }
             let seq = i64::try_from(event.seq)
                 .map_err(|_| error("storage_error", "event sequence out of range"))?;
-            let count=tx.execute("UPDATE sessions SET event_seq=?2,updated_at=unixepoch() WHERE id=?1 AND event_seq<?2",params![session,seq]).map_err(sql_error)?;
-            if count != 1 {
-                return Err(error("storage_error", "event sequence is not increasing"));
+            if matches!(change, StoreChange::ReservedEvent(_)) {
+                let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND event_seq>=?2) AND ?2>COALESCE((SELECT MAX(seq) FROM events WHERE session_id=?1),0)", params![session,seq], |r| r.get(0)).map_err(sql_error)?;
+                if !valid {
+                    return Err(error(
+                        "storage_error",
+                        "event sequence was not reserved or is not increasing",
+                    ));
+                }
+            } else {
+                let count=tx.execute("UPDATE sessions SET event_seq=?2,updated_at=unixepoch() WHERE id=?1 AND event_seq<?2",params![session,seq]).map_err(sql_error)?;
+                if count != 1 {
+                    return Err(error("storage_error", "event sequence is not increasing"));
+                }
             }
             let data = json(event, secrets)?;
             tx.execute(
@@ -967,6 +983,24 @@ pub struct BackgroundJobSummary {
     pub result: Option<ToolResult>,
 }
 impl SqliteStore {
+    /// Reserve a sequence range while holding the session writer lock. Unused
+    /// numbers remain gaps after interruption; visible numbers are never reused.
+    pub async fn reserve_event_sequences(
+        &self,
+        session_id: SessionId,
+        count: u32,
+    ) -> Result<(u64, u64), BoundaryError> {
+        if count == 0 {
+            return Err(error("storage_error", "empty event sequence reservation"));
+        }
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = inner.lock().map_err(|_| error("storage_error", "database lock failed"))?;
+            let end: i64 = conn.query_row("UPDATE sessions SET event_seq=event_seq+?2 WHERE id=?1 AND event_seq<=9223372036854775807-?2 RETURNING event_seq", params![id(session_id.0), i64::from(count)], |r| r.get(0)).map_err(sql_error)?;
+            let end = u64::try_from(end).map_err(|_| error("storage_error", "invalid event sequence"))?;
+            Ok((end-u64::from(count)+1,end))
+        }).await.map_err(|_|error("storage_error", "database worker failed"))?
+    }
     /// Return source metadata supplied to model requests in this session.
     pub async fn project_context_records(
         &self,

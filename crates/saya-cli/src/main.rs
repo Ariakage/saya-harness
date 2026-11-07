@@ -1,14 +1,18 @@
 mod chat;
+mod events;
 mod session;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use saya_core::{
     approvals::Preauthorizations,
-    boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store},
+    boundary::{
+        Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store, StoreChange,
+    },
     config::{self, Auth, Config, Environment, Output, Overrides, Profile, Protocol},
     contract::{
-        ApprovalRequest, BoundaryError, HistoryItem, ModelProtocol, ModelPurpose, PermissionMode,
-        Run, RunId, RunStatus, Session, SessionId, WorkMode,
+        ApprovalRequest, BoundaryError, ErrorInfo, HistoryItem, ModelProtocol, ModelPurpose,
+        PermissionMode, Persistence, Run, RunId, RunResult, RunStatus, SCHEMA_VERSION, Session,
+        SessionId, WorkMode,
     },
     input::{InputHandler, InputRequest},
     permissions::Policy,
@@ -179,6 +183,53 @@ fn overrides(cli: &Cli) -> Overrides {
 fn fail(message: impl std::fmt::Display) -> u8 {
     eprintln!("saya: {message}");
     2
+}
+fn output_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
+    if !matches!(output, Some(Output::Json | Output::Jsonl)) {
+        return fail(message);
+    }
+    let result = RunResult {
+        schema_version: SCHEMA_VERSION,
+        session_id: None,
+        run_id: None,
+        status: RunStatus::Failed,
+        stop_reason: Some("invalid_input".into()),
+        text: None,
+        error: Some(ErrorInfo {
+            code: "invalid_input".into(),
+            message: message.to_string(),
+        }),
+        usage: None,
+        artifacts: vec![],
+        persistence: None,
+    };
+    if output == Some(Output::Jsonl) {
+        let timestamp = match events::timestamp() {
+            Ok(timestamp) => timestamp,
+            Err(error) => return fail(error),
+        };
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"session_id":null,"run_id":null,"seq":1,"timestamp":timestamp,"type":"run.finished","data":result})
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_else(|_| "{}".into())
+        );
+    }
+    2
+}
+fn query_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
+    if output == Some(Output::Json) {
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"data":null,"error":{"code":"invalid_query","message":message.to_string()}})
+        );
+        2
+    } else {
+        fail(message)
+    }
 }
 fn init(overrides: &Overrides, env: &Environment) -> Result<(), Box<dyn std::error::Error>> {
     let path = config::config_path(overrides, env)?;
@@ -553,6 +604,8 @@ struct Launch {
     approvals: Preauthorizations,
     personal_context: PersonalContext,
     anthropic_prompt_cache: bool,
+    events: Option<Arc<events::EventWriter>>,
+    run_id: Option<RunId>,
 }
 fn personal_context(
     cli: &Cli,
@@ -623,7 +676,7 @@ fn build_runtime(
     let profile = &session.profile;
     let selected = config.profiles.get(profile).ok_or("profile not found")?;
     let run = Run {
-        id: RunId::new(),
+        id: launch.run_id.unwrap_or_default(),
         session_id: session.id,
         work_mode: session.work_mode,
         permissions: launch.permissions,
@@ -644,8 +697,10 @@ fn build_runtime(
         })
         .collect::<Result<BTreeMap<_, _>, BoundaryError>>()?;
     let router = Arc::new(ProfileRouter::new(profile.clone(), models)?);
-    let streamed = selected.stream;
-    let model: Arc<dyn Model> = if streamed {
+    let streamed = selected.stream && config.output == Output::Text;
+    let model: Arc<dyn Model> = if let Some(events) = &launch.events {
+        Arc::new(events::EventModel(router, events.clone()))
+    } else if streamed {
         Arc::new(PrintModel(router))
     } else {
         router
@@ -727,7 +782,9 @@ fn build_runtime(
 fn report_result(result: &saya_core::contract::RunResult, session: &Session, streamed: bool) -> u8 {
     if streamed {
         println!();
-    } else if let Some(text) = &result.text {
+    } else if result.status != RunStatus::NeedsInput
+        && let Some(text) = &result.text
+    {
         println!("{text}");
     }
     if result.stop_reason.as_deref() == Some("completed_with_background_cleanup") {
@@ -763,6 +820,31 @@ fn report_result(result: &saya_core::contract::RunResult, session: &Session, str
         RunStatus::Cancelled => 130,
     }
 }
+fn status_code(status: RunStatus) -> u8 {
+    match status {
+        RunStatus::Completed => 0,
+        RunStatus::Failed => 1,
+        RunStatus::NeedsConfirmation => 3,
+        RunStatus::NeedsInput => 4,
+        RunStatus::LimitReached => 5,
+        RunStatus::Cancelled => 130,
+    }
+}
+fn report_json(result: &RunResult, config: &Config) -> Result<u8, Box<dyn std::error::Error>> {
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut value = serde_json::to_value(result)?;
+    redact_value(&mut value, &secrets, 0);
+    let encoded = serde_json::to_string(&value)?;
+    if contains_encoded_secret(&encoded, &secrets) {
+        return Err("sensitive output details withheld".into());
+    }
+    println!("{encoded}");
+    Ok(status_code(result.status))
+}
 async fn run(
     config: Config,
     args: &RunArgs,
@@ -772,9 +854,6 @@ async fn run(
     cwd_explicit: bool,
     profile_explicit: bool,
 ) -> Result<u8, Box<dyn std::error::Error>> {
-    if config.output != Output::Text {
-        return Err("JSON and JSONL output are not available until P6".into());
-    }
     let terminal = if args.interactive {
         match Terminal::open() {
             Ok(t) => Some(Arc::new(t)),
@@ -826,25 +905,112 @@ async fn run(
         .as_ref()
         .map(|t| t.clone() as Arc<dyn ApprovalHandler>);
     let input = terminal.map(|t| t as Arc<dyn InputHandler>);
+    let run_id = RunId::new();
+    let events = if config.output == Output::Jsonl {
+        let secrets = config
+            .secret_env_names()
+            .iter()
+            .map(|name| config.secret(name).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        Some(Arc::new(events::EventWriter::new(
+            prepared.store.clone(),
+            session.id,
+            run_id,
+            secrets,
+        )))
+    } else {
+        None
+    };
+    let store: Arc<dyn Store> = if let Some(events) = &events {
+        Arc::new(events::EventStore(events.clone()))
+    } else {
+        prepared.store.clone()
+    };
     let (mut runtime, streamed) = build_runtime(
         &config,
         &session,
         &text,
         Launch {
             permissions: config.permissions_mode,
-            store: prepared.store.clone(),
+            store,
             cancellation: cancel,
             confirmation,
             input,
             approvals,
             personal_context,
             anthropic_prompt_cache,
+            events: events.clone(),
+            run_id: Some(run_id),
         },
     )?;
+    if let Some(events) = &events {
+        use saya_core::contract::EventPayload;
+        let payload = if args.session.is_some() {
+            EventPayload::SessionResumed {
+                work_mode: session.work_mode,
+                permissions: config.permissions_mode,
+                workspace: session.workspace.clone(),
+                profile: session.profile.clone(),
+            }
+        } else {
+            EventPayload::SessionCreated {
+                work_mode: session.work_mode,
+                permissions: config.permissions_mode,
+                workspace: session.workspace.clone(),
+                profile: session.profile.clone(),
+            }
+        };
+        events.emit(payload, None, true).await?;
+    }
     match runtime.run(&mut session).await {
+        Ok(result) if config.output == Output::Jsonl => Ok(status_code(result.status)),
+        Ok(result) if config.output == Output::Json => report_json(&result, &config),
         Ok(result) => Ok(report_result(&result, &session, streamed)),
         Err(error) => {
             report_runtime_error(&error, &config);
+            if let Some(events) = &events {
+                let result = RunResult {
+                    schema_version: SCHEMA_VERSION,
+                    session_id: Some(session.id),
+                    run_id: Some(run_id),
+                    status: RunStatus::Failed,
+                    stop_reason: Some(error.0.code.clone()),
+                    text: None,
+                    error: Some(error.0.clone()),
+                    usage: None,
+                    artifacts: vec![],
+                    persistence: Some(Persistence {
+                        saved: false,
+                        error: Some(error.0.clone()),
+                    }),
+                };
+                events
+                    .emit(
+                        saya_core::contract::EventPayload::RunFinished(result),
+                        Some(run_id),
+                        false,
+                    )
+                    .await?;
+                return Ok(1);
+            }
+            if config.output == Output::Json {
+                let result = RunResult {
+                    schema_version: SCHEMA_VERSION,
+                    session_id: Some(session.id),
+                    run_id: Some(run_id),
+                    status: RunStatus::Failed,
+                    stop_reason: Some(error.0.code.clone()),
+                    text: None,
+                    error: Some(error.0.clone()),
+                    usage: None,
+                    artifacts: vec![],
+                    persistence: Some(Persistence {
+                        saved: false,
+                        error: Some(error.0),
+                    }),
+                };
+                return report_json(&result, &config);
+            }
             Ok(1)
         }
     }
@@ -912,16 +1078,17 @@ async fn main() -> std::process::ExitCode {
             }
             Err(e) => fail(e),
         },
-        Some(Command::Run(args)) => match prompt(args) {
-            Err(e) => fail(e),
-            Ok(text) => match std::env::current_dir()
-                .map_err(|_| "cannot determine current directory".to_owned())
-                .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
-            {
-                Err(e) => fail(e),
-                Ok(c) => match personal_context(&cli, &c) {
-                    Err(e) => fail(e),
+        Some(Command::Run(args)) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
+        {
+            Err(e) => output_error(e, cli.output.map(Into::into)),
+            Ok(c) => match prompt(args) {
+                Err(e) => output_error(e, Some(c.output)),
+                Ok(text) => match personal_context(&cli, &c) {
+                    Err(e) => output_error(e, Some(c.output)),
                     Ok(personal) => {
+                        let output = c.output;
                         match run(
                             c,
                             args,
@@ -934,7 +1101,7 @@ async fn main() -> std::process::ExitCode {
                         .await
                         {
                             Ok(code) => code,
-                            Err(e) => fail(e),
+                            Err(e) => output_error(e, Some(output)),
                         }
                     }
                 },
@@ -959,10 +1126,10 @@ async fn main() -> std::process::ExitCode {
             .map_err(|_| "cannot determine current directory".to_owned())
             .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
         {
-            Err(e) => fail(e),
+            Err(e) => query_error(e, cli.output.map(Into::into)),
             Ok(config) => match query_sessions(&config, action).await {
                 Ok(code) => code,
-                Err(e) => fail(e),
+                Err(e) => query_error(e, Some(config.output)),
             },
         },
         Some(Command::Resume {

@@ -127,6 +127,11 @@ pub enum StoreChange {
         run_id: crate::contract::RunId,
         record: crate::project_context::ContextRecord,
     },
+    /// Durable runtime activity which may also be delivered as an event.
+    Activity {
+        run_id: crate::contract::RunId,
+        payload: crate::contract::EventPayload,
+    },
     ToolIntent {
         run_id: crate::contract::RunId,
         call: ToolCall,
@@ -146,6 +151,8 @@ pub enum StoreChange {
     ApprovalRequested(crate::contract::ApprovalRequest),
     RunFinished(RunResult),
     Event(Event),
+    /// Persist an event from a sequence range reserved for a session writer.
+    ReservedEvent(Event),
 }
 
 /// Storage boundary. The available in-memory implementation is not durable.

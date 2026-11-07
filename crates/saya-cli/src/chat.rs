@@ -684,6 +684,8 @@ pub async fn chat(
                     approvals: Preauthorizations::default(),
                     personal_context: personal_context.clone(),
                     anthropic_prompt_cache,
+                    events: None,
+                    run_id: None,
                 };
                 let (mut runtime, streamed) = match build_runtime(&config, &current, &text, launch)
                 {

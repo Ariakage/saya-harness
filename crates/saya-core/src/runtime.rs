@@ -8,8 +8,9 @@ use crate::{
         ToolContext, ToolDefinition,
     },
     contract::{
-        ApprovalRequest, BoundaryError, ErrorInfo, HistoryItem, ModelPurpose, Persistence, Run,
-        RunResult, RunStatus, SCHEMA_VERSION, Session, ToolCall, ToolResult, WorkMode,
+        ApprovalRequest, ApprovalSource, BoundaryError, ErrorInfo, EventPayload, HistoryItem,
+        ModelPurpose, Persistence, Run, RunResult, RunStatus, SCHEMA_VERSION, Session, ToolCall,
+        ToolResult, WorkMode,
     },
     dispatch::{DispatchReview, ToolDispatcher},
     input::{InputHandler, InputRequest},
@@ -874,6 +875,17 @@ impl AgentRuntime {
                     other => other?,
                 };
                 if let Some(answer) = answer {
+                    self.store
+                        .commit(&[StoreChange::Activity {
+                            run_id: self.run.id,
+                            payload: EventPayload::PermissionResolved {
+                                approval_id: request.approval_id.clone(),
+                                call_id: request.call_id.clone(),
+                                decision: if answer { "allow" } else { "deny" }.into(),
+                                source: ApprovalSource::User,
+                            },
+                        }])
+                        .await?;
                     if let Some(state) = &self.project_context
                         && !project_context_is_current(state, call)?
                     {
@@ -934,7 +946,20 @@ impl AgentRuntime {
         };
         let authorization = match authorization {
             Authorization::Pending(request) => match self.confirm(&request).await {
-                Ok(Some(answer)) => self.dispatcher.resolve(&request.approval_id, answer)?,
+                Ok(Some(answer)) => {
+                    self.store
+                        .commit(&[StoreChange::Activity {
+                            run_id: self.run.id,
+                            payload: EventPayload::PermissionResolved {
+                                approval_id: request.approval_id.clone(),
+                                call_id: request.call_id.clone(),
+                                decision: if answer { "allow" } else { "deny" }.into(),
+                                source: ApprovalSource::User,
+                            },
+                        }])
+                        .await?;
+                    self.dispatcher.resolve(&request.approval_id, answer)?
+                }
                 Err(e) if e.0.code == "stale_approval" => Authorization::Stale,
                 Err(e) => return Err(e),
                 Ok(None) => {
@@ -974,6 +999,16 @@ impl AgentRuntime {
                     }
                     let request = InputRequest::parse(call)?;
                     permit.consume_input(call, &context)?;
+                    self.store
+                        .commit(&[StoreChange::Activity {
+                            run_id: self.run.id,
+                            payload: EventPayload::InputRequested {
+                                input_id: call.call_id.clone(),
+                                question: request.question.clone(),
+                                options: request.options.clone(),
+                            },
+                        }])
+                        .await?;
                     let answer = if let Some(handler) = &self.input {
                         self.store
                             .commit(&[StoreChange::ToolIntent {
@@ -991,6 +1026,15 @@ impl AgentRuntime {
                     };
                     let result = match answer {
                         Some(answer) if !answer.trim().is_empty() && answer.len() <= 65536 => {
+                            self.store
+                                .commit(&[StoreChange::Activity {
+                                    run_id: self.run.id,
+                                    payload: EventPayload::InputReceived {
+                                        input_id: call.call_id.clone(),
+                                        answer: answer.clone(),
+                                    },
+                                }])
+                                .await?;
                             ToolResult {
                                 ok: true,
                                 data: Some(serde_json::json!({"answer": answer})),
@@ -1304,13 +1348,41 @@ impl AgentRuntime {
                     "needs_input" => RunStatus::NeedsInput,
                     _ => RunStatus::Failed,
                 };
-                let text = session.history[initial..].iter().rev().find_map(|item| {
-                    if let HistoryItem::AssistantPartial(text) = item {
-                        Some(text.clone())
-                    } else {
-                        None
-                    }
-                });
+                let text = session.history[initial..]
+                    .iter()
+                    .rev()
+                    .find_map(|item| {
+                        if let HistoryItem::AssistantPartial(text) = item {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        if status == RunStatus::NeedsInput {
+                            session.history[initial..]
+                                .iter()
+                                .rev()
+                                .find_map(|item| match item {
+                                    HistoryItem::ToolResult { result, .. }
+                                        if result
+                                            .error
+                                            .as_ref()
+                                            .is_some_and(|e| e.code == "needs_input") =>
+                                    {
+                                        result
+                                            .data
+                                            .as_ref()?
+                                            .get("question")?
+                                            .as_str()
+                                            .map(str::to_owned)
+                                    }
+                                    _ => None,
+                                })
+                        } else {
+                            None
+                        }
+                    });
                 (status, err.0.code.clone(), text, Some(err.0))
             }
         };

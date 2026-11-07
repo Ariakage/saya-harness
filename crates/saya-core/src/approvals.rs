@@ -3,11 +3,12 @@
 use crate::{
     boundary::{Cancellation, Model, Store, StoreChange, ToolContext},
     contract::{
-        ApprovalRequest, BoundaryError, ErrorInfo, PermissionMode, RunId, ToolCall, WorkMode,
+        ApprovalRequest, ApprovalSource, BoundaryError, ErrorInfo, EventPayload, PermissionMode,
+        ReviewSource, RunId, ToolCall, WorkMode,
     },
     mode::ModeController,
     permissions::{Decision, Operation, Policy},
-    review::{ReviewConfig, ReviewInput, SharedBudget, review_operation},
+    review::{ReviewConfig, ReviewDecisionSource, ReviewInput, SharedBudget, review_operation},
     tools::{
         exec::{ExecGate, ExecPlan, resolve_executable},
         read::ReadGate,
@@ -426,6 +427,31 @@ impl ApprovalManager {
             cancel,
         )
         .await?;
+        let source = match review.source {
+            ReviewDecisionSource::Rule => ReviewSource::Rule,
+            ReviewDecisionSource::Model => ReviewSource::Model,
+            ReviewDecisionSource::HumanFallback if review.reason == "review_sensitive_data" => {
+                ReviewSource::Rule
+            }
+            ReviewDecisionSource::HumanFallback => ReviewSource::Model,
+        };
+        let decision = match review.decision {
+            Decision::Allow => "allow",
+            Decision::Ask => "ask",
+            Decision::Deny => "deny",
+            Decision::ModelReview => "model_review",
+        };
+        self.store
+            .commit(&[StoreChange::Activity {
+                run_id: self.run_id,
+                payload: EventPayload::PermissionReviewed {
+                    call_id: input.call.call_id.clone(),
+                    decision: decision.into(),
+                    source,
+                    reason: review.reason.clone(),
+                },
+            }])
+            .await?;
         if cancel.is_cancelled() {
             return Err(failure("cancelled", "authorization cancelled"));
         }
@@ -449,16 +475,34 @@ impl ApprovalManager {
             && binding.permission_revision == self.initial_permission_revision
             && binding.permissions == self.initial_permissions
         {
-            let mut state = self.state.lock().map_err(|_| locked())?;
-            if state.rejected.contains(&rejection_key(&binding)) {
-                return Ok(Authorization::Denied("previously_denied"));
-            }
-            if let Some(index) = state
-                .preapproved
-                .iter()
-                .position(|item| item.argv == argv && item.cwd == cwd)
-            {
-                state.preapproved.remove(index);
+            let preapproved = {
+                let mut state = self.state.lock().map_err(|_| locked())?;
+                if state.rejected.contains(&rejection_key(&binding)) {
+                    return Ok(Authorization::Denied("previously_denied"));
+                }
+                if let Some(index) = state
+                    .preapproved
+                    .iter()
+                    .position(|item| item.argv == argv && item.cwd == cwd)
+                {
+                    state.preapproved.remove(index);
+                    true
+                } else {
+                    false
+                }
+            };
+            if preapproved {
+                self.store
+                    .commit(&[StoreChange::Activity {
+                        run_id: self.run_id,
+                        payload: EventPayload::PermissionResolved {
+                            approval_id: format!("preauthorization-{}", input.call.call_id),
+                            call_id: input.call.call_id.clone(),
+                            decision: "allow".into(),
+                            source: ApprovalSource::Preauthorization,
+                        },
+                    }])
+                    .await?;
                 return Ok(Authorization::Permit(
                     self.permit(binding, input.call.call_id.clone()),
                 ));

@@ -61,7 +61,8 @@ impl Store for MemoryStore {
                             return Err(failure("duplicate run"));
                         }
                     }
-                    StoreChange::ProjectContext { run_id, .. } => {
+                    StoreChange::ProjectContext { run_id, .. }
+                    | StoreChange::Activity { run_id, .. } => {
                         if !next.runs.contains_key(run_id) {
                             return Err(failure("run not found"));
                         }
@@ -119,7 +120,9 @@ impl Store for MemoryStore {
                             return Err(failure("run not found"));
                         }
                     }
-                    StoreChange::ApprovalRequested(_) | StoreChange::Event(_) => {}
+                    StoreChange::ApprovalRequested(_)
+                    | StoreChange::Event(_)
+                    | StoreChange::ReservedEvent(_) => {}
                 }
                 next.changes.push(change.clone());
             }

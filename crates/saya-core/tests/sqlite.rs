@@ -1012,3 +1012,66 @@ async fn recovery_links_background_launch_and_child_without_replay()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn reserved_event_sequences_are_never_reused_and_commit_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, run) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store
+        .commit(&[
+            StoreChange::Session(session.clone()),
+            StoreChange::RunStarted(run.clone()),
+        ])
+        .await?;
+    let (first, end) = store.reserve_event_sequences(session.id, 10).await?;
+    assert_eq!((first, end), (1, 10));
+    store
+        .commit(&[StoreChange::ReservedEvent(event(&session, &run, first))])
+        .await?;
+    assert!(
+        store
+            .commit(&[StoreChange::ReservedEvent(event(&session, &run, first))])
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .commit(&[StoreChange::ReservedEvent(event(&session, &run, end + 1))])
+            .await
+            .is_err()
+    );
+    let child = ToolCall {
+        call_id: "uncommitted".into(),
+        name: "read_file".into(),
+        arguments: "{}".into(),
+    };
+    assert!(
+        store
+            .commit(&[
+                StoreChange::ToolIntent {
+                    run_id: run.id,
+                    call: child
+                },
+                StoreChange::ReservedEvent(event(&session, &run, first))
+            ])
+            .await
+            .is_err()
+    );
+    let db = Connection::open(store.path())?;
+    let count: i64 = db.query_row(
+        "SELECT count(*) FROM tool_calls WHERE call_id='uncommitted'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(count, 0);
+    drop(db);
+    drop(store);
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    assert_eq!(
+        store.reserve_event_sequences(session.id, 5).await?,
+        (11, 15)
+    );
+    Ok(())
+}
