@@ -356,3 +356,148 @@ async fn session_lock_rejects_other_writer_but_allows_reads()
     let _next = second.lock_session(session.id)?;
     Ok(())
 }
+
+#[test]
+fn sqlite_lock_child_process() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, Write};
+    let Ok(directory) = std::env::var("SAYA_TEST_LOCK_DIR") else {
+        return Ok(());
+    };
+    let id: SessionId =
+        serde_json::from_value(serde_json::json!(std::env::var("SAYA_TEST_LOCK_ID")?))?;
+    let store = SqliteStore::open(Path::new(&directory), vec![])?;
+    let _lock = SqliteStore::lock_existing(Path::new(&directory), id)?;
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    runtime.block_on(store.commit(&[StoreChange::History {
+        session_id: id,
+        item: HistoryItem::UserText("live WAL data".into()),
+    }]))?;
+    println!("SAYA_CHILD_READY");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn real_process_lock_and_readonly_live_wal_preflight()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::{Command, Stdio},
+        sync::mpsc,
+        time::Duration,
+    };
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    let lock = store.lock_session(session.id)?;
+    store.create_session(&session, "hash").await?;
+    drop(lock);
+    drop(store);
+    let mut child = Command::new(std::env::current_exe()?)
+        .args(["--exact", "sqlite_lock_child_process", "--nocapture"])
+        .env("SAYA_TEST_LOCK_DIR", temp.path())
+        .env("SAYA_TEST_LOCK_ID", session.id.0.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("missing stdout")?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("SAYA_CHILD_READY") {
+                let _ = tx.send(());
+            }
+        }
+    });
+    rx.recv_timeout(Duration::from_secs(5))?;
+    let snapshot = [
+        "sessions.sqlite3",
+        "sessions.sqlite3-wal",
+        "sessions.sqlite3-shm",
+    ]
+    .map(|name| fs::read(temp.path().join(name)).unwrap());
+    let metadata = SqliteStore::peek_session(temp.path(), session.id)?.ok_or("session missing")?;
+    assert_eq!(metadata.id, session.id);
+    let after = [
+        "sessions.sqlite3",
+        "sessions.sqlite3-wal",
+        "sessions.sqlite3-shm",
+    ]
+    .map(|name| fs::read(temp.path().join(name)).unwrap());
+    assert_eq!(snapshot, after);
+    let error = match SqliteStore::lock_existing(temp.path(), session.id) {
+        Ok(_) => return Err("second process acquired lock".into()),
+        Err(e) => e,
+    };
+    assert_eq!(error.0.code, "session_busy");
+    let reader = SqliteStore::open(temp.path(), vec![])?;
+    assert!(
+        reader
+            .load_session(session.id)
+            .await?
+            .ok_or("missing")?
+            .history
+            .iter()
+            .any(|item| matches!(item, HistoryItem::UserText(v) if v == "live WAL data"))
+    );
+    drop(reader);
+    child
+        .stdin
+        .take()
+        .ok_or("missing stdin")?
+        .write_all(b"exit\n")?;
+    assert!(child.wait()?.success());
+    let _lock = SqliteStore::lock_existing(temp.path(), session.id)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn killing_writer_releases_process_session_lock() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        io::{BufRead, BufReader},
+        process::{Command, Stdio},
+        sync::mpsc,
+        time::Duration,
+    };
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    let lock = store.lock_session(session.id)?;
+    store.create_session(&session, "hash").await?;
+    drop(lock);
+    drop(store);
+    let mut child = Command::new(std::env::current_exe()?)
+        .args(["--exact", "sqlite_lock_child_process", "--nocapture"])
+        .env("SAYA_TEST_LOCK_DIR", temp.path())
+        .env("SAYA_TEST_LOCK_ID", session.id.0.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("missing stdout")?;
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("SAYA_CHILD_READY") {
+                let _ = send.send(());
+            }
+        }
+    });
+    receive.recv_timeout(Duration::from_secs(5))?;
+    child.kill()?;
+    child.wait()?;
+    let _lock = SqliteStore::lock_existing(temp.path(), session.id)?;
+    let reopened = SqliteStore::open(temp.path(), vec![])?;
+    assert!(
+        reopened
+            .load_session(session.id)
+            .await?
+            .ok_or("session missing")?
+            .history
+            .iter()
+            .any(|item| matches!(item, HistoryItem::UserText(value) if value == "live WAL data"))
+    );
+    Ok(())
+}

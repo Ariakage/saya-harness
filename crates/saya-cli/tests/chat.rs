@@ -10,6 +10,7 @@ use std::{
     },
     path::Path,
     process::{Child, Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -29,11 +30,13 @@ struct Pty {
     master: Option<fs::File>,
     child: Child,
     buffer: Vec<u8>,
-    _storage: TempDir,
+    _storage: Arc<TempDir>,
 }
 impl Pty {
     fn start(root: &Path, cfg: &Path, extra: &[&str]) -> Self {
-        let storage = TempDir::new().unwrap();
+        Self::start_with_storage(root, cfg, extra, Arc::new(TempDir::new().unwrap()))
+    }
+    fn start_with_storage(root: &Path, cfg: &Path, extra: &[&str], storage: Arc<TempDir>) -> Self {
         let mut master = -1;
         let mut slave = -1;
         // SAFETY: arguments point to valid descriptors; ownership moves to File below.
@@ -185,6 +188,69 @@ fn continuous_chat_keeps_history_and_changes_mode() {
             .unwrap()
             .contains("# Work mode: PLAN")
     );
+}
+
+#[test]
+fn resume_waits_for_input_and_uses_original_mode_with_new_permissions() {
+    let temp = TempDir::new().unwrap();
+    let storage = Arc::new(TempDir::new().unwrap());
+    let (url, requests) = fixture::server(vec![
+        ("application/json", answer("first answer")),
+        ("application/json", answer("second answer")),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut first = Pty::start_with_storage(temp.path(), &cfg, &["chat"], storage.clone());
+    first.until("> ");
+    first.send("first task\n");
+    first.until("first answer");
+    first.until("> ");
+    first.send("/mode plan\n");
+    first.until("Mode: plan");
+    first.until("> ");
+    assert!(first.finish().success());
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let listed = Command::new(env!("CARGO_BIN_EXE_saya"))
+        .env_clear()
+        .env("HOME", temp.path())
+        .env("XDG_DATA_HOME", storage.path().join("data"))
+        .env("XDG_STATE_HOME", storage.path().join("state"))
+        .env("XDG_CACHE_HOME", storage.path().join("cache"))
+        .current_dir(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let list: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let mut resumed = Pty::start_with_storage(
+        temp.path(),
+        &cfg,
+        &["--permissions", "manual", "resume", id],
+        storage,
+    );
+    resumed.until("> ");
+    assert!(requests.try_recv().is_err());
+    resumed.send("/status\n");
+    resumed.until("mode: plan; pending: none; permissions: manual");
+    resumed.until("> ");
+    resumed.send("second task\n");
+    resumed.until("second answer");
+    resumed.until("> ");
+    assert!(resumed.finish().success());
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    assert!(request.contains("first task"));
+    assert!(request.contains("first answer"));
+    assert!(request.contains("second task"));
 }
 #[test]
 fn profile_selection_and_slash_escape_are_handled() {

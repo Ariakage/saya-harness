@@ -84,8 +84,6 @@ pub async fn resume(
     cwd_explicit: bool,
     profile_explicit: bool,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
-    // An explicitly selected PLAN must never create its database inside the workspace.
-    check_roots(config, &config.cwd, config.mode)?;
     let id = parse_id(raw)?;
     let preview = SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
     let preview_workspace = if cwd_explicit {
@@ -94,8 +92,16 @@ pub async fn resume(
         &preview.workspace
     };
     check_roots(config, preview_workspace, preview.work_mode)?;
+    let lock = SqliteStore::lock_existing(&config.data_dir, id)?;
+    let locked_preview =
+        SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
+    let locked_workspace = if cwd_explicit {
+        &config.cwd
+    } else {
+        &locked_preview.workspace
+    };
+    check_roots(config, locked_workspace, locked_preview.work_mode)?;
     let store = open(config)?;
-    let lock = store.lock_session(id)?;
     let mut session = store.load_session(id).await?.ok_or("session not found")?;
     if store.has_unfinished_run(id).await? {
         return Err("session contains an interrupted run; recovery is not available yet".into());

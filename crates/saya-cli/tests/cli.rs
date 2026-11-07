@@ -367,6 +367,33 @@ fn config_init_never_overwrites_and_check_accepts_empty_template() {
             .success()
     );
 }
+
+#[test]
+fn concurrent_processes_can_initialize_the_same_database() {
+    let temp = TempDir::new().unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
+    let mut children = Vec::new();
+    for _ in 0..6 {
+        children.push(
+            command(temp.path())
+                .arg("--config")
+                .arg(&cfg)
+                .args(["session", "list"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
 #[test]
 fn prompt_sources_are_explicit_mutually_exclusive_and_nonempty() {
     let temp = TempDir::new().unwrap();
@@ -927,4 +954,128 @@ fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
     let _ = release_tx.send(());
     assert_eq!(output.status.code(), Some(130));
     assert!(String::from_utf8_lossy(&output.stderr).contains("cancelled"));
+}
+
+#[test]
+fn cli_session_lock_child() -> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        boundary::{Store, StoreChange},
+        contract::{HistoryItem, SessionId},
+        sqlite::SqliteStore,
+    };
+    let Ok(directory) = std::env::var("SAYA_TEST_LOCK_DIR") else {
+        return Ok(());
+    };
+    let id: SessionId = serde_json::from_value(json!(std::env::var("SAYA_TEST_LOCK_ID")?))?;
+    let store = SqliteStore::open(Path::new(&directory), vec![])?;
+    let _lock = SqliteStore::lock_existing(Path::new(&directory), id)?;
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    runtime.block_on(store.commit(&[StoreChange::History {
+        session_id: id,
+        item: HistoryItem::UserText("held session".into()),
+    }]))?;
+    println!("SAYA_CHILD_READY");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(())
+}
+
+#[test]
+fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dyn std::error::Error>>
+{
+    use std::{
+        io::{BufRead, BufReader},
+        sync::mpsc,
+    };
+    let temp = TempDir::new()?;
+    let (url, _) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"one"}), "stop"),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"two"}), "stop"),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"continued"}), "stop"),
+        ),
+    ])?;
+    let cfg = config(temp.path(), &url, "auto");
+    for prompt in ["first", "second"] {
+        let output = command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["run", prompt])
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let listing = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()?;
+    let data: serde_json::Value = serde_json::from_slice(&listing.stdout)?;
+    let entries = data["data"].as_array().ok_or("missing entries")?;
+    let get_id = |title: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["title"] == title)
+            .and_then(|entry| entry["id"].as_str())
+            .map(str::to_owned)
+            .ok_or("missing session")
+    };
+    let held = get_id("first")?;
+    let other = get_id("second")?;
+    let mut child = Command::new(std::env::current_exe()?)
+        .args(["--exact", "cli_session_lock_child", "--nocapture"])
+        .env("SAYA_TEST_LOCK_DIR", temp.path().join(".local/share/saya"))
+        .env("SAYA_TEST_LOCK_ID", &held)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("missing stdout")?;
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("SAYA_CHILD_READY") {
+                let _ = send.send(());
+            }
+        }
+    });
+    receive.recv_timeout(Duration::from_secs(5))?;
+    let busy = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", &held, "retry"])
+        .output()?;
+    assert!(!busy.status.success());
+    assert!(
+        String::from_utf8_lossy(&busy.stderr).contains("session_busy"),
+        "{}",
+        String::from_utf8_lossy(&busy.stderr)
+    );
+    let available = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", &other, "continue"])
+        .output()?;
+    assert!(
+        available.status.success(),
+        "{}",
+        String::from_utf8_lossy(&available.stderr)
+    );
+    child
+        .stdin
+        .take()
+        .ok_or("missing stdin")?
+        .write_all(b"exit\n")?;
+    assert!(child.wait()?.success());
+    Ok(())
 }

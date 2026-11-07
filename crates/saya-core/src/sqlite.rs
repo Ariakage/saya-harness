@@ -18,7 +18,7 @@ use std::{
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const DB_NAME: &str = "sessions.sqlite3";
@@ -349,8 +349,39 @@ pub struct SessionSummary {
     pub last_status: Option<crate::contract::RunStatus>,
 }
 impl SqliteStore {
-    /// Read only the last checkpointed session metadata without creating SQLite
-    /// side files. A nonempty WAL makes this preflight inconclusive.
+    /// Lock an existing session without creating any files. Call after a
+    /// read-only preflight and retain until all session writes are complete.
+    pub fn lock_existing(
+        data_dir: &Path,
+        session_id: SessionId,
+    ) -> Result<SessionLock, BoundaryError> {
+        let root = std::fs::canonicalize(data_dir)
+            .map_err(|_| error("storage_error", "data directory is unavailable"))?;
+        let directory = root.join("locks");
+        if !std::fs::symlink_metadata(&directory)
+            .map_err(|_| error("storage_error", "session lock directory is unavailable"))?
+            .is_dir()
+        {
+            return Err(error("storage_error", "invalid lock directory"));
+        }
+        let file = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(directory.join(format!("{}.lock", session_id.0)))
+            .map_err(|_| error("storage_error", "session lock is unavailable"))?;
+        // SAFETY: the descriptor is valid and flock retains no pointer.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let cause = std::io::Error::last_os_error();
+            return Err(if cause.kind() == std::io::ErrorKind::WouldBlock {
+                error("session_busy", "session is already in use")
+            } else {
+                error("storage_error", "cannot acquire session lock")
+            });
+        }
+        Ok(SessionLock(file))
+    }
+    /// Read session metadata without creating or modifying SQLite side files.
+    /// A live WAL is read through SQLite's read-only shared-memory mode.
     pub fn peek_session(
         data_dir: &Path,
         session_id: SessionId,
@@ -367,21 +398,23 @@ impl SqliteStore {
             ));
         }
         let wal = directory.join(format!("{DB_NAME}-wal"));
-        match std::fs::symlink_metadata(wal) {
-            Ok(meta) if !meta.is_file() || meta.len() > 0 => {
-                return Err(error(
-                    "storage_busy",
-                    "database WAL must be checkpointed before read-only preflight",
-                ));
+        let live_wal = match std::fs::symlink_metadata(wal) {
+            Ok(meta) if !meta.is_file() => {
+                return Err(error("storage_corrupt", "invalid database WAL"));
             }
+            Ok(meta) => meta.len() > 0,
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 return Err(error("storage_error", "cannot inspect database WAL"));
             }
-            _ => {}
-        }
+            _ => false,
+        };
         let mut uri = reqwest::Url::from_file_path(&path)
             .map_err(|_| error("storage_error", "invalid database path"))?;
-        uri.set_query(Some("immutable=1"));
+        uri.set_query(Some(if live_wal {
+            "readonly_shm=1"
+        } else {
+            "immutable=1"
+        }));
         let conn = Connection::open_with_flags(
             uri.as_str(),
             OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -395,7 +428,7 @@ impl SqliteStore {
         let app: i64 = conn
             .pragma_query_value(None, "application_id", |r| r.get(0))
             .map_err(sql_error)?;
-        if version != VERSION || app != APPLICATION_ID {
+        if !(1..=VERSION).contains(&version) || app != APPLICATION_ID {
             return Err(error(
                 if version > VERSION {
                     "storage_version"
@@ -604,9 +637,36 @@ impl SqliteStore {
     pub fn open(data_dir: &Path, secrets: Vec<String>) -> Result<Self, BoundaryError> {
         std::fs::create_dir_all(data_dir)
             .map_err(|_| error("storage_error", "cannot create data directory"))?;
-        let path = std::fs::canonicalize(data_dir)
-            .map_err(|_| error("storage_error", "cannot resolve data directory"))?
-            .join(DB_NAME);
+        let root = std::fs::canonicalize(data_dir)
+            .map_err(|_| error("storage_error", "cannot resolve data directory"))?;
+        let init = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(root.join(".database-init.lock"))
+            .map_err(|_| error("storage_error", "cannot open database initialization lock"))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            // SAFETY: the file owns a live descriptor; flock retains no pointer.
+            if unsafe { libc::flock(init.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                break;
+            }
+            let cause = std::io::Error::last_os_error();
+            if cause.kind() != std::io::ErrorKind::WouldBlock {
+                return Err(error(
+                    "storage_error",
+                    "cannot acquire database initialization lock",
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(error("storage_busy", "database initialization is busy"));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _init_guard = SessionLock(init);
+        let path = root.join(DB_NAME);
         let created = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -639,7 +699,7 @@ impl SqliteStore {
         let app: i64 = connection
             .pragma_query_value(None, "application_id", |r| r.get(0))
             .map_err(sql_error)?;
-        if !created && (version != VERSION || app != APPLICATION_ID) {
+        if !created && (!(1..=VERSION).contains(&version) || app != APPLICATION_ID) {
             return Err(error(
                 if version > VERSION {
                     "storage_version"
@@ -655,6 +715,9 @@ impl SqliteStore {
         connection
             .pragma_update(None, "foreign_keys", true)
             .map_err(sql_error)?;
+        connection
+            .pragma_update(None, "synchronous", "FULL")
+            .map_err(sql_error)?;
         let mode: String = connection
             .pragma_query_value(None, "journal_mode", |r| r.get(0))
             .map_err(sql_error)?;
@@ -666,9 +729,6 @@ impl SqliteStore {
                 return Err(error("storage_error", "SQLite WAL is unavailable"));
             }
         }
-        connection
-            .pragma_update(None, "synchronous", "FULL")
-            .map_err(sql_error)?;
         if created {
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
