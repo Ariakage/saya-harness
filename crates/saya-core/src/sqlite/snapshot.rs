@@ -382,7 +382,14 @@ fn read_checked(
         &key,
         &mut budget,
     )?;
-    let (last_change_seq,last_event_seq): (u64,u64) = tx.query_row("SELECT COALESCE((SELECT MAX(seq) FROM change_log WHERE session_id=?1),0),COALESCE((SELECT MAX(seq) FROM events WHERE session_id=?1),0)",[&key],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql_error)?;
+    let (last_change_seq, last_event_seq): (u64, u64) = tx
+        .query_row(
+            "SELECT COALESCE((SELECT MAX(seq) FROM change_log WHERE session_id=?1),0),
+                COALESCE((SELECT MAX(seq) FROM events WHERE session_id=?1),0)",
+            [&key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
     let created_at: String = tx
         .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |r| {
             r.get(0)

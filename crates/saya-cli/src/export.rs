@@ -116,12 +116,27 @@ fn response(
             )
         }
     };
-    let text=match output {
-        Output::Json=>serde_json::json!({"schema_version":1,"data":data,"error":error}).to_string(),
-        Output::Jsonl=>serde_json::json!({"schema_version":1,"type":kind,"timestamp":timestamp,"data":data,"error":error}).to_string(),
-        Output::Text=>match error {
-            Some(error)=>format!("saya: {}",safe_terminal_text(&format!("{}: {}",error.code,error.message))),
-            None=>format!("Exported {}",safe_terminal_text(&data.to_string())),
+    let text = match output {
+        Output::Json => serde_json::json!({
+            "schema_version": 1,
+            "data": data,
+            "error": error,
+        })
+        .to_string(),
+        Output::Jsonl => serde_json::json!({
+            "schema_version": 1,
+            "type": kind,
+            "timestamp": timestamp,
+            "data": data,
+            "error": error,
+        })
+        .to_string(),
+        Output::Text => match error {
+            Some(error) => format!(
+                "saya: {}",
+                safe_terminal_text(&format!("{}: {}", error.code, error.message))
+            ),
+            None => format!("Exported {}", safe_terminal_text(&data.to_string())),
         },
     };
     Response {

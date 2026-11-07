@@ -224,7 +224,23 @@ impl SessionExport {
         if let Some(fields) = session.as_object_mut() {
             fields.remove("history");
         }
-        let tool_calls=snapshot.tool_calls.iter().map(|stored|json!({"run_id":stored["run_id"],"call_id":stored["call_id"],"state":stored["state"],"call":selected_call(&stored["call"],options.include_tools),"result":if options.include_tools {stored["result"].clone()}else{result_summary(&stored["result"])}})).collect::<Vec<_>>();
+        let tool_calls = snapshot
+            .tool_calls
+            .iter()
+            .map(|stored| {
+                json!({
+                    "run_id": stored["run_id"],
+                    "call_id": stored["call_id"],
+                    "state": stored["state"],
+                    "call": selected_call(&stored["call"], options.include_tools),
+                    "result": if options.include_tools {
+                        stored["result"].clone()
+                    } else {
+                        result_summary(&stored["result"])
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
         let background_jobs = snapshot
             .background_jobs
             .iter()
