@@ -76,3 +76,14 @@ Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工�
 - **日志不可写**：检查状态目录权限与剩余空间；日志路径不应指向不安全的符号链接。
 
 当前不提供 OS 沙箱、MCP、插件系统、自动上下文压缩、TUI 或 GUI；后续规划见[能力路线图](capability-roadmap.md)。
+
+## 会话导出
+
+当前开发线可离线导出已保存会话，父目录须已存在，目标使用独占创建和0600权限。默认 Markdown、transcript 和省略工具正文，可显式选择完整范围与工具正文。
+
+```sh
+saya session export SESSION_ID --file ./session.md
+saya --output json session export SESSION_ID --format json --scope full --include-tools --file ./session.json
+```
+
+当前调用显式使用 PLAN 时，目标须位于工作区外。JSON／JSONL 的确认包含文件路径、字节数、SHA256及快照水位。取消退出130，其他导出错误退出2，错误码及文件发布保证见[导出说明](session-export.md)。

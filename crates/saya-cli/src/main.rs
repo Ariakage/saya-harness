@@ -1,5 +1,6 @@
 mod chat;
 mod events;
+mod export;
 use saya_app::{new_session, session};
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
@@ -117,6 +118,7 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum SessionAction {
+    Export(export::ExportArgs),
     List {
         #[arg(long, default_value_t = 1)]
         page: u64,
@@ -856,9 +858,13 @@ async fn query_sessions(
     config: &Config,
     action: &SessionAction,
 ) -> Result<u8, Box<dyn std::error::Error>> {
+    if let SessionAction::Export(args) = action {
+        return export::run(config, args).await;
+    }
     session::check_roots(config, &config.cwd, config.mode)?;
     let store = session::open(config)?;
     let mut data = match action {
+        SessionAction::Export(_) => return Err("invalid export routing".into()),
         SessionAction::List { page } => {
             let offset = page
                 .checked_sub(1)

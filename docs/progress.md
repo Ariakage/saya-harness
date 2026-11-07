@@ -32,6 +32,7 @@
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
 | DEV-039 | 完成 | 共享 EventWriter／EventModel、1秒有界 EventSink、人工输入桥与取消句柄已接入 CLI。3项桥接测试、CLI完整回归及 app／CLI Clippy 通过，覆盖队列背压／断开／过期回复，日志为 target/n0-dev039-*.log |
+| DEV-046 | 完成 | CLI离线导出和0600排他文件发布已实现，父路径身份复查、私有staging、摘要核验及机器错误码完整。7项发布测试、5项CLI验收和错误确认单测通过，涵盖RLIMIT写失败、路径替换、取消及已有目标保护 |
 | DEV-045 | 完成 | Markdown复用同一脱敏投影，动态围栏、HTML／ANSI／双向控制处理和总限额已实现。6项导出测试及 core Clippy通过 |
 | DEV-044 | 完成 | JSON导出 saya.session schema v1，范围／工具正文／内部态省略／复合调用关联／脱敏截断已实现。4项导出测试及core Clippy通过 |
 | DEV-043 | 完成 | 单只读事务快照与 WAL image 校验，包含全集合及真实持久水位。7项快照测试（含合法JSON篡改与可选字段兼容）、4项 WAL 回归（含重建限额及 SQLite VM 中断）和 core Clippy 通过，源128MiB／记录32MiB／100k行／5秒默认限额已固定 |

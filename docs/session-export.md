@@ -1,12 +1,12 @@
 # Session 导出设计
 
-**DEV-043 至 DEV-045 已实现只读快照、版本化 JSON 与 Markdown 导出。CLI 文件接入按 DEV-046 推进，以下 CLI 命令在该任务完成前保留为草案。**
+**DEV-043 至 DEV-046 已实现只读快照、JSON／Markdown 导出与 CLI 文件发布，本机离线验收通过。**
 
 ## 现有基础与入口
 
 `session list`、`session show` 和运行 JSON／JSONL 已在 0.1.0 实现。后续文件导出从 SQLite 中已保存的历史生成，读取与渲染可由 CLI、TUI 及未来 SDK 复用。
 
-候选 CLI 如下，命令在对应 DEV 完成后开放。
+CLI 使用以下显式命令。
 
 ```sh
 saya session export SESSION_ID --format markdown --scope transcript --file ./session.md
@@ -46,7 +46,7 @@ core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits
 
 导出使用持久化来源记录，文件系统中后续改动的指令内容具有独立时间点。供应商不透明签名／内部状态保存在运行存储的协议范围内，导出文件用省略元数据描述这些字段。会话导入、协议迁移和执行回放分别规划。
 
-## JSON 格式草案
+## JSON 格式 v1
 
 core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一投影，`to_json` 编码为独立 `schema_version = 1`、`export_type = saya.session` 格式。默认 scope 为 transcript，include_tools 为 false，每个字符串保留最多 64 KiB，最终编码最多 32 MiB。身份字段超过单字段限额时返回 `export_limit`，正文按 UTF-8 边界截取，并在 `truncated_fields` 保存 JSON Pointer、原字节数及保留字节数。
 
@@ -94,16 +94,16 @@ core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一
 
 消息与结构化记录放入动态长度代码围栏，围栏长度大于正文连续反引号最大长度。正文 HTML 字符转义，ANSI、回车及双向控制字符以显式 Unicode 转义呈现，中文和 emoji 保留。文件内容总上限与 JSON 一致，转义使 Markdown 超过编码限额时返回 `export_limit`。
 
-大结果采用一致的大小上限，JSON 和 Markdown 对同一字段采用相同的选择、脱敏与截断策略。读取预算超限时返回明确错误或带声明的有界结果，具体上限在 DEV-043 固定。
+大结果采用一致的大小上限，JSON 和 Markdown 对同一字段采用相同的选择、脱敏与截断策略。读取预算超限时返回明确错误或带声明的有界结果，当前默认每字段64 KiB，UTF-8边界截断并列出字段路径，单个导出32 MiB，超限返回 export_limit。
 
 ## 文件、安全与失败
 
-1. 用户显式选择目标路径，默认私有权限为 0600。已存在目标与符号链接在发布前检查，并使用具有排他创建语义的提交操作。
-2. 在目标父目录创建私有临时文件，完成渲染、写入和同步后发布。中途取消、磁盘满或编码失败时清理临时文件。
+1. 用户显式选择 UTF-8 目标路径，父目录须已存在，私有文件权限为 0600。已存在目标与符号链接在发布前检查，并使用具有排他创建语义的提交操作。
+2. 在目标父目录创建0700 staging目录及0600临时文件，完成渲染、写入和同步后通过排他hard link发布。打开父目录后核对身份，提交前与摘要核对后再次验证父路径。中途取消、磁盘满或编码失败时清理临时文件。
 3. 文件名竞争在最终提交点重新处理，已有文件保持原内容。并发测试覆盖验证与提交之间的路径替换。
 4. 当前调用显式选择 PLAN 时，目标及临时文件须位于工作区外，复用现有目录边界检查。运行记录的历史模式作为被导出数据保存。
 5. 脱敏再次应用于规范化快照，覆盖当前可解析配置凭据和已持久化遮蔽标记。省略字段及脱敏能力范围写入元数据。
-6. 导出由显式用户命令或 TUI 操作发起，模型请求次数为零。对活跃会话的查询完成后释放读事务，并在返回确认前核对最终文件摘要。
+6. 导出由显式用户命令发起，模型请求次数为零。对活跃会话的查询完成后释放读事务，并在返回确认前核对最终文件摘要。
 
 ## 验收
 
@@ -114,3 +114,5 @@ core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一
 - 同一快照的两种表达内容对应，stdout 的命令确认符合当前选择的输出模式。
 
 CLI 和 TUI 共用导出服务，任务定义及依赖见[后续开发计划](post-mvp-plan.md)。
+
+CLI 的 JSON／JSONL 确认保留具体错误码。取消在发布提交点前生效并退出130，其他失败退出2。发布后清理、目录身份或摘要核对失败返回 export_publish_uncertain，用户可按显式路径检查实际文件。投影、编码及发布运行于阻塞工作线程，终端中断仍由异步运行时接收。

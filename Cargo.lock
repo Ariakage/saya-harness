@@ -1246,9 +1246,11 @@ dependencies = [
 name = "saya-app"
 version = "0.1.0"
 dependencies = [
+ "cap-std",
  "libc",
  "saya-core",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
 ]
