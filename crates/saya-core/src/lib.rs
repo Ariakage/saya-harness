@@ -23,6 +23,7 @@ pub mod review;
 pub mod runtime;
 pub mod sqlite;
 pub mod tools;
+mod wal_recovery;
 
 #[cfg(test)]
 mod prototype;

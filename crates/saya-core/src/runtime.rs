@@ -698,8 +698,15 @@ impl AgentRuntime {
             };
             let item = HistoryItem::ToolResult {
                 call_id: call.call_id.clone(),
-                result,
+                result: result.clone(),
             };
+            if index == 0 && matches!(first_progress, CallProgress::WaitingInput) {
+                changes.push(StoreChange::ToolFinished {
+                    run_id: self.run.id,
+                    call_id: call.call_id.clone(),
+                    result,
+                });
+            }
             changes.push(StoreChange::History {
                 session_id: session.id,
                 item: item.clone(),
@@ -901,8 +908,14 @@ impl AgentRuntime {
                     let request = InputRequest::parse(call)?;
                     permit.consume_input(call, &context)?;
                     let answer = if let Some(handler) = &self.input {
-                        self.budget.pause()?;
+                        self.store
+                            .commit(&[StoreChange::ToolIntent {
+                                run_id: self.run.id,
+                                call: call.clone(),
+                            }])
+                            .await?;
                         *progress = CallProgress::WaitingInput;
+                        self.budget.pause()?;
                         let result = tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), result = handler.ask(&request, self.cancel.as_ref()) => result };
                         self.budget.resume()?;
                         result?
@@ -930,6 +943,20 @@ impl AgentRuntime {
                             truncated: false,
                         },
                     };
+                    if self.input.is_some() {
+                        crate::tools::write::save_result(
+                            self.store.as_ref(),
+                            call,
+                            &context,
+                            &result,
+                        )
+                        .await?;
+                        session.history.push(HistoryItem::ToolResult {
+                            call_id: call.call_id.clone(),
+                            result: result.clone(),
+                        });
+                        return Ok(result);
+                    }
                     return self.save_local(session, call, result).await;
                 }
                 let cancel = CallCancel::new(self.cancel.clone());

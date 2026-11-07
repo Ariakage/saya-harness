@@ -602,3 +602,239 @@ async fn killing_writer_releases_process_session_lock() -> Result<(), Box<dyn st
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn recovery_closes_interrupted_calls_without_replay_and_is_idempotent()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::contract::ApprovalRequest;
+    let temp = TempDir::new()?;
+    let (session, run) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store.create_session(&session, "hash").await?;
+    let calls: Vec<_> = ["running", "pending", "unstarted", "done"]
+        .into_iter()
+        .map(|id| ToolCall {
+            call_id: id.into(),
+            name: "write_file".into(),
+            arguments: "{}".into(),
+        })
+        .collect();
+    let mut changes = vec![StoreChange::RunStarted(run.clone())];
+    changes.extend(calls.iter().cloned().map(|call| StoreChange::History {
+        session_id: session.id,
+        item: HistoryItem::ToolCall(call),
+    }));
+    let ask = ToolCall {
+        call_id: "clarification".into(),
+        name: "ask_user".into(),
+        arguments: "{}".into(),
+    };
+    changes.push(StoreChange::History {
+        session_id: session.id,
+        item: HistoryItem::ToolCall(ask.clone()),
+    });
+    changes.extend([
+        StoreChange::ToolIntent {
+            run_id: run.id,
+            call: calls[0].clone(),
+        },
+        StoreChange::ToolIntent {
+            run_id: run.id,
+            call: ask,
+        },
+        StoreChange::ApprovalRequested(ApprovalRequest {
+            approval_id: "approval".into(),
+            call_id: "pending".into(),
+            run_id: run.id,
+            tool: "write_file".into(),
+            operation_summary: "write".into(),
+            arguments: serde_json::json!({}),
+            cwd: temp.path().into(),
+            work_mode: WorkMode::Work,
+        }),
+        StoreChange::ToolIntent {
+            run_id: run.id,
+            call: calls[3].clone(),
+        },
+        StoreChange::ToolFinished {
+            run_id: run.id,
+            call_id: "done".into(),
+            result: tool_result(),
+        },
+        StoreChange::History {
+            session_id: session.id,
+            item: HistoryItem::ToolResult {
+                call_id: "done".into(),
+                result: tool_result(),
+            },
+        },
+        StoreChange::ToolIntent {
+            run_id: run.id,
+            call: ToolCall {
+                call_id: "background-child".into(),
+                name: "exec".into(),
+                arguments: "{}".into(),
+            },
+        },
+    ]);
+    store.commit(&changes).await?;
+    let lock = store.lock_session(session.id)?;
+    let recovered = store.recover_interrupted(session.id).await?;
+    assert_eq!(
+        (
+            recovered.interrupted_runs,
+            recovered.unknown_tools,
+            recovered.closed_calls
+        ),
+        (1, 2, 4)
+    );
+    let saved = store.load_session(session.id).await?.ok_or("missing")?;
+    for (id, expected) in [
+        ("running", "outcome_unknown"),
+        ("pending", "needs_confirmation"),
+        ("unstarted", "not_executed"),
+        ("clarification", "input_interrupted"),
+    ] {
+        assert_eq!(saved.history.iter().filter(|item|matches!(item,HistoryItem::ToolResult {call_id,result} if call_id==id && result.error.as_ref().is_some_and(|e|e.code==expected))).count(),1);
+    }
+    assert_eq!(
+        saved
+            .history
+            .iter()
+            .filter(|item| matches!(item,HistoryItem::ToolResult {call_id,..} if call_id=="done"))
+            .count(),
+        1
+    );
+    assert!(!store.has_unfinished_run(session.id).await?);
+    assert_eq!(
+        store.recover_interrupted(session.id).await?,
+        Default::default()
+    );
+    let db = Connection::open(store.path())?;
+    let unknown: i64 = db.query_row(
+        "SELECT COUNT(*) FROM tool_calls WHERE run_id=?1 AND state='unknown'",
+        [run.id.0.to_string()],
+        |r| r.get(0),
+    )?;
+    assert_eq!(unknown, 2);
+    drop(lock);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_failure_rolls_back_all_repairs() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, run) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store.create_session(&session, "hash").await?;
+    let c = call();
+    store
+        .commit(&[
+            StoreChange::RunStarted(run.clone()),
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::ToolCall(c.clone()),
+            },
+            StoreChange::ToolIntent {
+                run_id: run.id,
+                call: c,
+            },
+        ])
+        .await?;
+    let db = Connection::open(store.path())?;
+    db.execute_batch("CREATE TRIGGER fail_recovery BEFORE UPDATE OF finished_at ON runs BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
+    let before = store.load_session(session.id).await?.ok_or("missing")?;
+    assert!(store.recover_interrupted(session.id).await.is_err());
+    assert_eq!(store.load_session(session.id).await?, Some(before));
+    assert!(store.has_unfinished_run(session.id).await?);
+    let state: String = db.query_row(
+        "SELECT state FROM tool_calls WHERE run_id=?1",
+        [run.id.0.to_string()],
+        |r| r.get(0),
+    )?;
+    assert_eq!(state, "running");
+    db.execute_batch("DROP TRIGGER fail_recovery")?;
+    assert_eq!(store.recover_interrupted(session.id).await?.closed_calls, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_session_update_retains_conservative_guard() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store.create_session(&session, "hash").await?;
+    let db = Connection::open(store.path())?;
+    db.execute_batch("CREATE TRIGGER fail_session_update BEFORE UPDATE OF metadata ON sessions BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
+    let mut next = session.clone();
+    next.work_mode = WorkMode::Plan;
+    assert!(
+        store
+            .commit(&[StoreChange::Session(next.clone())])
+            .await
+            .is_err()
+    );
+    assert_eq!(store.load_session(session.id).await?, Some(session.clone()));
+    let candidates =
+        SqliteStore::guard_candidates(temp.path(), session.id)?.ok_or("guard missing")?;
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c.work_mode == WorkMode::Work && c.workspace == session.workspace)
+    );
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c.work_mode == WorkMode::Plan && c.workspace == next.workspace)
+    );
+    db.execute_batch("DROP TRIGGER fail_session_update")?;
+    store
+        .commit(&[StoreChange::Session(session.clone())])
+        .await?;
+    let candidates =
+        SqliteStore::guard_candidates(temp.path(), session.id)?.ok_or("guard missing")?;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].work_mode, WorkMode::Work);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_does_not_guess_outcomes_for_dangling_calls_from_an_earlier_run()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, first) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store.create_session(&session, "hash").await?;
+    let first_call = call();
+    store
+        .commit(&[
+            StoreChange::RunStarted(first.clone()),
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::ToolCall(first_call),
+            },
+            StoreChange::RunFinished(result(&session, &first)),
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::UserText("new task".into()),
+            },
+        ])
+        .await?;
+    let second = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    store.commit(&[StoreChange::RunStarted(second)]).await?;
+    let before = store.load_session(session.id).await?;
+    let error = store
+        .recover_interrupted(session.id)
+        .await
+        .expect_err("ambiguous historical call");
+    assert_eq!(error.0.code, "storage_corrupt");
+    assert_eq!(store.load_session(session.id).await?, before);
+    assert!(store.has_unfinished_run(session.id).await?);
+    Ok(())
+}

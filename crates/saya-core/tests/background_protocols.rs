@@ -399,3 +399,94 @@ async fn background_review_and_execution_share_model_budget_across_protocols()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn recovered_tool_pairs_remain_valid_for_all_three_provider_protocols()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        boundary::{ModelRequest, ModelUpdate, StoreChange},
+        contract::{ModelPurpose, ToolCall},
+        sqlite::SqliteStore,
+    };
+    for protocol in [
+        ModelProtocol::ChatCompletions,
+        ModelProtocol::Responses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        let temp = support::temp_workspace()?;
+        let session = Session {
+            id: SessionId::new(),
+            workspace: temp.path().into(),
+            work_mode: WorkMode::Work,
+            profile: "test".into(),
+            protocol,
+            model: "fixture".into(),
+            history: vec![HistoryItem::UserText("first".into())],
+        };
+        let run = Run {
+            id: RunId::new(),
+            session_id: session.id,
+            work_mode: session.work_mode,
+            permissions: PermissionMode::Auto,
+        };
+        let call = ToolCall {
+            call_id: "crash-call".into(),
+            name: "read_file".into(),
+            arguments: "{\"path\":\"a\"}".into(),
+        };
+        let store = SqliteStore::open(&temp.path().join("data"), vec![])?;
+        store.create_session(&session, "hash").await?;
+        let mut changes = vec![StoreChange::RunStarted(run.clone())];
+        match protocol {
+            ModelProtocol::ChatCompletions=>{},
+            ModelProtocol::Responses=>changes.push(StoreChange::History {session_id:session.id,item:HistoryItem::ProviderItem {protocol,value:json!({"type":"function_call","id":"fc_1","status":"completed","call_id":"crash-call","name":"read_file","arguments":"{\"path\":\"a\"}"})}}),
+            ModelProtocol::AnthropicMessages=>{
+                changes.push(StoreChange::History {session_id:session.id,item:HistoryItem::ProviderItem {protocol,value:json!({"type":"thinking","thinking":"opaque","signature":"signed-fixture"})}});
+                changes.push(StoreChange::History {session_id:session.id,item:HistoryItem::ProviderItem {protocol,value:json!({"type":"tool_use","id":"crash-call","name":"read_file","input":{"path":"a"}})}});
+            }
+        }
+        changes.push(StoreChange::History {
+            session_id: session.id,
+            item: HistoryItem::ToolCall(call.clone()),
+        });
+        changes.push(StoreChange::ToolIntent {
+            run_id: run.id,
+            call,
+        });
+        store.commit(&changes).await?;
+        let _lock = store.lock_session(session.id)?;
+        assert_eq!(store.recover_interrupted(session.id).await?.closed_calls, 1);
+        let mut recovered = store.load_session(session.id).await?.ok_or("missing")?;
+        recovered
+            .history
+            .push(HistoryItem::UserText("continue".into()));
+        let (url, requests) =
+            fixture::server(vec![("text/event-stream", response(protocol, None, "ok"))])?;
+        let model = adapter(protocol, url)?;
+        let req = ModelRequest {
+            request_id: "id".into(),
+            purpose: ModelPurpose::Execution,
+            profile: "test".into(),
+            instructions: "test".into(),
+            dynamic_instructions: None,
+            max_output_tokens: None,
+            history: recovered.history,
+            tools: vec![],
+        };
+        let mut stream = model.start(&req, &Never).await?;
+        loop {
+            match stream.next(&Never).await? {
+                Some(ModelUpdate::Finished { .. }) => break,
+                Some(_) => {}
+                None => return Err("missing result".into()),
+            }
+        }
+        let sent = requests.recv_timeout(Duration::from_secs(2))?.to_string();
+        assert!(sent.contains("crash-call"));
+        assert!(sent.contains("outcome_unknown"));
+        if protocol == ModelProtocol::AnthropicMessages {
+            assert!(sent.contains("signed-fixture"));
+        }
+    }
+    Ok(())
+}

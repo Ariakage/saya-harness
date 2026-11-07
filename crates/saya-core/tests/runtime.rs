@@ -1451,6 +1451,46 @@ fn ask_call() -> HistoryItem {
 }
 
 #[tokio::test]
+async fn clarification_is_not_shown_if_its_intent_cannot_be_saved()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct CountingInput(AtomicBool);
+    impl saya_core::input::InputHandler for CountingInput {
+        fn ask<'a>(
+            &'a self,
+            _: &'a saya_core::input::InputRequest,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, Option<String>> {
+            Box::pin(async move {
+                self.0.store(true, Ordering::SeqCst);
+                Ok(Some("answer".into()))
+            })
+        }
+    }
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let model = Arc::new(FakeModel::new(vec![vec![ask_call()]]));
+    let store = Arc::new(FailingStore {
+        inner: MemoryStore::default(),
+        fail_result: false,
+    });
+    let input = Arc::new(CountingInput(AtomicBool::new(false)));
+    let mut runtime = runtime(temp.path(), run, model, store, Arc::new(NoCancel))?
+        .with_input_handler(input.clone());
+    assert_eq!(
+        runtime
+            .run(&mut session)
+            .await
+            .expect_err("intent failure")
+            .0
+            .code,
+        "storage_error"
+    );
+    assert!(!input.0.load(Ordering::SeqCst));
+    Ok(())
+}
+
+#[tokio::test]
 async fn noninteractive_clarification_preserves_question_and_stops()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;

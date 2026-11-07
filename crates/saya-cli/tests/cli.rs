@@ -251,6 +251,42 @@ fn resuming_plan_checks_workspace_before_creating_sqlite_side_files() {
 }
 
 #[test]
+fn new_plan_rejects_each_overlapping_storage_root_without_workspace_changes() {
+    for selected in ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
+        let workspace = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let cfg = config(workspace.path(), "http://127.0.0.1:1/v1", "auto");
+        let before: std::collections::BTreeSet<_> = fs::read_dir(workspace.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let mut cmd = command(workspace.path());
+        cmd.arg("--config")
+            .arg(&cfg)
+            .args(["--mode", "plan", "run", "inspect"]);
+        for name in ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
+            let root = if name == selected {
+                workspace.path().join("inside")
+            } else {
+                external.path().join(name)
+            };
+            cmd.env(name, root);
+        }
+        let result = cmd.output().unwrap();
+        assert_eq!(result.status.code(), Some(2), "{selected}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("PLAN storage directories overlap")
+        );
+        let after: std::collections::BTreeSet<_> = fs::read_dir(workspace.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(before, after, "{selected}");
+        assert!(!external.path().join("XDG_DATA_HOME/saya").exists());
+    }
+}
+
+#[test]
 fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("AGENTS.md"), "PROJECT_CONVENTION").unwrap();
@@ -1077,5 +1113,230 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
         .ok_or("missing stdin")?
         .write_all(b"exit\n")?;
     assert!(child.wait()?.success());
+    Ok(())
+}
+
+#[test]
+fn cli_crash_child() -> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        boundary::{Store, StoreChange},
+        contract::{HistoryItem, PermissionMode, Run, RunId, SessionId, ToolCall},
+        sqlite::SqliteStore,
+    };
+    let Ok(directory) = std::env::var("SAYA_TEST_CRASH_DIR") else {
+        return Ok(());
+    };
+    let id: SessionId = serde_json::from_value(json!(std::env::var("SAYA_TEST_CRASH_ID")?))?;
+    let store = SqliteStore::open(Path::new(&directory), vec![])?;
+    let _lock = SqliteStore::lock_existing(Path::new(&directory), id)?;
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    let session = runtime
+        .block_on(store.load_session(id))?
+        .ok_or("missing session")?;
+    let run = Run {
+        id: RunId::new(),
+        session_id: id,
+        work_mode: session.work_mode,
+        permissions: PermissionMode::Auto,
+    };
+    let call = ToolCall {
+        call_id: "crashed-call".into(),
+        name: "exec".into(),
+        arguments: json!({"argv":["touch",std::env::var("SAYA_TEST_CRASH_TARGET")?]}).to_string(),
+    };
+    runtime.block_on(store.commit(&[
+        StoreChange::RunStarted(run.clone()),
+        StoreChange::History {
+            session_id: id,
+            item: HistoryItem::ToolCall(call.clone()),
+        },
+        StoreChange::ToolIntent {
+            run_id: run.id,
+            call,
+        },
+    ]))?;
+    println!("SAYA_CRASH_READY");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(())
+}
+
+#[test]
+fn crashed_run_is_recovered_with_unknown_result_without_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    exercise_crash_recovery(false)
+}
+
+#[test]
+fn legacy_session_recovers_stranded_wal_without_writing_during_preflight()
+-> Result<(), Box<dyn std::error::Error>> {
+    exercise_crash_recovery(true)
+}
+
+fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        io::{BufRead, BufReader},
+        sync::mpsc,
+    };
+    let temp = TempDir::new()?;
+    let (url, requests) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"first"}), "stop"),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"recovered"}), "stop"),
+        ),
+    ])?;
+    let cfg = config(temp.path(), &url, "auto");
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "initial"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let listing = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()?;
+    let listing: serde_json::Value = serde_json::from_slice(&listing.stdout)?;
+    let id = listing["data"][0]["id"].as_str().ok_or("missing ID")?;
+    let target = temp.path().join("must-not-exist");
+    let mut child = Command::new(std::env::current_exe()?)
+        .args(["--exact", "cli_crash_child", "--nocapture"])
+        .env("SAYA_TEST_CRASH_DIR", temp.path().join(".local/share/saya"))
+        .env("SAYA_TEST_CRASH_ID", id)
+        .env("SAYA_TEST_CRASH_TARGET", &target)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let (send, receive) = mpsc::channel();
+    let stdout = child.stdout.take().ok_or("missing stdout")?;
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("SAYA_CRASH_READY") {
+                let _ = send.send(());
+            }
+        }
+    });
+    receive.recv_timeout(Duration::from_secs(5))?;
+    child.kill()?;
+    child.wait()?;
+    if legacy {
+        let data = temp.path().join(".local/share/saya");
+        fs::remove_file(data.join("locks").join(format!("{id}.guard")))?;
+        let files = [
+            "sessions.sqlite3",
+            "sessions.sqlite3-wal",
+            "sessions.sqlite3-shm",
+        ];
+        let before = files.map(|name| fs::read(data.join(name)).unwrap());
+        let session_id: saya_core::contract::SessionId = serde_json::from_value(json!(id))?;
+        assert!(saya_core::sqlite::SqliteStore::peek_session(&data, session_id)?.is_some());
+        let after = files.map(|name| fs::read(data.join(name)).unwrap());
+        assert_eq!(before, after);
+    }
+    let resumed = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "continue"])
+        .output()?;
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&resumed.stderr).contains("1 tool outcome(s) unknown"));
+    assert!(!target.exists());
+    let _ = requests.recv_timeout(Duration::from_secs(2))?;
+    let request = requests.recv_timeout(Duration::from_secs(2))?.to_string();
+    assert!(request.contains("crashed-call"));
+    assert!(request.contains("outcome_unknown"));
+    Ok(())
+}
+
+#[test]
+fn observed_tool_result_is_reported_when_persistence_fails()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    fs::write(temp.path().join("input.txt"), "observed fixture data")?;
+    let (url, _) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"first"}), "stop"),
+        ),
+        ("application/json", read_call()),
+    ])?;
+    let cfg = config(temp.path(), &url, "auto");
+    assert!(
+        command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["run", "first"])
+            .output()?
+            .status
+            .success()
+    );
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()?;
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout)?;
+    let id = list["data"][0]["id"].as_str().ok_or("missing id")?;
+    let db = rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3"))?;
+    db.execute_batch("CREATE TRIGGER reject_tool_result BEFORE UPDATE OF result ON tool_calls BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "read"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("observed tool result (not saved)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("observed fixture data"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn observed_result_redacts_configured_secret_when_save_is_rejected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let secret = "fake-credential-for-test";
+    fs::write(
+        temp.path().join("input.txt"),
+        format!("prefix {secret} suffix"),
+    )?;
+    let (url, _) = fixture::server(vec![("application/json", read_call())])?;
+    let cfg = config(temp.path(), &url, "auto");
+    let contents = fs::read_to_string(&cfg)?.replace(
+        "auth = \"none\"",
+        "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
+    );
+    fs::write(&cfg, contents)?;
+    let output = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "read"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("observed tool result (not saved)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("[REDACTED]"), "{stderr}");
+    assert!(!stderr.contains(secret));
     Ok(())
 }

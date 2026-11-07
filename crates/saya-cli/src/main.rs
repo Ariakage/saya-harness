@@ -238,6 +238,99 @@ fn safe_terminal_text(s: &str) -> String {
         })
         .collect()
 }
+fn redact_value(value: &mut serde_json::Value, secrets: &[String], depth: usize) {
+    match value {
+        serde_json::Value::String(text) => {
+            for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+                *text = text.replace(secret, "[REDACTED]");
+            }
+            if depth < 4
+                && let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
+                && !matches!(&nested, serde_json::Value::String(inner) if inner == text)
+            {
+                redact_value(&mut nested, secrets, depth + 1);
+                if let Ok(encoded) = serde_json::to_string(&nested) {
+                    *text = encoded;
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_value(item, secrets, depth);
+            }
+        }
+        serde_json::Value::Object(items) => {
+            let original = std::mem::take(items);
+            for (mut key, mut item) in original {
+                for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+                    key = key.replace(secret, "[REDACTED]");
+                }
+                redact_value(&mut item, secrets, depth);
+                items.insert(key, item);
+            }
+        }
+        _ => {}
+    }
+}
+fn contains_encoded_secret(text: &str, secrets: &[String]) -> bool {
+    secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+        .any(|secret| {
+            let mut candidate = secret.clone();
+            for _ in 0..6 {
+                if text.contains(&candidate) {
+                    return true;
+                }
+                let Ok(encoded) = serde_json::to_string(&candidate) else {
+                    return true;
+                };
+                let Some(fragment) = encoded.get(1..encoded.len().saturating_sub(1)) else {
+                    return true;
+                };
+                if fragment == candidate {
+                    break;
+                }
+                candidate = fragment.to_owned();
+            }
+            false
+        })
+}
+fn report_runtime_error(error: &BoundaryError, config: &Config) {
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(secrets) = secrets else {
+        eprintln!("saya: run failed; error details unavailable");
+        return;
+    };
+    let mut message = serde_json::Value::String(error.to_string());
+    redact_value(&mut message, &secrets, 0);
+    let message = message.as_str().unwrap_or("run failed");
+    if contains_encoded_secret(message, &secrets) {
+        eprintln!("saya: run failed; sensitive error details withheld");
+    } else {
+        eprintln!("saya: {}", safe_terminal_text(message));
+    }
+    if let Some(observed) = &error.2 {
+        if let Ok(mut value) = serde_json::to_value(observed) {
+            redact_value(&mut value, &secrets, 0);
+            let rendered = value.to_string();
+            if contains_encoded_secret(&rendered, &secrets) {
+                eprintln!("saya: observed tool result (not saved): sensitive details withheld");
+            } else {
+                eprintln!(
+                    "saya: observed tool result (not saved): {}",
+                    safe_terminal_text(&rendered)
+                );
+            }
+        } else {
+            eprintln!("saya: observed tool result could not be displayed");
+        }
+    }
+}
 impl Terminal {
     fn open() -> io::Result<Self> {
         use std::os::unix::fs::OpenOptionsExt;
@@ -702,6 +795,12 @@ async fn run(
     } else {
         session::create(&config, new_session(&config)?).await?
     };
+    if prepared.recovery.interrupted_runs > 0 {
+        eprintln!(
+            "saya: recovered {} interrupted run(s); {} tool outcome(s) unknown; no tools were replayed",
+            prepared.recovery.interrupted_runs, prepared.recovery.unknown_tools
+        );
+    }
     session::append(&mut prepared, text.clone()).await?;
     let mut session = prepared.session.clone();
     let approvals = if let Some(path) = &args.approval_file {
@@ -742,7 +841,7 @@ async fn run(
     match runtime.run(&mut session).await {
         Ok(result) => Ok(report_result(&result, &session, streamed)),
         Err(error) => {
-            eprintln!("saya: {error}");
+            report_runtime_error(&error, &config);
             Ok(1)
         }
     }
@@ -889,4 +988,30 @@ async fn main() -> std::process::ExitCode {
         },
     };
     std::process::ExitCode::from(code)
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    #[test]
+    fn redaction_detects_nested_encoded_credentials() {
+        let secret = r#"fake\"key\\tail"#.to_string();
+        let inner = serde_json::json!({"value":secret}).to_string();
+        let outer = serde_json::json!({"nested":inner}).to_string();
+        let mut value = serde_json::json!({"result":outer});
+        redact_value(&mut value, std::slice::from_ref(&secret), 0);
+        assert!(!contains_encoded_secret(
+            &value.to_string(),
+            std::slice::from_ref(&secret)
+        ));
+        let mut encoded = secret.clone();
+        for _ in 0..4 {
+            let quoted = serde_json::to_string(&encoded).unwrap();
+            encoded = quoted[1..quoted.len() - 1].to_owned();
+        }
+        assert!(contains_encoded_secret(
+            &format!("prefix {encoded} suffix"),
+            std::slice::from_ref(&secret)
+        ));
+    }
 }

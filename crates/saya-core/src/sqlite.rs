@@ -3,18 +3,19 @@
 use crate::{
     boundary::{Operation, Store, StoreChange},
     contract::{
-        BoundaryError, ErrorInfo, EventPayload, HistoryItem, SCHEMA_VERSION, Session, SessionId,
-        ToolState,
+        BoundaryError, ErrorInfo, EventPayload, HistoryItem, Persistence, RunId, RunResult,
+        RunStatus, SCHEMA_VERSION, Session, SessionId, ToolResult, ToolState, WorkMode,
     },
 };
 use rusqlite::{
     Connection, Error as SqlError, ErrorCode, OpenFlags, OptionalExtension, Transaction,
     TransactionBehavior, params,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
+    io::{Read, Write},
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -24,6 +25,165 @@ use std::{
 const DB_NAME: &str = "sessions.sqlite3";
 const APPLICATION_ID: i64 = 0x5341_5941;
 const VERSION: i64 = 2;
+
+/// One possible durable session location during an interrupted metadata update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardCandidate {
+    pub workspace: PathBuf,
+    pub work_mode: WorkMode,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionGuard {
+    session_id: SessionId,
+    candidates: Vec<GuardCandidate>,
+}
+fn candidate(session: &Session) -> GuardCandidate {
+    GuardCandidate {
+        workspace: session.workspace.clone(),
+        work_mode: session.work_mode,
+    }
+}
+fn read_guard(root: &Path, session_id: SessionId) -> Result<Option<SessionGuard>, BoundaryError> {
+    let directory = root.join("locks");
+    match std::fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        _ => return Err(error("storage_corrupt", "invalid session guard directory")),
+    }
+    let path = directory.join(format!("{}.guard", session_id.0));
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(error("storage_corrupt", "cannot open session guard")),
+    };
+    if !file
+        .metadata()
+        .map_err(|_| error("storage_corrupt", "invalid session guard"))?
+        .is_file()
+    {
+        return Err(error("storage_corrupt", "invalid session guard"));
+    }
+    let mut bytes = Vec::new();
+    file.take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| error("storage_corrupt", "cannot read session guard"))?;
+    if bytes.len() > 65_536 {
+        return Err(error("storage_corrupt", "session guard is too large"));
+    }
+    let guard: SessionGuard = serde_json::from_slice(&bytes)
+        .map_err(|_| error("storage_corrupt", "invalid session guard"))?;
+    if guard.session_id != session_id
+        || guard.candidates.is_empty()
+        || guard.candidates.len() > 32
+        || guard.candidates.iter().any(|c| !c.workspace.is_absolute())
+    {
+        return Err(error("storage_corrupt", "invalid session guard"));
+    }
+    Ok(Some(guard))
+}
+fn write_guard(root: &Path, guard: &SessionGuard, secrets: &[String]) -> Result<(), BoundaryError> {
+    let content = json(guard, secrets)?;
+    if content.len() > 65_536
+        || guard
+            .candidates
+            .iter()
+            .any(|item| !item.workspace.is_absolute())
+    {
+        return Err(error("storage_error", "invalid session guard data"));
+    }
+    let directory = root.join("locks");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| error("storage_error", "cannot create session guard directory"))?;
+    if !std::fs::symlink_metadata(&directory)
+        .map_err(|_| error("storage_error", "cannot inspect session guard directory"))?
+        .is_dir()
+    {
+        return Err(error("storage_error", "invalid session guard directory"));
+    }
+    let temporary = directory.join(format!(
+        ".{}.{}.tmp",
+        guard.session_id.0,
+        uuid::Uuid::now_v7()
+    ));
+    let target = directory.join(format!("{}.guard", guard.session_id.0));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&temporary)
+            .map_err(|_| error("storage_error", "cannot create session guard"))?;
+        file.write_all(content.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|_| error("storage_error", "cannot save session guard"))?;
+        std::fs::rename(&temporary, &target)
+            .map_err(|_| error("storage_error", "cannot replace session guard"))?;
+        File::open(&directory)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| error("storage_error", "cannot sync session guard directory"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+fn prepare_guard(
+    conn: &Connection,
+    root: &Path,
+    session: &Session,
+    secrets: &[String],
+) -> Result<(), BoundaryError> {
+    let mut guard = read_guard(root, session.id)?.unwrap_or(SessionGuard {
+        session_id: session.id,
+        candidates: vec![],
+    });
+    let prior: Option<String> = conn
+        .query_row(
+            "SELECT metadata FROM sessions WHERE id=?1",
+            [id(session.id.0)],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if let Some(prior) = prior {
+        let prior: Session = serde_json::from_str(&prior)
+            .map_err(|_| error("storage_corrupt", "invalid session data"))?;
+        if prior.id != session.id {
+            return Err(error("storage_corrupt", "invalid session identity"));
+        }
+        let old = candidate(&prior);
+        if !guard.candidates.contains(&old) {
+            guard.candidates.push(old);
+        }
+    }
+    let next = candidate(session);
+    if !guard.candidates.contains(&next) {
+        guard.candidates.push(next);
+    }
+    if guard.candidates.len() > 32 {
+        return Err(error(
+            "storage_error",
+            "too many unresolved session locations",
+        ));
+    }
+    write_guard(root, &guard, secrets)
+}
+fn finalize_guard(root: &Path, session: &Session, secrets: &[String]) -> Result<(), BoundaryError> {
+    write_guard(
+        root,
+        &SessionGuard {
+            session_id: session.id,
+            candidates: vec![candidate(session)],
+        },
+        secrets,
+    )
+}
 const SCHEMA: &str = r#"
 CREATE TABLE sessions (
  id TEXT PRIMARY KEY, metadata TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -82,6 +242,44 @@ fn sql_error(e: SqlError) -> BoundaryError {
         return error("storage_corrupt", "database is corrupt or is not SQLite");
     }
     error("storage_error", "database operation failed")
+}
+fn session_metadata(
+    conn: &Connection,
+    session_id: SessionId,
+) -> Result<Option<Session>, BoundaryError> {
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(sql_error)?;
+    let app: i64 = conn
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .map_err(sql_error)?;
+    if !(1..=VERSION).contains(&version) || app != APPLICATION_ID {
+        return Err(error(
+            if version > VERSION {
+                "storage_version"
+            } else {
+                "storage_corrupt"
+            },
+            "unsupported or unrecognized database",
+        ));
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT metadata FROM sessions WHERE id=?1",
+            [id(session_id.0)],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    raw.map(|raw| {
+        let session: Session = serde_json::from_str(&raw)
+            .map_err(|_| error("storage_corrupt", "invalid session data"))?;
+        if session.id != session_id || !session.history.is_empty() {
+            return Err(error("storage_corrupt", "invalid session identity"));
+        }
+        Ok(session)
+    })
+    .transpose()
 }
 fn check_schema(conn: &Connection) -> Result<(), BoundaryError> {
     let checked: String = conn
@@ -437,6 +635,184 @@ fn apply(
     }
     Ok(())
 }
+fn recover_transaction(
+    conn: &mut Connection,
+    session_id: SessionId,
+    secrets: &[String],
+) -> Result<RecoverySummary, BoundaryError> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql_error)?;
+    let key = id(session_id.0);
+    let runs: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM runs WHERE session_id=?1 AND finished_at IS NULL ORDER BY started_at,id").map_err(sql_error)?;
+        let rows = stmt.query_map([&key], |r| r.get(0)).map_err(sql_error)?;
+        rows.collect::<Result<_, _>>().map_err(sql_error)?
+    };
+    if runs.is_empty() {
+        return Ok(RecoverySummary::default());
+    }
+    let mut summary = RecoverySummary {
+        interrupted_runs: runs.len(),
+        ..Default::default()
+    };
+    let mut states: BTreeMap<String, (String, String, Option<String>)> = BTreeMap::new();
+    for run in &runs {
+        let mut stmt = tx
+            .prepare("SELECT call_id,state,result FROM tool_calls WHERE run_id=?1")
+            .map_err(sql_error)?;
+        let rows = stmt
+            .query_map([run], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        for row in rows {
+            let (call_id, state, result) = row.map_err(sql_error)?;
+            if states
+                .insert(call_id, (run.clone(), state, result))
+                .is_some()
+            {
+                return Err(error("storage_corrupt", "duplicate interrupted tool call"));
+            }
+        }
+    }
+    let items: Vec<HistoryItem> = {
+        let mut stmt = tx
+            .prepare("SELECT item FROM messages WHERE session_id=?1 ORDER BY ordinal")
+            .map_err(sql_error)?;
+        let rows = stmt
+            .query_map([&key], |r| r.get::<_, String>(0))
+            .map_err(sql_error)?;
+        rows.map(|row| {
+            serde_json::from_str(&row.map_err(sql_error)?)
+                .map_err(|_| error("storage_corrupt", "invalid stored history"))
+        })
+        .collect::<Result<_, _>>()?
+    };
+    let results: BTreeSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::ToolResult { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let current_input = items
+        .iter()
+        .rposition(|item| matches!(item, HistoryItem::UserText(_)))
+        .unwrap_or(0);
+    if items[..current_input]
+        .iter()
+        .any(|item| matches!(item, HistoryItem::ToolCall(call) if !results.contains(&call.call_id)))
+    {
+        return Err(error(
+            "storage_corrupt",
+            "an earlier run has an unresolved tool call",
+        ));
+    }
+    let mut calls = BTreeSet::new();
+    let mut closed_inputs = BTreeSet::new();
+    for item in &items[current_input..] {
+        if let HistoryItem::ToolCall(call) = item {
+            if !calls.insert(call.call_id.clone()) {
+                return Err(error("storage_corrupt", "duplicate historical tool call"));
+            }
+            if results.contains(&call.call_id) {
+                continue;
+            }
+            let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM approval_requests WHERE run_id IN (SELECT id FROM runs WHERE session_id=?1 AND finished_at IS NULL) AND json_extract(request,'$.call_id')=?2)", params![key,call.call_id], |r|r.get(0)).map_err(sql_error)?;
+            let result = match states.get(&call.call_id) {
+                Some((_, state, _)) if state == "running" && call.name == "ask_user" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"input_interrupted".into(), message:"clarification did not complete durably; no answer was restored".into() }), truncated:false },
+                Some((_, state, _)) if state == "running" || state == "unknown" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"outcome_unknown".into(), message:"operation may have started before interruption; do not replay automatically".into() }), truncated:false },
+                Some((_, _, Some(raw))) => serde_json::from_str(raw).map_err(|_| error("storage_corrupt", "invalid stored tool result"))?,
+                Some((_, state, None)) if state == "succeeded" || state == "failed" || state == "denied" => return Err(error("storage_corrupt", "completed tool result is missing")),
+                Some((_, state, None)) if state == "waiting_confirmation" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false },
+                Some((_, state, None)) if state != "requested" => return Err(error("storage_corrupt", "invalid stored tool state")),
+                _ if pending => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false },
+                _ => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"not_executed".into(), message:"run ended before this operation was dispatched".into() }), truncated:false },
+            };
+            if call.name == "ask_user"
+                && let Some((run, state, _)) = states.get(&call.call_id)
+                && state == "running"
+            {
+                let run_id: RunId = serde_json::from_value(serde_json::json!(run))
+                    .map_err(|_| error("storage_corrupt", "invalid run ID"))?;
+                apply(
+                    &tx,
+                    &StoreChange::ToolFinished {
+                        run_id,
+                        call_id: call.call_id.clone(),
+                        result: result.clone(),
+                    },
+                    secrets,
+                )?;
+                closed_inputs.insert(call.call_id.clone());
+            }
+            apply(
+                &tx,
+                &StoreChange::History {
+                    session_id,
+                    item: HistoryItem::ToolResult {
+                        call_id: call.call_id.clone(),
+                        result,
+                    },
+                },
+                secrets,
+            )?;
+            summary.closed_calls += 1;
+        }
+    }
+    for (call_id, (run, state, _)) in &states {
+        if state == "running" && !closed_inputs.contains(call_id) {
+            let run_id: RunId = serde_json::from_value(serde_json::json!(run))
+                .map_err(|_| error("storage_corrupt", "invalid run ID"))?;
+            apply(
+                &tx,
+                &StoreChange::ToolState {
+                    run_id,
+                    call_id: call_id.clone(),
+                    state: ToolState::Unknown,
+                },
+                secrets,
+            )?;
+            summary.unknown_tools += 1;
+        }
+    }
+    for run in runs {
+        let run_id: RunId = serde_json::from_value(serde_json::json!(run))
+            .map_err(|_| error("storage_corrupt", "invalid run ID"))?;
+        apply(
+            &tx,
+            &StoreChange::RunFinished(RunResult {
+                schema_version: SCHEMA_VERSION,
+                session_id: Some(session_id),
+                run_id: Some(run_id),
+                status: RunStatus::Failed,
+                stop_reason: Some("interrupted".into()),
+                text: None,
+                error: Some(ErrorInfo {
+                    code: "interrupted".into(),
+                    message: "run ended unexpectedly; unfinished operations were not replayed"
+                        .into(),
+                }),
+                usage: None,
+                artifacts: vec![],
+                persistence: Some(Persistence {
+                    saved: true,
+                    error: None,
+                }),
+            }),
+            secrets,
+        )?;
+    }
+    tx.commit().map_err(sql_error)?;
+    Ok(summary)
+}
+
 /// SQLite WAL backed Store. Data are committed atomically with FULL sync.
 /// Secret values are supplied by the host and cause fail-closed rejection if
 /// they appear in serialized data; they are never formatted or written.
@@ -467,7 +843,23 @@ pub struct SessionSummary {
     pub updated_at: i64,
     pub last_status: Option<crate::contract::RunStatus>,
 }
+/// Durable repairs made when exclusively opening an interrupted session.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RecoverySummary {
+    pub interrupted_runs: usize,
+    pub unknown_tools: usize,
+    pub closed_calls: usize,
+}
 impl SqliteStore {
+    /// Read conservative possible session locations without opening SQLite.
+    pub fn guard_candidates(
+        data_dir: &Path,
+        session_id: SessionId,
+    ) -> Result<Option<Vec<GuardCandidate>>, BoundaryError> {
+        let root = std::fs::canonicalize(data_dir)
+            .map_err(|_| error("storage_error", "data directory is unavailable"))?;
+        Ok(read_guard(&root, session_id)?.map(|guard| guard.candidates))
+    }
     /// Lock an existing session without creating any files. Call after a
     /// read-only preflight and retain until all session writes are complete.
     pub fn lock_existing(
@@ -500,7 +892,7 @@ impl SqliteStore {
         Ok(SessionLock(file))
     }
     /// Read session metadata without creating or modifying SQLite side files.
-    /// A live WAL is read through SQLite's read-only shared-memory mode.
+    /// WAL contents are reconstructed in memory before SQLite reads them.
     pub fn peek_session(
         data_dir: &Path,
         session_id: SessionId,
@@ -527,53 +919,21 @@ impl SqliteStore {
             }
             _ => false,
         };
+        if live_wal {
+            let snapshot = crate::wal_recovery::snapshot(&directory)?;
+            return session_metadata(&snapshot, session_id);
+        }
         let mut uri = reqwest::Url::from_file_path(&path)
             .map_err(|_| error("storage_error", "invalid database path"))?;
-        uri.set_query(Some(if live_wal {
-            "readonly_shm=1"
-        } else {
-            "immutable=1"
-        }));
+        uri.set_query(Some("immutable=1"));
         let conn = Connection::open_with_flags(
             uri.as_str(),
             OpenFlags::SQLITE_OPEN_READ_ONLY
                 | OpenFlags::SQLITE_OPEN_URI
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
-        .map_err(sql_error)?;
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .map_err(sql_error)?;
-        let app: i64 = conn
-            .pragma_query_value(None, "application_id", |r| r.get(0))
-            .map_err(sql_error)?;
-        if !(1..=VERSION).contains(&version) || app != APPLICATION_ID {
-            return Err(error(
-                if version > VERSION {
-                    "storage_version"
-                } else {
-                    "storage_corrupt"
-                },
-                "unsupported or unrecognized database",
-            ));
-        }
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT metadata FROM sessions WHERE id=?1",
-                [id(session_id.0)],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(sql_error)?;
-        raw.map(|raw| {
-            let session: Session = serde_json::from_str(&raw)
-                .map_err(|_| error("storage_corrupt", "invalid session data"))?;
-            if session.id != session_id || !session.history.is_empty() {
-                return Err(error("storage_corrupt", "invalid session identity"));
-            }
-            Ok(session)
-        })
-        .transpose()
+        .map_err(sql_error);
+        conn.and_then(|conn| session_metadata(&conn, session_id))
     }
     /// Try to acquire exclusive session ownership without waiting.
     pub fn lock_session(&self, session_id: SessionId) -> Result<SessionLock, BoundaryError> {
@@ -650,6 +1010,24 @@ impl SqliteStore {
         .await
         .map_err(|_| error("storage_error", "database worker failed"))?
     }
+    /// Close interrupted runs and dangling provider calls atomically. The caller
+    /// must hold the exclusive session lock; no tool is executed or replayed.
+    pub async fn recover_interrupted(
+        &self,
+        session_id: SessionId,
+    ) -> Result<RecoverySummary, BoundaryError> {
+        let inner = self.inner.clone();
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = inner
+                .lock()
+                .map_err(|_| error("storage_error", "database lock failed"))?;
+            recover_transaction(&mut conn, session_id, &secrets)
+        })
+        .await
+        .map_err(|_| error("storage_error", "database worker failed"))?
+    }
+
     /// Atomically create a new session together with its credential-free profile fingerprint.
     pub async fn create_session(
         &self,
@@ -658,6 +1036,11 @@ impl SqliteStore {
     ) -> Result<(), BoundaryError> {
         let inner = self.inner.clone();
         let secrets = self.secrets.clone();
+        let root = self
+            .path
+            .parent()
+            .ok_or_else(|| error("storage_error", "invalid data directory"))?
+            .to_owned();
         let session = session.clone();
         let fingerprint = fingerprint.to_owned();
         tokio::task::spawn_blocking(move || {
@@ -679,6 +1062,7 @@ impl SqliteStore {
                 return Err(error("session_exists", "session already exists"));
             }
             let fingerprint = json(&fingerprint, &secrets)?;
+            prepare_guard(&tx, &root, &session, &secrets)?;
             apply(&tx, &StoreChange::Session(session), &secrets)?;
             tx.execute(
                 "INSERT INTO session_config(session_id,fingerprint) VALUES(?1,?2)",
@@ -723,6 +1107,11 @@ impl SqliteStore {
     ) -> Result<(), BoundaryError> {
         let inner = self.inner.clone();
         let secrets = self.secrets.clone();
+        let root = self
+            .path
+            .parent()
+            .ok_or_else(|| error("storage_error", "invalid data directory"))?
+            .to_owned();
         let session = session.clone();
         let fingerprint = fingerprint.to_owned();
         tokio::task::spawn_blocking(move || {
@@ -743,8 +1132,11 @@ impl SqliteStore {
             if updated != 1 {
                 return Err(error("storage_corrupt", "session fingerprint is missing"));
             }
-            apply(&tx, &StoreChange::Session(session), &secrets)?;
-            tx.commit().map_err(sql_error)
+            prepare_guard(&tx, &root, &session, &secrets)?;
+            apply(&tx, &StoreChange::Session(session.clone()), &secrets)?;
+            tx.commit().map_err(sql_error)?;
+            let _ = finalize_guard(&root, &session, &secrets);
+            Ok(())
         })
         .await
         .map_err(|_| error("storage_error", "database worker failed"))?
@@ -942,6 +1334,7 @@ impl Store for SqliteStore {
         let inner = self.inner.clone();
         let secrets = self.secrets.clone();
         let changes = changes.to_vec();
+        let root = self.path.parent().map(Path::to_owned);
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let mut conn = inner
@@ -950,10 +1343,22 @@ impl Store for SqliteStore {
                 let tx = conn
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .map_err(sql_error)?;
+                let root = root.ok_or_else(|| error("storage_error", "invalid data directory"))?;
+                for change in &changes {
+                    if let StoreChange::Session(session) = change {
+                        prepare_guard(&tx, &root, session, &secrets)?;
+                    }
+                }
                 for change in &changes {
                     apply(&tx, change, &secrets)?;
                 }
-                tx.commit().map_err(sql_error)
+                tx.commit().map_err(sql_error)?;
+                for change in &changes {
+                    if let StoreChange::Session(session) = change {
+                        let _ = finalize_guard(&root, session, &secrets);
+                    }
+                }
+                Ok(())
             })
             .await
             .map_err(|_| error("storage_error", "database worker failed"))?

@@ -2,7 +2,7 @@
 use super::*;
 use saya_core::{
     boundary::StoreChange,
-    sqlite::{SessionLock, SqliteStore},
+    sqlite::{RecoverySummary, SessionLock, SqliteStore},
 };
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,7 @@ pub struct Prepared {
     pub store: Arc<SqliteStore>,
     pub session: Session,
     pub _lock: SessionLock,
+    pub recovery: RecoverySummary,
 }
 
 fn resolved(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -75,6 +76,7 @@ pub async fn create(
         store,
         session,
         _lock: lock,
+        recovery: RecoverySummary::default(),
     })
 }
 pub async fn resume(
@@ -85,26 +87,35 @@ pub async fn resume(
     profile_explicit: bool,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     let id = parse_id(raw)?;
-    let preview = SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
-    let preview_workspace = if cwd_explicit {
-        &config.cwd
-    } else {
-        &preview.workspace
+    let read_candidates =
+        || -> Result<Vec<saya_core::sqlite::GuardCandidate>, Box<dyn std::error::Error>> {
+            if let Some(candidates) = SqliteStore::guard_candidates(&config.data_dir, id)? {
+                return Ok(candidates);
+            }
+            let session =
+                SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
+            Ok(vec![saya_core::sqlite::GuardCandidate {
+                workspace: session.workspace,
+                work_mode: session.work_mode,
+            }])
+        };
+    let preflight = |candidates: &[saya_core::sqlite::GuardCandidate]| -> Result<(), Box<dyn std::error::Error>> {
+        for candidate in candidates {
+            let workspace = if cwd_explicit { &config.cwd } else { &candidate.workspace };
+            check_roots(config, workspace, candidate.work_mode)?;
+        }
+        Ok(())
     };
-    check_roots(config, preview_workspace, preview.work_mode)?;
+    preflight(&read_candidates()?)?;
     let lock = SqliteStore::lock_existing(&config.data_dir, id)?;
-    let locked_preview =
-        SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
-    let locked_workspace = if cwd_explicit {
-        &config.cwd
-    } else {
-        &locked_preview.workspace
-    };
-    check_roots(config, locked_workspace, locked_preview.work_mode)?;
+    let locked_preview = read_candidates()?;
+    preflight(&locked_preview)?;
     let store = open(config)?;
     let mut session = store.load_session(id).await?.ok_or("session not found")?;
-    if store.has_unfinished_run(id).await? {
-        return Err("session contains an interrupted run; recovery is not available yet".into());
+    if !locked_preview.iter().any(|candidate| {
+        candidate.workspace == session.workspace && candidate.work_mode == session.work_mode
+    }) {
+        return Err("session guard does not match stored metadata".into());
     }
     if profile_explicit && config.profile.as_ref() != Some(&session.profile) {
         return Err("session profile differs; start a new session".into());
@@ -140,10 +151,20 @@ pub async fn resume(
         session.workspace = workspace;
         store.update_session_config(&session, &fingerprint).await?;
     }
+    if SqliteStore::guard_candidates(&config.data_dir, id)?.is_none() || locked_preview.len() > 1 {
+        store
+            .commit(&[StoreChange::Session(session.clone())])
+            .await?;
+    }
+    let recovery = store.recover_interrupted(id).await?;
+    if recovery.interrupted_runs > 0 {
+        session = store.load_session(id).await?.ok_or("session not found")?;
+    }
     Ok(Prepared {
         store,
         session,
         _lock: lock,
+        recovery,
     })
 }
 pub async fn append(

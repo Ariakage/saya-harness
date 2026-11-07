@@ -309,6 +309,9 @@ pub async fn chat(
         }
         session::create(&config, new_session(&config)?).await?
     };
+    if prepared.recovery.interrupted_runs > 0 {
+        console.print(&format!("Recovered {} interrupted run(s); {} tool outcome(s) unknown; no tools were replayed.\n", prepared.recovery.interrupted_runs, prepared.recovery.unknown_tools))?;
+    }
     let workspace = prepared.session.workspace.clone();
     let mut session = Some(prepared.session);
     let store = prepared.store;
@@ -367,7 +370,10 @@ pub async fn chat(
                         report_result(&result, &finished, old.streamed);
                     }
                     Err(error) => {
-                        eprintln!("saya: {error}");
+                        report_runtime_error(&error, &config);
+                        if error.0.code == "storage_error" || error.2.is_some() {
+                            return Ok(1);
+                        }
                     }
                 }
                 session = Some(finished);

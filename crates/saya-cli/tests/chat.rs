@@ -252,6 +252,43 @@ fn resume_waits_for_input_and_uses_original_mode_with_new_permissions() {
     assert!(request.contains("first answer"));
     assert!(request.contains("second task"));
 }
+
+#[test]
+fn persistence_failure_shows_observed_result_and_ends_chat() {
+    let temp = TempDir::new().unwrap();
+    let storage = Arc::new(TempDir::new().unwrap());
+    fs::write(temp.path().join("input.txt"), "readable fixture\n").unwrap();
+    let (url, _) = fixture::server(vec![
+        ("application/json", answer("first")),
+        ("application/json", read_call()),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start_with_storage(temp.path(), &cfg, &["chat"], storage.clone());
+    pty.until("> ");
+    pty.send("first task\n");
+    pty.until("first");
+    pty.until("> ");
+    let db = rusqlite::Connection::open(storage.path().join("data/saya/sessions.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_tool_result BEFORE UPDATE OF result ON tool_calls BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+    drop(db);
+    pty.send("read task\n");
+    pty.until("observed tool result (not saved)");
+    pty.until("readable fixture");
+    drop(pty.master.take());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = pty.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "chat continued after a persistence failure"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(1));
+}
 #[test]
 fn profile_selection_and_slash_escape_are_handled() {
     let temp = TempDir::new().unwrap();
