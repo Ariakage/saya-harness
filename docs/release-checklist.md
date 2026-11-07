@@ -1,6 +1,6 @@
-# 0.1.0 发行检查草案
+# 0.1.0 发行检查
 
-**P7 尚未完成：D-035 调整为 macOS 15 后，新候选尚待最低环境双架构实测。** 本清单用于汇总证据和阻碍，不是发布批准或发布公告。候选及平台的实际验证边界见[发行候选验证](release-validation.md)，真实模型测试见[联调记录](live-model-validation.md)。
+**P7 验收完成。** 项目负责人已授权 0.1.0 发布，本清单汇总最终候选和发行证据。候选及平台的实际验证边界见[发行候选验证](release-validation.md)，真实模型测试见[联调记录](live-model-validation.md)。
 
 ## 基线证据索引
 
@@ -9,7 +9,7 @@
 | 基线 | 主要证据／当前缺口 |
 | --- | --- |
 | B-01 产品边界 | [项目范围](vision.md)、[CLI 使用指南](usage.md)；插件、MCP 等属于后续规划 |
-| B-02 工程与分发 | [workspace](../Cargo.toml)、[工具链](../rust-toolchain.toml)、[许可证](../LICENSE)；四目标候选已构建，macOS 15 新候选实测待补 |
+| B-02 工程与分发 | [workspace](../Cargo.toml)、[工具链](../rust-toolchain.toml)、[许可证](../LICENSE)；四原生目标在 Ubuntu 22.04／macOS 15 完成解包验收 |
 | B-03 CLI 与输入 | [CLI 端到端测试](../crates/saya-cli/tests/cli.rs)、[交互测试](../crates/saya-cli/tests/chat.rs) |
 | B-04 配置 | [配置测试](../crates/saya-core/tests/config.rs)、[配置说明](configuration.md) |
 | B-05 模型接入 | [协议说明](model-protocols.md)、[真实服务记录](live-model-validation.md)；仅一个服务和模型抽样 |
@@ -30,18 +30,18 @@
 | B-20 并发、配置变更与兼容 | [SQLite 测试](../crates/saya-core/tests/sqlite.rs)、[CLI 测试](../crates/saya-cli/tests/cli.rs)；schema 1→2 迁移说明见存储文档 |
 | B-21 日志、凭据与用量 | [CLI 测试](../crates/saya-cli/tests/cli.rs)、[开发进度 DEV-027](progress.md)、[配置说明](configuration.md)；未知秘密不保证识别 |
 | B-22 项目指令与提示词 | [项目上下文测试](../crates/saya-core/tests/project_context.rs)、[提示词测试](../crates/saya-core/tests/prompts.rs)、[来源说明](project-context.md) |
-| B-23 验收与 CI | [验收索引](acceptance.md)、[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42373322880)、[发行候选](release-validation.md)；macOS 15 新候选待验证 |
-| B-24 版本与后续变更 | [完整基线](mvp-baseline.md)、[存储说明](storage.md)、[决策记录](decisions.md)；发行说明仍为草案 |
+| B-23 验收与 CI | [验收索引](acceptance.md)、[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42381963924)、[发行候选](release-validation.md)；四原生目标最低环境与解包演练通过 |
+| B-24 版本与后续变更 | [完整基线](mvp-baseline.md)、[存储说明](storage.md)、[决策记录](decisions.md)；双语发行说明已整理 |
 
-AC-01 至 AC-23 的具体测试名见[验收索引](acceptance.md)。AC-24 已有四目标构建、部分运行环境 smoke 和 macOS 15／Ubuntu 22.04 四平台 CI；**macOS 15 aarch64／x86_64 新候选实际执行仍缺证据**，不能标记 AC-24 或 P7 完成。
+AC-01 至 AC-23 的具体测试名见[验收索引](acceptance.md)。AC-24 已由原生四平台构建、342 项测试与最终候选解包演练补齐。四包的源码和哈希与实际最低环境证据一致，见[最终验收记录](release-validation.md)。
 
 ## 已知限制与待办
 
-风险优先审查的五项确认问题已修复并通过独立复核，当前候选源码为 `854be1b`。四个解包二进制通过原有两项演练和五项审查回归，证据按各自包／二进制哈希记录。macOS 15 当前候选实测继续作为 P7 缺口。[审查记录](review-2026-11-07.md)、[候选证据](release-validation.md)
+风险优先审查的五项确认问题已修复并通过独立复核，当前候选源码为 `854be1b`。四个解包二进制通过原有两项演练和五项审查回归，证据按各自包／二进制哈希记录。同运行时代码的最终四原生候选已完成最低环境实测。[审查记录](review-2026-11-07.md)、[候选证据](release-validation.md)
 
 - 工具命令没有 OS 沙箱；进程组不能约束主动脱离的后代，外部并发文件替换不具备原子比较交换保证。
 - 已知凭据遮蔽不识别所有未知秘密；配置显式指向模型服务时，任务和适用上下文会发送给该服务。
 - 强制终止后，失去管理的后台进程可能继续运行；未知状态不会自动重放，也不表示进程已停止。
 - 用量与成本依赖服务返回的数字和用户显式费率；估算不是账单。单服务小样本联调不等于对任意模型的质量承诺。
-- macOS ARM 候选带链接器 ad-hoc 签名，Intel 候选未签名。开发者身份签名、公证和外部发布仍待适用指令，最低环境验证仍待完成。
+- macOS ARM 候选带链接器 ad-hoc 签名，Intel 候选未签名。正式包保持该签名状态，最低环境验收已完成，外部发布已获项目负责人授权。
 - 重复键、过深嵌套和无法保真处理的数值采用失败关闭，部分无秘密 JSON 内容也可能被拒绝。

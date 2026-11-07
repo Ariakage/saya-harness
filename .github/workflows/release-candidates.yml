@@ -33,7 +33,9 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Check workspace and build release binary
-        run: ./scripts/check.sh
+        run: |
+          ./scripts/check.sh
+          test "$(target/release/saya --version)" = "saya 0.1.0"
       - name: Check packaging and verification tools
         run: |
           python3 scripts/release/test_package.py

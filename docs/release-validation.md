@@ -1,8 +1,27 @@
-# 0.1.0 发行候选验证记录
+# 0.1.0 发行验证记录
 
-**P7 待完成 macOS 15 双架构候选实测。** 当前候选源码为 `854be1bc392fd51e7853b4c1b1c2fb00563a0780`，审查与修复见[风险优先审查](review-2026-11-07.md)。本记录包含后续文档更新，构建对象始终按下方固定源码和文件哈希识别。
+**P7 验收完成，正式发布构建进行中。** 授权后的最终候选验收来自源码 `2840cbbd52bc7cd03d8953c1837f43540928a290`，其运行时代码、提示词和 Cargo 依赖与审查修复 `854be1b` 内容一致。
 
-## 当前候选
+## P7 最终候选验收
+
+[Release candidates 42381963924](https://github.com/Ariakage/saya-harness/actions/runs/42381963924) 在四个原生目标全部通过。每项执行格式检查、Clippy、342 个 Rust 测试与 release 构建，随后对压缩包内的程序执行 PLAN 工具往返、人工批准与会话恢复、五项审查回归。三个发行工具测试组共四项通过。
+
+| 目标 | 实际最低环境 | 原生架构 | 验收包 SHA-256 |
+| --- | --- | --- | --- |
+| linux-x86_64 | glibc 2.35 | x86_64 | `da806437c64fb5754ab20199fe8d05214708f4b40952bcb04178f1131bd310f5` |
+| linux-aarch64 | glibc 2.35 | aarch64 | `b2a27e7fb56f31b049957c89b3937aa4da76dd01f998de2c0e50251b19b01ed6` |
+| macos-x86_64 | 15.7.9 | x86_64 | `ce5e4a50b3028658233b78cb21a87ed3f756d7ec3b5c1d67b58dcca33546e2c2` |
+| macos-aarch64 | 15.8.2 | arm64 | `68b9ae6bf2d0f6452cbc4a67ff58cfc002e9a328fa0a2b71fe9795e05f53752e` |
+
+下载到本机 `target/p7-acceptance-2840cbb/verified/` 的四个包逐一核对包哈希、二进制哈希、源码声明、测试脚本哈希、文件成员和执行权限，与各 job 保存的 `verification.json` 一致。完整汇总为同目录 `release-evidence.json`。用户授权的后续正式构建将从包含最终双语说明的固定提交生成，并再次执行相同验收后发布。
+
+审查修复后的三协议真实模型复测共六项通过，版本和服务样本见[真实模型记录](live-model-validation.md)。B-01 至 B-24 与 AC-01 至 AC-24 的覆盖见[发行检查](release-checklist.md)和[验收索引](acceptance.md)。
+
+## 历史本地候选 854be1b
+
+以下记录对应审查修复后的首次本地四目标构建。该次缺少的 macOS 15 原生证据已由上方同运行时代码的最终候选补齐。
+
+### 当时的本地候选
 
 候选目录为本机 `target/release-candidate-854be1b/`。四个二进制均从同一个 Git 源码导出构建，导出 tar 的 SHA-256 为 `a5236a6690bd250147ea6145366dc629d150a81b0b71df86c71475da802819ca`。Linux 验证环境中的 144 个源码文件逐一与该导出核对。包内 `BUILD-INFO.json` 的源码声明和二进制哈希均已核对。
 
@@ -39,7 +58,7 @@ cee5ffb625a46f029cc0ab96a844aa1ee85a4c6b888034d18e1a5cb42d0bdd4a  saya-0.1.0-mac
 | macos-x86_64 | `2675268e400a6ac6a1fa7fc8a29894393944d4c163208dd0c8dc05e8ed543bcd` |
 | macos-aarch64 | `03135fa43b1463a3108db6135f663b4a4a818ed5f6a3be4c0b83d89843c19031` |
 
-## 待完成的最低环境验证
+### 当时的最低环境缺口
 
 [GitHub Actions 42373322880](https://github.com/Ariakage/saya-harness/actions/runs/42373322880) 已再次通过只读查询核实，源码为 `47452e6173397d7b7b7eacd035116489bb2a3a70`，Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 四个 job 均成功。该 CI 运行中的二进制来源为该提交，原工作流执行离线工具往返与交互演练，未上传产物。当前候选来源为 `854be1b`，其 macOS 15 实测证据仍待补齐。
 

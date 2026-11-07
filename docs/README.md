@@ -1,6 +1,6 @@
 # 项目文档
 
-Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目负责人整套确认；core 运行时、CLI、持久化和三协议已通过本机受控验证，发行准备仍未完成。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 为准。
+Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目负责人整套确认；core 运行时、CLI、持久化和三协议已通过本机受控验证，P7 验收已完成，正式发行构建进行中。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 为准。
 
 | 文档 | 用途 | 当前状态 |
 | --- | --- | --- |
@@ -20,11 +20,11 @@ Saya Harness 的文档默认使用中文。CLI MVP 的产品基线已由项目�
 | [SQLite 存储组件](storage.md) | 事务、事件序号与持久化边界 | 本机受控验证，恢复见开发进度 |
 | [saya-plugin 规划](saya-plugin.md) | 未来插件系统的边界、阶段与验收草案 | 规划中，未实现 |
 | [后续能力路线图](capability-roadmap.md) | Sandbox、MCP 等 18 个功能模块、优先级与依赖 | 后续功能规划，未实现 |
-| [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P6 受控验证；P7 待开始 |
+| [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P7 验收完成 |
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
-| [发行检查草案](release-checklist.md) | 24 组基线、验收与已知限制 | P7 进行中 |
-| [0.1.0 候选版本说明](release-notes-0.1.0.md) | 候选功能、迁移与平台限制 | 草案，未发布 |
-| [发行候选验证记录](release-validation.md) | 构建产物、校验和、平台与待验证项 | P7 待验证 |
+| [发行检查](release-checklist.md) | 24 组基线、验收与已知限制 | P7 验收完成 |
+| [0.1.0 双语版本说明](release-notes-0.1.0.md) | 候选功能、迁移与平台限制 | 双语说明，发行构建中 |
+| [发行候选验证记录](release-validation.md) | 构建产物、校验和、平台与待验证项 | P7 验收完成 |
 | [MVP 验收证据](acceptance.md) | AC-01 至 AC-23 的测试映射与限制 | 本机受控验证 |
 | [开发进度](progress.md) | 阶段／任务状态与证据 | 持续维护 |
 | [提示词定制](prompts.md) | 英文 prompt、装配与来源对照 | 组件与受控接线，真实模型效果未评测 |
