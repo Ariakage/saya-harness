@@ -549,6 +549,16 @@ impl App {
             self.state.completion.dismiss();
             return Ok(false);
         }
+        if key.code == KeyCode::Tab
+            && key.modifiers.is_empty()
+            && self.palette.is_none()
+            && self.state.editor.text().is_empty()
+        {
+            if key.kind == KeyEventKind::Press {
+                self.cycle_mode().await?;
+            }
+            return Ok(false);
+        }
         if key.modifiers.is_empty() {
             match key.code {
                 KeyCode::Tab if self.state.completion.eligible() => {

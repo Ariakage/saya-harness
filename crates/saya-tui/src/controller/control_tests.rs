@@ -83,6 +83,83 @@ fn key(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
 }
 
 #[tokio::test]
+async fn empty_tab_cycles_all_modes_without_creating_a_conversation_or_notices() {
+    let (_root, mut app) = fixture();
+    for mode in [
+        WorkMode::Code,
+        WorkMode::Plan,
+        WorkMode::Build,
+        WorkMode::Work,
+    ] {
+        app.key(key(KeyCode::Tab, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(app.config.mode, mode);
+        assert_eq!(app.state.mode, format!("{mode:?}").to_uppercase());
+        assert!(app.state.editor.text().is_empty());
+        assert!(app.state.messages.is_empty());
+        assert!(app.prepared.is_none() && app.active.is_none() && app.ui_job.is_none());
+    }
+    assert!(!app.config.data_dir.exists());
+    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+        app.key(key(KeyCode::Tab, kind)).await.unwrap();
+        assert_eq!(app.config.mode, WorkMode::Work);
+        assert!(app.state.editor.text().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn tab_with_a_draft_or_palette_does_not_cycle_the_work_mode() {
+    let (_root, mut app) = fixture();
+    for (draft, expected) in [
+        ("plain", "plain\t"),
+        (" ", " \t"),
+        ("\n", "\n\t"),
+        ("/mo", "/mode plan"),
+    ] {
+        app.state.editor.set_text(draft);
+        app.key(key(KeyCode::Tab, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(app.state.editor.text(), expected);
+        assert_eq!(app.config.mode, WorkMode::Work);
+    }
+    app.state.editor.clear();
+    app.palette = Some(0);
+    app.show_palette();
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.config.mode, WorkMode::Work);
+    assert!(app.palette.is_some());
+}
+
+#[tokio::test]
+async fn empty_tab_persists_an_idle_session_mode_and_keeps_the_permission_selection() {
+    let (_root, mut app) = fixture();
+    app.prepared = Some(
+        session::create(&app.config, saya_app::new_session(&app.config).unwrap())
+            .await
+            .unwrap(),
+    );
+    app.command("/permissions manual").await.unwrap();
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.config.permissions_mode, PermissionMode::Manual);
+    assert_eq!(app.config.mode, WorkMode::Code);
+    let prepared = app.prepared.as_ref().unwrap();
+    let saved = prepared
+        .store
+        .load_session(prepared.session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.work_mode, WorkMode::Code);
+    assert!(saved.history.is_empty());
+}
+
+#[tokio::test]
 async fn slash_completion_selects_and_fills_before_enter_executes() {
     let (_root, mut app) = fixture();
     app.state.editor.set_text("/mo");
@@ -490,6 +567,38 @@ async fn changing_mode_drops_old_approval_and_shows_actual_and_pending_core_mode
     let core = app.active.as_ref().unwrap().handle.mode().unwrap();
     assert_eq!(core.current, WorkMode::Work);
     assert_eq!(core.pending, Some(WorkMode::Plan));
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn repeated_empty_tab_uses_the_latest_requested_mode_and_invalidates_old_approval() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.pending_mode.as_deref(), Some("CODE"));
+    let (request, receiver) = approval(&app, "tab-old-policy");
+    app.request(request);
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(
+        receiver.await.unwrap().unwrap_err().0.code,
+        "stale_approval"
+    );
+    assert!(app.pending.is_none());
+    assert_eq!(app.state.pending_mode.as_deref(), Some("PLAN"));
+    for expected in [WorkMode::Build, WorkMode::Work] {
+        app.key(key(KeyCode::Tab, KeyEventKind::Press))
+            .await
+            .unwrap();
+        let snapshot = app.active.as_ref().unwrap().handle.mode().unwrap();
+        assert_eq!(snapshot.current, WorkMode::Work);
+        assert_eq!(snapshot.pending.unwrap_or(snapshot.current), expected);
+        assert_eq!(app.config.mode, WorkMode::Work);
+    }
+    assert!(app.state.editor.text().is_empty());
     stop_active_call(&mut app).await;
 }
 

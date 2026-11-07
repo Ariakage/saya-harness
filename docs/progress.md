@@ -70,6 +70,16 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 
 检查日志为 `target/tui-reference-check.log`，正常入口报告为 `target/tui-reference-release-matrix.json`，程序SHA-256为 `a53f3a266f14e96f270527d55162eef2b6c9d4ed09f17d124aacbe75592a441f`。两组生产组件TestBackend布局PNG位于 `target/tui-reference-preview-110x32.png` 和 `target/tui-reference-preview-160x40.png`，预览使用合成数据。本节验收为本机受控服务和PTY，原生iTerm2截图访问受到工具限制。
 
+#### 视觉层次与空输入Tab模式循环
+
+2026-11-08，按 D-044 参考OpenCode细化配色与正文层次。共享低对比主题区分主区、侧栏、输入区和代码／工具卡片，角色标签与元数据分别着色，宽正文增加左右留白。Assistant呈现基础Markdown标题、列表、引用、强调、行内代码和代码卡片，流式未闭合标记保留字面内容，工具与审批维持安全原文。富文本逐逻辑行生成，片段与嵌套有界，跨样式grapheme折行沿用总行数和10,000行尾缓存。URL／HTML内容只作可见文本，原始会话内容继续保存。
+
+空输入Tab按WORK→CODE→PLAN→BUILD→WORK循环，复用模式命令的检查、持久化与审批失效路径。运行中和UI任务收尾期间从最新请求的模式继续循环，模式应用仍由core执行。普通草稿、空格、多行和命令前缀维持编辑／补全，命令面板独立；空输入的重复／释放事件不会插入Tab或重复切换，常规切换不生成额外对话消息。
+
+本机macOS27.2 ARM的最终完整检查通过格式、全目标Clippy、524项Rust测试和优化构建。优化程序通过16组真实PTY，新增空Tab循环、无模型／存储副作用、编辑与面板边界、活跃模式持久化、人工审批失效、三协议正文样式及原文保存。5项发行工具测试、工具smoke、文本journey和5项既有审查回归均通过。检查为 `target/tui-polish-check-final.log`，PTY报告为 `target/tui-polish-release-matrix.json`，程序SHA-256为 `1a01f8512cd191710c922da49ba23ae64e8e4bf85e689040586907af8fb8f812`。
+
+生产组件的合成状态预览为 `target/tui-polish-preview-160x40.png`、`target/tui-polish-preview-110x36.png` 和 `target/tui-polish-preview-idle.png`。模型服务验证使用本地可控夹具，平台范围为上述本机环境。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

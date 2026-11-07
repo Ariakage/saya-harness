@@ -136,6 +136,29 @@ fn fixture(scene: &str) -> State {
             .collect();
             state.skills_count = Some(3);
         }
+        "polish" | "markdown" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.session_title = "完善任务取消与恢复说明".into();
+            state.permissions = "auto".into();
+            state.thinking_effort = Some("high".into());
+            state.push_message(
+                Role::User,
+                "You",
+                "请检查取消后的会话恢复行为，并说明需要补充的验证。",
+            );
+            state.push_message(
+                Role::Tool,
+                "read_file · src/runtime.rs",
+                "status: completed\nlines: 48–61\n工具返回的 `path` 和 **内容** 保持原文。",
+            );
+            state.push_message(
+                Role::Assistant,
+                "configured-model",
+                "## 取消与恢复\n\n会话保留已提交的历史，恢复后等待新的用户输入。\n\n- **执行边界**  取消信号应传递到当前模型请求与工具任务。\n- **验证范围**  检查 `cancel.cancel()` 后是否完成后台清理。\n\n> 记录缺少退出状态时，先核对工作区中的实际结果。\n\n```rust\ncancel.cancel();\nlet result = runtime.wait().await?;\n```\n\n### 后续验证\n\n补充中文路径与组合字符 `é` 的覆盖，并验证 *不会重复执行* 已保存的工具调用。",
+            );
+            state.editor.set_text("补充取消过程中的恢复测试。");
+        }
         _ => {}
     }
     state
@@ -164,13 +187,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.iter().any(|argument| argument == "--help") {
         writeln!(
             std::io::stdout().lock(),
-            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar]"
+            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown]"
         )?;
         return Ok(());
     }
     if args.len() > 3 {
         return Err(
-            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar]".into(),
+            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown]".into(),
         );
     }
     let width = dimension(args.first(), 120, 240)?;
@@ -187,9 +210,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             | "compact"
             | "effort"
             | "sidebar"
+            | "polish"
+            | "markdown"
     ) {
         return Err(
-            "scene must be chat, approval, tool, commands, completion, idle, compact, effort or sidebar"
+            "scene must be chat, approval, tool, commands, completion, idle, compact, effort, sidebar, polish or markdown"
                 .into(),
         );
     }

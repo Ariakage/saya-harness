@@ -147,6 +147,33 @@ async fn new_and_resume_wait_for_input_and_hold_only_the_open_session_lock() {
 }
 
 #[tokio::test]
+async fn empty_tab_cycles_from_the_latest_mode_deferred_behind_ui_cleanup() {
+    let (_root, mut app) = fixture();
+    let (sender, cancel) = controlled_job(&mut app);
+    for expected in [WorkMode::Code, WorkMode::Plan] {
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.deferred_mode, Some(expected));
+        assert_eq!(app.config.mode, WorkMode::Work);
+        assert!(cancel.is_cancelled());
+    }
+    assert!(
+        sender
+            .send(UiResult::Details(crate::view::Details {
+                title: "cancelled query".into(),
+                lines: vec![],
+            }))
+            .is_ok()
+    );
+    complete(&mut app).await;
+    assert_eq!(app.config.mode, WorkMode::Plan);
+    assert_eq!(app.state.mode, "PLAN");
+    assert!(app.deferred_mode.is_none());
+    assert!(app.state.editor.text().is_empty());
+}
+
+#[tokio::test]
 async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
     let (_root, mut app) = fixture();
     assert_eq!(app.state.session_title, "New session");

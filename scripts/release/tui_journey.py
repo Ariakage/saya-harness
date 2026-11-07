@@ -265,6 +265,24 @@ class Screen:
         return '\n'.join(''.join(self.cells[index][column:width - 1]).rstrip()
                          for index in range(2, max(2, end or 2)))
 
+    def body_text(self):
+        width = self.main_width()
+        end = self.status_row()
+        if width is None or end is None:
+            return ''
+        return '\n'.join(''.join(self.cells[index][1:width - 1]).rstrip() for index in range(2, end))
+
+    def body_style(self, text):
+        width = self.main_width()
+        end = self.status_row()
+        if width is None or end is None:
+            return None
+        for row in range(2, end):
+            for column in range(1, width - 1):
+                if self.cells[row][column] and ''.join(self.cells[row][column:width - 1]).startswith(text):
+                    return self.colors[row][column]
+        return None
+
     def popup_text(self):
         width = self.main_width()
         if width is None:
@@ -587,7 +605,11 @@ def invoke(binary, root, config, extra=()):
 
 
 def stream_journey(binary, protocol):
-    fixture = Fixture(protocol, [{'text': 'TUI_STREAM_你好_🌸', 'pieces': ['TUI_STREAM_', '你好_', '🌸']}])
+    markdown = '\n'.join(['## Heading', '**strong** and *emphasis* and `inline`', '- item', '> quote',
+                          'https://example.test', '<b>literal html</b>', '```rust',
+                          'let x = **literal**;', '```', 'RichTextEnd'])
+    response = 'TUI_STREAM_你好_🌸\n' + markdown
+    fixture = Fixture(protocol, [{'text': response, 'pieces': ['TUI_STREAM_', '你好_', '🌸', '\n' + markdown]}])
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-stream-') as directory:
             root = Path(directory)
@@ -607,13 +629,31 @@ def stream_journey(binary, protocol):
                 terminal.send('\x1b[200~second\nthird 粘贴\x1b[201~')
                 terminal.send(b'\r')
                 terminal.until('TUI_STREAM_你好_🌸')
-                wait_idle(terminal, root)
+                result = wait_idle(terminal, root)
+                if result.get('text') != response:
+                    raise RuntimeError('Markdown presentation changed the persisted model response')
                 terminal.resize(48, 16)
                 terminal.title()
                 terminal.resize(110, 32)
                 terminal.until('TUI_STREAM_你好_🌸')
                 terminal.wait(lambda: 'max' in terminal.screen.main_row_text(terminal.screen.rows - 1),
                               'thinking effort footer after resize')
+                for text, foreground, background in [
+                        ('Heading', (187, 154, 247), (9, 9, 11)),
+                        ('strong', (246, 173, 85), (9, 9, 11)),
+                        ('emphasis', (246, 173, 85), (9, 9, 11)),
+                        ('inline', (125, 203, 155), (23, 23, 27)),
+                        ('- item', (246, 173, 85), (9, 9, 11)),
+                        ('quote', (129, 129, 139), (9, 9, 11)),
+                        ('╭─ rust', (48, 48, 56), (23, 23, 27)),
+                        ('let x = **literal**;', (196, 196, 204), (23, 23, 27))]:
+                    if terminal.screen.body_style(text) != (foreground, background):
+                        raise RuntimeError('Markdown style was missing or incorrect for ' + text)
+                visible = terminal.screen.body_text()
+                if '## Heading' in visible or '**strong**' in visible or '`inline`' in visible:
+                    raise RuntimeError('complete Markdown delimiters remained in the styled assistant body')
+                if 'https://example.test' not in visible or '<b>literal html</b>' not in visible or '╰─' not in visible:
+                    raise RuntimeError('Markdown changed literal URLs, HTML or the closing code card')
                 snapshot = terminal.screen.text
                 terminal.finish()
                 if len(fixture.requests) != 1 or fixture.requests[0].get('stream') is not True:
@@ -782,6 +822,114 @@ def command_completion_journey(binary):
         fixture.close()
 
 
+def empty_tab_mode_journey(binary):
+    active_call = ('tab-active-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
+    manual_call = ('tab-manual-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
+    def stale_manual(request):
+        result = tool_result(request, manual_call[0])
+        if result.get('ok') or result.get('error', {}).get('code') != 'stale_approval':
+            raise RuntimeError('empty Tab approved a tool or failed to invalidate its previous mode approval')
+        return {'text': 'TabManualDone'}
+    fixture = Fixture('openai-chat-completions', [
+        {'call': active_call, 'delay': 3}, expect_tool(active_call[0], {'text': 'TabActiveDone'}),
+        {'call': manual_call}, stale_manual])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-empty-tab-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            (workspace / 'fact.txt').write_text('tab fixture\n')
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                def no_dispatch(expected_mode):
+                    if terminal.mode() != expected_mode or fixture.requests:
+                        raise RuntimeError('Tab unexpectedly changed the mode or dispatched a model request')
+                    if (root / 'data').exists() or (root / 'state').exists():
+                        raise RuntimeError('idle Tab initialized persistent session storage')
+                    if list(workspace.iterdir()) != [workspace / 'fact.txt']:
+                        raise RuntimeError('idle Tab changed workspace files')
+
+                def clear_draft():
+                    terminal.send(b'\x03')
+                    terminal.wait(lambda: terminal.editor_text() == '', 'empty Tab fixture draft cleared')
+
+                terminal.title()
+                for mode in ['CODE', 'PLAN', 'BUILD', 'WORK']:
+                    terminal.send(b'\t')
+                    terminal.wait(lambda: terminal.mode() == mode and terminal.editor_text() == '',
+                                  'idle empty Tab mode ' + mode)
+                    no_dispatch(mode)
+
+                terminal.send(b'\x10')
+                terminal.wait(lambda: 'Commands' in terminal.screen.details_text(), 'Tab fixture command palette')
+                terminal.send(b'\t')
+                no_dispatch('WORK')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: 'Commands' not in terminal.screen.details_text(), 'Tab fixture command palette closed')
+                no_dispatch('WORK')
+                clear_draft()
+
+                for before, after in [('tab 中文', 'X'), (' ', 'space'), ('\n', 'multi')]:
+                    terminal.send(before if before != '\n' else b'\x0a')
+                    terminal.send(b'\t')
+                    terminal.send(after)
+                    expected = before + '    ' + after
+                    terminal.wait(lambda: terminal.editor_text() == expected, 'nonempty draft retained its Tab editing behavior')
+                    no_dispatch('WORK')
+                    clear_draft()
+
+                terminal.send('/mo')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'Tab fixture slash suggestions')
+                terminal.send(b'\t')
+                terminal.send(' ')
+                terminal.wait(lambda: terminal.editor_text() == '/mode plan' and not terminal.screen.popup_text(),
+                              'nonempty slash Tab completed without changing mode')
+                no_dispatch('WORK')
+                clear_draft()
+
+                terminal.line('Start the active Tab mode fixture')
+                terminal.wait(lambda: len(fixture.requests) == 1 and terminal.screen.status() == 'Running',
+                              'model request before active empty Tab')
+                terminal.send(b'\t')
+                terminal.wait(lambda: 'WORK→CODE' in terminal.screen.main_row_text(terminal.screen.rows - 1),
+                              'active Tab pending mode in the main footer')
+                if terminal.mode() != 'WORK' or len(fixture.requests) != 1:
+                    raise RuntimeError('active empty Tab interrupted the current model call')
+                terminal.until('TabActiveDone')
+                wait_idle(terminal, root)
+                if terminal.mode() != 'CODE' or session_data(binary, root, config)[0]['work_mode'].lower() != 'code':
+                    raise RuntimeError('active Tab did not apply and persist its mode at the next call boundary')
+
+                terminal.line('/permissions manual')
+                terminal.wait(lambda: terminal.permissions() == 'Manual Approval', 'Tab fixture manual permissions')
+                terminal.line('Request the manual Tab mode fixture')
+                terminal.wait(lambda: manual_call[0] in terminal.screen.details_text() and
+                              terminal.screen.status() == 'Awaiting approval', 'manual approval before draft Tab')
+                terminal.send('/mo')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'manual draft Tab suggestions')
+                terminal.send(b'\t')
+                terminal.send(' ')
+                terminal.wait(lambda: terminal.editor_text() == '/mode plan' and not terminal.screen.popup_text(),
+                              'manual draft Tab completion')
+                if terminal.mode() != 'CODE' or terminal.screen.status() != 'Awaiting approval' or len(fixture.requests) != 3:
+                    raise RuntimeError('nonempty approval Tab executed or approved the pending operation')
+                terminal.send(b'\x7f' * len('/mode plan '))
+                terminal.wait(lambda: terminal.editor_text() == '', 'manual Tab draft emptied')
+                terminal.send(b'\t')
+                terminal.until('TabManualDone')
+                wait_idle(terminal, root, count=2)
+                if terminal.mode() != 'PLAN' or len(fixture.requests) != 4:
+                    raise RuntimeError('empty approval Tab did not complete the explicit mode transition')
+                if session_data(binary, root, config)[0]['work_mode'].lower() != 'plan':
+                    raise RuntimeError('empty approval Tab mode was not persisted')
+                terminal.finish()
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def reference_layout_and_title_journey(binary):
     first_prompt = '整理 Saya 验收🌸'
     approval_prompt = '核对文件\n只读审批'
@@ -826,8 +974,8 @@ def reference_layout_and_title_journey(binary):
                                   'input' in footer(),
                                   'reference Message region at its fixed row')
                     screen = terminal.screen
-                    if screen.colors[0][0][1] not in (('indexed', 0), (0, 0, 0)):
-                        raise RuntimeError('reference header did not retain the black background')
+                    if screen.colors[0][0][1] != (9, 9, 11):
+                        raise RuntimeError('reference header did not retain the main background')
                     if not screen.main_row_text(1).startswith('┌') or '/' not in screen.main_row_text(1):
                         raise RuntimeError('reference workspace was not embedded in the outer top border')
                     if 'Ctrl+P' not in screen.main_row_text(0):
@@ -838,23 +986,23 @@ def reference_layout_and_title_journey(binary):
                     for index in range(input_row, rows - 1):
                         if screen.cells[index][1] != '│':
                             raise RuntimeError('reference input did not retain its left border')
-                        if screen.colors[index][1] != ((47, 116, 196), (47, 116, 196)):
+                        if screen.colors[index][1] != ((88, 166, 255), (88, 166, 255)):
                             raise RuntimeError('reference input stripe was not solid blue for the full composer height')
-                    if screen.colors[input_row][3][1] != (52, 52, 52):
+                    if screen.colors[input_row][3][1] != (32, 32, 36):
                         raise RuntimeError('reference Message region did not use its gray background')
                     if not any(ring in footer() for ring in ('○', '◔', '◑', '◕', '●')):
                         raise RuntimeError('reference footer omitted the labeled input ring')
                     if screen.main_width() >= 44:
                         terminal.wait(lambda: 'max' in footer(), 'reference configured thinking effort')
                         column = screen.main_row_text(rows - 1).index('max')
-                        if screen.colors[rows - 1][column][0] != (255, 154, 40):
+                        if screen.colors[rows - 1][column][0] != (246, 173, 85):
                             raise RuntimeError('reference thinking effort did not use its orange accent')
                     if sidebar_width:
                         terminal.wait(lambda: 'Context' in screen.sidebar_row_text(2) and
                                       'Window' in screen.sidebar_row_text(3) and
                                       'Extensions' in screen.sidebar_row_text(15),
                                       'sidebar fixed context and extension regions')
-                        if screen.colors[0][screen.main_width() + 1][1] != (52, 52, 52):
+                        if screen.colors[0][screen.main_width() + 1][1] != (20, 20, 22):
                             raise RuntimeError('sidebar did not use its reference gray background')
                         if 'Not implemented' not in screen.sidebar_row_text(16) or 'MCP' not in screen.sidebar_row_text(16):
                             raise RuntimeError('sidebar presented MCP as implemented')
@@ -1534,6 +1682,8 @@ def main():
     passed('four-modes-three-permissions')
     command_completion_journey(binary)
     passed('command-completion-editing-and-approval-priority')
+    empty_tab_mode_journey(binary)
+    passed('empty-tab-mode-cycle-pending-and-approval')
     reference_layout_and_title_journey(binary)
     passed('reference-layout-input-meter-and-window-title')
     manual_tools_and_clarification(binary)

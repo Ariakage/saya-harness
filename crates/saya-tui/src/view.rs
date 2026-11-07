@@ -2,11 +2,16 @@
 use crate::{
     commands::Completion,
     editor::{Editor, prefix_boundary, safe_text},
+    rich_text::{append_wrapped_line, markdown_lines},
+    theme::{
+        AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
+        INPUT_BACKGROUND, MUTED, RED, SIDEBAR_BACKGROUND,
+    },
 };
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -22,15 +27,7 @@ const MAX_DETAIL_LINES: usize = 10_000;
 const MAX_DETAIL_TITLE_BYTES: usize = 256;
 const TRUNCATED_DETAIL_PREFIX: &str = "Truncated · ";
 const DETAIL_TRUNCATION_NOTICE: &str = "[details display truncated]";
-const ACCENT: Color = Color::Rgb(127, 212, 226);
-const MUTED: Color = Color::Rgb(147, 155, 174);
-const BACKGROUND: Color = Color::Black;
-const FOREGROUND: Color = Color::Rgb(225, 229, 238);
 const MAX_COMPLETION_ROWS: usize = 6;
-const INPUT_BACKGROUND: Color = Color::Rgb(52, 52, 52);
-const BLUE: Color = Color::Rgb(47, 116, 196);
-const EFFORT_COLOR: Color = Color::Rgb(255, 154, 40);
-const SIDEBAR_BACKGROUND: Color = INPUT_BACKGROUND;
 const MAX_CONTEXT_ENTRIES: usize = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -406,6 +403,19 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
         } else {
             "↑↓ Tab/→ Esc"
         }
+    } else if state.editor.text().is_empty()
+        && !state
+            .details
+            .as_ref()
+            .is_some_and(|details| details.title == "Commands")
+    {
+        if area.width >= 70 {
+            "Tab mode · Ctrl+P commands"
+        } else if area.width >= 44 {
+            "Tab mode · Ctrl+P"
+        } else {
+            "Ctrl+P"
+        }
     } else if area.width < 44 {
         "Ctrl+P"
     } else {
@@ -421,8 +431,11 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     let outer = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(MUTED))
-        .title(format!(" • {} ", safe_line(&state.workspace)));
+        .border_style(Style::default().fg(BORDER))
+        .title(Line::styled(
+            format!(" • {} ", safe_line(&state.workspace)),
+            Style::default().fg(MUTED),
+        ));
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
     let input_lines = state
@@ -471,16 +484,19 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         safe_line(&state.session_title[..prefix_boundary(&state.session_title, 256)]),
         heading,
     );
-    lines[2] = Line::styled(
-        if state.context_breakdown.is_empty() {
-            "Context · Unknown"
-        } else if state.context_breakdown_estimated {
-            "Context · Estimated"
-        } else {
-            "Context"
-        },
-        heading,
-    );
+    lines[2] = Line::from(vec![
+        Span::styled("Context", heading),
+        Span::styled(
+            if state.context_breakdown.is_empty() {
+                " · Unknown"
+            } else if state.context_breakdown_estimated {
+                " · Estimated"
+            } else {
+                ""
+            },
+            Style::default().fg(MUTED),
+        ),
+    ]);
     lines[3] = Line::styled(
         format!(
             "Window {}",
@@ -526,12 +542,15 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         }
     }
     lines[15] = Line::styled("Extensions", heading);
-    lines[16] = Line::from("MCP  Not implemented");
-    lines[17] = Line::from("Plugins  Not implemented");
-    lines[18] = Line::from(match state.skills_count {
-        Some(count) => format!("Skills {count} discovered"),
-        None => "Skills —".into(),
-    });
+    lines[16] = Line::styled("MCP  Not implemented", Style::default().fg(MUTED));
+    lines[17] = Line::styled("Plugins  Not implemented", Style::default().fg(MUTED));
+    lines[18] = Line::styled(
+        match state.skills_count {
+            Some(count) => format!("Skills {count} discovered"),
+            None => "Skills —".into(),
+        },
+        Style::default().fg(MUTED),
+    );
     lines[20] = Line::styled("Details", heading);
     for (index, (label, value)) in [
         ("Profile", state.profile.as_str()),
@@ -592,12 +611,15 @@ fn context_rows(state: &State, width: usize) -> Vec<Line<'static>> {
                 context_bar(entry.tokens, state.context_window_tokens, bar_width);
             let padding = width.saturating_sub(label_width + bar_width + metric.width() + 2);
             Line::from(vec![
-                Span::raw(format!(
-                    "{label}{} ",
-                    " ".repeat(label_width.saturating_sub(label.width()))
-                )),
+                Span::styled(
+                    format!(
+                        "{label}{} ",
+                        " ".repeat(label_width.saturating_sub(label.width()))
+                    ),
+                    Style::default().fg(MUTED),
+                ),
                 Span::styled(filled, Style::default().fg(BLUE)),
-                Span::styled(remaining, Style::default().fg(MUTED)),
+                Span::styled(remaining, Style::default().fg(BORDER)),
                 Span::raw(format!(" {}{metric}", " ".repeat(padding))),
             ])
         })
@@ -705,14 +727,22 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
         &state.permissions
     };
     let ready = matches!(state.status.as_str(), "Ready" | "Completed");
+    let status_color = match state.status.as_str() {
+        "Ready" | "Completed" => GREEN,
+        "Failed" => RED,
+        "Awaiting approval" | "Awaiting input" | "NeedsConfirmation" | "NeedsInput"
+        | "LimitReached" => AMBER,
+        "Running" | "Reviewing" => BLUE,
+        _ => MUTED,
+    };
     draw_split_line(
         frame,
         Line::from(vec![
             Span::styled(
                 if ready { "✓ " } else { "● " },
-                Style::default().fg(if ready { Color::Green } else { BLUE }),
+                Style::default().fg(status_color),
             ),
-            Span::raw(safe_line(status)),
+            Span::styled(safe_line(status), Style::default().fg(MUTED)),
         ]),
         Line::styled(safe_line(permissions), Style::default().fg(MUTED)),
         area,
@@ -752,7 +782,7 @@ fn draw_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
     if show_effort {
         left.spans.push(Span::styled(
             format!(" {effort}"),
-            Style::default().fg(EFFORT_COLOR),
+            Style::default().fg(AMBER),
         ));
     }
     draw_split_line(
@@ -819,14 +849,18 @@ fn safe_line(text: &str) -> String {
 
 fn role_style(role: Role) -> Style {
     Style::default().fg(match role {
-        Role::User => Color::Rgb(180, 194, 255),
-        Role::Assistant => ACCENT,
-        Role::Tool => Color::Rgb(229, 190, 130),
+        Role::User => BLUE,
+        Role::Assistant => FOREGROUND,
+        Role::Tool => AMBER,
         Role::System => MUTED,
     })
 }
 
-fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, inner: Rect) {
+fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
+    if inner.width >= 40 {
+        inner.x += 1;
+        inner.width -= 2;
+    }
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -846,49 +880,60 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, inner: Rect) {
         );
     }
     for message in &state.messages {
-        let label = if message.label.is_empty() {
-            match message.role {
-                Role::User => "You",
-                Role::Assistant => "Saya",
-                Role::Tool => "Tool",
-                Role::System => "System",
-            }
-        } else {
-            &message.label
+        let role_label = match message.role {
+            Role::User => "You",
+            Role::Assistant => "Saya",
+            Role::Tool => "Tool",
+            Role::System => "System",
         };
-        let mut heading = safe_text(label);
+        let mut heading = Line::from(vec![Span::styled(
+            role_label,
+            role_style(message.role).add_modifier(Modifier::BOLD),
+        )]);
+        if !message.label.is_empty() && message.label != role_label {
+            heading.spans.push(Span::styled(
+                format!(" · {}", safe_line(&message.label)),
+                Style::default().fg(MUTED),
+            ));
+        }
         if message.streaming {
-            heading.push_str(" · streaming");
+            heading
+                .spans
+                .push(Span::styled(" · streaming", Style::default().fg(MUTED)));
         }
         if message.truncated {
-            heading.push_str(" · truncated");
+            heading
+                .spans
+                .push(Span::styled(" · truncated", Style::default().fg(AMBER)));
         }
-        append_wrapped(
-            &heading,
+        if message.role == Role::Tool {
+            heading = heading.style(Style::default().bg(CODE_BACKGROUND));
+        }
+        append_wrapped_line(
+            heading,
             width,
-            role_style(message.role).add_modifier(Modifier::BOLD),
             &mut lines,
             &mut line_count,
+            MAX_RENDER_LINES,
         );
-        let mut code = false;
-        for line in safe_text(&message.text).split('\n') {
-            if line.trim_start().starts_with("```") {
-                code = !code;
+        let text = safe_text(&message.text);
+        if message.role == Role::Assistant {
+            for line in markdown_lines(&text) {
+                append_wrapped_line(line, width, &mut lines, &mut line_count, MAX_RENDER_LINES);
             }
-            let style = if code || line.trim_start().starts_with("```") {
-                Style::default()
-                    .fg(Color::Rgb(203, 211, 225))
-                    .bg(Color::Rgb(29, 34, 46))
-            } else {
-                Style::default().fg(FOREGROUND)
+        } else {
+            let style = match message.role {
+                Role::Tool => Style::default().fg(CODE_FOREGROUND).bg(CODE_BACKGROUND),
+                Role::System => Style::default().fg(MUTED),
+                _ => Style::default().fg(FOREGROUND),
             };
-            append_wrapped(line, width, style, &mut lines, &mut line_count);
+            append_wrapped(&text, width, style, &mut lines, &mut line_count);
         }
         if message.truncated {
             append_wrapped(
                 "[display truncated]",
                 width,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(AMBER),
                 &mut lines,
                 &mut line_count,
             );
@@ -913,12 +958,12 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, inner: Rect) {
         .min(lines.len().saturating_sub(usize::from(inner.height)));
     let end = lines.len().saturating_sub(state.scroll);
     let start = end.saturating_sub(usize::from(inner.height));
-    let visible = lines
-        .into_iter()
-        .skip(start)
-        .take(end - start)
-        .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(visible), inner);
+    for (row, line) in lines.into_iter().skip(start).take(end - start).enumerate() {
+        frame.render_widget(
+            line,
+            Rect::new(inner.x, inner.y + row as u16, inner.width, 1),
+        );
+    }
 }
 
 fn draw_details(
@@ -929,9 +974,20 @@ fn draw_details(
     area: Rect,
 ) {
     let title = safe_line(&details.title[..prefix_boundary(&details.title, 256)]);
-    let mut block = Block::default().border_style(Style::default().fg(ACCENT));
+    let title_style = Style::default()
+        .fg(
+            if title.contains("Approval") || title.contains("Question") {
+                AMBER
+            } else {
+                FOREGROUND
+            },
+        )
+        .add_modifier(Modifier::BOLD);
+    let mut block = Block::default().border_style(Style::default().fg(BORDER));
     if area.height > 1 {
-        block = block.borders(Borders::TOP).title(format!(" {title} "));
+        block = block
+            .borders(Borders::TOP)
+            .title(Line::styled(format!(" {title} "), title_style));
     }
     let inner = block.inner(area);
     *page_rows = usize::from(inner.height).clamp(1, 10);
@@ -963,7 +1019,7 @@ fn draw_details(
                 &prefix,
                 usize::from(inner.width),
                 Style::default().fg(if line == DETAIL_TRUNCATION_NOTICE {
-                    Color::Yellow
+                    AMBER
                 } else {
                     FOREGROUND
                 }),
@@ -984,7 +1040,10 @@ fn draw_details(
         && (truncated || cached_truncated)
         && !title.starts_with(TRUNCATED_DETAIL_PREFIX)
     {
-        block = block.title(format!(" {TRUNCATED_DETAIL_PREFIX}{title} "));
+        block = block.title(Line::styled(
+            format!(" {TRUNCATED_DETAIL_PREFIX}{title} "),
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+        ));
     }
     if truncated {
         if lines.len() == MAX_RENDER_LINES {
@@ -992,7 +1051,7 @@ fn draw_details(
         }
         lines.push_back(Line::styled(
             "[details display truncated]",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(AMBER),
         ));
     }
     *scroll = (*scroll).min(lines.len().saturating_sub(usize::from(inner.height)));
@@ -1023,7 +1082,7 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
             "Message"
         };
         frame.render_widget(
-            Paragraph::new(label),
+            Paragraph::new(label).style(Style::default().fg(MUTED)),
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
         inner.y += 1;
@@ -1097,8 +1156,8 @@ fn draw_completion(frame: &mut Frame<'_>, state: &State, area: Rect) {
         .borders(Borders::ALL)
         .title(" Command suggestions ")
         .title_bottom(" ↑↓ Tab/→ Esc ")
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BACKGROUND));
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(SIDEBAR_BACKGROUND));
     let inner = block.inner(popup);
     let text_width = usize::from(inner.width.saturating_sub(2));
     let commands = items
@@ -1122,10 +1181,10 @@ fn draw_completion(frame: &mut Frame<'_>, state: &State, area: Rect) {
             let style = if active {
                 Style::default()
                     .fg(BACKGROUND)
-                    .bg(ACCENT)
+                    .bg(BLUE)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(FOREGROUND).bg(BACKGROUND)
+                Style::default().fg(FOREGROUND).bg(SIDEBAR_BACKGROUND)
             };
             let padding = command_width - UnicodeWidthStr::width(command.as_str()) + 2;
             let mut spans = vec![
@@ -1182,42 +1241,24 @@ fn append_wrapped(
     lines: &mut VecDeque<Line<'static>>,
     count: &mut usize,
 ) {
-    let mut current = String::new();
-    let mut column = 0;
-    for grapheme in text.graphemes(true) {
-        if grapheme == "\n" {
-            push_line(std::mem::take(&mut current), style, lines, count);
-            column = 0;
-            continue;
-        }
-        let cells = UnicodeWidthStr::width(grapheme);
-        if column > 0 && column + cells > width {
-            push_line(std::mem::take(&mut current), style, lines, count);
-            column = 0;
-        }
-        if cells > width {
-            current.push('�');
-            column += 1;
-        } else {
-            current.push_str(grapheme);
-            column += cells;
-        }
+    for line in text.split('\n') {
+        append_wrapped_line(
+            Line::styled(line.to_owned(), style),
+            width,
+            lines,
+            count,
+            MAX_RENDER_LINES,
+        );
     }
-    push_line(current, style, lines, count);
-}
-
-fn push_line(text: String, style: Style, lines: &mut VecDeque<Line<'static>>, count: &mut usize) {
-    *count = count.saturating_add(1);
-    if lines.len() == MAX_RENDER_LINES {
-        lines.pop_front();
-    }
-    lines.push_back(Line::styled(text, style));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::Suggestion;
+    use crate::{
+        commands::Suggestion,
+        theme::{HEADING, INLINE_CODE},
+    };
     use ratatui::{
         Terminal,
         backend::{Backend, TestBackend},
@@ -1442,7 +1483,7 @@ mod tests {
             buffer
                 .content
                 .iter()
-                .any(|cell| { cell.symbol() == "›" && cell.bg == ACCENT })
+                .any(|cell| { cell.symbol() == "›" && cell.bg == BLUE })
         );
         let image = render(&mut state, 120, 24);
         assert!(image.contains("Command suggestions"));
@@ -1489,7 +1530,7 @@ mod tests {
             .find(|row| buffer[(3, *row)].symbol() == "›")
             .unwrap();
         assert_eq!(row, 8);
-        assert_eq!(buffer[(3, row)].bg, ACCENT);
+        assert_eq!(buffer[(3, row)].bg, BLUE);
         let actual = (5..23)
             .map(|column| buffer[(column, row)].symbol())
             .collect::<String>();
@@ -1738,7 +1779,7 @@ mod tests {
                 buffer
                     .content
                     .iter()
-                    .any(|cell| cell.symbol() == "m" && cell.fg == EFFORT_COLOR)
+                    .any(|cell| cell.symbol() == "m" && cell.fg == AMBER)
             );
         }
         state.thinking_effort = None;
@@ -1956,5 +1997,118 @@ mod tests {
                 state.details_scroll += state.details_page_rows;
             }
         }
+    }
+
+    #[test]
+    fn message_headers_separate_role_metadata_and_literal_tool_cards() {
+        let mut state = State::default();
+        state.push_message(Role::User, "You", "**plain user text**");
+        state.push_message(Role::Tool, "read_file", "`literal`\n# raw heading");
+        state.push_message(Role::Assistant, "example-model", "answer");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 0).starts_with(" You"));
+        assert_eq!(buffer[(1, 0)].fg, BLUE);
+        assert!(buffer[(1, 0)].modifier.contains(Modifier::BOLD));
+        assert!(row_text(buffer, 1).contains("**plain user text**"));
+        assert!(row_text(buffer, 3).contains("Tool · read_file"));
+        assert_eq!(buffer[(1, 3)].fg, AMBER);
+        assert_eq!(buffer[(8, 3)].fg, MUTED);
+        for row in 3..=5 {
+            assert_eq!(buffer[(1, row)].bg, CODE_BACKGROUND);
+            assert_eq!(buffer[(78, row)].bg, CODE_BACKGROUND);
+        }
+        assert!(row_text(buffer, 4).contains("`literal`"));
+        assert!(row_text(buffer, 5).contains("# raw heading"));
+        assert!(row_text(buffer, 7).contains("Saya · example-model"));
+        assert_eq!(buffer[(1, 7)].fg, FOREGROUND);
+        assert_eq!(buffer[(8, 7)].fg, MUTED);
+        assert_eq!(state.messages[0].text, "**plain user text**");
+        assert_eq!(state.messages[1].text, "`literal`\n# raw heading");
+    }
+
+    #[test]
+    fn assistant_markdown_uses_theme_and_preserves_source_and_code_card_width() {
+        let source = "## Heading\nUse `input` and **care**.\n> quoted\n- item\n```rust\nlet x = \"**literal**\";\n```\nunsafe\x1b[2J";
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", source);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 1).starts_with(" Heading"));
+        assert_eq!(buffer[(1, 1)].fg, HEADING);
+        assert!(buffer[(1, 1)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(5, 2)].fg, INLINE_CODE);
+        assert_eq!(buffer[(15, 2)].fg, AMBER);
+        assert_eq!(buffer[(1, 3)].symbol(), "│");
+        assert_eq!(buffer[(1, 3)].fg, MUTED);
+        assert_eq!(buffer[(1, 4)].fg, AMBER);
+        for row in 5..=7 {
+            assert_eq!(buffer[(78, row)].bg, CODE_BACKGROUND);
+        }
+        assert!(row_text(buffer, 6).contains("**literal**"));
+        assert_eq!(buffer[(1, 6)].fg, CODE_FOREGROUND);
+        assert!(row_text(buffer, 8).contains("\\u{1b}[2J"));
+        assert_eq!(state.messages[0].text, source);
+        assert!(state.last_line_count < MAX_RENDER_LINES);
+    }
+
+    #[test]
+    fn status_icons_distinguish_attention_failure_and_progress_without_relayout() {
+        let mut state = State::default();
+        for (status, expected) in [
+            ("Ready", GREEN),
+            ("Completed", GREEN),
+            ("Running", BLUE),
+            ("Reviewing", BLUE),
+            ("Awaiting approval", AMBER),
+            ("Awaiting input", AMBER),
+            ("NeedsConfirmation", AMBER),
+            ("Failed", RED),
+            ("Cancelled", MUTED),
+        ] {
+            state.status = status.into();
+            let mut terminal = Terminal::new(TestBackend::new(60, 1)).unwrap();
+            terminal
+                .draw(|frame| draw_status(frame, &state, frame.area()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(0, 0)].fg, expected, "{status}");
+            assert_eq!(buffer[(2, 0)].fg, MUTED, "{status}");
+            assert!(row_text(buffer, 0).ends_with("auto"));
+        }
+    }
+
+    #[test]
+    fn empty_draft_mode_hint_yields_to_palette_and_completion() {
+        let mut state = State::default();
+        for (width, hint) in [
+            (80, "Tab mode · Ctrl+P commands"),
+            (60, "Tab mode · Ctrl+P"),
+            (30, "Ctrl+P"),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 18)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            assert!(row_text(terminal.backend().buffer(), 0).contains(hint));
+        }
+        state.set_details(Details {
+            title: "Commands".into(),
+            lines: vec!["palette".into()],
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(!row_text(terminal.backend().buffer(), 0).contains("Tab mode"));
+        state.details = None;
+        state.editor.set_text("/per");
+        state.completion.update("/per", 4, true);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let top = row_text(terminal.backend().buffer(), 0);
+        assert!(top.contains("↑↓ Tab/→ Esc"));
+        assert!(!top.contains("Tab mode"));
     }
 }

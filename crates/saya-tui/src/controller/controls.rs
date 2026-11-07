@@ -28,6 +28,62 @@ pub(super) fn closed(request: &Request) -> bool {
     }
 }
 impl App {
+    pub(super) async fn cycle_mode(&mut self) -> Result<()> {
+        let selected = if let Some(mode) = self.deferred_mode {
+            mode
+        } else if let Some(active) = &self.active {
+            let snapshot = active.handle.mode()?;
+            snapshot.pending.unwrap_or(snapshot.current)
+        } else {
+            self.config.mode
+        };
+        let target = match selected {
+            WorkMode::Work => WorkMode::Code,
+            WorkMode::Code => WorkMode::Plan,
+            WorkMode::Plan => WorkMode::Build,
+            WorkMode::Build => WorkMode::Work,
+        };
+        self.request_mode(target, false).await?;
+        Ok(())
+    }
+    async fn request_mode(&mut self, target: WorkMode, announce: bool) -> Result<()> {
+        let workspace = self
+            .prepared
+            .as_ref()
+            .map(|prepared| prepared.session.workspace.as_path())
+            .unwrap_or(&self.config.cwd);
+        session::check_roots(&self.config, workspace, target)?;
+        if let Some(job) = &self.ui_job {
+            job.cancel.cancel();
+            self.deferred_mode = Some(target);
+            self.state.pending_mode = Some(format!("{target:?}").to_uppercase());
+            self.state.details = None;
+            self.notice("Mode change waits for the UI operation to stop.");
+            return Ok(());
+        }
+        if let Some(active) = &self.active {
+            active.handle.request_mode(target)?;
+            self.invalidate_mode_approval();
+            self.refresh_mode()?;
+        } else {
+            if let Some(prepared) = &mut self.prepared {
+                let mut updated = prepared.session.clone();
+                updated.work_mode = target;
+                prepared
+                    .store
+                    .commit(&[StoreChange::Session(updated.clone())])
+                    .await?;
+                prepared.session = updated;
+            }
+            self.config.mode = target;
+            self.state.pending_mode = None;
+            self.refresh_header();
+        }
+        if announce {
+            self.notice(&format!("Mode requested — {target:?}"));
+        }
+        Ok(())
+    }
     pub(super) fn show_pending(&mut self) {
         if self.palette.is_some() {
             self.show_palette();
@@ -255,39 +311,7 @@ impl App {
             "/cancel" => self.cancel(),
             "/mode" => {
                 let target = mode(argument).ok_or("Use /mode plan|build|code|work")?;
-                let workspace = self
-                    .prepared
-                    .as_ref()
-                    .map(|p| p.session.workspace.as_path())
-                    .unwrap_or(&self.config.cwd);
-                session::check_roots(&self.config, workspace, target)?;
-                if let Some(job) = &self.ui_job {
-                    job.cancel.cancel();
-                    self.deferred_mode = Some(target);
-                    self.state.pending_mode = Some(format!("{target:?}").to_uppercase());
-                    self.state.details = None;
-                    self.notice("Mode change waits for the UI operation to stop.");
-                    return Ok(false);
-                }
-                if let Some(active) = &self.active {
-                    active.handle.request_mode(target)?;
-                    self.invalidate_mode_approval();
-                    self.refresh_mode()?;
-                } else {
-                    if let Some(prepared) = &mut self.prepared {
-                        let mut updated = prepared.session.clone();
-                        updated.work_mode = target;
-                        prepared
-                            .store
-                            .commit(&[StoreChange::Session(updated.clone())])
-                            .await?;
-                        prepared.session = updated;
-                    }
-                    self.config.mode = target;
-                    self.state.pending_mode = None;
-                    self.refresh_header();
-                }
-                self.notice(&format!("Mode requested — {target:?}"));
+                self.request_mode(target, true).await?;
             }
             "/permissions" => {
                 if self.active.is_some() || self.ui_job.is_some() {
@@ -322,6 +346,7 @@ impl App {
                         .map(|command| format!("{} · {}", command.text, command.description))
                         .chain([
                             "Enter send · Alt+Enter / Ctrl+J newline".into(),
+                            "Empty draft · Tab cycles WORK → CODE → PLAN → BUILD".into(),
                             "Ctrl+P commands · Ctrl+C cancel · Ctrl+D exit".into(),
                             "PgUp/PgDn scroll · End follow output".into(),
                             "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"

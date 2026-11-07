@@ -36,6 +36,8 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 在单行输入的开头键入 `/`，光标位于末尾时显示命令建议与灰色补全后缀。↑／↓选择，Tab或→填入草稿，Enter执行。Esc先隐藏建议并保留草稿。支持工作模式、权限和导出格式等固定参数，profile名、会话／任务ID与目标路径由用户补齐。`//`可输入字面量斜杠，多行文本继续使用常规编辑。
 
+输入框为空时，Tab按WORK→CODE→PLAN→BUILD→WORK循环模式。运行中会显示待生效选择，并在core调用边界应用。已有草稿时继续用于编辑或补全，Ctrl+P命令面板打开时按面板交互处理。
+
 `/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
 
 窗口标题为 `Saya | 首条任务的简短标题`。所有尺寸采用黑底外框与灰色蓝条输入区，Ready行右侧显示权限，底栏显示模式、模型、可选thinking effort和输入占比。达到120列×24行时显示会话、上下文分项估算和扩展状态侧栏。环形指示依据最近一次执行请求的输入用量，缺失显示 `—`，分项估算明确标记为Estimated。可在profile中设置 `thinking_effort = "max"` 等级别，三协议均按相应字段发送，支持范围由所选模型决定。[Thinking effort配置](configuration.md#thinking-effort)
