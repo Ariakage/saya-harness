@@ -12,6 +12,7 @@ pub mod boundary;
 pub mod config;
 pub mod contract;
 pub mod dispatch;
+pub mod export;
 pub mod input;
 pub mod logging;
 

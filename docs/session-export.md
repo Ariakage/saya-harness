@@ -1,6 +1,6 @@
 # Session 导出设计
 
-**DEV-043 已实现只读快照。JSON／Markdown 导出与 CLI 接入按 DEV-044 至 DEV-046 继续推进，以下未落地接口保留为草案。**
+**DEV-043／044 已实现只读快照与版本化 JSON 导出。Markdown 与 CLI 接入按 DEV-045／046 继续推进，以下未落地接口保留为草案。**
 
 ## 现有基础与入口
 
@@ -48,7 +48,11 @@ core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits
 
 ## JSON 格式草案
 
-导出格式具有独立的 schema 生命周期，首版标记 `schema_version = 1`、`export_type = saya.session`。以下为空集合形状示意，字段在 DEV-044 固定。
+core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一投影，`to_json` 编码为独立 `schema_version = 1`、`export_type = saya.session` 格式。默认 scope 为 transcript，include_tools 为 false，每个字符串保留最多 64 KiB，最终编码最多 32 MiB。身份字段超过单字段限额时返回 `export_limit`，正文按 UTF-8 边界截取，并在 `truncated_fields` 保存 JSON Pointer、原字节数及保留字节数。
+
+投影在截断前对全部已选择内容重新脱敏。Full 增加持久事件、activity、指标和审批元数据，工具参数及结果正文在 history、调用表、后台任务、事件、activity 和审批中统一按 include_tools 选择。供应商 ProviderItem 整体省略，可展示文本保留原 ordinal。旧 messages 表缺少 run_id，历史工具项只在持久调用可唯一匹配时补充 run_id，否则用 null 与 omitted_fields 说明。调用表始终保留独立的 (run_id, call_id)。
+
+以下为空集合形状示意。
 
 ```json
 {
@@ -74,7 +78,11 @@ core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits
   "metrics": [],
   "background_jobs": [],
   "events": [],
-  "omitted_fields": ["provider_internal_state"]
+  "activities": [],
+  "project_context": [],
+  "approval_requests": [],
+  "omitted_fields": ["provider_internal_state"],
+  "truncated_fields": []
 }
 ```
 
