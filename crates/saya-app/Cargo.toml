@@ -1,0 +1,10 @@
+[package]
+name = "saya-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+saya-core = { path = "../saya-core" }
+serde_json = "1.0.154"

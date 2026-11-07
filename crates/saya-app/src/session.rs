@@ -1,10 +1,15 @@
-//! Durable session preparation. Real side effects remain disabled until recovery is ready.
-use super::*;
+//! Durable session creation, validation, recovery and exclusive ownership.
+use saya_core::{
+    boundary::Store,
+    config::{Config, Protocol},
+    contract::{HistoryItem, ModelProtocol, Session, SessionId, WorkMode},
+};
 use saya_core::{
     boundary::StoreChange,
     sqlite::{RecoverySummary, SessionLock, SqliteStore},
 };
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub struct Prepared {
     pub store: Arc<SqliteStore>,
@@ -38,6 +43,7 @@ fn resolved(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     }
     Ok(result)
 }
+/// Validate PLAN storage separation before opening or creating storage.
 pub fn check_roots(
     config: &Config,
     workspace: &Path,
@@ -54,6 +60,7 @@ pub fn check_roots(
     }
     Ok(())
 }
+/// Open durable storage with configured redaction. May create or migrate the database.
 pub fn open(config: &Config) -> Result<Arc<SqliteStore>, Box<dyn std::error::Error>> {
     let secrets = config
         .secret_env_names()
@@ -62,9 +69,11 @@ pub fn open(config: &Config) -> Result<Arc<SqliteStore>, Box<dyn std::error::Err
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Arc::new(SqliteStore::open(&config.data_dir, secrets)?))
 }
+/// Parse a session identifier, returning a validation error for malformed input.
 pub fn parse_id(raw: &str) -> Result<SessionId, Box<dyn std::error::Error>> {
     Ok(serde_json::from_value(serde_json::json!(raw)).map_err(|_| "invalid session ID")?)
 }
+/// Create durable session metadata and acquire an exclusive lock held by Prepared.
 pub async fn create(
     config: &Config,
     session: Session,
@@ -86,6 +95,8 @@ pub async fn create(
         recovery: RecoverySummary::default(),
     })
 }
+/// Validate current configuration under an exclusive lock and recover interrupted runs.
+/// Historical approvals are never restored. Lock release follows Prepared lifetime.
 pub async fn resume(
     config: &Config,
     raw: &str,
@@ -174,6 +185,7 @@ pub async fn resume(
         recovery,
     })
 }
+/// Persist user input, then reload the durable session. Propagates storage errors.
 pub async fn append(
     prepared: &mut Prepared,
     text: String,

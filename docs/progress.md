@@ -12,7 +12,7 @@
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
-- 下一项实现为 DEV-038 共享应用服务，当前状态为待开始。
+- DEV-038 共享应用服务已完成本机验收，下一项为 DEV-039 事件与交互桥接。
 
 ## 后续开发状态
 
@@ -20,12 +20,18 @@
 
 | 阶段 | 任务 | 实际状态 | 已有基础与下一入口 |
 | --- | --- | --- | --- |
-| N0 共享基础 | DEV-038 至 DEV-046 | 待开始 | 0.1.0 的应用组装、安全日志和 SQLite 可复用，先执行 DEV-038 |
+| N0 共享基础 | DEV-038 至 DEV-046 | 进行中 | 0.1.0 的应用组装、安全日志和 SQLite 可复用，先执行 DEV-038 |
 | N1 默认 TUI | DEV-047 至 DEV-053 | 待开始 | 已记录默认入口方向，界面与新 crate 均待开发 |
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 待开始 | Linux 采用 Bubblewrap + Seccomp + socat，macOS 为独立 SeatbeltBackend，能力与性能待实测 |
 | N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078 | 待开始 | 已有指令／Skill 发现，OutputStore、Compact、插件 loader、检查点及 Hooks 待开发 |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 待开始 | 先做目标数据和手动步骤，后续自动阶段依赖持久调度等能力 |
 | N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
+
+### N0 实施记录
+
+| 任务 | 状态 | 证据 |
+| --- | --- | --- |
+| DEV-038 | 完成 | 新 saya-app 迁移模型组装与会话生命周期，CLI 正常入口回归通过，独立审查通过。`./scripts/check.sh` 的格式、Clippy、全套离线测试及 release 构建通过，日志为本机 target/n0-dev038-check.log |
 
 ### 2026-11-08 专项设计细化
 
