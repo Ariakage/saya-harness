@@ -247,6 +247,18 @@ impl ProjectContext {
                         .parent()
                         .ok_or_else(|| failure("invalid target path"))?;
                 }
+                // Invalid tool targets have no child scope. Tool validation
+                // reports their argument error before dispatch.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::NotADirectory
+                            | io::ErrorKind::InvalidInput
+                            | io::ErrorKind::InvalidFilename
+                    ) || e.raw_os_error() == Some(libc::ELOOP) =>
+                {
+                    return Ok(None);
+                }
                 Err(_) => return Err(failure("cannot resolve target path")),
             }
         }

@@ -145,31 +145,47 @@ async fn encoded_credentials_in_arguments_never_reach_the_review_model()
     let root = support::temp_workspace()?;
     let (policy, op) = setup(root.path())?;
     let secret = "fixture\"secret\\tail";
-    let mut nested = serde_json::json!({"token":secret}).to_string();
-    for _ in 0..3 {
-        let model = FakeModel::new(vec![finished(r#"{"decision":"allow","reason":"fixture"}"#)]);
-        let mut config = ReviewConfig::new("execution".into());
-        config.known_secrets.push(secret.into());
-        let mut request = input(&op);
-        request.arguments =
-            serde_json::json!({"env":{"PAYLOAD":{"source":"literal","value":nested}}});
-        let outcome = review_operation(
-            &policy,
-            request,
-            &model,
-            &SharedBudget::default(),
-            &config,
-            &NeverCancel,
-        )
-        .await?;
-        assert!(
-            model.seen.lock().map_err(|_| "lock")?.is_empty(),
-            "encoded credential was sent to the reviewer"
-        );
-        assert_eq!(outcome.decision, Decision::Ask);
-        assert_eq!(outcome.reason, "review_sensitive_data");
-        nested = serde_json::to_string(&nested)?;
+    let unicode = r#"{"token":"fixture\u0022secret\u005ctail"}"#;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(unicode)?["token"],
+        secret
+    );
+    for payload in [
+        serde_json::json!({"token":secret}).to_string(),
+        unicode.to_owned(),
+        r#"{"token":"fixture\u0022secret\u005ctail","token":"safe"}"#.to_owned(),
+        r#"{"token":"fixture\u0022secret\u005ctail","n":1e400}"#.to_owned(),
+        r#"{"token":"fixture\u0022secret\u005ctail","n":18446744073709551617}"#.to_owned(),
+        r#"{"token":"fixture\u0022secret\u005ctail","n":1e-9999}"#.to_owned(),
+    ] {
+        let mut nested = payload;
+        for _ in 0..10 {
+            let model =
+                FakeModel::new(vec![finished(r#"{"decision":"allow","reason":"fixture"}"#)]);
+            let mut config = ReviewConfig::new("execution".into());
+            config.known_secrets.push(secret.into());
+            let mut request = input(&op);
+            request.arguments =
+                serde_json::json!({"env":{"PAYLOAD":{"source":"literal","value":nested}}});
+            let outcome = review_operation(
+                &policy,
+                request,
+                &model,
+                &SharedBudget::default(),
+                &config,
+                &NeverCancel,
+            )
+            .await?;
+            assert!(
+                model.seen.lock().map_err(|_| "lock")?.is_empty(),
+                "encoded credential was sent to the reviewer"
+            );
+            assert_eq!(outcome.decision, Decision::Ask);
+            assert_eq!(outcome.reason, "review_sensitive_data");
+            nested = serde_json::to_string(&nested)?;
+        }
     }
+    let nested = unicode.to_owned();
     let model = FakeModel::new(vec![finished(
         &serde_json::json!({"decision":"allow","reason":nested}).to_string(),
     )]);

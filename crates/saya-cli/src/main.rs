@@ -298,28 +298,7 @@ fn redact_value(value: &mut serde_json::Value, secrets: &[String], _depth: usize
     }
 }
 fn contains_encoded_secret(text: &str, secrets: &[String]) -> bool {
-    secrets
-        .iter()
-        .filter(|secret| !secret.is_empty())
-        .any(|secret| {
-            let mut candidate = secret.clone();
-            for _ in 0..6 {
-                if text.contains(&candidate) {
-                    return true;
-                }
-                let Ok(encoded) = serde_json::to_string(&candidate) else {
-                    return true;
-                };
-                let Some(fragment) = encoded.get(1..encoded.len().saturating_sub(1)) else {
-                    return true;
-                };
-                if fragment == candidate {
-                    break;
-                }
-                candidate = fragment.to_owned();
-            }
-            false
-        })
+    saya_core::redaction::contains_secret(text, secrets)
 }
 fn report_runtime_error(error: &BoundaryError, config: &Config) {
     let secrets = config

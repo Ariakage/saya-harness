@@ -155,6 +155,17 @@ fn is_base(name: &str) -> bool {
 fn valid_env_name(name: &str) -> bool {
     !name.is_empty() && !name.contains(['=', '\0'])
 }
+fn cwd_error(error: io::Error) -> BoundaryError {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory | io::ErrorKind::InvalidFilename
+    ) || error.raw_os_error() == Some(libc::ELOOP)
+    {
+        failure("invalid_path", "command cwd must be an existing directory")
+    } else {
+        failure("io_error", error.to_string())
+    }
+}
 
 impl ExecTool {
     /// Resolve command identity without spawning or authorizing it. This lets
@@ -216,14 +227,16 @@ impl ExecTool {
             ));
         }
         let requested_cwd = args.cwd.as_deref().unwrap_or(&context.workspace);
+        if requested_cwd.as_os_str().as_bytes().contains(&0) {
+            return Err(failure("invalid_args", "command cwd must not contain NUL"));
+        }
+        let requested_cwd =
+            std::fs::canonicalize(context.workspace.join(requested_cwd)).map_err(cwd_error)?;
         let (cwd, root, relative) = self
             .files
-            .resolve(requested_cwd)
+            .resolve(&requested_cwd)
             .map_err(|e| failure(e.code, e.message))?;
-        let cwd_dir = root
-            .dir
-            .open_dir(relative)
-            .map_err(|e| failure("io_error", e.to_string()))?;
+        let cwd_dir = root.dir.open_dir(relative).map_err(cwd_error)?;
         let mut env = BTreeMap::new();
         for (key, value) in std::env::vars_os() {
             if let Some(name) = key.to_str()

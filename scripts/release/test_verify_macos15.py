@@ -45,11 +45,13 @@ class MacOS15VerifierTest(unittest.TestCase):
                  mock.patch.object(verify, 'command', side_effect=fake_command), \
                  mock.patch.object(verify.subprocess, 'run') as run, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(verify.main(), 0)
-                self.assertEqual(run.call_count, 2)
+                self.assertEqual(run.call_count, 3)
                 result = json.loads(evidence.read_text())
                 self.assertEqual(result['target'], 'macos-aarch64')
                 self.assertEqual(result['archive_sha256'], checksum)
                 self.assertEqual(result['interactive_journey'], 'passed')
+                self.assertEqual(result['review_regressions'], 'passed')
+                self.assertEqual(result['review_regressions_script_sha256'], hashlib.sha256((verify.HERE / 'review_regressions.py').read_bytes()).hexdigest())
                 self.assertNotEqual(verify.main(), 0)
                 self.assertEqual(json.loads(evidence.read_text()), result)
             wrong = root / 'wrong.tar.gz'

@@ -1021,7 +1021,10 @@ async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants(
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
     let secret = "fixture\"secret\\tail".to_owned();
-    let payload = serde_json::json!({"token":secret}).to_string();
+    let mut payload = serde_json::json!({"token":secret}).to_string();
+    for _ in 0..6 {
+        payload = serde_json::to_string(&payload)?;
+    }
     let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let signal = Arc::new(Signal::default());

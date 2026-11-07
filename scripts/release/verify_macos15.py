@@ -60,7 +60,7 @@ def main():
             build_info = command('otool', '-l', str(path))
             if not re.search(r'(?m)^\s*minos\s+15\.0(?:\.0)?\s*$', build_info):
                 raise ValueError('Mach-O does not declare minimum macOS 15.0')
-            for script in ('smoke.py', 'journey.py'):
+            for script in ('smoke.py', 'journey.py', 'review_regressions.py'):
                 subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
         try:
             arm64_capable = command('sysctl', '-n', 'hw.optional.arm64') == '1'
@@ -72,8 +72,10 @@ def main():
             'target': target, 'archive_name': args.archive.name, 'archive_sha256': digest,
             'binary_sha256': binary_hash, 'declared_source_commit': metadata.get('declared_source_commit'),
             'mach_o_minimum': '15.0', 'offline_tool_smoke': 'passed', 'interactive_journey': 'passed',
+            'review_regressions': 'passed',
             'smoke_script_sha256': hashlib.sha256((HERE / 'smoke.py').read_bytes()).hexdigest(),
             'journey_script_sha256': hashlib.sha256((HERE / 'journey.py').read_bytes()).hexdigest(),
+            'review_regressions_script_sha256': hashlib.sha256((HERE / 'review_regressions.py').read_bytes()).hexdigest(),
         }
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(evidence, output, indent=2, sort_keys=True)

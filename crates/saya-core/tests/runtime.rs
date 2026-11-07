@@ -139,66 +139,106 @@ fn runtime(
 }
 
 #[tokio::test]
-async fn invalid_background_requests_return_paired_errors_and_allow_model_correction()
+async fn invalid_tool_requests_return_paired_errors_and_allow_model_correction()
 -> Result<(), Box<dyn std::error::Error>> {
-    for (args, expected) in [
-        (
-            serde_json::json!({"tool":"unsupported","arguments":{}}),
-            "unknown_tool",
-        ),
-        (
-            serde_json::json!({"tool":"read_file","arguments":{}}),
-            "invalid_args",
-        ),
-        (
-            serde_json::json!({"tool":"exec","arguments":{"argv":[]}}),
-            "invalid_args",
-        ),
-        (
-            serde_json::json!({"tool":"exec","arguments":{"argv":["/no-such-saya-command"]}}),
-            "executable_not_found",
-        ),
-    ] {
-        let temp = support::temp_workspace()?;
-        let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
-        let model = Arc::new(FakeModel::new(vec![
-            vec![call("invalid", "background_start", args)],
-            vec![HistoryItem::AssistantText("corrected".into())],
-        ]));
-        let store = Arc::new(MemoryStore::default());
-        let mut runtime = runtime(
-            temp.path(),
-            run,
-            model.clone(),
-            store.clone(),
-            Arc::new(NoCancel),
-        )?;
-        let result = runtime.run(&mut session).await?;
-        assert_eq!(result.status, RunStatus::Completed, "{expected}");
-        let paired = session
-            .history
-            .iter()
-            .filter(|item| match item {
-                HistoryItem::ToolResult { call_id, result } => {
-                    call_id == "invalid"
-                        && result
-                            .error
-                            .as_ref()
-                            .is_some_and(|error| error.code == expected)
-                }
-                _ => false,
-            })
-            .count();
-        assert_eq!(paired, 1);
-        assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 2);
-        assert_eq!(
-            store
-                .load_session(session.id)
-                .await?
-                .ok_or("missing session")?
-                .history,
-            session.history
-        );
+    for background in [false, true] {
+        for (args, expected) in [
+            (
+                serde_json::json!({"tool":"unsupported","arguments":{}}),
+                "unknown_tool",
+            ),
+            (
+                serde_json::json!({"tool":"read_file","arguments":{}}),
+                "invalid_args",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":[]}}),
+                "invalid_args",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/no-such-saya-command"]}}),
+                "executable_not_found",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/usr/bin/true"],"cwd":"missing-directory"}}),
+                "invalid_path",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/usr/bin/true"],"cwd":"regular-file"}}),
+                "invalid_path",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/usr/bin/true"],"cwd":"regular-file/child"}}),
+                "invalid_path",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/usr/bin/true"],"cwd":"\u{0000}"}}),
+                "invalid_args",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/usr/bin/true"],"cwd":"x".repeat(1024)}}),
+                "invalid_path",
+            ),
+            (
+                serde_json::json!({"tool":"exec","arguments":{"argv":["/usr/bin/true"],"cwd":"loop"}}),
+                "invalid_path",
+            ),
+        ] {
+            let temp = support::temp_workspace()?;
+            std::fs::write(temp.path().join("regular-file"), "data")?;
+            std::os::unix::fs::symlink("loop", temp.path().join("loop"))?;
+            let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+            let (name, arguments) = if background {
+                ("background_start", args.clone())
+            } else {
+                (
+                    args["tool"].as_str().ok_or("missing tool")?,
+                    args["arguments"].clone(),
+                )
+            };
+            let model = Arc::new(FakeModel::new(vec![
+                vec![call("invalid", name, arguments)],
+                vec![HistoryItem::AssistantText("corrected".into())],
+            ]));
+            let store = Arc::new(MemoryStore::default());
+            let mut runtime = runtime(
+                temp.path(),
+                run,
+                model.clone(),
+                store.clone(),
+                Arc::new(NoCancel),
+            )?
+            .with_project_context(saya_core::project_context::ProjectContext::new(
+                temp.path(),
+                None,
+            )?)?;
+            let result = runtime.run(&mut session).await?;
+            assert_eq!(result.status, RunStatus::Completed, "{expected}");
+            let paired = session
+                .history
+                .iter()
+                .filter(|item| match item {
+                    HistoryItem::ToolResult { call_id, result } => {
+                        call_id == "invalid"
+                            && result
+                                .error
+                                .as_ref()
+                                .is_some_and(|error| error.code == expected)
+                    }
+                    _ => false,
+                })
+                .count();
+            assert_eq!(paired, 1);
+            assert_eq!(model.seen.lock().map_err(|_| "lock")?.len(), 2);
+            assert_eq!(
+                store
+                    .load_session(session.id)
+                    .await?
+                    .ok_or("missing session")?
+                    .history,
+                session.history
+            );
+        }
     }
     Ok(())
 }
