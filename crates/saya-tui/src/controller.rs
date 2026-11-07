@@ -1,4 +1,7 @@
 //! Interface orchestration using shared application services and durable events.
+#[cfg(test)]
+mod control_tests;
+mod controls;
 use crate::{
     terminal::TerminalGuard,
     view::{self, Role, State},
@@ -9,7 +12,7 @@ use crossterm::event::{
 use futures_util::StreamExt;
 use saya_app::{
     events::{ChannelSink, EventModel, EventStore, EventWriter},
-    interaction::RunCancellation,
+    interaction::{Request, RunCancellation, input_channel},
     session::{self, Prepared},
 };
 use saya_core::{
@@ -19,7 +22,7 @@ use saya_core::{
     contract::{
         BoundaryError, Event, EventPayload, ModelPurpose, RunId, RunResult, Session, WorkMode,
     },
-    runtime::PersonalContext,
+    runtime::{PersonalContext, RuntimeHandle},
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -40,6 +43,9 @@ struct Active {
     events: mpsc::Receiver<Event>,
     events_open: bool,
     assistant_id: u64,
+    handle: RuntimeHandle,
+    requests: mpsc::Receiver<Request>,
+    requests_open: bool,
 }
 impl Drop for Active {
     fn drop(&mut self) {
@@ -54,6 +60,8 @@ struct App {
     active: Option<Active>,
     state: State,
     exit_after_run: Option<u8>,
+    pending: Option<Request>,
+    palette: Option<usize>,
 }
 impl App {
     fn new(mut config: Config, options: Options) -> Result<Self> {
@@ -73,6 +81,8 @@ impl App {
             active: None,
             state: State::default(),
             exit_after_run: None,
+            pending: None,
+            palette: None,
         };
         app.refresh_header();
         app.state.push_message(Role::System,"Saya", "Ready. Enter sends a message; Alt+Enter or Ctrl+J adds a line. Ctrl+C cancels. Ctrl+D exits when idle.");
@@ -105,8 +115,14 @@ impl App {
             .and_then(|name| self.config.profiles.get(name))
             .map(|p| p.model.clone())
             .unwrap_or_else(|| "Unconfigured".into());
+        self.state.model = self.safe(&self.state.model);
         self.state.mode = format!("{:?}", self.config.mode).to_uppercase();
-        self.state.permissions = format!("{:?}", self.config.permissions_mode);
+        self.state.permissions = match self.config.permissions_mode {
+            saya_core::contract::PermissionMode::Auto => "auto",
+            saya_core::contract::PermissionMode::Manual => "Manual Approval",
+            saya_core::contract::PermissionMode::Bypass => "bypass permissions",
+        }
+        .into();
     }
     async fn start(&mut self, text: String) -> Result<()> {
         if self.active.is_some() {
@@ -130,6 +146,7 @@ impl App {
         ));
         let store: Arc<dyn Store> = Arc::new(EventStore(writer.clone()));
         let cancel = Arc::new(RunCancellation::new());
+        let (interaction, requests) = input_channel(16)?;
         let (mut runtime, _) = saya_app::build_runtime(
             &self.config,
             &prepared.session,
@@ -138,8 +155,8 @@ impl App {
                 permissions: self.config.permissions_mode,
                 store,
                 cancellation: cancel.clone(),
-                confirmation: None,
-                input: None,
+                confirmation: Some(interaction.clone()),
+                input: Some(interaction),
                 approvals: Preauthorizations::default(),
                 personal_context: self.options.personal_context.clone(),
                 anthropic_prompt_cache: self.options.anthropic_prompt_cache,
@@ -162,6 +179,7 @@ impl App {
         let assistant_id = self
             .state
             .push_message(Role::Assistant, self.state.model.clone(), "");
+        let handle = runtime.handle();
         let join = tokio::spawn(async move {
             let result = runtime.run(&mut current).await;
             (result, current)
@@ -172,6 +190,9 @@ impl App {
             events,
             events_open: true,
             assistant_id,
+            handle,
+            requests,
+            requests_open: true,
         });
         self.state.status = "Running".into();
         self.state.scroll_to_bottom();
@@ -185,13 +206,13 @@ impl App {
                     self.state.append_message(active.assistant_id, &text);
                 }
             }
-            EventPayload::ModelStarted { purpose, .. } => {
+            EventPayload::ModelStarted { purpose, .. } if self.pending.is_none() => {
                 self.state.status = if purpose == ModelPurpose::Review {
                     "Reviewing"
                 } else {
                     "Running"
                 }
-                .into()
+                .into();
             }
             EventPayload::ToolStarted { name, call_id } => {
                 self.state
@@ -208,6 +229,8 @@ impl App {
         };
     }
     fn cancel(&mut self) {
+        self.invalidate_pending();
+        self.palette = None;
         if let Some(active) = &self.active {
             active.cancel.cancel();
             self.state.status = "Cancelling".into();
@@ -220,6 +243,8 @@ impl App {
         result: std::result::Result<RunOutcome, tokio::task::JoinError>,
     ) -> Result<()> {
         let mut active = self.active.take().ok_or("run is unavailable")?;
+        self.invalidate_pending();
+        self.state.pending_mode = None;
         let (outcome, session) = result.map_err(|_| "run task failed")?;
         while let Ok(event) = active.events.try_recv() {
             if let EventPayload::ModelTextDelta { text, .. } = event.payload {
@@ -262,10 +287,34 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return Ok(false);
         }
+        if matches!(self.pending, Some(Request::Approval(..)))
+            && (key.kind != KeyEventKind::Press
+                || !(key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT))
+            && matches!(
+                key.code,
+                KeyCode::Char('y' | 'Y' | 'n' | 'N') | KeyCode::Enter | KeyCode::Esc
+            )
+        {
+            return Ok(false);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => {
                     self.cancel();
+                    return Ok(false);
+                }
+                KeyCode::Char('p') => {
+                    self.palette = if self.palette.is_some() {
+                        None
+                    } else {
+                        Some(0)
+                    };
+                    if self.palette.is_some() {
+                        self.show_palette();
+                    } else {
+                        self.state.details = None;
+                        self.show_pending();
+                    }
                     return Ok(false);
                 }
                 KeyCode::Char('d') if self.state.editor.text().is_empty() => {
@@ -279,7 +328,80 @@ impl App {
                 _ => {}
             }
         }
+        if let Some(selected) = self.palette {
+            match key.code {
+                KeyCode::Up => {
+                    self.palette = Some(selected.saturating_sub(1));
+                    self.show_palette();
+                    return Ok(false);
+                }
+                KeyCode::Down => {
+                    self.palette = Some((selected + 1).min(controls::COMMANDS.len() - 1));
+                    self.show_palette();
+                    return Ok(false);
+                }
+                KeyCode::Esc => {
+                    self.palette = None;
+                    self.state.details = None;
+                    self.show_pending();
+                    return Ok(false);
+                }
+                KeyCode::Enter => {
+                    let typed = self.state.editor.text().to_owned();
+                    let command = if typed.starts_with('/') {
+                        typed.as_str()
+                    } else {
+                        controls::COMMANDS[selected]
+                    };
+                    self.palette = None;
+                    let exit = self.command(command).await?;
+                    if typed.starts_with('/') {
+                        self.state.editor.clear();
+                    }
+                    if self.pending.is_some() {
+                        self.show_pending();
+                    }
+                    return Ok(exit);
+                }
+                _ => {}
+            }
+        }
+        let approval_visible = self.palette.is_none()
+            && self
+                .state
+                .details
+                .as_ref()
+                .is_some_and(|details| details.title == "Approval required");
+        if approval_visible && key.kind == KeyEventKind::Press {
+            if key.code == KeyCode::Esc {
+                self.reply_approval(false);
+                return Ok(false);
+            }
+            if self.state.editor.text().is_empty() {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        self.reply_approval(true);
+                        return Ok(false);
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') => {
+                        self.reply_approval(false);
+                        return Ok(false);
+                    }
+                    _ => {}
+                }
+            }
+        }
         match key.code {
+            KeyCode::Esc => {
+                self.state.details = None;
+                self.show_pending();
+            }
+            KeyCode::PageUp if self.state.details.is_some() => {
+                self.state.details_scroll = self.state.details_scroll.saturating_sub(10)
+            }
+            KeyCode::PageDown if self.state.details.is_some() => {
+                self.state.details_scroll = self.state.details_scroll.saturating_add(10)
+            }
             KeyCode::End if self.state.scroll > 0 => self.state.scroll_to_bottom(),
             KeyCode::PageUp => self.state.scroll_up(10),
             KeyCode::PageDown => self.state.scroll_down(10),
@@ -288,20 +410,7 @@ impl App {
                     .modifiers
                     .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
             {
-                let text = self.state.editor.text().to_owned();
-                if text.trim() == "/exit" {
-                    if self.active.is_some() {
-                        self.exit_after_run = Some(0);
-                        self.cancel();
-                    } else {
-                        return Ok(true);
-                    }
-                } else if self.active.is_some() {
-                    self.notice("A run is active. Ctrl+C cancels it; your draft is retained.");
-                } else if !text.trim().is_empty() {
-                    self.start(text).await?;
-                    self.state.editor.clear();
-                }
+                return self.submit().await;
             }
             _ => {
                 self.state.editor.handle_key(key);
@@ -350,14 +459,18 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             Tick,
             Signal,
             Event(Option<Event>),
+            Request(Option<Request>),
             Finished(std::result::Result<RunOutcome, tokio::task::JoinError>),
         }
+        dirty |= app.refresh_mode()?;
+        let pending_free = app.pending.is_none();
         let action = if let Some(active) = &mut app.active {
             tokio::select! {biased;
                 _=interrupt.recv()=>Action::Signal,
                 _=terminate.recv()=>Action::Signal,
                 _=hangup.recv()=>Action::Signal,
                 event=input.next(), if input_open=>Action::Input(event),
+                request=active.requests.recv(), if active.requests_open && pending_free=>Action::Request(request),
                 _=tick.tick()=>Action::Tick,
                 event=active.events.recv(), if active.events_open=>Action::Event(event),
                 result=&mut active.join=>Action::Finished(result),
@@ -400,6 +513,12 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                     app.cancel();
                 } else {
                     return Ok(130);
+                }
+            }
+            Action::Request(Some(request)) => app.request(request),
+            Action::Request(None) => {
+                if let Some(active) = &mut app.active {
+                    active.requests_open = false;
                 }
             }
             Action::Event(Some(event)) => app.event(event),

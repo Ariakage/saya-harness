@@ -86,3 +86,9 @@ DEV-047 至 DEV-053 覆盖终端状态恢复、窗口变化、Unicode／窄屏�
 库内流式协调器通过共享EventWriter／EventModel消费运行事件，绘制仅在状态变化时进行，目标帧间隔33ms。每轮最多主动消费64条已到达事件，键盘与取消信号优先处理。异常或输入断开后取消所属运行，关闭事件接收并等待运行收尾，再退出终端guard。
 
 输入最多64KiB，单条正文256KiB，聊天正文总量2MiB及512条，截断与驱逐均显示标记。聊天保留最近10,000视觉行，详情最多保留2MiB／10,000视觉行，超过显示范围有可见提示。100列起采用对话与详情双栏，窄屏详情占主区域。默认界面使用深色、英文角色标签，源文件为saya-tui的editor／view／controller模块。
+
+## DEV-049 运行控制
+
+Ctrl+P打开命令面板，方向键选择、Enter执行、Esc关闭。/mode plan|build|code|work由用户触发，标题同时显示实际模式和core待切换模式。/permissions auto|manual|bypass在运行空闲时修改本次权限设置。/status、/cancel、/help与/exit提供运行状态和控制。
+
+逐工具审核显示tool、call_id、approval_id、工作区、模式及参数，y批准、n或Esc拒绝。决策要求当前审核可见，并使用新的普通／Shift按键，重复和Ctrl／Alt／Super组合键保持编辑语义。澄清在输入框填写后Enter回复，//转义支持字面量斜杠。待审核时仍可输入/mode切换，旧reply立即失效，实际授权由core在派发前重查。人工等待的活跃预算计时沿用core pause逻辑。

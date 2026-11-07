@@ -12,7 +12,7 @@
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
-- DEV-038 至 DEV-046 已完成并分别提交，N0 全量本机验收通过。下一任务为 DEV-049 模式、审批与运行控制。
+- DEV-038 至 DEV-046 已完成并分别提交，N0 全量本机验收通过。下一任务为 DEV-050 会话、工具、后台与导出入口。
 
 ## 后续开发状态
 
@@ -31,6 +31,7 @@
 
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
+| DEV-049 | 完成 | 复用core RuntimeHandle和输入桥，支持实际／待切换模式、空闲权限、逐工具批准、澄清、命令面板和取消。19项lib测试及Clippy通过，含10项真实受控运行／人机输入边界回归，阻断重复键、组合键与隐藏面板误批准 |
 | DEV-048 | 完成 | 有界UTF-8/grapheme编辑、流事件聊天协调器、安全折行／代码块、滚动与窄屏呈现已实现。9项lib组件／草稿回归和Clippy通过，重绘与事件消费有界调度；正常入口集成按DEV-051／052验收 |
 | DEV-047 | 完成 | saya-tui library、Ratatui0.30.2／Crossterm0.29.0已锁定。3项真实PTY生命周期测试、Clippy及格式检查通过，覆盖normal/error/panic/重复进入及termios与屏幕恢复。日志为target/n1-dev047-*.log |
 

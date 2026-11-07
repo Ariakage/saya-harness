@@ -1,0 +1,393 @@
+//! Human decisions require current explicit input. Core retains authorization.
+use super::*;
+use saya_core::{
+    boundary::{Cancellation, Model, ModelRequest, ModelStream, Operation},
+    config::{Environment, Overrides},
+    contract::{ApprovalRequest, ErrorInfo, PermissionMode, Run},
+    input::InputRequest,
+    permissions::{PermissionConfig, Policy},
+    review::ReviewConfig,
+    runtime::{AgentRuntime, RuntimeLimits, RuntimeSetup},
+    tools::{
+        exec::ExecConfig,
+        read::{ReadLimits, ReadTools},
+    },
+};
+use std::{ffi::OsString, time::Duration};
+use tokio::sync::{Notify, oneshot};
+
+type ApprovalReceiver = oneshot::Receiver<std::result::Result<Option<bool>, BoundaryError>>;
+fn fixture() -> (tempfile::TempDir, App) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let config_path = root.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"schema_version = 1
+[defaults]
+profile = "fixture"
+[profiles.fixture]
+protocol = "openai-chat-completions"
+base_url = "http://127.0.0.1:9/v1"
+model = "fixture"
+auth = "none"
+context_window_tokens = 128000
+stream = false
+"#,
+    )
+    .unwrap();
+    let config = saya_core::config::load(
+        Overrides {
+            config: Some(config_path),
+            ..Default::default()
+        },
+        Environment::from_pairs([(OsString::from("HOME"), root.path().as_os_str().to_owned())]),
+        &workspace,
+    )
+    .unwrap();
+    let app = App::new(
+        config,
+        Options {
+            personal_context: PersonalContext::default(),
+            anthropic_prompt_cache: false,
+            cwd_explicit: false,
+            profile_explicit: false,
+            mode_override: None,
+        },
+    )
+    .unwrap();
+    (root, app)
+}
+fn approval(app: &App, id: &str) -> (Request, ApprovalReceiver) {
+    let (reply, receiver) = oneshot::channel();
+    (
+        Request::Approval(
+            ApprovalRequest {
+                approval_id: id.into(),
+                call_id: "call-fixture".into(),
+                run_id: RunId::new(),
+                tool: "read_file".into(),
+                operation_summary: "Read selected file".into(),
+                arguments: serde_json::json!({"path":"fixture.txt"}),
+                cwd: app.config.cwd.clone(),
+                work_mode: app.config.mode,
+            },
+            reply,
+        ),
+        receiver,
+    )
+}
+fn key(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
+    KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind)
+}
+
+#[tokio::test]
+async fn approval_decisions_require_a_fresh_press_in_the_visible_prompt() {
+    for (decision, expected) in [('y', true), ('n', false)] {
+        let (_root, mut app) = fixture();
+        let (request, mut receiver) = approval(&app, "current");
+        app.request(request);
+        app.key(key(KeyCode::Char(decision), KeyEventKind::Repeat))
+            .await
+            .unwrap();
+        app.key(key(KeyCode::Enter, KeyEventKind::Repeat))
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(app.pending.is_some());
+        assert!(
+            app.state.editor.text().is_empty(),
+            "repeat decision entered the editor"
+        );
+        app.key(key(KeyCode::Char(decision), KeyEventKind::Release))
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        app.key(key(KeyCode::Char(decision), KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(receiver.await.unwrap().unwrap(), Some(expected));
+        assert!(app.pending.is_none());
+    }
+}
+
+#[tokio::test]
+async fn hidden_approval_is_not_answered_by_the_draft_and_enter() {
+    let (_root, mut app) = fixture();
+    let (request, mut receiver) = approval(&app, "hidden");
+    app.request(request);
+    app.command("/help").await.unwrap();
+    app.state.editor.set_text("yes");
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    assert!(app.pending.is_some());
+    app.state.editor.clear();
+    app.show_pending();
+    app.key(key(KeyCode::Esc, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
+}
+
+#[tokio::test]
+async fn cancel_drops_pending_reply_and_clears_the_draft() {
+    let (_root, mut app) = fixture();
+    let (request, receiver) = approval(&app, "cancelled");
+    app.request(request);
+    app.state.editor.set_text("unsubmitted draft");
+    app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .await
+        .unwrap();
+    assert!(receiver.await.is_err());
+    assert!(app.pending.is_none());
+    assert!(app.state.details.is_none());
+    assert!(app.state.editor.text().is_empty());
+}
+
+#[tokio::test]
+async fn clarification_keeps_unicode_and_decodes_literal_slash_escape() {
+    for (typed, expected) in [("值 🌸", "值 🌸"), ("//tmp/report", "/tmp/report")] {
+        let (_root, mut app) = fixture();
+        let (reply, receiver) = oneshot::channel();
+        app.request(Request::Input(
+            InputRequest {
+                question: "Choose a location".into(),
+                options: vec![],
+            },
+            reply,
+        ));
+        app.state.editor.set_text("  ");
+        app.key(key(KeyCode::Enter, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert!(app.pending.is_some());
+        app.state.editor.set_text(typed);
+        app.key(key(KeyCode::Enter, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(receiver.await.unwrap().unwrap().as_deref(), Some(expected));
+        assert!(app.pending.is_none());
+        assert!(app.state.editor.text().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn expired_replies_are_removed_and_closed_arrivals_do_not_replace_current_prompt() {
+    let (_root, mut app) = fixture();
+    let (current, current_receiver) = approval(&app, "current");
+    app.request(current);
+    let (expired, expired_receiver) = approval(&app, "expired");
+    drop(expired_receiver);
+    app.request(expired);
+    let Some(Request::Approval(request, _)) = &app.pending else {
+        panic!("missing current approval");
+    };
+    assert_eq!(request.approval_id, "current");
+    drop(current_receiver);
+    assert!(app.refresh_mode().unwrap());
+    assert!(app.pending.is_none());
+    assert!(app.state.details.is_none());
+}
+
+#[tokio::test]
+async fn idle_mode_is_persisted_and_permission_choice_remains_current_invocation_state() {
+    let (_root, mut app) = fixture();
+    app.prepared = Some(
+        session::create(&app.config, saya_app::new_session(&app.config).unwrap())
+            .await
+            .unwrap(),
+    );
+    app.command("/permissions manual").await.unwrap();
+    app.command("/mode code").await.unwrap();
+    assert_eq!(app.config.permissions_mode, PermissionMode::Manual);
+    assert_eq!(app.state.permissions, "Manual Approval");
+    assert_eq!(app.config.mode, WorkMode::Code);
+    assert_eq!(app.state.mode, "CODE");
+    assert!(app.state.pending_mode.is_none());
+    let prepared = app.prepared.as_ref().unwrap();
+    assert_eq!(
+        prepared
+            .store
+            .load_session(prepared.session.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .work_mode,
+        WorkMode::Code
+    );
+}
+
+struct HoldingModel(Arc<Notify>);
+impl Model for HoldingModel {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            self.0.notify_one();
+            cancel.cancelled().await;
+            Err(BoundaryError(
+                ErrorInfo {
+                    code: "cancelled".into(),
+                    message: "fixture cancelled".into(),
+                },
+                None,
+                None,
+            ))
+        })
+    }
+}
+async fn attach_active_call(app: &mut App) {
+    let mut prepared = session::create(&app.config, saya_app::new_session(&app.config).unwrap())
+        .await
+        .unwrap();
+    session::append(&mut prepared, "task".into()).await.unwrap();
+    let cancel = Arc::new(RunCancellation::new());
+    let started = Arc::new(Notify::new());
+    let files =
+        Arc::new(ReadTools::new(&app.config.cwd, &[], false, ReadLimits::default()).unwrap());
+    let mut runtime = AgentRuntime::new(RuntimeSetup {
+        run: Run {
+            id: RunId::new(),
+            session_id: prepared.session.id,
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Auto,
+        },
+        model: Arc::new(HoldingModel(started.clone())),
+        store: prepared.store.clone(),
+        policy: Arc::new(Policy::new(&app.config.cwd, PermissionConfig::default()).unwrap()),
+        files,
+        cancellation: cancel.clone(),
+        review: ReviewConfig::new("fixture".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "task".into(),
+        confirmation: None,
+        limits: RuntimeLimits::default(),
+    })
+    .unwrap();
+    let handle = runtime.handle();
+    let mut current = prepared.session.clone();
+    let join = tokio::spawn(async move {
+        let result = runtime.run(&mut current).await;
+        (result, current)
+    });
+    let (_sender, events) = mpsc::channel(1);
+    let (_interaction, requests) = input_channel(1).unwrap();
+    app.active = Some(Active {
+        cancel,
+        join,
+        events,
+        events_open: false,
+        assistant_id: app.state.push_message(Role::Assistant, "fixture", ""),
+        handle,
+        requests,
+        requests_open: false,
+    });
+    app.prepared = Some(prepared);
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+}
+async fn stop_active_call(app: &mut App) {
+    app.cancel();
+    let active = app.active.as_mut().unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), &mut active.join)
+        .await
+        .unwrap();
+    app.finish(outcome).unwrap();
+}
+
+#[tokio::test]
+async fn changing_mode_drops_old_approval_and_shows_actual_and_pending_core_modes() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    let (request, receiver) = approval(&app, "old-policy");
+    app.request(request);
+    app.command("/mode plan").await.unwrap();
+    assert!(receiver.await.is_err());
+    assert!(app.pending.is_none());
+    assert_eq!(app.state.mode, "WORK");
+    assert_eq!(app.state.pending_mode.as_deref(), Some("PLAN"));
+    let core = app.active.as_ref().unwrap().handle.mode().unwrap();
+    assert_eq!(core.current, WorkMode::Work);
+    assert_eq!(core.pending, Some(WorkMode::Plan));
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn active_permission_change_is_refused_and_cancellation_reaches_owned_runtime() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    assert!(app.command("/permissions bypass").await.is_err());
+    assert_eq!(app.config.permissions_mode, PermissionMode::Auto);
+    let cancel = app.active.as_ref().unwrap().cancel.clone();
+    let (request, receiver) = approval(&app, "cancelled-active");
+    app.request(request);
+    app.cancel();
+    assert!(cancel.is_cancelled());
+    assert!(receiver.await.is_err());
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn plan_storage_checks_apply_to_every_permission_mode_before_creating_files() {
+    for permissions in [
+        PermissionMode::Auto,
+        PermissionMode::Manual,
+        PermissionMode::Bypass,
+    ] {
+        let (_root, mut app) = fixture();
+        app.config.permissions_mode = permissions;
+        app.config.data_dir = app.config.cwd.join("data");
+        assert!(app.command("/mode plan").await.is_err());
+        assert_eq!(app.config.mode, WorkMode::Work);
+        assert_eq!(app.state.mode, "WORK");
+        assert!(!app.config.data_dir.exists());
+    }
+}
+
+#[tokio::test]
+async fn modified_editing_shortcuts_do_not_grant_approval() {
+    for modifiers in [
+        KeyModifiers::CONTROL,
+        KeyModifiers::ALT,
+        KeyModifiers::SUPER,
+    ] {
+        let (_root, mut app) = fixture();
+        let (request, mut receiver) = approval(&app, "modifier");
+        app.request(request);
+        app.key(KeyEvent::new(KeyCode::Char('y'), modifiers))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                receiver.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "modifier {modifiers:?} granted approval"
+        );
+        assert!(app.pending.is_some());
+    }
+    let (_root, mut app) = fixture();
+    let (request, receiver) = approval(&app, "uppercase");
+    app.request(request);
+    app.key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT))
+        .await
+        .unwrap();
+    assert_eq!(receiver.await.unwrap().unwrap(), Some(true));
+}
