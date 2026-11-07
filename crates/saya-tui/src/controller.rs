@@ -2,14 +2,15 @@
 #[cfg(test)]
 mod control_tests;
 mod controls;
+#[cfg(test)]
+mod service_tests;
+mod services;
 use crate::{
+    input::TerminalInput,
     terminal::TerminalGuard,
     view::{self, Role, State},
 };
-use crossterm::event::{
-    Event as TerminalEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
-use futures_util::StreamExt;
+use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use saya_app::{
     events::{ChannelSink, EventModel, EventStore, EventWriter},
     interaction::{Request, RunCancellation, input_channel},
@@ -62,6 +63,9 @@ struct App {
     exit_after_run: Option<u8>,
     pending: Option<Request>,
     palette: Option<usize>,
+    ui_job: Option<services::UiJob>,
+    deferred_mode: Option<WorkMode>,
+    queued_prompt: Option<String>,
 }
 impl App {
     fn new(mut config: Config, options: Options) -> Result<Self> {
@@ -83,6 +87,9 @@ impl App {
             exit_after_run: None,
             pending: None,
             palette: None,
+            ui_job: None,
+            deferred_mode: None,
+            queued_prompt: None,
         };
         app.refresh_header();
         app.state.push_message(Role::System,"Saya", "Ready. Enter sends a message; Alt+Enter or Ctrl+J adds a line. Ctrl+C cancels. Ctrl+D exits when idle.");
@@ -129,10 +136,17 @@ impl App {
             self.notice("A run is active. Ctrl+C cancels it.");
             return Ok(());
         }
+        if self.ui_job.is_some() {
+            return Err("Wait for the UI operation or cancel it before sending a message".into());
+        }
         let display = self.safe(&text);
         if self.prepared.is_none() {
-            self.prepared =
-                Some(session::create(&self.config, saya_app::new_session(&self.config)?).await?);
+            if self.config.profile.is_none() {
+                return Err("Choose a configured profile with /profiles and /profile NAME".into());
+            }
+            self.service("/new", "").await?;
+            self.queued_prompt = Some(text);
+            return Ok(());
         }
         let prepared = self.prepared.as_mut().ok_or("session is unavailable")?;
         let run_id = RunId::new();
@@ -207,6 +221,17 @@ impl App {
                 }
             }
             EventPayload::ModelStarted { purpose, .. } if self.pending.is_none() => {
+                if purpose == ModelPurpose::Execution
+                    && let Some(active) = &mut self.active
+                    && self.state.messages.back().is_none_or(|message| {
+                        message.id != active.assistant_id || !message.text.is_empty()
+                    })
+                {
+                    self.state.finish_message(active.assistant_id);
+                    active.assistant_id =
+                        self.state
+                            .push_message(Role::Assistant, self.state.model.clone(), "");
+                }
                 self.state.status = if purpose == ModelPurpose::Review {
                     "Reviewing"
                 } else {
@@ -229,6 +254,14 @@ impl App {
         };
     }
     fn cancel(&mut self) {
+        if let Some(job) = &self.ui_job {
+            job.cancel.cancel();
+        }
+        self.deferred_mode = None;
+        self.queued_prompt = None;
+        if self.active.is_none() {
+            self.state.pending_mode = None;
+        }
         self.invalidate_pending();
         self.palette = None;
         if let Some(active) = &self.active {
@@ -318,7 +351,7 @@ impl App {
                     return Ok(false);
                 }
                 KeyCode::Char('d') if self.state.editor.text().is_empty() => {
-                    if self.active.is_some() {
+                    if self.active.is_some() || self.ui_job.is_some() {
                         self.exit_after_run = Some(0);
                         self.cancel();
                         return Ok(false);
@@ -367,6 +400,7 @@ impl App {
             }
         }
         let approval_visible = self.palette.is_none()
+            && self.deferred_mode.is_none()
             && self
                 .state
                 .details
@@ -431,12 +465,17 @@ pub async fn run(config: Config, options: Options) -> Result<u8> {
     if let Some(mut active) = app.active.take() {
         active.cancel.cancel();
         active.events.close();
+        active.requests.close();
         let _ = (&mut active.join).await;
+    }
+    if let Some(mut job) = app.ui_job.take() {
+        job.cancel.cancel();
+        let _ = (&mut job.join).await;
     }
     outcome
 }
 async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
-    let mut input = EventStream::new();
+    let mut input = TerminalInput::new()?;
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(33));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
@@ -460,6 +499,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             Signal,
             Event(Option<Event>),
             Request(Option<Request>),
+            UiJob(std::result::Result<services::UiResult, BoundaryError>),
             Finished(std::result::Result<RunOutcome, tokio::task::JoinError>),
         }
         dirty |= app.refresh_mode()?;
@@ -470,6 +510,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 _=terminate.recv()=>Action::Signal,
                 _=hangup.recv()=>Action::Signal,
                 event=input.next(), if input_open=>Action::Input(event),
+                result=services::next_job(&mut app.ui_job)=>Action::UiJob(result),
                 request=active.requests.recv(), if active.requests_open && pending_free=>Action::Request(request),
                 _=tick.tick()=>Action::Tick,
                 event=active.events.recv(), if active.events_open=>Action::Event(event),
@@ -477,7 +518,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             }
         } else {
             tokio::select! {biased; _=interrupt.recv()=>Action::Signal,_=terminate.recv()=>Action::Signal,
-            _=hangup.recv()=>Action::Signal,event=input.next(), if input_open=>Action::Input(event),_=tick.tick()=>Action::Tick}
+            _=hangup.recv()=>Action::Signal,result=services::next_job(&mut app.ui_job)=>Action::UiJob(result),event=input.next(), if input_open=>Action::Input(event),_=tick.tick()=>Action::Tick}
         };
         let redraw = !matches!(&action, Action::Event(_));
         dirty |= !matches!(&action, Action::Tick);
@@ -500,7 +541,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             Action::Input(Some(Ok(_))) | Action::Tick => {}
             Action::Input(Some(Err(_))) | Action::Input(None) => {
                 input_open = false;
-                if app.active.is_some() {
+                if app.active.is_some() || app.ui_job.is_some() {
                     app.exit_after_run = Some(1);
                     app.cancel();
                 } else {
@@ -508,12 +549,15 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 }
             }
             Action::Signal => {
-                if app.active.is_some() {
+                if app.active.is_some() || app.ui_job.is_some() {
                     app.exit_after_run = Some(130);
                     app.cancel();
                 } else {
                     return Ok(130);
                 }
+            }
+            Action::UiJob(result) => {
+                app.finish_ui(result).await?;
             }
             Action::Request(Some(request)) => app.request(request),
             Action::Request(None) => {
@@ -529,14 +573,17 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             }
             Action::Finished(result) => {
                 app.finish(result)?;
-                if let Some(code) = app.exit_after_run {
-                    return Ok(code);
-                }
             }
         }
         if redraw && dirty {
             terminal.draw(|frame| view::draw(frame, &mut app.state))?;
             dirty = false;
+        }
+        if app.active.is_none()
+            && app.ui_job.is_none()
+            && let Some(code) = app.exit_after_run
+        {
+            return Ok(code);
         }
     }
 }

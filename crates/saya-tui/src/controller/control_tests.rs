@@ -319,13 +319,129 @@ async fn changing_mode_drops_old_approval_and_shows_actual_and_pending_core_mode
     let (request, receiver) = approval(&app, "old-policy");
     app.request(request);
     app.command("/mode plan").await.unwrap();
-    assert!(receiver.await.is_err());
+    assert_eq!(
+        receiver.await.unwrap().unwrap_err().0.code,
+        "stale_approval"
+    );
     assert!(app.pending.is_none());
     assert_eq!(app.state.mode, "WORK");
     assert_eq!(app.state.pending_mode.as_deref(), Some("PLAN"));
     let core = app.active.as_ref().unwrap().handle.mode().unwrap();
     assert_eq!(core.current, WorkMode::Work);
     assert_eq!(core.pending, Some(WorkMode::Plan));
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn execution_rounds_follow_their_tool_results_in_the_visible_conversation() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    let id = app.prepared.as_ref().unwrap().session.id;
+    let event = |payload| Event {
+        schema_version: 1,
+        session_id: id,
+        run_id: None,
+        seq: 1,
+        timestamp: "fixture".into(),
+        payload,
+    };
+    app.event(event(EventPayload::ModelTextDelta {
+        request_id: "first".into(),
+        text: "Before the tool".into(),
+    }));
+    app.event(event(EventPayload::ToolStarted {
+        call_id: "read".into(),
+        name: "read_file".into(),
+    }));
+    app.event(event(EventPayload::ToolFinished {
+        call_id: "read".into(),
+        name: "read_file".into(),
+        result: saya_core::contract::ToolResult {
+            ok: true,
+            data: Some(serde_json::json!({"text":"tool result"})),
+            error: None,
+            truncated: false,
+        },
+    }));
+    app.event(event(EventPayload::ModelStarted {
+        request_id: "final".into(),
+        purpose: ModelPurpose::Execution,
+        profile: "fixture".into(),
+    }));
+    app.event(event(EventPayload::ModelTextDelta {
+        request_id: "final".into(),
+        text: "After the tool".into(),
+    }));
+    let last = app.state.messages.back().unwrap();
+    assert_eq!(last.role, Role::Assistant);
+    assert_eq!(last.text, "After the tool");
+    assert!(
+        app.state
+            .messages
+            .iter()
+            .any(|message| { message.text == "Before the tool" && !message.streaming })
+    );
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn deferred_mode_blocks_old_decisions_until_ui_cleanup_and_core_invalidation() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    let (request, mut decision) = approval(&app, "old-policy");
+    app.request(request);
+    let (sender, receiver) = oneshot::channel();
+    app.ui_job = Some(super::services::UiJob {
+        cancel: Arc::new(RunCancellation::new()),
+        join: tokio::spawn(async move { Ok(receiver.await.unwrap()) }),
+    });
+    app.command("/mode plan").await.unwrap();
+    app.state.editor.set_text("yes");
+    app.submit().await.unwrap();
+    assert!(matches!(
+        decision.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    assert!(app.pending.is_some());
+    assert_eq!(
+        app.active.as_ref().unwrap().handle.mode().unwrap().current,
+        WorkMode::Work
+    );
+    assert!(
+        sender
+            .send(super::services::UiResult::Details(crate::view::Details {
+                title: "cancelled query".into(),
+                lines: vec![],
+            }))
+            .is_ok()
+    );
+    let result = super::services::next_job(&mut app.ui_job).await;
+    app.finish_ui(result).await.unwrap();
+    assert_eq!(
+        decision.await.unwrap().unwrap_err().0.code,
+        "stale_approval"
+    );
+    assert_eq!(
+        app.active.as_ref().unwrap().handle.mode().unwrap().pending,
+        Some(WorkMode::Plan)
+    );
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn pending_mode_change_prevents_starting_a_workspace_export() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.command("/mode plan").await.unwrap();
+    for command in ["/export", "/export-full"] {
+        let error = app
+            .service(command, "json forbidden.json")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pending mode change"));
+        assert!(app.ui_job.is_none());
+        assert!(!app.config.cwd.join("forbidden.json").exists());
+    }
     stop_active_call(&mut app).await;
 }
 

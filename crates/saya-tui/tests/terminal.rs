@@ -8,7 +8,8 @@ use std::{
         fd::{AsRawFd, FromRawFd},
         unix::process::CommandExt,
     },
-    process::{Command, Stdio},
+    path::Path,
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -24,6 +25,10 @@ fn terminal_child_probe() -> io::Result<()> {
         );
         return Ok(());
     }
+    if matches!(mode.as_str(), "slow" | "slow-panic" | "closed") {
+        return output_fault_child(&mode);
+    }
+    let original_flags = fd_flags(libc::STDOUT_FILENO)?;
     match mode.as_str() {
         "normal" => {
             let mut terminal = TerminalGuard::enter()?;
@@ -74,6 +79,12 @@ fn terminal_child_probe() -> io::Result<()> {
         _ => panic!("unknown terminal probe"),
     }
     assert!(!crossterm::terminal::is_raw_mode_enabled()?);
+    if let Some(path) = std::env::var_os("SAYA_TERMINAL_REPORT") {
+        report(
+            Path::new(&path),
+            serde_json::json!({"original_flags":original_flags, "restored_flags":fd_flags(libc::STDOUT_FILENO)?}),
+        )?;
+    }
     eprintln!("terminal restored");
     let mut release = String::new();
     std::io::stdin().read_line(&mut release)?;
@@ -103,7 +114,13 @@ fn drain_terminal(master: &mut File, output: &mut Vec<u8>) -> io::Result<()> {
     }
 }
 
-fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
+struct PtyProbe {
+    master: File,
+    slave: File,
+    child: Child,
+    original: libc::termios,
+}
+fn spawn_probe(mode: &str, report: Option<&Path>) -> io::Result<PtyProbe> {
     let mut master = -1;
     let mut slave = -1;
     let mut size = libc::winsize {
@@ -126,8 +143,15 @@ fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: successful openpty returned distinct owned descriptors.
-    let mut master = unsafe { File::from_raw_fd(master) };
+    let master = unsafe { File::from_raw_fd(master) };
     let slave = unsafe { File::from_raw_fd(slave) };
+    for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+        // SAFETY: owned PTY descriptors remain live through child setup.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
     let original = terminal_attributes(&slave)
         .map_err(|error| io::Error::other(format!("original attributes: {error}")))?;
     // SAFETY: master owns the descriptor, and F_SETFL changes only its flags.
@@ -146,6 +170,9 @@ fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
         .stdin(Stdio::from(slave.try_clone()?))
         .stdout(Stdio::from(slave.try_clone()?))
         .stderr(Stdio::from(slave.try_clone()?));
+    if let Some(report) = report {
+        command.env("SAYA_TERMINAL_REPORT", report);
+    }
     // SAFETY: this child-only setup uses async-signal-safe session/ioctl calls.
     unsafe {
         command.pre_exec(move || {
@@ -155,9 +182,26 @@ fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
             Ok(())
         });
     }
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|error| io::Error::other(format!("spawn probe: {error}")))?;
+    Ok(PtyProbe {
+        master,
+        slave,
+        child,
+        original,
+    })
+}
+
+fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
+    let report_root = tempfile::tempdir()?;
+    let report_path = report_root.path().join("report.json");
+    let PtyProbe {
+        mut master,
+        slave,
+        mut child,
+        original,
+    } = spawn_probe(mode, Some(&report_path))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut output = Vec::new();
     let mut restored = None;
@@ -171,6 +215,14 @@ fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
             // Darwin revokes slave descriptors when the controlling session ends.
             // Inspect restored state while the child waits for this release.
             restored = Some(terminal_attributes(&slave)?);
+            let flags: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&report_path)?).map_err(io::Error::other)?;
+            assert_eq!(flags["restored_flags"], flags["original_flags"]);
+            assert_eq!(
+                fd_flags(slave.as_raw_fd())?,
+                flags["original_flags"].as_i64().unwrap() as i32,
+                "{mode} descriptor flags"
+            );
             master.write_all(b"release\n")?;
         }
         if let Some(status) = child.try_wait()? {
@@ -237,5 +289,223 @@ fn non_terminal_entry_has_no_terminal_side_effects() -> io::Result<()> {
     assert!(output.status.success());
     assert!(!output.stdout.contains(&0x1b));
     assert!(!output.stderr.contains(&0x1b));
+    Ok(())
+}
+
+fn fd_flags(fd: i32) -> io::Result<i32> {
+    // SAFETY: fcntl reads flags on an existing descriptor.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(flags)
+    }
+}
+fn report(path: &Path, value: serde_json::Value) -> io::Result<()> {
+    let temporary = path.with_extension("next");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec(&value).map_err(io::Error::other)?,
+    )?;
+    std::fs::rename(temporary, path)
+}
+fn output_fault_child(mode: &str) -> io::Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static HOOK_RAN: AtomicBool = AtomicBool::new(false);
+    let path = std::env::var_os("SAYA_TERMINAL_REPORT")
+        .ok_or_else(|| io::Error::other("missing probe report"))?;
+    let path = Path::new(&path);
+    if mode == "closed" {
+        // SAFETY: this isolated child handles the peer disappearance explicitly.
+        unsafe {
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+        }
+    }
+    if mode == "slow-panic" {
+        std::panic::set_hook(Box::new(|_| {
+            HOOK_RAN.store(true, Ordering::Release);
+        }));
+    }
+    let original_flags = fd_flags(libc::STDOUT_FILENO)?;
+    let mut terminal = TerminalGuard::enter()?;
+    if mode == "closed" {
+        report(path, serde_json::json!({"phase":"ready"}))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.with_extension("release").exists() {
+            if Instant::now() > deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let draw_error = terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("closed peer"),
+                    frame.area(),
+                )
+            })
+            .is_err();
+        let started = Instant::now();
+        let restore_error = terminal.restore().is_err();
+        report(
+            path,
+            serde_json::json!({"phase":"done", "draw_error":draw_error,
+            "restore_error":restore_error, "elapsed_ms":started.elapsed().as_millis(),
+            "original_flags":original_flags, "flags_restored":fd_flags(libc::STDOUT_FILENO)?==original_flags,
+            "raw_restored":!crossterm::terminal::is_raw_mode_enabled()?}),
+        )?;
+        // The test harness would write its completion text into the vanished peer.
+        std::process::exit(0);
+    }
+    let started = Instant::now();
+    let mut stalled = false;
+    for index in 0..2048 {
+        let row = if index % 2 == 0 { "A" } else { "B" }.repeat(80) + "\n";
+        let text = row.repeat(24);
+        match terminal
+            .draw(|frame| frame.render_widget(ratatui::widgets::Paragraph::new(text), frame.area()))
+        {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                stalled = true;
+                break;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    assert!(stalled, "probe never filled the terminal output queue");
+    if mode == "slow-panic" {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = terminal.draw(|_| panic!("stalled terminal panic"));
+        }));
+        assert!(outcome.is_err());
+        assert!(HOOK_RAN.load(Ordering::Acquire));
+    }
+    let restore_started = Instant::now();
+    let _ = terminal.restore();
+    report(
+        path,
+        serde_json::json!({"phase":"done", "stalled":stalled,
+        "elapsed_ms":started.elapsed().as_millis(), "restore_ms":restore_started.elapsed().as_millis(),
+        "original_flags":original_flags, "flags_restored":fd_flags(libc::STDOUT_FILENO)?==original_flags,
+        "raw_restored":!crossterm::terminal::is_raw_mode_enabled()?, "hook_ran":HOOK_RAN.load(Ordering::Acquire)}),
+    )?;
+    let mut release = String::new();
+    std::io::stdin().read_line(&mut release)?;
+    Ok(())
+}
+fn wait_for_report(path: &Path, phase: &str, child: &mut Child) -> io::Result<serde_json::Value> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(bytes) = std::fs::read(path) {
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            if value["phase"] == phase {
+                return Ok(value);
+            }
+        }
+        if let Some(status) = child.try_wait()? {
+            return Err(io::Error::other(format!(
+                "probe exited before {phase}: {status}"
+            )));
+        }
+        if Instant::now() > deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "probe report timed out",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+#[test]
+fn stalled_terminal_and_panic_restore_raw_and_descriptor_flags_with_bounded_output()
+-> io::Result<()> {
+    for mode in ["slow", "slow-panic"] {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("report.json");
+        let PtyProbe {
+            mut master,
+            slave,
+            mut child,
+            original,
+        } = spawn_probe(mode, Some(&path))?;
+        // No read of the master occurs until draw and restoration have completed.
+        let report = wait_for_report(&path, "done", &mut child)?;
+        assert_eq!(report["stalled"], true);
+        assert_eq!(report["flags_restored"], true);
+        assert_eq!(report["raw_restored"], true);
+        assert!(report["elapsed_ms"].as_u64().unwrap() < 3000);
+        assert!(report["restore_ms"].as_u64().unwrap() < 500);
+        let restored = terminal_attributes(&slave)?;
+        assert_eq!(restored.c_iflag, original.c_iflag);
+        assert_eq!(restored.c_oflag, original.c_oflag);
+        assert_eq!(restored.c_cflag, original.c_cflag);
+        assert_eq!(restored.c_lflag, original.c_lflag);
+        assert_eq!(restored.c_cc, original.c_cc);
+        assert_eq!(
+            fd_flags(slave.as_raw_fd())?,
+            report["original_flags"].as_i64().unwrap() as i32
+        );
+        let mut output = Vec::new();
+        drain_terminal(&mut master, &mut output)?;
+        master.write_all(b"release\n")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            drain_terminal(&mut master, &mut output)?;
+            if let Some(status) = child.try_wait()? {
+                assert!(
+                    status.success(),
+                    "{mode}: {}",
+                    String::from_utf8_lossy(&output)
+                );
+                break;
+            }
+            if Instant::now() > deadline {
+                child.kill()?;
+                child.wait()?;
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    Ok(())
+}
+#[test]
+fn disconnected_peer_returns_and_restores_original_descriptor_flags() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("report.json");
+    let PtyProbe {
+        master,
+        slave,
+        mut child,
+        ..
+    } = spawn_probe("closed", Some(&path))?;
+    wait_for_report(&path, "ready", &mut child)?;
+    drop(master);
+    std::fs::write(path.with_extension("release"), b"release")?;
+    let report = wait_for_report(&path, "done", &mut child)?;
+    assert_eq!(report["draw_error"], true);
+    assert_eq!(report["flags_restored"], true);
+    assert!(report["elapsed_ms"].as_u64().unwrap() < 500);
+    assert_eq!(
+        fd_flags(slave.as_raw_fd())?,
+        report["original_flags"].as_i64().unwrap() as i32
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            assert!(status.success());
+            break;
+        }
+        if Instant::now() > deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
     Ok(())
 }

@@ -121,7 +121,7 @@ fn default_version() -> String {
 }
 
 /// Provider settings contain reference names, never API key values.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub protocol: Protocol,
@@ -178,7 +178,7 @@ struct Defaults {
     permissions: PermissionMode,
     output: Output,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Review {
     pub profile: Option<String>,
@@ -192,14 +192,14 @@ impl Default for Review {
         }
     }
 }
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Commands {
     pub inherit_env: BTreeSet<String>,
 }
 
 /// All B-15 limits; zero is rejected instead of disabling a limit.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
     pub max_model_requests: usize,
@@ -301,6 +301,7 @@ struct Document {
     limits: Limits,
 }
 /// Effective settings; no model is implicitly selected. Secret values stay in Environment.
+#[derive(Clone)]
 pub struct Config {
     pub config_path: PathBuf,
     pub cwd: PathBuf,

@@ -71,7 +71,7 @@ PLAN、BUILD、CODE、WORK 的选择来自用户操作。UI 同时展示当前�
 
 ## 技术与终端恢复
 
-DEV-047 已锁定 Ratatui0.30.2、Crossterm0.29.0 和已有 Tokio，输入／状态更新与绘制分离。Ratatui只启用Crossterm与layout-cache，Crossterm启用事件流及bracketed paste。编辑与呈现在 DEV-048 接入。Ratatui 提供多种应用组织方式，Crossterm 的 `EventStream` 支持异步事件输入，需要启用对应 feature。[Ratatui 应用模式](https://ratatui.rs/concepts/application-patterns/)、[Crossterm EventStream](https://docs.rs/crossterm/latest/crossterm/event/struct.EventStream.html)
+DEV-047 已锁定 Ratatui0.30.2、Crossterm0.29.0 和已有 Tokio，输入／状态更新与绘制分离。Ratatui启用Crossterm与layout-cache，Crossterm启用bracketed paste和use-dev-tty。独立输入线程使用50ms level poll，向容量64的队列发送键盘与窗口事件，异步主循环消费队列。该路径修复真实PTY缩放后首次Ctrl+D可能遗失的问题，退出前停止输入线程并恢复文件描述符。依赖与特性在Cargo.lock和crate配置中固定。[Ratatui 应用模式](https://ratatui.rs/concepts/application-patterns/)、[Crossterm 0.29 features](https://docs.rs/crate/crossterm/0.29.0/features)
 
 终端 guard 管理 raw mode、alternate screen 和光标。正常返回、可恢复错误、panic unwind 及受处理信号走统一恢复路径，panic hook 链保留原诊断。强制终止场景记录尽力清理边界和终端恢复方法。初始化与恢复设计参考 [Ratatui panic hooks](https://ratatui.rs/recipes/apps/panic-hooks/)。
 
@@ -85,10 +85,20 @@ DEV-047 至 DEV-053 覆盖终端状态恢复、窗口变化、Unicode／窄屏�
 
 库内流式协调器通过共享EventWriter／EventModel消费运行事件，绘制仅在状态变化时进行，目标帧间隔33ms。每轮最多主动消费64条已到达事件，键盘与取消信号优先处理。异常或输入断开后取消所属运行，关闭事件接收并等待运行收尾，再退出终端guard。
 
-输入最多64KiB，单条正文256KiB，聊天正文总量2MiB及512条，截断与驱逐均显示标记。聊天保留最近10,000视觉行，详情最多保留2MiB／10,000视觉行，超过显示范围有可见提示。100列起采用对话与详情双栏，窄屏详情占主区域。默认界面使用深色、英文角色标签，源文件为saya-tui的editor／view／controller模块。
+输入最多64KiB，单条正文256KiB，聊天正文总量2MiB及512条，截断与驱逐均显示标记。聊天保留最近10,000视觉行，详情最多保留2MiB／10,000逻辑行，超过显示范围有可见提示。100列起采用对话与详情双栏，窄屏详情占主区域。默认界面使用深色、英文角色标签，源文件为saya-tui的editor／view／controller模块。
 
 ## DEV-049 运行控制
 
 Ctrl+P打开命令面板，方向键选择、Enter执行、Esc关闭。/mode plan|build|code|work由用户触发，标题同时显示实际模式和core待切换模式。/permissions auto|manual|bypass在运行空闲时修改本次权限设置。/status、/cancel、/help与/exit提供运行状态和控制。
 
 逐工具审核显示tool、call_id、approval_id、工作区、模式及参数，y批准、n或Esc拒绝。决策要求当前审核可见，并使用新的普通／Shift按键，重复和Ctrl／Alt／Super组合键保持编辑语义。澄清在输入框填写后Enter回复，//转义支持字面量斜杠。待审核时仍可输入/mode切换，旧reply立即失效，实际授权由core在派发前重查。人工等待的活跃预算计时沿用core pause逻辑。
+
+## DEV-050 会话与记录入口
+
+`/new` 创建会话并等待输入，`/sessions [PAGE]` 每页列出20条记录，`/resume ID` 恢复历史、原模式与配置引用。配置变化需使用显式 `/resume-accept ID` 接受。恢复使用本次启动的权限设置，等待新输入。`/profiles` 查看配置中的模型，`/profile NAME` 在空闲时选择并释放原会话，下一条消息创建新会话。
+
+`/tools` 和 `/jobs` 读取当前会话的一致性快照，展示持久化水位、run_id 和 call_id，保留 unknown、错误与截断状态。面板标记 UI 查询来源，沿用现有记录读取服务。`/cancel-job ID` 向当前运行请求取消所属后台任务。
+
+`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含完整范围及工具记录。路径支持空格，相对路径基于当前工作区。导出复用安全文件发布、已有文件保护和 PLAN 路径检查，回执带持久化水位。已完成发布的文件即使随后取消，界面仍报告实际回执。
+
+会话初始化、恢复和快照／导出通过独立 UI 任务执行。Ctrl+C 可请求取消，退出时等待任务收尾。UI 任务结束后才能应用排队的模式变化，权限修改要求运行与 UI 任务均空闲。读取到的正文沿用脱敏与有限显示缓存。

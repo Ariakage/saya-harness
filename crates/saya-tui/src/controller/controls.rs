@@ -12,6 +12,11 @@ pub(super) const COMMANDS: &[&str] = &[
     "/permissions auto",
     "/permissions manual",
     "/permissions bypass",
+    "/sessions",
+    "/new",
+    "/profiles",
+    "/tools",
+    "/jobs",
     "/status",
     "/cancel",
     "/help",
@@ -78,7 +83,7 @@ impl App {
                     .collect(),
             ),
         };
-        self.state.details = Some(Details {
+        self.state.set_details(Details {
             title: title.into(),
             lines: lines.iter().map(|text| self.safe(text)).collect(),
         });
@@ -102,6 +107,23 @@ impl App {
         self.state.details = None;
         self.state.details_scroll = 0;
     }
+    fn invalidate_mode_approval(&mut self) {
+        if matches!(self.pending, Some(Request::Approval(..))) {
+            if let Some(Request::Approval(_, reply)) = self.pending.take() {
+                let _ = reply.send(Err(BoundaryError(
+                    saya_core::contract::ErrorInfo {
+                        code: "stale_approval".into(),
+                        message: "work mode changed".into(),
+                    },
+                    None,
+                    None,
+                )));
+            }
+            self.invalidate_pending();
+        } else {
+            self.show_pending();
+        }
+    }
     pub(super) fn reply_approval(&mut self, approved: bool) {
         if let Some(Request::Approval(_, reply)) = self.pending.take() {
             let _ = reply.send(Ok(Some(approved)));
@@ -117,8 +139,19 @@ impl App {
             let pending = snapshot
                 .pending
                 .map(|value| format!("{value:?}").to_uppercase());
+            let pending = pending.or_else(|| {
+                self.deferred_mode
+                    .map(|mode| format!("{mode:?}").to_uppercase())
+            });
             changed = self.state.mode != current || self.state.pending_mode != pending;
             self.state.mode = current;
+            self.state.pending_mode = pending;
+        }
+        if self.active.is_none() {
+            let pending = self
+                .deferred_mode
+                .map(|mode| format!("{mode:?}").to_uppercase());
+            changed |= self.state.pending_mode != pending;
             self.state.pending_mode = pending;
         }
         if self.pending.as_ref().is_some_and(closed) {
@@ -130,7 +163,7 @@ impl App {
     }
     pub(super) fn show_palette(&mut self) {
         let selected = self.palette.unwrap_or(0);
-        self.state.details = Some(Details {
+        self.state.set_details(Details {
             title: "Commands".into(),
             lines: COMMANDS
                 .iter()
@@ -147,6 +180,10 @@ impl App {
             let exit = self.command(&text).await?;
             self.state.editor.clear();
             return Ok(exit);
+        }
+        if self.pending.is_some() && self.deferred_mode.is_some() {
+            self.notice("Wait for the pending mode change before answering the current request.");
+            return Ok(false);
         }
         if matches!(self.pending, Some(Request::Approval(..)))
             && !self
@@ -178,11 +215,13 @@ impl App {
                             let _ = reply.send(Ok(Some(true)));
                             self.state.editor.clear();
                             self.state.details = None;
+                            self.state.status = "Running".into();
                         }
                         "n" | "no" => {
                             let _ = reply.send(Ok(Some(false)));
                             self.state.editor.clear();
                             self.state.details = None;
+                            self.state.status = "Running".into();
                         }
                         _ => {
                             self.pending = Some(Request::Approval(request, reply));
@@ -217,7 +256,7 @@ impl App {
         let argument = argument.trim();
         match name {
             "/exit" => {
-                if self.active.is_some() {
+                if self.active.is_some() || self.ui_job.is_some() {
                     self.exit_after_run = Some(0);
                     self.cancel();
                 } else {
@@ -233,9 +272,17 @@ impl App {
                     .map(|p| p.session.workspace.as_path())
                     .unwrap_or(&self.config.cwd);
                 session::check_roots(&self.config, workspace, target)?;
+                if let Some(job) = &self.ui_job {
+                    job.cancel.cancel();
+                    self.deferred_mode = Some(target);
+                    self.state.pending_mode = Some(format!("{target:?}").to_uppercase());
+                    self.state.details = None;
+                    self.notice("Mode change waits for the UI operation to stop.");
+                    return Ok(false);
+                }
                 if let Some(active) = &self.active {
                     active.handle.request_mode(target)?;
-                    self.invalidate_pending();
+                    self.invalidate_mode_approval();
                     self.refresh_mode()?;
                 } else {
                     if let Some(prepared) = &mut self.prepared {
@@ -248,12 +295,13 @@ impl App {
                         prepared.session = updated;
                     }
                     self.config.mode = target;
+                    self.state.pending_mode = None;
                     self.refresh_header();
                 }
                 self.notice(&format!("Mode requested — {target:?}"));
             }
             "/permissions" => {
-                if self.active.is_some() {
+                if self.active.is_some() || self.ui_job.is_some() {
                     return Err("Permissions can be changed while idle".into());
                 }
                 self.config.permissions_mode =
@@ -263,16 +311,22 @@ impl App {
             }
             "/status" => {
                 self.refresh_mode()?;
+                let session = self
+                    .prepared
+                    .as_ref()
+                    .map(|prepared| prepared.session.id.0.to_string())
+                    .unwrap_or_else(|| "No session".into());
                 self.notice(&format!(
-                    "{} · mode {} · pending {:?} · permissions {}",
+                    "{} · session {} · mode {} · pending {:?} · permissions {}",
                     self.state.status,
+                    session,
                     self.state.mode,
                     self.state.pending_mode,
                     self.state.permissions
                 ));
             }
             "/help" => {
-                self.state.details = Some(Details {
+                self.state.set_details(Details {
                     title: "Help".into(),
                     lines: COMMANDS
                         .iter()
@@ -285,6 +339,10 @@ impl App {
                         .collect(),
                 });
                 self.state.details_scroll = 0;
+            }
+            "/new" | "/profile" | "/profiles" | "/resume" | "/resume-accept" | "/sessions"
+            | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job" => {
+                self.service(name, argument).await?
             }
             _ => return Err("Unknown command. Ctrl+P shows available commands.".into()),
         }

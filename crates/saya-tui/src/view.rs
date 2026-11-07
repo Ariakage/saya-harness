@@ -15,6 +15,10 @@ pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 pub const MAX_TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_MESSAGES: usize = 512;
 const MAX_RENDER_LINES: usize = 10_000;
+const MAX_DETAIL_LINES: usize = 10_000;
+const MAX_DETAIL_TITLE_BYTES: usize = 256;
+const TRUNCATED_DETAIL_PREFIX: &str = "Truncated · ";
+const DETAIL_TRUNCATION_NOTICE: &str = "[details display truncated]";
 const ACCENT: Color = Color::Rgb(127, 212, 226);
 const MUTED: Color = Color::Rgb(147, 155, 174);
 const BACKGROUND: Color = Color::Rgb(20, 23, 31);
@@ -163,6 +167,21 @@ impl State {
         }
     }
 
+    /// Retain a bounded details pane, including truncation metadata.
+    /// Existing scroll position is preserved and clamped during rendering.
+    pub fn set_details(&mut self, details: Details) {
+        self.details = Some(details);
+        self.enforce_details_limits();
+    }
+
+    fn enforce_details_limits(&mut self) {
+        if let Some(details) = &mut self.details
+            && details_need_limits(details)
+        {
+            bound_details(details);
+        }
+    }
+
     pub fn scroll_up(&mut self, lines: usize) {
         self.scroll = self.scroll.saturating_add(lines);
     }
@@ -200,9 +219,77 @@ impl State {
     }
 }
 
+fn details_need_limits(details: &Details) -> bool {
+    if details.title.len() > MAX_DETAIL_TITLE_BYTES
+        || details.title.capacity() > MAX_DETAIL_TITLE_BYTES
+        || details.lines.capacity() > MAX_DETAIL_LINES
+    {
+        return true;
+    }
+    let mut bytes = 0usize;
+    let mut allocated = 0usize;
+    let mut rows = 0usize;
+    for line in &details.lines {
+        bytes = bytes.saturating_add(line.len());
+        allocated = allocated.saturating_add(line.capacity());
+        if bytes > MAX_TRANSCRIPT_BYTES || allocated > MAX_TRANSCRIPT_BYTES {
+            return true;
+        }
+        rows = rows.saturating_add(1 + line.bytes().filter(|byte| *byte == b'\n').count());
+        if rows > MAX_DETAIL_LINES {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn bound_details(details: &mut Details) {
+    let mut truncated = details.title.len() > MAX_DETAIL_TITLE_BYTES;
+    details.title =
+        details.title[..prefix_boundary(&details.title, MAX_DETAIL_TITLE_BYTES)].to_owned();
+    let sources = std::mem::take(&mut details.lines);
+    let mut bounded = Vec::with_capacity(sources.len().min(MAX_DETAIL_LINES));
+    let mut retained = 0usize;
+    'sources: for source in sources {
+        let source_end = prefix_boundary(&source, MAX_TRANSCRIPT_BYTES.saturating_sub(retained));
+        for line in source[..source_end].split('\n') {
+            if bounded.len() == MAX_DETAIL_LINES {
+                truncated = true;
+                break 'sources;
+            }
+            bounded.push(line.to_owned());
+            retained += line.len();
+        }
+        if source_end < source.len() {
+            truncated = true;
+            break;
+        }
+    }
+    if truncated {
+        while bounded.len() >= MAX_DETAIL_LINES
+            || retained + DETAIL_TRUNCATION_NOTICE.len() > MAX_TRANSCRIPT_BYTES
+        {
+            let Some(tail) = bounded.pop() else { break };
+            retained -= tail.len();
+            let remaining =
+                MAX_TRANSCRIPT_BYTES.saturating_sub(retained + DETAIL_TRUNCATION_NOTICE.len());
+            if bounded.len() < MAX_DETAIL_LINES - 1 && remaining > 0 {
+                let end = prefix_boundary(&tail, remaining.min(tail.len()));
+                retained += end;
+                bounded.push(tail[..end].to_owned());
+            }
+        }
+        bounded.push(DETAIL_TRUNCATION_NOTICE.to_owned());
+    }
+    bounded.shrink_to_fit();
+    details.lines = bounded;
+}
+
 /// Render a state snapshot. Terminal controls are displayed as escaped text.
 /// This function performs no model, storage or terminal I/O.
 pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
+    state.enforce_limits();
+    state.enforce_details_limits();
     let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().fg(FOREGROUND).bg(BACKGROUND)),
@@ -215,7 +302,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         );
         return;
     }
-    state.enforce_limits();
     let input_lines = state
         .editor
         .text()
@@ -434,6 +520,10 @@ fn draw_details(frame: &mut Frame<'_>, details: &Details, scroll: &mut usize, ar
     let mut lines = VecDeque::new();
     let mut count = 0;
     let mut remaining = MAX_TRANSCRIPT_BYTES;
+    let cached_truncated = details
+        .lines
+        .last()
+        .is_some_and(|line| line == DETAIL_TRUNCATION_NOTICE);
     let mut truncated = false;
     'sources: for source in &details.lines {
         let end = prefix_boundary(source, remaining);
@@ -450,7 +540,11 @@ fn draw_details(frame: &mut Frame<'_>, details: &Details, scroll: &mut usize, ar
             append_wrapped(
                 &prefix,
                 usize::from(inner.width),
-                Style::default().fg(FOREGROUND),
+                Style::default().fg(if line == DETAIL_TRUNCATION_NOTICE {
+                    Color::Yellow
+                } else {
+                    FOREGROUND
+                }),
                 &mut lines,
                 &mut count,
             );
@@ -464,8 +558,10 @@ fn draw_details(frame: &mut Frame<'_>, details: &Details, scroll: &mut usize, ar
             break;
         }
     }
+    if (truncated || cached_truncated) && !title.starts_with(TRUNCATED_DETAIL_PREFIX) {
+        block = block.title(format!(" {TRUNCATED_DETAIL_PREFIX}{title} "));
+    }
     if truncated {
-        block = block.title(format!(" Truncated · {title} "));
         if lines.len() == MAX_RENDER_LINES {
             lines.pop_back();
         }
@@ -684,6 +780,68 @@ mod tests {
         });
         state.details_scroll = 0;
         assert!(render(&mut state, 60, 20).contains("Truncated"));
+    }
+
+    #[test]
+    fn details_setter_bounds_owned_bytes_rows_and_allocation_without_changing_scroll() {
+        let mut state = State {
+            details_scroll: 17,
+            ..State::default()
+        };
+        state.set_details(Details {
+            title: "Parameters".into(),
+            lines: vec!["界".repeat(12 * 1024 * 1024)],
+        });
+        let details = state.details.as_ref().unwrap();
+        assert_eq!(details.title, "Parameters");
+        assert_eq!(details.lines.last().unwrap(), DETAIL_TRUNCATION_NOTICE);
+        assert!(details.lines.iter().map(String::len).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
+        assert!(details.lines.iter().map(String::capacity).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
+        assert!(details.lines.len() <= MAX_DETAIL_LINES);
+        assert_eq!(state.details_scroll, 17);
+        assert!(render(&mut state, 60, 20).contains("Truncated"));
+        state.set_details(Details {
+            title: "Rows".into(),
+            lines: vec!["line\n".repeat(MAX_DETAIL_LINES + 20)],
+        });
+        let details = state.details.as_ref().unwrap();
+        assert_eq!(details.lines.len(), MAX_DETAIL_LINES);
+        assert_eq!(details.lines.last().unwrap(), DETAIL_TRUNCATION_NOTICE);
+        assert!(details.lines.capacity() <= MAX_DETAIL_LINES);
+    }
+
+    #[test]
+    fn draw_normalizes_direct_details_even_on_tiny_frames_and_is_idempotent() {
+        let mut state = State {
+            details: Some(Details {
+                title: "Direct assignment".into(),
+                lines: vec!["x".repeat(MAX_TRANSCRIPT_BYTES + 1)],
+            }),
+            ..State::default()
+        };
+        render(&mut state, 1, 1);
+        let details = state.details.as_ref().unwrap();
+        assert!(details.lines.iter().map(String::capacity).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
+        let title = details.title.clone();
+        let lines = details.lines.clone();
+        render(&mut state, 60, 20);
+        assert_eq!(state.details.as_ref().unwrap().title, title);
+        assert_eq!(state.details.as_ref().unwrap().lines, lines);
+    }
+
+    #[test]
+    fn unused_details_capacity_is_released_without_claiming_data_truncation() {
+        let mut source = String::with_capacity(MAX_TRANSCRIPT_BYTES * 4);
+        source.push_str("retained");
+        let mut state = State::default();
+        state.set_details(Details {
+            title: "Tool".into(),
+            lines: vec![source],
+        });
+        let details = state.details.as_ref().unwrap();
+        assert_eq!(details.title, "Tool");
+        assert_eq!(details.lines, ["retained"]);
+        assert_eq!(details.lines[0].capacity(), "retained".len());
     }
 
     #[test]
