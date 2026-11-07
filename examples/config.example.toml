@@ -1,0 +1,28 @@
+# Copy this file before editing. No credential values belong in this file.
+schema_version = 1
+
+[defaults]
+profile = "local"
+mode = "work"
+permissions = "auto"
+output = "text"
+
+# Replace these values with the protocol, API root, model and actual context
+# window of your own local service. config check does not contact the service.
+[profiles.local]
+protocol = "openai-chat-completions"
+base_url = "http://127.0.0.1:8000/v1"
+model = "YOUR_LOCAL_MODEL"
+auth = "none"
+context_window_tokens = 128000
+stream = true
+
+# For an authenticated service, configure an additional profile and reference
+# an environment variable NAME. Never put its value in this file:
+# [profiles.remote]
+# protocol = "openai-responses"
+# base_url = "https://example.com/v1"
+# model = "YOUR_MODEL"
+# auth = "bearer"
+# api_key_env = "SAYA_API_KEY"
+# context_window_tokens = 128000

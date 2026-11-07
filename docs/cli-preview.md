@@ -1,8 +1,8 @@
 # CLI 开发预览
 
-当前 CLI 是开发预览。`saya run` 与 `saya chat` 接入三种协议、SQLite 持久会话以及受权限约束的文件、搜索和命令工具；PLAN 始终禁止写入和命令。会话锁、迁移和中断恢复已通过本机受控验证，完整输出与发行验收仍未完成。
+当前 CLI 是开发预览。`saya run` 与 `saya chat` 接入三种协议、SQLite 持久会话以及受权限约束的文件、搜索和命令工具；PLAN 始终禁止写入和命令。会话锁、迁移和中断恢复已通过本机受控验证，结构化输出和四类任务已通过本机受控验证；发行验收仍未完成。
 
-配置格式见[配置组件](configuration.md)和[基线 B-04](mvp-baseline.md)。例如，先用 `saya config init` 创建空模板，填入明确的模型 profile 和凭据环境变量名，再用 `saya config check` 校验；此命令不会覆盖已有文件。默认配置文件位于 `$XDG_CONFIG_HOME/saya/config.toml` 或 `~/.config/saya/config.toml`，也可用 `--config PATH` 选择文件。模板不包含模型或真实凭据。运行示例（假定已经配置默认 profile）：
+入门步骤和故障处理见[使用指南](usage.md)。配置格式见[配置组件](configuration.md)和[基线 B-04](mvp-baseline.md)。例如，先用 `saya config init` 创建空模板，填入明确的模型 profile 和凭据环境变量名，再用 `saya config check` 校验；此命令不会覆盖已有文件。默认配置文件位于 `$XDG_CONFIG_HOME/saya/config.toml` 或 `~/.config/saya/config.toml`，也可用 `--config PATH` 选择文件。模板不包含模型或真实凭据。运行示例（假定已经配置默认 profile）：
 
 ```sh
 saya run 'Inspect this workspace'

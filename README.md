@@ -2,7 +2,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
 
-**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。CLI 已接入本地持久会话、恢复与受权限控制的真实文件和命令工具；单次运行支持 JSON／JSONL；已知凭据遮蔽、结构化日志和用量记录已通过本机受控验证；端到端集成验收仍在后续阶段。**
+**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。CLI 已接入本地持久会话、恢复与受权限控制的真实文件和命令工具；单次运行支持 JSON／JSONL；已知凭据遮蔽、结构化日志和用量记录已通过本机受控验证；四类任务、三协议和模式权限矩阵已通过本机受控端到端验证；发行验收仍未完成。**
 
 ## 已确认方向
 
@@ -32,7 +32,7 @@
 3. 工具执行结果返回模型，运行时继续下一轮。
 4. CLI 展示结果并保存会话，后续可列出或恢复；失败、取消或达到运行限制时明确结束。
 
-已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、CLI、本地会话持久化、并发与中断恢复已通过本机受控验证；端到端集成与发行验收尚未完成。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
+已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、CLI、本地会话持久化、并发与中断恢复已通过本机受控验证；四类任务与三协议已通过本机受控端到端验证，发行验收尚未完成。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
 
 ## 文档
 
@@ -48,7 +48,9 @@
 | [运行时接口](docs/runtime.md) | 可复用 Agent 循环、调用边界和验证范围 |
 | [架构设计](docs/architecture.md) | Agent 循环、模块边界与实现约束 |
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
+| [CLI 使用指南](docs/usage.md) | 构建、配置、使用示例与故障处理 |
 | [CLI 开发预览](docs/cli-preview.md) | 单次运行、交互、会话和当前限制 |
+| [MVP 验收证据](docs/acceptance.md) | AC-01 至 AC-23 的测试映射与限制 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |
@@ -59,7 +61,7 @@
 | [提示词定制](docs/prompts.md) | 英文提示词、模式与审核装配、来源取舍对照和离线预览 |
 | [决策记录](docs/decisions.md) | 已确认方向、基线和历史变更 |
 
-需求基线与开发计划已准备。后续按[路线图](docs/roadmap.md)推进，并在[进度记录](docs/progress.md)维护实际状态；DEV-006 的模式状态机已在普通构建提供，切换行为已在测试专用原型中验证；可复用 core 循环已在受控测试中完成 P1；真实协议适配已完成受控验证；CLI 仍在开发。
+当前实现、验证证据与剩余发行工作见[开发进度](docs/progress.md)；[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
 CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
 

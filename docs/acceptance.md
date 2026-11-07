@@ -42,4 +42,4 @@ cargo test -p saya-cli --test acceptance --locked
 | AC-22 | [CLI 测试](../crates/saya-cli/tests/cli.rs) `background_launch_intent_failure_prevents_command_execution`、`failed_write_result_is_reported_and_recovery_never_replays_it`、`crashed_background_command_is_reported_unknown_and_never_replayed`、`busy_session_does_not_prevent_resuming_another_session`；[SQLite 测试](../crates/saya-core/tests/sqlite.rs) `real_process_lock_and_readonly_live_wal_preflight` |
 | AC-23 | [CLI 测试](../crates/saya-cli/tests/cli.rs) `crashed_run_is_recovered_with_unknown_result_without_replay`；[后台协议测试](../crates/saya-core/tests/background_protocols.rs) `recovered_tool_pairs_remain_valid_for_all_three_provider_protocols` |
 
-本阶段在 macOS aarch64／Rust 1.99.1 执行完整本机检查，共 335 项测试；P6 这次提交尚未在其他平台或远端 CI 验证。AC-24 的发行目标及最低运行环境验证属于 P7，不能用替身或历史 CI 结果代替。
+本阶段在 macOS aarch64／Rust 1.99.1 执行完整本机检查，共 337 项测试；P6 提交尚未在其他平台或远端 CI 验证。[配置与预授权示例测试](../crates/saya-cli/tests/documented_examples.rs)另外验证文档示例的 CLI 行为。AC-24 的发行目标及最低运行环境验证属于 P7，不能用替身或历史 CI 结果代替。
