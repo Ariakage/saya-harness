@@ -77,7 +77,7 @@ def main():
             dependencies = command('ldd', str(path))
             if 'not found' in dependencies:
                 raise ValueError('binary has missing shared libraries')
-            for script in ('smoke.py', 'journey.py', 'review_regressions.py'):
+            for script in ('smoke.py', 'journey.py', 'review_regressions.py', 'tui_journey.py'):
                 subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
         evidence = {
             'schema_version': 1, 'captured_at_utc': datetime.now(timezone.utc).isoformat(),
@@ -87,9 +87,9 @@ def main():
             'declared_source_commit': metadata['declared_source_commit'],
             'maximum_glibc_symbol': '.'.join(map(str, maximum)), 'dependencies': dependencies,
             'rustc': command('rustc', '--version'), 'offline_tool_smoke': 'passed',
-            'interactive_journey': 'passed', 'review_regressions': 'passed',
+            'interactive_journey': 'passed', 'review_regressions': 'passed', 'tui_journey': 'passed',
             'test_script_sha256': {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
-                                   for name in ('smoke.py', 'journey.py', 'review_regressions.py')},
+                                   for name in ('smoke.py', 'journey.py', 'review_regressions.py', 'tui_journey.py')},
         }
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(evidence, output, indent=2, sort_keys=True)

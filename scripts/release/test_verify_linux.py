@@ -47,9 +47,11 @@ class LinuxVerifierTest(unittest.TestCase):
                  mock.patch.object(verify.subprocess, 'run') as run, \
                  redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(verify.main(), 0)
-                self.assertEqual(run.call_count, 3)
+                self.assertEqual(run.call_count, 4)
                 evidence = json.loads(output.read_text())
                 self.assertEqual(evidence['maximum_glibc_symbol'], '2.34')
+                self.assertEqual(evidence['tui_journey'], 'passed')
+                self.assertIn('tui_journey.py', evidence['test_script_sha256'])
                 self.assertEqual(evidence['archive_sha256'], checksum)
                 self.assertNotEqual(verify.main(), 0)
                 self.assertEqual(json.loads(output.read_text()), evidence)

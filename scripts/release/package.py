@@ -28,6 +28,19 @@ def architecture_matches(target, data):
     return data[:4] == b'\xcf\xfa\xed\xfe' and struct.unpack_from('<I', data, 4)[0] == expected
 
 
+def workspace_version(manifest):
+    number = r'(?:0|[1-9][0-9]*)'
+    identifier = r'(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+    build = r'[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*'
+    version = number + r'\.' + number + r'\.' + number
+    version += r'(?:-' + identifier + r'(?:\.' + identifier + r')*)?'
+    version += r'(?:\+' + build + r')?'
+    match = re.search(r'^version = "(' + version + r')"$', manifest, re.MULTILINE)
+    if not match:
+        raise ValueError('could not read a valid workspace version from source commit')
+    return match.group(1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source-commit', required=True, help='commit used to build every supplied binary')
@@ -40,10 +53,7 @@ def main():
             parser.error('source commit must be a full lowercase SHA-1')
         commit = git('rev-parse', '--verify', args.source_commit + '^{commit}').decode().strip()
         manifest = git('show', commit + ':Cargo.toml').decode()
-        match = re.search(r'^version = \"([0-9]+\.[0-9]+\.[0-9]+)\"$', manifest, re.MULTILINE)
-        if not match:
-            parser.error('could not read workspace version from source commit')
-        version = match.group(1)
+        version = workspace_version(manifest)
         epoch = int(git('show', '-s', '--format=%ct', commit))
         license_data = git('show', commit + ':LICENSE')
         readme = git('show', commit + ':README.md')

@@ -4,7 +4,7 @@
 
 **0.1.0 已发布。** 提供 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64 CLI 安装包。中英双语说明、校验和及四平台最低环境验收证据见 [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。
 
-当前开发线已实现 N0 共享基础及 N1 默认 TUI 的主要交互，包括 `saya-app`、诊断与追踪、日志查询、JSON／Markdown 会话导出及终端对话界面。直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。四平台和候选产物验收进度见[开发进度](docs/progress.md)。
+当前开发线为 **0.2.0-rc.1 候选**，已实现 N0 共享基础及 N1 默认 TUI，包括 `saya-app`、诊断与追踪、日志查询、JSON／Markdown 会话导出及终端对话界面。直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。本轮用于验收和试用，正式发布安排在后续代码 review 与其他测试之后。候选范围见[双语说明](docs/release-notes-0.2.0-rc.1.md)，实际证据见[开发进度](docs/progress.md)。
 
 ## 已确认方向
 

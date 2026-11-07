@@ -53,6 +53,16 @@ def main():
                 raise ValueError('binary architecture does not match target')
             if binary_hash != metadata.get('binary_sha256'):
                 raise ValueError('binary SHA-256 mismatch')
+        try:
+            arm64_capable = command('sysctl', '-n', 'hw.optional.arm64') == '1'
+        except subprocess.CalledProcessError:
+            arm64_capable = False
+        machine = platform.machine()
+        native_target = 'macos-aarch64' if machine == 'arm64' and arm64_capable else None
+        if machine == 'x86_64' and not arm64_capable:
+            native_target = 'macos-x86_64'
+        if target != native_target:
+            raise ValueError('candidate target must match the native machine without translation')
         with tempfile.TemporaryDirectory(prefix='saya-macos15-') as temporary:
             path = Path(temporary) / 'saya'
             path.write_bytes(binary)
@@ -60,21 +70,18 @@ def main():
             build_info = command('otool', '-l', str(path))
             if not re.search(r'(?m)^\s*minos\s+15\.0(?:\.0)?\s*$', build_info):
                 raise ValueError('Mach-O does not declare minimum macOS 15.0')
-            for script in ('smoke.py', 'journey.py', 'review_regressions.py'):
+            for script in ('smoke.py', 'journey.py', 'review_regressions.py', 'tui_journey.py'):
                 subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
-        try:
-            arm64_capable = command('sysctl', '-n', 'hw.optional.arm64') == '1'
-        except subprocess.CalledProcessError:
-            arm64_capable = False
         evidence = {
             'schema_version': 1, 'captured_at_utc': datetime.now(timezone.utc).isoformat(),
-            'macos_version': version, 'machine': platform.machine(), 'arm64_capable': arm64_capable,
+            'macos_version': version, 'machine': machine, 'arm64_capable': arm64_capable,
             'target': target, 'archive_name': args.archive.name, 'archive_sha256': digest,
             'binary_sha256': binary_hash, 'declared_source_commit': metadata.get('declared_source_commit'),
             'mach_o_minimum': '15.0', 'offline_tool_smoke': 'passed', 'interactive_journey': 'passed',
-            'review_regressions': 'passed',
+            'review_regressions': 'passed', 'tui_journey': 'passed',
             'smoke_script_sha256': hashlib.sha256((HERE / 'smoke.py').read_bytes()).hexdigest(),
             'journey_script_sha256': hashlib.sha256((HERE / 'journey.py').read_bytes()).hexdigest(),
+            'tui_journey_script_sha256': hashlib.sha256((HERE / 'tui_journey.py').read_bytes()).hexdigest(),
             'review_regressions_script_sha256': hashlib.sha256((HERE / 'review_regressions.py').read_bytes()).hexdigest(),
         }
         with args.output.open('x', encoding='utf-8') as output:

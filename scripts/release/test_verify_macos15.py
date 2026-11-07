@@ -45,15 +45,47 @@ class MacOS15VerifierTest(unittest.TestCase):
                  mock.patch.object(verify, 'command', side_effect=fake_command), \
                  mock.patch.object(verify.subprocess, 'run') as run, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(verify.main(), 0)
-                self.assertEqual(run.call_count, 3)
+                self.assertEqual(run.call_count, 4)
                 result = json.loads(evidence.read_text())
                 self.assertEqual(result['target'], 'macos-aarch64')
                 self.assertEqual(result['archive_sha256'], checksum)
                 self.assertEqual(result['interactive_journey'], 'passed')
                 self.assertEqual(result['review_regressions'], 'passed')
+                self.assertEqual(result['tui_journey'], 'passed')
                 self.assertEqual(result['review_regressions_script_sha256'], hashlib.sha256((verify.HERE / 'review_regressions.py').read_bytes()).hexdigest())
                 self.assertNotEqual(verify.main(), 0)
                 self.assertEqual(json.loads(evidence.read_text()), result)
+            for machine, arm64 in [('x86_64', '1'), ('x86_64', '0')]:
+                native_output = root / ('native-' + machine + '-' + arm64 + '.json')
+                native_args = ['verify_macos15.py', str(archive), '--sha256', checksum,
+                               '--output', str(native_output)]
+                def native_command(*command):
+                    return {'sw_vers': '15.7.6', 'otool': 'minos 15.0', 'sysctl': arm64}[command[0]]
+                with mock.patch.object(sys, 'argv', native_args), \
+                     mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
+                     mock.patch.object(verify.platform, 'machine', return_value=machine), \
+                     mock.patch.object(verify, 'command', side_effect=native_command), \
+                     mock.patch.object(verify.subprocess, 'run') as run, \
+                     redirect_stderr(io.StringIO()):
+                    self.assertNotEqual(verify.main(), 0)
+                    run.assert_not_called()
+                    self.assertFalse(native_output.exists())
+            intel_archive = root / 'intel.tar.gz'
+            intel_checksum = create_archive(intel_archive, 'macos-x86_64', 0x01000007)
+            intel_output = root / 'intel.json'
+            intel_args = ['verify_macos15.py', str(intel_archive), '--sha256', intel_checksum,
+                          '--output', str(intel_output)]
+            def intel_command(*command):
+                return {'sw_vers': '15.7.6', 'otool': 'minos 15.0', 'sysctl': '0'}[command[0]]
+            with mock.patch.object(sys, 'argv', intel_args), \
+                 mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
+                 mock.patch.object(verify.platform, 'machine', return_value='x86_64'), \
+                 mock.patch.object(verify, 'command', side_effect=intel_command), \
+                 mock.patch.object(verify.subprocess, 'run') as run, \
+                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertEqual(verify.main(), 0)
+                self.assertEqual(run.call_count, 4)
+                self.assertEqual(json.loads(intel_output.read_text())['target'], 'macos-x86_64')
             wrong = root / 'wrong.tar.gz'
             wrong_checksum = create_archive(wrong, 'macos-x86_64', 0x0100000c)
             bad_output = root / 'bad.json'
@@ -78,6 +110,7 @@ class MacOS15VerifierTest(unittest.TestCase):
                 fresh = root / ('bad-' + wrong_minos.replace(' ', '-') + '.json')
                 invalid_args = ['verify_macos15.py', str(archive), '--sha256', checksum, '--output', str(fresh)]
                 with mock.patch.object(sys, 'argv', invalid_args), mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
+                     mock.patch.object(verify.platform, 'machine', return_value='arm64'), \
                      mock.patch.object(verify, 'command', side_effect=bad_command), \
                      mock.patch.object(verify.subprocess, 'run') as run, redirect_stderr(io.StringIO()):
                     self.assertNotEqual(verify.main(), 0)

@@ -35,7 +35,8 @@ jobs:
       - name: Check workspace and build release binary
         run: |
           ./scripts/check.sh
-          test "$(target/release/saya --version)" = "saya 0.1.0"
+          expected_version=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "saya-cli"))')
+          test "$(target/release/saya --version)" = "saya $expected_version"
       - name: Check packaging and verification tools
         run: |
           python3 scripts/release/test_package.py

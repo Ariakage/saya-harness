@@ -10,6 +10,8 @@ import tarfile
 import tempfile
 import unittest
 
+from package import workspace_version
+
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / 'scripts/release/package.py'
 
@@ -23,6 +25,13 @@ def macho(cpu):
 
 
 class CandidatePackageTest(unittest.TestCase):
+    def test_workspace_prerelease_versions_preserve_candidate_identity(self):
+        for version in ('0.1.0', '0.2.0-rc.1', '0.2.0-rc.1+build.42'):
+            self.assertEqual(workspace_version('[workspace.package]\nversion = "' + version + '"\n'), version)
+        for version in ('01.2.0', '0.2.0-rc.01', '0.2.0-', '0.2.0-rc..1', '0.2.0-rc/unsafe'):
+            with self.assertRaises(ValueError):
+                workspace_version('version = "' + version + '"')
+
     def test_architecture_validation_determinism_and_no_overwrite(self):
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         with tempfile.TemporaryDirectory() as directory:

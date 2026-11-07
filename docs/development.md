@@ -12,7 +12,7 @@
 4. 完成聚焦、完整的改动并同步相关文档，按[路线图](roadmap.md)中的完成标准验证。
 5. 在进度记录中更新状态、证据、阻碍与下一任务，报告实际结果及未验证范围。
 
-工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，MVP workspace 为 saya-core＋saya-cli，DEV-038 增加共享应用服务 saya-app，二进制 saya，许可证 MIT。具体依赖补丁版本在初始化时按兼容性选择并提交 Cargo.lock，不重新提出偏好问题。
+工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，MVP workspace 为 saya-core＋saya-cli，DEV-038 增加共享应用服务 saya-app，DEV-047 增加 saya-tui library，二进制 saya，许可证 MIT。具体依赖补丁版本由 Cargo.lock 记录。
 
 根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。MVP 的实施定义为 P0 至 P7、DEV-001 至 DEV-037，新增任务为 DEV-038 至 DEV-083。各版本依据对应任务和实际验收维护状态，原 CLI／core 基线见 B-02。
 

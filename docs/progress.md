@@ -31,6 +31,7 @@
 
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
+| DEV-053 | 进行中（候选准备） | 选择0.2.0-rc.1作为N0／N1测试候选，双语说明、默认入口迁移、设计文档、SemVer打包及四平台原生解包验收接线已准备。最终候选与环境证据见[TUI验证](tui-validation.md)，正式发布安排在后续代码review与其他测试之后 |
 | DEV-052 | 进行中（本机完成，四平台待验收） | 已接入 CI 的13组真实PTY矩阵，覆盖三协议、多行／Unicode／bracketed paste、缩放、4模式×3权限、逐工具审批／澄清、stale approval、会话锁／恢复／导出、后台取消／PLAN清理、unknown、高频流、慢消费者及信号。8项输入／6项终端测试通过，含36轮panic及持续慢读的250ms单帧I/O预算。最终构建与四原生runner证据随后补充 |
 | DEV-051 | 完成（本机正常入口） | 无子命令仅在 stdin／stdout 均为 TTY 时进入 TUI，非 TTY／管道及 JSON／JSONL 冲突提前返回2且 stdout为空。3 项新路由回归和 105 项 CLI 测试通过，原 chat／run／resume／session／config 继续使用显式入口，workspace Clippy通过。日志为 target/n1-dev051-*.log，完整本机PTY矩阵结果见 DEV-052 |
 | DEV-050 | 完成（组件与服务验收） | 新建／浏览／恢复会话、profile 选择、工具／后台快照、取消与 JSON／Markdown 导出复用 saya-app。11 项存储服务回归、36 项 TUI lib 测试和全目标 Clippy 通过，覆盖锁释放、unknown／截断及 run_id＋call_id、PLAN 路径、取消／退出后的发布回执、脱敏、SQLite 初始化不阻塞界面，以及工具轮次后的最终回答位置。详情缓存限制为 2 MiB／10,000 逻辑行。日志为 target/n1-dev050-*.log，正常入口在 DEV-051／052 验收 |
