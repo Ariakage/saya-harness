@@ -179,7 +179,7 @@ impl Probe {
         let child_tty = slave.as_raw_fd();
         let mut command = Command::new(std::env::current_exe()?);
         let stdin = if mode == "partial" || mode.contains("separate") {
-            let mut name = [0i8; 1024];
+            let mut name: [libc::c_char; 1024] = [0; 1024];
             // SAFETY: the slave is live and name has room for a terminal path.
             if unsafe { libc::ttyname_r(slave.as_raw_fd(), name.as_mut_ptr(), name.len()) } != 0 {
                 return Err(io::Error::last_os_error());

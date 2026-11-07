@@ -46,6 +46,13 @@ fn terminal_child_probe() -> io::Result<()> {
                 );
             })?;
             terminal.restore()?;
+            assert_eq!(
+                terminal
+                    .draw(|_| panic!("restored guard rendered"))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::BrokenPipe
+            );
             // A restored guard may still exist while a new guard takes ownership.
             let mut next = TerminalGuard::enter()?;
             drop(terminal);
@@ -265,6 +272,10 @@ fn normal_error_panic_and_nested_entry_restore_real_terminal_state() -> io::Resu
     for mode in ["normal", "error", "panic", "nested"] {
         let output = run_terminal_probe(mode)?;
         let text = String::from_utf8_lossy(&output);
+        assert!(
+            !text.contains("Failed to show the cursor"),
+            "backend cleanup printed after terminal restoration: {text}"
+        );
         assert!(
             text.contains("\u{1b}[?1049h"),
             "{mode} entered alternate screen"
@@ -494,10 +505,11 @@ fn stalled_terminal_and_panic_restore_raw_and_descriptor_flags_with_bounded_outp
         loop {
             drain_terminal(&mut master, &mut output)?;
             if let Some(status) = child.try_wait()? {
+                let text = String::from_utf8_lossy(&output);
+                assert!(status.success(), "{mode}: {}", text);
                 assert!(
-                    status.success(),
-                    "{mode}: {}",
-                    String::from_utf8_lossy(&output)
+                    !text.contains("Failed to show the cursor"),
+                    "{mode}: {text}"
                 );
                 break;
             }

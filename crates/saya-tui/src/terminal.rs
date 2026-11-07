@@ -157,7 +157,11 @@ impl Write for TerminalOutput {
             .lock()
             .map_err(|_| io::Error::other("terminal output state unavailable"))?;
         if state.ended {
-            return Err(io::ErrorKind::BrokenPipe.into());
+            // Saya has already attempted bounded cursor/screen restoration.
+            // Ratatui's destructor writes another ShowCursor and otherwise
+            // logs failures to stderr, which may now be a full blocking TTY.
+            // This private backend becomes a sink only during teardown.
+            return Ok(bytes.len());
         }
         let write_deadline = Instant::now() + WRITE_WAIT;
         let deadline = state
