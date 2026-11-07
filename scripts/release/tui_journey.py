@@ -499,9 +499,16 @@ def wait_idle(terminal, root, count=1, expected_status='completed'):
         except sqlite3.Error:
             return False
     terminal.wait(finished, 'persisted run completion')
-    terminal.pump(0.1)
-    if expected_status and outcome[0].get('status') != expected_status:
+    status = outcome[0].get('status')
+    if expected_status and status != expected_status:
         raise RuntimeError('unexpected persisted run status: ' + json.dumps(outcome[0]))
+    ui_status = ''.join(part.capitalize() for part in status.split('_'))
+    # Persistence finishes before App.finish consumes the run outcome. Only the
+    # final header status proves that the UI has released its active run.
+    def ui_finished():
+        header = terminal.screen.text.splitlines()[0]
+        return header.lstrip().startswith('SAYA ') and header.rsplit('|', 1)[-1].strip() == ui_status
+    terminal.wait(ui_finished, 'idle UI status ' + ui_status)
     return outcome[0]
 
 
