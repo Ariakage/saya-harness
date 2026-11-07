@@ -4,6 +4,8 @@
 
 **0.1.0 已发布。** 提供 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64 CLI 安装包。中英双语说明、校验和及四平台最低环境验收证据见 [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。
 
+当前开发线已实现 N0 共享基础，包括 `saya-app`、五级诊断与追踪、日志查询，以及 JSON／Markdown 会话导出。实施与本机验收证据见[开发进度](docs/progress.md)。
+
 ## 已确认方向
 
 - 实现语言：Rust。

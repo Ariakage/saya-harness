@@ -1,6 +1,6 @@
 # 开发进度
 
-**记录于 2026-11-08。P0 至 P7 已完成，v0.1.0 已发布，后续功能处于规划阶段。**
+**记录于 2026-11-08。P0 至 P7 已完成，v0.1.0 已发布，当前开发线 N0 共享基础完成本机验收。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -12,7 +12,7 @@
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
-- DEV-038／039 共享应用与交互桥已完成本机验收，日志与会话导出按 N0 依赖继续推进。
+- DEV-038 至 DEV-046 已完成并分别提交，N0 全量本机验收通过。下一任务为 DEV-047 TUI 终端生命周期。
 
 ## 后续开发状态
 
@@ -20,7 +20,7 @@
 
 | 阶段 | 任务 | 实际状态 | 已有基础与下一入口 |
 | --- | --- | --- | --- |
-| N0 共享基础 | DEV-038 至 DEV-046 | 进行中 | 0.1.0 的应用组装、安全日志和 SQLite 可复用，先执行 DEV-038 |
+| N0 共享基础 | DEV-038 至 DEV-046 | 完成（本机验收） | 共享应用、日志／追踪与会话导出均通过正常 CLI 入口及故障回归，见下表 |
 | N1 默认 TUI | DEV-047 至 DEV-053 | 待开始 | 已记录默认入口方向，界面与新 crate 均待开发 |
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 待开始 | Linux 采用 Bubblewrap + Seccomp + socat，macOS 为独立 SeatbeltBackend，能力与性能待实测 |
 | N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078 | 待开始 | 已有指令／Skill 发现，OutputStore、Compact、插件 loader、检查点及 Hooks 待开发 |
@@ -29,17 +29,35 @@
 
 ### N0 实施记录
 
-| 任务 | 状态 | 证据 |
-| --- | --- | --- |
-| DEV-038 | 完成 | 新 saya-app 迁移模型组装与会话生命周期，CLI 正常入口回归通过，独立审查通过。`./scripts/check.sh` 的格式、Clippy、全套离线测试及 release 构建通过，日志为本机 target/n0-dev038-check.log |
-| DEV-039 | 完成 | 共享 EventWriter／EventModel、1秒有界 EventSink、人工输入桥与取消句柄已接入 CLI。3项桥接测试、三协议SSE至JSONL参数化正常入口回归、CLI完整回归及 app／CLI Clippy 通过，覆盖队列背压／断开／过期回复，日志为 target/n0-dev039-*.log |
-| DEV-040 | 完成 | 五级 LogLevel、类型化白名单记录、旧行解码和安全文件边界已实现。日志9项测试及 core Clippy 通过 |
-| DEV-041 | 完成 | tracing安全subscriber、有界普通／优先队列、退出排空及执行／核查／工具／后台关联已实现，CLI安装全局订阅。日志12项、runtime40项及 CLI Clippy 通过 |
-| DEV-042 | 完成 | --log-level／SAYA_LOG_LEVEL优先级、show分页与tail轮转跟随已接入，查询只读且支持JSON／JSONL。查询4项、CLI5项、日志全16项和workspace Clippy通过，覆盖慢pipe中断、文件代际、私有权限、时间与终端控制 |
-| DEV-043 | 完成 | 单只读事务快照与 WAL image 校验，包含全集合及真实持久水位。7项快照测试（含合法JSON篡改与可选字段兼容）、4项 WAL 回归（含重建限额及 SQLite VM 中断）和 core Clippy 通过，源128MiB／记录32MiB／100k行／5秒默认限额已固定 |
-| DEV-044 | 完成 | JSON导出 saya.session schema v1，范围／工具正文／内部态省略／复合调用关联／脱敏截断已实现。4项导出测试及core Clippy通过 |
-| DEV-045 | 完成 | Markdown复用同一脱敏投影，动态围栏、HTML／ANSI／双向控制处理和总限额已实现。6项导出测试及 core Clippy通过 |
-| DEV-046 | 完成 | CLI离线导出和0600排他文件发布已实现，父路径身份复查、私有staging、摘要核验及机器错误码完整。7项发布测试、5项CLI验收和错误确认单测通过，涵盖RLIMIT写失败、路径替换、取消及已有目标保护 |
+| 任务 | 状态 | 阶段提交 | 证据 |
+| --- | --- | --- | --- |
+| DEV-038 | 完成 | `b8c84af` | 新 saya-app 迁移模型组装与会话生命周期，CLI 正常入口回归通过，独立审查通过。`./scripts/check.sh` 的格式、Clippy、全套离线测试及 release 构建通过，日志为本机 target/n0-dev038-check.log |
+| DEV-039 | 完成 | `88014a9` | 共享 EventWriter／EventModel、1秒有界 EventSink、人工输入桥与取消句柄已接入 CLI。3项桥接测试、三协议SSE至JSONL参数化正常入口回归、CLI完整回归及 app／CLI Clippy 通过，覆盖队列背压／断开／过期回复，日志为 target/n0-dev039-*.log |
+| DEV-040 | 完成 | `97e92b7` | 五级 LogLevel、类型化白名单记录、旧行解码和安全文件边界已实现。日志9项测试及 core Clippy 通过 |
+| DEV-041 | 完成 | `b01513a` | tracing安全subscriber、有界普通／优先队列、退出排空及执行／核查／工具／后台关联已实现，CLI安装全局订阅。日志12项、runtime40项及 CLI Clippy 通过 |
+| DEV-042 | 完成 | `838bf00` | --log-level／SAYA_LOG_LEVEL优先级、show分页与tail轮转跟随已接入，查询只读且支持JSON／JSONL。查询4项、CLI5项、日志全16项和workspace Clippy通过，覆盖慢pipe中断、文件代际、私有权限、时间与终端控制 |
+| DEV-043 | 完成 | `3cab1ae` | 单只读事务快照与 WAL image 校验，包含全集合及真实持久水位。7项快照测试（含合法JSON篡改与可选字段兼容）、5项 WAL 回归（含重建限额、SQLite VM 中断及旧逐文件限额兼容）和 core Clippy 通过，源128MiB／记录32MiB／100k行／5秒默认限额已固定 |
+| DEV-044 | 完成 | `ca7f77d` | JSON导出 saya.session schema v1，范围／工具正文／内部态省略／复合调用关联／脱敏截断已实现。4项导出测试及core Clippy通过 |
+| DEV-045 | 完成 | `ecf9c0b` | Markdown复用同一脱敏投影，动态围栏、HTML／ANSI／双向控制处理和总限额已实现。6项导出测试及 core Clippy通过 |
+| DEV-046 | 完成 | `a463eba` | CLI离线导出和0600排他文件发布已实现，父路径身份复查、私有staging、摘要核验及机器错误码完整。7项发布测试、5项CLI验收和错误确认单测通过，涵盖RLIMIT写失败、路径替换、取消及已有目标保护 |
+
+### N0 最终验收（2026-11-08）
+
+验收源码为 `f1f48e4`，环境为 macOS 27.2 ARM、Rust 1.99.1。`./scripts/check.sh` 完整通过格式检查、workspace Clippy（warnings 为错误）、392项离线 Rust 测试及 release 构建，记录为本机 `target/n0-acceptance-final.log`。
+
+| 验收要求 | 实际证据 |
+| --- | --- |
+| 应用服务与恢复契约 | CLI完整回归，模式覆盖、配置变更、PLAN目录、锁与恢复行为，以及独立迁移审查 |
+| 流事件与输入控制 | Chat／Responses／Anthropic三协议SSE至JSONL正常入口，单一终态、关联ID与递增序号；队列、断开、晚回复、取消及审批失效回归 |
+| 日志与追踪 | 日志16项（含查询）、runtime40项及CLI日志5项，覆盖字段白名单、秘密、轮转、优先队列、过载、丢弃、排空与慢pipe取消 |
+| 一致性快照 | Snapshot7项及WAL5项，覆盖并发提交、真实水位、只读源、合法JSON损坏、旧schema、限额、VM取消和旧恢复每文件512MiB兼容 |
+| 导出与文件发布 | Export6项、发布7项、CLI导出5项及错误确认单测，覆盖两格式、选择／省略／脱敏／截断、路径替换、RLIMIT写失败、取消及目标保护 |
+| 原生release程序 | smoke、journey、review_regressions三组离线演练均通过；新日志查询及两种导出由同一个release程序实测，收据哈希与0600权限核对通过 |
+| 文档与凭据 | 64个Markdown文件456个相对链接有效，既有私有凭据未出现在待提交文件中 |
+
+新功能release演练报告为本机 `target/n0-release-features.json`，查询与导出的模型请求数为0。该次程序 SHA256 为 `d6a23962d167303bd0c4761e8b1fcff3ec0d5bd855ea625be40b2718b776ffc1`。跨平台记录继续分别依据实际环境验收维护，本次N0证据来自上述本机环境。
+
+阶段提交见上表。独立审查追加 `b51787f`、`758dced`、`31d1cd6` 修复快照边界，`41a1e9f` 补齐三协议直接证据。实现时固定了快照128MiB源总量／32MiB记录／100k行／5秒、每导出32MiB、每字段64KiB等默认限额，具体语义见[导出说明](session-export.md)。
 
 ### 2026-11-08 专项设计细化
 

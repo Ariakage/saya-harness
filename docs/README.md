@@ -26,10 +26,10 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [原生 Sandbox](sandbox.md) | Seatbelt、Linux 原生组合、网络、AST 与能力等级 | 后端组合已明确，接口待实现 |
 | [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | 设计草案 |
 | [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | 设计草案 |
-| [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | 方向明确，方案待实现 |
-| [日志与追踪](observability.md) | 五级日志、span、安全记录与本地查询 | 基于现有日志的增强草案 |
-| [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 与文件保存 | 方向明确，方案待实现 |
-| [Goal 设计](goal.md) | 目标、证据、预算、恢复与分层交付 | 方向明确，方案待实现 |
+| [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | DEV-043 至 DEV-046 已实现，本机验收通过 |
+| [日志与追踪](observability.md) | 五级日志、span、安全记录与本地查询 | DEV-040 至 DEV-042 已实现，本机验收通过 |
+| [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 与文件保存 | DEV-043 至 DEV-046 已实现，本机验收通过 |
+| [Goal 设计](goal.md) | 目标、证据、预算、恢复与分层交付 | DEV-043 至 DEV-046 已实现，本机验收通过 |
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P7 验收完成 |
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
 | [发行检查](release-checklist.md) | 24 组基线、验收与已知限制 | P7 验收完成 |

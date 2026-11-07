@@ -1,6 +1,6 @@
 # 架构设计
 
-**0.1.0 已完成 P0 至 P7 验收并发布。本文描述已交付架构，后续应用分层与扩展方案见[后续开发计划](post-mvp-plan.md)。**
+**0.1.0 已发布，当前开发线完成 N0 共享基础。本文同时记录已交付架构与后续扩展边界，状态及验收见[开发进度](progress.md)。**
 
 约束为 Rust、CLI → TUI → GUI、Saya 自己驱动 Agent 循环，同时支持编程与通用任务。CLI 包含交互和单次运行、四种工作模式、三种权限模式、三类模型协议、本地工具、流式／结构化输出和会话恢复，默认 WORK 与 auto。精确契约以[完整基线](mvp-baseline.md)为准，范围见[需求规格](requirements.md)，行为见[执行契约](execution.md)。
 
@@ -96,7 +96,7 @@ flowchart TD
 
 所有产品与接口阻塞项已由[完整基线](mvp-baseline.md) B-01 至 B-24 收敛；具体内部 Rust 类型和模块文件名由开发者在保持行为的前提下处理。Tokio、clap、reqwest＋rustls、serde／toml、thiserror、tracing 与 rusqlite 的职责按 B-02 实现。
 
-core／CLI crate 和锁文件已建立，普通构建提供可复用运行时、七项本地工具、权限调度、后台任务和三协议适配。模型协议、profile 核查、恢复和事件输出通过受控验证，指定模型完成三协议小规模联调。正式源码的四原生平台分别通过 342 项 Rust 测试和解包演练，公开发行包完成下载复核。具体环境与证据见[发行验证](release-validation.md)和[开发进度](progress.md)。
+core／app／CLI crate 和锁文件已建立，普通构建提供可复用运行时、七项本地工具、权限调度、后台任务和三协议适配。模型协议、profile 核查、恢复和事件输出通过受控验证，指定模型完成三协议小规模联调。正式源码的四原生平台分别通过 342 项 Rust 测试和解包演练，公开发行包完成下载复核。具体环境与证据见[发行验证](release-validation.md)和[开发进度](progress.md)。
 
 ## 提示词装配
 
