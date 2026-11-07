@@ -1,10 +1,10 @@
 # 后续能力路线图
 
-**更新于 2026-11-07。本文包含 F-01 至 F-20 的后续能力规划，MVP 基础与待开发增量分别记录。**
+**更新于 2026-11-08。本文包含 F-01 至 F-20 的后续能力规划，MVP 基础与待开发增量分别记录。**
 
-本文回答“CLI MVP 之后，Saya Harness 还需要开发哪些能力”。Sandbox 与 MCP 见[决策记录](decisions.md) D-028，增强日志、Session Export、Goal 与默认 TUI 见 D-036 至 D-038。版本候选、任务依赖及验收见[后续开发计划](post-mvp-plan.md)，下面的能力范围和技术方向作为开发规划维护。
+本文回答“CLI MVP 之后，Saya Harness 还需要开发哪些能力”。基础扩展见[决策记录](decisions.md) D-028、D-036 至 D-038，本轮 Browser、上下文／插件细化及原生后端见 D-039 至 D-041。版本候选、依赖及验收见[后续开发计划](post-mvp-plan.md)。
 
-0.1.0 已发布，其行为以[完整基线](mvp-baseline.md)及后续决策为准。P0 至 P7、DEV-001 至 DEV-037 见[MVP 实施任务](implementation-plan.md)，新增 DEV-038 至 DEV-074 见后续开发计划。
+0.1.0 已发布，其行为以[完整基线](mvp-baseline.md)及后续决策为准。P0 至 P7、DEV-001 至 DEV-037 见[MVP 实施任务](implementation-plan.md)，新增 DEV-038 至 DEV-083 见后续开发计划。
 
 ## 总体顺序
 
@@ -43,6 +43,8 @@ flowchart TD
     GM --> GA[有限自动 Goal]
     X --> GA
     J --> GA
+    S --> BR[Browser]
+    C --> BR
     O -.-> C
     O -.-> J
     O -.-> A
@@ -87,7 +89,7 @@ flowchart TD
 - 进程与资源：进程树清理、运行时间、CPU／内存／进程数量限制，以及环境和凭据注入范围。
 - 支持能力探测；用户选择的隔离要求无法满足时明确失败，不静默换成无隔离宿主执行。
 
-交付顺序：统一接口和测试 → 一个容器／隔离环境后端 → Linux 与 macOS 的支持矩阵 → 按实测考虑原生后端。Linux Landlock 可作为原生限制候选，具体能力取决于内核支持，不能直接当作 macOS 方案。依据 [Linux 内核文档](https://docs.kernel.org/userspace-api/landlock.html)。容器方案还需验证挂载、网络、daemon 与运行配置，参考 [Docker 隔离说明](https://docs.docker.com/engine/security/)和 [rootless 模式](https://docs.docker.com/engine/security/rootless/)，这里不指定用户安装某个运行时。
+首轮采用原生后端。Linux 按项目负责人指定的 Bubblewrap + Seccomp + socat 实现，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 的后续实现。资源能力区分 hard／best_effort／unsupported，网络桥与域名策略分别验证。命令 AST／CST 风险事实、文件策略、资源及性能验收见[Sandbox 设计](sandbox.md)。
 
 验收：子进程不能越过已声明的隔离边界，资源耗尽与取消能清理，所报告后端与实际运行一致。未来 sandbox 与 bypass 的组合要形成明确的版本契约；推荐保留所选隔离环境的硬边界。sandbox 只读能力不自动在现有 PLAN 中启用 exec。
 
@@ -150,6 +152,8 @@ Saya 自身对外提供 MCP Server 放在 F-13 的集成方向中，不与首轮
 
 ## F-06 上下文管理
 
+ContextBuilder、OutputStore、检索工具和 Compact 的预算、协议分组、迟滞水位、检查点及缓存设计见[上下文与长输出](context-management.md)。任务为 DEV-062／063／076／077，所有接口与限额仍为草案。
+
 **价值**：长任务在预算内继续执行，用户能理解摘要和检索对上下文的影响。
 
 - 上下文组成与占用可见：任务、指令、工具结果、附件、摘要与最近对话。
@@ -193,6 +197,8 @@ Saya 自身对外提供 MCP Server 放在 F-13 的集成方向中，不与首轮
 先做受控父子任务，再考虑多层委派与更复杂协作。验收包含两个独立改动的隔离、冲突处理、总预算与取消；子任务需要有可核验的产物与合并结果。
 
 ## F-10 联网读取与浏览器
+
+BrowserProvider 首版候选为托管 Chromium／Playwright MCP worker，通过原生后端约束。URL／搜索、ARIA 快照、页面交互、截图、文件、登录、后台任务及策略见[Browser 设计](browser.md)，任务为 DEV-079 至 DEV-083。
 
 **价值**：完成需要外部资料与网页交互的通用任务。
 
@@ -321,6 +327,6 @@ Goal 生命周期与四工作模式分别表达。每次工具执行经过当前
 
 ## 研究依据与维护
 
-本规划已核对 MCP 传输、HTTP 授权、工具及官方 Rust SDK，以及容器与 Linux 原生限制的官方资料，链接位于相关条目。规范和 SDK 会变化，进入开发时记录所验证的版本；本文不把调研参考版本当作已经实现的兼容承诺。
+本规划核对了 MCP、官方 Rust SDK、Bubblewrap、Seccomp、cgroup、Seatbelt 工程实现、Playwright 及上下文协议资料，来源位于相关条目和专项文档。进入开发时记录实际库版本、平台及验证结果，兼容范围由验收证据维护。
 
-进度由[开发进度](progress.md)记录。F-01 至 F-20 表示能力模块，DEV-038 至 DEV-074 表示后续实施任务，已发布 MVP 的 DEV-001 至 DEV-037 保留原有证据。
+进度由[开发进度](progress.md)记录。F-01 至 F-20 表示能力模块，DEV-038 至 DEV-083 表示后续实施任务，已发布 MVP 的 DEV-001 至 DEV-037 保留原有证据。

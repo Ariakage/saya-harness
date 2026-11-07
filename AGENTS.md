@@ -15,6 +15,7 @@
 - MVP 的确定接口、默认值、边界与工程选型以[完整基线](docs/mvp-baseline.md) B-01 至 B-24 为准，已由项目负责人整套确认，见 D-027；macOS 最低支持版本经 D-035 调整为 15。
 - Sandbox、MCP 等后续新增功能见[能力路线图](docs/capability-roadmap.md)。功能规划与 MVP 实施任务分别处理，不将规划清单当作已实现或自动扩入 0.1。
 - 0.1.0 之后的任务分解见[后续开发计划](docs/post-mvp-plan.md)，日志、Session Export、默认 TUI 和 Goal 的细节在对应设计草案中维护。
+- 未来 Sandbox 按 D-040 使用 Linux Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 实现。实施时读取[原生隔离](docs/sandbox.md)、[上下文](docs/context-management.md)、[Browser](docs/browser.md)与[插件规范](docs/saya-plugin.md)。
 - 产品方向与实现状态见 [README.md](README.md)、[项目范围](docs/vision.md)和[决策记录](docs/decisions.md)。已确定与已实现必须分开描述。
 
 ## 开始工作

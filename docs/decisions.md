@@ -57,6 +57,9 @@
 | D-036 | 2026-11-07 | 增强日志系统，并支持 Session 导出 Markdown／JSON | F-12 增加五级诊断与 tracing 规划，新增 F-19。基于现有安全日志和 SQLite 发展一致性快照、导出格式及文件保存，设计见日志与导出文档 |
 | D-037 | 2026-11-07 | 未来提供 `/goal` 目标能力 | 新增 F-20，规划目标、步骤、验收证据及分阶段持续推进。高层编排、预算和模式控制的具体方案见 Goal 设计草案 |
 | D-038 | 2026-11-07 | 后续直接运行 `saya` 进入 TUI | 细化 D-002，未来修改 B-03 的无子命令行为。TTY、共享应用层与命令兼容按 TUI 设计验证，0.1.0 已发布行为保留在原基线和发行记录中 |
+| D-039 | 2026-11-08 | 细化 Browser、Sandbox／AST、Compact／长输出与 saya-plugin 规范 | 项目负责人要求具体设计。形成 Browser、原生隔离、上下文及插件 v1 草案，包含 manifest 示例和结构 schema。具体权限、参数及限额按任务验收收敛 |
+| D-040 | 2026-11-08 | Linux Sandbox 使用 Bubblewrap + Seccomp + socat | 项目负责人明确指定原生组合。network namespace、系统调用过滤、代理桥及实际出口共同验证，资源硬限额按 cgroup 能力报告，首轮实现见 Sandbox 设计 |
+| D-041 | 2026-11-08 | 将 Seatbelt 的 sandbox-exec 封装为独立后端，并预留容器／VM 实现路径 | 项目负责人明确 macOS 后端边界。core 依赖 ExecutionBackend 与能力接口，Seatbelt profile 留在后端内。deprecated 状态、系统版本、资源与清理差异按平台验证 |
 
 ## 当前基线与变更管理
 

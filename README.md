@@ -54,9 +54,12 @@
 | [0.1.0 双语版本说明](docs/release-notes-0.1.0.md) | 功能、安装、兼容性与已知限制 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
-| [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |
+| [saya-plugin 规范](docs/saya-plugin.md) | manifest v1 草案、结构 schema、权限与生命周期 |
 | [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
-| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 候选范围、五个阶段与 DEV-038 至 DEV-074 |
+| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 候选范围、六个阶段与 DEV-038 至 DEV-083 |
+| [原生 Sandbox](docs/sandbox.md) | Seatbelt 独立后端、Bubblewrap／Seccomp／socat 和 AST |
+| [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
+| [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
 | [日志与追踪](docs/observability.md) | 五级诊断、关联 span、日志查询与安全边界 |
 | [Session 导出](docs/session-export.md) | 一致性快照、Markdown／JSON 与文件保存 |
@@ -69,7 +72,7 @@
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 候选范围为共享应用服务、增强日志、Session Export 和默认 TUI，随后按依赖交付 Sandbox、MCP、Compact、插件及 Goal。具体版本根据验收收敛，GUI 位于 TUI 之后。
+后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 候选范围为共享应用服务、增强日志、Session Export 和默认 TUI，原生 Sandbox、MCP、Compact、插件、Browser 及 Goal 按依赖交付。具体版本根据验收收敛，GUI 位于 TUI 之后。
 
 ## 许可证
 

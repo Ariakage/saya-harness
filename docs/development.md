@@ -14,7 +14,7 @@
 
 工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，workspace 为 saya-core＋saya-cli，二进制 saya，许可证 MIT。具体依赖补丁版本在初始化时按兼容性选择并提交 Cargo.lock，不重新提出偏好问题。
 
-根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。MVP 的实施定义为 P0 至 P7、DEV-001 至 DEV-037，新增任务为 DEV-038 至 DEV-074。各版本依据对应任务和实际验收维护状态，原 CLI／core 基线见 B-02。
+根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。MVP 的实施定义为 P0 至 P7、DEV-001 至 DEV-037，新增任务为 DEV-038 至 DEV-083。各版本依据对应任务和实际验收维护状态，原 CLI／core 基线见 B-02。
 
 提交信息遵循 [AGENTS.md](../AGENTS.md) 中的 Conventional Commits 约定。
 

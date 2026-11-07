@@ -1,28 +1,126 @@
-# saya-plugin：未来插件系统规划
+# saya-plugin v1 规范草案
 
-**状态：方向已确认，以下架构和阶段是规划草案，尚未实现，也不进入 CLI MVP。**
+**更新于 2026-11-08。系统名称沿用 D-031，本文细化 F-03／DEV-065 至 DEV-067、DEV-078。manifest v1 表示插件格式版本，实际支持情况由宿主能力声明与验收结果决定。**
 
-`saya-plugin` 是未来为 Saya Harness 提供可安装、可管理扩展能力的插件系统。它面向 CLI、TUI 和 GUI 复用的运行时能力，优先服务领域指令、工具连接和工作流扩展。名称不预设最终仓库结构、crate 组织、二进制名或稳定 ABI。
+## 规范文件
 
-## 边界与职责
+- 包根入口为 `saya-plugin.toml`，采用 TOML。
+- 结构约束见 [JSON Schema](schemas/saya-plugin-v1.schema.json)，TOML 解析成数据对象后按该 schema 校验。
+- 可复制的结构示例见 [saya-plugin.example.toml](../examples/saya-plugin.example.toml)，示例中的兼容范围只演示语法。
+- 路径、SemVer 范围、唯一 ID、能力组合、文件类型、来源与授权还需运行时语义验证。
 
-- Saya core 保有运行生命周期、工具注册与分发、模式、权限、预算、取消和审计记录的最终控制权；插件不能通过声明自行改变这些边界。
-- 插件包描述其身份、版本、兼容范围、来源、依赖和申请能力；运行时只暴露实际启用、完成校验的能力。插件文档与工具输出是数据，不能提升为系统指令或授权。
-- 初期优先考虑声明式包，组合 Skills、资源与受控的 MCP 配置；可执行扩展依赖 Sandbox 和权限机制成熟后另行设计。首轮不预设原生动态库 ABI，也不将 MCP、Skills、Hooks 混成同一执行协议。
-- 安装／升级应可检查来源、依赖和变化；启用、停用、卸载应有明确作用域和状态。插件不随意安装依赖、启动进程、访问网络或读取凭据；具体能力取决于未来安全模型与用户设置。
-- 可用性与故障应可观察：区分未安装、未启用、不兼容、启动失败和运行失败；隔离单个插件失败，支持取消与资源清理。尚不承诺市场、自动更新、远程执行或多 Agent。
+## 包与扩展点
 
-## 交付阶段（草案）
+```text
+plugin-root/
+  saya-plugin.toml
+  LICENSE
+  skills/rust-review/SKILL.md
+  resources/review-guide.md
+  mcp/server.py
+  hooks/record_summary.py
+```
 
-1. **契约与威胁模型**：明确扩展点、包格式和兼容规则，梳理工具／资源／指令注入、供应链、授权、卸载及回滚边界。形成可审阅 ADR 和测试矩阵。
-2. **声明式原型**：在隔离夹具中加载本地 manifest 与资源，验证版本、冲突、启停及作用域；不把文件内容自动提升为系统权限。
-3. **受控工具接入**：在 Sandbox、MCP Client、凭据引用及可审计事件就绪后，接入受控工具服务与运行时权限、预算和取消；测试失效、恶意输入与进程清理。
-4. **生命周期与分发**：验证安装、升级、停用、卸载、来源追踪及恢复；再评估签名、索引、发行与生态接口。
+v1 定义声明式 Skills、资源、MCP 服务与受控 Hook 入口。执行组件经批准的解释器／运行环境启动，宿主内部扩展由稳定的工具与应用接口承接。浏览器通过宿主已启用的托管能力使用。
 
-## 验收方向
+| 字段 | 约束 |
+| --- | --- |
+| `schema_version` | 整数 1，未知版本返回不兼容错误 |
+| `plugin` | ID、SemVer 版本、描述、许可证和可选许可证文件／主页 |
+| `compatibility` | 宿主版本范围及 `requires_features`，必须包含 `plugin-manifest-v1` |
+| `capabilities` | 申请能力、网络 origins 和 credential slots，形成包的能力上界 |
+| `skills` | entry ID 和包含 SKILL.md 的相对目录 |
+| `resources` | entry ID、相对文件及媒体类型 |
+| `mcp` | entry ID、transport、program／args 或 HTTPS endpoint、凭据槽 |
+| `hooks` | entry ID、事件、种类、program／args、超时 |
+| `dependencies` | 依赖包 ID 与版本范围，实际版本和摘要由 lock 固定 |
 
-- 至少一个声明式领域包及一个受控 MCP 插件可安装、启用、调用、停用并升级；停用后不再注入指令、注册工具或启动残留进程。
-- 未声明、未授权和超预算的能力调用不能执行；PLAN 和显式 deny 在插件路径依然有效。插件崩溃、超时、取消或宿主重启后状态可解释，不自动重放不明副作用。
-- 对包来源、版本、兼容性、权限申请及执行结果有可追踪证据；安全失败不静默放行。
+包至少包含一个扩展入口。同类 entry ID 和 dependency ID 唯一，顶层及对象中的未知字段拒绝。包版本使用 SemVer 2.0.0，范围按实现时固定的 Rust semver 语法验证。[SemVer](https://semver.org/)、[Cargo 版本范围](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#version-requirement-syntax)
 
-依赖与具体范围见[能力路线图](capability-roadmap.md) F-01、F-02、F-03、F-04、F-12、F-18。Skill 激活、包管理和 Hooks 的后续任务为[开发计划](post-mvp-plan.md) DEV-065 至 DEV-067。
+## 命名与兼容
+
+包 ID 使用小写命名空间，示例为 `io.saya.examples.rust-workflow`。entry ID 使用小写字母、数字与连字符。内部身份采用 `plugin_id/entry_id`，模型侧名称由 Tool Registry 稳定映射并校验协议长度／字符限制。
+
+宿主版本匹配与 feature 集匹配都通过后才能启用。Skill、stdio MCP、HTTP MCP、Hooks 和托管浏览器分别声明对应 feature。未满足条件时显示缺失项。模型工具别名绑定完整 ID、包摘要和工具版本，碰撞作为注册错误处理。
+
+同 ID／版本的不同摘要记录为来源冲突，启用时明确选择内容身份。包 ID 与发布者文本为声明信息，信任决定依据实际来源、摘要和用户选择。
+
+现有用户级／工作区 Skill 同名优先级按 D-033 处理。插件入口默认使用限定名，用户显式定义的别名记录来源及覆盖范围。
+
+## 权限与配置
+
+有效权限由包申请、显式启用范围、当前用户策略、工作模式和后端能力的交集确定，显式 deny 优先。
+
+| 能力类别 | 示例申请 | 生效检查 |
+| --- | --- | --- |
+| 工作区 | `workspace.read`、`workspace.write` | 受控视图、路径与写回规则 |
+| 执行 | `process.exec`、`mcp.stdio` | 已批准运行环境、argv、AST 风险和隔离 |
+| 网络／远程 MCP | `network.outbound`、`mcp.http` | 精确 origin、实际出口和连接授权 |
+| 凭据 | `credential.use` 与命名槽 | 宿主配置的用途绑定和撤销状态 |
+| Hooks | `hook.observe`、`hook.check` | 事件、操作许可、超时及执行预算 |
+| 浏览器／产物 | `browser.observe`、`browser.interact`、`artifact.read`、`artifact.write` | 已启用宿主能力、当前资源 ACL 与操作策略 |
+
+网络 origin 采用规范化 HTTPS origin，endpoint 的路径与凭据用途另行检查。凭据槽为符号名称，实际 secret 引用由用户在选定配置中绑定。literal secret、任意宿主环境继承和插件指定的宿主绝对挂载分别由语义验证及执行策略限制。
+
+项目 `.saya` 可承载待审阅声明，运行配置仍遵循 B-04 的显式选择。安装与启用通过用户操作记录，工作区文件变化产生可审阅差异。启用记录绑定包摘要和作用域，当前每次工具操作继续按本次权限判断。
+
+Skill 文本、资源和服务输出以低信任来源数据传递，执行组件的能力交集在后端落实。模型工具调用继续由宿主派发，并通过来源注入夹具评估行为。
+
+## 路径、存储与摘要
+
+路径使用规范化 UTF-8 相对路径，组件采用 `/` 分隔。拒绝绝对路径、盘符、反斜杠、点路径组件、NUL／控制字符、链接、设备及特殊文件。相同规范化或大小写折叠路径冲突时拒绝安装。
+
+包内容安装到 XDG 数据目录的私有内容寻址存储，按 digest 固定，按只读策略提供给原生 worker。候选提取上限为 4,096 个文件、展开总量 64 MiB、单文件 16 MiB，目录深度和路径字节上限同样在验证器中检查。归档格式、文件类型和展开配额在提取过程中执行检查。
+
+树摘要算法候选名为 `saya-tree-sha256-v1`。
+
+1. 收集包括 manifest 的全部普通文件，使用规范化相对路径，按 UTF-8 字节排序。
+2. 以 ASCII `saya-plugin-tree-v1` 及零字节作为摘要域。
+3. 每项加入路径长度的 u32 big-endian、路径字节、文件长度的 u64 big-endian 和文件内容 SHA-256 的 32 个原始字节。
+4. 得到整个树的 SHA-256，文件时间及宿主权限元数据分别由安装策略处理。
+
+lock 记录包 ID、版本、来源、安全的获取引用、树摘要、依赖摘要和所需能力指纹。lock 位于包内容树外，源码身份和启用记录同时绑定摘要。启用与实际加载前验证内容身份，数据损坏进入失败状态。
+
+## 启动与生命周期
+
+```text
+validate -> install -> inspect -> enable
+  -> 注册元数据与能力 -> 按需启动 -> 运行租约
+  -> disable -> 取消与清理 -> 释放租约 -> uninstall / GC
+```
+
+安装先完成解析、结构／语义校验、文件清单与摘要。依赖从已显式取得的包中解析，缺失或循环依赖返回错误。安装阶段只处理包内容与登记。
+
+Skills 按激活请求加载正文。MCP 服务在需要时按 package／entry／Run 身份启动，调用与结果进入统一记录。更新先保存新版本，运行中的实例持有原版本租约，后续 Run 使用选定的新版本。停用立即关闭新调度，并取消、清理已拥有的执行资源。
+
+全局安装状态、作用域启用状态和运行实例健康状态分别保存。cleanup pending／unknown 有独立展示，卸载在租约及资源处理后回收对象。工作区产物通过自身生命周期管理。
+
+## 可执行入口和 Hooks
+
+`program` 为宿主批准的运行环境名称。`args` 为直接 argv，`@plugin/` 路径前缀解析到当前已验证包的只读访问位置。替换使用路径值，解释器和 shell 入口经过命令分析与当前策略。
+
+MCP transport 首版覆盖 stdio，远程 HTTPS 需通过 `mcp.http`、网络及相应 feature 检查。服务器扩展请求按协商能力、请求预算和宿主策略处理。
+
+Hook 事件草案为 `run.started`、`run.finished`、`tool.before_dispatch`、`tool.finished`。observer 返回受限 annotations，check 只在 `tool.before_dispatch` 使用，返回 `pass`、`deny` 或 `abstain`。检查结果与其他权限条件共同决定派发。
+
+Hook 进程作为独立操作保存意图、结果与 parent call，使用当前模式／权限。Manual Approval 产生相应操作确认。人工等待按运行预算规则计时，实际执行使用独立超时。拒绝、格式错误或 check 超时阻止原操作，observer 失败记录诊断。递归 Hook 触发由宿主深度与事件身份约束。
+
+## 用户命令草案
+
+```sh
+saya plugin validate ./plugin-root
+saya plugin install --path ./plugin-root
+saya plugin list
+saya plugin inspect io.saya.examples.rust-workflow
+saya plugin enable io.saya.examples.rust-workflow --scope workspace
+saya plugin disable io.saya.examples.rust-workflow
+saya plugin uninstall io.saya.examples.rust-workflow
+```
+
+CLI／TUI 展示版本、来源、树摘要、依赖、申请能力、有效范围和实例状态。升级展示内容与能力差异，新的摘要及能力范围重新记录启用决定。
+
+## 验收与实现状态
+
+DEV-078 实现结构及语义验证、内容摘要、lock 和命名规则，DEV-065／066／067 接入激活、生命周期和执行入口。测试覆盖未知字段、版本、缺失 feature、恶意路径、归档膨胀、摘要损坏、依赖环、并发更新／停用、过期批准、Hook 递归和清理失败。
+
+当前交付为规范草案、可解析 manifest 示例及结构 schema。运行时 loader、安装器、权限接入和命令实现按[后续开发计划](post-mvp-plan.md)推进。

@@ -20,6 +20,8 @@
 
 后续共享应用服务拟提取为 saya-app，TUI 拟采用 saya-tui library，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
 
+执行层拟通过 ExecutionBackend 连接独立 SeatbeltBackend 及 Linux Bubblewrap／Seccomp／socat 组合，预留容器／VM 的实现路径，实际能力分级见[原生隔离设计](sandbox.md)。BrowserProvider、ContextBuilder／OutputStore 与插件规范分别见[Browser](browser.md)、[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。
+
 运行时通过输入、控制与事件／结果接口连接界面。终端格式、TUI 组件和 GUI 状态管理不进入核心循环；结果与事件使用 B-17 的 schema v1。内部 Rust 函数签名按实现处理，0.1 不承诺独立 SDK 稳定性。
 
 ## 运行模式

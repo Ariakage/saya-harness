@@ -18,9 +18,14 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [CLI 开发预览](cli-preview.md) | 单次运行、持久会话和当前限制 | 实现记录，当前发行行为见使用指南 |
 | [项目指令与 Skill 发现](project-context.md) | 来源、优先级与刷新规则 | 受控验证通过 |
 | [SQLite 存储组件](storage.md) | 事务、事件序号与持久化边界 | 本机受控验证，恢复见开发进度 |
-| [saya-plugin 规划](saya-plugin.md) | 未来插件系统的边界、阶段与验收草案 | 规划中，未实现 |
+| [saya-plugin v1 规范](saya-plugin.md) | manifest、权限、lock、生命周期和验收 | 规范草案，loader 待实现 |
+| [插件结构 schema](schemas/saya-plugin-v1.schema.json) | TOML 解析结果的 JSON Schema | v1 草案，含语义验证要求 |
+| [插件 manifest 示例](../examples/saya-plugin.example.toml) | 声明 Skills／MCP／Hook 的结构示例 | 格式示例 |
 | [后续能力路线图](capability-roadmap.md) | F-01 至 F-20 的功能模块、优先级与依赖 | MVP 基础与待开发增量分别记录 |
-| [后续开发计划](post-mvp-plan.md) | 0.2.0 候选、N0 至 N4、DEV-038 至 DEV-074 | 任务定义与设计草案 |
+| [后续开发计划](post-mvp-plan.md) | 0.2.0 候选、N0 至 N5、DEV-038 至 DEV-083 | 任务定义与设计草案 |
+| [原生 Sandbox](sandbox.md) | Seatbelt、Linux 原生组合、网络、AST 与能力等级 | 后端组合已明确，接口待实现 |
+| [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | 设计草案 |
+| [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | 设计草案 |
 | [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | 方向明确，方案待实现 |
 | [日志与追踪](observability.md) | 五级日志、span、安全记录与本地查询 | 基于现有日志的增强草案 |
 | [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 与文件保存 | 方向明确，方案待实现 |

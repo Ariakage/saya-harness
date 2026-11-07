@@ -1,0 +1,47 @@
+# Proposed plugin format. This file is a syntax example for the future loader.
+# The version range demonstrates syntax. Host feature checks are also required.
+schema_version = 1
+
+[plugin]
+id = "io.saya.examples.rust-workflow"
+version = "0.1.0"
+description = "Rust review instructions and isolated project checks."
+license = "MIT"
+license_file = "LICENSE"
+
+[compatibility]
+requires_saya = ">=0.2.0, <1.0.0"
+requires_features = [
+  "plugin-manifest-v1",
+  "skill-directory-v1",
+  "mcp-stdio-v1",
+  "hook-events-v1",
+]
+
+[capabilities]
+requested = ["workspace.read", "process.exec", "mcp.stdio", "hook.observe"]
+network_origins = []
+credential_slots = []
+
+[[skills]]
+id = "rust-review"
+path = "skills/rust-review"
+
+[[resources]]
+id = "review-guide"
+path = "resources/review-guide.md"
+media_type = "text/markdown"
+
+[[mcp]]
+id = "project-checks"
+transport = "stdio"
+program = "python3"
+args = ["@plugin/mcp/server.py"]
+
+[[hooks]]
+id = "record-tool-summary"
+event = "tool.finished"
+kind = "observer"
+program = "python3"
+args = ["@plugin/hooks/record_summary.py"]
+timeout_ms = 1000

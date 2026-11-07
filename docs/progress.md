@@ -1,6 +1,6 @@
 # 开发进度
 
-**记录于 2026-11-07。P0 至 P7 已完成，v0.1.0 已发布。**
+**记录于 2026-11-08。P0 至 P7 已完成，v0.1.0 已发布，后续功能处于规划阶段。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -11,22 +11,33 @@
 - 开发计划：已准备，包含 P0 至 P7、DEV-001 至 DEV-037；工作量估算不是发布日期承诺。
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
-- 后续规划包含 F-01 至 F-20，新增日志增强、Session Export、默认 TUI 和 Goal 设计。N0 至 N4／DEV-038 至 DEV-074 的依赖与验收见[开发计划](post-mvp-plan.md)，运行内后台工具已有 D-029 的 MVP 实现。
+- 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
 - 下一项实现为 DEV-038 共享应用服务，当前状态为待开始。
 
 ## 后续开发状态
 
-本轮完成开发计划与专项设计文档，实际功能状态如下。0.2.0 为 N0／N1 的候选版本，发行范围根据实现和验收结果确定。
+开发计划与专项设计按下列任务跟踪，新增功能实际状态如下。0.2.0 为 N0／N1 的候选版本，发行范围根据实现和验收结果确定。
 
 | 阶段 | 任务 | 实际状态 | 已有基础与下一入口 |
 | --- | --- | --- | --- |
 | N0 共享基础 | DEV-038 至 DEV-046 | 待开始 | 0.1.0 的应用组装、安全日志和 SQLite 可复用，先执行 DEV-038 |
 | N1 默认 TUI | DEV-047 至 DEV-053 | 待开始 | 已记录默认入口方向，界面与新 crate 均待开发 |
-| N2 隔离与 MCP | DEV-054 至 DEV-061 | 待开始 | 工具注册、执行后端、Sandbox、MCP 与凭据方案按依赖验证 |
-| N3 上下文与扩展 | DEV-062 至 DEV-068 | 待开始 | 已有指令／Skill 发现，Compact、激活、插件、检查点及 Hooks 待开发 |
+| N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 待开始 | Linux 采用 Bubblewrap + Seccomp + socat，macOS 为独立 SeatbeltBackend，能力与性能待实测 |
+| N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078 | 待开始 | 已有指令／Skill 发现，OutputStore、Compact、插件 loader、检查点及 Hooks 待开发 |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 待开始 | 先做目标数据和手动步骤，后续自动阶段依赖持久调度等能力 |
+| N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
 
-规划整理核对了引用对话、当前 workspace、日志、CLI 路由、流事件和存储查询接口。`./scripts/check.sh` 通过格式检查、Clippy、342 项 Rust 测试和 release 构建。61 个 Markdown 文件的 418 个相对链接、37 项后续 DEV 的无环依赖、20 个能力编号及 JSON 示例检查通过。变更范围为文档及 core 模块说明注释。
+### 2026-11-08 专项设计细化
+
+新增 Browser、原生 Sandbox 和上下文／长输出设计，将 saya-plugin 细化为 v1 草案并提供 JSON Schema 与 TOML 示例。Linux 组合和 Seatbelt 独立后端按 D-040／041 记录，容器／VM 作为统一接口的后续实现路径。当前交付为设计与结构规范，功能 DEV 均为待开始。
+
+本机只读检查确认 macOS 27.2 提供 sandbox-exec，系统手册标记 deprecated。原生后端、macOS 15、Linux namespace／Seccomp／代理以及性能尚待对应 DEV 实测。
+
+本轮文档验证通过 64 个 Markdown 文件的 450 个相对链接、46 项后续任务的无环依赖和 20 个能力编号检查。插件 JSON Schema 自校验、TOML 示例及 6 个有效／25 个拒绝案例通过，JSON 示例和已知测试凭据泄露检查通过。验证范围为文档、结构规范与示例，报告位于本机 `target/runtime-design-validation.json`。
+
+### 2026-11-07 初版计划验证
+
+初版规划核对了引用对话、workspace、日志、CLI 路由、流事件和存储查询接口。`./scripts/check.sh` 通过格式检查、Clippy、342 项 Rust 测试和 release 构建。61 个 Markdown 文件的 418 个相对链接、37 项后续 DEV 的无环依赖、20 个能力编号及 JSON 示例检查通过。变更范围为文档及 core 模块说明注释。
 
 ## 阶段状态
 
