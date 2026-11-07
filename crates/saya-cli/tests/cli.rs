@@ -461,7 +461,7 @@ fn prompt_sources_are_explicit_mutually_exclusive_and_nonempty() {
     assert_eq!(child.wait_with_output().unwrap().status.code(), Some(2));
 }
 #[test]
-fn local_model_can_read_workspace_but_never_receives_mutation_tools() {
+fn local_model_can_read_workspace_and_receives_authorized_work_tools() {
     let temp = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "fixture data").unwrap();
     let (url, requests) = fixture::server(vec![
@@ -503,8 +503,8 @@ fn local_model_can_read_workspace_but_never_receives_mutation_tools() {
         .map(|v| v["function"]["name"].as_str().unwrap())
         .collect();
     assert!(names.contains(&"read_file"));
-    assert!(!names.contains(&"write_file"));
-    assert!(!names.contains(&"exec"));
+    assert!(names.contains(&"write_file"));
+    assert!(names.contains(&"exec"));
     let second = requests.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(second.to_string().contains("fixture data"));
 }
@@ -1339,4 +1339,417 @@ fn observed_result_redacts_configured_secret_when_save_is_rejected()
     assert!(stderr.contains("[REDACTED]"), "{stderr}");
     assert!(!stderr.contains(secret));
     Ok(())
+}
+
+fn tool_response(id: &str, name: &str, arguments: serde_json::Value) -> String {
+    response(
+        json!({"role":"assistant","content":null,"tool_calls":[{"id":id,"type":"function","function":{"name":name,"arguments":arguments.to_string()}}]}),
+        "tool_calls",
+    )
+}
+
+#[test]
+fn authorized_writes_and_commands_execute_and_are_persisted() {
+    for (permission, name, arguments, target) in [
+        (
+            "auto",
+            "write_file",
+            json!({"path":"created.txt","content":"created","expected_version":null}),
+            "created.txt",
+        ),
+        (
+            "bypass",
+            "exec",
+            json!({"argv":["/usr/bin/touch","command-created"],"cwd":null,"timeout_seconds":null}),
+            "command-created",
+        ),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let (url, _) = fixture::server(vec![
+            (
+                "application/json",
+                tool_response("operation", name, arguments),
+            ),
+            (
+                "application/json",
+                response(json!({"role":"assistant","content":"done"}), "stop"),
+            ),
+        ])
+        .unwrap();
+        let cfg = config(temp.path(), &url, permission);
+        let output = command(temp.path())
+            .arg("--config")
+            .arg(cfg)
+            .args(["run", "perform task"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            temp.path().join(target).exists(),
+            "{name} did not create target"
+        );
+        let db = rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3"))
+            .unwrap();
+        let (state, result): (String, Option<String>) = db
+            .query_row(
+                "SELECT state,result FROM tool_calls WHERE call_id='operation'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "succeeded", "{name}: {result:?}");
+        assert!(result.is_some());
+    }
+}
+
+#[test]
+fn manual_noninteractive_write_does_not_execute_without_approval() {
+    let temp = TempDir::new().unwrap();
+    let (url, _) = fixture::server(vec![(
+        "application/json",
+        tool_response(
+            "write",
+            "write_file",
+            json!({"path":"denied.txt","content":"no","expected_version":null}),
+        ),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "manual");
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "write"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!temp.path().join("denied.txt").exists());
+}
+
+#[test]
+fn plan_never_executes_provider_requested_writes_or_commands() {
+    for permission in ["auto", "manual", "bypass"] {
+        for (name, arguments, target) in [
+            (
+                "write_file",
+                json!({"path":"forbidden.txt","content":"no","expected_version":null}),
+                "forbidden.txt",
+            ),
+            (
+                "exec",
+                json!({"argv":["/usr/bin/touch","forbidden-command"],"cwd":null,"timeout_seconds":null}),
+                "forbidden-command",
+            ),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let storage = TempDir::new().unwrap();
+            let (url, requests) = fixture::server(vec![
+                (
+                    "application/json",
+                    tool_response("forbidden", name, arguments),
+                ),
+                (
+                    "application/json",
+                    response(json!({"role":"assistant","content":"done"}), "stop"),
+                ),
+            ])
+            .unwrap();
+            let cfg = config(temp.path(), &url, permission);
+            let output = command(temp.path())
+                .env("XDG_DATA_HOME", storage.path().join("data"))
+                .env("XDG_STATE_HOME", storage.path().join("state"))
+                .env("XDG_CACHE_HOME", storage.path().join("cache"))
+                .arg("--config")
+                .arg(cfg)
+                .args(["--mode", "plan", "run", "inspect"])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(!temp.path().join(target).exists(), "{permission}: {name}");
+            let first = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(
+                !first["tools"]
+                    .to_string()
+                    .contains(&format!("\"name\":\"{name}\""))
+            );
+            assert!(
+                output.status.code().is_some(),
+                "process did not exit normally"
+            );
+        }
+    }
+}
+
+#[test]
+fn crashed_background_command_is_reported_unknown_and_never_replayed() {
+    use std::time::Instant;
+    let temp = TempDir::new().unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (url, requests) = fixture::server_dynamic(3, move |index, _| {
+        match index {
+            0 => ("application/json", tool_response("background-launch", "background_start", json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","printf x >> marker; sleep 3"],"cwd":null,"timeout_seconds":null}}))),
+            1 => {
+                entered_tx.send(()).unwrap();
+                let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                ("application/json", response(json!({"role":"assistant","content":"unused"}), "stop"))
+            },
+            _ => ("application/json", response(json!({"role":"assistant","content":"resumed"}), "stop")),
+        }
+    }).unwrap();
+    let cfg = config(temp.path(), &url, "bypass");
+    let mut child = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "start background"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !temp.path().join("marker").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "background command did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    release_tx.send(()).unwrap();
+    let resumed = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "continue"])
+        .output()
+        .unwrap();
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let _first = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+    let _second = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+    let third = requests
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .to_string();
+    assert!(third.contains("saya_background_recovery_v1"), "{third}");
+    assert!(third.contains("unknown"), "{third}");
+    std::thread::sleep(Duration::from_millis(3300));
+    assert_eq!(fs::read_to_string(temp.path().join("marker")).unwrap(), "x");
+    let show = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "show", id])
+        .output()
+        .unwrap();
+    let show: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(
+        show["data"]["background_jobs"][0]["state"], "unknown",
+        "{show}"
+    );
+}
+
+#[test]
+fn background_launch_intent_failure_prevents_command_execution() {
+    let temp = TempDir::new().unwrap();
+    let (url, _) = fixture::server(vec![
+        ("application/json", response(json!({"role":"assistant","content":"first"}), "stop")),
+        ("application/json", tool_response("launch", "background_start", json!({"tool":"exec","arguments":{"argv":["/usr/bin/touch","must-not-exist"],"cwd":null,"timeout_seconds":null}}))),
+    ]).unwrap();
+    let cfg = config(temp.path(), &url, "bypass");
+    let first = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "start"])
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let db =
+        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_launch BEFORE INSERT ON tool_calls WHEN json_extract(NEW.call,'$.name')='background_start' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "launch"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!temp.path().join("must-not-exist").exists());
+}
+
+#[test]
+fn failed_write_result_is_reported_and_recovery_never_replays_it() {
+    let temp = TempDir::new().unwrap();
+    let (url, requests) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"first"}), "stop"),
+        ),
+        (
+            "application/json",
+            tool_response(
+                "write-once",
+                "write_file",
+                json!({"path":"once.txt","content":"once","expected_version":null}),
+            ),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"recovered"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    assert!(
+        command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["run", "start"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let db =
+        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_write_result BEFORE UPDATE OF result ON tool_calls WHEN NEW.call_id='write-once' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+    let failed = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "write"])
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("observed tool result (not saved)"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("once.txt")).unwrap(),
+        "once"
+    );
+    db.execute_batch("DROP TRIGGER reject_write_result")
+        .unwrap();
+    let recovered = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "continue"])
+        .output()
+        .unwrap();
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let resumed = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    assert!(resumed.contains("outcome_unknown"), "{resumed}");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("once.txt")).unwrap(),
+        "once"
+    );
+}
+
+#[test]
+fn exact_command_preauthorization_executes_only_in_that_run() {
+    let temp = TempDir::new().unwrap();
+    let args =
+        json!({"argv":["/usr/bin/touch","approved-marker"],"cwd":null,"timeout_seconds":null});
+    let (url, _) = fixture::server(vec![
+        (
+            "application/json",
+            tool_response("approved", "exec", args.clone()),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"done"}), "stop"),
+        ),
+        (
+            "application/json",
+            tool_response("unapproved", "exec", args),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "manual");
+    let approval = temp.path().join("approved.json");
+    fs::write(&approval, json!({"schema_version":1,"commands":[{"argv":["/usr/bin/touch","approved-marker"],"cwd":temp.path()}]}).to_string()).unwrap();
+    let first = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--approval-file"])
+        .arg(&approval)
+        .arg("run once")
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(temp.path().join("approved-marker").exists());
+    fs::remove_file(temp.path().join("approved-marker")).unwrap();
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let second = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "again"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        second.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(!temp.path().join("approved-marker").exists());
 }

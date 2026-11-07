@@ -6,6 +6,7 @@ use crate::{
     contract::{ApprovalRequest, BoundaryError, ErrorInfo, ToolCall, ToolResult, WorkMode},
     dispatch::{DispatchReview, ToolDispatcher},
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     future::Future,
@@ -122,11 +123,21 @@ pub struct PendingJob {
     context: ToolContext,
 }
 pub struct BackgroundRequest<'a> {
+    /// Provider call whose result will contain this job's identifier.
+    pub parent_call_id: &'a str,
     pub tool: &'a str,
     pub arguments: serde_json::Value,
     pub context: &'a ToolContext,
     pub summary: &'a str,
     pub interactive: bool,
+}
+/// Stable parent-to-child association without embedding arbitrary provider IDs.
+pub(crate) fn child_prefix(parent_call_id: &str) -> String {
+    let digest: String = Sha256::digest(parent_call_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("background-{digest}-")
 }
 struct Job {
     cancel: JobCancel,
@@ -211,7 +222,11 @@ impl BackgroundJobs {
         review: DispatchReview<'_>,
     ) -> Result<JobSubmission, BoundaryError> {
         let call = ToolCall {
-            call_id: format!("background-{}", uuid::Uuid::now_v7()),
+            call_id: format!(
+                "{}{}",
+                child_prefix(request.parent_call_id),
+                uuid::Uuid::now_v7()
+            ),
             name: request.tool.into(),
             arguments: request.arguments.to_string(),
         };
@@ -295,7 +310,11 @@ impl BackgroundJobs {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|_| failure("runtime_error", "Tokio runtime required"))?;
         let cancel = JobCancel::new();
-        let id = uuid::Uuid::now_v7().to_string();
+        let id = if call.call_id.starts_with("background-") {
+            call.call_id.clone()
+        } else {
+            uuid::Uuid::now_v7().to_string()
+        };
         let mut state = self
             .shared
             .state
@@ -313,6 +332,9 @@ impl BackgroundJobs {
                 >= self.max_running
         {
             return Err(failure("limit_reached", "background job limit reached"));
+        }
+        if state.jobs.contains_key(&id) {
+            return Err(failure("invalid_args", "duplicate background job ID"));
         }
         let mode = self.dispatcher.mode_controller().snapshot()?;
         if mode.pending.is_some() || mode.current != context.run.work_mode {
@@ -770,6 +792,7 @@ impl crate::boundary::Tool for BackgroundTool {
                         .jobs
                         .submit(
                             BackgroundRequest {
+                                parent_call_id: &call.call_id,
                                 tool: &args.tool,
                                 arguments: args.arguments,
                                 context,

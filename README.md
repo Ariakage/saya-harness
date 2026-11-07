@@ -2,7 +2,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
 
-**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。CLI 提供只读单次运行与内存交互会话；持久化和真实工作区副作用仍在后续阶段。**
+**当前状态：core 运行循环、本地工具、权限、后台任务和三种模型协议已通过受控验证；指定模型的三协议文本与工具往返已完成小规模联调。CLI 已接入本地持久会话、恢复与受权限控制的真实文件和命令工具；运行结果 JSON／JSONL 等集成工作仍在后续阶段。**
 
 ## 已确认方向
 
@@ -32,7 +32,7 @@
 3. 工具执行结果返回模型，运行时继续下一轮。
 4. CLI 展示结果并保存会话，后续可列出或恢复；失败、取消或达到运行限制时明确结束。
 
-已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、只读 CLI 和本地持久会话预览已实现；并发和崩溃恢复等完整产品行为尚未完成。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
+已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、CLI、本地会话持久化、并发与中断恢复已通过本机受控验证；完整输出与发行验收尚未完成。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
 
 ## 文档
 
@@ -48,7 +48,7 @@
 | [运行时接口](docs/runtime.md) | 可复用 Agent 循环、调用边界和验证范围 |
 | [架构设计](docs/architecture.md) | Agent 循环、模块边界与实现约束 |
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
-| [CLI 开发预览](docs/cli-preview.md) | 只读单次运行、配置和当前限制 |
+| [CLI 开发预览](docs/cli-preview.md) | 单次运行、交互、会话和当前限制 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |

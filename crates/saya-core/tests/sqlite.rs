@@ -838,3 +838,177 @@ async fn recovery_does_not_guess_outcomes_for_dangling_calls_from_an_earlier_run
     assert!(store.has_unfinished_run(session.id).await?);
     Ok(())
 }
+
+#[tokio::test]
+async fn recovery_links_background_launch_and_child_without_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+    for scenario in [
+        "pending",
+        "not_started",
+        "running",
+        "finished",
+        "acknowledged_running",
+        "acknowledged_not_started",
+    ] {
+        let temp = TempDir::new()?;
+        let (session, run) = fixture(temp.path());
+        let store = SqliteStore::open(temp.path(), vec![])?;
+        store.create_session(&session, "hash").await?;
+        let parent = ToolCall {
+            call_id: "launch".into(),
+            name: "background_start".into(),
+            arguments: "{\"tool\":\"exec\",\"arguments\":{}}".into(),
+        };
+        let digest: String = Sha256::digest(parent.call_id.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let job_id = format!("background-{digest}-01890f3a-8d14-7c5c-a5f7-000000000001");
+        let child = ToolCall {
+            call_id: job_id.clone(),
+            name: "exec".into(),
+            arguments: "{}".into(),
+        };
+        let mut changes = vec![
+            StoreChange::RunStarted(run.clone()),
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::ToolCall(parent.clone()),
+            },
+            StoreChange::ToolIntent {
+                run_id: run.id,
+                call: parent,
+            },
+        ];
+        if scenario == "pending" {
+            changes.push(StoreChange::ApprovalRequested(
+                saya_core::contract::ApprovalRequest {
+                    approval_id: "pending".into(),
+                    call_id: job_id.clone(),
+                    run_id: run.id,
+                    tool: "exec".into(),
+                    operation_summary: "run".into(),
+                    arguments: serde_json::json!({}),
+                    cwd: temp.path().into(),
+                    work_mode: WorkMode::Work,
+                },
+            ));
+        }
+        if matches!(scenario, "running" | "finished" | "acknowledged_running") {
+            changes.push(StoreChange::ToolIntent {
+                run_id: run.id,
+                call: child,
+            });
+        }
+        if scenario == "finished" {
+            changes.push(StoreChange::ToolFinished {
+                run_id: run.id,
+                call_id: job_id.clone(),
+                result: tool_result(),
+            });
+        }
+        if scenario.starts_with("acknowledged") {
+            let ack = ToolResult {
+                ok: true,
+                data: Some(serde_json::json!({"status":"started","job_id":job_id})),
+                error: None,
+                truncated: false,
+            };
+            changes.push(StoreChange::ToolFinished {
+                run_id: run.id,
+                call_id: "launch".into(),
+                result: ack.clone(),
+            });
+            changes.push(StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::ToolResult {
+                    call_id: "launch".into(),
+                    result: ack,
+                },
+            });
+        }
+        store.commit(&changes).await?;
+        let _lock = store.lock_session(session.id)?;
+        store.recover_interrupted(session.id).await?;
+        let saved = store.load_session(session.id).await?.ok_or("missing")?;
+        let result = saved
+            .history
+            .iter()
+            .find_map(|item| match item {
+                HistoryItem::ToolResult { call_id, result } if call_id == "launch" => Some(result),
+                _ => None,
+            })
+            .ok_or("missing launch result")?;
+        match scenario {
+            "pending" => assert_eq!(
+                result.error.as_ref().map(|e| e.code.as_str()),
+                Some("needs_confirmation")
+            ),
+            "not_started" => assert_eq!(
+                result.error.as_ref().map(|e| e.code.as_str()),
+                Some("not_executed")
+            ),
+            "running" => {
+                assert_eq!(
+                    result.error.as_ref().map(|e| e.code.as_str()),
+                    Some("outcome_unknown")
+                );
+                assert_eq!(result.data.as_ref().unwrap()["job_id"], job_id);
+            }
+            "finished" => assert_eq!(result.data.as_ref().unwrap()["outcome"], "finished"),
+            "acknowledged_running" | "acknowledged_not_started" => {
+                let notice = saved
+                    .history
+                    .iter()
+                    .find_map(|item| match item {
+                        HistoryItem::UserText(value)
+                            if value.contains("saya_background_recovery_v1") =>
+                        {
+                            Some(value)
+                        }
+                        _ => None,
+                    })
+                    .ok_or("missing notice")?;
+                let notice: serde_json::Value = serde_json::from_str(notice)?;
+                let job = &notice["saya_background_recovery_v1"]["jobs"][0];
+                assert_eq!(job["job_id"], job_id);
+                assert_eq!(
+                    job["outcome"],
+                    if scenario == "acknowledged_running" {
+                        "unknown"
+                    } else {
+                        "not_executed"
+                    }
+                );
+                assert_eq!(job["managed"], false);
+                if scenario == "acknowledged_running" {
+                    assert!(job["active"].is_null());
+                } else {
+                    assert_eq!(job["active"], false);
+                }
+            }
+            _ => unreachable!(),
+        }
+        let listed = store.background_jobs(session.id).await?;
+        match scenario {
+            "pending" | "not_started" => assert!(listed.is_empty()),
+            "running" | "acknowledged_running" => {
+                assert_eq!(listed.len(), 1);
+                assert_eq!(listed[0].job_id, job_id);
+                assert_eq!(listed[0].state, "unknown");
+            }
+            "finished" => {
+                assert_eq!(listed.len(), 1);
+                assert_eq!(listed[0].state, "succeeded");
+                assert!(listed[0].result.as_ref().is_some_and(|result| result.ok));
+            }
+            "acknowledged_not_started" => {
+                assert_eq!(listed.len(), 1);
+                assert_eq!(listed[0].state, "not_executed");
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(())
+}

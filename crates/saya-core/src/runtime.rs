@@ -219,6 +219,8 @@ enum CallProgress {
     NotDispatched,
     Dispatched,
     WaitingInput,
+    BackgroundStart,
+    BackgroundWaitingApproval,
 }
 fn project_context_is_current(
     state: &Mutex<ProjectState>,
@@ -672,6 +674,50 @@ impl AgentRuntime {
         session.history.push(item);
         Ok(result)
     }
+    async fn finish_control(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        kind: BackgroundToolKind,
+        result: ToolResult,
+    ) -> Result<ToolResult, BoundaryError> {
+        if !matches!(kind, BackgroundToolKind::Start) {
+            return self.save_local(session, call, result).await;
+        }
+        let item = HistoryItem::ToolResult {
+            call_id: call.call_id.clone(),
+            result: result.clone(),
+        };
+        let mut changes = vec![
+            StoreChange::ToolFinished {
+                run_id: self.run.id,
+                call_id: call.call_id.clone(),
+                result: result.clone(),
+            },
+            StoreChange::History {
+                session_id: session.id,
+                item: item.clone(),
+            },
+        ];
+        let state = match result.error.as_ref().map(|error| error.code.as_str()) {
+            Some("permission_denied" | "mode_denied") => Some(crate::contract::ToolState::Denied),
+            Some("needs_confirmation") => Some(crate::contract::ToolState::WaitingConfirmation),
+            _ => None,
+        };
+        if let Some(state) = state {
+            changes.push(StoreChange::ToolState {
+                run_id: self.run.id,
+                call_id: call.call_id.clone(),
+                state,
+            });
+        }
+        if let Err(mut error) = self.store.commit(&changes).await {
+            error.2 = Some(Box::new(result));
+            return Err(error);
+        }
+        session.history.push(item);
+        Ok(result)
+    }
     async fn close_calls(
         &self,
         session: &mut Session,
@@ -687,6 +733,14 @@ impl AgentRuntime {
                     "outcome_unknown",
                     "operation may have started; do not replay automatically",
                 ),
+                (true, CallProgress::BackgroundStart) => failed(
+                    "outcome_unknown",
+                    "background submission was interrupted; do not replay automatically",
+                ),
+                (true, CallProgress::BackgroundWaitingApproval) => failed(
+                    "needs_confirmation",
+                    "background approval was interrupted; no authorization was restored",
+                ),
                 (true, CallProgress::WaitingInput) => failed(
                     "input_interrupted",
                     "clarification ended before an answer was received",
@@ -700,7 +754,14 @@ impl AgentRuntime {
                 call_id: call.call_id.clone(),
                 result: result.clone(),
             };
-            if index == 0 && matches!(first_progress, CallProgress::WaitingInput) {
+            if index == 0
+                && matches!(
+                    first_progress,
+                    CallProgress::WaitingInput
+                        | CallProgress::BackgroundStart
+                        | CallProgress::BackgroundWaitingApproval
+                )
+            {
                 changes.push(StoreChange::ToolFinished {
                     run_id: self.run.id,
                     call_id: call.call_id.clone(),
@@ -748,17 +809,15 @@ impl AgentRuntime {
             _ => None,
         };
         if let Some(kind) = control {
-            let accepted_before = self
-                .jobs
-                .events()?
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event.kind,
-                        crate::background::BackgroundEventKind::Accepted { .. }
-                    )
-                })
-                .count();
+            if matches!(kind, BackgroundToolKind::Start) {
+                self.store
+                    .commit(&[StoreChange::ToolIntent {
+                        run_id: self.run.id,
+                        call: call.clone(),
+                    }])
+                    .await?;
+                *progress = CallProgress::BackgroundStart;
+            }
             if matches!(kind, BackgroundToolKind::Cancel) {
                 *progress = CallProgress::Dispatched;
             }
@@ -767,28 +826,15 @@ impl AgentRuntime {
                 .tool(kind)
                 .execute(call, &context, self.cancel.as_ref())
                 .await;
-            if matches!(kind, BackgroundToolKind::Start)
-                && self
-                    .jobs
-                    .events()?
-                    .iter()
-                    .filter(|event| {
-                        matches!(
-                            event.kind,
-                            crate::background::BackgroundEventKind::Accepted { .. }
-                        )
-                    })
-                    .count()
-                    > accepted_before
-            {
-                *progress = CallProgress::Dispatched;
-            }
             let result = outcome?;
             if result
                 .error
                 .as_ref()
                 .is_some_and(|e| e.code == "needs_confirmation")
             {
+                if matches!(kind, BackgroundToolKind::Start) {
+                    *progress = CallProgress::BackgroundWaitingApproval;
+                }
                 let request: ApprovalRequest = serde_json::from_value(
                     result
                         .data
@@ -801,9 +847,10 @@ impl AgentRuntime {
                 let answer = match self.confirm(&request).await {
                     Err(e) if e.0.code == "stale_approval" => {
                         return self
-                            .save_local(
+                            .finish_control(
                                 session,
                                 call,
+                                kind,
                                 failed("stale_approval", "mode changed while awaiting approval"),
                             )
                             .await;
@@ -815,9 +862,10 @@ impl AgentRuntime {
                         && !project_context_is_current(state, call)?
                     {
                         return self
-                            .save_local(
+                            .finish_control(
                                 session,
                                 call,
+                                kind,
                                 failed(
                                     "project_context_changed",
                                     "project context changed while awaiting approval",
@@ -825,11 +873,14 @@ impl AgentRuntime {
                             )
                             .await;
                     }
+                    if matches!(kind, BackgroundToolKind::Start) {
+                        *progress = CallProgress::BackgroundStart;
+                    }
                     let result = self.background.resolve(&request.approval_id, answer)?;
-                    return self.save_local(session, call, result).await;
+                    return self.finish_control(session, call, kind, result).await;
                 }
             }
-            return self.save_local(session, call, result).await;
+            return self.finish_control(session, call, kind, result).await;
         }
         let review = DispatchReview {
             model: self.model.as_ref(),

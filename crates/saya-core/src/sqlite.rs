@@ -716,16 +716,102 @@ fn recover_transaction(
     }
     let mut calls = BTreeSet::new();
     let mut closed_inputs = BTreeSet::new();
+    let mut background_notices = Vec::new();
     for item in &items[current_input..] {
         if let HistoryItem::ToolCall(call) = item {
             if !calls.insert(call.call_id.clone()) {
                 return Err(error("storage_corrupt", "duplicate historical tool call"));
             }
             if results.contains(&call.call_id) {
+                if call.name == "background_start" {
+                    let recorded = items.iter().find_map(|item| match item {
+                        HistoryItem::ToolResult { call_id, result }
+                            if call_id == &call.call_id && result.ok =>
+                        {
+                            result
+                                .data
+                                .as_ref()
+                                .and_then(|data| data.get("job_id"))
+                                .and_then(Value::as_str)
+                        }
+                        _ => None,
+                    });
+                    if let Some(job_id) = recorded {
+                        let linked =
+                            job_id.starts_with(&crate::background::child_prefix(&call.call_id));
+                        let (outcome, result) = if linked {
+                            match states.get(job_id) {
+                                Some((_, state, _)) if state == "running" || state == "unknown" => {
+                                    ("unknown", None)
+                                }
+                                Some((_, _, Some(raw))) => (
+                                    "finished",
+                                    Some(serde_json::from_str::<ToolResult>(raw).map_err(
+                                        |_| error("storage_corrupt", "invalid background result"),
+                                    )?),
+                                ),
+                                Some(_) => ("unknown", None),
+                                None => ("not_executed", None),
+                            }
+                        } else {
+                            ("unknown", None)
+                        };
+                        let active = if outcome == "unknown" {
+                            None
+                        } else {
+                            Some(false)
+                        };
+                        background_notices.push(serde_json::json!({"job_id":job_id,"outcome":outcome,"result":result,"active":active,"managed":false}));
+                    }
+                }
                 continue;
             }
             let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM approval_requests WHERE run_id IN (SELECT id FROM runs WHERE session_id=?1 AND finished_at IS NULL) AND json_extract(request,'$.call_id')=?2)", params![key,call.call_id], |r|r.get(0)).map_err(sql_error)?;
-            let result = match states.get(&call.call_id) {
+            let result = if call.name == "background_start" {
+                let prefix = crate::background::child_prefix(&call.call_id);
+                let associated: Vec<_> = states
+                    .iter()
+                    .filter(|(id, _)| id.starts_with(&prefix))
+                    .collect();
+                if associated.len() > 1 {
+                    return Err(error(
+                        "storage_corrupt",
+                        "multiple background jobs share a launch call",
+                    ));
+                }
+                if let Some((job_id, (_, state, raw))) = associated.first() {
+                    if state == "running" || state == "unknown" {
+                        ToolResult { ok:false, data:Some(serde_json::json!({"job_id":job_id,"status":"interrupted","outcome":"unknown"})), error:Some(ErrorInfo {code:"outcome_unknown".into(), message:"background operation may have started; do not replay automatically".into()}), truncated:false }
+                    } else if let Some(raw) = raw {
+                        let child: ToolResult = serde_json::from_str(raw)
+                            .map_err(|_| error("storage_corrupt", "invalid background result"))?;
+                        ToolResult {
+                            ok: true,
+                            data: Some(
+                                serde_json::json!({"job_id":job_id,"status":"interrupted","outcome":"finished","result":child}),
+                            ),
+                            error: None,
+                            truncated: false,
+                        }
+                    } else {
+                        return Err(error("storage_corrupt", "background result is missing"));
+                    }
+                } else {
+                    let child_pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM approval_requests WHERE run_id IN (SELECT id FROM runs WHERE session_id=?1 AND finished_at IS NULL) AND substr(json_extract(request,'$.call_id'),1,?2)=?3)", params![key,prefix.len() as i64,prefix], |r|r.get(0)).map_err(sql_error)?;
+                    let legacy = states
+                        .keys()
+                        .any(|id| id.starts_with("background-") && id.len() < 100);
+                    let code = if child_pending {
+                        "needs_confirmation"
+                    } else if legacy {
+                        "outcome_unknown"
+                    } else {
+                        "not_executed"
+                    };
+                    ToolResult {ok:false,data:None,error:Some(ErrorInfo {code:code.into(), message:"background submission was interrupted; no authorization or job was restored".into()}),truncated:false}
+                }
+            } else {
+                match states.get(&call.call_id) {
                 Some((_, state, _)) if state == "running" && call.name == "ask_user" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"input_interrupted".into(), message:"clarification did not complete durably; no answer was restored".into() }), truncated:false },
                 Some((_, state, _)) if state == "running" || state == "unknown" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"outcome_unknown".into(), message:"operation may have started before interruption; do not replay automatically".into() }), truncated:false },
                 Some((_, _, Some(raw))) => serde_json::from_str(raw).map_err(|_| error("storage_corrupt", "invalid stored tool result"))?,
@@ -734,8 +820,9 @@ fn recover_transaction(
                 Some((_, state, None)) if state != "requested" => return Err(error("storage_corrupt", "invalid stored tool state")),
                 _ if pending => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false },
                 _ => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"not_executed".into(), message:"run ended before this operation was dispatched".into() }), truncated:false },
+            }
             };
-            if call.name == "ask_user"
+            if (call.name == "ask_user" || call.name == "background_start")
                 && let Some((run, state, _)) = states.get(&call.call_id)
                 && state == "running"
             {
@@ -781,6 +868,19 @@ fn recover_transaction(
             )?;
             summary.unknown_tools += 1;
         }
+    }
+    if !background_notices.is_empty() {
+        apply(
+            &tx,
+            &StoreChange::History {
+                session_id,
+                item: HistoryItem::UserText(
+                    serde_json::json!({"saya_background_recovery_v1":{"jobs":background_notices}})
+                        .to_string(),
+                ),
+            },
+            secrets,
+        )?;
     }
     for run in runs {
         let run_id: RunId = serde_json::from_value(serde_json::json!(run))
@@ -850,7 +950,57 @@ pub struct RecoverySummary {
     pub unknown_tools: usize,
     pub closed_calls: usize,
 }
+/// Persisted background outcome; these jobs are never restarted on resume.
+#[derive(Debug, Serialize)]
+pub struct BackgroundJobSummary {
+    pub job_id: String,
+    pub run_id: RunId,
+    pub parent_call_id: String,
+    pub tool: Option<String>,
+    pub state: String,
+    pub result: Option<ToolResult>,
+}
 impl SqliteStore {
+    /// List known submitted jobs and their durable child outcomes for a session.
+    pub async fn background_jobs(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<BackgroundJobSummary>, BoundaryError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = inner.lock().map_err(|_| error("storage_error", "database lock failed"))?;
+            let tx = conn.transaction().map_err(sql_error)?;
+            let parents: Vec<(String,String,Option<String>,bool)> = {
+                let mut statement = tx.prepare("SELECT c.run_id,c.call_id,c.result,r.finished_at IS NOT NULL FROM tool_calls c JOIN runs r ON r.id=c.run_id WHERE r.session_id=?1 AND json_extract(c.call,'$.name')='background_start' ORDER BY r.started_at,c.rowid").map_err(sql_error)?;
+                let rows=statement.query_map([id(session_id.0)], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(sql_error)?;
+                rows.collect::<Result<_,_>>().map_err(sql_error)?
+            };
+            let mut jobs=Vec::new();
+            for (run,parent,raw,finished) in parents {
+                let prefix=crate::background::child_prefix(&parent);
+                let mut statement=tx.prepare("SELECT call_id,call,state,result FROM tool_calls WHERE run_id=?1 AND substr(call_id,1,?2)=?3").map_err(sql_error)?;
+                let rows=statement.query_map(params![run,prefix.len() as i64,prefix],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?))).map_err(sql_error)?;
+                let children=rows.collect::<Result<Vec<_>,_>>().map_err(sql_error)?;
+                if children.len()>1 {return Err(error("storage_corrupt", "multiple jobs share a launch call"));}
+                let acknowledged: Option<ToolResult> = raw.map(|raw|serde_json::from_str(&raw).map_err(|_|error("storage_corrupt", "invalid launch result"))).transpose()?;
+                let acknowledged_id=acknowledged.as_ref().and_then(|result|result.data.as_ref()).and_then(|data|data.get("job_id")).and_then(Value::as_str);
+                let (job_id,tool,state,result) = if let Some((job_id,call,state,result))=children.into_iter().next() {
+                    if acknowledged_id.is_some_and(|value|value!=job_id) {return Err(error("storage_corrupt", "background job identity mismatch"));}
+                    let call:crate::contract::ToolCall=serde_json::from_str(&call).map_err(|_|error("storage_corrupt", "invalid background call"))?;
+                    let result:Option<ToolResult>=result.map(|raw|serde_json::from_str(&raw).map_err(|_|error("storage_corrupt", "invalid background result"))).transpose()?;
+                    let state=if state=="running" && finished {"unknown".to_owned()} else if result.as_ref().and_then(|r|r.error.as_ref()).is_some_and(|e|e.code=="cancelled") {"cancelled".to_owned()} else {state};
+                    (job_id,Some(call.name),state,result)
+                } else if let Some(job_id)=acknowledged_id {
+                    let state=if !job_id.starts_with(&prefix) {"unknown"} else if finished {"not_executed"} else {"accepted"};
+                    (job_id.to_owned(),None,state.to_owned(),None)
+                } else {continue};
+                let run_id:RunId=serde_json::from_value(serde_json::json!(run)).map_err(|_|error("storage_corrupt", "invalid run ID"))?;
+                jobs.push(BackgroundJobSummary {job_id,run_id,parent_call_id:parent,tool,state,result});
+            }
+            tx.commit().map_err(sql_error)?;
+            Ok(jobs)
+        }).await.map_err(|_|error("storage_error", "database worker failed"))?
+    }
     /// Read conservative possible session locations without opening SQLite.
     pub fn guard_candidates(
         data_dir: &Path,

@@ -284,9 +284,37 @@ fn invalidate_approval(pending: &mut Option<UiRequest>) {
     }
 }
 fn help(console: &mut Console) -> io::Result<()> {
-    console.print("/mode [plan|build|code|work]  /permissions [auto|bypass|manual]\n/status  /cancel  /help  /exit\nUse // to send text beginning with /.\n")
+    console.print("/mode [plan|build|code|work]  /permissions [auto|bypass|manual]\n/status  /cancel  /jobs  /job ID  /cancel-job ID  /help  /exit\nUse // to send text beginning with /.\n")
 }
-/// Start a terminal-only, in-memory session. Worktree mutations remain disabled.
+fn job_display(status: Option<saya_core::background::JobStatus>, config: &Config) -> String {
+    use saya_core::background::JobStatus;
+    let mut data = match status {
+        None => serde_json::json!({"status":"not_found"}),
+        Some(JobStatus::Running) => serde_json::json!({"status":"running"}),
+        Some(JobStatus::Finished(result)) => {
+            serde_json::json!({"status":"finished","result":result})
+        }
+        Some(JobStatus::Failed(error)) => {
+            serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2})
+        }
+    };
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(secrets) = secrets else {
+        return "status unavailable".into();
+    };
+    redact_value(&mut data, &secrets, 0);
+    let rendered = data.to_string();
+    if contains_encoded_secret(&rendered, &secrets) {
+        "sensitive status details withheld".into()
+    } else {
+        safe_terminal_text(&rendered)
+    }
+}
+/// Start a terminal-only persistent session with policy-controlled tools.
 pub async fn chat(
     mut config: Config,
     personal_context: PersonalContext,
@@ -321,7 +349,7 @@ pub async fn chat(
     let mut pending: Option<UiRequest> = None;
     let mut exit_after_run: Option<u8> = None;
     let mut terminal_open = true;
-    console.print("Saya chat (persistent, read-only preview). Type /help for commands.\n> ")?;
+    console.print("Saya chat (persistent session). Type /help for commands.\n> ")?;
     loop {
         enum Event {
             Line(Option<Result<String, &'static str>>),
@@ -429,7 +457,10 @@ pub async fn chat(
                     let arg = words.next();
                     if words.next().is_some()
                         || (arg.is_some()
-                            && matches!(command, "/help" | "/status" | "/cancel" | "/exit"))
+                            && matches!(
+                                command,
+                                "/help" | "/status" | "/cancel" | "/exit" | "/jobs"
+                            ))
                     {
                         console.print("Invalid command arguments.\n")?;
                         if active.is_none() {
@@ -461,6 +492,61 @@ pub async fn chat(
                                 console.print("Cancelling run...\n")?;
                             } else {
                                 console.print("No active run.\n")?;
+                            }
+                        }
+                        "/jobs" => {
+                            if let Some(run) = active.as_ref() {
+                                let mut count = 0usize;
+                                for event in run.handle.background_events()? {
+                                    if let saya_core::background::BackgroundEventKind::Accepted {
+                                        tool,
+                                        ..
+                                    } = event.kind
+                                    {
+                                        count += 1;
+                                        let status = job_display(
+                                            run.handle.background_status(&event.job_id)?,
+                                            &config,
+                                        );
+                                        console.print(&format!(
+                                            "{} {} {}\n",
+                                            safe_terminal_text(&event.job_id),
+                                            safe_terminal_text(&tool),
+                                            status
+                                        ))?;
+                                    }
+                                }
+                                if count == 0 {
+                                    console.print("No background jobs.\n")?;
+                                }
+                            } else {
+                                console.print("No active run.\n")?;
+                            }
+                        }
+                        "/job" => {
+                            if let (Some(run), Some(id)) = (active.as_ref(), arg) {
+                                console.print(&format!(
+                                    "{}\n",
+                                    job_display(run.handle.background_status(id)?, &config)
+                                ))?;
+                            } else {
+                                console.print("Usage: /job ID during an active run.\n")?;
+                            }
+                        }
+                        "/cancel-job" => {
+                            if let (Some(run), Some(id)) = (active.as_ref(), arg) {
+                                match run.handle.background_status(id)? {
+                                    Some(saya_core::background::JobStatus::Running) => {
+                                        run.handle.cancel_background(id)?;
+                                        console.print("Background cancellation requested.\n")?;
+                                    }
+                                    Some(_) => {
+                                        console.print("Background job already finished.\n")?
+                                    }
+                                    None => console.print("Background job not found.\n")?,
+                                }
+                            } else {
+                                console.print("Usage: /cancel-job ID during an active run.\n")?;
                             }
                         }
                         "/mode" => {

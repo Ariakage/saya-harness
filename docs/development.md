@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具。CLI 当前提供[只读运行与持久会话预览](cli-preview.md)；崩溃恢复和真实工作区副作用仍未完成。CI 在此前提交上已通过四平台验证，当前证据见[开发进度](progress.md)。
+仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具。CLI 已提供[运行与持久会话预览](cli-preview.md)，真实工作区副作用经权限和持久化调度；崩溃恢复已通过本机受控验证。CI 在此前提交上已通过四平台验证，当前证据见[开发进度](progress.md)。
 
 ## 开发流程
 
@@ -44,11 +44,11 @@ CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明；未�
 
 ## 只读工具开发状态
 
-`crates/saya-core/src/tools/read.rs` 提供只读文件／目录与搜索 API、`Tool` 适配器和可配置上限。它使用 cap-std 根目录句柄、ignore／globset、regex、sha2 及 Tokio 阻塞线程池；具体版本见 Cargo.lock。搜索读取 `.gitignore` 时同样受路径根约束。工具执行前由调度和权限层授权，已接入只读 CLI 预览；会话恢复边界仍在开发。根检查不限制子进程，也不等同于操作系统沙箱。
+`crates/saya-core/src/tools/read.rs` 提供只读文件／目录与搜索 API、`Tool` 适配器和可配置上限。它使用 cap-std 根目录句柄、ignore／globset、regex、sha2 及 Tokio 阻塞线程池；具体版本见 Cargo.lock。搜索读取 `.gitignore` 时同样受路径根约束。工具执行前由调度和权限层授权，已接入 CLI。根检查不限制子进程，也不等同于操作系统沙箱。
 
-`crates/saya-core/src/tools/write.rs` 实现受授权钩子保护的单文件写入与统一补丁，使用 diffy 校验单文件补丁，要求执行前记录意图。现阶段内存存储仅供受控测试；真实工作区副作用必须等后续持久化和权限调度接入。版本检查在替换前执行；现有文件的检查与替换之间不具备对任意外部并发写入的原子比较交换保证。
+`crates/saya-core/src/tools/write.rs` 实现受授权钩子保护的单文件写入与统一补丁，使用 diffy 校验单文件补丁，要求执行前记录意图。CLI 使用持久化与权限调度后执行真实工作区副作用；内存存储仅供受控测试。版本检查在替换前执行；现有文件的检查与替换之间不具备对任意外部并发写入的原子比较交换保证。
 
-`crates/saya-core/src/tools/exec.rs` 提供直接 argv 进程适配器，依赖 Tokio process 与 nix 信号；仅在受控测试中与内存存储配合使用。命令启动前仍需完整权限和持久化调度。进程组清理并不构成文件系统、网络或主动脱离进程组的后代隔离。
+`crates/saya-core/src/tools/exec.rs` 提供直接 argv 进程适配器，依赖 Tokio process 与 nix 信号；CLI 可在权限和持久化调度后启动命令；内存存储仅供受控测试。进程组清理并不构成文件系统、网络或主动脱离进程组的后代隔离。
 
 `crates/saya-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。`crates/saya-core/src/review.rs` 已提供与模型替身验证的独立核查组件；三协议和单次许可已接入 core，调用者共享运行预算并在派发前重查。
 

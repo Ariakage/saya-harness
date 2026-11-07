@@ -2154,7 +2154,7 @@ async fn background_submit_needs_approval_then_returns_queryable_result()
     let model = deny_model();
     let budget = SharedBudget::default();
     let cfg = config();
-    let submission = jobs.submit(BackgroundRequest { tool:"write_file", arguments:serde_json::json!({"path":"out.txt", "content":"hello", "expected_version":null}), context:&context, summary:"create file", interactive:true }, DispatchReview { model:&model, budget:&budget, config:&cfg }).await?;
+    let submission = jobs.submit(BackgroundRequest { parent_call_id:"test-parent", tool:"write_file", arguments:serde_json::json!({"path":"out.txt", "content":"hello", "expected_version":null}), context:&context, summary:"create file", interactive:true }, DispatchReview { model:&model, budget:&budget, config:&cfg }).await?;
     let pending = match submission {
         JobSubmission::Pending(p) => p,
         _ => return Err("expected pending approval".into()),
@@ -2245,6 +2245,7 @@ async fn background_submit_supports_every_local_tool() -> Result<(), Box<dyn std
         let submission = jobs
             .submit(
                 BackgroundRequest {
+                    parent_call_id: "test-parent",
                     tool,
                     arguments,
                     context: &context,

@@ -110,4 +110,4 @@ cargo run -p saya-core --example prompt_preview -- --review
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 
-三协议适配已有 core 级受控验证，CLI 有只读开发预览；用户级／项目指令与 Skill 发现的验证范围见[开发进度](progress.md)。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。
+三协议适配已有 core 级受控验证，CLI 有持久会话与受权限控制的工具开发预览；用户级／项目指令与 Skill 发现的验证范围见[开发进度](progress.md)。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。

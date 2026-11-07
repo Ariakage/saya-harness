@@ -698,7 +698,7 @@ fn build_runtime(
     review.idle_timeout = limits.model_idle;
     review.total_timeout = limits.model_total;
     review.known_secrets = known_secrets.clone();
-    let mut runtime = AgentRuntime::new_read_only(RuntimeSetup {
+    let mut runtime = AgentRuntime::new(RuntimeSetup {
         run,
         model,
         store: launch.store,
@@ -729,6 +729,9 @@ fn report_result(result: &saya_core::contract::RunResult, session: &Session, str
         println!();
     } else if let Some(text) = &result.text {
         println!("{text}");
+    }
+    if result.stop_reason.as_deref() == Some("completed_with_background_cleanup") {
+        eprintln!("saya: unfinished background jobs were cancelled when the run ended");
     }
     if result.status == RunStatus::NeedsInput
         && let Some(question) = session.history.iter().rev().find_map(|item| match item {
@@ -862,7 +865,13 @@ async fn query_sessions(
         }
         SessionAction::Show { session_id } => {
             let id = session::parse_id(session_id)?;
-            serde_json::to_value(store.load_session(id).await?.ok_or("session not found")?)?
+            let mut session =
+                serde_json::to_value(store.load_session(id).await?.ok_or("session not found")?)?;
+            session.as_object_mut().ok_or("invalid session")?.insert(
+                "background_jobs".into(),
+                serde_json::to_value(store.background_jobs(id).await?)?,
+            );
+            session
         }
     };
     match config.output {

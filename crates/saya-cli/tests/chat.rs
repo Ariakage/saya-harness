@@ -589,3 +589,95 @@ fn cancelling_while_awaiting_clarification_records_interrupted_input() {
     assert!(second.contains("input_interrupted"));
     assert!(!second.contains("outcome_unknown"));
 }
+
+#[test]
+fn background_job_can_be_approved_listed_and_inspected_in_chat() {
+    let temp = TempDir::new().unwrap();
+    fs::write(temp.path().join("input.txt"), "background data").unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (url,_)=fixture::server_dynamic(2,move |index,_| {
+        if index==0 {
+            let arguments=json!({"tool":"read_file","arguments":{"path":"input.txt","start_line":1,"line_count":1}}).to_string();
+            ("application/json",json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"launch","type":"function","function":{"name":"background_start","arguments":arguments}}]}}]}).to_string())
+        } else {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            ("application/json",answer("done"))
+        }
+    }).unwrap();
+    let cfg = config(temp.path(), &url, "manual", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
+    pty.until("> ");
+    pty.send("start background read\n");
+    pty.until("Approval required");
+    pty.until("Allow this call? [y/N]");
+    pty.send("y\n");
+    entered_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+    pty.send("/jobs\n");
+    let listed = pty.until("read_file");
+    let job = listed
+        .split_whitespace()
+        .find(|item| item.starts_with("background-"))
+        .unwrap()
+        .to_owned();
+    pty.until("\n");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        pty.send(&format!("/job {job}\n"));
+        pty.until("\"status\":\"");
+        let status = pty.until("\"");
+        if status == "finished\"" {
+            break;
+        }
+        assert_eq!(status, "running\"");
+        assert!(Instant::now() < deadline, "background job did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    pty.send(&format!("/cancel-job {job}\n"));
+    pty.until("Background job already finished.");
+    release_tx.send(()).unwrap();
+    pty.until("done");
+    pty.until("> ");
+    assert!(pty.finish().success());
+}
+
+#[test]
+fn running_background_command_can_be_cancelled_from_chat() {
+    let temp = TempDir::new().unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (url, _) = fixture::server_dynamic(2, move |index, _| {
+        if index == 0 {
+            let arguments = json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","printf started > marker; sleep 30"],"cwd":null,"timeout_seconds":null}}).to_string();
+            ("application/json", json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"launch","type":"function","function":{"name":"background_start","arguments":arguments}}]}}]}).to_string())
+        } else {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+            ("application/json", answer("done"))
+        }
+    }).unwrap();
+    let cfg = config(temp.path(), &url, "bypass", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
+    pty.until("> ");
+    pty.send("start a command\n");
+    entered_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while !temp.path().join("marker").exists() {
+        assert!(Instant::now() < deadline, "command did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    pty.send("/jobs\n");
+    let listed = pty.until("exec");
+    let job = listed
+        .split_whitespace()
+        .find(|item| item.starts_with("background-"))
+        .unwrap()
+        .to_owned();
+    pty.send(&format!("/cancel-job {job}\n"));
+    pty.until("Background cancellation requested.");
+    release_tx.send(()).unwrap();
+    pty.until("done");
+    pty.until("> ");
+    assert!(pty.finish().success());
+}
