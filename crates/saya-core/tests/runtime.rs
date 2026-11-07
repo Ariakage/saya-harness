@@ -2014,3 +2014,117 @@ async fn sqlite_result_failure_preserves_observed_write_and_stops_loop()
     assert_eq!(state, "running");
     Ok(())
 }
+
+#[tokio::test]
+async fn diagnostics_correlate_execution_review_tools_and_background_jobs()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::logging::{JsonLog, LogEntry, LogLevel, diagnostics::Diagnostics};
+    use tracing::instrument::WithSubscriber;
+    let logs = tempfile::tempdir()?;
+    let diagnostics =
+        Diagnostics::start(JsonLog::new(logs.path(), vec![]).with_level(LogLevel::Trace))?;
+    let dispatch = diagnostics.dispatch();
+    // Concurrent tests without a subscriber must participate in tracing's
+    // multi-dispatch interest calculation instead of its single-dispatch cache.
+    let _unsubscribed = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let first_run = run.id.0.to_string();
+    let model = Arc::new(FakeModel::new(vec![
+        vec![call(
+            "diagnostic-exec",
+            "exec",
+            serde_json::json!({"argv":["/bin/sh","-c","true"]}),
+        )],
+        vec![HistoryItem::AssistantText(
+            r#"{"decision":"allow","reason":"local fixture"}"#.into(),
+        )],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let mut coordinator = runtime(
+        temp.path(),
+        run,
+        model,
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?;
+    assert_eq!(
+        async { coordinator.run(&mut session).await }
+            .with_subscriber(dispatch.clone())
+            .await?
+            .status,
+        RunStatus::Completed
+    );
+
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Bypass);
+    let background_run = run.id.0.to_string();
+    let model = Arc::new(BackgroundModel {
+        modes: Mutex::new(None),
+        count: std::sync::atomic::AtomicUsize::new(0),
+        marker: temp.path().join("started"),
+        job: Mutex::new(None),
+    });
+    let mut coordinator = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?;
+    *model.modes.lock().map_err(|_| "lock")? = Some(coordinator.handle());
+    assert_eq!(
+        async { coordinator.run(&mut session).await }
+            .with_subscriber(dispatch)
+            .await?
+            .status,
+        RunStatus::Completed
+    );
+    diagnostics.flush(std::time::Duration::from_secs(2))?;
+    let text = std::fs::read_to_string(logs.path().join("saya.log"))?;
+    let rows: Vec<LogEntry> = text
+        .lines()
+        .map(|line| LogEntry::decode(line.as_bytes(), &[]))
+        .collect::<Result<_, _>>()?;
+    let model_rows: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.event == "model.started"
+                && row.context.as_ref().and_then(|ctx| ctx.run_id.as_ref()) == Some(&first_run)
+        })
+        .collect();
+    assert!(
+        model_rows
+            .iter()
+            .any(|row| row.data["purpose"] == "execution"),
+        "{text}"
+    );
+    assert!(model_rows.iter().any(|row| row.data["purpose"] == "review"));
+    assert!(model_rows.iter().all(|row| {
+        row.context
+            .as_ref()
+            .is_some_and(|context| context.request_id.is_some() && context.session_id.is_some())
+    }));
+    assert!(rows.iter().any(|row| {
+        row.event == "tool.finished"
+            && row
+                .context
+                .as_ref()
+                .and_then(|context| context.call_id.as_deref())
+                == Some("diagnostic-exec")
+    }));
+    assert!(rows.iter().any(|row| {
+        row.event == "tool.dispatched"
+            && row.context.as_ref().is_some_and(|context| {
+                context.job_id.is_some()
+                    && context.call_id.is_some()
+                    && context.run_id.as_ref() == Some(&background_run)
+            })
+    }));
+    assert!(rows.iter().any(|row| {
+        row.event == "background.finished"
+            && row.context.as_ref().is_some_and(|context| {
+                context.job_id.is_some() && context.run_id.as_ref() == Some(&background_run)
+            })
+    }));
+    Ok(())
+}

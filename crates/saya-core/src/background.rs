@@ -14,6 +14,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::{Notify, watch};
+use tracing::{Instrument, instrument::WithSubscriber};
 
 pub const DEFAULT_MAX_BACKGROUND_RUNNING: usize = 4;
 pub const DEFAULT_MAX_BACKGROUND_JOBS: usize = 256;
@@ -152,6 +153,14 @@ struct State {
 }
 impl State {
     fn event(&mut self, job_id: &str, kind: BackgroundEventKind) {
+        let event = match &kind {
+            BackgroundEventKind::Accepted { .. } => "background.accepted",
+            BackgroundEventKind::CancellationRequested { .. } => {
+                "background.cancellation_requested"
+            }
+            BackgroundEventKind::Finished { .. } => "background.finished",
+        };
+        tracing::info!(target: "saya::background", event, job_id);
         self.events.push(BackgroundEvent {
             sequence: self.events.len() as u64 + 1,
             job_id: job_id.into(),
@@ -359,72 +368,86 @@ impl BackgroundJobs {
         let shared = self.shared.clone();
         let dispatcher = self.dispatcher.clone();
         let job_id = id.clone();
-        let task = runtime.spawn(async move {
-            let signal = Combined {
-                root: dispatcher.root_cancellation(),
-                job: cancel,
-            };
-            dispatcher
-                .execute_with_cancel(&call, &context, permit, &signal, true)
-                .await
-        });
-        runtime.spawn(async move {
-            let outcome = task.await.unwrap_or_else(|_| {
-                Err(failure(
-                    "background_error",
-                    "background task failed unexpectedly",
-                ))
-            });
-            if let Ok(mut state) = shared.state.lock() {
-                if let Err(error) = &outcome
-                    && error.0.code != "cancelled"
-                {
-                    state.closed = true;
-                    state.fatal = Some(error.clone());
-                    let ids: Vec<_> = state
-                        .jobs
-                        .keys()
-                        .filter(|id| *id != &job_id)
-                        .cloned()
-                        .collect();
-                    for id in ids {
-                        state.request_cancellation(&id, BackgroundCancelReason::Failure);
+        let span = tracing::info_span!(target: "saya::background", "background", session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str(), job_id = job_id.as_str());
+        let worker_span = span.clone();
+        let task = runtime.spawn(
+            async move {
+                let signal = Combined {
+                    root: dispatcher.root_cancellation(),
+                    job: cancel,
+                };
+                dispatcher
+                    .execute_with_cancel(&call, &context, permit, &signal, true)
+                    .await
+            }
+            .instrument(worker_span)
+            .with_current_subscriber(),
+        );
+        runtime.spawn(
+            async move {
+                let outcome = task.await.unwrap_or_else(|_| {
+                    Err(failure(
+                        "background_error",
+                        "background task failed unexpectedly",
+                    ))
+                });
+                if let Ok(mut state) = shared.state.lock() {
+                    if let Err(error) = &outcome
+                        && error.0.code != "cancelled"
+                    {
+                        state.closed = true;
+                        state.fatal = Some(error.clone());
+                        let ids: Vec<_> = state
+                            .jobs
+                            .keys()
+                            .filter(|id| *id != &job_id)
+                            .cloned()
+                            .collect();
+                        for id in ids {
+                            state.request_cancellation(&id, BackgroundCancelReason::Failure);
+                        }
+                    }
+                    if let Some(job) = state.jobs.get_mut(&job_id) {
+                        let (status, outcome) = match outcome {
+                            Ok(value) => {
+                                let outcome = if value.ok {
+                                    BackgroundOutcome::Succeeded
+                                } else if value
+                                    .error
+                                    .as_ref()
+                                    .is_some_and(|e| e.code == "cancelled")
+                                {
+                                    BackgroundOutcome::Cancelled
+                                } else {
+                                    BackgroundOutcome::Failed {
+                                        code: value.error.as_ref().map_or_else(
+                                            || "tool_error".into(),
+                                            |e| e.code.clone(),
+                                        ),
+                                    }
+                                };
+                                (JobStatus::Finished(value), outcome)
+                            }
+                            Err(error) => {
+                                let outcome = if error.0.code == "cancelled" {
+                                    BackgroundOutcome::Cancelled
+                                } else {
+                                    BackgroundOutcome::Failed {
+                                        code: error.0.code.clone(),
+                                    }
+                                };
+                                (JobStatus::Failed(error), outcome)
+                            }
+                        };
+                        job.status = status;
+                        state.event(&job_id, BackgroundEventKind::Finished { outcome });
                     }
                 }
-                if let Some(job) = state.jobs.get_mut(&job_id) {
-                    let (status, outcome) = match outcome {
-                        Ok(value) => {
-                            let outcome = if value.ok {
-                                BackgroundOutcome::Succeeded
-                            } else if value.error.as_ref().is_some_and(|e| e.code == "cancelled") {
-                                BackgroundOutcome::Cancelled
-                            } else {
-                                BackgroundOutcome::Failed {
-                                    code: value
-                                        .error
-                                        .as_ref()
-                                        .map_or_else(|| "tool_error".into(), |e| e.code.clone()),
-                                }
-                            };
-                            (JobStatus::Finished(value), outcome)
-                        }
-                        Err(error) => {
-                            let outcome = if error.0.code == "cancelled" {
-                                BackgroundOutcome::Cancelled
-                            } else {
-                                BackgroundOutcome::Failed {
-                                    code: error.0.code.clone(),
-                                }
-                            };
-                            (JobStatus::Failed(error), outcome)
-                        }
-                    };
-                    job.status = status;
-                    state.event(&job_id, BackgroundEventKind::Finished { outcome });
-                }
+                shared.changed.notify_waiters();
             }
-            shared.changed.notify_waiters();
-        });
+            .instrument(span)
+            .with_current_subscriber(),
+        );
         Ok(id)
     }
     pub fn status(&self, id: &str) -> Result<Option<JobStatus>, BoundaryError> {

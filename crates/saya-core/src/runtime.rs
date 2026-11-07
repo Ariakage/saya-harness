@@ -1354,10 +1354,12 @@ impl AgentRuntime {
     }
     /// Run once, then cancel and await all background work. Execution returns
     /// typed status; storage failures return errors retaining observed results.
+    #[tracing::instrument(target = "saya::runtime", name = "run", skip_all, fields(session_id = %session.id.0, run_id = %self.run.id.0))]
     pub async fn run(&mut self, session: &mut Session) -> Result<RunResult, BoundaryError> {
         if self.used {
             return Err(error("invalid_run", "runtime is single-use"));
         }
+        tracing::info!(target: "saya::runtime", event = "run.started");
         self.budget.start_run()?;
         self.metrics.start();
         self.used = true;
@@ -1466,6 +1468,8 @@ impl AgentRuntime {
                 ])
                 .await?;
         }
+        tracing::info!(target: "saya::runtime", event = "run.finished", status = ?result.status,
+            error_code = result.error.as_ref().map(|error| error.code.as_str()).unwrap_or(""));
         Ok(result)
     }
 }

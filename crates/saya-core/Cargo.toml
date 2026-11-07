@@ -28,3 +28,5 @@ toml = "1.2.0"
 uuid = { version = "1.29.0", features = ["v7", "serde"] }
 serde_yaml_ng = "0.10"
 rusqlite = { version = "0.37", features = ["bundled", "backup", "serialize", "hooks"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }

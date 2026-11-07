@@ -46,8 +46,11 @@ impl Store for ObservedStore {
                     StoreChange::ToolIntent { call, .. } if call.call_id == self.call_id => {
                         self.intent.store(true, Ordering::Release)
                     }
-                    StoreChange::ToolFinished { call_id, .. } if call_id == &self.call_id => {
-                        self.finished.store(true, Ordering::Release)
+                    StoreChange::ToolFinished {
+                        call_id, result, ..
+                    } if call_id == &self.call_id => {
+                        self.finished.store(true, Ordering::Release);
+                        tracing::info!(target: "saya::tools", event = "tool.finished", status = if result.ok { "completed" } else { "failed" }, error_code = result.error.as_ref().map(|error| error.code.as_str()).unwrap_or(""));
                     }
                     _ => {}
                 }
@@ -213,6 +216,7 @@ impl ToolDispatcher {
     /// Normalize and authorize a single call. A `Pending` or
     /// `NeedsConfirmation` result never executes the operation. The caller
     /// must use the returned permit exactly once, or resolve a pending request.
+    #[tracing::instrument(target = "saya::tools", name = "authorize", skip_all, fields(session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str()))]
     pub async fn authorize(
         &self,
         call: &ToolCall,
@@ -308,6 +312,7 @@ impl ToolDispatcher {
         self.execute_with_cancel(call, context, permit, self.cancel.as_ref(), false)
             .await
     }
+    #[tracing::instrument(target = "saya::tools", name = "tool", skip_all, fields(session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str()))]
     pub(crate) async fn execute_with_cancel(
         &self,
         call: &ToolCall,
@@ -344,6 +349,7 @@ impl ToolDispatcher {
         } else {
             self.store.clone()
         };
+        tracing::info!(target: "saya::tools", event = "tool.dispatched");
         match call.name.as_str() {
             "read_file" | "list_dir" | "find_files" | "search_text" => {
                 let kind = match call.name.as_str() {
@@ -363,6 +369,7 @@ impl ToolDispatcher {
                     Ok(result) => {
                         let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
                         save_result(store.as_ref(), call, context, &result).await?;
+                        tracing::info!(target: "saya::tools", event = "tool.finished", status = if result.ok { "completed" } else { "failed" });
                         Ok(result)
                     }
                     Err(error) => {

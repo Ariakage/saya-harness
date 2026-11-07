@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
+use tracing::Instrument;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunMetrics {
@@ -249,12 +250,20 @@ struct Completion {
     metrics: Arc<Metrics>,
     purpose: ModelPurpose,
     done: bool,
+    span: tracing::Span,
+    started: Instant,
+    status: &'static str,
+    error_code: Option<String>,
 }
 impl Drop for Completion {
     fn drop(&mut self) {
         if !self.done {
             self.metrics.finish(self.purpose, None);
         }
+        self.span.in_scope(|| {
+            tracing::info!(target: "saya::model", event = "model.finished", status = self.status,
+                error_code = self.error_code.as_deref().unwrap_or(""), duration_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+        });
     }
 }
 struct MeasuredStream {
@@ -272,12 +281,30 @@ impl Model for MeasuredModel {
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
             self.metrics.request(request.purpose);
-            let completion = Completion {
+            let purpose = match request.purpose {
+                ModelPurpose::Execution => "execution",
+                ModelPurpose::Review => "review",
+            };
+            let span = tracing::info_span!(target: "saya::model", "model", request_id = request.request_id.as_str(), profile = request.profile.as_str(), purpose);
+            span.in_scope(|| tracing::info!(target: "saya::model", event = "model.started"));
+            let mut completion = Completion {
                 metrics: self.metrics.clone(),
                 purpose: request.purpose,
                 done: false,
+                span: span.clone(),
+                started: Instant::now(),
+                status: "abandoned",
+                error_code: None,
             };
-            let inner = self.inner.start(request, cancel).await?;
+            let inner = self
+                .inner
+                .start(request, cancel)
+                .instrument(span)
+                .await
+                .inspect_err(|error| {
+                    completion.status = "failed";
+                    completion.error_code = Some(error.0.code.clone());
+                })?;
             Ok(Box::new(MeasuredStream { inner, completion }) as Box<dyn ModelStream>)
         })
     }
@@ -285,7 +312,15 @@ impl Model for MeasuredModel {
 impl ModelStream for MeasuredStream {
     fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
         Box::pin(async move {
-            let next = self.inner.next(cancel).await?;
+            let next = self
+                .inner
+                .next(cancel)
+                .instrument(self.completion.span.clone())
+                .await
+                .inspect_err(|error| {
+                    self.completion.status = "failed";
+                    self.completion.error_code = Some(error.0.code.clone());
+                })?;
             if let Some(ModelUpdate::Finished { usage, .. }) = &next
                 && !self.completion.done
             {
@@ -293,6 +328,7 @@ impl ModelStream for MeasuredStream {
                     .metrics
                     .finish(self.completion.purpose, usage.clone());
                 self.completion.done = true;
+                self.completion.status = "completed";
             }
             Ok(next)
         })

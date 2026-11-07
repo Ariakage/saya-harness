@@ -1,4 +1,5 @@
 //! Local structured diagnostics with bounded retention and credential redaction.
+pub mod diagnostics;
 use crate::{
     contract::{BoundaryError, ErrorInfo},
     redaction,

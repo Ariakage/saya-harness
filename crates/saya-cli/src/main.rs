@@ -502,12 +502,32 @@ fn personal_context(
         memory: read(&cli.memory_file, &secrets)?,
     })
 }
+static DIAGNOSTICS: std::sync::Mutex<Option<saya_core::logging::diagnostics::Diagnostics>> =
+    std::sync::Mutex::new(None);
+fn install_diagnostics(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut current = DIAGNOSTICS.lock().map_err(|_| "diagnostics lock failed")?;
+    if current.is_none() {
+        let secrets = config
+            .secret_env_names()
+            .iter()
+            .map(|name| config.secret(name).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        let diagnostic = saya_core::logging::diagnostics::Diagnostics::start(
+            saya_core::logging::JsonLog::new(&config.state_dir, secrets),
+        )?;
+        tracing::dispatcher::set_global_default(diagnostic.dispatch())
+            .map_err(|_| "diagnostics subscriber already installed")?;
+        *current = Some(diagnostic);
+    }
+    Ok(())
+}
 fn build_runtime(
     config: &Config,
     session: &Session,
     summary: &str,
     launch: Launch,
 ) -> Result<(AgentRuntime, bool), Box<dyn std::error::Error>> {
+    install_diagnostics(config)?;
     let events = launch.events;
     saya_app::build_runtime(
         config,
@@ -1033,6 +1053,14 @@ async fn main() -> std::process::ExitCode {
             },
         },
     };
+    if let Ok(mut diagnostics) = DIAGNOSTICS.lock()
+        && let Some(diagnostics) = diagnostics.take()
+        && diagnostics
+            .flush(std::time::Duration::from_secs(2))
+            .is_err()
+    {
+        eprintln!("saya: diagnostic log flush failed");
+    }
     std::process::ExitCode::from(code)
 }
 

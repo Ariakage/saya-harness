@@ -1,6 +1,6 @@
 # 日志与追踪设计
 
-**DEV-040 已实现五级类型化日志。tracing 接入与查询接口按 DEV-041／042 推进，实际状态见[开发进度](progress.md)。**
+**DEV-040／041 已实现五级类型化日志与受控 tracing 接入。查询接口按 DEV-042 推进，实际状态见[开发进度](progress.md)。**
 
 ## 已有实现
 
@@ -13,6 +13,12 @@
 `DiagnosticRecord` 使用 `LogContext` 关联 session／run／request／call／job／span，`LogFields` 白名单接受状态、错误码、profile、协议、目的、耗时、字节数、数量及丢弃数。新记录保存 `schema_version = 1`、UTC 时间、进程号和本 logger 的单调序号。旧 `record` API 与旧行解码继续可用。
 
 每条记录最多 64 KiB，写入前使用统一脱敏处理已知凭据与嵌套 JSON。默认阈值在打开目录前过滤，配置为 trace 后可记录全部五级。日志文件为 0600，新建目录为 0700，拒绝符号链接、硬链接、其他用户拥有的文件及过宽文件权限。写锁最多等待一秒，失败通过 `log_error` 返回。轮转维持 10 MiB 与五份备份。
+
+## tracing 写入与关联
+
+`logging::diagnostics::Diagnostics` 管理本地 writer 线程和 subscriber，应用入口安装 dispatch 并保留 guard 至退出。默认普通队列容量 256，warn／error 优先队列容量 32，普通事件队列满后计数丢弃，高优先事件最多等待 20 毫秒。`flush` 返回写入失败或超时，退出最多等待两秒，`diagnostics.dropped` 记录累计变化。
+
+subscriber 只接收 `saya`／`saya::` target，按类型化白名单采集字段，未知字段和 message 被过滤。超长单字段以 withheld 标记处理后再进入队列。span 保存 session／run／request／call／job 归属，后台任务显式传播 subscriber 与 span。运行、模型执行、独立审核、工具派发和后台状态通过同一诊断层关联，模型完成记录包含单调时钟耗时。
 
 ## 五级日志
 
