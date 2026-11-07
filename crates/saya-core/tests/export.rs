@@ -195,3 +195,74 @@ fn ambiguous_legacy_history_links_are_explicit_and_limits_fail()
     );
     Ok(())
 }
+
+#[test]
+fn markdown_fences_html_controls_and_long_unicode_use_the_same_projection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut snapshot = fixture();
+    let text = "你好 🌸\n``````\n<script>bad & worse</script>\u{1b}[31m\u{202e}\r";
+    snapshot
+        .session
+        .history
+        .push(HistoryItem::AssistantText(text.into()));
+    let export = SessionExport::from_snapshot(
+        &snapshot,
+        ExportOptions {
+            scope: ExportScope::Full,
+            ..ExportOptions::default()
+        },
+        &[],
+    )?;
+    let markdown = String::from_utf8(export.to_markdown()?)?;
+    assert!(markdown.contains("你好 🌸"));
+    assert!(markdown.contains("```````text\n"));
+    assert!(markdown.contains("&lt;script&gt;bad &amp; worse&lt;/script&gt;"));
+    assert!(!markdown.contains('<'));
+    assert!(!markdown.contains('\u{1b}'));
+    assert!(!markdown.contains('\u{202e}'));
+    assert!(!markdown.contains('\r'));
+    assert!(markdown.contains("\\u{1b}[31m"));
+    assert!(!markdown.contains("tool-body-value"));
+    assert!(!markdown.contains("opaque-secret"));
+    assert!(markdown.contains("run-1"));
+    assert!(markdown.contains("run-2"));
+    assert!(markdown.contains("unknown"));
+    assert_eq!(export.history.last().unwrap()["text"], text);
+    Ok(())
+}
+#[test]
+fn markdown_and_json_share_truncation_and_output_limit() -> Result<(), Box<dyn std::error::Error>> {
+    let mut snapshot = fixture();
+    snapshot
+        .session
+        .history
+        .push(HistoryItem::UserText("🌸".repeat(100)));
+    let export = SessionExport::from_snapshot(
+        &snapshot,
+        ExportOptions {
+            max_field_bytes: 41,
+            ..ExportOptions::default()
+        },
+        &[],
+    )?;
+    let markdown = String::from_utf8(export.to_markdown()?)?;
+    let retained = "🌸".repeat(10);
+    assert!(markdown.contains(&retained));
+    assert!(!markdown.contains(&"🌸".repeat(11)));
+    assert!(markdown.contains("Truncated fields"));
+    assert!(markdown.contains("original_bytes"));
+    // JSON and Markdown have independent encoded sizes under the same limit.
+    let mut long = fixture();
+    long.session.history = vec![HistoryItem::UserText("<&>".repeat(3000))];
+    let export = SessionExport::from_snapshot(
+        &long,
+        ExportOptions {
+            max_output_bytes: 20_000,
+            ..ExportOptions::default()
+        },
+        &[],
+    )?;
+    assert!(export.to_json()?.len() < 20_000);
+    assert_eq!(export.to_markdown().unwrap_err().0.code, "export_limit");
+    Ok(())
+}

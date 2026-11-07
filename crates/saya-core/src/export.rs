@@ -3,6 +3,8 @@ use crate::{
     contract::{BoundaryError, ErrorInfo, HistoryItem},
     sqlite::SessionSnapshot,
 };
+mod markdown;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 

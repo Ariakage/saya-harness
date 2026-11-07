@@ -1,6 +1,6 @@
 # Session 导出设计
 
-**DEV-043／044 已实现只读快照与版本化 JSON 导出。Markdown 与 CLI 接入按 DEV-045／046 继续推进，以下未落地接口保留为草案。**
+**DEV-043 至 DEV-045 已实现只读快照、版本化 JSON 与 Markdown 导出。CLI 文件接入按 DEV-046 推进，以下 CLI 命令在该任务完成前保留为草案。**
 
 ## 现有基础与入口
 
@@ -90,7 +90,9 @@ core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一
 
 ## Markdown 表达
 
-按消息顺序展示用户、assistant 和选定工具内容，附会话元数据、快照水位及明确的截断标记。代码围栏长度大于正文中连续反引号的最大长度，内容经过 HTML 转义与终端控制字符处理，链接和工具输出保留来源标签。
+`SessionExport::to_markdown` 使用与 JSON 相同的投影，按原 ordinal 展示用户、assistant、部分响应和选定工具内容，附会话元数据、快照水位、Run／工具复合关联、来源、省略字段及截断说明。Full 范围额外呈现指标、持久事件、activity 和审批元数据。
+
+消息与结构化记录放入动态长度代码围栏，围栏长度大于正文连续反引号最大长度。正文 HTML 字符转义，ANSI、回车及双向控制字符以显式 Unicode 转义呈现，中文和 emoji 保留。文件内容总上限与 JSON 一致，转义使 Markdown 超过编码限额时返回 `export_limit`。
 
 大结果采用一致的大小上限，JSON 和 Markdown 对同一字段采用相同的选择、脱敏与截断策略。读取预算超限时返回明确错误或带声明的有界结果，具体上限在 DEV-043 固定。
 
