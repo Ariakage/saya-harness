@@ -1,6 +1,6 @@
 # 架构设计
 
-**状态：已按 D-027 完整基线定案；core、三协议适配、CLI 与 SQLite 会话恢复已接入并经本机受控验证；完整集成与发行验收尚未完成。**
+**0.1.0 已完成 P0 至 P7 验收并发布。本文描述已交付架构，后续应用分层与扩展方案见[后续开发计划](post-mvp-plan.md)。**
 
 约束为 Rust、CLI → TUI → GUI、Saya 自己驱动 Agent 循环，同时支持编程与通用任务。CLI 包含交互和单次运行、四种工作模式、三种权限模式、三类模型协议、本地工具、流式／结构化输出和会话恢复，默认 WORK 与 auto。精确契约以[完整基线](mvp-baseline.md)为准，范围见[需求规格](requirements.md)，行为见[执行契约](execution.md)。
 
@@ -16,7 +16,9 @@
 | 上下文管理 | 组织模型所需的消息、工具声明与历史结果 |
 | 会话存储 | XDG 数据目录中的 SQLite WAL、状态事务保存、写锁、版本迁移与恢复 |
 
-Cargo workspace 固定为 saya-core 与 saya-cli，二进制 saya。上述逻辑职责放在 core 的模块内，不分别拆成多个 crate；CLI 负责终端、命令参数与输出呈现。Rust 1.99.1／edition 2024、依赖职责与平台基线见 B-02。
+0.1.0 Cargo workspace 包含 saya-core 与 saya-cli，二进制为 saya。CLI 负责终端、命令参数、运行组装与输出呈现，core 提供复用运行时。Rust 1.99.1／edition 2024、依赖职责与平台基线见 B-02。
+
+后续共享应用服务拟提取为 saya-app，TUI 拟采用 saya-tui library，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
 
 运行时通过输入、控制与事件／结果接口连接界面。终端格式、TUI 组件和 GUI 状态管理不进入核心循环；结果与事件使用 B-17 的 schema v1。内部 Rust 函数签名按实现处理，0.1 不承诺独立 SDK 稳定性。
 
@@ -92,7 +94,7 @@ flowchart TD
 
 所有产品与接口阻塞项已由[完整基线](mvp-baseline.md) B-01 至 B-24 收敛；具体内部 Rust 类型和模块文件名由开发者在保持行为的前提下处理。Tokio、clap、reqwest＋rustls、serde／toml、thiserror、tracing 与 rusqlite 的职责按 B-02 实现。
 
-core／CLI crate 和锁文件已建立；普通构建提供可复用运行时、七项本地工具、权限调度、后台任务和三协议适配。模型协议、profile 核查和后台调用已通过本地受控夹具，指定模型的三协议文本与工具往返也已小规模联调。`MemoryStore` 不持久化；CLI 任务执行、SQLite 会话恢复及完整事件输出已通过本机受控验证；最终候选的最低平台验证仍待完成。实际范围与证据见[开发进度](progress.md)，不能以文档定案替代 B-23 验收。
+core／CLI crate 和锁文件已建立，普通构建提供可复用运行时、七项本地工具、权限调度、后台任务和三协议适配。模型协议、profile 核查、恢复和事件输出通过受控验证，指定模型完成三协议小规模联调。正式源码的四原生平台分别通过 342 项 Rust 测试和解包演练，公开发行包完成下载复核。具体环境与证据见[发行验证](release-validation.md)和[开发进度](progress.md)。
 
 ## 提示词装配
 

@@ -1,0 +1,60 @@
+# 日志与追踪设计
+
+**状态为后续设计草案。增强日志需求已明确，F-12 的实现任务为 DEV-040 至 DEV-042，实际状态见[开发进度](progress.md)。**
+
+## 已有实现
+
+[logging.rs](../crates/saya-core/src/logging.rs) 提供 `JsonLog`，当前接受 `warn`、`error`，在已选 state 目录写 JSON 行，单文件 10 MiB、最多五份备份，写入前进行已知凭据脱敏，并用跨进程锁保护轮转。CLI 的 `log_run_result` 记录未完成运行的摘要，`log_warning` 处理写入失败。
+
+[events.rs](../crates/saya-cli/src/events.rs) 的事件输出与 SQLite 持久事件负责运行展示及恢复。新增诊断日志与这些数据分别维护，并通过 ID 关联。
+
+## 五级日志
+
+| 级别 | 记录内容 |
+| --- | --- |
+| trace | 状态边界、调度阶段、队列与 span 元数据 |
+| debug | 参数校验结果、连接阶段、限额判断及耗时 |
+| info | 会话／运行／工具生命周期摘要 |
+| warn | 可恢复错误、重试、权限拒绝及能力降级原因 |
+| error | 运行失败、存储失败及需要处理的系统错误 |
+
+候选默认级别为 `warn`，通过 `--log-level` 或 `SAYA_LOG_LEVEL` 显式选择其他级别，优先级为 CLI 高于环境变量、高于默认值。首批保留现有配置文件加载方式。
+
+```sh
+# 以下为后续接口草案
+saya --log-level debug chat
+saya --log-level trace run "Investigate the failure"
+saya logs show --session SESSION_ID --level warn
+saya logs tail --session SESSION_ID
+```
+
+级别过滤按严重程度阈值处理，`warn` 同时包含 `error`。时间范围使用带时区输入，保存的时间为 UTC。耗时使用单调时钟，日志排序同时参考进程、关联 ID 和本地序号。
+
+## 接入与记录结构
+
+采用 `tracing` 的 span／event 作为进程内诊断入口，在可执行入口安装 subscriber，安全记录层负责字段选择、脱敏、大小检查和轮转。库层发出结构化诊断，应用入口管理订阅生命周期。异步任务通过显式 span 传播归属。设计参考官方 [tracing](https://docs.rs/tracing/latest/tracing/) 和 [tracing-subscriber](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/) 文档。
+
+候选记录保留 `timestamp`、`level`、`event`、`data`，在兼容读取旧行的基础上扩展格式版本、target、trace／span、session／run／request／call／job ID、状态、耗时和字节计数。具体 schema 在 DEV-040 固定，并覆盖旧日志查询。
+
+记录路径采用以下顺序。
+
+1. 采集类型化字段，文本参数使用字段白名单。
+2. 对结构化值执行已知凭据遮蔽，处理嵌套／编码内容及控制字符。
+3. 执行单行与队列上限检查，附加关联元数据。
+4. 通过现有私有目录、文件权限、跨进程锁和轮转机制保存。
+
+Prompt、环境变量、HTTP 认证头、命令完整环境和工具正文具有独立的数据访问范围。五级日志默认记录其 ID、大小、耗时和状态。第三方诊断按 target 白名单接入，过滤发生在落盘与显示之前。
+
+## 并发、失败与输出
+
+- 使用有界后台写队列承接阻塞文件操作。队列满时记录诊断丢弃计数，保留 warn／error 的优先通道，并设置有界等待和退出排空策略。
+- 关键业务事件继续通过持久化入口保存。日志写入失败显示经过脱敏的降级状态，涉及执行意图／结果的存储失败按现有运行终止契约处理。
+- CLI 诊断与运行 JSON／JSONL 的 stdout 分离。TUI 中由界面展示诊断状态，终端绘制保持单一输出所有者。
+- `logs show` 分页读取轮转文件，`tail` 跟随文件更换。二者处理损坏尾行、取消、符号链接和私有文件权限，输出经过终端安全转换。
+- 日志保持本地保存，远端追踪接收端属于后续独立集成。
+
+## 验收
+
+DEV-040 验证全部级别、旧行读取、字段白名单、深层编码秘密、权限、符号链接和跨进程轮转。DEV-041 验证并发模型／核查／工具／后台任务的 span 归属，以及队列过载、慢磁盘与退出排空。DEV-042 验证筛选、跟随、取消和 JSON／JSONL stdout。
+
+诊断完整性、业务事件完整性和副作用保存分别给出结果，测试使用本地模型、合成凭据及故障注入。任务依赖见[后续开发计划](post-mvp-plan.md)。

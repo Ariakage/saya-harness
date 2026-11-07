@@ -2,8 +2,9 @@
 //!
 //! These development-stage interfaces are not a stable SDK. They define data
 //! and boundaries plus a volatile store and a permission-checked local tool
-//! dispatcher, provider adapters and reusable run coordinator. Durable storage,
-//! CLI task execution, and the stable SDK are not yet implemented.
+//! dispatcher, provider adapters, reusable run coordinator, and SQLite durable
+//! storage. The CLI uses these services for task execution and session recovery.
+//! SDK stability is tracked as a future capability.
 
 pub mod approvals;
 pub mod background;

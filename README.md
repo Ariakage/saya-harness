@@ -56,6 +56,11 @@
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规划](docs/saya-plugin.md) | 未来插件系统的边界、实施阶段与验收方向 |
 | [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
+| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 候选范围、五个阶段与 DEV-038 至 DEV-074 |
+| [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
+| [日志与追踪](docs/observability.md) | 五级诊断、关联 span、日志查询与安全边界 |
+| [Session 导出](docs/session-export.md) | 一致性快照、Markdown／JSON 与文件保存 |
+| [Goal 设计](docs/goal.md) | 目标、步骤、证据、手动与有限自动推进 |
 | [MVP 实施路线图](docs/roadmap.md) | 8 个 MVP 里程碑、工作量估算与交付条件 |
 | [实施任务](docs/implementation-plan.md) | 37 个任务、依赖、交付与基线／验收覆盖 |
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |
@@ -64,7 +69,7 @@
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-CLI 之后的新增功能按[后续能力路线图](docs/capability-roadmap.md)规划，优先 Sandbox、MCP Client、Skills／插件与 Hooks，观测评估同步建设；界面继续按 TUI → GUI 演进。
+后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 候选范围为共享应用服务、增强日志、Session Export 和默认 TUI，随后按依赖交付 Sandbox、MCP、Compact、插件及 Goal。具体版本根据验收收敛，GUI 位于 TUI 之后。
 
 ## 许可证
 

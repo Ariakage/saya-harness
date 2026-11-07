@@ -7,14 +7,14 @@
 ## 开发流程
 
 1. 阅读 [AGENTS.md](../AGENTS.md)、[开发进度](progress.md)及任务涉及的设计文档。
-2. 检查当前文件与工作区修改，按[实施任务](implementation-plan.md)的依赖和阶段退出条件确定当前任务。
+2. 检查当前文件与工作区修改，按对应版本的依赖和退出条件确定任务。MVP 定义见[实施任务](implementation-plan.md)，新增功能见[后续开发计划](post-mvp-plan.md)。
 3. 按已确认基线实现；只有改变范围、默认值或公共契约时才补充[决策记录](decisions.md)，普通内部实现自行处理。
 4. 完成聚焦、完整的改动并同步相关文档，按[路线图](roadmap.md)中的完成标准验证。
 5. 在进度记录中更新状态、证据、阻碍与下一任务，报告实际结果及未验证范围。
 
 工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，workspace 为 saya-core＋saya-cli，二进制 saya，许可证 MIT。具体依赖补丁版本在初始化时按兼容性选择并提交 Cargo.lock，不重新提出偏好问题。
 
-根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。B-23 的顺序已细化为路线图 P0 至 P7、DEV-001 至 DEV-032；核心与 CLI 的依赖边界遵循 B-02。工作量估算与任务完成状态分别维护，不把计划日程当作已完成证据。
+根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。MVP 的实施定义为 P0 至 P7、DEV-001 至 DEV-037，新增任务为 DEV-038 至 DEV-074。各版本依据对应任务和实际验收维护状态，原 CLI／core 基线见 B-02。
 
 提交信息遵循 [AGENTS.md](../AGENTS.md) 中的 Conventional Commits 约定。
 
