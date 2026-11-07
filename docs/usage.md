@@ -34,6 +34,8 @@ cp examples/config.example.toml "$config_path"
 
 Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。Ctrl+C 取消运行或界面操作，空闲时清空草稿。输入为空时 Ctrl+D 退出，活跃操作先取消并等待收尾。PgUp／PgDn 滚动对话或详情，End 跟随最新对话，Esc 关闭详情。待批准时，y 批准，n 或 Esc 拒绝。需要澄清时在输入框回复。
 
+在单行输入的开头键入 `/`，光标位于末尾时显示命令建议与灰色补全后缀。↑／↓选择，Tab或→填入草稿，Enter执行。Esc先隐藏建议并保留草稿。支持工作模式、权限和导出格式等固定参数，profile名、会话／任务ID与目标路径由用户补齐。`//`可输入字面量斜杠，多行文本继续使用常规编辑。
+
 `/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
 
 `saya chat` 保留文本交互，`run`、`resume`、`session`、`config` 和 `logs` 继续通过显式子命令使用。无子命令的管道／非终端调用、JSON／JSONL 输出冲突返回用法错误2，stdout为空，并在打开配置、会话或终端之前提示选择具体子命令。脚本输入使用 `saya run --stdin`。

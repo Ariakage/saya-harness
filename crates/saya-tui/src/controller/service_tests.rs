@@ -342,6 +342,31 @@ async fn cancelled_session_activation_keeps_current_session_and_releases_candida
 }
 
 #[tokio::test]
+async fn incomplete_export_commands_preserve_the_draft_without_starting_a_worker() {
+    let (_root, mut app) = fixture();
+    create(&mut app).await;
+    let before = snapshot(&app).await;
+    for text in [
+        "/export json ",
+        "/export-full markdown ",
+        "/export unsupported target",
+    ] {
+        app.state.editor.set_text(text);
+        let error = app
+            .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<BoundaryError>().unwrap().0.code,
+            "invalid_input"
+        );
+        assert_eq!(app.state.editor.text(), text);
+        assert!(app.ui_job.is_none() && app.active.is_none());
+    }
+    assert_eq!(before.last_change_seq, snapshot(&app).await.last_change_seq);
+}
+
+#[tokio::test]
 async fn ui_export_uses_current_plan_mode_and_preserves_existing_files() {
     let (root, mut app) = fixture();
     create(&mut app).await;

@@ -1,4 +1,5 @@
 //! Terminal frontend for Saya's shared application services.
+pub mod commands;
 pub mod input;
 pub mod terminal;
 

@@ -4,24 +4,6 @@ use crate::view::Details;
 use saya_app::interaction::Request;
 use saya_core::{boundary::StoreChange, contract::PermissionMode};
 
-pub(super) const COMMANDS: &[&str] = &[
-    "/mode plan",
-    "/mode build",
-    "/mode code",
-    "/mode work",
-    "/permissions auto",
-    "/permissions manual",
-    "/permissions bypass",
-    "/sessions",
-    "/new",
-    "/profiles",
-    "/tools",
-    "/jobs",
-    "/status",
-    "/cancel",
-    "/help",
-    "/exit",
-];
 fn mode(value: &str) -> Option<WorkMode> {
     match value.to_ascii_lowercase().as_str() {
         "plan" => Some(WorkMode::Plan),
@@ -168,7 +150,14 @@ impl App {
             lines: COMMANDS
                 .iter()
                 .enumerate()
-                .map(|(i, command)| format!("{} {command}", if i == selected { "›" } else { " " }))
+                .map(|(i, command)| {
+                    format!(
+                        "{} {} · {}",
+                        if i == selected { "›" } else { " " },
+                        command.text,
+                        command.description
+                    )
+                })
                 .chain(std::iter::once("↑/↓ select · Enter run · Esc close".into()))
                 .collect(),
         });
@@ -330,11 +319,13 @@ impl App {
                     title: "Help".into(),
                     lines: COMMANDS
                         .iter()
-                        .map(|text| (*text).into())
+                        .map(|command| format!("{} · {}", command.text, command.description))
                         .chain([
                             "Enter send · Alt+Enter / Ctrl+J newline".into(),
                             "Ctrl+P commands · Ctrl+C cancel · Ctrl+D exit".into(),
                             "PgUp/PgDn scroll · End follow output".into(),
+                            "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"
+                                .into(),
                         ])
                         .collect(),
                 });

@@ -1,5 +1,6 @@
 //! Render production widgets from a synthetic state using TestBackend.
 use ratatui::{Terminal, backend::TestBackend};
+use saya_tui::commands::COMMANDS;
 use saya_tui::view::{self, Details, Role, State};
 use std::{error::Error, io::Write};
 use unicode_width::UnicodeWidthStr;
@@ -69,28 +70,26 @@ fn fixture(scene: &str) -> State {
         "commands" => {
             state.set_details(Details {
                 title: "Commands".into(),
-                lines: [
-                    "› /mode plan",
-                    "  /mode build",
-                    "  /mode code",
-                    "  /mode work",
-                    "  /permissions auto",
-                    "  /permissions manual",
-                    "  /permissions bypass",
-                    "  /sessions",
-                    "  /new",
-                    "  /profiles",
-                    "  /tools",
-                    "  /jobs",
-                    "  /status",
-                    "  /cancel",
-                    "  /help",
-                    "  /exit",
-                    "↑/↓ select · Enter run · Esc close",
-                ]
-                .map(str::to_owned)
-                .into(),
+                lines: COMMANDS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, suggestion)| {
+                        format!(
+                            "{} {} · {}",
+                            if index == 0 { "›" } else { " " },
+                            suggestion.text,
+                            suggestion.description
+                        )
+                    })
+                    .chain(std::iter::once("↑/↓ select · Enter run · Esc close".into()))
+                    .collect(),
             });
+        }
+        "completion" => {
+            state.editor.set_text("/permissions ");
+            state
+                .completion
+                .update(state.editor.text(), state.editor.cursor(), true);
         }
         _ => {}
     }
@@ -120,18 +119,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.iter().any(|argument| argument == "--help") {
         writeln!(
             std::io::stdout().lock(),
-            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands]"
+            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion]"
         )?;
         return Ok(());
     }
     if args.len() > 3 {
-        return Err("usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands]".into());
+        return Err(
+            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion]".into(),
+        );
     }
     let width = dimension(args.first(), 120, 240)?;
     let height = dimension(args.get(1), 30, 80)?;
     let scene = args.get(2).map(String::as_str).unwrap_or("chat");
-    if !matches!(scene, "chat" | "approval" | "tool" | "commands") {
-        return Err("scene must be chat, approval, tool or commands".into());
+    if !matches!(
+        scene,
+        "chat" | "approval" | "tool" | "commands" | "completion"
+    ) {
+        return Err("scene must be chat, approval, tool, commands or completion".into());
     }
     let mut state = fixture(scene);
     let mut terminal = Terminal::new(TestBackend::new(width, height))?;

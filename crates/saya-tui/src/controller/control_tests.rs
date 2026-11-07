@@ -83,6 +83,165 @@ fn key(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
 }
 
 #[tokio::test]
+async fn slash_completion_selects_and_fills_before_enter_executes() {
+    let (_root, mut app) = fixture();
+    app.state.editor.set_text("/mo");
+    app.key(key(KeyCode::Down, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/mo");
+    assert_eq!(app.state.completion.current().unwrap().text, "/mode build");
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/mode build");
+    assert_eq!(app.config.mode, WorkMode::Work);
+    assert!(app.active.is_none() && app.prepared.is_none() && app.ui_job.is_none());
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.config.mode, WorkMode::Build);
+    assert!(app.state.editor.text().is_empty());
+}
+
+#[tokio::test]
+async fn completion_dismissal_preserves_draft_and_tab_explicitly_reopens() {
+    let (_root, mut app) = fixture();
+    app.state.editor.set_text("/permissions ");
+    app.key(key(KeyCode::Down, KeyEventKind::Press))
+        .await
+        .unwrap();
+    app.key(key(KeyCode::Esc, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/permissions ");
+    assert!(!app.state.completion.visible());
+    app.refresh_completion();
+    assert!(!app.state.completion.visible());
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/permissions manual");
+    assert_eq!(app.config.permissions_mode, PermissionMode::Auto);
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.config.permissions_mode, PermissionMode::Manual);
+}
+
+#[tokio::test]
+async fn first_escape_dismisses_completion_before_the_next_escape_denies_approval() {
+    for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+        let (_root, mut app) = fixture();
+        let (request, mut receiver) = approval(&app, "completion-visible");
+        app.request(request);
+        app.state.editor.set_text("/mo");
+        app.key(KeyEvent::new(KeyCode::Esc, modifiers))
+            .await
+            .unwrap();
+        assert!(!app.state.completion.visible());
+        assert_eq!(app.state.editor.text(), "/mo");
+        assert_eq!(
+            app.state.details.as_ref().unwrap().title,
+            "Approval required"
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        app.key(key(KeyCode::Esc, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
+    }
+}
+
+#[tokio::test]
+async fn completion_respects_the_cursor_literal_slashes_and_normal_editing() {
+    let (_root, mut app) = fixture();
+    app.state.editor.set_text("/mo");
+    app.state.editor.move_left();
+    app.key(key(KeyCode::Right, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/mo");
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/mo");
+    app.key(key(KeyCode::Right, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/mode plan");
+    for text in ["/unknown", "/exit"] {
+        app.state.editor.set_text(text);
+        app.key(key(KeyCode::Tab, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(app.state.editor.text(), text);
+    }
+    for text in ["//literal", "你好🌸\nmore"] {
+        app.state.editor.set_text(text);
+        app.key(key(KeyCode::Right, KeyEventKind::Press))
+            .await
+            .unwrap();
+        assert_eq!(app.state.editor.text(), text);
+        assert!(!app.state.completion.visible());
+    }
+    app.state.editor.set_text("plain");
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "plain\t");
+}
+
+#[tokio::test]
+async fn argument_scaffold_completion_stays_in_the_editor_without_starting_ui_work() {
+    let (_root, mut app) = fixture();
+    app.state.editor.set_text("/export j");
+    app.key(key(KeyCode::Tab, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/export json ");
+    assert!(app.prepared.is_none() && app.active.is_none() && app.ui_job.is_none());
+    assert!(!app.config.data_dir.exists());
+}
+
+#[tokio::test]
+async fn command_palette_fills_required_arguments_and_preserves_an_existing_message() {
+    let (_root, mut app) = fixture();
+    let selected = COMMANDS
+        .iter()
+        .position(|command| command.text == "/resume ")
+        .unwrap();
+    app.palette = Some(selected);
+    app.show_palette();
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "/resume ");
+    assert!(app.ui_job.is_none());
+    app.state.editor.set_text("草稿 🌸");
+    app.palette = Some(selected);
+    app.show_palette();
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), "草稿 🌸");
+    assert!(app.ui_job.is_none());
+    app.state.editor.clear();
+    app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL))
+        .await
+        .unwrap();
+    assert_eq!(app.state.details.as_ref().unwrap().title, "Commands");
+    assert!(!app.state.completion.visible());
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.config.mode, WorkMode::Plan);
+}
+
+#[tokio::test]
 async fn approval_decisions_require_a_fresh_press_in_the_visible_prompt() {
     for (decision, expected) in [('y', true), ('n', false)] {
         let (_root, mut app) = fixture();

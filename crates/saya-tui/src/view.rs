@@ -1,11 +1,14 @@
 //! Pure, bounded TUI state and rendering. Runtime effects belong to the controller.
-use crate::editor::{Editor, prefix_boundary, safe_text};
+use crate::{
+    commands::Completion,
+    editor::{Editor, prefix_boundary, safe_text},
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::collections::VecDeque;
 use unicode_segmentation::UnicodeSegmentation;
@@ -23,6 +26,7 @@ const ACCENT: Color = Color::Rgb(127, 212, 226);
 const MUTED: Color = Color::Rgb(147, 155, 174);
 const BACKGROUND: Color = Color::Rgb(20, 23, 31);
 const FOREGROUND: Color = Color::Rgb(225, 229, 238);
+const MAX_COMPLETION_ROWS: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -59,6 +63,7 @@ pub struct State {
     pub pending_mode: Option<String>,
     pub usage: String,
     pub editor: Editor,
+    pub completion: Completion,
     pub messages: VecDeque<Message>,
     pub details: Option<Details>,
     /// Visual line offset from the top of the current details pane.
@@ -83,6 +88,7 @@ impl Default for State {
             pending_mode: None,
             usage: String::new(),
             editor: Editor::default(),
+            completion: Completion::default(),
             messages: VecDeque::new(),
             details: None,
             details_scroll: 0,
@@ -314,7 +320,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         .min(usize::from(area.height / 3).max(3)) as u16;
     let areas = Layout::vertical([
         Constraint::Length(if area.height < 12 { 2 } else { 3 }),
-        Constraint::Min(1),
+        Constraint::Min(0),
         Constraint::Length(input_height),
         Constraint::Length(1),
     ])
@@ -337,7 +343,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         draw_transcript(frame, state, body);
     }
     draw_editor(frame, state, areas[2]);
-    let footer = if state.details.is_some() {
+    draw_completion(frame, state, body);
+    let footer = if state.completion.visible() {
+        "↑/↓ select  Tab/→ complete  Esc dismiss  Enter run"
+    } else if state.details.is_some() {
         "PgUp/PgDn details  Esc back  Ctrl+P commands  Ctrl+C stop"
     } else if state.scroll == 0 {
         "Enter send  Alt+Enter/Ctrl+J newline  Ctrl+P commands  Ctrl+C stop  Ctrl+D exit"
@@ -599,17 +608,119 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let first_row = cursor_row.saturating_sub(usize::from(inner.height) - 1);
     let first_column = cursor_column.saturating_sub(usize::from(inner.width) - 1);
     let text = safe_text(state.editor.text());
+    let ghost = state
+        .completion
+        .current()
+        .filter(|_| {
+            state.completion.visible() && state.editor.cursor() == state.editor.text().len()
+        })
+        .and_then(|suggestion| suggestion.text.strip_prefix(state.editor.text()))
+        .map(safe_line);
     let lines = text
         .split('\n')
+        .enumerate()
         .skip(first_row)
         .take(usize::from(inner.height))
-        .map(|line| Line::from(crop_display(line, first_column, usize::from(inner.width))))
+        .map(|(row, line)| {
+            let draft = crop_display(line, first_column, usize::from(inner.width));
+            let remaining =
+                usize::from(inner.width).saturating_sub(UnicodeWidthStr::width(draft.as_str()));
+            let mut spans = vec![Span::raw(draft)];
+            if row == cursor_row
+                && let Some(ghost) = &ghost
+            {
+                spans.push(Span::styled(
+                    crop_display(ghost, 0, remaining),
+                    Style::default().fg(MUTED),
+                ));
+            }
+            Line::from(spans)
+        })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
     frame.set_cursor_position((
         inner.x + (cursor_column - first_column) as u16,
         inner.y + (cursor_row - first_row) as u16,
     ));
+}
+
+fn draw_completion(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    if !state.completion.visible() || area.height < 3 || area.width < 4 {
+        return;
+    }
+    let items = &state.completion.items;
+    let rows = MAX_COMPLETION_ROWS
+        .min(items.len())
+        .min(usize::from(area.height - 2));
+    if rows == 0 {
+        return;
+    }
+    let selected = state.completion.selected.min(items.len() - 1);
+    let first = selected
+        .saturating_sub(rows - 1)
+        .min(items.len().saturating_sub(rows));
+    let popup = Rect::new(
+        area.x + 1,
+        area.bottom() - rows as u16 - 2,
+        (area.width - 2).min(80),
+        rows as u16 + 2,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Command suggestions ")
+        .title_bottom(" ↑↓ Tab/→ Esc ")
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BACKGROUND));
+    let inner = block.inner(popup);
+    let text_width = usize::from(inner.width.saturating_sub(2));
+    let commands = items
+        .iter()
+        .skip(first)
+        .take(rows)
+        .map(|item| crop_display(&safe_line(item.text), 0, text_width))
+        .collect::<Vec<_>>();
+    let command_width = commands
+        .iter()
+        .map(|command| UnicodeWidthStr::width(command.as_str()))
+        .max()
+        .unwrap_or(0);
+    let lines = items
+        .iter()
+        .skip(first)
+        .zip(commands)
+        .enumerate()
+        .map(|(row, (item, command))| {
+            let active = row + first == selected;
+            let style = if active {
+                Style::default()
+                    .fg(BACKGROUND)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FOREGROUND).bg(BACKGROUND)
+            };
+            let padding = command_width - UnicodeWidthStr::width(command.as_str()) + 2;
+            let mut spans = vec![
+                Span::raw(if active { "› " } else { "  " }),
+                Span::raw(command),
+            ];
+            if text_width >= command_width + 6 {
+                spans.push(Span::raw(" ".repeat(padding)));
+                spans.push(Span::styled(
+                    crop_display(
+                        &safe_line(item.description),
+                        0,
+                        text_width - command_width - 2,
+                    ),
+                    Style::default().fg(if active { BACKGROUND } else { MUTED }),
+                ));
+            }
+            Line::from(spans).style(style)
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(block, popup);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn crop_display(text: &str, skip: usize, width: usize) -> String {
@@ -678,7 +789,11 @@ fn push_line(text: String, style: Style, lines: &mut VecDeque<Line<'static>>, co
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::commands::Suggestion;
+    use ratatui::{
+        Terminal,
+        backend::{Backend, TestBackend},
+    };
 
     fn render(state: &mut State, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -865,5 +980,150 @@ mod tests {
         });
         assert!(render(&mut state, 120, 24).contains("Tool details"));
         assert!(render(&mut state, 40, 12).contains("unknown"));
+    }
+
+    #[test]
+    fn completion_ghost_keeps_the_draft_cursor_and_details_unchanged() {
+        let mut state = State::default();
+        state.editor.set_text("/per");
+        state
+            .completion
+            .update(state.editor.text(), state.editor.cursor(), true);
+        state.set_details(Details {
+            title: "Saved records".into(),
+            lines: vec!["state unknown".into()],
+        });
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!((cursor.x, cursor.y), (5, 21));
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(cursor.x, cursor.y)].symbol(), "m");
+        assert_eq!(buffer[(cursor.x, cursor.y)].fg, MUTED);
+        assert_eq!(state.editor.text(), "/per");
+        assert_eq!(state.editor.cursor(), 4);
+        assert_eq!(state.details.as_ref().unwrap().title, "Saved records");
+        assert_eq!(state.details.as_ref().unwrap().lines, ["state unknown"]);
+        assert!(
+            buffer
+                .content
+                .iter()
+                .any(|cell| { cell.symbol() == "›" && cell.bg == ACCENT })
+        );
+        let image = render(&mut state, 120, 24);
+        assert!(image.contains("Command suggestions"));
+        assert!(image.contains("Tab/→ complete"));
+    }
+
+    #[test]
+    fn dismissed_completion_clears_its_popup_and_ghost_on_the_same_terminal() {
+        let mut state = State::default();
+        state.editor.set_text("/per");
+        state
+            .completion
+            .update(state.editor.text(), state.editor.cursor(), true);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        state.completion.dismiss();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let image = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!image.contains("Command suggestions"));
+        assert!(!image.contains('›'));
+        assert!(!image.contains("/permissions"));
+        assert_eq!(terminal.backend().buffer()[(5, 21)].symbol(), " ");
+        assert_eq!(state.editor.text(), "/per");
+    }
+
+    #[test]
+    fn narrow_completion_keeps_the_selected_row_in_its_six_row_window() {
+        let mut state = State::default();
+        state.editor.set_text("/");
+        state.completion.update("/", 1, true);
+        assert!(state.completion.items.len() > MAX_COMPLETION_ROWS);
+        state.completion.selected = state.completion.items.len() - 1;
+        let selected = state.completion.current().unwrap().text;
+        let mut terminal = Terminal::new(TestBackend::new(26, 16)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = (0..16)
+            .find(|row| buffer[(2, *row)].symbol() == "›")
+            .unwrap();
+        assert_eq!(row, 10);
+        assert_eq!(buffer[(2, row)].bg, ACCENT);
+        let actual = (4..24)
+            .map(|column| buffer[(column, row)].symbol())
+            .collect::<String>();
+        assert_eq!(actual.trim_end(), crop_display(selected, 0, 20));
+        assert_eq!(
+            buffer
+                .content
+                .iter()
+                .filter(|cell| cell.symbol() == "›")
+                .count(),
+            1
+        );
+        assert_eq!(state.editor.text(), "/");
+    }
+
+    #[test]
+    fn ghost_respects_unicode_horizontal_cropping_and_end_of_draft() {
+        let mut state = State::default();
+        state.editor.set_text("/界界界");
+        state.completion.update("/", 1, true);
+        state.completion.items = vec![Suggestion {
+            text: "/界界界ab",
+            description: "Unicode preview",
+        }];
+        let mut terminal = Terminal::new(TestBackend::new(6, 3)).unwrap();
+        terminal
+            .draw(|frame| draw_editor(frame, &state, frame.area()))
+            .unwrap();
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!((cursor.x, cursor.y), (4, 1));
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 1)].symbol(), " ");
+        assert_eq!(buffer[(2, 1)].symbol(), "界");
+        assert_eq!(buffer[(4, 1)].symbol(), "a");
+        assert_eq!(buffer[(4, 1)].fg, MUTED);
+        assert_eq!(state.editor.text(), "/界界界");
+        state.editor.move_left();
+        terminal
+            .draw(|frame| draw_editor(frame, &state, frame.area()))
+            .unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| { cell.symbol() != "a" && cell.symbol() != "b" })
+        );
+    }
+
+    #[test]
+    fn completion_degrades_safely_on_small_frames_with_bounded_history() {
+        let mut state = State::default();
+        for _ in 0..12 {
+            state.push_message(Role::Tool, "Tool", "界".repeat(MAX_MESSAGE_BYTES / 3));
+        }
+        state.editor.set_text("/per");
+        state
+            .completion
+            .update(state.editor.text(), state.editor.cursor(), true);
+        for (width, height) in [(0, 0), (1, 1), (19, 5), (20, 6), (30, 10), (120, 30)] {
+            render(&mut state, width, height);
+            assert_eq!(state.editor.text(), "/per");
+        }
+        let image = render(&mut state, 20, 6);
+        assert!(image.contains("/permissions"));
+        assert!(!image.contains('›'));
+        assert!(state.dropped_messages > 0);
+        assert!(state.messages.len() <= MAX_MESSAGES);
     }
 }

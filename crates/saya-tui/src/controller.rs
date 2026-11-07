@@ -6,6 +6,7 @@ mod controls;
 mod service_tests;
 mod services;
 use crate::{
+    commands::COMMANDS,
     input::TerminalInput,
     terminal::TerminalGuard,
     view::{self, Role, State},
@@ -92,7 +93,11 @@ impl App {
             queued_prompt: None,
         };
         app.refresh_header();
-        app.state.push_message(Role::System,"Saya", "Ready. Enter sends a message; Alt+Enter or Ctrl+J adds a line. Ctrl+C cancels. Ctrl+D exits when idle.");
+        app.state.push_message(
+            Role::System,
+            "Saya",
+            "Ready. Enter sends a message; Alt+Enter or Ctrl+J adds a line. Type / for commands and Tab to complete. Ctrl+C cancels. Ctrl+D exits when idle.",
+        );
         if app.config.profile.is_none() {
             app.notice("Choose a configured model profile before sending a message.");
         }
@@ -317,6 +322,19 @@ impl App {
         Ok(())
     }
     async fn key(&mut self, key: KeyEvent) -> Result<bool> {
+        self.refresh_completion();
+        let result = self.handle_key(key).await;
+        self.refresh_completion();
+        result
+    }
+    fn refresh_completion(&mut self) {
+        self.state.completion.update(
+            self.state.editor.text(),
+            self.state.editor.cursor(),
+            self.palette.is_none(),
+        );
+    }
+    async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
         if key.kind == KeyEventKind::Release {
             return Ok(false);
         }
@@ -369,7 +387,7 @@ impl App {
                     return Ok(false);
                 }
                 KeyCode::Down => {
-                    self.palette = Some((selected + 1).min(controls::COMMANDS.len() - 1));
+                    self.palette = Some((selected + 1).min(COMMANDS.len() - 1));
                     self.show_palette();
                     return Ok(false);
                 }
@@ -384,9 +402,23 @@ impl App {
                     let command = if typed.starts_with('/') {
                         typed.as_str()
                     } else {
-                        controls::COMMANDS[selected]
+                        COMMANDS[selected].text
                     };
                     self.palette = None;
+                    if !typed.starts_with('/') && command.ends_with(' ') {
+                        if !typed.is_empty() {
+                            self.notice(
+                                "Clear the current draft before entering command arguments.",
+                            );
+                            self.state.details = None;
+                            self.show_pending();
+                            return Ok(false);
+                        }
+                        self.state.editor.set_text(command);
+                        self.state.details = None;
+                        self.show_pending();
+                        return Ok(false);
+                    }
                     let exit = self.command(command).await?;
                     if typed.starts_with('/') {
                         self.state.editor.clear();
@@ -395,6 +427,39 @@ impl App {
                         self.show_pending();
                     }
                     return Ok(exit);
+                }
+                _ => {}
+            }
+        }
+        if key.code == KeyCode::Esc
+            && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            && self.state.completion.visible()
+        {
+            self.state.completion.dismiss();
+            return Ok(false);
+        }
+        if key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::Tab if self.state.completion.eligible() => {
+                    self.state.completion.reopen();
+                    if let Some(suggestion) = self.state.completion.current() {
+                        self.state.editor.set_text(suggestion.text);
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Right if self.state.completion.visible() => {
+                    if let Some(suggestion) = self.state.completion.current() {
+                        self.state.editor.set_text(suggestion.text);
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Up if self.state.completion.visible() => {
+                    self.state.completion.previous();
+                    return Ok(false);
+                }
+                KeyCode::Down if self.state.completion.visible() => {
+                    self.state.completion.next();
+                    return Ok(false);
                 }
                 _ => {}
             }
@@ -575,6 +640,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 app.finish(result)?;
             }
         }
+        app.refresh_completion();
         if redraw && dirty {
             terminal.draw(|frame| view::draw(frame, &mut app.state))?;
             dirty = false;

@@ -238,6 +238,19 @@ impl App {
                 {
                     return Err("Wait for the pending mode change before exporting".into());
                 }
+                let export = if matches!(name, "/export" | "/export-full") {
+                    let (format, path) = argument.split_once(' ').ok_or_else(|| {
+                        failure("invalid_input", "Use /export json|markdown PATH")
+                    })?;
+                    if !matches!(format, "json" | "markdown") || path.trim().is_empty() {
+                        return Err(
+                            failure("invalid_input", "Use /export json|markdown PATH").into()
+                        );
+                    }
+                    Some((format.to_owned(), std::path::PathBuf::from(path.trim())))
+                } else {
+                    None
+                };
                 let prepared = self
                     .prepared
                     .as_ref()
@@ -248,7 +261,6 @@ impl App {
                 let workspace = prepared.session.workspace.clone();
                 let mode = self.current_mode()?;
                 let operation = name.to_owned();
-                let argument = argument.to_owned();
                 let cancel = Arc::new(RunCancellation::new());
                 let checking = cancel.clone();
                 let join = tokio::spawn(async move {
@@ -290,19 +302,13 @@ impl App {
                         .await
                         .map_err(|_| failure("ui_worker_failed", "Tool display worker failed"))?;
                     }
-                    let (format, path) = argument.split_once(' ').ok_or_else(|| {
-                        failure("invalid_input", "Use /export json|markdown PATH")
-                    })?;
-                    if !matches!(format, "json" | "markdown") || path.trim().is_empty() {
-                        return Err(failure("invalid_input", "Use /export json|markdown PATH"));
-                    }
-                    let target = std::path::PathBuf::from(path.trim());
+                    let (format, target) = export
+                        .ok_or_else(|| failure("invalid_input", "Export arguments unavailable"))?;
                     let target = if target.is_absolute() {
                         target
                     } else {
                         workspace.join(target)
                     };
-                    let format = format.to_owned();
                     let full = operation == "/export-full";
                     tokio::task::spawn_blocking(move || {
                         let export = SessionExport::from_snapshot(

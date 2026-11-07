@@ -40,6 +40,12 @@
 | DEV-047 | 完成 | d7a1489 | saya-tui library、Ratatui0.30.2／Crossterm0.29.0已锁定。3项真实PTY生命周期测试、Clippy及格式检查通过，覆盖normal/error/panic/重复进入及termios与屏幕恢复。日志为target/n1-dev047-*.log |
 
 
+### RC1之后的TUI交互完善
+
+2026-11-08，开发线加入斜杠命令补全与输入建议。24项静态命令／参数前缀与命令面板、帮助共用，支持灰色后缀、候选说明、方向键选择、Tab／末尾→接受及Esc隐藏。Enter执行完整草稿，profile名、会话／任务ID和目标路径由用户补齐。
+
+本机macOS27.2 ARM通过格式、全目标Clippy、466项Rust测试、优化构建、5项发行工具测试和14组真实PTY验收。新增场景覆盖补全时的零副作用、参数前缀、草稿／光标／多行／字面量斜杠、命令面板及人工审批优先级。Shift+Esc关闭建议和缺少导出路径时保留草稿另有针对性回归。日志为 `target/tui-completion-check.log`，完整正常入口报告为 `target/tui-completion-release-matrix.json`。本节证据来自本机，RC1的四平台候选证据对应上方已固定源码。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

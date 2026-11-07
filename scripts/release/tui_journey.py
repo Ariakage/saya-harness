@@ -475,6 +475,157 @@ def stream_journey(binary, protocol):
         fixture.close()
 
 
+
+def command_completion_journey(binary):
+    call = ('completion-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
+    def denied(request):
+        result = tool_result(request, call[0])
+        if result.get('ok') or result.get('error', {}).get('code') != 'permission_denied':
+            raise RuntimeError('second Esc did not reject the pending tool approval')
+        return {'text': 'COMPLETION_APPROVAL_DONE'}
+    fixture = Fixture('openai-chat-completions', [
+        {'text': 'COMPLETION_MULTILINE_DONE'}, {'text': 'COMPLETION_LITERAL_DONE'},
+        {'call': call}, denied])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-completion-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            (workspace / 'fact.txt').write_text('completion fixture\n')
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                def editor_text():
+                    rows = terminal.screen.text.splitlines()
+                    start = next((index for index, row in enumerate(rows) if '┌ Message ' in row), None)
+                    if start is None:
+                        return None
+                    content = []
+                    for row in rows[start + 1:]:
+                        if row.startswith('└'):
+                            break
+                        if row.startswith('│') and row.endswith('│'):
+                            content.append(row[1:-1].rstrip())
+                    return '\n'.join(content).rstrip()
+
+                def mode():
+                    return terminal.screen.text.splitlines()[0].split('|')[0].split()[-1]
+
+                def permissions():
+                    return terminal.screen.text.splitlines()[0].split('|')[1].strip()
+
+                def no_completion_effects(expected_mode, expected_permissions):
+                    if mode() != expected_mode or permissions() != expected_permissions:
+                        raise RuntimeError('completion changed the active mode or permissions before Enter')
+                    if fixture.requests or (root / 'data').exists() or (root / 'state').exists():
+                        raise RuntimeError('completion invoked a model or accessed persistent session storage')
+                    if list(workspace.iterdir()) != [workspace / 'fact.txt']:
+                        raise RuntimeError('completion changed workspace files')
+
+                def clear_draft():
+                    terminal.send(b'\x03')
+                    terminal.wait(lambda: editor_text() == '' and 'Command suggestions' not in terminal.screen.text,
+                                  'empty draft after Ctrl+C')
+
+                terminal.title()
+                terminal.send('/')
+                terminal.until('Command suggestions')
+                terminal.send('mo')
+                terminal.until('/mode plan')
+                terminal.send(b'\t')
+                terminal.wait(lambda: editor_text() == '/mode plan', 'Tab completed mode draft')
+                no_completion_effects('WORK', 'auto')
+                terminal.send(b'\r')
+                terminal.wait(lambda: mode() == 'PLAN' and editor_text() == '', 'explicit mode command execution')
+
+                terminal.send('/permissions ')
+                terminal.until('Command suggestions')
+                terminal.send(b'\x1b[B')
+                terminal.wait(lambda: any('› /permissions manual' in row for row in terminal.screen.text.splitlines()),
+                              'highlighted permissions suggestion')
+                terminal.send(b'\t')
+                terminal.wait(lambda: editor_text() == '/permissions manual', 'selected permissions completion')
+                no_completion_effects('PLAN', 'auto')
+                terminal.send(b'\r')
+                terminal.wait(lambda: permissions() == 'Manual Approval' and editor_text() == '',
+                              'explicit permissions command execution')
+
+                terminal.send('/mo')
+                terminal.until('Command suggestions')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.text,
+                              'Esc hid suggestions and ghost while preserving draft')
+                terminal.send(b'\x10')
+                terminal.until('Commands')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: editor_text() == '/mo' and 'Commands' not in terminal.screen.text,
+                              'existing command palette closed with draft intact')
+                clear_draft()
+
+                terminal.send('/resume-a')
+                terminal.until('Command suggestions')
+                terminal.send(b'\t')
+                terminal.send('NOT_A_SESSION_ID')
+                terminal.wait(lambda: editor_text() == '/resume-accept NOT_A_SESSION_ID',
+                              'scaffold completion retained its trailing argument space')
+                no_completion_effects('PLAN', 'Manual Approval')
+                clear_draft()
+
+                terminal.send('/mode wo')
+                terminal.until('Command suggestions')
+                terminal.send(b'\x1b[C')
+                terminal.send(' ')
+                terminal.wait(lambda: editor_text() == '/mode work' and 'Command suggestions' not in terminal.screen.text,
+                              'Right accepted actual draft before additional typing')
+                no_completion_effects('PLAN', 'Manual Approval')
+                clear_draft()
+
+                terminal.send('普通中文')
+                terminal.send(b'\x0a')
+                terminal.send('第二行')
+                terminal.wait(lambda: editor_text() == '普通中文\n第二行' and
+                              'Command suggestions' not in terminal.screen.text, 'ordinary multiline draft without completion')
+                no_completion_effects('PLAN', 'Manual Approval')
+                terminal.send(b'\r')
+                terminal.until('COMPLETION_MULTILINE_DONE')
+                wait_idle(terminal, root)
+                if not any(message.get('role') == 'user' and message.get('content') == '普通中文\n第二行'
+                           for message in fixture.requests[0]['messages']):
+                    raise RuntimeError('ordinary multiline input was changed by command completion')
+
+                terminal.send('//literal')
+                terminal.wait(lambda: editor_text() == '//literal' and 'Command suggestions' not in terminal.screen.text,
+                              'escaped slash draft without completion')
+                terminal.send(b'\r')
+                terminal.until('COMPLETION_LITERAL_DONE')
+                wait_idle(terminal, root, count=2)
+                if not any(message.get('role') == 'user' and message.get('content') == '/literal'
+                           for message in fixture.requests[1]['messages']):
+                    raise RuntimeError('escaped slash input was executed as a command')
+
+                terminal.line('Request the manual read fixture')
+                terminal.wait(lambda: call[0] in terminal.screen.text and 'Approval required' in terminal.screen.text,
+                              'pending manual approval')
+                terminal.send('/mo')
+                terminal.until('Command suggestions')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.text
+                              and 'Approval required' in terminal.screen.text, 'first Esc preserved tool approval')
+                if len(fixture.requests) != 3:
+                    raise RuntimeError('first completion Esc replied to a pending tool approval')
+                terminal.send(b'\x1b')
+                terminal.until('COMPLETION_APPROVAL_DONE')
+                wait_idle(terminal, root, count=3)
+                if len(fixture.requests) != 4:
+                    raise RuntimeError('completion approval interaction duplicated model requests')
+                clear_draft()
+                terminal.finish()
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def session_data(binary, root, config):
     result = subprocess.run([str(binary), '--config', str(config), '--cwd', str(root / 'workspace'),
                              '--output', 'json', 'session', 'list'], cwd=root / 'workspace',
@@ -961,6 +1112,8 @@ def main():
         passed(protocol + '-stream-resize-terminal-restore')
     mode_permission_matrix(binary)
     passed('four-modes-three-permissions')
+    command_completion_journey(binary)
+    passed('command-completion-editing-and-approval-priority')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
     mode_change_invalidates_approval(binary)
