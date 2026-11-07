@@ -275,3 +275,29 @@ fn honors_selected_config_and_environment_over_defaults() {
     assert_eq!(c.data_dir, root.join("chosen-data"));
     assert_ne!(c.config_path, second);
 }
+
+#[test]
+fn explicit_pricing_is_validated_without_changing_provider_identity() {
+    let temp = TempDir::new().unwrap();
+    let path = write(temp.path(), "config.toml", fixture());
+    let overrides = || Overrides {
+        config: Some(path.clone()),
+        ..Default::default()
+    };
+    let before = config::load(overrides(), test_env(temp.path()), temp.path())
+        .unwrap()
+        .profiles["chat"]
+        .fingerprint()
+        .unwrap();
+    let mut text = fixture().to_string();
+    text.push_str("\n[profiles.chat.pricing]\ncurrency = \"USD\"\ninput_microunits_per_million = 1000000\noutput_microunits_per_million = 2000000\n");
+    fs::write(&path, &text).unwrap();
+    let loaded = config::load(overrides(), test_env(temp.path()), temp.path()).unwrap();
+    assert_eq!(loaded.profiles["chat"].fingerprint().unwrap(), before);
+    assert_eq!(
+        loaded.profiles["chat"].pricing.as_ref().unwrap().currency,
+        "USD"
+    );
+    fs::write(&path, text.replace("USD", "usd")).unwrap();
+    assert!(config::load(overrides(), test_env(temp.path()), temp.path()).is_err());
+}

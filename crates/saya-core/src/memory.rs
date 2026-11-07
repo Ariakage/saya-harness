@@ -62,7 +62,8 @@ impl Store for MemoryStore {
                         }
                     }
                     StoreChange::ProjectContext { run_id, .. }
-                    | StoreChange::Activity { run_id, .. } => {
+                    | StoreChange::Activity { run_id, .. }
+                    | StoreChange::RunMetrics { run_id, .. } => {
                         if !next.runs.contains_key(run_id) {
                             return Err(failure("run not found"));
                         }

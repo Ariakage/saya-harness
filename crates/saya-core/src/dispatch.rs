@@ -100,6 +100,7 @@ pub struct ToolDispatcher {
     modes: ModeController,
     read_only: bool,
     context_guard: OnceLock<Arc<ContextGuard>>,
+    known_secrets: Vec<String>,
 }
 type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
 /// Review dependencies shared with the surrounding execution loop.
@@ -157,6 +158,7 @@ impl ToolDispatcher {
         exec_config: ExecConfig,
     ) -> Result<Self, BoundaryError> {
         let cancel = setup.cancellation.clone();
+        let known_secrets = setup.known_secrets.clone();
         let manager = ApprovalManager::new(
             policy.clone(),
             modes.clone(),
@@ -174,6 +176,7 @@ impl ToolDispatcher {
             modes,
             read_only: false,
             context_guard: OnceLock::new(),
+            known_secrets,
         })
     }
     pub(crate) fn set_context_guard(&self, guard: Arc<ContextGuard>) -> Result<(), BoundaryError> {
@@ -352,6 +355,7 @@ impl ToolDispatcher {
                 let tool = ReadTool::with_gate(self.files.clone(), kind, permit);
                 match tool.execute(call, context, cancel).await {
                     Ok(result) => {
+                        let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
                         save_result(store.as_ref(), call, context, &result).await?;
                         Ok(result)
                     }
@@ -409,7 +413,7 @@ impl ToolDispatcher {
                 if !observed.finished.load(Ordering::Acquire) {
                     save_result(observed.as_ref(), call, context, &result).await?;
                 }
-                Ok(result)
+                crate::redaction::tool_result(&result, &self.known_secrets)
             }
             _ => Err(failure("unknown_tool", "unsupported local tool")),
         }

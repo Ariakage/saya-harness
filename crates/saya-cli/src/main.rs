@@ -271,7 +271,10 @@ impl Cancellation for Cancel {
         })
     }
 }
-struct Terminal(tokio::sync::Mutex<std::fs::File>);
+struct Terminal {
+    file: tokio::sync::Mutex<std::fs::File>,
+    secrets: Vec<String>,
+}
 struct PollGuard(Arc<std::sync::atomic::AtomicBool>);
 impl Drop for PollGuard {
     fn drop(&mut self) {
@@ -289,38 +292,9 @@ fn safe_terminal_text(s: &str) -> String {
         })
         .collect()
 }
-fn redact_value(value: &mut serde_json::Value, secrets: &[String], depth: usize) {
-    match value {
-        serde_json::Value::String(text) => {
-            for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
-                *text = text.replace(secret, "[REDACTED]");
-            }
-            if depth < 4
-                && let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
-                && !matches!(&nested, serde_json::Value::String(inner) if inner == text)
-            {
-                redact_value(&mut nested, secrets, depth + 1);
-                if let Ok(encoded) = serde_json::to_string(&nested) {
-                    *text = encoded;
-                }
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                redact_value(item, secrets, depth);
-            }
-        }
-        serde_json::Value::Object(items) => {
-            let original = std::mem::take(items);
-            for (mut key, mut item) in original {
-                for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
-                    key = key.replace(secret, "[REDACTED]");
-                }
-                redact_value(&mut item, secrets, depth);
-                items.insert(key, item);
-            }
-        }
-        _ => {}
+fn redact_value(value: &mut serde_json::Value, secrets: &[String], _depth: usize) {
+    if saya_core::redaction::redact(value, secrets).is_err() {
+        *value = serde_json::Value::String("sensitive details withheld".into());
     }
 }
 fn contains_encoded_secret(text: &str, secrets: &[String]) -> bool {
@@ -383,22 +357,25 @@ fn report_runtime_error(error: &BoundaryError, config: &Config) {
     }
 }
 impl Terminal {
-    fn open() -> io::Result<Self> {
+    fn open(secrets: Vec<String>) -> io::Result<Self> {
         use std::os::unix::fs::OpenOptionsExt;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(libc::O_NONBLOCK)
             .open("/dev/tty")?;
-        Ok(Self(tokio::sync::Mutex::new(file)))
+        Ok(Self {
+            file: tokio::sync::Mutex::new(file),
+            secrets,
+        })
     }
     async fn read_line(
         &self,
         prompt: &str,
         cancel: &dyn Cancellation,
     ) -> Result<Option<String>, BoundaryError> {
-        let mut tty = self.0.lock().await;
-        write!(tty, "{prompt}")
+        let mut tty = self.file.lock().await;
+        write!(tty, "{}", redacted_text(prompt, &self.secrets))
             .map_err(|_| cli_error("terminal_error", "cannot write to controlling terminal"))?;
         let mut input = tty
             .try_clone()
@@ -697,7 +674,12 @@ fn build_runtime(
         })
         .collect::<Result<BTreeMap<_, _>, BoundaryError>>()?;
     let router = Arc::new(ProfileRouter::new(profile.clone(), models)?);
-    let streamed = selected.stream && config.output == Output::Text;
+    let secrets = config.secret_env_names();
+    let known_secrets = secrets
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    let streamed = selected.stream && config.output == Output::Text && known_secrets.is_empty();
     let model: Arc<dyn Model> = if let Some(events) = &launch.events {
         Arc::new(events::EventModel(router, events.clone()))
     } else if streamed {
@@ -705,11 +687,6 @@ fn build_runtime(
     } else {
         router
     };
-    let secrets = config.secret_env_names();
-    let known_secrets = secrets
-        .iter()
-        .map(|name| config.secret(name).map(str::to_owned))
-        .collect::<Result<Vec<_>, _>>()?;
     let policy = Arc::new(Policy::new(&session.workspace, config.permissions.clone())?);
     let lim = &config.limits;
     let files = Arc::new(ReadTools::new(
@@ -768,6 +745,14 @@ fn build_runtime(
         confirmation: launch.confirmation,
         limits,
     })?;
+    let review_profile = config.review.profile.as_ref().unwrap_or(profile);
+    runtime = runtime.with_pricing(
+        selected.pricing.clone(),
+        config
+            .profiles
+            .get(review_profile)
+            .and_then(|profile| profile.pricing.clone()),
+    );
     let home = std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
@@ -779,13 +764,61 @@ fn build_runtime(
     runtime = runtime.with_personal_context(launch.personal_context);
     Ok((runtime, streamed))
 }
-fn report_result(result: &saya_core::contract::RunResult, session: &Session, streamed: bool) -> u8 {
+fn redacted_text(text: &str, secrets: &[String]) -> String {
+    let mut value = serde_json::Value::String(text.into());
+    if saya_core::redaction::redact(&mut value, secrets).is_err() {
+        return "sensitive details withheld".into();
+    }
+    safe_terminal_text(value.as_str().unwrap_or("sensitive details withheld"))
+}
+fn safe_output(text: &str, config: &Config) -> String {
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(secrets) = secrets else {
+        return "sensitive details withheld".into();
+    };
+    redacted_text(text, &secrets)
+}
+fn log_warning(config: &Config, level: &str, event: &str, data: serde_json::Value) {
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(secrets) = secrets else {
+        eprintln!("saya: structured log unavailable");
+        return;
+    };
+    let log = saya_core::logging::JsonLog::new(&config.state_dir, secrets);
+    if log.record(level, event, data).is_err() {
+        eprintln!("saya: structured log unavailable");
+    }
+}
+fn log_run_result(config: &Config, result: &RunResult) {
+    if result.status != RunStatus::Completed {
+        log_warning(
+            config,
+            "warn",
+            "run.finished",
+            serde_json::json!({"session_id":result.session_id,"run_id":result.run_id,"status":result.status,"stop_reason":result.stop_reason,"error":result.error,"usage":result.usage}),
+        );
+    }
+}
+fn report_result(
+    result: &saya_core::contract::RunResult,
+    session: &Session,
+    streamed: bool,
+    config: &Config,
+) -> u8 {
     if streamed {
         println!();
     } else if result.status != RunStatus::NeedsInput
         && let Some(text) = &result.text
     {
-        println!("{text}");
+        println!("{}", safe_output(text, config));
     }
     if result.stop_reason.as_deref() == Some("completed_with_background_cleanup") {
         eprintln!("saya: unfinished background jobs were cancelled when the run ended");
@@ -805,11 +838,15 @@ fn report_result(result: &saya_core::contract::RunResult, session: &Session, str
     {
         eprintln!(
             "saya: clarification: {}",
-            safe_terminal_text(&question.to_string())
+            safe_output(&question.to_string(), config)
         );
     }
     if let Some(e) = &result.error {
-        eprintln!("saya: {}: {}", e.code, e.message);
+        eprintln!(
+            "saya: {}: {}",
+            safe_output(&e.code, config),
+            safe_output(&e.message, config)
+        );
     }
     match result.status {
         RunStatus::Completed => 0,
@@ -846,7 +883,7 @@ fn report_json(result: &RunResult, config: &Config) -> Result<u8, Box<dyn std::e
     Ok(status_code(result.status))
 }
 async fn run(
-    config: Config,
+    config: &Config,
     args: &RunArgs,
     text: String,
     personal_context: PersonalContext,
@@ -855,7 +892,12 @@ async fn run(
     profile_explicit: bool,
 ) -> Result<u8, Box<dyn std::error::Error>> {
     let terminal = if args.interactive {
-        match Terminal::open() {
+        let secrets = config
+            .secret_env_names()
+            .iter()
+            .map(|name| config.secret(name).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        match Terminal::open(secrets) {
             Ok(t) => Some(Arc::new(t)),
             Err(e) => {
                 eprintln!("terminal unavailable: {e}");
@@ -867,7 +909,7 @@ async fn run(
     };
     let mut prepared = if let Some(id) = &args.session {
         session::resume(
-            &config,
+            config,
             id,
             args.accept_config_change,
             cwd_explicit,
@@ -875,7 +917,7 @@ async fn run(
         )
         .await?
     } else {
-        session::create(&config, new_session(&config)?).await?
+        session::create(config, new_session(config)?).await?
     };
     if prepared.recovery.interrupted_runs > 0 {
         eprintln!(
@@ -927,7 +969,7 @@ async fn run(
         prepared.store.clone()
     };
     let (mut runtime, streamed) = build_runtime(
-        &config,
+        config,
         &session,
         &text,
         Launch {
@@ -963,11 +1005,22 @@ async fn run(
         events.emit(payload, None, true).await?;
     }
     match runtime.run(&mut session).await {
-        Ok(result) if config.output == Output::Jsonl => Ok(status_code(result.status)),
-        Ok(result) if config.output == Output::Json => report_json(&result, &config),
-        Ok(result) => Ok(report_result(&result, &session, streamed)),
+        Ok(result) => {
+            log_run_result(config, &result);
+            match config.output {
+                Output::Jsonl => Ok(status_code(result.status)),
+                Output::Json => report_json(&result, config),
+                Output::Text => Ok(report_result(&result, &session, streamed, config)),
+            }
+        }
         Err(error) => {
-            report_runtime_error(&error, &config);
+            log_warning(
+                config,
+                "error",
+                "run.failed",
+                serde_json::json!({"session_id":session.id,"run_id":run_id,"error":error.0}),
+            );
+            report_runtime_error(&error, config);
             if let Some(events) = &events {
                 let result = RunResult {
                     schema_version: SCHEMA_VERSION,
@@ -1009,7 +1062,7 @@ async fn run(
                         error: Some(error.0),
                     }),
                 };
-                return report_json(&result, &config);
+                return report_json(&result, config);
             }
             Ok(1)
         }
@@ -1021,7 +1074,7 @@ async fn query_sessions(
 ) -> Result<u8, Box<dyn std::error::Error>> {
     session::check_roots(config, &config.cwd, config.mode)?;
     let store = session::open(config)?;
-    let data = match action {
+    let mut data = match action {
         SessionAction::List { page } => {
             let offset = page
                 .checked_sub(1)
@@ -1041,9 +1094,19 @@ async fn query_sessions(
                 "project_context_records".into(),
                 serde_json::to_value(store.project_context_records(id).await?)?,
             );
+            session.as_object_mut().ok_or("invalid session")?.insert(
+                "run_metrics".into(),
+                serde_json::to_value(store.run_metrics(id).await?)?,
+            );
             session
         }
     };
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    saya_core::redaction::redact(&mut data, &secrets)?;
     match config.output {
         Output::Text => println!("{}", serde_json::to_string_pretty(&data)?),
         Output::Json => println!("{}", serde_json::json!({"schema_version":1,"data":data})),
@@ -1084,13 +1147,13 @@ async fn main() -> std::process::ExitCode {
         {
             Err(e) => output_error(e, cli.output.map(Into::into)),
             Ok(c) => match prompt(args) {
-                Err(e) => output_error(e, Some(c.output)),
+                Err(e) => output_error(safe_output(&e.to_string(), &c), Some(c.output)),
                 Ok(text) => match personal_context(&cli, &c) {
-                    Err(e) => output_error(e, Some(c.output)),
+                    Err(e) => output_error(safe_output(&e.to_string(), &c), Some(c.output)),
                     Ok(personal) => {
                         let output = c.output;
                         match run(
-                            c,
+                            &c,
                             args,
                             text,
                             personal,
@@ -1101,7 +1164,19 @@ async fn main() -> std::process::ExitCode {
                         .await
                         {
                             Ok(code) => code,
-                            Err(e) => output_error(e, Some(output)),
+                            Err(e) => {
+                                if args.session.is_none()
+                                    && session::check_roots(&c, &c.cwd, c.mode).is_ok()
+                                {
+                                    log_warning(
+                                        &c,
+                                        "error",
+                                        "run.setup_failed",
+                                        serde_json::json!({"message":safe_output(&e.to_string(),&c)}),
+                                    );
+                                }
+                                output_error(safe_output(&e.to_string(), &c), Some(output))
+                            }
                         }
                     }
                 },
@@ -1113,11 +1188,19 @@ async fn main() -> std::process::ExitCode {
         {
             Err(e) => fail(e),
             Ok(config) => match personal_context(&cli, &config) {
-                Err(e) => fail(e),
+                Err(e) => fail(safe_output(&e.to_string(), &config)),
                 Ok(personal) => {
+                    let Ok(secrets) = config
+                        .secret_env_names()
+                        .iter()
+                        .map(|name| config.secret(name).map(str::to_owned))
+                        .collect::<Result<Vec<_>, _>>()
+                    else {
+                        return std::process::ExitCode::from(fail("sensitive details unavailable"));
+                    };
                     match chat::chat(config, personal, cli.anthropic_prompt_cache, None).await {
                         Ok(code) => code,
-                        Err(e) => fail(e),
+                        Err(e) => fail(redacted_text(&e.to_string(), &secrets)),
                     }
                 }
             },
@@ -1129,7 +1212,7 @@ async fn main() -> std::process::ExitCode {
             Err(e) => query_error(e, cli.output.map(Into::into)),
             Ok(config) => match query_sessions(&config, action).await {
                 Ok(code) => code,
-                Err(e) => query_error(e, Some(config.output)),
+                Err(e) => query_error(safe_output(&e.to_string(), &config), Some(config.output)),
             },
         },
         Some(Command::Resume {
@@ -1141,7 +1224,7 @@ async fn main() -> std::process::ExitCode {
         {
             Err(e) => fail(e),
             Ok(config) => match personal_context(&cli, &config) {
-                Err(e) => fail(e),
+                Err(e) => fail(safe_output(&e.to_string(), &config)),
                 Ok(personal) => match session::resume(
                     &config,
                     session_id,
@@ -1151,18 +1234,30 @@ async fn main() -> std::process::ExitCode {
                 )
                 .await
                 {
-                    Err(e) => fail(e),
-                    Ok(prepared) => match chat::chat(
-                        config,
-                        personal,
-                        cli.anthropic_prompt_cache,
-                        Some(prepared),
-                    )
-                    .await
-                    {
-                        Ok(code) => code,
-                        Err(e) => fail(e),
-                    },
+                    Err(e) => fail(safe_output(&e.to_string(), &config)),
+                    Ok(prepared) => {
+                        let Ok(secrets) = config
+                            .secret_env_names()
+                            .iter()
+                            .map(|name| config.secret(name).map(str::to_owned))
+                            .collect::<Result<Vec<_>, _>>()
+                        else {
+                            return std::process::ExitCode::from(fail(
+                                "sensitive details unavailable",
+                            ));
+                        };
+                        match chat::chat(
+                            config,
+                            personal,
+                            cli.anthropic_prompt_cache,
+                            Some(prepared),
+                        )
+                        .await
+                        {
+                            Ok(code) => code,
+                            Err(e) => fail(redacted_text(&e.to_string(), &secrets)),
+                        }
+                    }
                 },
             },
         },

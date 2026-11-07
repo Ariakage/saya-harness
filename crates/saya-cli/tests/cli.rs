@@ -1317,18 +1317,41 @@ fn observed_result_redacts_configured_secret_when_save_is_rejected()
         temp.path().join("input.txt"),
         format!("prefix {secret} suffix"),
     )?;
-    let (url, _) = fixture::server(vec![("application/json", read_call())])?;
+    let (url, _) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"first"}), "stop"),
+        ),
+        ("application/json", read_call()),
+    ])?;
     let cfg = config(temp.path(), &url, "auto");
     let contents = fs::read_to_string(&cfg)?.replace(
         "auth = \"none\"",
         "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
     );
     fs::write(&cfg, contents)?;
+    let first = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "start"])
+        .output()?;
+    assert!(first.status.success());
+    let list = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()?;
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout)?;
+    let id = list["data"][0]["id"].as_str().ok_or("missing session")?;
+    let db = rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3"))?;
+    db.execute_batch("CREATE TRIGGER reject_result BEFORE UPDATE OF result ON tool_calls BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
     let output = command(temp.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(cfg)
-        .args(["run", "read"])
+        .args(["run", "--session", id, "read"])
         .output()?;
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2496,7 +2519,7 @@ fn jsonl_never_emits_a_known_secret_split_across_stream_chunks() {
             .count(),
         1
     );
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
 }
 
 #[test]
@@ -2586,4 +2609,278 @@ fn json_session_query_failure_uses_query_envelope_without_run_event() {
     assert!(value["error"].is_object());
     assert!(value.get("run_id").is_none());
     assert!(value.get("type").is_none());
+}
+
+#[test]
+fn run_reports_known_usage_metrics_and_verified_file_artifact() {
+    let temp = TempDir::new().unwrap();
+    let with_usage = |message: serde_json::Value, finish: &str, input: u64, output: u64| {
+        json!({"choices":[{"index":0,"finish_reason":finish,"message":message}],"usage":{"prompt_tokens":input,"completion_tokens":output}}).to_string()
+    };
+    let arguments =
+        json!({"path":"artifact.txt","content":"result","expected_version":null}).to_string();
+    let call = json!({"role":"assistant","content":null,"tool_calls":[{"id":"write","type":"function","function":{"name":"write_file","arguments":arguments}}]});
+    let (url, _) = fixture::server(vec![
+        ("application/json", with_usage(call, "tool_calls", 10, 5)),
+        (
+            "application/json",
+            with_usage(json!({"role":"assistant","content":"done"}), "stop", 4, 2),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let mut config_text = fs::read_to_string(&cfg).unwrap();
+    config_text.push_str("\n[profiles.test.pricing]\ncurrency = \"USD\"\ninput_microunits_per_million = 1000000\noutput_microunits_per_million = 2000000\n");
+    fs::write(&cfg, config_text).unwrap();
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "run", "write"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        result["usage"],
+        json!({"input_tokens":14,"output_tokens":7,"estimated":false})
+    );
+    assert_eq!(result["artifacts"].as_array().unwrap().len(), 1);
+    assert_eq!(result["artifacts"][0]["operation"], "created");
+    assert_eq!(
+        result["artifacts"][0]["path"],
+        fs::canonicalize(temp.path().join("artifact.txt"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    let id = result["session_id"].as_str().unwrap();
+    let show = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "show", id])
+        .output()
+        .unwrap();
+    let show: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    let metrics = &show["data"]["run_metrics"][0]["metrics"];
+    assert_eq!(metrics["execution_requests"], 2);
+    assert_eq!(metrics["review_requests"], 0);
+    assert_eq!(metrics["tool_calls"], 1);
+    assert_eq!(metrics["execution_usage"]["input_tokens"], 14);
+    assert_eq!(
+        metrics["execution_cost"],
+        json!({"currency":"USD","microunits":28,"rounded_up":false,"estimated":true})
+    );
+    assert!(metrics["review_cost"].is_null());
+    assert!(metrics["duration_ms"].is_u64());
+}
+
+#[test]
+fn run_keeps_partial_provider_usage_unknown_and_separates_review() {
+    let temp = TempDir::new().unwrap();
+    let args =
+        json!({"argv":["/usr/bin/touch","command-artifact"],"cwd":null,"timeout_seconds":null})
+            .to_string();
+    let call = json!({"role":"assistant","content":null,"tool_calls":[{"id":"cmd","type":"function","function":{"name":"exec","arguments":args}}]});
+    let first=json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":call}],"usage":{"prompt_tokens":10,"completion_tokens":5}}).to_string();
+    let review=json!({"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{\"decision\":\"allow\",\"reason\":\"safe\"}"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}).to_string();
+    let last = response(json!({"role":"assistant","content":"done"}), "stop");
+    let (url, _) = fixture::server(vec![
+        ("application/json", first),
+        ("application/json", review),
+        ("application/json", last),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "run", "command"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        result["usage"],
+        json!({"input_tokens":null,"output_tokens":null,"estimated":true})
+    );
+    assert!(result["artifacts"].as_array().unwrap().is_empty());
+    assert!(temp.path().join("command-artifact").exists());
+    let id = result["session_id"].as_str().unwrap();
+    let show = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "show", id])
+        .output()
+        .unwrap();
+    let show: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    let metrics = &show["data"]["run_metrics"][0]["metrics"];
+    assert_eq!(metrics["execution_requests"], 2);
+    assert_eq!(metrics["review_requests"], 1);
+    assert_eq!(metrics["review_usage"]["input_tokens"], 3);
+    assert!(metrics["execution_usage"]["input_tokens"].is_null());
+}
+
+#[test]
+fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
+    let temp = TempDir::new().unwrap();
+    let secret = "fake-runtime-secret-123";
+    fs::write(
+        temp.path().join("input.txt"),
+        format!("prefix {secret} suffix"),
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("AGENTS.md"),
+        format!("project instruction {secret}"),
+    )
+    .unwrap();
+    let (url, requests) = fixture::server(vec![
+        ("application/json", read_call()),
+        (
+            "application/json",
+            response(
+                json!({"role":"assistant","content":format!("answer {secret}")}),
+                "stop",
+            ),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let contents = fs::read_to_string(&cfg).unwrap().replace(
+        "auth = \"none\"",
+        "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
+    );
+    fs::write(&cfg, contents).unwrap();
+    let output = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", &format!("inspect {secret}")])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "answer [REDACTED]\n"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    let first = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    let second = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    assert!(!first.contains(secret));
+    assert!(!second.contains(secret));
+    assert!(second.contains("[REDACTED]"));
+    let list = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let show = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "show", id])
+        .output()
+        .unwrap();
+    let show = String::from_utf8(show.stdout).unwrap();
+    assert!(!show.contains(secret));
+    assert!(show.contains("[REDACTED]"));
+    for entry in fs::read_dir(temp.path().join(".local/share/saya")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let bytes = fs::read(path).unwrap();
+            assert!(
+                !bytes
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes())
+            );
+        }
+    }
+}
+
+#[test]
+fn completed_background_write_is_included_in_artifacts() {
+    let temp = TempDir::new().unwrap();
+    let marker = temp.path().join("background-artifact.txt");
+    let wait_for = marker.clone();
+    let (url,_)=fixture::server_dynamic(2,move |index,_| {
+        if index==0 {
+            ("application/json",tool_response("launch","background_start",json!({"tool":"write_file","arguments":{"path":"background-artifact.txt","content":"done","expected_version":null}})))
+        } else {
+            let deadline=std::time::Instant::now()+Duration::from_secs(5);
+            while !wait_for.exists() {assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));}
+            ("application/json",response(json!({"role":"assistant","content":"done"}),"stop"))
+        }
+    }).unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let output = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["--output", "json", "run", "start"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["artifacts"].as_array().unwrap().len(), 1, "{value}");
+    assert_eq!(
+        value["artifacts"][0]["path"],
+        fs::canonicalize(marker).unwrap().to_str().unwrap()
+    );
+}
+
+#[test]
+fn warnings_are_logged_as_redacted_json_without_stdout_pollution() {
+    let temp = TempDir::new().unwrap();
+    let secret = "fake-logging-secret";
+    fs::write(temp.path().join("input.txt"), "data").unwrap();
+    let (url, _) = fixture::server(vec![("application/json", read_call())]).unwrap();
+    let cfg = config(temp.path(), &url, "manual");
+    let config = fs::read_to_string(&cfg).unwrap().replace(
+        "auth = \"none\"",
+        "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
+    );
+    fs::write(&cfg, config).unwrap();
+    let output = command(temp.path())
+        .env("TEST_KEY", secret)
+        .arg("--config")
+        .arg(cfg)
+        .args(["--output", "json", "run", &format!("read {secret}")])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["status"], "needs_confirmation");
+    let path = temp.path().join(".local/state/saya/saya.log");
+    let contents = fs::read_to_string(path).unwrap();
+    assert!(!contents.contains(secret));
+    let line: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
+    assert_eq!(line["level"], "warn");
+    assert_eq!(line["event"], "run.finished");
+    assert_eq!(line["data"]["status"], "needs_confirmation");
 }

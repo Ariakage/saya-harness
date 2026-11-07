@@ -3,10 +3,10 @@ use crate::{
     boundary::{Cancellation, Operation, ToolDefinition},
     contract::{BoundaryError, ErrorInfo, ToolCall},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One bounded question and optional suggestions; free-form answers remain valid.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputRequest {
     pub question: String,

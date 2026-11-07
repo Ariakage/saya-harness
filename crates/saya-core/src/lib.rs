@@ -12,13 +12,16 @@ pub mod config;
 pub mod contract;
 pub mod dispatch;
 pub mod input;
+pub mod logging;
 
 pub mod memory;
+pub mod metrics;
 pub mod mode;
 pub mod permissions;
 pub mod project_context;
 pub mod prompt;
 pub mod provider;
+pub mod redaction;
 pub mod review;
 pub mod runtime;
 pub mod sqlite;

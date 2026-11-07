@@ -14,6 +14,7 @@ use crate::{
     },
     dispatch::{DispatchReview, ToolDispatcher},
     input::{InputHandler, InputRequest},
+    metrics::{MeasuredModel, Metrics},
     mode::ModeController,
     permissions::Policy,
     project_context::ProjectContext,
@@ -72,14 +73,17 @@ fn context_target(call: &ToolCall) -> Option<PathBuf> {
         _ => None,
     }
 }
-struct RuntimeStore(Arc<dyn Store>);
+struct RuntimeStore {
+    inner: Arc<dyn Store>,
+    metrics: Arc<Metrics>,
+}
 impl Store for RuntimeStore {
     fn load_session<'a>(
         &'a self,
         id: crate::contract::SessionId,
     ) -> Operation<'a, Option<Session>> {
         Box::pin(async move {
-            self.0
+            self.inner
                 .load_session(id)
                 .await
                 .map_err(normalize_storage_error)
@@ -87,10 +91,12 @@ impl Store for RuntimeStore {
     }
     fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
         Box::pin(async move {
-            self.0
+            self.inner
                 .commit(changes)
                 .await
-                .map_err(normalize_storage_error)
+                .map_err(normalize_storage_error)?;
+            self.metrics.observe(changes);
+            Ok(())
         })
     }
 }
@@ -193,6 +199,7 @@ pub struct AgentRuntime {
     background: Arc<BackgroundTools>,
     review: ReviewConfig,
     budget: SharedBudget,
+    metrics: Arc<Metrics>,
     summary: String,
     confirmation: Option<Arc<dyn ApprovalHandler>>,
     input: Option<Arc<dyn InputHandler>>,
@@ -289,8 +296,22 @@ impl AgentRuntime {
                 "runtime budgets and timeouts must be positive",
             ));
         }
-        let store: Arc<dyn Store> = Arc::new(RuntimeStore(setup.store));
+        let metrics = Arc::new(Metrics::default());
+        let store: Arc<dyn Store> = Arc::new(RuntimeStore {
+            inner: setup.store,
+            metrics: metrics.clone(),
+        });
+        let model: Arc<dyn Model> = Arc::new(MeasuredModel {
+            inner: setup.model,
+            metrics: metrics.clone(),
+        });
         let modes = ModeController::new(setup.run.work_mode);
+        let mut review = setup.review;
+        review
+            .known_secrets
+            .extend(setup.known_secrets.iter().cloned());
+        review.known_secrets.sort();
+        review.known_secrets.dedup();
         let permission_revision = PermissionRevision::new(modes.clone(), setup.run.permissions);
         let budget = SharedBudget::new(limits.model_requests, limits.active_time);
         let dispatcher = ToolDispatcher::new(
@@ -321,23 +342,24 @@ impl AgentRuntime {
         )?);
         let background = Arc::new(BackgroundTools::new(
             jobs.clone(),
-            setup.model.clone(),
+            model.clone(),
             budget.clone(),
-            setup.review.clone(),
+            review.clone(),
             setup.summary.clone(),
             setup.confirmation.is_some(),
         ));
         Ok(Self {
             run: setup.run,
-            model: setup.model,
+            model,
             store,
             cancel: setup.cancellation,
             dispatcher,
             modes,
             jobs,
             background,
-            review: setup.review,
+            review,
             budget,
+            metrics,
             summary: setup.summary,
             confirmation: setup.confirmation,
             input: None,
@@ -354,6 +376,15 @@ impl AgentRuntime {
             jobs: self.jobs.clone(),
             modes: self.modes.clone(),
         }
+    }
+    /// Apply explicitly configured rates to the two request categories.
+    pub fn with_pricing(
+        self,
+        execution: Option<crate::config::Pricing>,
+        review: Option<crate::config::Pricing>,
+    ) -> Self {
+        self.metrics.pricing(execution, review);
+        self
     }
     /// Install a UI clarification handler before starting this single-use run.
     pub fn with_input_handler(mut self, handler: Arc<dyn InputHandler>) -> Self {
@@ -495,9 +526,9 @@ impl AgentRuntime {
                     let snapshot = state.loader.snapshot(state.target.as_deref())?;
                     state.provided_fingerprint = Some(snapshot.fingerprint()?);
                     record = Some(snapshot.record(request_id.clone())?);
-                    history.push(HistoryItem::UserText(
-                        serde_json::json!({"saya_project_context_v1": snapshot}).to_string(),
-                    ));
+                    let mut context = serde_json::json!({"saya_project_context_v1": snapshot});
+                    crate::redaction::redact(&mut context, &self.review.known_secrets)?;
+                    history.push(HistoryItem::UserText(context.to_string()));
                 }
                 if self.personal_context.preferences.is_some()
                     || self.personal_context.memory.is_some()
@@ -998,6 +1029,11 @@ impl AgentRuntime {
                         ));
                     }
                     let request = InputRequest::parse(call)?;
+                    let mut redacted = serde_json::to_value(&request)
+                        .map_err(|_| error("invalid_args", "cannot encode input request"))?;
+                    crate::redaction::redact(&mut redacted, &self.review.known_secrets)?;
+                    let request: InputRequest = serde_json::from_value(redacted)
+                        .map_err(|_| error("invalid_args", "cannot redact input request"))?;
                     permit.consume_input(call, &context)?;
                     self.store
                         .commit(&[StoreChange::Activity {
@@ -1054,6 +1090,8 @@ impl AgentRuntime {
                             truncated: false,
                         },
                     };
+                    let result =
+                        crate::redaction::tool_result(&result, &self.review.known_secrets)?;
                     if self.input.is_some() {
                         crate::tools::write::save_result(
                             self.store.as_ref(),
@@ -1238,6 +1276,7 @@ impl AgentRuntime {
                     return Err(err);
                 }
                 calls_used += 1;
+                self.metrics.tool_call();
                 if calls_used > self.limits.tool_calls {
                     self.close_calls(session, &calls[index..], CallProgress::NotDispatched)
                         .await?;
@@ -1311,6 +1350,7 @@ impl AgentRuntime {
             return Err(error("invalid_run", "runtime is single-use"));
         }
         self.budget.start_run()?;
+        self.metrics.start();
         self.used = true;
         let initial = session.history.len();
         let outcome = self.run_inner(session).await;
@@ -1387,6 +1427,10 @@ impl AgentRuntime {
             }
         };
         let started = self.started.load(Ordering::Acquire);
+        let (metrics, usage, artifacts) = self
+            .metrics
+            .snapshot()
+            .ok_or_else(|| error("metrics_error", "run metrics lock failed"))?;
         let result = RunResult {
             schema_version: SCHEMA_VERSION,
             session_id: Some(session.id),
@@ -1395,8 +1439,8 @@ impl AgentRuntime {
             stop_reason: Some(reason),
             text,
             error: info,
-            usage: None,
-            artifacts: vec![],
+            usage,
+            artifacts,
             persistence: Some(Persistence {
                 saved: started,
                 error: None,
@@ -1404,7 +1448,13 @@ impl AgentRuntime {
         };
         if started {
             self.store
-                .commit(&[StoreChange::RunFinished(result.clone())])
+                .commit(&[
+                    StoreChange::RunMetrics {
+                        run_id: self.run.id,
+                        metrics,
+                    },
+                    StoreChange::RunFinished(result.clone()),
+                ])
                 .await?;
         }
         Ok(result)

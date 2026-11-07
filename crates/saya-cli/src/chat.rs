@@ -62,12 +62,13 @@ impl InputHandler for Ui {
 }
 struct Console {
     tty: std::fs::File,
+    secrets: Vec<String>,
     lines: mpsc::UnboundedReceiver<Result<String, &'static str>>,
     stop: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
 }
 impl Console {
-    fn open() -> io::Result<Self> {
+    fn open(secrets: Vec<String>) -> io::Result<Self> {
         let tty = OpenOptions::new()
             .read(true)
             .write(true)
@@ -131,13 +132,15 @@ impl Console {
         });
         Ok(Self {
             tty,
+            secrets,
             lines,
             stop,
             reader: Some(reader),
         })
     }
     fn print(&mut self, text: &str) -> io::Result<()> {
-        self.tty.write_all(text.as_bytes())?;
+        self.tty
+            .write_all(redacted_text(text, &self.secrets).as_bytes())?;
         self.tty.flush()
     }
 }
@@ -199,12 +202,19 @@ fn display_permission(mode: PermissionMode) -> &'static str {
         PermissionMode::Manual => "manual",
     }
 }
-fn show_prompt(console: &mut Console, request: &UiRequest) -> io::Result<()> {
+fn show_prompt(console: &mut Console, request: &UiRequest, config: &Config) -> io::Result<()> {
     match request {
         UiRequest::Approval(request, _) => {
             let args = serde_json::to_string(&request.arguments)
                 .unwrap_or_else(|_| "<unavailable>".into());
-            console.print(&format!("\nApproval required\nTool: {}\nArguments: {}\nWorking directory: {}\nMode: {}\nAllow this call? [y/N] ",safe_terminal_text(&request.tool),args,safe_terminal_text(&request.cwd.to_string_lossy()),display_mode(request.work_mode)))
+            let text = format!(
+                "\nApproval required\nTool: {}\nArguments: {}\nWorking directory: {}\nMode: {}\nAllow this call? [y/N] ",
+                safe_terminal_text(&request.tool),
+                args,
+                safe_terminal_text(&request.cwd.to_string_lossy()),
+                display_mode(request.work_mode)
+            );
+            console.print(&safe_output(&text, config))
         }
         UiRequest::Input(request, _) => {
             let mut text = format!("\n{}\n", safe_terminal_text(&request.question));
@@ -216,7 +226,7 @@ fn show_prompt(console: &mut Console, request: &UiRequest) -> io::Result<()> {
                 ));
             }
             text.push_str("Answer: ");
-            console.print(&text)
+            console.print(&safe_output(&text, config))
         }
     }
 }
@@ -324,7 +334,12 @@ pub async fn chat(
     if config.output != Output::Text {
         return Err("chat requires text output".into());
     }
-    let mut console = Console::open().map_err(|_| "chat requires a controlling terminal")?;
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut console = Console::open(secrets).map_err(|_| "chat requires a controlling terminal")?;
     let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let prepared = if let Some(existing) = existing {
         config.profile = Some(existing.session.profile.clone());
@@ -395,9 +410,16 @@ pub async fn chat(
                 pending = None;
                 match outcome {
                     Ok(result) => {
-                        report_result(&result, &finished, old.streamed);
+                        log_run_result(&config, &result);
+                        report_result(&result, &finished, old.streamed, &config);
                     }
                     Err(error) => {
+                        log_warning(
+                            &config,
+                            "error",
+                            "run.failed",
+                            serde_json::json!({"session_id":finished.id,"error":error.0}),
+                        );
                         report_runtime_error(&error, &config);
                         if error.0.code == "storage_error" || error.2.is_some() {
                             return Ok(1);
@@ -415,7 +437,7 @@ pub async fn chat(
             }
             Event::Request(Some(request)) => {
                 if terminal_open && pending.is_none() {
-                    show_prompt(&mut console, &request)?;
+                    show_prompt(&mut console, &request, &config)?;
                     pending = Some(request);
                 }
                 // Concurrent requests are not expected; dropping the reply fails closed.
@@ -466,7 +488,7 @@ pub async fn chat(
                         if active.is_none() {
                             console.print("> ")?;
                         } else if let Some(request) = pending.as_ref() {
-                            show_prompt(&mut console, request)?;
+                            show_prompt(&mut console, request, &config)?;
                         }
                         continue;
                     }
@@ -645,7 +667,7 @@ pub async fn chat(
                     if active.is_none() {
                         console.print("> ")?;
                     } else if let Some(request) = pending.as_ref() {
-                        show_prompt(&mut console, request)?;
+                        show_prompt(&mut console, request, &config)?;
                     }
                     continue;
                 }
@@ -669,7 +691,10 @@ pub async fn chat(
                         item: item.clone(),
                     }])
                     .await?;
-                current.history.push(item);
+                current = store
+                    .load_session(current.id)
+                    .await?
+                    .ok_or("session not found")?;
                 let cancel = Arc::new(Cancel(tokio::sync::watch::channel(false).0));
                 let (requests_tx, requests_rx) = mpsc::unbounded_channel();
                 let ui = Arc::new(Ui {

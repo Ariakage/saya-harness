@@ -247,34 +247,44 @@ async fn event_sequences_remain_monotonic_and_deltas_are_not_persisted()
     Ok(())
 }
 #[tokio::test]
-async fn known_secrets_are_rejected_without_database_persistence()
+async fn known_secrets_are_redacted_and_structural_ids_fail_closed()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = TempDir::new()?;
     let secret = "fake\"secret\\value";
     let (mut session, run) = fixture(temp.path());
     let store = SqliteStore::open(temp.path(), vec![secret.into()])?;
-    session.history.push(HistoryItem::UserText(secret.into()));
-    assert!(
-        store
-            .commit(&[StoreChange::Session(session.clone())])
-            .await
-            .is_err()
-    );
-    assert!(store.load_session(session.id).await?.is_none());
-    session.history.pop();
+    session
+        .history
+        .push(HistoryItem::UserText(format!("before {secret} after")));
     store
         .commit(&[
             StoreChange::Session(session.clone()),
             StoreChange::RunStarted(run.clone()),
         ])
         .await?;
+    let saved = store
+        .load_session(session.id)
+        .await?
+        .ok_or("missing session")?;
+    assert_eq!(
+        saved.history.last(),
+        Some(&HistoryItem::UserText("before [REDACTED] after".into()))
+    );
     let mut c = call();
     c.arguments = serde_json::json!({"content":secret}).to_string();
+    store
+        .commit(&[StoreChange::ToolIntent {
+            run_id: run.id,
+            call: c,
+        }])
+        .await?;
+    let mut invalid = call();
+    invalid.call_id = secret.into();
     assert!(
         store
             .commit(&[StoreChange::ToolIntent {
                 run_id: run.id,
-                call: c
+                call: invalid
             }])
             .await
             .is_err()
@@ -288,10 +298,18 @@ async fn known_secrets_are_rejected_without_database_persistence()
                     .windows(secret.len())
                     .any(|part| part == secret.as_bytes())
             );
+            let encoded = serde_json::to_string(secret)?;
+            let fragment = &encoded[1..encoded.len() - 1];
+            assert!(
+                !bytes
+                    .windows(fragment.len())
+                    .any(|part| part == fragment.as_bytes())
+            );
         }
     }
     Ok(())
 }
+
 #[test]
 fn corrupt_foreign_and_newer_databases_are_never_silently_replaced()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -1073,5 +1091,35 @@ async fn reserved_event_sequences_are_never_reused_and_commit_atomically()
         store.reserve_event_sequences(session.id, 5).await?,
         (11, 15)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn signed_provider_state_with_known_secret_fails_closed_without_modification()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let secret = "fixture-opaque-secret";
+    let (session, run) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![secret.into()])?;
+    store
+        .commit(&[
+            StoreChange::Session(session.clone()),
+            StoreChange::RunStarted(run),
+        ])
+        .await?;
+    let opaque = HistoryItem::ProviderItem {
+        protocol: ModelProtocol::AnthropicMessages,
+        value: serde_json::json!({"signature":secret}),
+    };
+    assert!(
+        store
+            .commit(&[StoreChange::History {
+                session_id: session.id,
+                item: opaque
+            }])
+            .await
+            .is_err()
+    );
+    assert_eq!(store.load_session(session.id).await?.unwrap(), session);
     Ok(())
 }

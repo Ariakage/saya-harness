@@ -179,6 +179,10 @@ pub async fn append(
             item: item.clone(),
         }])
         .await?;
-    prepared.session.history.push(item);
+    prepared.session = prepared
+        .store
+        .load_session(prepared.session.id)
+        .await?
+        .ok_or("session not found")?;
     Ok(())
 }

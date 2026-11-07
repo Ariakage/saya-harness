@@ -407,8 +407,51 @@ fn json<T: Serialize>(value: &T, secrets: &[String]) -> Result<String, BoundaryE
             "storage data contains a configured secret",
         ));
     }
+    let encoded = serde_json::to_string(&value)
+        .map_err(|_| error("storage_error", "cannot serialize storage data"))?;
+    if crate::redaction::contains_secret(&encoded, secrets) {
+        return Err(error(
+            "storage_sensitive_data",
+            "storage data contains a configured secret",
+        ));
+    }
+    Ok(encoded)
+}
+fn json_redacted<T: Serialize + serde::de::DeserializeOwned>(
+    value: &T,
+    secrets: &[String],
+) -> Result<String, BoundaryError> {
+    let mut value = serde_json::to_value(value)
+        .map_err(|_| error("storage_error", "cannot serialize storage data"))?;
+    crate::redaction::redact(&mut value, secrets).map_err(|_| {
+        error(
+            "storage_sensitive_data",
+            "storage data cannot be safely redacted",
+        )
+    })?;
+    serde_json::from_value::<T>(value.clone()).map_err(|_| {
+        error(
+            "storage_sensitive_data",
+            "redaction changes a required storage field",
+        )
+    })?;
     serde_json::to_string(&value)
         .map_err(|_| error("storage_error", "cannot serialize storage data"))
+}
+fn history_json(item: &HistoryItem, secrets: &[String]) -> Result<String, BoundaryError> {
+    match item {
+        HistoryItem::ProviderItem { .. } => json(item, secrets),
+        HistoryItem::ToolCall(call) => {
+            json(&call.call_id, secrets)?;
+            json(&call.name, secrets)?;
+            json_redacted(item, secrets)
+        }
+        HistoryItem::ToolResult { call_id, .. } => {
+            json(call_id, secrets)?;
+            json_redacted(item, secrets)
+        }
+        _ => json_redacted(item, secrets),
+    }
 }
 fn contains_secret(value: &Value, secrets: &[String], depth: usize) -> bool {
     match value {
@@ -490,7 +533,7 @@ fn apply(
             tx.execute("DELETE FROM messages WHERE session_id=?1", [&key])
                 .map_err(sql_error)?;
             for (index, item) in session.history.iter().enumerate() {
-                let item = json(item, secrets)?;
+                let item = history_json(item, secrets)?;
                 let index = i64::try_from(index)
                     .map_err(|_| error("storage_error", "too many messages"))?;
                 tx.execute(
@@ -515,18 +558,49 @@ fn apply(
         StoreChange::ProjectContext { run_id, record } => {
             let run = id(run_id.0);
             let session = run_session(tx, &run)?;
-            let record = json(record, secrets)?;
+            json(&record.request_id, secrets)?;
+            json(&record.fingerprint, secrets)?;
+            let record = json_redacted(record, secrets)?;
             journal(tx, &session, Some(&run), "project_context", Some(&record))?;
         }
         StoreChange::Activity { run_id, payload } => {
             let run = id(run_id.0);
             let session = run_session(tx, &run)?;
-            let record = json(payload, secrets)?;
+            match payload {
+                EventPayload::PermissionReviewed { call_id, .. } => {
+                    json(call_id, secrets)?;
+                }
+                EventPayload::PermissionRequested {
+                    approval_id,
+                    call_id,
+                    ..
+                }
+                | EventPayload::PermissionResolved {
+                    approval_id,
+                    call_id,
+                    ..
+                } => {
+                    json(approval_id, secrets)?;
+                    json(call_id, secrets)?;
+                }
+                EventPayload::InputRequested { input_id, .. }
+                | EventPayload::InputReceived { input_id, .. } => {
+                    json(input_id, secrets)?;
+                }
+                _ => {}
+            }
+            let record = json_redacted(payload, secrets)?;
             journal(tx, &session, Some(&run), "activity", Some(&record))?;
+        }
+        StoreChange::RunMetrics { run_id, metrics } => {
+            let run = id(run_id.0);
+            let session = run_session(tx, &run)?;
+            let record = json(metrics, secrets)?;
+            journal(tx, &session, Some(&run), "run_metrics", Some(&record))?;
         }
         StoreChange::History { session_id, item } => {
             let key = id(session_id.0);
-            let data = json(item, secrets)?;
+            let data = history_json(item, secrets)?;
             let next: i64 = tx
                 .query_row(
                     "SELECT COALESCE(MAX(ordinal)+1,0) FROM messages WHERE session_id=?1",
@@ -544,7 +618,9 @@ fn apply(
         StoreChange::ToolIntent { run_id, call } => {
             let run = id(run_id.0);
             let session = run_session(tx, &run)?;
-            let data = json(call, secrets)?;
+            json(&call.call_id, secrets)?;
+            json(&call.name, secrets)?;
+            let data = json_redacted(call, secrets)?;
             tx.execute(
                 "INSERT INTO tool_calls(run_id,call_id,call,state) VALUES(?1,?2,?3,'running')",
                 params![run, call.call_id, data],
@@ -559,7 +635,8 @@ fn apply(
         } => {
             let run = id(run_id.0);
             let session = run_session(tx, &run)?;
-            let data = json(result, secrets)?;
+            json(call_id, secrets)?;
+            let data = json_redacted(result, secrets)?;
             let count=tx.execute("UPDATE tool_calls SET state=?3,result=?4 WHERE run_id=?1 AND call_id=?2 AND state='running'",params![run,call_id,if result.ok{"succeeded"}else{"failed"},data]).map_err(sql_error)?;
             if count != 1 {
                 return Err(error("storage_error", "tool is not running"));
@@ -573,6 +650,7 @@ fn apply(
         } => {
             let run = id(run_id.0);
             let session = run_session(tx, &run)?;
+            json(call_id, secrets)?;
             let count = tx
                 .execute(
                     "UPDATE tool_calls SET state=?3 WHERE run_id=?1 AND call_id=?2",
@@ -587,7 +665,9 @@ fn apply(
         StoreChange::ApprovalRequested(request) => {
             let run = id(request.run_id.0);
             let session = run_session(tx, &run)?;
-            let data = json(request, secrets)?;
+            json(&request.approval_id, secrets)?;
+            json(&request.call_id, secrets)?;
+            let data = json_redacted(request, secrets)?;
             tx.execute(
                 "INSERT INTO approval_requests(approval_id,run_id,request) VALUES(?1,?2,?3)",
                 params![request.approval_id, run, data],
@@ -610,7 +690,7 @@ fn apply(
             if result.session_id.map(|v| id(v.0)).as_deref() != Some(&session) {
                 return Err(error("storage_error", "run session mismatch"));
             }
-            let data = json(result, secrets)?;
+            let data = json_redacted(result, secrets)?;
             let count=tx.execute("UPDATE runs SET result=?2,finished_at=unixepoch() WHERE id=?1 AND result IS NULL",params![run,data]).map_err(sql_error)?;
             if count != 1 {
                 return Err(error("storage_error", "run already finished"));
@@ -982,7 +1062,31 @@ pub struct BackgroundJobSummary {
     pub state: String,
     pub result: Option<ToolResult>,
 }
+/// Persisted per-run metrics and their associated run.
+#[derive(Debug, Serialize)]
+pub struct RunMetricsRecord {
+    pub run_id: RunId,
+    pub metrics: crate::metrics::RunMetrics,
+}
 impl SqliteStore {
+    /// Return persisted metrics in session order.
+    pub async fn run_metrics(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<RunMetricsRecord>, BoundaryError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn=inner.lock().map_err(|_|error("storage_error", "database lock failed"))?;
+            let mut stmt=conn.prepare("SELECT run_id,reference FROM change_log WHERE session_id=?1 AND kind='run_metrics' ORDER BY seq").map_err(sql_error)?;
+            let rows=stmt.query_map([id(session_id.0)], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(sql_error)?;
+            rows.map(|row| {
+                let (run,raw)=row.map_err(sql_error)?;
+                let run_id=serde_json::from_value(serde_json::json!(run)).map_err(|_|error("storage_corrupt","invalid metrics run ID"))?;
+                let metrics=serde_json::from_str(&raw).map_err(|_|error("storage_corrupt","invalid run metrics"))?;
+                Ok(RunMetricsRecord {run_id,metrics})
+            }).collect()
+        }).await.map_err(|_|error("storage_error","database worker failed"))?
+    }
     /// Reserve a sequence range while holding the session writer lock. Unused
     /// numbers remain gaps after interruption; visible numbers are never reused.
     pub async fn reserve_event_sequences(

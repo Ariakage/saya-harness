@@ -132,6 +132,11 @@ pub enum StoreChange {
         run_id: crate::contract::RunId,
         payload: crate::contract::EventPayload,
     },
+    /// Per-run counters, duration and provider-reported usage.
+    RunMetrics {
+        run_id: crate::contract::RunId,
+        metrics: crate::metrics::RunMetrics,
+    },
     ToolIntent {
         run_id: crate::contract::RunId,
         call: ToolCall,

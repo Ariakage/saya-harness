@@ -148,6 +148,17 @@ pub struct Profile {
     pub omit_stream_usage: bool,
     #[serde(default)]
     pub omit_reasoning_include: bool,
+    /// Optional explicit rates; excluded from the provider identity fingerprint.
+    #[serde(default, skip_serializing)]
+    pub pricing: Option<Pricing>,
+}
+/// Rates in millionths of the named currency per one million tokens.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pricing {
+    pub currency: String,
+    pub input_microunits_per_million: u64,
+    pub output_microunits_per_million: u64,
 }
 impl Profile {
     /// Fingerprint profile settings and credential reference names, never credential values.
@@ -351,6 +362,17 @@ fn parse_env<T: for<'de> Deserialize<'de>>(
 fn validate_profile(p: &Profile, env: &Environment) -> Result<(), BoundaryError> {
     if p.model.trim().is_empty() || p.context_window_tokens == 0 || p.max_output_tokens == 0 {
         return Err(invalid("profile model and token limits are required"));
+    }
+    if p.pricing.as_ref().is_some_and(|pricing| {
+        pricing.currency.len() != 3
+            || !pricing
+                .currency
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase())
+    }) {
+        return Err(invalid(
+            "pricing currency must be a three-letter uppercase code",
+        ));
     }
     let url = Url::parse(&p.base_url).map_err(|_| invalid("invalid API base URL"))?;
     if !url.username().is_empty()
