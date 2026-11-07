@@ -6,36 +6,24 @@ Saya 的终端界面以持续对话为主。用户在主区查看回答与工具
 
 ## 布局
 
-界面按终端单元格分配空间。宽度至少100列且高度至少24行时使用常规布局。
+界面按终端单元格分配空间，所有尺寸采用同一参考样式。
 
 | 区域 | 内容 | 当前尺寸 |
 | --- | --- | --- |
-| 顶栏 | Saya、工作模式、权限、运行状态；工作区、profile／model、effort；用量 | 3行 |
+| 顶栏 | Saya Harness、版本、Ctrl+P命令入口 | 1行 |
+| 外框顶边 | 工作目录 | 1行 |
 | 主区 | 对话与按需详情 | 占据剩余高度 |
-| 输入区 | 多行草稿与插入光标 | 含边框3至8行，根据草稿与终端高度调整 |
-| 底栏 | 发送、换行、命令、取消、退出或当前详情导航 | 1行 |
+| 状态行 | Ready／运行状态，右侧为权限 | 1行 |
+| 输入区 | 灰底、蓝色左竖线、多行草稿和光标 | 通常4至6行，极小窗口按可用空间压缩 |
+| 外框底边 | 模式、模型、effort和输入占比 | 1行 |
+| 宽屏侧栏 | 会话名、上下文分项、扩展状态和其他元数据 | 达到120列×24行时显示，宽度为窗口四分之一，限制28至40列 |
 
-主区没有详情时，对话使用全宽。存在详情且主区宽度达到100列时，对话和详情并列，详情宽度取终端宽度的三分之一，并限制在32至48列。低于100列时，详情使用整个主区。低于20列或6行时显示放大终端的提示。
+主区没有详情时，对话使用全部主区宽度。主区宽度达到100列时，详情与对话并列，详情宽度取主区的三分之一，并限制在32至48列。较窄时详情占据主区。侧栏与按需详情分别处理，所有尺寸保留同一主区外框。低于20列或6行时提示放大终端。
 
-宽度低于100列或高度低于24行时采用参考图对应的紧凑布局。外框包住对话、状态和输入，工作目录嵌入外框顶边。输入区为3至5行，根据草稿和可用高度分配。权限位于状态行右侧，底栏保留模式、模型、effort和用量。长模型名先截短，为effort与用量留空间，极窄窗口优先模式和用量。20×6时只保留必要状态和编辑空间。
+长模型名先截短，为effort与用量留空间，极窄窗口优先模式和用量。有详情且高度很小时，至少保留一行可滚动的实际详情，压缩输入为无标题的单行草稿。翻页步长依据实际详情高度，便于逐行查看工具、调用ID和参数。
 
 ```text
-宽屏，有详情
-┌ Saya  CODE  Manual Approval  Awaiting approval ──────────────────┐
-│ workspace · profile / model                                     │
-│ usage                                                           │
-├ Conversation ───────────────────────┬ Approval required ─────────┤
-│ You                                 │ Tool / call / approval ID │
-│ task                                │ Mode / workspace          │
-│                                     │ operation summary         │
-│ model                               │ arguments                 │
-│ answer / code                       │ reply guidance            │
-├ Message ────────────────────────────┴───────────────────────────┤
-│ draft                                                          │
-└────────────────────────────────────────────────────────────────┘
-  key guidance
-
-紧凑窗口，无详情
+单主区
 Saya Harness (v实际版本)                       Ctrl+P commands
 ┌ • /workspace ────────────────────────────────────────────┐
 │                                                         │
@@ -46,32 +34,47 @@ Saya Harness (v实际版本)                       Ctrl+P commands
 │ ▌ draft                                                 │
 │ ▌                                                       │
 └ WORK model max                 ◔ input 25.6k/128k (20%) ─┘
+
+宽屏侧栏
+Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
+┌ • /workspace ────────────────────────────┐ Context · Estimated
+│                                         │ Window 128k
+│ 对话，或按需显示审批／工具详情             │ System       ███ ~4k
+│                                         │ Instructions █   ~1k
+│                                         │ Skills       █  ~300
+│                                         │ …
+│                                         │ Extensions
+│                                         │ MCP Not implemented
+│                                         │ Plugins Not implemented
+│ ✓ Ready                            auto │ Skills N discovered
+│ ▌ Message                               │ Profile
+│ ▌ draft                                 │ 其他会话元数据
+└ WORK model max      ◔ input … ───────────┘ /workspace
 ```
 
 上图表达区域关系，实际字符布局可由下方预览命令生成。布局代码集中在[view.rs](../crates/saya-tui/src/view.rs)。
 
 ## 配色与信息层级
 
-常规布局使用深色底色、青色强调和英语界面标签。紧凑布局使用黑色主背景、灰色输入背景和蓝色输入竖线，Ready为绿色，thinking effort为橙黄色。下表记录常规主题。
+主区使用黑色背景、灰色输入背景和蓝色输入竖线，Ready为绿色，thinking effort为橙黄色，界面标签使用英语。
 
 | Token | RGB | 使用位置 |
 | --- | --- | --- |
-| Background | `#14171F` | 窗口底色 |
+| Background | `#000000` | 主区底色 |
 | Foreground | `#E1E5EE` | 消息正文与主要元数据 |
-| Accent | `#7FD4E2` | Saya 标记、assistant 标题、输入与详情边框 |
-| Muted | `#939BAE` | 次要元数据、system 消息和快捷键 |
+| Input / Sidebar | `#343434` | 输入和侧栏底色 |
+| Accent | `#2F74C4` | 输入竖线和工作模式 |
+| Effort | `#FF9A28` | thinking effort |
+| Muted | `#939BAE` | 次要元数据和边框 |
 | User | `#B4C2FF` | 用户消息标题 |
 | Tool | `#E5BE82` | 工具消息标题 |
-| Border | `#41495C` | 对话边框 |
 | Code background | `#1D222E` | 代码围栏和代码正文背景 |
 | Code foreground | `#CBD3E1` | 代码文本 |
 | Warning | 终端 `Yellow` | 显示截断提示 |
 
-紧凑主题的主背景为 `#000000`，输入背景为 `#343434`，蓝色强调为 `#2F74C4`，thinking effort 为 `#FF9A28`。
-
 消息标题使用加粗样式，分别标明用户、模型、工具和系统来源。流式消息标题附加 `streaming`。达到显示上限时，消息标题和末尾均保留截断提示。代码围栏原样显示，围栏内文本使用代码配色。
 
-主题常量、`role_style`、`draw_header`、`draw_transcript` 和 `draw_editor` 均位于[view.rs](../crates/saya-tui/src/view.rs)。
+主题常量、`role_style`、`draw_session`、`draw_transcript` 和 `draw_editor` 均位于[view.rs](../crates/saya-tui/src/view.rs)。
 
 ## 编辑与滚动
 
@@ -135,7 +138,7 @@ flowchart LR
 | 信息 | 来源与界面责任 |
 | --- | --- |
 | 工作模式 | Config 提供启动选择，RuntimeHandle 提供当前和待生效模式；State 同时保存两者 |
-| 权限模式 | 当前运行配置与用户操作，由 controller 写入顶栏或紧凑状态行右侧 |
+| 权限模式 | 当前运行配置与用户操作，由 controller 写入状态行右侧 |
 | Thinking effort | 所选执行 profile 的实际请求设置，未配置显示 `—`，协议字段见[配置](configuration.md#thinking-effort) |
 | 输入用量 | 最近一次执行请求的 `ModelFinished.usage.input_tokens` 与配置窗口之比，估算带 `~`，未知显示 `—` |
 | 窗口标题 | 从会话首条用户任务派生、脱敏、合并空白、保留80字符，经 TerminalGuard 清理后写入 OSC 2 |
@@ -146,7 +149,7 @@ flowchart LR
 | 运行结束 | RunResult 提供最终状态、错误与可用用量 |
 | 会话和导出 | 已建立的 app／core 会话与导出服务提供持久数据 |
 
-工作模式与权限规则由 core 执行。人工回复沿原请求通道返回，失效与版本检查由运行时落实。顶栏在切换等待期间保留当前模式，并展示待生效模式。UI 查询或导出仍在收尾时，模式请求先排队；core 已有待生效模式时，导出等待模式稳定后由用户重新发起。数据契约见[TUI 总体设计](tui.md)。
+工作模式与权限规则由 core 执行。人工回复沿原请求通道返回，失效与版本检查由运行时落实。底栏在切换等待期间保留当前模式，并展示待生效模式。UI 查询或导出仍在收尾时，模式请求先排队；core 已有待生效模式时，导出等待模式稳定后由用户重新发起。数据契约见[TUI 总体设计](tui.md)。
 
 ## 当前命令与服务行为
 

@@ -446,12 +446,14 @@ async fn attach_active_call(app: &mut App) {
         (result, current)
     });
     let (_sender, events) = mpsc::channel(1);
+    let (_context_sender, context) = watch::channel(None);
     let (_interaction, requests) = input_channel(1).unwrap();
     app.active = Some(Active {
         cancel,
         join,
         events,
         events_open: false,
+        context,
         assistant_id: app.state.push_message(Role::Assistant, "fixture", ""),
         handle,
         requests,
@@ -698,6 +700,61 @@ async fn final_event_drain_clears_old_usage_when_only_the_next_request_start_arr
     stop_active_call(&mut app).await;
     assert_eq!(app.state.context_input_tokens, None);
     assert!(!app.state.context_estimated);
+}
+
+#[tokio::test]
+async fn context_snapshots_refresh_and_the_final_closed_channel_preserves_the_latest() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    let (sender, receiver) = watch::channel(None);
+    app.active.as_mut().unwrap().context = receiver;
+    sender.send_replace(Some(ContextSnapshot {
+        entries: vec![saya_app::context::ContextEntry {
+            label: "System",
+            tokens: 120,
+        }],
+        skills_count: Some(2),
+    }));
+    assert!(app.refresh_context());
+    assert_eq!(app.state.context_breakdown[0].label, "System");
+    assert_eq!(app.state.context_breakdown[0].tokens, 120);
+    assert_eq!(app.state.skills_count, Some(2));
+    assert!(app.state.context_breakdown_estimated);
+    assert!(!app.refresh_context());
+    sender.send_replace(Some(ContextSnapshot {
+        entries: vec![saya_app::context::ContextEntry {
+            label: "Conversation",
+            tokens: 300,
+        }],
+        skills_count: Some(0),
+    }));
+    drop(sender);
+    stop_active_call(&mut app).await;
+    assert_eq!(app.state.context_breakdown[0].label, "Conversation");
+    assert_eq!(app.state.context_breakdown[0].tokens, 300);
+    assert_eq!(app.state.skills_count, Some(0));
+}
+
+#[tokio::test]
+async fn one_line_details_page_through_each_row() {
+    let (_root, mut app) = fixture();
+    let (request, receiver) = approval(&app, "small-viewport");
+    app.request(request);
+    app.state.details_page_rows = 1;
+    app.key(key(KeyCode::PageDown, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.details_scroll, 1);
+    app.key(key(KeyCode::PageDown, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.details_scroll, 2);
+    app.key(key(KeyCode::PageUp, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.details_scroll, 1);
+    app.reply_approval(false);
+    assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
 }
 
 #[tokio::test]

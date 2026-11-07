@@ -1,7 +1,7 @@
-//! Render production widgets from a synthetic state using TestBackend.
+//! Render the unified session view from a synthetic state using TestBackend.
 use ratatui::{Terminal, backend::TestBackend};
 use saya_tui::commands::COMMANDS;
-use saya_tui::view::{self, Details, Role, State};
+use saya_tui::view::{self, ContextEntry, Details, Role, State};
 use std::{error::Error, io::Write};
 use unicode_width::UnicodeWidthStr;
 
@@ -115,6 +115,27 @@ fn fixture(scene: &str) -> State {
             state.editor.clear();
             state.thinking_effort = Some("max".into());
         }
+        "sidebar" => {
+            state.editor.clear();
+            state.context_breakdown = [
+                ("System", 8_000),
+                ("Instructions", 4_000),
+                ("Skills", 128),
+                ("Preferences", 512),
+                ("Memory", 1_024),
+                ("Conversation", 8_192),
+                ("Files", 1_024),
+                ("Tools", 2_048),
+                ("Protocol", 512),
+            ]
+            .into_iter()
+            .map(|(label, tokens)| ContextEntry {
+                label: label.into(),
+                tokens,
+            })
+            .collect();
+            state.skills_count = Some(3);
+        }
         _ => {}
     }
     state
@@ -143,13 +164,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.iter().any(|argument| argument == "--help") {
         writeln!(
             std::io::stdout().lock(),
-            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort]"
+            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar]"
         )?;
         return Ok(());
     }
     if args.len() > 3 {
         return Err(
-            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort]".into(),
+            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar]".into(),
         );
     }
     let width = dimension(args.first(), 120, 240)?;
@@ -157,10 +178,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let scene = args.get(2).map(String::as_str).unwrap_or("chat");
     if !matches!(
         scene,
-        "chat" | "approval" | "tool" | "commands" | "completion" | "idle" | "compact" | "effort"
+        "chat"
+            | "approval"
+            | "tool"
+            | "commands"
+            | "completion"
+            | "idle"
+            | "compact"
+            | "effort"
+            | "sidebar"
     ) {
         return Err(
-            "scene must be chat, approval, tool, commands, completion, idle, compact or effort"
+            "scene must be chat, approval, tool, commands, completion, idle, compact, effort or sidebar"
                 .into(),
         );
     }

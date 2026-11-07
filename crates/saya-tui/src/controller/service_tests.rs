@@ -137,6 +137,8 @@ async fn new_and_resume_wait_for_input_and_hold_only_the_open_session_lock() {
     assert!(transcript(&app).contains("saved question"));
     assert_eq!(app.state.session_title, "saved question");
     assert_eq!(app.state.context_input_tokens, None);
+    assert!(app.state.context_breakdown.is_empty());
+    assert_eq!(app.state.skills_count, None);
     assert!(snapshot(&app).await.runs.is_empty());
     assert_eq!(store.lock_session(id).err().unwrap().0.code, "session_busy");
     let data = app.config.data_dir.clone();
@@ -174,10 +176,19 @@ async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
         output_tokens: Some(20),
         estimated: true,
     }));
+    app.record_context_snapshot(ContextSnapshot {
+        entries: vec![saya_app::context::ContextEntry {
+            label: "Skills",
+            tokens: 20,
+        }],
+        skills_count: Some(1),
+    });
     create(&mut app).await;
     assert_eq!(app.state.session_title, "New session");
     assert_eq!(app.state.context_input_tokens, None);
     assert!(!app.state.context_estimated);
+    assert!(app.state.context_breakdown.is_empty());
+    assert_eq!(app.state.skills_count, None);
     assert!(snapshot(&app).await.runs.is_empty());
 }
 
@@ -193,6 +204,13 @@ async fn profile_selection_clears_the_title_and_previous_context_usage() {
         output_tokens: None,
         estimated: false,
     }));
+    app.record_context_snapshot(ContextSnapshot {
+        entries: vec![saya_app::context::ContextEntry {
+            label: "System",
+            tokens: 30,
+        }],
+        skills_count: Some(0),
+    });
     let mut other = app.config.profiles["fixture"].clone();
     other.model = "other model".into();
     other.context_window_tokens = 256000;
@@ -203,6 +221,8 @@ async fn profile_selection_clears_the_title_and_previous_context_usage() {
     assert_eq!(app.state.session_title, "New session");
     assert_eq!(app.state.context_window_tokens, Some(256000));
     assert_eq!(app.state.context_input_tokens, None);
+    assert!(app.state.context_breakdown.is_empty());
+    assert_eq!(app.state.skills_count, None);
     assert_eq!(app.state.model, "other model");
     assert_eq!(app.state.thinking_effort.as_deref(), Some("max"));
 }

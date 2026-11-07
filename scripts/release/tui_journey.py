@@ -174,90 +174,112 @@ class Screen:
     def text(self):
         return '\n'.join(''.join(row).rstrip() for row in self.cells)
 
-    @property
-    def compact(self):
-        return self.columns < 100 or self.rows < 24
-
     def row_text(self, index):
         return ''.join(self.cells[index]).rstrip()
 
+    def main_width(self):
+        return next((index + 1 for index, cell in enumerate(self.cells[-1]) if cell == '┘'), None)
+
+    def main_row_text(self, index):
+        width = self.main_width()
+        return ''.join(self.cells[index][:width]).rstrip() if width is not None else ''
+
+    def sidebar_row_text(self, index):
+        width = self.main_width()
+        return ''.join(self.cells[index][width:]).strip() if width is not None else ''
+
     def message_row(self):
-        for index in range(self.rows - 2, max(1, self.rows - 11), -1):
-            row = self.row_text(index)
-            if self.compact:
-                label = ''.join(self.cells[index][3:self.columns - 1]).strip()
-                if label == 'Message' or label.startswith('Message '):
-                    return index
-            elif '┌ Message ' in row:
-                return index
+        width = self.main_width()
+        status_row = self.status_row()
+        if width is None or status_row is None or (self.rows == 6 and status_row == 3):
+            return None
+        index = status_row + 1
+        label = ''.join(self.cells[index][3:width - 1]).strip()
+        if label == 'Message' or label.startswith('Message '):
+            return index
         return None
 
     def editor_text(self):
         start = self.message_row()
+        if start is None and self.rows == 6 and self.status_row() == 3:
+            start = 3
         if start is None:
             return None
-        if self.compact:
-            end = self.rows - (1 if self.rows == 6 else 2)
-            content = [''.join(self.cells[index][3:self.columns - 1]).rstrip()
-                       for index in range(start + 1, end)]
-            return '\n'.join(content).rstrip()
-        content = []
-        for index in range(start + 1, self.rows):
-            row = self.row_text(index)
-            if row.startswith('└'):
-                break
-            if row.startswith('│') and row.endswith('│'):
-                content.append(row[1:-1].rstrip())
+        width = self.main_width()
+        end = self.rows - (2 if self.rows - 1 - start > 2 else 1)
+        content = [''.join(self.cells[index][3:width - 1]).rstrip()
+                   for index in range(start + 1, end)]
         return '\n'.join(content).rstrip()
 
     def mode(self):
-        if self.compact:
-            row = ''.join(self.cells[self.rows - 1][1:self.columns - 1])
-        else:
-            if not self.row_text(0).lstrip().startswith('SAYA '):
-                return None
-            row = self.row_text(0).split('|')[0]
+        width = self.main_width()
+        if width is None:
+            return None
+        row = ''.join(self.cells[self.rows - 1][1:width - 1])
         match = re.search(r'(?:^|\s)(PLAN|BUILD|CODE|WORK)(?:\s|→|$)', row)
         return match.group(1) if match else None
 
     def permissions(self):
-        if not self.compact:
-            if not self.row_text(0).lstrip().startswith('SAYA '):
-                return None
-            fields = self.row_text(0).split('|')
-            return fields[1].strip() if len(fields) == 3 else None
-        start = self.message_row()
-        if start is None:
+        status_row = self.status_row()
+        if status_row is None:
             return None
-        row = self.row_text(start - 1).strip(' │')
+        row = self.main_row_text(status_row).strip(' │')
         for label in ('Manual Approval', 'bypass permissions', 'manual', 'bypass', 'auto'):
             if row.endswith(label):
                 return {'manual': 'Manual Approval', 'bypass': 'bypass permissions'}.get(label, label)
         return None
 
     def status(self):
-        if not self.compact:
-            if not self.row_text(0).lstrip().startswith('SAYA '):
-                return None
-            fields = self.row_text(0).split('|')
-            return fields[2].strip() if len(fields) == 3 else None
-        start = self.message_row()
+        status_row = self.status_row()
         permission = self.permissions()
-        if start is None or permission is None:
+        if status_row is None or permission is None:
             return None
         label = permission
-        if self.columns - 2 < 48:
+        if self.main_width() - 2 < 48:
             label = {'Manual Approval': 'manual', 'bypass permissions': 'bypass'}.get(permission, permission)
-        row = self.row_text(start - 1).strip(' │')
+        row = self.main_row_text(status_row).strip(' │')
         status = row[:-len(label)].strip().lstrip('✓● ').strip()
         return {'Approval': 'Awaiting approval', 'Input': 'Awaiting input',
                 'Cancel': 'Cancelling', 'Done': 'Completed'}.get(status, status)
 
+    def status_row(self):
+        if self.main_width() is None:
+            return None
+        labels = ('Manual Approval', 'bypass permissions', 'manual', 'bypass', 'auto')
+        for index in range(self.rows - 3, max(1, self.rows - 9), -1):
+            if self.cells[index][1] in ('✓', '●'):
+                row = self.main_row_text(index).strip(' │')
+                if any(row.endswith(label) for label in labels):
+                    return index
+        return None
+
     def details_text(self):
-        if self.compact:
-            end = self.message_row()
-            return '\n'.join(self.row_text(index) for index in range(2, max(2, (end or 3) - 1)))
-        return '\n'.join(self.row_text(index) for index in range(3, self.message_row() or 3))
+        end = self.status_row()
+        width = self.main_width()
+        if width is None:
+            return ''
+        column = 1
+        if width >= 100:
+            details_width = min(48, max(32, (width - 2) // 3))
+            column = width - 1 - details_width
+        return '\n'.join(''.join(self.cells[index][column:width - 1]).rstrip()
+                         for index in range(2, max(2, end or 2)))
+
+    def popup_text(self):
+        width = self.main_width()
+        if width is None:
+            return ''
+        end = max(2, self.status_row() or 2)
+        for start in range(2, end):
+            row = ''.join(self.cells[start][2:width - 1])
+            if row.startswith('┌ Command suggestions '):
+                lines = []
+                for index in range(start, end):
+                    lines.append(''.join(self.cells[index][2:min(width - 2, 82)]).rstrip())
+                    if self.cells[index][2] == '└':
+                        break
+                return '\n'.join(lines)
+        return ''
 
 
 SUPERVISOR = r"""
@@ -376,7 +398,8 @@ class Terminal:
     def resize(self, columns, rows):
         # The kernel sends SIGWINCH to the foreground group for TIOCSWINSZ.
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
-        self.screen.resize(columns, rows)
+        if self.screen.columns != columns or self.screen.rows != rows:
+            self.screen.resize(columns, rows)
 
     def pump(self, timeout=0.05):
         ready, _, _ = select.select([self.master], [], [], timeout)
@@ -408,10 +431,7 @@ class Terminal:
         self.wait(lambda: text in self.screen.text, repr(text), timeout)
 
     def title(self):
-        def visible():
-            header = self.screen.row_text(0).lstrip()
-            return header.startswith('Saya Harness') if self.screen.compact else header.startswith('SAYA ')
-        self.wait(visible, 'TUI title in its header region')
+        self.wait(lambda: self.screen.main_row_text(0).startswith('Saya Harness'), 'TUI title in its header region')
 
     def editor_text(self):
         return self.screen.editor_text()
@@ -577,8 +597,8 @@ def stream_journey(binary, protocol):
             terminal = invoke(binary, root, config)
             try:
                 terminal.title()
-                terminal.wait(lambda: terminal.screen.row_text(1).endswith('Effort max'),
-                              'configured thinking effort in the wide header')
+                terminal.wait(lambda: 'max' in terminal.screen.main_row_text(terminal.screen.rows - 1),
+                              'configured thinking effort in the footer')
                 if termios.tcgetattr(terminal.slave)[3] & termios.ICANON:
                     raise RuntimeError('TUI did not enable raw mode')
                 expected_input = 'first 你好🌸\nsecond\nthird 粘贴'
@@ -592,8 +612,8 @@ def stream_journey(binary, protocol):
                 terminal.title()
                 terminal.resize(110, 32)
                 terminal.until('TUI_STREAM_你好_🌸')
-                terminal.wait(lambda: terminal.screen.row_text(1).endswith('Effort max'),
-                              'restored wide thinking effort header')
+                terminal.wait(lambda: 'max' in terminal.screen.main_row_text(terminal.screen.rows - 1),
+                              'thinking effort footer after resize')
                 snapshot = terminal.screen.text
                 terminal.finish()
                 if len(fixture.requests) != 1 or fixture.requests[0].get('stream') is not True:
@@ -660,14 +680,14 @@ def command_completion_journey(binary):
 
                 def clear_draft():
                     terminal.send(b'\x03')
-                    terminal.wait(lambda: editor_text() == '' and 'Command suggestions' not in terminal.screen.text,
+                    terminal.wait(lambda: editor_text() == '' and 'Command suggestions' not in terminal.screen.popup_text(),
                                   'empty draft after Ctrl+C')
 
                 terminal.title()
                 terminal.send('/')
-                terminal.until('Command suggestions')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'command suggestions popup')
                 terminal.send('mo')
-                terminal.until('/mode plan')
+                terminal.wait(lambda: '/mode plan' in terminal.screen.popup_text(), 'mode prefix suggestions')
                 terminal.send(b'\t')
                 terminal.wait(lambda: editor_text() == '/mode plan', 'Tab completed mode draft')
                 no_completion_effects('WORK', 'auto')
@@ -675,9 +695,9 @@ def command_completion_journey(binary):
                 terminal.wait(lambda: mode() == 'PLAN' and editor_text() == '', 'explicit mode command execution')
 
                 terminal.send('/permissions ')
-                terminal.until('Command suggestions')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'command suggestions popup')
                 terminal.send(b'\x1b[B')
-                terminal.wait(lambda: any('› /permissions manual' in row for row in terminal.screen.text.splitlines()),
+                terminal.wait(lambda: any('› /permissions manual' in row for row in terminal.screen.popup_text().splitlines()),
                               'highlighted permissions suggestion')
                 terminal.send(b'\t')
                 terminal.wait(lambda: editor_text() == '/permissions manual', 'selected permissions completion')
@@ -687,19 +707,19 @@ def command_completion_journey(binary):
                               'explicit permissions command execution')
 
                 terminal.send('/mo')
-                terminal.until('Command suggestions')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'command suggestions popup')
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.text,
+                terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.popup_text(),
                               'Esc hid suggestions and ghost while preserving draft')
                 terminal.send(b'\x10')
-                terminal.until('Commands')
+                terminal.wait(lambda: 'Commands' in terminal.screen.details_text(), 'command palette details')
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: editor_text() == '/mo' and 'Commands' not in terminal.screen.text,
+                terminal.wait(lambda: editor_text() == '/mo' and 'Commands' not in terminal.screen.details_text(),
                               'existing command palette closed with draft intact')
                 clear_draft()
 
                 terminal.send('/resume-a')
-                terminal.until('Command suggestions')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'command suggestions popup')
                 terminal.send(b'\t')
                 terminal.send('NOT_A_SESSION_ID')
                 terminal.wait(lambda: editor_text() == '/resume-accept NOT_A_SESSION_ID',
@@ -708,10 +728,10 @@ def command_completion_journey(binary):
                 clear_draft()
 
                 terminal.send('/mode wo')
-                terminal.until('Command suggestions')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'command suggestions popup')
                 terminal.send(b'\x1b[C')
                 terminal.send(' ')
-                terminal.wait(lambda: editor_text() == '/mode work' and 'Command suggestions' not in terminal.screen.text,
+                terminal.wait(lambda: editor_text() == '/mode work' and 'Command suggestions' not in terminal.screen.popup_text(),
                               'Right accepted actual draft before additional typing')
                 no_completion_effects('PLAN', 'Manual Approval')
                 clear_draft()
@@ -720,7 +740,7 @@ def command_completion_journey(binary):
                 terminal.send(b'\x0a')
                 terminal.send('第二行')
                 terminal.wait(lambda: editor_text() == '普通中文\n第二行' and
-                              'Command suggestions' not in terminal.screen.text, 'ordinary multiline draft without completion')
+                              'Command suggestions' not in terminal.screen.popup_text(), 'ordinary multiline draft without completion')
                 no_completion_effects('PLAN', 'Manual Approval')
                 terminal.send(b'\r')
                 terminal.until('COMPLETION_MULTILINE_DONE')
@@ -730,7 +750,7 @@ def command_completion_journey(binary):
                     raise RuntimeError('ordinary multiline input was changed by command completion')
 
                 terminal.send('//literal')
-                terminal.wait(lambda: editor_text() == '//literal' and 'Command suggestions' not in terminal.screen.text,
+                terminal.wait(lambda: editor_text() == '//literal' and 'Command suggestions' not in terminal.screen.popup_text(),
                               'escaped slash draft without completion')
                 terminal.send(b'\r')
                 terminal.until('COMPLETION_LITERAL_DONE')
@@ -740,13 +760,13 @@ def command_completion_journey(binary):
                     raise RuntimeError('escaped slash input was executed as a command')
 
                 terminal.line('Request the manual read fixture')
-                terminal.wait(lambda: call[0] in terminal.screen.text and 'Approval required' in terminal.screen.text,
+                terminal.wait(lambda: call[0] in terminal.screen.details_text() and 'Approval required' in terminal.screen.details_text(),
                               'pending manual approval')
                 terminal.send('/mo')
-                terminal.until('Command suggestions')
+                terminal.wait(lambda: bool(terminal.screen.popup_text()), 'command suggestions popup')
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.text
-                              and 'Approval required' in terminal.screen.text, 'first Esc preserved tool approval')
+                terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.popup_text()
+                              and 'Approval required' in terminal.screen.details_text(), 'first Esc preserved tool approval')
                 if len(fixture.requests) != 3:
                     raise RuntimeError('first completion Esc replied to a pending tool approval')
                 terminal.send(b'\x1b')
@@ -762,14 +782,14 @@ def command_completion_journey(binary):
         fixture.close()
 
 
-def compact_layout_and_title_journey(binary):
+def reference_layout_and_title_journey(binary):
     first_prompt = '整理 Saya 验收🌸'
     approval_prompt = '核对文件\n只读审批'
     tiny_prompt = '窄屏中文'
     malicious_prompt = '  项目\u202e\x1b]2;FORGED\x07 标题🌸\t第一项任务 ' + '长中文' * 60
     call = ('compact-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
     fixture = Fixture('openai-chat-completions', [
-        {'text': 'MODEL_BODY | PLAN | Manual Approval | Completed | input 99%',
+        {'text': 'MODEL_BODY | PLAN | Manual Approval | Completed | input 99% | Context · Estimated | Skills 999 discovered',
          'chat_usage': {'prompt_tokens': 64000, 'completion_tokens': 5}},
         {'call': call, 'chat_usage': {'prompt_tokens': 1024, 'completion_tokens': 5}},
         expect_tool(call[0], {'text': 'COMPACT_APPROVED',
@@ -781,7 +801,11 @@ def compact_layout_and_title_journey(binary):
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
-            (workspace / 'fact.txt').write_text('compact fixture\n')
+            (workspace / 'fact.txt').write_text('reference fixture\n')
+            (workspace / 'AGENTS.md').write_text('Use the reference UI fixture instructions and preserve fact.txt.\n')
+            skill = workspace / '.saya' / 'skills' / 'example'
+            skill.mkdir(parents=True)
+            (skill / 'SKILL.md').write_text('---\nname: example\ndescription: Offline reference UI acceptance fixture.\n---\nRead fact.txt when requested.\n')
             config = configuration(root, fixture)
             config.write_text(config.read_text() + 'thinking_effort = "max"\n')
             terminal = invoke(binary, root, config)
@@ -790,102 +814,184 @@ def compact_layout_and_title_journey(binary):
                     return terminal.screen.window_titles[-1] if terminal.screen.window_titles else None
 
                 def footer():
-                    return terminal.screen.row_text(terminal.screen.rows - 1)
+                    return terminal.screen.main_row_text(terminal.screen.rows - 1)
 
-                def compact_ready(columns, rows, expected_message_row):
+                def reference_ready(columns, rows, expected_message_row):
                     terminal.resize(columns, rows)
                     terminal.title()
+                    sidebar_width = min(40, max(28, columns // 4)) if columns >= 120 and rows >= 24 else 0
                     terminal.wait(lambda: terminal.screen.message_row() == expected_message_row and
+                                  terminal.screen.main_width() == columns - sidebar_width and
                                   terminal.screen.status() is not None and terminal.mode() is not None and
                                   'input' in footer(),
-                                  'compact Message region at its fixed row')
+                                  'reference Message region at its fixed row')
                     screen = terminal.screen
-                    if not screen.row_text(1).startswith('┌') or '/' not in screen.row_text(1):
-                        raise RuntimeError('compact workspace was not embedded in the outer top border')
-                    if 'Ctrl+P' not in screen.row_text(0):
-                        raise RuntimeError('compact command hint was missing from the top row')
-                    if columns >= 44 and '(v' not in screen.row_text(0):
-                        raise RuntimeError('compact header omitted the package version')
-                    if screen.cells[expected_message_row][1] != '│':
-                        raise RuntimeError('compact input did not retain its left border')
-                    if screen.colors[expected_message_row][1][0] != (47, 116, 196):
-                        raise RuntimeError('compact input left border was not blue')
-                    if screen.colors[expected_message_row][3][1] != (52, 52, 52):
-                        raise RuntimeError('compact Message region did not use its gray background')
-                    if columns >= 44:
-                        terminal.wait(lambda: 'max' in footer(), 'compact configured thinking effort')
-                        column = screen.row_text(rows - 1).index('max')
+                    if screen.colors[0][0][1] not in (('indexed', 0), (0, 0, 0)):
+                        raise RuntimeError('reference header did not retain the black background')
+                    if not screen.main_row_text(1).startswith('┌') or '/' not in screen.main_row_text(1):
+                        raise RuntimeError('reference workspace was not embedded in the outer top border')
+                    if 'Ctrl+P' not in screen.main_row_text(0):
+                        raise RuntimeError('reference command hint was missing from the top row')
+                    if screen.main_width() >= 44 and '(v' not in screen.main_row_text(0):
+                        raise RuntimeError('reference header omitted the package version')
+                    input_row = expected_message_row if expected_message_row is not None else 4
+                    for index in range(input_row, rows - 1):
+                        if screen.cells[index][1] != '│':
+                            raise RuntimeError('reference input did not retain its left border')
+                        if screen.colors[index][1] != ((47, 116, 196), (47, 116, 196)):
+                            raise RuntimeError('reference input stripe was not solid blue for the full composer height')
+                    if screen.colors[input_row][3][1] != (52, 52, 52):
+                        raise RuntimeError('reference Message region did not use its gray background')
+                    if not any(ring in footer() for ring in ('○', '◔', '◑', '◕', '●')):
+                        raise RuntimeError('reference footer omitted the labeled input ring')
+                    if screen.main_width() >= 44:
+                        terminal.wait(lambda: 'max' in footer(), 'reference configured thinking effort')
+                        column = screen.main_row_text(rows - 1).index('max')
                         if screen.colors[rows - 1][column][0] != (255, 154, 40):
-                            raise RuntimeError('compact thinking effort did not use its orange accent')
+                            raise RuntimeError('reference thinking effort did not use its orange accent')
+                    if sidebar_width:
+                        terminal.wait(lambda: 'Context' in screen.sidebar_row_text(2) and
+                                      'Window' in screen.sidebar_row_text(3) and
+                                      'Extensions' in screen.sidebar_row_text(15),
+                                      'sidebar fixed context and extension regions')
+                        if screen.colors[0][screen.main_width() + 1][1] != (52, 52, 52):
+                            raise RuntimeError('sidebar did not use its reference gray background')
+                        if 'Not implemented' not in screen.sidebar_row_text(16) or 'MCP' not in screen.sidebar_row_text(16):
+                            raise RuntimeError('sidebar presented MCP as implemented')
+                        if 'Not implemented' not in screen.sidebar_row_text(17) or 'Plugins' not in screen.sidebar_row_text(17):
+                            raise RuntimeError('sidebar presented plugins as implemented')
+                        if 'Skills' not in screen.sidebar_row_text(18):
+                            raise RuntimeError('sidebar omitted its actual skill discovery state')
+                    elif any(screen.sidebar_row_text(index) for index in range(rows)):
+                        raise RuntimeError('sidebar remained visible below its size threshold')
 
                 def assert_user_input(request_index, expected):
                     if not any(message.get('role') == 'user' and message.get('content') == expected
                                for message in fixture.requests[request_index]['messages']):
-                        raise RuntimeError('compact editor changed the submitted user text')
+                        raise RuntimeError('reference editor changed the submitted user text')
+
+                def assert_sidebar_context(nonzero):
+                    labels = ['System', 'Instructions', 'Skills', 'Preferences', 'Memory',
+                              'Conversation', 'Files', 'Tools', 'Protocol']
+                    populated = {}
+                    terminal.wait(lambda: terminal.screen.sidebar_row_text(2) == 'Context · Estimated' and
+                                  terminal.screen.sidebar_row_text(18) == 'Skills 1 discovered',
+                                  'actual execution context estimates and discovered skill')
+                    if terminal.screen.sidebar_row_text(0) != first_prompt:
+                        raise RuntimeError('sidebar session title did not match the actual first task')
+                    if terminal.screen.sidebar_row_text(3) != 'Window 128k':
+                        raise RuntimeError('sidebar context window did not match the configured model')
+                    if not terminal.screen.sidebar_row_text(13).startswith('Total ~'):
+                        raise RuntimeError('sidebar did not label its total context as estimated')
+                    for index, label in enumerate(labels, 4):
+                        row = terminal.screen.sidebar_row_text(index)
+                        if not row.startswith(label + ' '):
+                            raise RuntimeError('sidebar omitted context category ' + label)
+                        metric = re.search(r'\s([0-9]+(?:\.[0-9]+)?)[kMGT]?\s+[<>]?[0-9]+(?:\.[0-9]+)?%$', row)
+                        if metric is None:
+                            raise RuntimeError('sidebar did not display a bounded numeric estimate for ' + label)
+                        populated[label] = float(metric.group(1)) > 0
+                        if label in nonzero and not populated[label]:
+                            raise RuntimeError('sidebar did not estimate the actual ' + label + ' context')
+                    return populated
 
                 terminal.title()
                 terminal.wait(lambda: title() == 'Saya | New session', 'initial window title')
-                compact_ready(80, 24, 20)
+                for columns, rows, message_row in [
+                        (110, 32, 27), (120, 40, 35),
+                        (119, 24, 19), (120, 24, 19), (119, 24, 19),
+                        (120, 23, 18), (120, 24, 19), (120, 23, 18),
+                        (99, 24, 19), (100, 24, 19), (99, 24, 19),
+                        (100, 23, 18), (100, 24, 19), (100, 23, 18),
+                        (80, 24, 19), (60, 18, 13), (20, 6, 3),
+                        (160, 45, 40), (120, 40, 35), (110, 32, 27), (80, 24, 19)]:
+                    reference_ready(columns, rows, message_row)
+                    if terminal.mode() != 'WORK' or terminal.permissions() != 'auto' or terminal.screen.status() != 'Ready':
+                        raise RuntimeError('resizing changed the reference control state')
+                    if terminal.screen.main_width() < columns and 'Unknown' not in terminal.screen.sidebar_row_text(2):
+                        raise RuntimeError('sidebar invented context estimates before a model request')
+                    if terminal.screen.main_width() < columns and terminal.screen.sidebar_row_text(18) != 'Skills —':
+                        raise RuntimeError('sidebar invented skill discovery before the first request')
+                if fixture.requests:
+                    raise RuntimeError('reference layout resizing called the model')
                 if terminal.mode() != 'WORK' or terminal.permissions() != 'auto' or terminal.screen.status() != 'Ready':
-                    raise RuntimeError('compact initial control state was not displayed in fixed regions')
-                terminal.wait(lambda: 'input —/128k (—)' in footer(), 'unknown initial compact input usage')
+                    raise RuntimeError('reference initial control state was not displayed in fixed regions')
+                terminal.wait(lambda: 'input —/128k (—)' in footer(), 'unknown initial reference input usage')
                 terminal.line(first_prompt)
                 wait_idle(terminal, root)
                 terminal.wait(lambda: title() == 'Saya | ' + first_prompt, 'first-task window title')
                 assert_user_input(0, first_prompt)
                 if fixture.requests[0].get('reasoning_effort') != 'max':
-                    raise RuntimeError('compact configured thinking effort was not sent to the model')
+                    raise RuntimeError('reference configured thinking effort was not sent to the model')
                 if terminal.mode() != 'WORK' or terminal.permissions() != 'auto':
-                    raise RuntimeError('model body text spoofed the compact control observer')
-                terminal.wait(lambda: '◑ input 64k/128k (50%)' in footer(), 'execution input usage in compact meter')
+                    raise RuntimeError('model body text spoofed the reference control observer')
+                terminal.wait(lambda: '◑ input 64k/128k (50%)' in footer(), 'execution input usage in reference meter')
                 identifier = session_data(binary, root, config)[0]['id']
+                reference_ready(120, 40, 35)
+                if assert_sidebar_context({'Instructions', 'Skills'})['Files']:
+                    raise RuntimeError('sidebar invented file output context before a file tool result')
 
-                compact_ready(60, 18, 14)
+                reference_ready(60, 18, 13)
                 terminal.send('/mo')
-                terminal.wait(lambda: 'Command suggestions' in terminal.screen.details_text(),
-                              'compact completion popup')
+                terminal.wait(lambda: 'Command suggestions' in terminal.screen.popup_text(),
+                              'reference completion popup')
                 terminal.send(b'\t')
                 terminal.send(' ')
                 terminal.wait(lambda: terminal.editor_text() == '/mode plan' and
-                              'Command suggestions' not in terminal.screen.details_text(), 'compact accepted command draft')
+                              'Command suggestions' not in terminal.screen.popup_text(), 'reference accepted command draft')
                 if terminal.mode() != 'WORK' or len(fixture.requests) != 1:
-                    raise RuntimeError('compact completion executed before Enter')
+                    raise RuntimeError('reference completion executed before Enter')
                 terminal.send(b'\r')
                 terminal.wait(lambda: terminal.mode() == 'PLAN' and terminal.editor_text() == '',
-                              'compact explicit mode change')
+                              'reference explicit mode change')
                 terminal.line('/permissions manual')
                 terminal.wait(lambda: terminal.permissions() == 'Manual Approval' and terminal.editor_text() == '',
-                              'compact explicit permissions change')
+                              'reference explicit permissions change')
                 terminal.send('核对文件')
                 terminal.send(b'\x0a')
                 terminal.send('只读审批')
-                terminal.wait(lambda: terminal.editor_text() == approval_prompt, 'compact multiline editor draft')
+                terminal.wait(lambda: terminal.editor_text() == approval_prompt, 'reference multiline editor draft')
                 terminal.send(b'\r')
                 terminal.wait(lambda: terminal.screen.status() == 'Awaiting approval' and
-                              call[0] in terminal.screen.details_text(), 'compact manual approval')
+                              call[0] in terminal.screen.details_text(), 'reference manual approval')
                 assert_user_input(1, approval_prompt)
                 if terminal.permissions() != 'Manual Approval' or len(fixture.requests) != 2:
-                    raise RuntimeError('compact approval did not pause the tool request')
-                compact_ready(80, 24, 20)
-                terminal.wait(lambda: 'Approval required' in terminal.screen.details_text() and
-                              call[0] in terminal.screen.details_text(), 'resized compact approval details')
+                    raise RuntimeError('reference approval did not pause the tool request')
+                for columns, rows, message_row in [
+                        (99, 24, 19), (100, 24, 19), (99, 24, 19),
+                        (110, 32, 27), (119, 24, 19), (120, 24, 19),
+                        (120, 23, 18), (120, 40, 35), (160, 45, 40), (80, 24, 19)]:
+                    reference_ready(columns, rows, message_row)
+                    terminal.wait(lambda: 'Approval required' in terminal.screen.details_text() and
+                                  call[0] in terminal.screen.details_text(), 'reference approval in its actual details region')
+                    if terminal.screen.status() != 'Awaiting approval' or len(fixture.requests) != 2:
+                        raise RuntimeError('resizing replied to a pending reference tool approval')
+                reference_ready(20, 6, None)
+                reveal_details(terminal, lambda: call[0] in terminal.screen.details_text(), 'tiny approval call ID')
+                for _ in range(10):
+                    terminal.send(b'\x1b[5~')
+                terminal.wait(lambda: 'Tool read_file' in terminal.screen.details_text() and
+                              terminal.screen.status() == 'Awaiting approval', 'tiny approval tool metadata')
+                reference_ready(80, 24, 19)
                 terminal.send('y')
                 wait_idle(terminal, root, count=2)
                 terminal.wait(lambda: '○ input 512/128k (0%)' in footer(), 'latest execution input usage without accumulation')
                 if title() != 'Saya | ' + first_prompt:
                     raise RuntimeError('a later task replaced the first-task window title')
+                reference_ready(120, 40, 35)
+                assert_sidebar_context({'Instructions', 'Skills', 'Files'})
 
-                compact_ready(20, 6, 3)
+                reference_ready(20, 6, 3)
                 if terminal.mode() != 'PLAN' or terminal.permissions() != 'Manual Approval' or terminal.screen.status() != 'Completed':
-                    raise RuntimeError('tiny compact state did not preserve mode, permissions and completion')
+                    raise RuntimeError('tiny reference state did not preserve mode, permissions and completion')
                 terminal.send(tiny_prompt)
-                terminal.wait(lambda: terminal.editor_text() == tiny_prompt, 'tiny compact Unicode editor')
+                terminal.wait(lambda: terminal.editor_text() == tiny_prompt, 'tiny reference Unicode editor')
                 terminal.send(b'\r')
                 wait_idle(terminal, root, count=3)
                 assert_user_input(3, tiny_prompt)
-                terminal.wait(lambda: 'input 10%' in footer(), 'labeled tiny compact input percentage')
+                terminal.wait(lambda: 'input 10%' in footer(), 'labeled tiny reference input percentage')
 
-                compact_ready(80, 24, 20)
+                reference_ready(80, 24, 19)
                 terminal.line('/new')
                 terminal.wait(lambda: title() == 'Saya | New session' and terminal.screen.status() == 'Ready',
                               'new session title reset')
@@ -999,7 +1105,7 @@ def expect_tool(call_id, reply):
 
 def approval(terminal, fixture, call_id, expected_requests):
     def visible():
-        text = terminal.screen.text
+        text = terminal.screen.details_text()
         lower = text.lower()
         marker = 'background-' if call_id == 'manual-start' else call_id
         return marker in text and ('approval required' in lower or 'approve' in lower or 'y/n' in lower or 'allow' in lower)
@@ -1050,8 +1156,8 @@ def manual_tools_and_clarification(binary):
                 terminal.line('Read, search, background status and ask the fixture')
                 for index, call_id in enumerate(['manual-read', 'manual-search', 'manual-start', 'manual-status', 'manual-question'], 1):
                     approval(terminal, fixture, call_id, index)
-                terminal.wait(lambda: 'Question' in terminal.screen.text and 'TUI_QUESTION' in terminal.screen.text
-                              and 'Approval required' not in terminal.screen.text, 'clarification input')
+                terminal.wait(lambda: 'Question' in terminal.screen.details_text() and 'TUI_QUESTION' in terminal.screen.details_text()
+                              and 'Approval required' not in terminal.screen.details_text(), 'clarification input')
                 terminal.line('TUI_ANSWER')
                 terminal.until('MANUAL_TOOLS_DONE')
                 result = wait_idle(terminal, root)
@@ -1104,7 +1210,7 @@ def mode_change_invalidates_approval(binary):
             try:
                 terminal.title()
                 terminal.line('Request the manual write')
-                terminal.wait(lambda: 'stale-write' in terminal.screen.text, 'pending write approval')
+                terminal.wait(lambda: 'stale-write' in terminal.screen.details_text(), 'pending write approval')
                 if len(fixture.requests) != 1 or (workspace / 'must-not-exist.txt').exists():
                     raise RuntimeError('manual write executed before confirmation')
                 terminal.line('/mode plan')
@@ -1428,8 +1534,8 @@ def main():
     passed('four-modes-three-permissions')
     command_completion_journey(binary)
     passed('command-completion-editing-and-approval-priority')
-    compact_layout_and_title_journey(binary)
-    passed('compact-layout-input-meter-and-window-title')
+    reference_layout_and_title_journey(binary)
+    passed('reference-layout-input-meter-and-window-title')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
     mode_change_invalidates_approval(binary)

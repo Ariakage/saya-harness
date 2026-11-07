@@ -13,6 +13,7 @@ use crate::{
 };
 use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use saya_app::{
+    context::{ContextModel, ContextSnapshot, ContextSources},
     events::{ChannelSink, EventModel, EventStore, EventWriter},
     interaction::{Request, RunCancellation, input_channel},
     session::{self, Prepared},
@@ -28,7 +29,7 @@ use saya_core::{
     runtime::{PersonalContext, RuntimeHandle},
 };
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type RunOutcome = (std::result::Result<RunResult, BoundaryError>, Session);
@@ -45,6 +46,7 @@ struct Active {
     join: tokio::task::JoinHandle<RunOutcome>,
     events: mpsc::Receiver<Event>,
     events_open: bool,
+    context: watch::Receiver<Option<ContextSnapshot>>,
     assistant_id: u64,
     handle: RuntimeHandle,
     requests: mpsc::Receiver<Request>,
@@ -169,6 +171,38 @@ impl App {
         self.state.context_input_tokens = usage.as_ref().and_then(|usage| usage.input_tokens);
         self.state.context_estimated = usage.is_some_and(|usage| usage.estimated);
     }
+    fn reset_context(&mut self) {
+        self.record_context_input(None);
+        self.state.context_breakdown.clear();
+        self.state.context_breakdown_estimated = true;
+        self.state.skills_count = None;
+    }
+    fn record_context_snapshot(&mut self, snapshot: ContextSnapshot) {
+        self.state.context_breakdown = snapshot
+            .entries
+            .into_iter()
+            .map(|entry| view::ContextEntry {
+                label: entry.label.into(),
+                tokens: entry.tokens,
+            })
+            .collect();
+        self.state.context_breakdown_estimated = true;
+        self.state.skills_count = snapshot.skills_count;
+    }
+    fn refresh_context(&mut self) -> bool {
+        let Some(active) = &mut self.active else {
+            return false;
+        };
+        if !active.context.has_changed().unwrap_or(true) {
+            return false;
+        }
+        let snapshot = active.context.borrow_and_update().clone();
+        if let Some(snapshot) = snapshot {
+            self.record_context_snapshot(snapshot);
+            return true;
+        }
+        false
+    }
     async fn start(&mut self, text: String) -> Result<()> {
         if self.active.is_some() {
             self.notice("A run is active. Ctrl+C cancels it.");
@@ -189,6 +223,12 @@ impl App {
         let prepared = self.prepared.as_mut().ok_or("session is unavailable")?;
         let run_id = RunId::new();
         let (sender, events) = mpsc::channel(256);
+        let (context_sender, context) = watch::channel(None);
+        let context_sources = ContextSources {
+            project: true,
+            personal: self.options.personal_context.preferences.is_some()
+                || self.options.personal_context.memory.is_some(),
+        };
         let writer = Arc::new(EventWriter::new(
             prepared.store.clone(),
             prepared.session.id,
@@ -214,7 +254,13 @@ impl App {
                 anthropic_prompt_cache: self.options.anthropic_prompt_cache,
                 run_id: Some(run_id),
             },
-            move |model, _| Arc::new(EventModel(model, writer)),
+            move |model, _| {
+                Arc::new(ContextModel::new(
+                    Arc::new(EventModel(model, writer)),
+                    context_sender,
+                    context_sources,
+                ))
+            },
         )?;
         session::append(prepared, text.clone()).await.map_err(|_| {
             BoundaryError(
@@ -228,7 +274,7 @@ impl App {
         })?;
         let mut current = prepared.session.clone();
         self.refresh_header();
-        self.record_context_input(None);
+        self.reset_context();
         self.state.push_message(Role::User, "You", display);
         let assistant_id = self
             .state
@@ -243,6 +289,7 @@ impl App {
             join,
             events,
             events_open: true,
+            context,
             assistant_id,
             handle,
             requests,
@@ -350,6 +397,9 @@ impl App {
                 } => self.record_context_input(None),
                 _ => {}
             }
+        }
+        if let Some(snapshot) = active.context.borrow_and_update().clone() {
+            self.record_context_snapshot(snapshot);
         }
         self.config.mode = session.work_mode;
         if let Some(prepared) = &mut self.prepared {
@@ -557,10 +607,16 @@ impl App {
                 self.show_pending();
             }
             KeyCode::PageUp if self.state.details.is_some() => {
-                self.state.details_scroll = self.state.details_scroll.saturating_sub(10)
+                self.state.details_scroll = self
+                    .state
+                    .details_scroll
+                    .saturating_sub(self.state.details_page_rows)
             }
             KeyCode::PageDown if self.state.details.is_some() => {
-                self.state.details_scroll = self.state.details_scroll.saturating_add(10)
+                self.state.details_scroll = self
+                    .state
+                    .details_scroll
+                    .saturating_add(self.state.details_page_rows)
             }
             KeyCode::End if self.state.scroll > 0 => self.state.scroll_to_bottom(),
             KeyCode::PageUp => self.state.scroll_up(10),
@@ -628,6 +684,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             UiJob(std::result::Result<services::UiResult, BoundaryError>),
             Finished(std::result::Result<RunOutcome, tokio::task::JoinError>),
         }
+        dirty |= app.refresh_context();
         dirty |= app.refresh_mode()?;
         let pending_free = app.pending.is_none();
         let action = if let Some(active) = &mut app.active {

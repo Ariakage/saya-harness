@@ -1,5 +1,6 @@
 //! Shared application assembly and durable session lifecycle for Saya interfaces.
 //! Runtime policy and execution remain in saya-core. Callers supply UI adapters.
+pub mod context;
 pub mod events;
 pub mod export;
 pub mod interaction;

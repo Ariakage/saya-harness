@@ -48,7 +48,7 @@
 
 #### 紧凑界面、会话标题与 thinking effort
 
-2026-11-08，按 D-042 实现参考图对应的紧凑窗口。宽度低于100列或高度低于24行时使用黑底外框、顶边工作目录、状态右侧权限、灰色输入与蓝色竖线。底栏显示模式、模型、thinking effort及带环形字符的输入占比，最小20×6仍可编辑。长模型名为effort与用量留出空间。窗口标题从首条用户任务派生为 `Saya | 简短标题`，已知凭据先脱敏，随后合并空白、保留80字符并移除终端控制。新建、profile选择和恢复同步标题，OSC 2与xterm标题栈走有界恢复。
+2026-11-08，按 D-042 初版实现参考图对应的紧凑窗口。初版将宽度低于100列或高度低于24行的窗口设为黑底外框、顶边工作目录、状态右侧权限、灰色输入与蓝色竖线。底栏显示模式、模型、thinking effort及带环形字符的输入占比，最小20×6仍可编辑。长模型名为effort与用量留出空间。窗口标题从首条用户任务派生为 `Saya | 简短标题`，已知凭据先脱敏，随后合并空白、保留80字符并移除终端控制。新建、profile选择和恢复同步标题，OSC 2与xterm标题栈走有界恢复。
 
 profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max，三协议分别传入对应effort字段。未配置时保留服务默认及原配置指纹，独立核查按其目标profile取值。界面显示实际请求值，服务内部映射依模型确定。Chat兼容服务的 `reasoning_content` 按assistant轮次以严格协议项持久保存和回传，完整JSON／SSE均受16MiB聚合限额约束，并覆盖恢复、正文／导出隔离及敏感数据事务拒绝。参数及协议边界见[配置](configuration.md#thinking-effort)与[模型接入](model-protocols.md#chat-completions)。
 
@@ -59,6 +59,16 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 - 完整检查为 `target/tui-compact-check-final.log`，正常入口报告为 `target/tui-compact-release-matrix.json`。
 - 该次程序SHA-256为 `7a71c6aa37f128cff2663ae8a1ca3f05c5b45639e0bd99aa9029f4e11b481a18`，Mach-O部署版本为15.0。
 - 视图和交互说明见[TUI设计](tui-design.md)与[TUI接口](tui.md#紧凑窗口与会话标题)，本次新增功能的跨平台及真实服务证据按对应环境后续验收维护。
+
+#### 统一参考布局与全屏信息侧栏
+
+2026-11-08，用户实测指出 `c09fc39` 在大窗口进入旧样式。已删除旧宽屏绘制路径，按 D-043 将主区参考样式应用到全部尺寸，灰色输入区默认4行并采用实心蓝色左条。达到120列×24行时显示会话名、上下文分项、扩展状态和工作目录侧栏。20×6详情保留可滚动内容，翻页依据实际可见高度。
+
+新增共享应用层ContextModel，在执行请求边界推送仅含固定标签、计数和Skill数量的最新快照。System／Instructions／Skills／Preferences／Memory／Conversation／Files／Tools／Protocol九类采用明确标注的字符启发式估算，侧栏支持小数百分比和部分单元格条形。宿主前缀按位置和类型验证，后续同形用户JSON归入对话，原始协议内容按实际匹配关系去重。Review保持独立，新建／恢复／换profile清空旧快照，最终关闭通道保留末次统计。MCP与插件显示当前Not implemented，Skill数量来自实际注入的目录元数据。
+
+本机macOS27.2 ARM／Rust1.99.1通过完整 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，包含格式、全目标Clippy、505项Rust测试和优化构建。独立复核通过40项controller和23项view测试。优化程序通过15组真实PTY，新增110／120／160列、119↔120和23↔24阈值往返、上下文与Skill真实来源、Files结果增长、实心蓝条、极小窗口逐页核查及既有三协议／模式／权限／会话／取消链路。
+
+检查日志为 `target/tui-reference-check.log`，正常入口报告为 `target/tui-reference-release-matrix.json`，程序SHA-256为 `a53f3a266f14e96f270527d55162eef2b6c9d4ed09f17d124aacbe75592a441f`。两组生产组件TestBackend布局PNG位于 `target/tui-reference-preview-110x32.png` 和 `target/tui-reference-preview-160x40.png`，预览使用合成数据。本节验收为本机受控服务和PTY，原生iTerm2截图访问受到工具限制。
 
 ### N0 实施记录
 

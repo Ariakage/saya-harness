@@ -24,13 +24,14 @@ const TRUNCATED_DETAIL_PREFIX: &str = "Truncated · ";
 const DETAIL_TRUNCATION_NOTICE: &str = "[details display truncated]";
 const ACCENT: Color = Color::Rgb(127, 212, 226);
 const MUTED: Color = Color::Rgb(147, 155, 174);
-const BACKGROUND: Color = Color::Rgb(20, 23, 31);
+const BACKGROUND: Color = Color::Black;
 const FOREGROUND: Color = Color::Rgb(225, 229, 238);
 const MAX_COMPLETION_ROWS: usize = 6;
-const COMPACT_BACKGROUND: Color = Color::Black;
 const INPUT_BACKGROUND: Color = Color::Rgb(52, 52, 52);
-const COMPACT_BLUE: Color = Color::Rgb(47, 116, 196);
+const BLUE: Color = Color::Rgb(47, 116, 196);
 const EFFORT_COLOR: Color = Color::Rgb(255, 154, 40);
+const SIDEBAR_BACKGROUND: Color = INPUT_BACKGROUND;
+const MAX_CONTEXT_ENTRIES: usize = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -56,6 +57,12 @@ pub struct Details {
     pub lines: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ContextEntry {
+    pub label: String,
+    pub tokens: u64,
+}
+
 #[derive(Debug)]
 pub struct State {
     pub session_title: String,
@@ -70,6 +77,9 @@ pub struct State {
     pub context_window_tokens: Option<u64>,
     pub context_input_tokens: Option<u64>,
     pub context_estimated: bool,
+    pub context_breakdown: Vec<ContextEntry>,
+    pub context_breakdown_estimated: bool,
+    pub skills_count: Option<usize>,
     pub thinking_effort: Option<String>,
     pub editor: Editor,
     pub completion: Completion,
@@ -77,6 +87,8 @@ pub struct State {
     pub details: Option<Details>,
     /// Visual line offset from the top of the current details pane.
     pub details_scroll: usize,
+    /// Page movement in the last rendered details viewport.
+    pub details_page_rows: usize,
     /// Visual lines above the live bottom. Zero follows streamed output.
     pub scroll: usize,
     pub dropped_messages: usize,
@@ -100,12 +112,16 @@ impl Default for State {
             context_window_tokens: None,
             context_input_tokens: None,
             context_estimated: false,
+            context_breakdown: Vec::new(),
+            context_breakdown_estimated: true,
+            skills_count: None,
             thinking_effort: None,
             editor: Editor::default(),
             completion: Completion::default(),
             messages: VecDeque::new(),
             details: None,
             details_scroll: 0,
+            details_page_rows: 10,
             scroll: 0,
             dropped_messages: 0,
             next_id: 1,
@@ -176,6 +192,7 @@ impl State {
         self.messages.clear();
         self.scroll = 0;
         self.details_scroll = 0;
+        self.details_page_rows = 10;
         self.dropped_messages = 0;
         self.last_width = 0;
         self.last_line_count = 0;
@@ -311,13 +328,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     state.enforce_limits();
     state.enforce_details_limits();
     let area = frame.area();
-    let compact = area.width < 100 || area.height < 24;
     frame.render_widget(
-        Block::default().style(Style::default().fg(FOREGROUND).bg(if compact {
-            COMPACT_BACKGROUND
-        } else {
-            BACKGROUND
-        })),
+        Block::default().style(Style::default().fg(FOREGROUND).bg(BACKGROUND)),
         area,
     );
     if area.width < 20 || area.height < 6 {
@@ -327,72 +339,56 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         );
         return;
     }
-    if compact {
-        draw_compact(frame, state, area);
-        return;
-    }
-    let input_lines = state
-        .editor
-        .text()
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count()
-        + 1;
-    let input_height = (input_lines + 2)
-        .clamp(3, 8)
-        .min(usize::from(area.height / 3).max(3)) as u16;
-    let areas = Layout::vertical([
-        Constraint::Length(if area.height < 12 { 2 } else { 3 }),
-        Constraint::Min(0),
-        Constraint::Length(input_height),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    draw_header(frame, state, areas[0]);
-    let body = areas[1];
-    draw_body(frame, state, body, true);
-    draw_editor(frame, state, areas[2], false);
-    draw_completion(frame, state, body);
-    let footer = if state.completion.visible() {
-        "↑/↓ select  Tab/→ complete  Esc dismiss  Enter run"
-    } else if state.details.is_some() {
-        "PgUp/PgDn details  Esc back  Ctrl+P commands  Ctrl+C stop"
-    } else if state.scroll == 0 {
-        "Enter send  Alt+Enter/Ctrl+J newline  Ctrl+P commands  Ctrl+C stop  Ctrl+D exit"
+    if area.width >= 120 && area.height >= 24 {
+        let sidebar_width = (area.width / 4).clamp(28, 40);
+        let main_width = area.width - sidebar_width;
+        draw_session(
+            frame,
+            state,
+            Rect::new(area.x, area.y, main_width, area.height),
+        );
+        draw_sidebar(
+            frame,
+            state,
+            Rect::new(area.x + main_width, area.y, sidebar_width, area.height),
+        );
     } else {
-        "PgUp/PgDn scroll  End follow output  Ctrl+P commands  Ctrl+C stop"
-    };
-    frame.render_widget(
-        Paragraph::new(footer).style(Style::default().fg(MUTED)),
-        areas[3],
-    );
+        draw_session(frame, state, area);
+    }
 }
 
-fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect, framed: bool) {
-    if state.details.is_some() && body.width >= 100 {
+fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
+    if state.details.is_some() && body.width >= 98 {
         let columns = Layout::horizontal([
             Constraint::Min(50),
             Constraint::Length((body.width / 3).clamp(32, 48)),
         ])
         .split(body);
-        draw_transcript(frame, state, columns[0], framed);
+        draw_transcript(frame, state, columns[0]);
         if let Some(details) = &state.details {
             draw_details(
                 frame,
                 details,
                 &mut state.details_scroll,
+                &mut state.details_page_rows,
                 columns[1],
-                framed,
             );
         }
     } else if let Some(details) = &state.details {
-        draw_details(frame, details, &mut state.details_scroll, body, framed);
+        draw_details(
+            frame,
+            details,
+            &mut state.details_scroll,
+            &mut state.details_page_rows,
+            body,
+        );
     } else {
-        draw_transcript(frame, state, body, framed);
+        state.details_page_rows = 10;
+        draw_transcript(frame, state, body);
     }
 }
 
-fn draw_compact(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
+fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     let title = if area.width < 44 {
         Line::from("Saya Harness")
     } else {
@@ -436,24 +432,232 @@ fn draw_compact(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
         .filter(|byte| *byte == b'\n')
         .count()
         + 1;
-    let input_height = (input_lines + 2)
-        .clamp(3, 5)
-        .min(usize::from(inner.height.saturating_sub(1))) as u16;
+    let input_height = (input_lines + 3).clamp(4, 6).min(usize::from(
+        inner
+            .height
+            .saturating_sub(if state.details.is_some() { 2 } else { 1 }),
+    )) as u16;
     let rows = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(1),
         Constraint::Length(input_height),
     ])
     .split(inner);
-    draw_body(frame, state, rows[0], false);
-    draw_compact_status(frame, state, rows[1]);
-    draw_editor(frame, state, rows[2], true);
+    draw_body(frame, state, rows[0]);
+    draw_status(frame, state, rows[1]);
+    draw_editor(frame, state, rows[2]);
     draw_completion(frame, state, rows[0]);
-    draw_compact_footer(
+    draw_footer(
         frame,
         state,
         Rect::new(inner.x, outer.bottom() - 1, inner.width, 1),
     );
+}
+
+fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    frame.render_widget(
+        Block::default().style(Style::default().fg(FOREGROUND).bg(SIDEBAR_BACKGROUND)),
+        area,
+    );
+    let content = Rect::new(
+        area.x + 1,
+        area.y,
+        area.width.saturating_sub(2),
+        area.height,
+    );
+    let heading = Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD);
+    let mut lines = vec![Line::default(); 27];
+    lines[0] = Line::styled(
+        safe_line(&state.session_title[..prefix_boundary(&state.session_title, 256)]),
+        heading,
+    );
+    lines[2] = Line::styled(
+        if state.context_breakdown.is_empty() {
+            "Context · Unknown"
+        } else if state.context_breakdown_estimated {
+            "Context · Estimated"
+        } else {
+            "Context"
+        },
+        heading,
+    );
+    lines[3] = Line::styled(
+        format!(
+            "Window {}",
+            state
+                .context_window_tokens
+                .filter(|tokens| *tokens > 0)
+                .map(token_label)
+                .unwrap_or_else(|| "—".into())
+        ),
+        Style::default().fg(MUTED),
+    );
+    if state.context_breakdown.is_empty() {
+        lines[4] = Line::styled("Unknown before request", Style::default().fg(MUTED));
+    } else {
+        for (index, line) in context_rows(state, usize::from(content.width))
+            .into_iter()
+            .enumerate()
+        {
+            lines[index + 4] = line;
+        }
+        if state.context_breakdown.len() > MAX_CONTEXT_ENTRIES {
+            lines[13] = Line::styled("Additional entries omitted", Style::default().fg(MUTED));
+        } else {
+            let total = state
+                .context_breakdown
+                .iter()
+                .map(|entry| u128::from(entry.tokens))
+                .sum::<u128>();
+            let summary = match u64::try_from(total) {
+                Ok(total) => format!(
+                    "Total {}{} {}",
+                    if state.context_breakdown_estimated {
+                        "~"
+                    } else {
+                        ""
+                    },
+                    token_label(total),
+                    sidebar_percentage(total, state.context_window_tokens)
+                ),
+                Err(_) => "Total estimate exceeds range".into(),
+            };
+            lines[13] = Line::styled(summary, Style::default().fg(MUTED));
+        }
+    }
+    lines[15] = Line::styled("Extensions", heading);
+    lines[16] = Line::from("MCP  Not implemented");
+    lines[17] = Line::from("Plugins  Not implemented");
+    lines[18] = Line::from(match state.skills_count {
+        Some(count) => format!("Skills {count} discovered"),
+        None => "Skills —".into(),
+    });
+    lines[20] = Line::styled("Details", heading);
+    for (index, (label, value)) in [
+        ("Profile", state.profile.as_str()),
+        ("Model", state.model.as_str()),
+        ("Mode", state.mode.as_str()),
+        ("Permissions", state.permissions.as_str()),
+        ("Effort", state.thinking_effort.as_deref().unwrap_or("—")),
+        ("Status", state.status.as_str()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = index + 21;
+        if row < usize::from(area.height.saturating_sub(2)) {
+            lines[row] = Line::styled(
+                format!("{label} {}", safe_line(value)),
+                Style::default().fg(MUTED),
+            );
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), content);
+    frame.render_widget(
+        Paragraph::new(safe_line(&state.workspace)).style(Style::default().fg(MUTED)),
+        Rect::new(content.x, area.bottom() - 1, content.width, 1),
+    );
+}
+
+fn context_rows(state: &State, width: usize) -> Vec<Line<'static>> {
+    let entries = state
+        .context_breakdown
+        .iter()
+        .take(MAX_CONTEXT_ENTRIES)
+        .map(|entry| {
+            let metric = format!(
+                "{} {}",
+                token_label(entry.tokens),
+                sidebar_percentage(entry.tokens, state.context_window_tokens)
+            );
+            (entry, metric)
+        })
+        .collect::<Vec<_>>();
+    let metric_width = entries
+        .iter()
+        .map(|(_, metric)| metric.width())
+        .max()
+        .unwrap_or(0);
+    let label_width = 12.min(width.saturating_sub(metric_width + 5));
+    let bar_width = width.saturating_sub(label_width + metric_width + 2).min(8);
+    entries
+        .into_iter()
+        .map(|(entry, metric)| {
+            let label = crop_display(
+                &safe_line(&entry.label[..prefix_boundary(&entry.label, 256)]),
+                0,
+                label_width,
+            );
+            let (filled, remaining) =
+                context_bar(entry.tokens, state.context_window_tokens, bar_width);
+            let padding = width.saturating_sub(label_width + bar_width + metric.width() + 2);
+            Line::from(vec![
+                Span::raw(format!(
+                    "{label}{} ",
+                    " ".repeat(label_width.saturating_sub(label.width()))
+                )),
+                Span::styled(filled, Style::default().fg(BLUE)),
+                Span::styled(remaining, Style::default().fg(MUTED)),
+                Span::raw(format!(" {}{metric}", " ".repeat(padding))),
+            ])
+        })
+        .collect()
+}
+
+fn sidebar_percentage(input: u64, window: Option<u64>) -> String {
+    let Some(window) = window.filter(|window| *window > 0) else {
+        return "—".into();
+    };
+    if input > window {
+        return ">100%".into();
+    }
+    let tenths = u128::from(input) * 1000 / u128::from(window);
+    if input > 0 && tenths == 0 {
+        "<0.1%".into()
+    } else if tenths % 10 == 0 {
+        format!("{}%", tenths / 10)
+    } else {
+        format!("{}.{}%", tenths / 10, tenths % 10)
+    }
+}
+
+fn context_bar(input: u64, window: Option<u64>, width: usize) -> (String, String) {
+    let Some(window) = window.filter(|window| *window > 0) else {
+        return (String::new(), "─".repeat(width));
+    };
+    if width == 0 {
+        return (String::new(), String::new());
+    }
+    let eighths =
+        (u128::from(input) * width as u128 * 8 / u128::from(window)).min(width as u128 * 8);
+    let eighths = if input > 0 { eighths.max(1) } else { eighths } as usize;
+    let full = eighths / 8;
+    let fraction = eighths % 8;
+    let filled = format!(
+        "{}{}",
+        "█".repeat(full),
+        ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"][fraction]
+    );
+    let remaining = width.saturating_sub(full + usize::from(fraction > 0));
+    (filled, "░".repeat(remaining))
+}
+
+fn context_percentage(input: u64, window: Option<u64>) -> Option<u64> {
+    window.filter(|window| *window > 0).map(|window| {
+        if input > window {
+            101
+        } else {
+            (u128::from(input) * 100 / u128::from(window)) as u64
+        }
+    })
+}
+
+fn percentage_label(percent: Option<u64>) -> String {
+    match percent {
+        Some(101) => ">100%".into(),
+        Some(value) => format!("{value}%"),
+        None => "—".into(),
+    }
 }
 
 fn draw_split_line(
@@ -479,7 +683,7 @@ fn draw_split_line(
     );
 }
 
-fn draw_compact_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
+fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let status = if area.width < 40 {
         match state.status.as_str() {
             "Awaiting approval" => "Approval",
@@ -506,7 +710,7 @@ fn draw_compact_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
         Line::from(vec![
             Span::styled(
                 if ready { "✓ " } else { "● " },
-                Style::default().fg(if ready { Color::Green } else { COMPACT_BLUE }),
+                Style::default().fg(if ready { Color::Green } else { BLUE }),
             ),
             Span::raw(safe_line(status)),
         ]),
@@ -516,7 +720,7 @@ fn draw_compact_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
     );
 }
 
-fn draw_compact_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
+fn draw_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let mode = if let Some(pending) = &state.pending_mode {
         format!("{}→{}", safe_line(&state.mode), safe_line(pending))
     } else {
@@ -539,7 +743,7 @@ fn draw_compact_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let model_width = left_width
         .saturating_sub(mode.width() + 1 + if show_effort { effort.width() + 1 } else { 0 });
     let mut left = Line::from(vec![
-        Span::styled(mode, Style::default().fg(COMPACT_BLUE)),
+        Span::styled(mode, Style::default().fg(BLUE)),
         Span::raw(format!(
             " {}",
             crop_display(&safe_line(&state.model), 0, model_width)
@@ -564,14 +768,7 @@ fn context_meter(state: &State, short: bool) -> String {
     let window = state.context_window_tokens.filter(|window| *window > 0);
     let percent = state
         .context_input_tokens
-        .zip(window)
-        .map(|(input, window)| {
-            if input > window {
-                101
-            } else {
-                (u128::from(input) * 100 / u128::from(window)) as u64
-            }
-        });
+        .and_then(|input| context_percentage(input, window));
     let ring = match percent {
         Some(0) | None => "○",
         Some(1..=25) => "◔",
@@ -579,11 +776,7 @@ fn context_meter(state: &State, short: bool) -> String {
         Some(51..=75) => "◕",
         Some(_) => "●",
     };
-    let percentage = match percent {
-        Some(101) => ">100%".into(),
-        Some(value) => format!("{value}%"),
-        None => "—".into(),
-    };
+    let percentage = percentage_label(percent);
     let estimated = if state.context_estimated && state.context_input_tokens.is_some() {
         "~"
     } else {
@@ -620,62 +813,6 @@ fn token_label(value: u64) -> String {
     value.to_string()
 }
 
-fn draw_header(frame: &mut Frame<'_>, state: &State, area: Rect) {
-    let mode = if let Some(pending) = &state.pending_mode {
-        format!("{} -> {}", state.mode, pending)
-    } else {
-        state.mode.clone()
-    };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            " SAYA ",
-            Style::default()
-                .fg(BACKGROUND)
-                .bg(ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "  {}  |  {}  |  {}",
-                safe_line(&mode),
-                safe_line(&state.permissions),
-                safe_line(&state.status)
-            ),
-            Style::default().fg(FOREGROUND),
-        ),
-    ])];
-    let effort = state
-        .thinking_effort
-        .as_deref()
-        .map(safe_line)
-        .unwrap_or_else(|| "—".into());
-    let effort_width = "Effort ".width() + effort.width();
-    let metadata = crop_display(
-        &format!(
-            " {}  ·  {} / {}",
-            safe_line(&state.workspace),
-            safe_line(&state.profile),
-            safe_line(&state.model)
-        ),
-        0,
-        usize::from(area.width).saturating_sub(effort_width + 1),
-    );
-    let padding = usize::from(area.width).saturating_sub(metadata.width() + effort_width);
-    lines.push(Line::from(vec![
-        Span::styled(metadata, Style::default().fg(MUTED)),
-        Span::raw(" ".repeat(padding)),
-        Span::styled("Effort ", Style::default().fg(MUTED)),
-        Span::styled(effort, Style::default().fg(EFFORT_COLOR)),
-    ]));
-    if !state.usage.is_empty() && area.height >= 3 {
-        lines.push(Line::styled(
-            format!(" {}", safe_line(&state.usage)),
-            Style::default().fg(MUTED),
-        ));
-    }
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
 fn safe_line(text: &str) -> String {
     safe_text(text).replace('\n', "\\n")
 }
@@ -689,17 +826,7 @@ fn role_style(role: Role) -> Style {
     })
 }
 
-fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, area: Rect, framed: bool) {
-    let block = if framed {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Rgb(65, 73, 92)))
-            .title(" Conversation ")
-    } else {
-        Block::default()
-    };
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, inner: Rect) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -798,15 +925,16 @@ fn draw_details(
     frame: &mut Frame<'_>,
     details: &Details,
     scroll: &mut usize,
+    page_rows: &mut usize,
     area: Rect,
-    framed: bool,
 ) {
     let title = safe_line(&details.title[..prefix_boundary(&details.title, 256)]);
-    let mut block = Block::default()
-        .borders(if framed { Borders::ALL } else { Borders::TOP })
-        .title(format!(" {title} "))
-        .border_style(Style::default().fg(ACCENT));
+    let mut block = Block::default().border_style(Style::default().fg(ACCENT));
+    if area.height > 1 {
+        block = block.borders(Borders::TOP).title(format!(" {title} "));
+    }
     let inner = block.inner(area);
+    *page_rows = usize::from(inner.height).clamp(1, 10);
     if inner.width == 0 || inner.height == 0 {
         frame.render_widget(block, area);
         return;
@@ -852,7 +980,10 @@ fn draw_details(
             break;
         }
     }
-    if (truncated || cached_truncated) && !title.starts_with(TRUNCATED_DETAIL_PREFIX) {
+    if area.height > 1
+        && (truncated || cached_truncated)
+        && !title.starts_with(TRUNCATED_DETAIL_PREFIX)
+    {
         block = block.title(format!(" {TRUNCATED_DETAIL_PREFIX}{title} "));
     }
     if truncated {
@@ -874,28 +1005,18 @@ fn draw_details(
     frame.render_widget(Paragraph::new(visible), inner);
 }
 
-fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect, compact: bool) {
-    let title = if state.editor.truncated {
-        " Input · paste truncated at 64 KiB "
-    } else {
-        " Message "
-    };
-    let block = if compact {
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_style(Style::default().fg(COMPACT_BLUE))
-            .style(Style::default().fg(FOREGROUND).bg(INPUT_BACKGROUND))
-    } else {
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(Style::default().fg(ACCENT))
-    };
+fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(BLUE).bg(BLUE))
+        .style(Style::default().fg(FOREGROUND).bg(INPUT_BACKGROUND));
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
-    if compact && inner.height > 0 {
+    if inner.height > 0 {
         inner.x += 1;
         inner.width = inner.width.saturating_sub(1);
+    }
+    if inner.height > 1 {
         let label = if state.editor.truncated {
             "Message · paste truncated at 64 KiB"
         } else {
@@ -1309,7 +1430,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let cursor = terminal.backend_mut().get_cursor_position().unwrap();
-        assert_eq!((cursor.x, cursor.y), (5, 21));
+        assert_eq!((cursor.x, cursor.y), (7, 20));
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(cursor.x, cursor.y)].symbol(), "m");
         assert_eq!(buffer[(cursor.x, cursor.y)].fg, MUTED);
@@ -1325,7 +1446,7 @@ mod tests {
         );
         let image = render(&mut state, 120, 24);
         assert!(image.contains("Command suggestions"));
-        assert!(image.contains("Tab/→ complete"));
+        assert!(image.contains("Tab/→ Esc"));
     }
 
     #[test]
@@ -1349,7 +1470,7 @@ mod tests {
         assert!(!image.contains("Command suggestions"));
         assert!(!image.contains('›'));
         assert!(!image.contains("/permissions"));
-        assert_eq!(terminal.backend().buffer()[(7, 21)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(7, 20)].symbol(), " ");
         assert_eq!(state.editor.text(), "/per");
     }
 
@@ -1367,7 +1488,7 @@ mod tests {
         let row = (0..16)
             .find(|row| buffer[(3, *row)].symbol() == "›")
             .unwrap();
-        assert_eq!(row, 9);
+        assert_eq!(row, 8);
         assert_eq!(buffer[(3, row)].bg, ACCENT);
         let actual = (5..23)
             .map(|column| buffer[(column, row)].symbol())
@@ -1395,19 +1516,19 @@ mod tests {
         }];
         let mut terminal = Terminal::new(TestBackend::new(6, 3)).unwrap();
         terminal
-            .draw(|frame| draw_editor(frame, &state, frame.area(), false))
+            .draw(|frame| draw_editor(frame, &state, frame.area()))
             .unwrap();
         let cursor = terminal.backend_mut().get_cursor_position().unwrap();
-        assert_eq!((cursor.x, cursor.y), (4, 1));
+        assert_eq!((cursor.x, cursor.y), (5, 1));
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(1, 1)].symbol(), " ");
-        assert_eq!(buffer[(2, 1)].symbol(), "界");
-        assert_eq!(buffer[(4, 1)].symbol(), "a");
-        assert_eq!(buffer[(4, 1)].fg, MUTED);
+        assert_eq!(buffer[(2, 1)].symbol(), " ");
+        assert_eq!(buffer[(3, 1)].symbol(), "界");
+        assert_eq!(buffer[(5, 1)].symbol(), "a");
+        assert_eq!(buffer[(5, 1)].fg, MUTED);
         assert_eq!(state.editor.text(), "/界界界");
         state.editor.move_left();
         terminal
-            .draw(|frame| draw_editor(frame, &state, frame.area(), false))
+            .draw(|frame| draw_editor(frame, &state, frame.area()))
             .unwrap();
         assert!(
             terminal
@@ -1441,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_layout_keeps_status_input_and_footer_in_their_observable_regions() {
+    fn session_layout_keeps_status_input_and_footer_in_their_observable_regions() {
         let mut state = State {
             workspace: "/tmp/project".into(),
             model: "configured-model".into(),
@@ -1450,23 +1571,32 @@ mod tests {
             ..State::default()
         };
         state.editor.set_text("hello");
-        for (width, height, status_row, title_row, input_row) in
-            [(80, 24, 19, 20, 21), (60, 18, 13, 14, 15), (20, 6, 2, 3, 4)]
-        {
+        for (width, height, status_row, title_row, input_row, main_width) in [
+            (80, 24, 18, 19, 20, 80),
+            (60, 18, 12, 13, 14, 60),
+            (20, 6, 2, 3, 4, 20),
+            (110, 32, 26, 27, 28, 110),
+            (120, 40, 34, 35, 36, 90),
+            (160, 45, 39, 40, 41, 120),
+        ] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
             let cursor = terminal.backend_mut().get_cursor_position().unwrap();
             assert_eq!((cursor.x, cursor.y), (8, input_row));
             let buffer = terminal.backend().buffer();
-            assert_eq!(buffer[(0, 0)].bg, COMPACT_BACKGROUND);
+            assert_eq!(buffer[(0, 0)].bg, BACKGROUND);
             assert!(row_text(buffer, 0).contains("Saya Harness"));
             assert!(row_text(buffer, 0).contains("Ctrl+P"));
             assert!(row_text(buffer, 1).contains("/tmp/project"));
             assert!(row_text(buffer, status_row).contains("✓ Ready"));
-            assert!(row_text(buffer, status_row).ends_with("auto│"));
+            let status = (0..main_width)
+                .map(|column| buffer[(column, status_row)].symbol())
+                .collect::<String>();
+            assert!(status.ends_with("auto│"));
             assert_eq!(buffer[(3, title_row)].symbol(), "M");
             assert_eq!(buffer[(1, title_row)].symbol(), "│");
-            assert_eq!(buffer[(1, title_row)].fg, COMPACT_BLUE);
+            assert_eq!(buffer[(1, title_row)].fg, BLUE);
+            assert_eq!(buffer[(1, title_row)].bg, BLUE);
             assert_eq!(buffer[(2, title_row)].bg, INPUT_BACKGROUND);
             assert_eq!(buffer[(3, input_row)].symbol(), "h");
             assert_eq!(buffer[(3, input_row)].bg, INPUT_BACKGROUND);
@@ -1484,23 +1614,44 @@ mod tests {
     }
 
     #[test]
-    fn compact_breakpoints_preserve_the_large_terminal_header_and_usage() {
+    fn resizing_across_former_breakpoints_keeps_one_reference_layout() {
         let mut state = State {
             usage: "wide-usage-marker".into(),
             ..State::default()
         };
-        for (width, height) in [(100, 24), (120, 30)] {
-            let image = render(&mut state, width, height);
-            assert!(image.contains("SAYA"));
-            assert!(image.contains("wide-usage-marker"));
-            assert!(image.contains("Conversation"));
-            assert!(!image.contains("Saya Harness"));
-        }
-        for (width, height) in [(99, 24), (100, 23)] {
-            let image = render(&mut state, width, height);
-            assert!(image.contains("Saya Harness"));
+        let mut terminal = Terminal::new(TestBackend::new(99, 23)).unwrap();
+        for (width, height) in [
+            (99, 23),
+            (100, 23),
+            (100, 24),
+            (99, 24),
+            (110, 32),
+            (120, 40),
+            (160, 45),
+            (100, 24),
+            (99, 23),
+        ] {
+            terminal.backend_mut().resize(width, height);
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let image = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(row_text(buffer, 0).contains("Saya Harness"));
+            assert!(row_text(buffer, 0).contains(env!("CARGO_PKG_VERSION")));
+            assert!(row_text(buffer, 1).starts_with("┌ • . "));
+            assert!(row_text(buffer, height - 6).contains("✓ Ready"));
+            assert_eq!(buffer[(3, height - 5)].symbol(), "M");
+            assert_eq!(buffer[(1, height - 5)].fg, BLUE);
+            assert_eq!(buffer[(3, height - 4)].bg, INPUT_BACKGROUND);
+            assert!(row_text(buffer, height - 1).starts_with("└WORK"));
+            assert!(row_text(buffer, height - 1).contains("input"));
+            assert!(!image.contains("SAYA"));
             assert!(!image.contains("wide-usage-marker"));
             assert!(!image.contains("Conversation"));
+            assert!(!image.contains("Enter send"));
         }
     }
 
@@ -1531,7 +1682,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_multiline_editor_scrolls_within_its_gray_input_and_keeps_safety_markers() {
+    fn multiline_editor_scrolls_within_its_gray_input_and_keeps_safety_markers() {
         let mut state = State {
             status: "Awaiting approval".into(),
             permissions: "Manual Approval".into(),
@@ -1548,9 +1699,9 @@ mod tests {
         assert_eq!(cursor.y, 15);
         assert!(cursor.x < 59);
         let buffer = terminal.backend().buffer();
-        assert!(row_text(buffer, 11).contains("Awaiting approval"));
-        assert!(row_text(buffer, 11).ends_with("Manual Approval│"));
-        assert_eq!(buffer[(3, 12)].symbol(), "M");
+        assert!(row_text(buffer, 10).contains("Awaiting approval"));
+        assert!(row_text(buffer, 10).ends_with("Manual Approval│"));
+        assert_eq!(buffer[(3, 11)].symbol(), "M");
         assert!(row_text(buffer, 13).contains("four"));
         assert!(row_text(buffer, 14).contains("five"));
         assert!(row_text(buffer, 15).contains("e\u{301}界"));
@@ -1576,7 +1727,7 @@ mod tests {
             context_input_tokens: Some(64_000),
             ..State::default()
         };
-        for (width, height) in [(80, 24), (60, 18)] {
+        for (width, height) in [(80, 24), (60, 18), (110, 32), (120, 40)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
             let buffer = terminal.backend().buffer();
@@ -1590,10 +1741,220 @@ mod tests {
                     .any(|cell| cell.symbol() == "m" && cell.fg == EFFORT_COLOR)
             );
         }
-        let mut terminal = Terminal::new(TestBackend::new(110, 32)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert!(row_text(terminal.backend().buffer(), 1).ends_with("Effort max"));
         state.thinking_effort = None;
-        assert!(render(&mut state, 110, 32).contains("Effort —"));
+        assert!(!render(&mut state, 110, 32).contains(" max"));
+    }
+
+    #[test]
+    fn wide_details_and_completion_share_the_session_body_without_covering_the_editor() {
+        let mut state = State::default();
+        state.push_message(Role::User, "You", "conversation marker");
+        state.set_details(Details {
+            title: "Approval required".into(),
+            lines: vec!["operation marker".into()],
+        });
+        state.editor.set_text("/per");
+        state.completion.update("/per", 4, true);
+        for (width, main_width) in [(99, 99), (100, 100), (110, 110), (120, 90), (160, 120)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 32)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+            assert_eq!((cursor.x, cursor.y), (7, 28));
+            let buffer = terminal.backend().buffer();
+            let right_width = ((main_width - 2) / 3).clamp(32, 48);
+            let details_x = if main_width >= 100 {
+                main_width - 1 - right_width
+            } else {
+                1
+            };
+            let heading = (details_x..main_width - 1)
+                .map(|column| buffer[(column, 2)].symbol())
+                .collect::<String>();
+            assert!(heading.contains("Approval required"));
+            assert!(row_text(buffer, 3).contains("operation marker"));
+            if main_width >= 100 {
+                assert!(row_text(buffer, 2).contains("You"));
+                assert!(row_text(buffer, 3).contains("conversation marker"));
+            }
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .contains("Command suggestions")
+            );
+            assert_eq!(buffer[(cursor.x, cursor.y)].symbol(), "m");
+            assert_eq!(buffer[(cursor.x, cursor.y)].bg, INPUT_BACKGROUND);
+            assert_eq!(state.editor.text(), "/per");
+            assert_eq!(state.details.as_ref().unwrap().title, "Approval required");
+        }
+    }
+
+    #[test]
+    fn sidebar_is_responsive_and_labels_unknown_extensions_without_invented_state() {
+        let mut state = State {
+            session_title: "Sidebar session".into(),
+            workspace: "/tmp/workspace".into(),
+            context_window_tokens: Some(128_000),
+            ..State::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(119, 40)).unwrap();
+        for (width, height, main_width) in [
+            (119, 40, 119),
+            (120, 40, 90),
+            (120, 23, 120),
+            (120, 24, 90),
+            (160, 45, 120),
+            (110, 32, 110),
+            (119, 24, 119),
+        ] {
+            terminal.backend_mut().resize(width, height);
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(main_width - 1, height - 1)].symbol(), "┘");
+            assert!(row_text(buffer, 0).starts_with("Saya Harness"));
+            if main_width < width {
+                assert_eq!(buffer[(main_width, 0)].bg, SIDEBAR_BACKGROUND);
+                for (row, text) in [
+                    (0, "Sidebar session"),
+                    (2, "Context · Unknown"),
+                    (3, "Window 128k"),
+                    (4, "Unknown before request"),
+                    (15, "Extensions"),
+                    (16, "MCP  Not implemented"),
+                    (17, "Plugins  Not implemented"),
+                    (18, "Skills —"),
+                    (height - 1, "/tmp/workspace"),
+                ] {
+                    let actual = (main_width..width)
+                        .map(|column| buffer[(column, row)].symbol())
+                        .collect::<String>();
+                    assert!(
+                        actual.contains(text),
+                        "{width}x{height} row {row}: {actual}"
+                    );
+                }
+            } else {
+                assert_eq!(buffer[(width - 1, 0)].bg, BACKGROUND);
+                assert!(!row_text(buffer, 2).contains("Context"));
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_context_rows_are_bounded_safe_and_keep_small_proportions_visible() {
+        let mut state = State {
+            context_window_tokens: Some(128_000),
+            context_breakdown: vec![
+                ContextEntry {
+                    label: "Skills".into(),
+                    tokens: 128,
+                },
+                ContextEntry {
+                    label: "Conversation".into(),
+                    tokens: 64_000,
+                },
+            ],
+            skills_count: Some(3),
+            ..State::default()
+        };
+        let lines = context_rows(&state, 26);
+        assert!(lines[0].to_string().contains("0.1%"));
+        assert!(lines[0].to_string().contains('▏'));
+        assert!(lines[1].to_string().contains("50%"));
+        assert!(lines.iter().all(|line| line.width() <= 26));
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 2).contains("Context · Estimated"));
+        assert!(row_text(buffer, 13).contains("Total ~64.1k 50.1%"));
+        assert!(row_text(buffer, 18).contains("Skills 3 discovered"));
+        state.context_breakdown = (0..MAX_CONTEXT_ENTRIES + 10)
+            .map(|_| ContextEntry {
+                label: "unsafe\x1b[2J\u{202e}".into(),
+                tokens: u64::MAX,
+            })
+            .collect();
+        assert_eq!(context_rows(&state, 26).len(), MAX_CONTEXT_ENTRIES);
+        assert!(
+            context_rows(&state, 26)
+                .iter()
+                .all(|line| line.width() <= 26)
+        );
+        let image = render(&mut state, 120, 40);
+        assert!(image.contains("Additional entries omitted"));
+        assert!(!image.contains('\x1b'));
+        assert!(!image.contains('\u{202e}'));
+    }
+
+    #[test]
+    fn context_bars_and_percentages_handle_fractional_zero_unknown_and_overflow_inputs() {
+        for (tokens, expected) in [
+            (0, "0%"),
+            (1, "<0.1%"),
+            (128, "0.1%"),
+            (64_000, "50%"),
+            (128_000, "100%"),
+        ] {
+            assert_eq!(sidebar_percentage(tokens, Some(128_000)), expected);
+        }
+        assert_eq!(sidebar_percentage(u64::MAX, Some(0)), "—");
+        assert_eq!(sidebar_percentage(u64::MAX, Some(1)), ">100%");
+        assert_eq!(
+            context_bar(128, Some(128_000), 5),
+            ("▏".into(), "░░░░".into())
+        );
+        assert_eq!(
+            context_bar(64_000, Some(128_000), 5),
+            ("██▌".into(), "░░".into())
+        );
+        assert_eq!(
+            context_bar(0, Some(128_000), 5),
+            (String::new(), "░░░░░".into())
+        );
+        assert_eq!(
+            context_bar(u64::MAX, Some(0), 5),
+            (String::new(), "─────".into())
+        );
+        assert_eq!(
+            context_bar(u64::MAX, Some(1), 5),
+            ("█████".into(), String::new())
+        );
+        assert_eq!(context_bar(1, Some(1), 0), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn tiny_details_show_scrollable_content_while_retaining_an_editable_draft() {
+        let mut state = State {
+            status: "Awaiting approval".into(),
+            permissions: "Manual Approval".into(),
+            ..State::default()
+        };
+        state.editor.set_text("yes");
+        state.set_details(Details {
+            title: "Approval required".into(),
+            lines: vec![
+                "Tool read_file".into(),
+                "Call c1".into(),
+                "{\"path\":\"ok\"}".into(),
+            ],
+        });
+        for height in [6, 7] {
+            state.details_scroll = 0;
+            let mut terminal = Terminal::new(TestBackend::new(20, height)).unwrap();
+            for expected in ["Tool read_file", "Call c1", "{\"path\":\"ok\"}"] {
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+                assert_eq!((cursor.x, cursor.y), (6, height - 2));
+                let buffer = terminal.backend().buffer();
+                assert!(row_text(buffer, 2).contains(expected));
+                assert!(row_text(buffer, 3).contains("Approval"));
+                assert_eq!(buffer[(3, height - 2)].symbol(), "y");
+                assert_eq!(buffer[(3, height - 2)].bg, INPUT_BACKGROUND);
+                assert_eq!(state.details_page_rows, 1);
+                state.details_scroll += state.details_page_rows;
+            }
+        }
     }
 }
