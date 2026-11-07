@@ -321,7 +321,7 @@ error 为 null 或 `{ "code": "稳定标识", "message": "可读说明" }`；art
 ## B-18 存储位置与格式
 
 - 数据根为 `$XDG_DATA_HOME/saya`，默认 `~/.local/share/saya`，可用 `--data-dir` 覆盖；数据库为 `sessions.sqlite3`。日志根为 `$XDG_STATE_HOME/saya`，默认 `~/.local/state/saya`。
-- 采用 SQLite WAL、foreign_keys 开启、synchronous FULL，schema 初版为 1。rusqlite 选择 bundled，避免依赖系统 SQLite；参见 [rusqlite bundled 说明](https://github.com/rusqlite/rusqlite)与 [SQLite WAL](https://sqlite.org/wal.html)。会话库仅支持本地磁盘，不支持网络共享文件系统。
+- 采用 SQLite WAL、foreign_keys 开启、synchronous FULL，schema 初版为 1，目前内部版本为 2，迁移先建立一致性备份。rusqlite 选择 bundled，避免依赖系统 SQLite；参见 [rusqlite bundled 说明](https://github.com/rusqlite/rusqlite)与 [SQLite WAL](https://sqlite.org/wal.html)。会话库仅支持本地磁盘，不支持网络共享文件系统。
 - 核心实体为 sessions、runs、messages／provider_items、tool_calls、events；会话和运行 ID 使用 UUIDv7。精确表结构作为内部实现随迁移版本管理，不鼓励外部直接依赖数据库列。
 - 会话保留直到用户管理数据目录，不自动过期或上传。0.1 提供 list／show／resume；删除、导出和全文检索命令不进入首版。
 - PLAN 的数据目录、日志与缓存必须在目标工作区外。若所选目录重叠，启动检查失败，要求换数据目录／工作区；不为保存会话而默默在 PLAN 工作区创建应用文件。

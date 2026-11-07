@@ -455,6 +455,107 @@ async fn real_process_lock_and_readonly_live_wal_preflight()
 }
 
 #[tokio::test]
+async fn migration_creates_a_consistent_backup_and_preserves_sessions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store.create_session(&session, "hash").await?;
+    drop(store);
+    let path = temp.path().join("sessions.sqlite3");
+    let db = Connection::open(&path)?;
+    db.execute_batch("DROP INDEX sessions_updated; PRAGMA user_version=1;")?;
+    drop(db);
+    let migrated = SqliteStore::open(temp.path(), vec![])?;
+    assert_eq!(
+        migrated.load_session(session.id).await?,
+        Some(session.clone())
+    );
+    drop(migrated);
+    let backup = fs::read_dir(temp.path())?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".backup"))
+        })
+        .ok_or("missing backup")?;
+    let backup_db = Connection::open(backup)?;
+    assert_eq!(
+        backup_db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
+        1
+    );
+    assert_eq!(
+        backup_db.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE id=?1",
+            [session.id.0.to_string()],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    let db = Connection::open(path)?;
+    assert_eq!(
+        db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_migration_keeps_original_database_and_backup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store.create_session(&session, "hash").await?;
+    drop(store);
+    let path = temp.path().join("sessions.sqlite3");
+    let db = Connection::open(&path)?;
+    db.execute_batch(
+        "DROP INDEX sessions_updated; CREATE TABLE sessions_updated(x); PRAGMA user_version=1;",
+    )?;
+    drop(db);
+    assert!(SqliteStore::open(temp.path(), vec![]).is_err());
+    let db = Connection::open(path)?;
+    assert_eq!(
+        db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
+        1
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE id=?1",
+            [session.id.0.to_string()],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    assert!(
+        fs::read_dir(temp.path())?
+            .filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().ends_with(".backup"))
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_schema_is_reported_as_corrupt() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    let path = store.path().to_owned();
+    drop(store);
+    let db = Connection::open(path)?;
+    db.execute_batch("DROP TABLE session_config")?;
+    drop(db);
+    let error = match SqliteStore::open(temp.path(), vec![]) {
+        Ok(_) => return Err("damaged schema accepted".into()),
+        Err(error) => error,
+    };
+    assert_eq!(error.0.code, "storage_corrupt");
+    Ok(())
+}
+
+#[tokio::test]
 async fn killing_writer_releases_process_session_lock() -> Result<(), Box<dyn std::error::Error>> {
     use std::{
         io::{BufRead, BufReader},

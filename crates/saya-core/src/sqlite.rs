@@ -23,7 +23,7 @@ use std::{
 
 const DB_NAME: &str = "sessions.sqlite3";
 const APPLICATION_ID: i64 = 0x5341_5941;
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 const SCHEMA: &str = r#"
 CREATE TABLE sessions (
  id TEXT PRIMARY KEY, metadata TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -59,7 +59,9 @@ CREATE TABLE change_log (
  PRIMARY KEY(session_id,seq)
 );
 CREATE INDEX runs_by_session ON runs(session_id,started_at);
+CREATE INDEX sessions_updated ON sessions(updated_at DESC);
 "#;
+const V2_MIGRATION: &str = "CREATE INDEX sessions_updated ON sessions(updated_at DESC)";
 fn error(code: &str, message: &str) -> BoundaryError {
     BoundaryError(
         ErrorInfo {
@@ -80,6 +82,123 @@ fn sql_error(e: SqlError) -> BoundaryError {
         return error("storage_corrupt", "database is corrupt or is not SQLite");
     }
     error("storage_error", "database operation failed")
+}
+fn check_schema(conn: &Connection) -> Result<(), BoundaryError> {
+    let checked: String = conn
+        .query_row("PRAGMA quick_check(1)", [], |r| r.get(0))
+        .map_err(sql_error)?;
+    if checked != "ok" {
+        return Err(error("storage_corrupt", "database integrity check failed"));
+    }
+    for (table, columns) in [
+        (
+            "sessions",
+            &[
+                "id",
+                "metadata",
+                "created_at",
+                "updated_at",
+                "event_seq",
+                "change_seq",
+            ][..],
+        ),
+        ("messages", &["session_id", "ordinal", "item"][..]),
+        ("session_config", &["session_id", "fingerprint"][..]),
+        (
+            "runs",
+            &[
+                "id",
+                "session_id",
+                "run",
+                "result",
+                "started_at",
+                "finished_at",
+            ][..],
+        ),
+        (
+            "tool_calls",
+            &["run_id", "call_id", "call", "state", "result"][..],
+        ),
+        (
+            "approval_requests",
+            &["approval_id", "run_id", "request"][..],
+        ),
+        ("events", &["session_id", "seq", "run_id", "event"][..]),
+        (
+            "change_log",
+            &["session_id", "seq", "run_id", "kind", "reference"][..],
+        ),
+    ] {
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .map_err(sql_error)?;
+        let actual = stmt
+            .query_map([table], |row| row.get::<_, String>(0))
+            .map_err(sql_error)?
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()
+            .map_err(sql_error)?;
+        if columns.iter().any(|name| !actual.contains(*name)) {
+            return Err(error("storage_corrupt", "database schema is incomplete"));
+        }
+    }
+    let invalid: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| error("storage_corrupt", "database foreign keys are invalid"))?;
+    if invalid {
+        return Err(error(
+            "storage_corrupt",
+            "database foreign keys are inconsistent",
+        ));
+    }
+    Ok(())
+}
+fn backup_v1(conn: &Connection, root: &Path) -> Result<(), BoundaryError> {
+    let path = root.join(format!("{DB_NAME}.v1-{}.backup", uuid::Uuid::now_v7()));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|_| error("storage_error", "cannot create migration backup"))?;
+    let mut destination = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(sql_error)?;
+    {
+        let backup = rusqlite::backup::Backup::new(conn, &mut destination).map_err(sql_error)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match backup.step(128).map_err(sql_error)? {
+                rusqlite::backup::StepResult::Done => break,
+                rusqlite::backup::StepResult::More => {}
+                _ if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                _ => return Err(error("storage_busy", "migration backup is busy")),
+            }
+        }
+    }
+    check_schema(&destination)?;
+    let version: i64 = destination
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(sql_error)?;
+    let app: i64 = destination
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .map_err(sql_error)?;
+    if version != 1 || app != APPLICATION_ID {
+        return Err(error("storage_corrupt", "invalid migration backup"));
+    }
+    drop(destination);
+    File::open(&path)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| error("storage_error", "cannot sync migration backup"))?;
+    File::open(root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| error("storage_error", "cannot sync migration backup directory"))?;
+    Ok(())
 }
 fn json<T: Serialize>(value: &T, secrets: &[String]) -> Result<String, BoundaryError> {
     let value = serde_json::to_value(value)
@@ -712,12 +831,25 @@ impl SqliteStore {
         if created && (version != 0 || app != 0) {
             return Err(error("storage_corrupt", "new database is not empty"));
         }
+        if !created {
+            check_schema(&connection)?;
+        }
         connection
             .pragma_update(None, "foreign_keys", true)
             .map_err(sql_error)?;
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(sql_error)?;
+        if !created && version == 1 {
+            backup_v1(&connection, &root)?;
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            tx.execute_batch(V2_MIGRATION).map_err(sql_error)?;
+            tx.pragma_update(None, "user_version", VERSION)
+                .map_err(sql_error)?;
+            tx.commit().map_err(sql_error)?;
+        }
         let mode: String = connection
             .pragma_query_value(None, "journal_mode", |r| r.get(0))
             .map_err(sql_error)?;
