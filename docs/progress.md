@@ -98,6 +98,16 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 
 日志为 `target/tui-interactive-check-final.log`，正常入口报告为 `target/tui-interactive-release-matrix.json`，程序SHA-256为 `9050acb2510c02e698f199a7aaf3dbb17a4151a46b12e9e60193ed91fb2ea76b`，Mach-O最低部署版本为15.0。`target/tui-interactive-thinking-tasks-160x40.png` 与 `target/tui-interactive-expanded-tool-110x36.png` 来自该程序的受控PTY单元格快照。当前证据为本机离线验收，四平台候选证据仍对应上方固定RC1源码。
 
+#### 输入区与摘要卡片美化
+
+2026-11-08，开发线进一步细化输入区、工具卡片与侧栏。Message采用Strong前景与加粗，发送／换行／折叠提示使用键帽样式。空草稿显示斜体 `Describe a task…` 渲染占位，审批／澄清、补全和粘贴超限按实际状态显示，底部留白加入浅色收边。真实光标、Unicode多行和极小窗口有回归。
+
+可识别的完整结构化工具结果默认收成摘要卡片，展示实际Todo计数、文件行范围／字节数、搜索／目录项数、退出码和错误信息，展开查看原始结果。摘要严格校验数据，输出限制512字节／120个grapheme，覆盖巨型组合簇、控制字符、重复字段、未知／矛盾／不完整结果。Thinking采用精简状态标题，侧栏加入弱分隔、强标题、非零数值层次和任务进行中强调。
+
+本机macOS27.2 ARM／Rust1.99.1通过部署目标15.0的完整格式、workspace全目标Clippy、577项Rust测试及优化构建。正常入口19组PTY全部通过，新增短工具摘要、失败与截断状态、逐卡展开结果与模型所见JSON相等、同名真实占位文本、66KiB粘贴、输入键帽和底部收边等验证。5项发行工具测试、工具smoke、文本journey、5项审查回归及私有配置离线校验通过。
+
+检查日志为 `target/tui-beautify-check-final.log`，PTY报告为 `target/tui-beautify-release-matrix.json`。程序SHA-256为 `aef46edff56e04056f79cf0f2a58636e5ddf349f9fead6a82ce6d1b54865dade`，Mach-O最低部署版本为15.0。`target/tui-beautify-refined-160x40.png`、`target/tui-beautify-refined-110x36.png` 和 `target/tui-beautify-composer.png` 为生产组件合成状态预览，含颜色与字重投影。本轮正常入口PTY另保存4组单元格快照，实际模型服务使用本地受控夹具。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

@@ -70,3 +70,16 @@ macOS27.2 ARM／Rust1.99.1通过部署目标15.0的完整格式、workspace全�
 - 两张PNG由该程序的受控PTY单元格快照渲染，分别为 `target/tui-interactive-thinking-tasks-160x40.png` 和 `target/tui-interactive-expanded-tool-110x36.png`。
 
 本节证据来自本机和本地协议替身，RC1的四平台原生候选验收按上方固定源码记录。
+
+## 输入区与摘要卡片美化验收
+
+2026-11-08，macOS27.2 ARM／Rust1.99.1，部署目标15.0。完整检查通过格式、workspace全目标Clippy、577项Rust测试和优化构建。41项view测试与8项摘要测试覆盖实际状态、512字节／120grapheme限制、未知数据回退、完整原文展开、输入占位／真实草稿、字重、键帽、Unicode多行、极小窗口、审批及粘贴警示。
+
+优化程序完成19组正常入口PTY，新增摘要组按后续模型请求中的原始ToolResult逐卡核对展开JSON，失败状态与截断颜色由实际结果验证。既有三协议、4模式×3权限、空Tab、补全、会话恢复、导出、取消、后台任务、慢消费者和终端恢复继续通过，输入区追加同名真实占位文本和66KiB粘贴门槛。5项发行工具测试、工具smoke、文本journey和5项审查回归通过。
+
+- 完整检查为 `target/tui-beautify-check-final.log`，正常入口报告为 `target/tui-beautify-release-matrix.json`。
+- 二进制SHA-256为 `aef46edff56e04056f79cf0f2a58636e5ddf349f9fead6a82ce6d1b54865dade`，实际Mach-O部署目标15.0。
+- 组件合成预览为 `target/tui-beautify-refined-160x40.png`、`target/tui-beautify-refined-110x36.png` 与 `target/tui-beautify-composer.png`，通过TestBackend单元格及Modifier生成颜色／字重投影。
+- 正常入口PTY快照前缀为 `target/tui-beautify-idle-composer-80x24`、`target/tui-beautify-thinking-tasks-160x40`、`target/tui-beautify-expanded-tool-110x36` 和 `target/tui-beautify-tool-summaries-160x45`，均保存cells JSON供复核。
+
+证据范围为上述本机和本地协议替身，平台候选记录按各自源码和产物维护。

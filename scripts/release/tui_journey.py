@@ -24,6 +24,9 @@ import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+EDITOR_PLACEHOLDER = 'Describe a task…'
+
+
 class Screen:
     """Small VT screen used to observe cursor-positioned Ratatui updates."""
     def __init__(self, columns=110, rows=32):
@@ -177,6 +180,13 @@ class Screen:
     def row_text(self, index):
         return ''.join(self.cells[index]).rstrip()
 
+    def row_style(self, index, text, start=0, end=None):
+        end = self.columns if end is None else end
+        for column in range(start, end):
+            if self.cells[index][column] and ''.join(self.cells[index][column:end]).startswith(text):
+                return self.colors[index][column]
+        return None
+
     def main_width(self):
         return next((index + 1 for index, cell in enumerate(self.cells[-1]) if cell == '┘'), None)
 
@@ -209,6 +219,10 @@ class Screen:
         end = self.rows - (2 if self.rows - 1 - start > 2 else 1)
         content = [''.join(self.cells[index][3:width - 1]).rstrip()
                    for index in range(start + 1, end)]
+        if (self.rows - 1 - start > 2 and content and content[0] == EDITOR_PLACEHOLDER and
+                not any(content[1:]) and self.row_style(start + 1, EDITOR_PLACEHOLDER, 3, width - 1) ==
+                ((129, 129, 139), (32, 32, 36))):
+            return ''
         return '\n'.join(content).rstrip()
 
     def mode(self):
@@ -291,14 +305,15 @@ class Screen:
         if details and width >= 100:
             width -= min(48, max(32, (width - 2) // 3))
         headers = []
+        column = 2 if width - 2 >= 40 else 1
         for row in range(2, end):
-            for column in range(1, width - 1):
-                text = ''.join(self.cells[row][column:width - 1]).rstrip()
-                if (text.startswith(('▶ Thinking', '▼ Thinking', '▶ Tool', '▼ Tool')) and
-                        self.colors[row][column][1] == (23, 23, 27) and
-                        (role is None or text[2:].startswith(role))):
-                    headers.append((column, row, text))
-                    break
+            text = ''.join(self.cells[row][column:width - 1]).rstrip()
+            thinking = text.startswith(('▶ Thinking', '▼ Thinking'))
+            tool = text.startswith(('▶ Tool', '▼ Tool'))
+            background = (9, 9, 11) if thinking else (23, 23, 27)
+            if ((thinking or tool) and self.colors[row][column] == ((129, 129, 139), background) and
+                    (role is None or text[2:].startswith(role))):
+                headers.append((column, row, text))
         return headers
 
     def popup_text(self):
@@ -702,6 +717,10 @@ def stream_journey(binary, protocol):
                 result = wait_idle(terminal, root)
                 if result.get('text') != response:
                     raise RuntimeError('Markdown presentation changed the persisted model response')
+                terminal.settle()
+                headers = terminal.screen.fold_headers('Thinking')
+                if len(headers) != 1 or headers[0][2] != '▶ Thinking · done':
+                    raise RuntimeError('completed thinking did not use its concise final-state header')
                 if thought in terminal.screen.body_text():
                     raise RuntimeError('provider plaintext thinking was expanded by default')
                 terminal.send(b'\x0f')
@@ -934,6 +953,40 @@ def empty_tab_mode_journey(binary):
                     terminal.wait(lambda: terminal.editor_text() == '', 'empty Tab fixture draft cleared')
 
                 terminal.title()
+                terminal.settle()
+                input_row = terminal.screen.message_row() + 1
+                if terminal.screen.row_style(input_row, EDITOR_PLACEHOLDER, 3,
+                                             terminal.screen.main_width() - 1) != ((129, 129, 139), (32, 32, 36)):
+                    raise RuntimeError('fresh empty draft did not display its muted placeholder')
+                if terminal.editor_text() != '':
+                    raise RuntimeError('placeholder text was treated as user input')
+                terminal.send(EDITOR_PLACEHOLDER)
+                terminal.wait(lambda: terminal.editor_text() == EDITOR_PLACEHOLDER, 'literal placeholder text retained as a user draft')
+                terminal.settle()
+                if terminal.screen.row_style(input_row, EDITOR_PLACEHOLDER, 3,
+                                             terminal.screen.main_width() - 1) != ((212, 212, 216), (32, 32, 36)):
+                    raise RuntimeError('literal placeholder draft did not use the user-input foreground')
+                terminal.send(b'\t')
+                terminal.send('X')
+                terminal.wait(lambda: terminal.editor_text() == EDITOR_PLACEHOLDER + '    X',
+                              'Tab edits a literal placeholder draft without cycling mode')
+                no_dispatch('WORK')
+                clear_draft()
+
+                terminal.send('\x1b[200~' + 'x' * 66000 + '\x1b[201~')
+                terminal.wait(lambda: terminal.screen.message_row() is not None and
+                              'Message · paste truncated at 64 KiB' in terminal.screen.main_row_text(
+                                  terminal.screen.message_row()), 'paste limit warning in the composer caption')
+                terminal.settle()
+                caption = terminal.screen.message_row()
+                if terminal.screen.row_style(caption, 'Message · paste truncated', 3,
+                                             terminal.screen.main_width() - 1) != ((246, 173, 85), (32, 32, 36)):
+                    raise RuntimeError('paste limit warning did not use its warning hierarchy')
+                if 'Enter send' in terminal.screen.main_row_text(caption):
+                    raise RuntimeError('composer hint displaced the paste truncation warning')
+                no_dispatch('WORK')
+                clear_draft()
+
                 for mode in ['CODE', 'PLAN', 'BUILD', 'WORK']:
                     terminal.send(b'\t')
                     terminal.wait(lambda: terminal.mode() == mode and terminal.editor_text() == '',
@@ -1052,9 +1105,12 @@ def reference_layout_and_title_journey(binary):
                                   terminal.screen.status() is not None and terminal.mode() is not None and
                                   'input' in footer(),
                                   'reference Message region at its fixed row')
+                    terminal.settle()
                     screen = terminal.screen
                     if screen.colors[0][0][1] != (9, 9, 11):
                         raise RuntimeError('reference header did not retain the main background')
+                    if screen.row_style(0, 'Saya Harness', 0, screen.main_width()) != ((232, 232, 237), (9, 9, 11)):
+                        raise RuntimeError('reference brand did not use its stronger foreground hierarchy')
                     if not screen.main_row_text(1).startswith('┌') or '/' not in screen.main_row_text(1):
                         raise RuntimeError('reference workspace was not embedded in the outer top border')
                     if 'Ctrl+P' not in screen.main_row_text(0):
@@ -1069,6 +1125,33 @@ def reference_layout_and_title_journey(binary):
                             raise RuntimeError('reference input stripe was not solid blue for the full composer height')
                     if screen.colors[input_row][3][1] != (32, 32, 36):
                         raise RuntimeError('reference Message region did not use its gray background')
+                    if expected_message_row is not None:
+                        inner_width = screen.main_width() - 4
+                        hint = ('Enter send · Alt+Enter newline · Ctrl+O fold' if inner_width >= 64 else
+                                'Enter send · Ctrl+O fold' if inner_width >= 38 else None)
+                        message = screen.main_row_text(input_row)
+                        if hint is not None and hint not in message:
+                            raise RuntimeError('Message region omitted its width-appropriate input hint')
+                        if hint is not None:
+                            keys = ['Enter', 'Ctrl+O'] if inner_width < 64 else ['Enter', 'Alt+Enter', 'Ctrl+O']
+                            for key in keys:
+                                if screen.row_style(input_row, key, 3, screen.main_width() - 1) != ((232, 232, 237), (23, 23, 27)):
+                                    raise RuntimeError('input hint did not use its keycap hierarchy for ' + key)
+                            if screen.row_style(input_row, 'send', 3, screen.main_width() - 1) != ((129, 129, 139), (32, 32, 36)):
+                                raise RuntimeError('input hint action did not use its secondary composer color')
+                        if hint is None and 'Enter send' in message:
+                            raise RuntimeError('input hint displaced the narrow Message label')
+                        if screen.row_style(input_row, 'Message', 3, screen.main_width() - 1) != ((232, 232, 237), (32, 32, 36)):
+                            raise RuntimeError('Message caption did not use its stronger foreground')
+                        show_placeholder = (rows - 1 - input_row > 2 and screen.status() not in
+                                            ('Awaiting input', 'NeedsInput', 'Awaiting approval', 'NeedsConfirmation'))
+                        placeholder_style = screen.row_style(input_row + 1, EDITOR_PLACEHOLDER, 3, screen.main_width() - 1)
+                        if show_placeholder and placeholder_style != ((129, 129, 139), (32, 32, 36)):
+                            raise RuntimeError('empty composer omitted its style-distinct placeholder')
+                        if not show_placeholder and placeholder_style is not None:
+                            raise RuntimeError('placeholder occupied a tiny composer or pending human response')
+                        if rows - 1 - input_row > 2 and screen.colors[rows - 2][3] != ((42, 42, 48), (32, 32, 36)):
+                            raise RuntimeError('composer padding did not contain its subtle bottom edge')
                     if not any(ring in footer() for ring in ('○', '◔', '◑', '◕', '●')):
                         raise RuntimeError('reference footer omitted the labeled input ring')
                     if screen.main_width() >= 44:
@@ -1089,6 +1172,9 @@ def reference_layout_and_title_journey(binary):
                             raise RuntimeError('sidebar presented plugins as implemented')
                         if 'Skills' not in screen.sidebar_row_text(18):
                             raise RuntimeError('sidebar omitted its actual skill discovery state')
+                        for row, label in [(2, 'Context'), (15, 'Extensions'), (20, 'Tasks')]:
+                            if screen.row_style(row, label, screen.main_width()) != ((232, 232, 237), (20, 20, 22)):
+                                raise RuntimeError('sidebar section did not retain its stronger heading color for ' + label)
                     elif any(screen.sidebar_row_text(index) for index in range(rows)):
                         raise RuntimeError('sidebar remained visible below its size threshold')
 
@@ -1104,6 +1190,7 @@ def reference_layout_and_title_journey(binary):
                     terminal.wait(lambda: terminal.screen.sidebar_row_text(2) == 'Context · Estimated' and
                                   terminal.screen.sidebar_row_text(18) == 'Skills 1 discovered',
                                   'actual execution context estimates and discovered skill')
+                    terminal.settle()
                     if terminal.screen.sidebar_row_text(0) != first_prompt:
                         raise RuntimeError('sidebar session title did not match the actual first task')
                     if terminal.screen.sidebar_row_text(3) != 'Window 128k':
@@ -1118,6 +1205,10 @@ def reference_layout_and_title_journey(binary):
                         if metric is None:
                             raise RuntimeError('sidebar did not display a bounded numeric estimate for ' + label)
                         populated[label] = float(metric.group(1)) > 0
+                        token = metric.group(0).strip().split()[0]
+                        foreground = (232, 232, 237) if populated[label] else (129, 129, 139)
+                        if terminal.screen.row_style(index, token, terminal.screen.main_width()) != (foreground, (20, 20, 22)):
+                            raise RuntimeError('sidebar numeric hierarchy did not match the actual value for ' + label)
                         if label in nonzero and not populated[label]:
                             raise RuntimeError('sidebar did not estimate the actual ' + label + ' context')
                     return populated
@@ -1139,6 +1230,7 @@ def reference_layout_and_title_journey(binary):
                         raise RuntimeError('sidebar invented context estimates before a model request')
                     if terminal.screen.main_width() < columns and terminal.screen.sidebar_row_text(18) != 'Skills —':
                         raise RuntimeError('sidebar invented skill discovery before the first request')
+                save_interactive_screen(terminal, 'idle-composer-80x24')
                 if fixture.requests:
                     raise RuntimeError('reference layout resizing called the model')
                 if terminal.mode() != 'WORK' or terminal.permissions() != 'auto' or terminal.screen.status() != 'Ready':
@@ -1299,6 +1391,13 @@ def mode_permission_matrix(binary):
                     terminal = invoke(binary, root, config, ['--mode', mode])
                     try:
                         terminal.title()
+                        label = {'auto': 'auto', 'manual': 'Manual Approval', 'bypass': 'bypass permissions'}[permission]
+                        terminal.wait(lambda: terminal.permissions() == label, 'configured permission label before model input')
+                        terminal.settle()
+                        foreground = (129, 129, 139) if permission == 'auto' else (187, 166, 133)
+                        if terminal.screen.row_style(terminal.screen.status_row(), label, 1,
+                                                     terminal.screen.main_width() - 1) != (foreground, (9, 9, 11)):
+                            raise RuntimeError('permission label did not use its actual-mode color hierarchy')
                         terminal.line('Report the configured mode')
                         terminal.until(marker)
                         wait_idle(terminal, root)
@@ -1420,7 +1519,7 @@ def manual_tools_and_clarification(binary):
 
 
 def save_interactive_screen(terminal, name):
-    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-interactive-' + name + '-cells.json')
+    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-beautify-' + name + '-cells.json')
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps({'columns': terminal.screen.columns, 'rows': terminal.screen.rows,
                                'cells': terminal.screen.cells, 'colors': terminal.screen.colors},
@@ -1453,6 +1552,8 @@ def thinking_tools_and_mouse_journey(binary):
                 headers = terminal.screen.fold_headers()
                 if any(not item[2].startswith('▶ ') for item in headers):
                     raise RuntimeError('thinking or long tool was expanded by default')
+                if any(item[2] != '▶ Thinking · done' for item in terminal.screen.fold_headers('Thinking')):
+                    raise RuntimeError('thinking cards retained redundant source text or omitted the completed state')
                 if any(thought in terminal.screen.body_text() for thought in thoughts):
                     raise RuntimeError('collapsed thinking leaked its provider text into the visible body')
                 tools = terminal.screen.fold_headers('Tool')
@@ -1656,6 +1757,105 @@ def todos_manual_plan_and_restore_journey(binary):
                 restored.finish()
             finally:
                 restored.close()
+    finally:
+        fixture.close()
+
+
+def summary_tool_cards_journey(binary):
+    todo = ('summary-todo', 'todo_write', {'todos': [
+        {'id': 'summary-task', 'content': 'SHORT_TODO_BODY_FIXTURE', 'status': 'pending'}]})
+    missing = ('summary-error', 'read_file', {'path': 'missing.txt', 'start_line': 1, 'line_count': 1})
+    truncated = ('summary-truncated', 'read_file', {'path': 'short.txt', 'start_line': 1, 'line_count': 1})
+    results = {}
+    def after(call, reply):
+        def respond(request):
+            results[call[0]] = tool_result(request, call[0])
+            return reply
+        return respond
+    fixture = Fixture('openai-chat-completions', [
+        {'call': todo}, after(todo, {'call': missing}), after(missing, {'call': truncated}),
+        after(truncated, {'text': 'SUMMARY_DONE'})])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-summary-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            (root / 'workspace' / 'short.txt').write_text('TRUNCATED_BODY_FIXTURE\nOMITTED_SECOND_LINE\n')
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.resize(160, 45)
+                terminal.title()
+                terminal.line('Exercise concise task, failed read and truncated read cards')
+                terminal.until('SUMMARY_DONE')
+                wait_idle(terminal, root)
+                terminal.settle()
+                if len(fixture.requests) != 4:
+                    raise RuntimeError('summary presentation changed the number of model requests')
+                if not results[todo[0]].get('ok') or results[todo[0]].get('data') != todo[2]:
+                    raise RuntimeError('short todo fixture did not complete with its canonical data')
+                if results[missing[0]].get('ok') or results[missing[0]].get('error', {}).get('code') != 'io_error':
+                    raise RuntimeError('missing-file fixture did not return its real failure')
+                if not results[truncated[0]].get('ok') or not results[truncated[0]].get('truncated'):
+                    raise RuntimeError('truncated read fixture did not preserve its real truncation state')
+                terminal.wait(lambda: len(terminal.screen.fold_headers('Tool')) == 3,
+                              'three canonical short tool results are folded cards')
+
+                def header(call_id):
+                    return next((item for item in terminal.screen.fold_headers('Tool') if call_id in item[2]), None)
+
+                for call in (todo, missing, truncated):
+                    item = header(call[0])
+                    if item is None or not item[2].startswith('▶ Tool · ' + call[1]):
+                        raise RuntimeError('canonical short result was not collapsed for ' + call[0])
+                    icon = '✕' if call == missing else '✓'
+                    foreground = (248, 113, 113) if call == missing else (125, 203, 155)
+                    if terminal.screen.row_style(item[1], icon, item[0], terminal.screen.main_width() - 1) != (foreground, (23, 23, 27)):
+                        raise RuntimeError('tool summary did not use its actual result status color for ' + call[0])
+                todo_header, error_header, truncated_header = (header(call[0]) for call in (todo, missing, truncated))
+                if '1 task · 0 done/0 active' not in todo_header[2]:
+                    raise RuntimeError('short todo summary did not report its actual task counts')
+                if 'io_error' not in error_header[2] or terminal.screen.row_style(
+                        error_header[1], 'io_error', error_header[0], terminal.screen.main_width() - 1) != ((248, 113, 113), (23, 23, 27)):
+                    raise RuntimeError('failed tool summary omitted or miscolored the actual error code')
+                content_bytes = len(results[truncated[0]]['data']['content'].encode())
+                if f'lines 1–1 · {content_bytes} bytes' not in truncated_header[2]:
+                    raise RuntimeError('read summary did not report its actual range and byte count')
+                if 'truncated' not in truncated_header[2] or terminal.screen.row_style(
+                        truncated_header[1], 'truncated', truncated_header[0], terminal.screen.main_width() - 1) != ((246, 173, 85), (23, 23, 27)):
+                    raise RuntimeError('tool summary omitted or miscolored its real truncation marker')
+                if any(item[2] != '▶ Thinking · unavailable' for item in terminal.screen.fold_headers('Thinking')):
+                    raise RuntimeError('provider-without-thinking cards invented available thought text')
+                if 'SHORT_TODO_BODY_FIXTURE' in terminal.screen.body_text() or 'TRUNCATED_BODY_FIXTURE' in terminal.screen.body_text():
+                    raise RuntimeError('a folded tool summary exposed its raw result body')
+                save_interactive_screen(terminal, 'tool-summaries-160x45')
+
+                for call in (todo, missing, truncated):
+                    item = header(call[0])
+                    terminal.click(item[0] + 3, item[1])
+                    terminal.wait(lambda: header(call[0]) is not None and header(call[0])[2].startswith('▼ '),
+                                  'expanded short tool result ' + call[0])
+                    terminal.settle()
+                    item = header(call[0])
+                    content = ''
+                    decoded = None
+                    for row in range(item[1] + 1, terminal.screen.status_row()):
+                        content += ''.join(terminal.screen.cells[row][item[0]:terminal.screen.main_width() - 2])
+                        try:
+                            decoded, _ = json.JSONDecoder().raw_decode(content)
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                    if decoded != results[call[0]]:
+                        raise RuntimeError('expanded card changed or omitted original tool JSON for ' + call[0] + '\n' + content)
+                    terminal.click(item[0] + 3, item[1])
+                    terminal.wait(lambda: header(call[0]) is not None and header(call[0])[2].startswith('▶ '),
+                                  'collapsed short tool result ' + call[0])
+                    terminal.settle()
+                if len(fixture.requests) != 4:
+                    raise RuntimeError('opening tool summaries replayed a model request or tool')
+                terminal.finish()
+            finally:
+                terminal.close()
     finally:
         fixture.close()
 
@@ -2012,6 +2212,8 @@ def main():
     passed('thinking-tool-folds-mouse-scroll-and-restore')
     todos_manual_plan_and_restore_journey(binary)
     passed('todos-manual-plan-sidebar-and-restore')
+    summary_tool_cards_journey(binary)
+    passed('short-tool-summaries-failure-truncation-and-original-json')
     mode_change_invalidates_approval(binary)
     passed('mode-change-invalidates-write-approval')
     session_restore_and_export(binary)

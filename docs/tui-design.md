@@ -63,22 +63,29 @@ Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
 | Background | `#09090B` | 主区底色 |
 | Sidebar | `#141416` | 侧栏底色 |
 | Input | `#202024` | 输入区底色 |
+| Input border | `#2A2A30` | 输入区底部留白内的浅收边 |
 | Border | `#303038` | 低对比外框和分隔 |
 | Foreground | `#D4D4D8` | 消息正文与主要元数据 |
+| Strong foreground | `#E8E8ED` | 品牌、分区标题、非零数值与输入标题 |
 | Muted | `#81818B` | 次要元数据和流式状态 |
 | Blue | `#58A6FF` | 输入竖线和工作模式 |
 | Heading | `#BB9AF7` | 正文标题 |
 | Inline code / Ready | `#7DCB9B` | 行内代码和就绪状态 |
 | Amber | `#F6AD55` | 强调、列表标记、effort及等待状态 |
+| Soft amber | `#BBA685` | Manual Approval与bypass权限标签 |
 | Code background | `#17171B` | 代码卡片背景 |
 | Code foreground | `#C4C4CC` | 代码正文 |
 | Red | `#F87171` | 失败状态 |
 
-消息标题标明用户、模型、工具和系统来源，流式与截断标记使用弱化元数据色。消息间留空行，较宽正文两侧各增加一格留白，极窄窗口使用可用宽度。工具结果采用暗色原文卡片，审批与澄清继续显示安全处理后的原始参数。
+消息标题标明用户、模型、工具和系统来源，主标题采用较亮前景和字重，流式与截断标记分层着色。消息间留空行，较宽正文两侧各增加一格留白，极窄窗口使用可用宽度。工具结果采用低对比摘要卡片，展开查看安全原文。审批与澄清显示安全处理后的原始参数。
 
 Assistant正文支持有界的基础Markdown呈现，包括ATX标题、无序／有序列表、引用、成对强调、行内代码以及代码围栏。标题使用紫色，强调和列表标记使用暖色，行内代码使用绿色，代码围栏转换为带语言标签的卡片。流式未闭合的行内标记保留可见文本，代码内部保持原文，URL／HTML展示为可见文本且不触发链接动作。每逻辑行至多256个样式片段，嵌套上限为4，折行按完整grapheme处理并沿用10,000视觉行缓存预算。
 
 共享颜色定义在[theme.rs](../crates/saya-tui/src/theme.rs)，正文样式与折行在[rich_text.rs](../crates/saya-tui/src/rich_text.rs)，区域绘制在[view.rs](../crates/saya-tui/src/view.rs)。
+
+侧栏分区标题配浅色分隔，非零用量数字与零值使用不同灰度，任务进行中高亮，完成项弱化。状态行的权限标签按实际权限区分颜色。
+
+输入区以Strong前景和字重强调Message标题，发送、换行和折叠快捷键采用深底键帽与弱化说明文字。常规空输入在编辑首行显示斜体 `Describe a task…`，占位文字仅参与渲染，发送和Tab模式判断读取Editor草稿。人工审批、澄清、截断和补全场景采用各自提示。原底部留白内增加低对比细线，实际草稿区保留多行编辑与水平跟随。1至2行的极小输入区按空间简化提示，粘贴超限使用暖色加粗警示。
 
 ## 编辑与滚动
 
@@ -125,6 +132,8 @@ Thinking与工具长输出使用可折叠卡片，命中区域按本帧实际可
 执行轮次按ModelStarted事件顺序显示Thinking，watch日志更新已存在的卡片。可读推理在应用层独立投影、完整脱敏后截断，日志最多64轮／合计2MiB，每轮显示最多256KiB。原始聚合超过16MiB时仅保留受限提示，执行继续遵守原有预算。内容不可用时显示实际状态。
 
 Tasks使用core的TodoItem类型，最多64条。侧栏用○／◐／✓标记pending／in_progress／completed，任务正文保留为安全单行，长项按可用宽度截短，条目超出可见区时显示余项数量。列表来自成功工具结果，恢复时从历史重建。
+
+完整结构化工具结果经严格的本地投影生成标题摘要。任务列表显示总数、完成数和进行中数，文件读取显示行范围与字节数，搜索／目录显示项数，命令显示退出码及取消／超时状态。错误摘要取实际code与message，截断以暖色标记。正文、stdout与命中内容通过展开查看。摘要输入和单行输出均有界，未知或不完整结构沿安全原文显示。
 
 ## 显示预算与安全呈现
 
@@ -207,6 +216,7 @@ cargo run --locked -p saya-tui --example render_preview -- 80 24 idle
 cargo run --locked -p saya-tui --example render_preview -- 80 24 effort
 cargo run --locked -p saya-tui --example render_preview -- 60 18 compact
 cargo run --locked -p saya-tui --example render_preview -- 20 6 idle
+cargo run --locked -p saya-tui --example render_preview -- 160 40 refined
 cargo run --locked -p saya-tui --example render_preview -- 160 40 tasks
 cargo run --locked -p saya-tui --example render_preview -- 160 40 folded
 cargo run --locked -p saya-tui --example render_preview -- 110 36 expanded

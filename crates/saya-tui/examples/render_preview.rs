@@ -160,6 +160,87 @@ fn fixture(scene: &str) -> State {
             );
             state.editor.set_text("补充取消过程中的恢复测试。");
         }
+        "refined" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.session_title = "完善会话恢复与任务面板".into();
+            state.workspace = "/workspace/saya-harness".into();
+            state.permissions = "auto".into();
+            state.status = "Completed".into();
+            state.thinking_effort = Some("high".into());
+            state.context_input_tokens = Some(25_600);
+            state.context_breakdown = [
+                ("System", 4_800),
+                ("Instructions", 2_100),
+                ("Skills", 860),
+                ("Preferences", 160),
+                ("Memory", 520),
+                ("Conversation", 12_600),
+                ("Files", 2_080),
+                ("Tools", 1_920),
+                ("Protocol", 560),
+            ]
+            .into_iter()
+            .map(|(label, tokens)| ContextEntry {
+                label: label.into(),
+                tokens,
+            })
+            .collect();
+            state.skills_count = Some(3);
+            state.todos = vec![
+                TodoItem {
+                    id: "inspect".into(),
+                    content: "核对会话与取消边界".into(),
+                    status: TodoStatus::Completed,
+                },
+                TodoItem {
+                    id: "present".into(),
+                    content: "完善消息卡片与侧栏层次".into(),
+                    status: TodoStatus::Completed,
+                },
+                TodoItem {
+                    id: "verify".into(),
+                    content: "运行终端交互验收".into(),
+                    status: TodoStatus::InProgress,
+                },
+            ];
+            state.push_message(
+                Role::User,
+                "You",
+                "优化会话恢复的交互体验，保留任务进度与执行记录。",
+            );
+            state.push_message(Role::Thinking, "provider thought text", "Inspect the saved session and its current task snapshot. Verify cancellation and restoration before presenting the result.");
+            let read_result = serde_json::json!({
+                "ok": true,
+                "data": {
+                    "content": "// controlled preview line\n".repeat(25),
+                    "start_line": 24,
+                    "end_line": 48,
+                    "version": "preview-version",
+                    "truncated": false
+                },
+                "error": null,
+                "truncated": false
+            });
+            state.push_message(
+                Role::Tool,
+                "read_file · read-session · completed",
+                read_result.to_string(),
+            );
+            let tasks_result = serde_json::json!({
+                "ok": true,
+                "data": { "todos": state.todos },
+                "error": null,
+                "truncated": false
+            });
+            state.push_message(
+                Role::Tool,
+                "todo_write · task-progress · completed",
+                tasks_result.to_string(),
+            );
+            state.push_message(Role::Assistant, "configured-model", "## 会话恢复与进度\n\n已整理恢复入口，任务清单和工具记录现在更容易核查。\n\n- **会话进度**  恢复后展示最近成功保存的任务状态。\n- **执行记录**  点击工具卡片可查看完整结果和调用标识。\n- **取消处理**  等待后台清理完成，再结束当前运行。\n\n```rust\nlet tasks = current_todos(&session.history);\nhandle.shutdown_background().await?;\n```\n\n接下来继续检查窄窗口、鼠标滚动和审批交互。");
+            state.editor.set_text("继续验收窄窗口和恢复流程。");
+        }
         "tasks" | "folded" | "expanded" => {
             state.clear_messages();
             state.editor.clear();
@@ -233,13 +314,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.iter().any(|argument| argument == "--help") {
         writeln!(
             std::io::stdout().lock(),
-            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown|tasks|folded|expanded]"
+            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown|tasks|folded|expanded|refined]"
         )?;
         return Ok(());
     }
     if args.len() > 3 {
         return Err(
-            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown|tasks|folded|expanded]".into(),
+            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown|tasks|folded|expanded|refined]".into(),
         );
     }
     let width = dimension(args.first(), 120, 240)?;
@@ -261,9 +342,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             | "tasks"
             | "folded"
             | "expanded"
+            | "refined"
     ) {
         return Err(
-            "scene must be chat, approval, tool, commands, completion, idle, compact, effort, sidebar, polish, markdown, tasks, folded or expanded"
+            "scene must be chat, approval, tool, commands, completion, idle, compact, effort, sidebar, polish, markdown, tasks, folded, expanded or refined"
                 .into(),
         );
     }
