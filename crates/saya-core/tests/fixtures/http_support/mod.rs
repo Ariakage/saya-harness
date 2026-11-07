@@ -139,7 +139,7 @@ where
     let address = listener.local_addr()?;
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        for index in 0..count {
+        'requests: for index in 0..count {
             let Ok((mut socket, _)) = listener.accept() else {
                 return;
             };
@@ -176,11 +176,11 @@ where
                 body.len()
             );
             if socket.write_all(header.as_bytes()).is_err() {
-                return;
+                continue;
             }
             for chunk in body.as_bytes().chunks(17) {
                 if socket.write_all(chunk).is_err() {
-                    return;
+                    continue 'requests;
                 }
             }
         }
