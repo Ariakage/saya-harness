@@ -61,6 +61,11 @@ impl Store for MemoryStore {
                             return Err(failure("duplicate run"));
                         }
                     }
+                    StoreChange::ProjectContext { run_id, .. } => {
+                        if !next.runs.contains_key(run_id) {
+                            return Err(failure("run not found"));
+                        }
+                    }
                     StoreChange::History { session_id, item } => {
                         next.sessions
                             .get_mut(session_id)

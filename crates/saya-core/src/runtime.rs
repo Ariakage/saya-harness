@@ -484,6 +484,8 @@ impl AgentRuntime {
                     self.personal_context.preferences.is_some(),
                     self.personal_context.memory.is_some(),
                 )?);
+                let request_id = uuid::Uuid::now_v7().to_string();
+                let mut record = None;
                 let mut history = vec![crate::prompt::runtime_context(session, &run)?];
                 if let Some(state) = &self.project_context {
                     let mut state = state.lock().map_err(|_| {
@@ -491,6 +493,7 @@ impl AgentRuntime {
                     })?;
                     let snapshot = state.loader.snapshot(state.target.as_deref())?;
                     state.provided_fingerprint = Some(snapshot.fingerprint()?);
+                    record = Some(snapshot.record(request_id.clone())?);
                     history.push(HistoryItem::UserText(
                         serde_json::json!({"saya_project_context_v1": snapshot}).to_string(),
                     ));
@@ -501,8 +504,8 @@ impl AgentRuntime {
                     history.push(HistoryItem::UserText(serde_json::json!({"saya_personal_context_v1": {"preferences": self.personal_context.preferences, "memory": self.personal_context.memory}}).to_string()));
                 }
                 history.extend(session.history.iter().cloned());
-                Ok::<_, BoundaryError>(ModelRequest {
-                    request_id: uuid::Uuid::now_v7().to_string(),
+                let request = ModelRequest {
+                    request_id,
                     purpose: ModelPurpose::Execution,
                     profile: session.profile.clone(),
                     instructions,
@@ -510,15 +513,28 @@ impl AgentRuntime {
                     max_output_tokens: None,
                     history,
                     tools,
-                })
+                };
+                Ok::<_, BoundaryError>((request, record))
             })();
-            let request = match request {
+            let (request, record) = match request {
                 Ok(v) => v,
                 Err(e) => {
                     self.modes.finish()?;
                     return Err(e);
                 }
             };
+            if let Some(record) = record
+                && let Err(e) = self
+                    .store
+                    .commit(&[StoreChange::ProjectContext {
+                        run_id: self.run.id,
+                        record,
+                    }])
+                    .await
+            {
+                self.modes.finish()?;
+                return Err(e);
+            }
             let start = Instant::now();
             let mut partial = String::new();
             let mut received = false;

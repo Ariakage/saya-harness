@@ -512,6 +512,12 @@ fn apply(
             .map_err(sql_error)?;
             journal(tx, &session, Some(&key), "run_started", None)?;
         }
+        StoreChange::ProjectContext { run_id, record } => {
+            let run = id(run_id.0);
+            let session = run_session(tx, &run)?;
+            let record = json(record, secrets)?;
+            journal(tx, &session, Some(&run), "project_context", Some(&record))?;
+        }
         StoreChange::History { session_id, item } => {
             let key = id(session_id.0);
             let data = json(item, secrets)?;
@@ -961,6 +967,22 @@ pub struct BackgroundJobSummary {
     pub result: Option<ToolResult>,
 }
 impl SqliteStore {
+    /// Return source metadata supplied to model requests in this session.
+    pub async fn project_context_records(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<crate::project_context::ContextRecord>, BoundaryError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = inner.lock().map_err(|_| error("storage_error", "database lock failed"))?;
+            let mut statement = conn.prepare("SELECT reference FROM change_log WHERE session_id=?1 AND kind='project_context' ORDER BY seq").map_err(sql_error)?;
+            let rows = statement.query_map([id(session_id.0)], |row| row.get::<_, String>(0)).map_err(sql_error)?;
+            rows.map(|row| {
+                let raw = row.map_err(sql_error)?;
+                serde_json::from_str(&raw).map_err(|_| error("storage_corrupt", "invalid project context record"))
+            }).collect()
+        }).await.map_err(|_| error("storage_error", "database worker failed"))?
+    }
     /// List known submitted jobs and their durable child outcomes for a session.
     pub async fn background_jobs(
         &self,

@@ -871,6 +871,10 @@ async fn query_sessions(
                 "background_jobs".into(),
                 serde_json::to_value(store.background_jobs(id).await?)?,
             );
+            session.as_object_mut().ok_or("invalid session")?.insert(
+                "project_context_records".into(),
+                serde_json::to_value(store.project_context_records(id).await?)?,
+            );
             session
         }
     };

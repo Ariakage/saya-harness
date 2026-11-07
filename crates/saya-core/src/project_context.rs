@@ -53,11 +53,49 @@ pub struct Snapshot {
     pub instructions: Vec<InstructionSource>,
     pub skills: Vec<Skill>,
 }
+/// Source metadata for auditing a model request; source contents are excluded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceRecord {
+    pub path: PathBuf,
+    pub scope: String,
+    pub sha256: String,
+    pub kind: String,
+}
+/// Project context supplied to one model request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextRecord {
+    pub request_id: String,
+    pub fingerprint: String,
+    pub sources: Vec<SourceRecord>,
+}
 impl Snapshot {
     pub fn fingerprint(&self) -> Result<String, BoundaryError> {
         let bytes =
             serde_json::to_vec(self).map_err(|_| failure("cannot encode project context"))?;
         Ok(hex(&bytes))
+    }
+    pub fn record(&self, request_id: String) -> Result<ContextRecord, BoundaryError> {
+        let sources = self
+            .instructions
+            .iter()
+            .map(|source| SourceRecord {
+                path: source.path.clone(),
+                scope: source.scope.into(),
+                sha256: source.sha256.clone(),
+                kind: "instruction".into(),
+            })
+            .chain(self.skills.iter().map(|source| SourceRecord {
+                path: source.path.clone(),
+                scope: source.scope.into(),
+                sha256: source.sha256.clone(),
+                kind: "skill".into(),
+            }))
+            .collect();
+        Ok(ContextRecord {
+            request_id,
+            fingerprint: self.fingerprint()?,
+            sources,
+        })
     }
 }
 fn hex(bytes: &[u8]) -> String {

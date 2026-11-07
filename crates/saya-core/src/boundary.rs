@@ -122,6 +122,11 @@ pub enum StoreChange {
         session_id: crate::contract::SessionId,
         item: HistoryItem,
     },
+    /// Record the source metadata supplied to a model request without its content.
+    ProjectContext {
+        run_id: crate::contract::RunId,
+        record: crate::project_context::ContextRecord,
+    },
     ToolIntent {
         run_id: crate::contract::RunId,
         call: ToolCall,

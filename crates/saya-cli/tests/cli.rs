@@ -1753,3 +1753,131 @@ fn exact_command_preauthorization_executes_only_in_that_run() {
     );
     assert!(!temp.path().join("approved-marker").exists());
 }
+
+#[test]
+fn project_instruction_sources_are_recorded_per_request_without_contents() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("AGENTS.md");
+    fs::write(&source, "PRIVATE_INSTRUCTION_FIRST").unwrap();
+    let (url, requests) = fixture::server(vec![
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"first"}), "stop"),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"second"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let first = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "first"])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    fs::write(&source, "PRIVATE_INSTRUCTION_SECOND").unwrap();
+    let second = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "second"])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let first_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    let second_request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_string();
+    assert!(first_request.contains("PRIVATE_INSTRUCTION_FIRST"));
+    assert!(second_request.contains("PRIVATE_INSTRUCTION_SECOND"));
+    let show = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "show", id])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(show.stdout).unwrap();
+    assert!(!text.contains("PRIVATE_INSTRUCTION_"));
+    let show: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let records = show["data"]["project_context_records"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[0]["sources"][0]["path"],
+        fs::canonicalize(source).unwrap().to_str().unwrap()
+    );
+    assert_eq!(records[0]["sources"][0]["scope"], "workspace");
+    assert_eq!(records[0]["sources"][0]["kind"], "instruction");
+    assert_ne!(
+        records[0]["sources"][0]["sha256"],
+        records[1]["sources"][0]["sha256"]
+    );
+    assert_ne!(records[0]["request_id"], records[1]["request_id"]);
+}
+
+#[test]
+fn instruction_source_record_failure_stops_before_model_request() {
+    let temp = TempDir::new().unwrap();
+    let (url, requests) = fixture::server(vec![(
+        "application/json",
+        response(json!({"role":"assistant","content":"first"}), "stop"),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    assert!(
+        command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["run", "start"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let list = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "session", "list"])
+        .output()
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list["data"][0]["id"].as_str().unwrap();
+    let db =
+        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_context BEFORE INSERT ON change_log WHEN NEW.kind='project_context' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+    let failed = command(temp.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "--session", id, "continue"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        failed.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+    let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(requests.try_recv().is_err());
+}
