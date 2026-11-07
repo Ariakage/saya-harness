@@ -60,6 +60,7 @@
 | D-039 | 2026-11-08 | 细化 Browser、Sandbox／AST、Compact／长输出与 saya-plugin 规范 | 项目负责人要求具体设计。形成 Browser、原生隔离、上下文及插件 v1 草案，包含 manifest 示例和结构 schema。具体权限、参数及限额按任务验收收敛 |
 | D-040 | 2026-11-08 | Linux Sandbox 使用 Bubblewrap + Seccomp + socat | 项目负责人明确指定原生组合。network namespace、系统调用过滤、代理桥及实际出口共同验证，资源硬限额按 cgroup 能力报告，首轮实现见 Sandbox 设计 |
 | D-041 | 2026-11-08 | 将 Seatbelt 的 sandbox-exec 封装为独立后端，并预留容器／VM 实现路径 | 项目负责人明确 macOS 后端边界。core 依赖 ExecutionBackend 与能力接口，Seatbelt profile 留在后端内。deprecated 状态、系统版本、资源与清理差异按平台验证 |
+| D-042 | 2026-11-08 | 调整紧凑 TUI、会话窗口标题并接入 thinking effort | 项目负责人提供参考图，确认会话概括名沿用首条任务短标题，max表示thinking effort，并要求本轮接入配置、三协议适配和实际参数显示。开发线采用黑底外框、工作目录顶边、灰底蓝条输入、状态右侧权限及输入占比环形指示。profile可选五档effort，省略沿用服务默认，详见[配置](configuration.md#thinking-effort)和[TUI](tui.md#紧凑窗口与会话标题) |
 
 ## 当前基线与变更管理
 

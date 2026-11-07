@@ -8,6 +8,7 @@ pub mod transport;
 
 use crate::{
     boundary::ModelRequest,
+    config::ThinkingEffort,
     contract::{BoundaryError, ErrorInfo, ModelPurpose},
 };
 use serde_json::{Map, Value};
@@ -31,6 +32,7 @@ pub struct ModelSettings {
     pub model: String,
     pub context_window_tokens: u64,
     pub max_output_tokens: u32,
+    pub thinking_effort: Option<ThinkingEffort>,
     pub strict_tools: bool,
     pub stream: bool,
 }

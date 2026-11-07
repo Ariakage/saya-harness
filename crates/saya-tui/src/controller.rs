@@ -22,7 +22,8 @@ use saya_core::{
     boundary::Store,
     config::Config,
     contract::{
-        BoundaryError, Event, EventPayload, ModelPurpose, RunId, RunResult, Session, WorkMode,
+        BoundaryError, Event, EventPayload, HistoryItem, ModelPurpose, RunId, RunResult, Session,
+        Usage, WorkMode,
     },
     runtime::{PersonalContext, RuntimeHandle},
 };
@@ -93,11 +94,6 @@ impl App {
             queued_prompt: None,
         };
         app.refresh_header();
-        app.state.push_message(
-            Role::System,
-            "Saya",
-            "Ready. Enter sends a message; Alt+Enter or Ctrl+J adds a line. Type / for commands and Tab to complete. Ctrl+C cancels. Ctrl+D exits when idle.",
-        );
         if app.config.profile.is_none() {
             app.notice("Choose a configured model profile before sending a message.");
         }
@@ -128,6 +124,39 @@ impl App {
             .map(|p| p.model.clone())
             .unwrap_or_else(|| "Unconfigured".into());
         self.state.model = self.safe(&self.state.model);
+        self.state.context_window_tokens = self
+            .config
+            .profile
+            .as_ref()
+            .and_then(|name| self.config.profiles.get(name))
+            .map(|profile| profile.context_window_tokens);
+        self.state.thinking_effort = self
+            .config
+            .profile
+            .as_ref()
+            .and_then(|name| self.config.profiles.get(name))
+            .and_then(|profile| profile.thinking_effort)
+            .map(|effort| effort.as_str().into());
+        self.state.session_title = self
+            .prepared
+            .as_ref()
+            .and_then(|prepared| {
+                prepared.session.history.iter().find_map(|item| match item {
+                    HistoryItem::UserText(text) => Some(text.as_str()),
+                    _ => None,
+                })
+            })
+            .map(|text| {
+                self.safe(text)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+            })
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "New session".into());
         self.state.mode = format!("{:?}", self.config.mode).to_uppercase();
         self.state.permissions = match self.config.permissions_mode {
             saya_core::contract::PermissionMode::Auto => "auto",
@@ -135,6 +164,10 @@ impl App {
             saya_core::contract::PermissionMode::Bypass => "bypass permissions",
         }
         .into();
+    }
+    fn record_context_input(&mut self, usage: Option<Usage>) {
+        self.state.context_input_tokens = usage.as_ref().and_then(|usage| usage.input_tokens);
+        self.state.context_estimated = usage.is_some_and(|usage| usage.estimated);
     }
     async fn start(&mut self, text: String) -> Result<()> {
         if self.active.is_some() {
@@ -194,6 +227,8 @@ impl App {
             )
         })?;
         let mut current = prepared.session.clone();
+        self.refresh_header();
+        self.record_context_input(None);
         self.state.push_message(Role::User, "You", display);
         let assistant_id = self
             .state
@@ -218,6 +253,15 @@ impl App {
         Ok(())
     }
     fn event(&mut self, event: Event) {
+        if matches!(
+            &event.payload,
+            EventPayload::ModelStarted {
+                purpose: ModelPurpose::Execution,
+                ..
+            }
+        ) {
+            self.record_context_input(None);
+        }
         match event.payload {
             EventPayload::ModelTextDelta { text, .. } => {
                 let text = self.safe(&text);
@@ -244,6 +288,11 @@ impl App {
                 }
                 .into();
             }
+            EventPayload::ModelFinished {
+                purpose: ModelPurpose::Execution,
+                usage,
+                ..
+            } => self.record_context_input(usage),
             EventPayload::ToolStarted { name, call_id } => {
                 self.state
                     .push_message(Role::Tool, name, format!("Running {call_id}"));
@@ -285,9 +334,21 @@ impl App {
         self.state.pending_mode = None;
         let (outcome, session) = result.map_err(|_| "run task failed")?;
         while let Ok(event) = active.events.try_recv() {
-            if let EventPayload::ModelTextDelta { text, .. } = event.payload {
-                self.state
-                    .append_message(active.assistant_id, &self.safe(&text));
+            match event.payload {
+                EventPayload::ModelTextDelta { text, .. } => {
+                    self.state
+                        .append_message(active.assistant_id, &self.safe(&text));
+                }
+                EventPayload::ModelFinished {
+                    purpose: ModelPurpose::Execution,
+                    usage,
+                    ..
+                } => self.record_context_input(usage),
+                EventPayload::ModelStarted {
+                    purpose: ModelPurpose::Execution,
+                    ..
+                } => self.record_context_input(None),
+                _ => {}
             }
         }
         self.config.mode = session.work_mode;
@@ -642,6 +703,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
         }
         app.refresh_completion();
         if redraw && dirty {
+            terminal.set_title(&format!("Saya | {}", app.state.session_title))?;
             terminal.draw(|frame| view::draw(frame, &mut app.state))?;
             dirty = false;
         }

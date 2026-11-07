@@ -121,6 +121,7 @@ impl App {
                 self.state.clear_messages();
                 self.state.details = None;
                 self.state.usage.clear();
+                self.record_context_input(None);
                 self.refresh_header();
                 self.notice("Profile selected. New session is waiting for your message.");
             }
@@ -392,6 +393,7 @@ impl App {
                 self.config.mode = prepared.session.work_mode;
                 self.state.clear_messages();
                 self.state.usage.clear();
+                self.record_context_input(None);
                 self.state.details = None;
                 self.state.pending_mode = None;
                 let history = &prepared.session.history;

@@ -23,12 +23,15 @@ fn fixture(scene: &str) -> State {
         "The recorded outcome is unknown. Check the workspace before retrying.\n\n```rust\ncancel.cancel();\nlet outcome = task.await?;\n```\n\nThe interface keeps the call identity and the recorded state visible.",
     );
     state.workspace = "/path/to/project".into();
+    state.session_title = "Review cancellation".into();
     state.profile = "example".into();
     state.model = "configured-model".into();
     state.mode = "CODE".into();
     state.permissions = "Manual Approval".into();
     state.status = "Completed".into();
     state.usage = r#"{"input_tokens":1280,"output_tokens":256,"estimated":false}"#.into();
+    state.context_window_tokens = Some(128_000);
+    state.context_input_tokens = Some(1_280);
     state
         .editor
         .insert("Investigate the saved result.\nKeep existing user changes.");
@@ -91,6 +94,27 @@ fn fixture(scene: &str) -> State {
                 .completion
                 .update(state.editor.text(), state.editor.cursor(), true);
         }
+        "idle" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.session_title = "New session".into();
+            state.mode = "WORK".into();
+            state.permissions = "auto".into();
+            state.status = "Ready".into();
+            state.usage.clear();
+            state.context_input_tokens = None;
+        }
+        "compact" => {
+            state
+                .editor
+                .set_text("Continue the review.\nKeep existing user changes.");
+            state.context_input_tokens = Some(25_600);
+            state.usage = r#"{"input_tokens":25600,"output_tokens":256,"estimated":false}"#.into();
+        }
+        "effort" => {
+            state.editor.clear();
+            state.thinking_effort = Some("max".into());
+        }
         _ => {}
     }
     state
@@ -119,13 +143,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.iter().any(|argument| argument == "--help") {
         writeln!(
             std::io::stdout().lock(),
-            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion]"
+            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort]"
         )?;
         return Ok(());
     }
     if args.len() > 3 {
         return Err(
-            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion]".into(),
+            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort]".into(),
         );
     }
     let width = dimension(args.first(), 120, 240)?;
@@ -133,9 +157,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let scene = args.get(2).map(String::as_str).unwrap_or("chat");
     if !matches!(
         scene,
-        "chat" | "approval" | "tool" | "commands" | "completion"
+        "chat" | "approval" | "tool" | "commands" | "completion" | "idle" | "compact" | "effort"
     ) {
-        return Err("scene must be chat, approval, tool, commands or completion".into());
+        return Err(
+            "scene must be chat, approval, tool, commands, completion, idle, compact or effort"
+                .into(),
+        );
     }
     let mut state = fixture(scene);
     let mut terminal = Terminal::new(TestBackend::new(width, height))?;

@@ -54,6 +54,9 @@ impl ChatModel {
         let map = body
             .as_object_mut()
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;
+        if let Some(effort) = self.settings.thinking_effort {
+            map.insert("reasoning_effort".into(), json!(effort));
+        }
         map.insert(
             if self.compatibility.legacy_max_tokens {
                 "max_tokens"
@@ -87,20 +90,53 @@ fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value
     let mut messages = vec![json!({"role":"system","content":instructions})];
     let mut text: Option<String> = None;
     let mut calls = Vec::new();
+    let mut reasoning: Option<String> = None;
     let mut pending = HashSet::new();
-    fn flush(messages: &mut Vec<Value>, text: &mut Option<String>, calls: &mut Vec<Value>) {
+    fn flush(
+        messages: &mut Vec<Value>,
+        text: &mut Option<String>,
+        calls: &mut Vec<Value>,
+        reasoning: &mut Option<String>,
+    ) -> Result<(), BoundaryError> {
         if text.is_some() || !calls.is_empty() {
             let mut message = json!({"role":"assistant","content":text.take()});
+            if let Some(reasoning) = reasoning.take() {
+                let retained = calls.iter().fold(
+                    reasoning
+                        .len()
+                        .saturating_add(message["content"].as_str().map_or(0, str::len)),
+                    |sum, call| {
+                        sum.saturating_add(call["id"].as_str().map_or(0, str::len))
+                            .saturating_add(call["function"]["name"].as_str().map_or(0, str::len))
+                            .saturating_add(
+                                call["function"]["arguments"].as_str().map_or(0, str::len),
+                            )
+                    },
+                );
+                if retained > MAX_CONTENT_BYTES {
+                    return Err(failure(
+                        "invalid_history",
+                        "assistant replay exceeds size limit",
+                    ));
+                }
+                message["reasoning_content"] = Value::String(reasoning);
+            }
             if !calls.is_empty() {
                 message["tool_calls"] = Value::Array(std::mem::take(calls));
             }
             messages.push(message);
+        } else if reasoning.is_some() {
+            return Err(failure(
+                "invalid_history",
+                "reasoning has no assistant message",
+            ));
         }
+        Ok(())
     }
-    for item in history {
+    for (index, item) in history.iter().enumerate() {
         match item {
             HistoryItem::UserText(value) => {
-                flush(&mut messages, &mut text, &mut calls);
+                flush(&mut messages, &mut text, &mut calls, &mut reasoning)?;
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
@@ -108,7 +144,9 @@ fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value
             }
             HistoryItem::AssistantPartial(value) if value.is_empty() => {}
             HistoryItem::AssistantText(value) | HistoryItem::AssistantPartial(value) => {
-                flush(&mut messages, &mut text, &mut calls);
+                if text.is_some() || !calls.is_empty() {
+                    flush(&mut messages, &mut text, &mut calls, &mut reasoning)?;
+                }
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
@@ -124,7 +162,7 @@ fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value
                 calls.push(json!({"id":call.call_id,"type":"function","function":{"name":call.name,"arguments":call.arguments}}));
             }
             HistoryItem::ToolResult { call_id, result } => {
-                flush(&mut messages, &mut text, &mut calls);
+                flush(&mut messages, &mut text, &mut calls, &mut reasoning)?;
                 if !pending.remove(call_id) {
                     return Err(failure(
                         "invalid_history",
@@ -135,12 +173,36 @@ fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value
                     .map_err(|_| failure("invalid_history", "tool result cannot be serialized"))?;
                 messages.push(json!({"role":"tool","tool_call_id":call_id,"content":content}));
             }
-            HistoryItem::ProviderItem { .. } => {
-                return Err(failure("invalid_history", "incompatible provider history"));
+            HistoryItem::ProviderItem { protocol, value } => {
+                flush(&mut messages, &mut text, &mut calls, &mut reasoning)?;
+                if *protocol != ModelProtocol::ChatCompletions || !pending.is_empty() {
+                    return Err(failure("invalid_history", "incompatible provider history"));
+                }
+                let valid_assistant = match history.get(index + 1) {
+                    Some(HistoryItem::AssistantText(text)) => !text.is_empty(),
+                    Some(HistoryItem::ToolCall(_)) => true,
+                    _ => false,
+                };
+                let fields = value.as_object().filter(|fields| fields.len() == 1);
+                let retained = fields
+                    .and_then(|fields| fields.get("reasoning_content"))
+                    .and_then(Value::as_str);
+                let retained = retained
+                    .filter(|text| text.len() <= MAX_CONTENT_BYTES)
+                    .ok_or_else(|| {
+                        failure("invalid_history", "invalid assistant reasoning replay")
+                    })?;
+                if !valid_assistant {
+                    return Err(failure(
+                        "invalid_history",
+                        "reasoning has no complete assistant message",
+                    ));
+                }
+                reasoning = Some(retained.to_owned());
             }
         }
     }
-    flush(&mut messages, &mut text, &mut calls);
+    flush(&mut messages, &mut text, &mut calls, &mut reasoning)?;
     if !pending.is_empty() {
         return Err(failure("invalid_history", "tool results are incomplete"));
     }
@@ -209,6 +271,7 @@ struct CallParts {
 #[derive(Default)]
 struct ChatState {
     text: String,
+    reasoning: Option<String>,
     calls: BTreeMap<usize, CallParts>,
     finish: Option<String>,
     usage: Option<Usage>,
@@ -364,6 +427,9 @@ impl ChatState {
                 "unsupported completion content",
             ));
         }
+        if let Some(reasoning) = optional_string(delta.get("reasoning_content"))? {
+            bounded_push(self.reasoning.get_or_insert_with(String::new), reasoning)?;
+        }
         let text = optional_string(delta.get("content"))?.map(str::to_owned);
         if let Some(value) = &text {
             bounded_push(&mut self.text, value)?;
@@ -405,20 +471,30 @@ impl ChatState {
                 "duplicate completion finish",
             ));
         }
-        let retained = self.calls.values().fold(self.text.len(), |sum, call| {
-            sum.saturating_add(call.arguments.len())
-                .saturating_add(call.id.as_ref().map_or(0, String::len))
-                .saturating_add(call.name.as_ref().map_or(0, String::len))
-        });
+        self.check_size()?;
+        Ok(text)
+    }
+    fn check_size(&self) -> Result<(), BoundaryError> {
+        let retained = self.calls.values().fold(
+            self.text
+                .len()
+                .saturating_add(self.reasoning.as_ref().map_or(0, String::len)),
+            |sum, call| {
+                sum.saturating_add(call.arguments.len())
+                    .saturating_add(call.id.as_ref().map_or(0, String::len))
+                    .saturating_add(call.name.as_ref().map_or(0, String::len))
+            },
+        );
         if retained > MAX_CONTENT_BYTES {
             return Err(failure(
                 "invalid_model_response",
                 "provider content exceeds size limit",
             ));
         }
-        Ok(text)
+        Ok(())
     }
     fn finish(self) -> Result<(Vec<HistoryItem>, Option<Usage>), BoundaryError> {
+        self.check_size()?;
         let reason = self.finish.as_deref().ok_or_else(|| {
             failure(
                 "incomplete_model_response",
@@ -483,6 +559,15 @@ impl ChatState {
                 "provider returned an empty response",
             ));
         }
+        if let Some(reasoning) = self.reasoning {
+            items.insert(
+                0,
+                HistoryItem::ProviderItem {
+                    protocol: ModelProtocol::ChatCompletions,
+                    value: json!({"reasoning_content":reasoning}),
+                },
+            );
+        }
         Ok((items, self.usage))
     }
 }
@@ -517,6 +602,9 @@ fn complete_json(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bou
         return Err(failure("provider_refusal", "provider refused the request"));
     }
     let mut state = ChatState::default();
+    if let Some(reasoning) = optional_string(message.get("reasoning_content"))? {
+        bounded_push(state.reasoning.get_or_insert_with(String::new), reasoning)?;
+    }
     if let Some(text) = optional_string(message.get("content"))? {
         bounded_push(&mut state.text, text)?;
     }
@@ -553,4 +641,76 @@ fn complete_json(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bou
     state.finish = optional_string(choice.get("finish_reason"))?.map(str::to_owned);
     state.usage = parse_usage(obj.get("usage"))?;
     state.finish()
+}
+
+#[cfg(test)]
+mod reasoning_tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_and_visible_output_share_the_aggregate_limit() {
+        let half = "a".repeat(MAX_CONTENT_BYTES / 2);
+        let mut state = ChatState::default();
+        assert_eq!(
+            state
+                .update(&json!({
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"reasoning_content": half},
+                        "finish_reason": null
+                    }]
+                }))
+                .unwrap(),
+            None
+        );
+        let error = state
+            .update(&json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": format!("{half}b")},
+                    "finish_reason": null
+                }]
+            }))
+            .unwrap_err();
+        assert_eq!(error.0.code, "invalid_model_response");
+        let error = complete_json(&json!({
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": half,
+                    "content": format!("{half}b")
+                }
+            }]
+        }))
+        .unwrap_err();
+        assert_eq!(error.0.code, "invalid_model_response");
+    }
+
+    #[test]
+    fn explicitly_empty_reasoning_is_preserved_without_becoming_text() {
+        let (items, _) = complete_json(&json!({
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "",
+                    "content": "visible"
+                }
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            items,
+            vec![
+                HistoryItem::ProviderItem {
+                    protocol: ModelProtocol::ChatCompletions,
+                    value: json!({"reasoning_content":""})
+                },
+                HistoryItem::AssistantText("visible".into())
+            ]
+        );
+    }
 }

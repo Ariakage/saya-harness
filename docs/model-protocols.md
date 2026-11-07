@@ -14,6 +14,8 @@
 
 profile 明确选择 strict 时，无法在不改变工具语义的情况下转换的开放对象或可选字段会报配置错误；兼容网关可显式关闭 strict。兼容选项可改用 `max_tokens` 或省略流式 usage 请求。上下文保护使用本地估算加输出预留，不等同于供应商实际 token 计数，不自动删除历史。
 
+当前开发线还支持兼容服务返回的 `reasoning_content`。完整 JSON 和 SSE 中的内容作为该轮 assistant 的协议项保存，后续请求将其回传到对应的 assistant 消息。流式片段按顺序组合，与文本和工具参数共用16MiB单轮聚合限额。历史投影仅接受 Chat 协议、单一字符串字段及紧邻的完整 assistant 语义项，孤立、畸形或跨协议项返回错误。已保存的协议项可在恢复后继续使用，用户可见文本、增量和会话导出使用原有语义投影。该字段的回传满足 DeepSeek 思考模式携带工具时的连续调用要求。[DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/)
+
 ## Responses
 
 `provider::responses::ResponsesModel` 显式发送 `store: false`，按本地历史回传原始 output items；不使用 `previous_response_id`。加密 reasoning、消息和函数调用按顺序保存，文本与工具调用作为独立运行时语义项关联到对应原始项；回传前会校验二者一致，避免重复或伪造调用。函数结果通过 `call_id` 与调用关联。
@@ -29,6 +31,8 @@ profile 明确选择 strict 时，无法在不改变工具语义的情况下转�
 ## Profile 与独立核查
 
 `provider::router::ProfileRouter` 将执行请求固定到会话选定的 profile；独立审核默认复用该 profile，也可通过 `review.profile` 指定另一个已注册的 profile，甚至使用不同协议。审核不携带可执行工具或完整任务历史，默认输出上限为 1024 tokens，和执行请求共享模型请求／活跃时间预算。审核服务不可用、输出无效或指定 profile 不可用时退回人工确认；取消与预算耗尽仍终止运行。
+
+每个 profile 可独立设置 `thinking_effort`。Chat、Responses、Messages 分别使用 `reasoning_effort`、`reasoning.effort` 和 `output_config.effort`，未配置时省略字段，独立审核采用其目标 profile 的值。五档取值、模型兼容和指纹恢复规则见[配置说明](configuration.md#thinking-effort)。
 
 ## 后台工具映射
 

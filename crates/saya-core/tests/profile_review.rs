@@ -63,6 +63,7 @@ fn settings(profile: &str, model: &str, stream: bool) -> ModelSettings {
         model: model.into(),
         context_window_tokens: 128_000,
         max_output_tokens: 8192,
+        thinking_effort: None,
         strict_tools: false,
         stream,
     }

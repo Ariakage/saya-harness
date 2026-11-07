@@ -45,6 +45,7 @@ fn settings(stream: bool) -> ModelSettings {
         model: "fixture-model".into(),
         context_window_tokens: 128_000,
         max_output_tokens: 8192,
+        thinking_effort: None,
         strict_tools: false,
         stream,
     }

@@ -38,6 +38,8 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 `/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
 
+窗口标题为 `Saya | 首条任务的简短标题`。低于100列或24行时采用黑底紧凑布局，Ready行右侧显示权限，底栏显示模式、模型、可选thinking effort和输入占比。环形指示依据最近一次执行请求的输入用量，缺失显示 `—`，估算带 `~`。可在profile中设置 `thinking_effort = "max"` 等级别，三协议均按相应字段发送，支持范围由所选模型决定。[Thinking effort配置](configuration.md#thinking-effort)
+
 `saya chat` 保留文本交互，`run`、`resume`、`session`、`config` 和 `logs` 继续通过显式子命令使用。无子命令的管道／非终端调用、JSON／JSONL 输出冲突返回用法错误2，stdout为空，并在打开配置、会话或终端之前提示选择具体子命令。脚本输入使用 `saya run --stdin`。
 
 ## 单次任务与文本会话

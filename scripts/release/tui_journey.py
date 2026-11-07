@@ -27,14 +27,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class Screen:
     """Small VT screen used to observe cursor-positioned Ratatui updates."""
     def __init__(self, columns=110, rows=32):
+        self.foreground = self.background = None
         self.resize(columns, rows)
         self.pending = ''
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.saved = (0, 0)
+        self.window_titles = []
+        self.title_stack = []
 
     def resize(self, columns, rows):
         self.columns, self.rows = columns, rows
         self.cells = [[' '] * columns for _ in range(rows)]
+        self.colors = [[(None, None)] * columns for _ in range(rows)]
         self.x = self.y = 0
 
     def feed(self, raw):
@@ -61,6 +65,9 @@ class Screen:
                     if not end:
                         self.pending = value[index:]
                         break
+                    payload = value[index + 2:index + 2 + end.start()]
+                    if following == ']' and payload.startswith('2;'):
+                        self.window_titles.append(payload[2:])
                     index += 2 + end.end()
                     continue
                 if following == '7':
@@ -87,8 +94,10 @@ class Screen:
                         self.x = 0
                         self.y = min(self.y + 1, self.rows - 1)
                     self.cells[self.y][self.x] = char
+                    self.colors[self.y][self.x] = (self.foreground, self.background)
                     if width == 2 and self.x + 1 < self.columns:
                         self.cells[self.y][self.x + 1] = ''
+                        self.colors[self.y][self.x + 1] = (self.foreground, self.background)
                     self.x += width
             index += 1
 
@@ -133,10 +142,122 @@ class Screen:
         elif private and final == 'h' and 1049 in numbers:
             self.cells = [[' '] * self.columns for _ in range(self.rows)]
             self.x = self.y = 0
+        elif final == 't' and numbers in ([22, 2], [23, 2]):
+            self.title_stack.append('push' if numbers[0] == 22 else 'pop')
+        elif final == 'm':
+            index = 0
+            while index < len(numbers):
+                value = numbers[index]
+                if value == 0:
+                    self.foreground = self.background = None
+                elif value == 39:
+                    self.foreground = None
+                elif value == 49:
+                    self.background = None
+                elif value in (38, 48) and numbers[index + 1:index + 2] == [2] and index + 4 < len(numbers):
+                    color = tuple(numbers[index + 2:index + 5])
+                    if value == 38:
+                        self.foreground = color
+                    else:
+                        self.background = color
+                    index += 4
+                elif value in (38, 48) and numbers[index + 1:index + 2] == [5] and index + 2 < len(numbers):
+                    color = ('indexed', numbers[index + 2])
+                    if value == 38:
+                        self.foreground = color
+                    else:
+                        self.background = color
+                    index += 2
+                index += 1
 
     @property
     def text(self):
         return '\n'.join(''.join(row).rstrip() for row in self.cells)
+
+    @property
+    def compact(self):
+        return self.columns < 100 or self.rows < 24
+
+    def row_text(self, index):
+        return ''.join(self.cells[index]).rstrip()
+
+    def message_row(self):
+        for index in range(self.rows - 2, max(1, self.rows - 11), -1):
+            row = self.row_text(index)
+            if self.compact:
+                label = ''.join(self.cells[index][3:self.columns - 1]).strip()
+                if label == 'Message' or label.startswith('Message '):
+                    return index
+            elif '┌ Message ' in row:
+                return index
+        return None
+
+    def editor_text(self):
+        start = self.message_row()
+        if start is None:
+            return None
+        if self.compact:
+            end = self.rows - (1 if self.rows == 6 else 2)
+            content = [''.join(self.cells[index][3:self.columns - 1]).rstrip()
+                       for index in range(start + 1, end)]
+            return '\n'.join(content).rstrip()
+        content = []
+        for index in range(start + 1, self.rows):
+            row = self.row_text(index)
+            if row.startswith('└'):
+                break
+            if row.startswith('│') and row.endswith('│'):
+                content.append(row[1:-1].rstrip())
+        return '\n'.join(content).rstrip()
+
+    def mode(self):
+        if self.compact:
+            row = ''.join(self.cells[self.rows - 1][1:self.columns - 1])
+        else:
+            if not self.row_text(0).lstrip().startswith('SAYA '):
+                return None
+            row = self.row_text(0).split('|')[0]
+        match = re.search(r'(?:^|\s)(PLAN|BUILD|CODE|WORK)(?:\s|→|$)', row)
+        return match.group(1) if match else None
+
+    def permissions(self):
+        if not self.compact:
+            if not self.row_text(0).lstrip().startswith('SAYA '):
+                return None
+            fields = self.row_text(0).split('|')
+            return fields[1].strip() if len(fields) == 3 else None
+        start = self.message_row()
+        if start is None:
+            return None
+        row = self.row_text(start - 1).strip(' │')
+        for label in ('Manual Approval', 'bypass permissions', 'manual', 'bypass', 'auto'):
+            if row.endswith(label):
+                return {'manual': 'Manual Approval', 'bypass': 'bypass permissions'}.get(label, label)
+        return None
+
+    def status(self):
+        if not self.compact:
+            if not self.row_text(0).lstrip().startswith('SAYA '):
+                return None
+            fields = self.row_text(0).split('|')
+            return fields[2].strip() if len(fields) == 3 else None
+        start = self.message_row()
+        permission = self.permissions()
+        if start is None or permission is None:
+            return None
+        label = permission
+        if self.columns - 2 < 48:
+            label = {'Manual Approval': 'manual', 'bypass permissions': 'bypass'}.get(permission, permission)
+        row = self.row_text(start - 1).strip(' │')
+        status = row[:-len(label)].strip().lstrip('✓● ').strip()
+        return {'Approval': 'Awaiting approval', 'Input': 'Awaiting input',
+                'Cancel': 'Cancelling', 'Done': 'Completed'}.get(status, status)
+
+    def details_text(self):
+        if self.compact:
+            end = self.message_row()
+            return '\n'.join(self.row_text(index) for index in range(2, max(2, (end or 3) - 1)))
+        return '\n'.join(self.row_text(index) for index in range(3, self.message_row() or 3))
 
 
 SUPERVISOR = r"""
@@ -287,7 +408,19 @@ class Terminal:
         self.wait(lambda: text in self.screen.text, repr(text), timeout)
 
     def title(self):
-        self.wait(lambda: 'saya' in self.screen.text.lower(), 'TUI title')
+        def visible():
+            header = self.screen.row_text(0).lstrip()
+            return header.startswith('Saya Harness') if self.screen.compact else header.startswith('SAYA ')
+        self.wait(visible, 'TUI title in its header region')
+
+    def editor_text(self):
+        return self.screen.editor_text()
+
+    def mode(self):
+        return self.screen.mode()
+
+    def permissions(self):
+        return self.screen.permissions()
 
     def send(self, value):
         os.write(self.master, value.encode() if isinstance(value, str) else value)
@@ -322,7 +455,7 @@ class Terminal:
         os.close(self.slave)
 
 
-def protocol_stream(protocol, text='', call=None, pieces=None):
+def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, chat_reasoning=None):
     pieces = pieces if pieces is not None else [text]
     if protocol == 'openai-chat-completions':
         delta = {'content': text}
@@ -331,8 +464,12 @@ def protocol_stream(protocol, text='', call=None, pieces=None):
             delta = {'tool_calls': [{'index': 0, 'id': identifier, 'type': 'function',
                                     'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
         deltas = [delta] if call else [{'content': piece} for piece in pieces]
+        if chat_reasoning is not None:
+            deltas = [{'reasoning_content': piece} for piece in chat_reasoning] + deltas
         events = [{'choices': [{'index': 0, 'delta': piece, 'finish_reason': None}]} for piece in deltas]
         events.append({'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls' if call else 'stop'}]})
+        if chat_usage is not None:
+            events.append({'choices': [], 'usage': chat_usage})
         return ''.join('data: ' + json.dumps(event) + '\n\n' for event in events) + 'data: [DONE]\n\n'
     if protocol == 'openai-responses':
         if call:
@@ -383,7 +520,8 @@ class Fixture:
                     reply = reply(request)
                 if 'delay' in reply:
                     time.sleep(reply['delay'])
-                body = protocol_stream(protocol, reply.get('text', ''), reply.get('call'), reply.get('pieces')).encode()
+                body = protocol_stream(protocol, reply.get('text', ''), reply.get('call'),
+                                       reply.get('pieces'), reply.get('chat_usage'), reply.get('chat_reasoning')).encode()
                 if reply.get('partial'):
                     body = body.split(b'\n\n', 1)[0] + b'\n\n'
                 try:
@@ -435,9 +573,12 @@ def stream_journey(binary, protocol):
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
+            config.write_text(config.read_text() + 'thinking_effort = "max"\n')
             terminal = invoke(binary, root, config)
             try:
                 terminal.title()
+                terminal.wait(lambda: terminal.screen.row_text(1).endswith('Effort max'),
+                              'configured thinking effort in the wide header')
                 if termios.tcgetattr(terminal.slave)[3] & termios.ICANON:
                     raise RuntimeError('TUI did not enable raw mode')
                 expected_input = 'first 你好🌸\nsecond\nthird 粘贴'
@@ -451,11 +592,21 @@ def stream_journey(binary, protocol):
                 terminal.title()
                 terminal.resize(110, 32)
                 terminal.until('TUI_STREAM_你好_🌸')
+                terminal.wait(lambda: terminal.screen.row_text(1).endswith('Effort max'),
+                              'restored wide thinking effort header')
                 snapshot = terminal.screen.text
                 terminal.finish()
                 if len(fixture.requests) != 1 or fixture.requests[0].get('stream') is not True:
                     raise RuntimeError('TUI stream did not use one streamed model request')
                 request = fixture.requests[0]
+                if protocol == 'openai-chat-completions':
+                    effort = request.get('reasoning_effort')
+                elif protocol == 'openai-responses':
+                    effort = request.get('reasoning', {}).get('effort')
+                else:
+                    effort = request.get('output_config', {}).get('effort')
+                if effort != 'max':
+                    raise RuntimeError('configured thinking effort did not reach the model protocol')
                 messages = request['input'] if protocol == 'openai-responses' else request['messages']
                 user_text = []
                 for message in messages:
@@ -495,24 +646,9 @@ def command_completion_journey(binary):
             config = configuration(root, fixture)
             terminal = invoke(binary, root, config)
             try:
-                def editor_text():
-                    rows = terminal.screen.text.splitlines()
-                    start = next((index for index, row in enumerate(rows) if '┌ Message ' in row), None)
-                    if start is None:
-                        return None
-                    content = []
-                    for row in rows[start + 1:]:
-                        if row.startswith('└'):
-                            break
-                        if row.startswith('│') and row.endswith('│'):
-                            content.append(row[1:-1].rstrip())
-                    return '\n'.join(content).rstrip()
-
-                def mode():
-                    return terminal.screen.text.splitlines()[0].split('|')[0].split()[-1]
-
-                def permissions():
-                    return terminal.screen.text.splitlines()[0].split('|')[1].strip()
+                editor_text = terminal.editor_text
+                mode = terminal.mode
+                permissions = terminal.permissions
 
                 def no_completion_effects(expected_mode, expected_permissions):
                     if mode() != expected_mode or permissions() != expected_permissions:
@@ -626,6 +762,161 @@ def command_completion_journey(binary):
         fixture.close()
 
 
+def compact_layout_and_title_journey(binary):
+    first_prompt = '整理 Saya 验收🌸'
+    approval_prompt = '核对文件\n只读审批'
+    tiny_prompt = '窄屏中文'
+    malicious_prompt = '  项目\u202e\x1b]2;FORGED\x07 标题🌸\t第一项任务 ' + '长中文' * 60
+    call = ('compact-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
+    fixture = Fixture('openai-chat-completions', [
+        {'text': 'MODEL_BODY | PLAN | Manual Approval | Completed | input 99%',
+         'chat_usage': {'prompt_tokens': 64000, 'completion_tokens': 5}},
+        {'call': call, 'chat_usage': {'prompt_tokens': 1024, 'completion_tokens': 5}},
+        expect_tool(call[0], {'text': 'COMPACT_APPROVED',
+                            'chat_usage': {'prompt_tokens': 512, 'completion_tokens': 5}}),
+        {'text': 'COMPACT_TINY_DONE', 'chat_usage': {'prompt_tokens': 12800, 'completion_tokens': 5}},
+        {'text': 'COMPACT_SAFE_TITLE_DONE'}])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-compact-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            (workspace / 'fact.txt').write_text('compact fixture\n')
+            config = configuration(root, fixture)
+            config.write_text(config.read_text() + 'thinking_effort = "max"\n')
+            terminal = invoke(binary, root, config)
+            try:
+                def title():
+                    return terminal.screen.window_titles[-1] if terminal.screen.window_titles else None
+
+                def footer():
+                    return terminal.screen.row_text(terminal.screen.rows - 1)
+
+                def compact_ready(columns, rows, expected_message_row):
+                    terminal.resize(columns, rows)
+                    terminal.title()
+                    terminal.wait(lambda: terminal.screen.message_row() == expected_message_row and
+                                  terminal.screen.status() is not None and terminal.mode() is not None and
+                                  'input' in footer(),
+                                  'compact Message region at its fixed row')
+                    screen = terminal.screen
+                    if not screen.row_text(1).startswith('┌') or '/' not in screen.row_text(1):
+                        raise RuntimeError('compact workspace was not embedded in the outer top border')
+                    if 'Ctrl+P' not in screen.row_text(0):
+                        raise RuntimeError('compact command hint was missing from the top row')
+                    if columns >= 44 and '(v' not in screen.row_text(0):
+                        raise RuntimeError('compact header omitted the package version')
+                    if screen.cells[expected_message_row][1] != '│':
+                        raise RuntimeError('compact input did not retain its left border')
+                    if screen.colors[expected_message_row][1][0] != (47, 116, 196):
+                        raise RuntimeError('compact input left border was not blue')
+                    if screen.colors[expected_message_row][3][1] != (52, 52, 52):
+                        raise RuntimeError('compact Message region did not use its gray background')
+                    if columns >= 44:
+                        terminal.wait(lambda: 'max' in footer(), 'compact configured thinking effort')
+                        column = screen.row_text(rows - 1).index('max')
+                        if screen.colors[rows - 1][column][0] != (255, 154, 40):
+                            raise RuntimeError('compact thinking effort did not use its orange accent')
+
+                def assert_user_input(request_index, expected):
+                    if not any(message.get('role') == 'user' and message.get('content') == expected
+                               for message in fixture.requests[request_index]['messages']):
+                        raise RuntimeError('compact editor changed the submitted user text')
+
+                terminal.title()
+                terminal.wait(lambda: title() == 'Saya | New session', 'initial window title')
+                compact_ready(80, 24, 20)
+                if terminal.mode() != 'WORK' or terminal.permissions() != 'auto' or terminal.screen.status() != 'Ready':
+                    raise RuntimeError('compact initial control state was not displayed in fixed regions')
+                terminal.wait(lambda: 'input —/128k (—)' in footer(), 'unknown initial compact input usage')
+                terminal.line(first_prompt)
+                wait_idle(terminal, root)
+                terminal.wait(lambda: title() == 'Saya | ' + first_prompt, 'first-task window title')
+                assert_user_input(0, first_prompt)
+                if fixture.requests[0].get('reasoning_effort') != 'max':
+                    raise RuntimeError('compact configured thinking effort was not sent to the model')
+                if terminal.mode() != 'WORK' or terminal.permissions() != 'auto':
+                    raise RuntimeError('model body text spoofed the compact control observer')
+                terminal.wait(lambda: '◑ input 64k/128k (50%)' in footer(), 'execution input usage in compact meter')
+                identifier = session_data(binary, root, config)[0]['id']
+
+                compact_ready(60, 18, 14)
+                terminal.send('/mo')
+                terminal.wait(lambda: 'Command suggestions' in terminal.screen.details_text(),
+                              'compact completion popup')
+                terminal.send(b'\t')
+                terminal.send(' ')
+                terminal.wait(lambda: terminal.editor_text() == '/mode plan' and
+                              'Command suggestions' not in terminal.screen.details_text(), 'compact accepted command draft')
+                if terminal.mode() != 'WORK' or len(fixture.requests) != 1:
+                    raise RuntimeError('compact completion executed before Enter')
+                terminal.send(b'\r')
+                terminal.wait(lambda: terminal.mode() == 'PLAN' and terminal.editor_text() == '',
+                              'compact explicit mode change')
+                terminal.line('/permissions manual')
+                terminal.wait(lambda: terminal.permissions() == 'Manual Approval' and terminal.editor_text() == '',
+                              'compact explicit permissions change')
+                terminal.send('核对文件')
+                terminal.send(b'\x0a')
+                terminal.send('只读审批')
+                terminal.wait(lambda: terminal.editor_text() == approval_prompt, 'compact multiline editor draft')
+                terminal.send(b'\r')
+                terminal.wait(lambda: terminal.screen.status() == 'Awaiting approval' and
+                              call[0] in terminal.screen.details_text(), 'compact manual approval')
+                assert_user_input(1, approval_prompt)
+                if terminal.permissions() != 'Manual Approval' or len(fixture.requests) != 2:
+                    raise RuntimeError('compact approval did not pause the tool request')
+                compact_ready(80, 24, 20)
+                terminal.wait(lambda: 'Approval required' in terminal.screen.details_text() and
+                              call[0] in terminal.screen.details_text(), 'resized compact approval details')
+                terminal.send('y')
+                wait_idle(terminal, root, count=2)
+                terminal.wait(lambda: '○ input 512/128k (0%)' in footer(), 'latest execution input usage without accumulation')
+                if title() != 'Saya | ' + first_prompt:
+                    raise RuntimeError('a later task replaced the first-task window title')
+
+                compact_ready(20, 6, 3)
+                if terminal.mode() != 'PLAN' or terminal.permissions() != 'Manual Approval' or terminal.screen.status() != 'Completed':
+                    raise RuntimeError('tiny compact state did not preserve mode, permissions and completion')
+                terminal.send(tiny_prompt)
+                terminal.wait(lambda: terminal.editor_text() == tiny_prompt, 'tiny compact Unicode editor')
+                terminal.send(b'\r')
+                wait_idle(terminal, root, count=3)
+                assert_user_input(3, tiny_prompt)
+                terminal.wait(lambda: 'input 10%' in footer(), 'labeled tiny compact input percentage')
+
+                compact_ready(80, 24, 20)
+                terminal.line('/new')
+                terminal.wait(lambda: title() == 'Saya | New session' and terminal.screen.status() == 'Ready',
+                              'new session title reset')
+                terminal.wait(lambda: 'input —/128k (—)' in footer(), 'new session input meter reset')
+                title_count = len(terminal.screen.window_titles)
+                terminal.send('\x1b[200~' + malicious_prompt + '\x1b[201~')
+                terminal.send(b'\r')
+                wait_idle(terminal, root, count=4)
+                assert_user_input(4, malicious_prompt)
+                titles = terminal.screen.window_titles[title_count:]
+                if len(titles) != 1 or not titles[0].startswith('Saya | 项目]2;FORGED 标题🌸 第一项任务 '):
+                    raise RuntimeError('hostile task text injected a second OSC or changed its sanitized title prefix')
+                if len(titles[0]) > 87 or len(titles[0].encode()) > 512:
+                    raise RuntimeError('long first-task window title exceeded its limit')
+                if any(unicodedata.category(character) == 'Cc' or character in '\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069'
+                       for character in titles[0]):
+                    raise RuntimeError('window title retained terminal controls or bidi overrides')
+                terminal.line('/resume ' + identifier)
+                terminal.wait(lambda: title() == 'Saya | ' + first_prompt and terminal.screen.status() == 'Ready',
+                              'resumed first-task window title')
+                if len(fixture.requests) != 5:
+                    raise RuntimeError('title changes or session browsing made an extra model request')
+                terminal.finish()
+                if terminal.screen.title_stack != ['push', 'pop']:
+                    raise RuntimeError('window title was not saved and restored through the terminal title stack')
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def session_data(binary, root, config):
     result = subprocess.run([str(binary), '--config', str(config), '--cwd', str(root / 'workspace'),
                              '--output', 'json', 'session', 'list'], cwd=root / 'workspace',
@@ -655,10 +946,9 @@ def wait_idle(terminal, root, count=1, expected_status='completed'):
         raise RuntimeError('unexpected persisted run status: ' + json.dumps(outcome[0]))
     ui_status = ''.join(part.capitalize() for part in status.split('_'))
     # Persistence finishes before App.finish consumes the run outcome. Only the
-    # final header status proves that the UI has released its active run.
+    # final state region proves that the UI has released its active run.
     def ui_finished():
-        header = terminal.screen.text.splitlines()[0]
-        return header.lstrip().startswith('SAYA ') and header.rsplit('|', 1)[-1].strip() == ui_status
+        return terminal.screen.status() == ui_status
     terminal.wait(ui_finished, 'idle UI status ' + ui_status)
     return outcome[0]
 
@@ -720,20 +1010,31 @@ def approval(terminal, fixture, call_id, expected_requests):
 
 
 def manual_tools_and_clarification(binary):
+    reasoning_parts = ['OPAQUE_REASONING_FIXTURE_', 'retained across tools']
+    reasoning = ''.join(reasoning_parts)
     read = ('manual-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 2})
     search = ('manual-search', 'search_text', {'path': '.', 'pattern': 'TUI_PRIVATE_FIXTURE'})
     start = ('manual-start', 'background_start', {'tool': 'read_file',
               'arguments': {'path': 'fact.txt', 'start_line': 1, 'line_count': 2}})
     ask = ('manual-question', 'ask_user', {'question': 'TUI_QUESTION', 'options': ['first', 'second']})
+    def assert_reasoning(request):
+        replay = [message for message in request['messages'] if message.get('role') == 'assistant'
+                  and any(call.get('id') == 'manual-read' for call in message.get('tool_calls', []))]
+        if len(replay) != 1 or replay[0].get('reasoning_content') != reasoning:
+            raise RuntimeError('opaque assistant reasoning was changed or omitted after the tool result')
+    def after_read(request):
+        assert_reasoning(request)
+        return {'call': search}
     def status(request):
         job_id = tool_result(request, 'manual-start')['data']['job_id']
         return {'call': ('manual-status', 'background_status', {'job_id': job_id})}
     def final(request):
+        assert_reasoning(request)
         result = tool_result(request, 'manual-question')
         if 'TUI_ANSWER' not in json.dumps(result):
             raise RuntimeError('clarification answer did not reach the model')
         return {'text': 'MANUAL_TOOLS_DONE'}
-    replies = [{'call': read}, expect_tool('manual-read', {'call': search}),
+    replies = [{'call': read, 'chat_reasoning': reasoning_parts}, expect_tool('manual-read', after_read),
                expect_tool('manual-search', {'call': start}), expect_tool('manual-start', status),
                expect_tool('manual-status', {'call': ask}), expect_tool('manual-question', final)]
     fixture = Fixture('openai-chat-completions', replies)
@@ -753,7 +1054,9 @@ def manual_tools_and_clarification(binary):
                               and 'Approval required' not in terminal.screen.text, 'clarification input')
                 terminal.line('TUI_ANSWER')
                 terminal.until('MANUAL_TOOLS_DONE')
-                wait_idle(terminal, root)
+                result = wait_idle(terminal, root)
+                if result.get('text') != 'MANUAL_TOOLS_DONE':
+                    raise RuntimeError('opaque reasoning replaced the visible final answer')
                 full_export = root / 'full tool session.json'
                 terminal.line('/export-full json ' + str(full_export))
                 terminal.wait(full_export.exists, 'full session export')
@@ -763,9 +1066,20 @@ def manual_tools_and_clarification(binary):
                     raise RuntimeError('full TUI export did not retain its explicit tool opt-in')
                 if len(exported['tool_calls']) < 5 or 'TUI_PRIVATE_FIXTURE' not in full_export.read_text():
                     raise RuntimeError('full TUI export omitted completed tool records')
+                if reasoning in full_export.read_text():
+                    raise RuntimeError('full session export exposed provider-owned opaque reasoning')
+                with sqlite3.connect(root / 'data' / 'saya' / 'sessions.sqlite3') as connection:
+                    saved = [json.loads(row[0]) for row in connection.execute('SELECT item FROM messages ORDER BY ordinal')]
+                retained = [item['data']['value'].get('reasoning_content') for item in saved if item.get('kind') == 'provider_item']
+                if retained != [reasoning]:
+                    raise RuntimeError('opaque assistant reasoning was not persisted as provider-owned history')
                 terminal.finish()
                 if len(fixture.requests) != 6:
                     raise RuntimeError('manual tool roundtrip request count is incorrect')
+                for request in fixture.requests[1:]:
+                    assert_reasoning(request)
+                if any(part.encode() in terminal.raw for part in reasoning_parts):
+                    raise RuntimeError('opaque assistant reasoning was emitted to the terminal')
             finally:
                 terminal.close()
     finally:
@@ -1114,6 +1428,8 @@ def main():
     passed('four-modes-three-permissions')
     command_completion_journey(binary)
     passed('command-completion-editing-and-approval-priority')
+    compact_layout_and_title_journey(binary)
+    passed('compact-layout-input-meter-and-window-title')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
     mode_change_invalidates_approval(binary)

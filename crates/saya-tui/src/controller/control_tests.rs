@@ -544,6 +544,163 @@ async fn execution_rounds_follow_their_tool_results_in_the_visible_conversation(
 }
 
 #[tokio::test]
+async fn context_meter_tracks_only_the_latest_execution_request_and_clears_unknown_usage() {
+    let (_root, mut app) = fixture();
+    let session_id = saya_core::contract::SessionId::new();
+    let event = |payload| Event {
+        schema_version: 1,
+        session_id,
+        run_id: None,
+        seq: 1,
+        timestamp: "fixture".into(),
+        payload,
+    };
+    for (purpose, tokens, expected) in [
+        (ModelPurpose::Execution, Some(1024), Some(1024)),
+        (ModelPurpose::Review, Some(999), Some(1024)),
+        (ModelPurpose::Execution, Some(512), Some(512)),
+        (ModelPurpose::Execution, None, None),
+    ] {
+        app.event(event(EventPayload::ModelFinished {
+            request_id: "fixture".into(),
+            purpose,
+            ok: true,
+            usage: tokens.map(|tokens| Usage {
+                input_tokens: Some(tokens),
+                output_tokens: Some(50),
+                estimated: true,
+            }),
+            error: None,
+        }));
+        assert_eq!(app.state.context_input_tokens, expected);
+        assert_eq!(app.state.context_estimated, expected.is_some());
+    }
+    app.record_context_input(Some(Usage {
+        input_tokens: Some(100),
+        output_tokens: None,
+        estimated: false,
+    }));
+    for purpose in [ModelPurpose::Review, ModelPurpose::Execution] {
+        app.event(event(EventPayload::ModelStarted {
+            request_id: "fixture".into(),
+            purpose,
+            profile: "fixture".into(),
+        }));
+        assert_eq!(
+            app.state.context_input_tokens,
+            (purpose == ModelPurpose::Review).then_some(100)
+        );
+    }
+}
+
+#[tokio::test]
+async fn final_event_drain_keeps_latest_request_usage_separate_from_run_totals() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    let session_id = app.prepared.as_ref().unwrap().session.id;
+    let (sender, events) = mpsc::channel(2);
+    app.active.as_mut().unwrap().events = events;
+    for (purpose, input) in [(ModelPurpose::Execution, 512), (ModelPurpose::Review, 777)] {
+        sender
+            .send(Event {
+                schema_version: 1,
+                session_id,
+                run_id: None,
+                seq: 1,
+                timestamp: "fixture".into(),
+                payload: EventPayload::ModelFinished {
+                    request_id: "queued".into(),
+                    purpose,
+                    ok: true,
+                    usage: Some(Usage {
+                        input_tokens: Some(input),
+                        output_tokens: Some(10),
+                        estimated: false,
+                    }),
+                    error: None,
+                },
+            })
+            .await
+            .unwrap();
+    }
+    app.cancel();
+    let (result, session) = (&mut app.active.as_mut().unwrap().join).await.unwrap();
+    let mut result = result.unwrap();
+    result.usage = Some(Usage {
+        input_tokens: Some(9000),
+        output_tokens: Some(2000),
+        estimated: false,
+    });
+    app.finish(Ok((Ok(result), session))).unwrap();
+    assert_eq!(app.state.context_input_tokens, Some(512));
+    assert!(!app.state.context_estimated);
+    assert!(app.state.usage.contains("9000"));
+}
+
+#[tokio::test]
+async fn execution_start_clears_old_usage_even_before_expired_approval_is_removed() {
+    for expired in [false, true] {
+        let (_root, mut app) = fixture();
+        app.record_context_input(Some(Usage {
+            input_tokens: Some(512),
+            output_tokens: Some(10),
+            estimated: true,
+        }));
+        let (request, receiver) = approval(&app, "meter-waiting");
+        app.request(request);
+        if expired {
+            drop(receiver);
+        }
+        app.event(Event {
+            schema_version: 1,
+            session_id: saya_core::contract::SessionId::new(),
+            run_id: None,
+            seq: 1,
+            timestamp: "fixture".into(),
+            payload: EventPayload::ModelStarted {
+                request_id: "next".into(),
+                purpose: ModelPurpose::Execution,
+                profile: "fixture".into(),
+            },
+        });
+        assert_eq!(app.state.context_input_tokens, None);
+        assert!(!app.state.context_estimated);
+        assert_eq!(app.state.status, "Awaiting approval");
+    }
+}
+
+#[tokio::test]
+async fn final_event_drain_clears_old_usage_when_only_the_next_request_start_arrived() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.record_context_input(Some(Usage {
+        input_tokens: Some(512),
+        output_tokens: Some(10),
+        estimated: false,
+    }));
+    let (sender, events) = mpsc::channel(1);
+    app.active.as_mut().unwrap().events = events;
+    sender
+        .send(Event {
+            schema_version: 1,
+            session_id: app.prepared.as_ref().unwrap().session.id,
+            run_id: None,
+            seq: 1,
+            timestamp: "fixture".into(),
+            payload: EventPayload::ModelStarted {
+                request_id: "next-without-usage".into(),
+                purpose: ModelPurpose::Execution,
+                profile: "fixture".into(),
+            },
+        })
+        .await
+        .unwrap();
+    stop_active_call(&mut app).await;
+    assert_eq!(app.state.context_input_tokens, None);
+    assert!(!app.state.context_estimated);
+}
+
+#[tokio::test]
 async fn deferred_mode_blocks_old_decisions_until_ui_cleanup_and_core_invalidation() {
     let (_root, mut app) = fixture();
     attach_active_call(&mut app).await;

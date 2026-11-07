@@ -301,3 +301,77 @@ fn explicit_pricing_is_validated_without_changing_provider_identity() {
     fs::write(&path, text.replace("USD", "usd")).unwrap();
     assert!(config::load(overrides(), test_env(temp.path()), temp.path()).is_err());
 }
+
+#[test]
+fn omitted_thinking_effort_preserves_the_legacy_profile_fingerprint() {
+    let temp = TempDir::new().unwrap();
+    let path = write(temp.path(), "config.toml", fixture());
+    let loaded = config::load(
+        Overrides {
+            config: Some(path),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    let mut profile = loaded.profiles["chat"].clone();
+    assert_eq!(profile.thinking_effort, None);
+    // Pin the pre-effort serialization, including field order and old defaults.
+    let legacy = r#"{"protocol":"openai-chat-completions","base_url":"https://example.invalid/v1","model":"example","auth":"bearer","api_key_env":"EXAMPLE_KEY","context_window_tokens":100000,"max_output_tokens":8192,"allow_remote_http":false,"headers_env":{},"strict_tools":false,"stream":true,"api_version":"2026-10-21","legacy_max_tokens":false,"omit_stream_usage":false,"omit_reasoning_include":false}"#;
+    assert_eq!(serde_json::to_string(&profile).unwrap(), legacy);
+    let original = profile.fingerprint().unwrap();
+    assert_eq!(
+        original,
+        "af8d44cbd9e2f4feda225ca593a9874838d4216848377342a8ba2e2cc201adbe"
+    );
+    profile.thinking_effort = Some(config::ThinkingEffort::Max);
+    let maximum = profile.fingerprint().unwrap();
+    assert_ne!(maximum, original);
+    profile.thinking_effort = Some(config::ThinkingEffort::High);
+    assert_ne!(profile.fingerprint().unwrap(), maximum);
+    profile.thinking_effort = None;
+    assert_eq!(profile.fingerprint().unwrap(), original);
+}
+
+#[test]
+fn explicit_thinking_effort_accepts_five_levels_and_rejects_unknown_values() {
+    let temp = TempDir::new().unwrap();
+    let path = write(temp.path(), "config.toml", fixture());
+    for level in [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "none",
+        "minimal",
+        "automatic",
+        "HIGH",
+        "",
+    ] {
+        let text = fixture().replacen(
+            "model = \"example\"",
+            &format!("model = \"example\"\nthinking_effort = \"{level}\""),
+            1,
+        );
+        fs::write(&path, text).unwrap();
+        let result = config::load(
+            Overrides {
+                config: Some(path.clone()),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        );
+        if ["low", "medium", "high", "xhigh", "max"].contains(&level) {
+            let loaded = result.unwrap();
+            let effort = loaded.profiles["chat"].thinking_effort.unwrap();
+            assert_eq!(effort.as_str(), level);
+            assert_eq!(serde_json::to_value(effort).unwrap(), level);
+            assert_eq!(loaded.profiles["responses"].thinking_effort, None);
+        } else {
+            assert!(result.is_err(), "{level}");
+        }
+    }
+}

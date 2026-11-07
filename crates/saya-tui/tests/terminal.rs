@@ -37,6 +37,9 @@ fn terminal_child_probe() -> io::Result<()> {
     match mode.as_str() {
         "normal" => {
             let mut terminal = TerminalGuard::enter()?;
+            terminal.set_title("Saya | normal 🌸")?;
+            terminal.set_title("Saya | normal 🌸")?;
+            terminal.set_title(" Saya   | normal 🌸\x07")?;
             let size = terminal.size()?;
             assert_eq!((size.width, size.height), (80, 24));
             terminal.draw(|frame| {
@@ -47,6 +50,10 @@ fn terminal_child_probe() -> io::Result<()> {
             })?;
             terminal.restore()?;
             assert_eq!(
+                terminal.set_title("ended").unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            assert_eq!(
                 terminal
                     .draw(|_| panic!("restored guard rendered"))
                     .unwrap_err()
@@ -56,12 +63,14 @@ fn terminal_child_probe() -> io::Result<()> {
             // A restored guard may still exist while a new guard takes ownership.
             let mut next = TerminalGuard::enter()?;
             drop(terminal);
+            next.set_title("Saya | next")?;
             assert!(crossterm::terminal::is_raw_mode_enabled()?);
             next.draw(|_| {})?;
         }
         "error" => {
             fn failing() -> io::Result<()> {
-                let _terminal = TerminalGuard::enter()?;
+                let mut terminal = TerminalGuard::enter()?;
+                terminal.set_title("Saya | error")?;
                 Err(io::Error::other("probe error"))
             }
             assert!(failing().is_err());
@@ -75,18 +84,40 @@ fn terminal_child_probe() -> io::Result<()> {
             }));
             let result = std::panic::catch_unwind(|| {
                 let mut terminal = TerminalGuard::enter().unwrap();
+                terminal.set_title("Saya | panic").unwrap();
                 terminal.draw(|_| panic!("probe panic")).unwrap();
             });
             assert!(result.is_err());
         }
         "nested" => {
-            let terminal = TerminalGuard::enter()?;
+            let mut terminal = TerminalGuard::enter()?;
+            terminal.set_title("Saya | nested")?;
             assert_eq!(
                 TerminalGuard::enter().err().unwrap().kind(),
                 io::ErrorKind::AlreadyExists
             );
             assert!(crossterm::terminal::is_raw_mode_enabled()?);
             drop(terminal);
+        }
+        "titles" => {
+            let mut terminal = TerminalGuard::enter()?;
+            let malicious = "Saya | safe\x1b]52;c;payload\x07\x1b\\\r\nnext\u{009d}8;;link\u{009c}\u{202e}RTL\u{2066}end\u{2069}";
+            terminal.set_title(malicious)?;
+            terminal.set_title(malicious)?;
+            let controls: String = (0..=31)
+                .chain(127..=159)
+                .filter_map(char::from_u32)
+                .collect();
+            terminal.set_title(&format!("A{controls}B"))?;
+            let large = format!("Saya | {}END", "🌸界".repeat(1000));
+            terminal.set_title(&large)?;
+            terminal.set_title(&large)?;
+            terminal.draw(|frame| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("AFTER_TITLE"),
+                    frame.area(),
+                )
+            })?;
         }
         _ => panic!("unknown terminal probe"),
     }
@@ -292,7 +323,79 @@ fn normal_error_panic_and_nested_entry_restore_real_terminal_state() -> io::Resu
         if mode == "panic" {
             assert!(text.contains("previous panic hook ran"));
         }
+        let expected = if mode == "normal" {
+            vec![
+                "push".into(),
+                "set Saya | normal 🌸".into(),
+                "pop".into(),
+                "push".into(),
+                "set Saya | next".into(),
+                "pop".into(),
+            ]
+        } else {
+            vec!["push".into(), format!("set Saya | {mode}"), "pop".into()]
+        };
+        assert_eq!(title_operations(&output), expected, "{mode}");
     }
+    Ok(())
+}
+
+fn title_operations(output: &[u8]) -> Vec<String> {
+    let mut operations = Vec::new();
+    let mut index = 0;
+    while index < output.len() {
+        if output[index..].starts_with(b"\x1b[22;2t") {
+            operations.push("push".into());
+            index += b"\x1b[22;2t".len();
+        } else if output[index..].starts_with(b"\x1b[23;2t") {
+            operations.push("pop".into());
+            index += b"\x1b[23;2t".len();
+        } else if output[index..].starts_with(b"\x1b]2;") {
+            let start = index + 4;
+            let end = output[start..]
+                .windows(2)
+                .position(|bytes| bytes == b"\x1b\\")
+                .unwrap()
+                + start;
+            operations.push(format!(
+                "set {}",
+                std::str::from_utf8(&output[start..end]).unwrap()
+            ));
+            index = end + 2;
+        } else {
+            index += 1;
+        }
+    }
+    operations
+}
+
+#[test]
+fn titles_are_protocol_safe_deduplicated_and_utf8_bounded() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
+    let output = run_terminal_probe("titles")?;
+    let operations = title_operations(&output);
+    assert_eq!(operations.len(), 5, "{operations:?}");
+    assert_eq!(operations[0], "push");
+    assert_eq!(operations[4], "pop");
+    assert_eq!(
+        operations[1],
+        "set Saya | safe]52;c;payload\\ next8;;linkRTLend"
+    );
+    assert_eq!(operations[2], "set A B");
+    let title = operations[3].strip_prefix("set ").unwrap();
+    let large = format!("Saya | {}END", "🌸界".repeat(1000));
+    assert!(title.len() <= 512);
+    assert!(large.starts_with(title));
+    assert!(title.len() > 508);
+    assert!(!String::from_utf8_lossy(&output).contains("\x1b]52;"));
+    assert!(!output.contains(&0x07));
+    for operation in operations
+        .iter()
+        .filter_map(|operation| operation.strip_prefix("set "))
+    {
+        assert!(!operation.chars().any(|character| character.is_control() || matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')));
+    }
+    assert!(String::from_utf8_lossy(&output).contains("AFTER_TITLE"));
     Ok(())
 }
 
@@ -366,7 +469,7 @@ fn output_fault_child(mode: &str) -> io::Result<()> {
         report(
             path,
             serde_json::json!({"phase":"done", "draw_ms":draw_ms,
-                "frame_deadline":error.to_string().contains("frame write budget"),
+                "frame_deadline":error.to_string().contains("output write budget"),
                 "would_block":error.kind()==io::ErrorKind::WouldBlock,
                 "original_flags":original_flags,
                 "flags_restored":fd_flags(libc::STDOUT_FILENO)?==original_flags,
@@ -422,6 +525,9 @@ fn output_fault_child(mode: &str) -> io::Result<()> {
         }
     }
     assert!(stalled, "probe never filled the terminal output queue");
+    let title_started = Instant::now();
+    let title_failed = terminal.set_title("Saya | stalled title").is_err();
+    let title_ms = title_started.elapsed().as_millis();
     if mode == "slow-panic" {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = terminal.draw(|_| panic!("stalled terminal panic"));
@@ -435,6 +541,7 @@ fn output_fault_child(mode: &str) -> io::Result<()> {
         path,
         serde_json::json!({"phase":"done", "stalled":stalled,
         "elapsed_ms":started.elapsed().as_millis(), "restore_ms":restore_started.elapsed().as_millis(),
+        "title_failed":title_failed,"title_ms":title_ms,
         "original_flags":original_flags, "flags_restored":fd_flags(libc::STDOUT_FILENO)?==original_flags,
         "raw_restored":!crossterm::terminal::is_raw_mode_enabled()?, "hook_ran":HOOK_RAN.load(Ordering::Acquire)}),
     )?;
@@ -486,6 +593,8 @@ fn stalled_terminal_and_panic_restore_raw_and_descriptor_flags_with_bounded_outp
         assert_eq!(report["stalled"], true);
         assert_eq!(report["flags_restored"], true);
         assert_eq!(report["raw_restored"], true);
+        assert_eq!(report["title_failed"], true);
+        assert!(report["title_ms"].as_u64().unwrap() < 500);
         assert!(report["elapsed_ms"].as_u64().unwrap() < 3000);
         assert!(report["restore_ms"].as_u64().unwrap() < 500);
         let restored = terminal_attributes(&slave)?;

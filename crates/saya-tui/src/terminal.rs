@@ -20,6 +20,9 @@ const RESTORE_WAIT: Duration = Duration::from_millis(100);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
 const FRAME_WRITE_WAIT: Duration = Duration::from_millis(250);
 const RESTORE_BYTES: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
+const PUSH_TITLE: &[u8] = b"\x1b[22;2t";
+const POP_TITLE: &[u8] = b"\x1b[23;2t";
+const MAX_TITLE_BYTES: usize = 512;
 
 /// A single owner of raw mode, alternate screen, bracketed paste and the cursor.
 ///
@@ -44,7 +47,9 @@ struct OutputState {
     ended: bool,
     presentation_started: bool,
     restoration_error: Option<io::ErrorKind>,
-    frame_deadline: Option<Instant>,
+    write_deadline: Option<Instant>,
+    title_saved: bool,
+    title: Option<String>,
 }
 struct TerminalOutput(Arc<Output>);
 
@@ -74,10 +79,14 @@ fn write_descriptor(fd: i32, bytes: &[u8]) -> io::Result<usize> {
         Ok(count as usize)
     }
 }
-fn write_restore(fd: i32) -> io::Result<()> {
-    let deadline = Instant::now() + RESTORE_WAIT;
-    let mut remaining = RESTORE_BYTES;
+fn write_until(fd: i32, mut remaining: &[u8], deadline: Instant) -> io::Result<()> {
     while !remaining.is_empty() {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "terminal control write budget exceeded",
+            ));
+        }
         match write_descriptor(fd, remaining) {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
             Ok(count) => remaining = &remaining[count..],
@@ -87,15 +96,50 @@ fn write_restore(fd: i32) -> io::Result<()> {
                     io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
                 ) =>
             {
-                if Instant::now() >= deadline {
-                    return Err(error);
-                }
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(error) => return Err(error),
         }
     }
     Ok(())
+}
+
+fn write_restore(fd: i32, title_saved: bool) -> io::Result<()> {
+    let deadline = Instant::now() + RESTORE_WAIT;
+    // Finish any partially written OSC before screen and title restoration.
+    for bytes in [
+        b"\x1b\\".as_slice(),
+        RESTORE_BYTES,
+        if title_saved { POP_TITLE } else { b"" },
+    ] {
+        write_until(fd, bytes, deadline)?;
+    }
+    Ok(())
+}
+
+fn safe_title(text: &str) -> String {
+    let mut title = String::with_capacity(MAX_TITLE_BYTES);
+    // Bound normalization even for a long input consisting entirely of controls.
+    for character in text.chars().take(4096) {
+        let character = if character.is_whitespace() {
+            if title.is_empty() || title.ends_with(' ') {
+                continue;
+            }
+            ' '
+        } else if character.is_control()
+            || matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')
+        {
+            continue;
+        } else {
+            character
+        };
+        if title.len() + character.len_utf8() > MAX_TITLE_BYTES {
+            break;
+        }
+        title.push(character);
+    }
+    title.truncate(title.trim_end().len());
+    title
 }
 impl Output {
     fn new() -> io::Result<Self> {
@@ -115,9 +159,52 @@ impl Output {
                 ended: false,
                 presentation_started: false,
                 restoration_error: None,
-                frame_deadline: None,
+                write_deadline: None,
+                title_saved: false,
+                title: None,
             }),
         })
+    }
+    fn write_control(self: &Arc<Self>, bytes: &[u8]) -> io::Result<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+            if state.ended {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            state.write_deadline = Some(Instant::now() + WRITE_WAIT);
+        }
+        let result = TerminalOutput(self.clone()).write_all(bytes);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+        state.write_deadline = None;
+        result?;
+        if state.ended {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
+        Ok(())
+    }
+    fn save_title(&self) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+        if state.ended {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
+        // Keep the successful push and its restoration marker under one lock,
+        // including when another thread's panic hook requests restoration.
+        write_until(
+            self.file.as_raw_fd(),
+            PUSH_TITLE,
+            Instant::now() + WRITE_WAIT,
+        )?;
+        state.title_saved = true;
+        Ok(())
     }
     fn restore(&self) -> io::Result<()> {
         crate::input::stop_active_reader();
@@ -139,7 +226,7 @@ impl Output {
         // race a fresh frame write after its active-state check.
         let raw = disable_raw_mode();
         let screen = if state.presentation_started {
-            write_restore(self.file.as_raw_fd())
+            write_restore(self.file.as_raw_fd(), state.title_saved)
         } else {
             Ok(())
         };
@@ -165,16 +252,16 @@ impl Write for TerminalOutput {
         }
         let write_deadline = Instant::now() + WRITE_WAIT;
         let deadline = state
-            .frame_deadline
+            .write_deadline
             .map_or(write_deadline, |frame| frame.min(write_deadline));
         loop {
             if state
-                .frame_deadline
+                .write_deadline
                 .is_some_and(|frame| Instant::now() >= frame)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "terminal frame write budget exceeded",
+                    "terminal output write budget exceeded",
                 ));
             }
             match write_descriptor(self.0.file.as_raw_fd(), bytes) {
@@ -278,10 +365,43 @@ impl TerminalGuard {
             EnableBracketedPaste,
             Hide
         )?;
+        // XTWINOPS saves only the window title, leaving the icon label alone.
+        // https://www.invisible-island.net/xterm/ctlseqs/ctlseqs.html
+        guard.output.save_title()?;
         guard.terminal = Some(Terminal::new(CrosstermBackend::new(TerminalOutput(
             guard.output.clone(),
         )))?);
         Ok(guard)
+    }
+
+    /// Set the window title using a sanitized single-line OSC 2 payload.
+    /// Controls and bidi formatting are removed, whitespace is collapsed, and
+    /// at most 512 UTF-8 bytes are retained from the first 4096 input scalars.
+    /// Repeated normalized titles perform no I/O. The complete write has a
+    /// 100 ms budget. Ended guards return BrokenPipe.
+    /// Title restoration requires a terminal supporting xterm's title stack.
+    pub fn set_title(&mut self, title: &str) -> io::Result<()> {
+        self.check_active()?;
+        let title = safe_title(title);
+        if self
+            .output
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .title
+            .as_deref()
+            == Some(title.as_str())
+        {
+            return Ok(());
+        }
+        self.output
+            .write_control(format!("\x1b\\\x1b]2;{title}\x1b\\").as_bytes())?;
+        self.output
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .title = Some(title);
+        Ok(())
     }
 
     /// Draw a frame, tolerating transient backpressure for at most 100 ms per
@@ -298,13 +418,13 @@ impl TerminalGuard {
             .state
             .lock()
             .map_err(|_| io::Error::other("terminal output state unavailable"))?
-            .frame_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
+            .write_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
         let result = terminal.draw(render).map(|_| ());
         self.output
             .state
             .lock()
             .map_err(|_| io::Error::other("terminal output state unavailable"))?
-            .frame_deadline = None;
+            .write_deadline = None;
         result
     }
     /// Read the current terminal size, including after a resize event.

@@ -16,6 +16,8 @@ model = "YOUR_LOCAL_MODEL"
 auth = "none"
 context_window_tokens = 128000
 stream = true
+# Optional, only for models that support the requested effort level.
+# thinking_effort = "max"
 
 # For an authenticated service, configure an additional profile and reference
 # an environment variable NAME. Never put its value in this file:

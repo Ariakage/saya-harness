@@ -135,11 +135,76 @@ async fn new_and_resume_wait_for_input_and_hold_only_the_open_session_lock() {
         vec![HistoryItem::UserText("saved question".into())]
     );
     assert!(transcript(&app).contains("saved question"));
+    assert_eq!(app.state.session_title, "saved question");
+    assert_eq!(app.state.context_input_tokens, None);
     assert!(snapshot(&app).await.runs.is_empty());
     assert_eq!(store.lock_session(id).err().unwrap().0.code, "session_busy");
     let data = app.config.data_dir.clone();
     drop(app);
     let _released = SqliteStore::lock_existing(&data, id).unwrap();
+}
+
+#[tokio::test]
+async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
+    let (_root, mut app) = fixture();
+    assert_eq!(app.state.session_title, "New session");
+    assert!(app.state.messages.is_empty());
+    assert_eq!(app.state.context_window_tokens, Some(128000));
+    assert_eq!(app.state.thinking_effort, None);
+    create(&mut app).await;
+    let secret = "fixture-sensitive-title";
+    app.secrets.push(secret.into());
+    let first = format!("  调查\n\t{}{}  完成  ", "项".repeat(72), secret);
+    session::append(app.prepared.as_mut().unwrap(), first)
+        .await
+        .unwrap();
+    app.refresh_header();
+    let title = app.state.session_title.clone();
+    assert_eq!(title.chars().count(), 80);
+    assert!(title.starts_with("调查 "));
+    assert!(!title.contains("fixture"));
+    assert!(!title.contains('\n'));
+    session::append(app.prepared.as_mut().unwrap(), "later task".into())
+        .await
+        .unwrap();
+    app.refresh_header();
+    assert_eq!(app.state.session_title, title);
+    app.record_context_input(Some(Usage {
+        input_tokens: Some(512),
+        output_tokens: Some(20),
+        estimated: true,
+    }));
+    create(&mut app).await;
+    assert_eq!(app.state.session_title, "New session");
+    assert_eq!(app.state.context_input_tokens, None);
+    assert!(!app.state.context_estimated);
+    assert!(snapshot(&app).await.runs.is_empty());
+}
+
+#[tokio::test]
+async fn profile_selection_clears_the_title_and_previous_context_usage() {
+    let (_root, mut app) = fixture();
+    create(&mut app).await;
+    session::append(app.prepared.as_mut().unwrap(), "old task".into())
+        .await
+        .unwrap();
+    app.record_context_input(Some(Usage {
+        input_tokens: Some(512),
+        output_tokens: None,
+        estimated: false,
+    }));
+    let mut other = app.config.profiles["fixture"].clone();
+    other.model = "other model".into();
+    other.context_window_tokens = 256000;
+    other.thinking_effort = Some(saya_core::config::ThinkingEffort::Max);
+    app.config.profiles.insert("other".into(), other);
+    app.service("/profile", "other").await.unwrap();
+    assert!(app.prepared.is_none());
+    assert_eq!(app.state.session_title, "New session");
+    assert_eq!(app.state.context_window_tokens, Some(256000));
+    assert_eq!(app.state.context_input_tokens, None);
+    assert_eq!(app.state.model, "other model");
+    assert_eq!(app.state.thinking_effort.as_deref(), Some("max"));
 }
 
 #[tokio::test]

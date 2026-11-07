@@ -61,6 +61,7 @@ fn model(
         model: p.model.clone(),
         context_window_tokens: p.context_window_tokens,
         max_output_tokens: p.max_output_tokens,
+        thinking_effort: p.thinking_effort,
         strict_tools: p.strict_tools,
         stream: p.stream,
     };

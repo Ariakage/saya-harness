@@ -68,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model: args[3].clone(),
         context_window_tokens: 128_000,
         max_output_tokens: 128,
+        thinking_effort: None,
         strict_tools: false,
         stream: true,
     };

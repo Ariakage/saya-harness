@@ -46,6 +46,20 @@
 
 本机macOS27.2 ARM通过格式、全目标Clippy、466项Rust测试、优化构建、5项发行工具测试和14组真实PTY验收。新增场景覆盖补全时的零副作用、参数前缀、草稿／光标／多行／字面量斜杠、命令面板及人工审批优先级。Shift+Esc关闭建议和缺少导出路径时保留草稿另有针对性回归。日志为 `target/tui-completion-check.log`，完整正常入口报告为 `target/tui-completion-release-matrix.json`。本节证据来自本机，RC1的四平台候选证据对应上方已固定源码。
 
+#### 紧凑界面、会话标题与 thinking effort
+
+2026-11-08，按 D-042 实现参考图对应的紧凑窗口。宽度低于100列或高度低于24行时使用黑底外框、顶边工作目录、状态右侧权限、灰色输入与蓝色竖线。底栏显示模式、模型、thinking effort及带环形字符的输入占比，最小20×6仍可编辑。长模型名为effort与用量留出空间。窗口标题从首条用户任务派生为 `Saya | 简短标题`，已知凭据先脱敏，随后合并空白、保留80字符并移除终端控制。新建、profile选择和恢复同步标题，OSC 2与xterm标题栈走有界恢复。
+
+profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max，三协议分别传入对应effort字段。未配置时保留服务默认及原配置指纹，独立核查按其目标profile取值。界面显示实际请求值，服务内部映射依模型确定。Chat兼容服务的 `reasoning_content` 按assistant轮次以严格协议项持久保存和回传，完整JSON／SSE均受16MiB聚合限额约束，并覆盖恢复、正文／导出隔离及敏感数据事务拒绝。参数及协议边界见[配置](configuration.md#thinking-effort)与[模型接入](model-protocols.md#chat-completions)。
+
+输入占比使用最近一次执行请求的报告用量，独立核查与运行累计值分开。开始新请求及新建／恢复／切换profile时清空旧值，缺失显示 `—`，估算带 `~`。独立复核发现并修复人工审批待清理和最终队列排空时可能沿用旧值的两个边界。
+
+本机macOS27.2 ARM／Rust1.99.1的 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh` 完整通过格式、workspace全目标Clippy、488项Rust测试和优化构建。该程序通过15组真实PTY、5项发行工具测试、工具smoke、文本会话journey与5项既有审查回归，私有模型配置校验通过。三协议max均在正常TUI入口核对请求字段与显示值，compact覆盖80×24／60×18／20×6、审批／补全、用量、标题注入和恢复。隐藏reasoning通过正常工具调用、SQLite保存、后续请求、终端输出和完整导出的联合验证。验证使用受控本地服务，环境和程序摘要见下方记录。
+
+- 完整检查为 `target/tui-compact-check-final.log`，正常入口报告为 `target/tui-compact-release-matrix.json`。
+- 该次程序SHA-256为 `7a71c6aa37f128cff2663ae8a1ca3f05c5b45639e0bd99aa9029f4e11b481a18`，Mach-O部署版本为15.0。
+- 视图和交互说明见[TUI设计](tui-design.md)与[TUI接口](tui.md#紧凑窗口与会话标题)，本次新增功能的跨平台及真实服务证据按对应环境后续验收维护。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

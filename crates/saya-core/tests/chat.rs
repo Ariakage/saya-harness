@@ -46,6 +46,7 @@ fn settings(stream: bool) -> ModelSettings {
         model: "fixture-model".into(),
         context_window_tokens: 128_000,
         max_output_tokens: 8192,
+        thinking_effort: None,
         strict_tools: false,
         stream,
     }
@@ -292,12 +293,20 @@ async fn strict_schema_and_context_budget_fail_before_network()
 async fn chat_adapter_drives_runtime_tool_loop() -> Result<(), Box<dyn std::error::Error>> {
     let first = fixture::sse(&[
         chunk(
+            json!({"reasoning_content":"opaque-runtime-first"}),
+            Value::Null,
+        ),
+        chunk(
             json!({"tool_calls":[{"index":0,"id":"call-write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"out.txt\",\"content\":\"ok\",\"expected_version\":null}"}}]}),
             Value::Null,
         ),
         chunk(json!({}), json!("tool_calls")),
     ]);
     let second = fixture::sse(&[
+        chunk(
+            json!({"reasoning_content":"opaque-runtime-final"}),
+            Value::Null,
+        ),
         chunk(json!({"content":"done"}), Value::Null),
         chunk(json!({}), json!("stop")),
     ]);
@@ -349,6 +358,15 @@ async fn chat_adapter_drives_runtime_tool_loop() -> Result<(), Box<dyn std::erro
     })?;
     let result = runtime.run(&mut session).await?;
     assert_eq!(result.status, RunStatus::Completed);
+    assert_eq!(result.text.as_deref(), Some("done"));
+    assert_eq!(
+        session
+            .history
+            .iter()
+            .filter(|item| matches!(item, HistoryItem::ProviderItem { .. }))
+            .count(),
+        2
+    );
     assert_eq!(std::fs::read_to_string(temp.path().join("out.txt"))?, "ok");
     assert_eq!(
         store
@@ -363,6 +381,14 @@ async fn chat_adapter_drives_runtime_tool_loop() -> Result<(), Box<dyn std::erro
     let first_system = first["messages"][0]["content"]
         .as_str()
         .ok_or("missing system")?;
+    assert!(
+        second["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["role"] == "assistant"
+                && message["reasoning_content"] == "opaque-runtime-first")
+    );
     let second_system = second["messages"][0]["content"]
         .as_str()
         .ok_or("missing system")?;
@@ -453,6 +479,350 @@ fn session_model_and_protocol_cannot_change_under_a_profile()
             .0
             .code,
         "invalid_config"
+    );
+    Ok(())
+}
+
+fn reasoning_response(
+    stream: bool,
+    visible: &str,
+    reasoning: Option<&str>,
+    call: Option<&str>,
+) -> (&'static str, String) {
+    let mut message = json!({"role":"assistant","content":visible});
+    if let Some(reasoning) = reasoning {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    if let Some(id) = call {
+        message["tool_calls"] = json!([{"id":id,"type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]);
+    }
+    let finish = if call.is_some() { "tool_calls" } else { "stop" };
+    if stream {
+        let mut events = Vec::new();
+        if let Some(reasoning) = reasoning {
+            let middle = reasoning.floor_char_boundary(reasoning.len() / 2);
+            events.push(chunk(
+                json!({"reasoning_content":&reasoning[..middle]}),
+                Value::Null,
+            ));
+            events.push(chunk(
+                json!({"reasoning_content":&reasoning[middle..]}),
+                Value::Null,
+            ));
+        }
+        events.push(chunk(json!({"content":visible}), Value::Null));
+        if call.is_some() {
+            message["tool_calls"][0]["index"] = json!(0);
+            events.push(chunk(
+                json!({"tool_calls":message["tool_calls"]}),
+                Value::Null,
+            ));
+        }
+        events.push(chunk(json!({}), json!(finish)));
+        ("text/event-stream", fixture::sse(&events))
+    } else {
+        (
+            "application/json",
+            json!({"choices":[{"index":0,"finish_reason":finish,"message":message}]}).to_string(),
+        )
+    }
+}
+
+#[tokio::test]
+async fn reasoning_is_opaque_and_replayed_per_turn_after_sqlite_restore()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        boundary::StoreChange,
+        export::{ExportOptions, ExportScope, SessionExport},
+        sqlite::{SnapshotLimits, SqliteStore},
+    };
+    for stream in [false, true] {
+        let (url, requests) = fixture::server(vec![
+            reasoning_response(stream, "checking", Some("opaque-first"), Some("call-a")),
+            reasoning_response(
+                stream,
+                "checking again",
+                Some("opaque-second"),
+                Some("call-b"),
+            ),
+            reasoning_response(stream, "done", Some("opaque-final"), None),
+            reasoning_response(stream, "followup", None, None),
+        ])?;
+        let mut config = settings(stream);
+        config.thinking_effort = Some(saya_core::config::ThinkingEffort::Max);
+        let model = ChatModel::new(transport(url)?, config, ChatCompatibility::default());
+        let temp = support::temp_workspace()?;
+        let root = temp.path().join("store");
+        let mut session = Session {
+            id: SessionId::new(),
+            workspace: temp.path().into(),
+            work_mode: WorkMode::Work,
+            profile: "test".into(),
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fixture-model".into(),
+            history: request().history,
+        };
+        SqliteStore::open(&root, vec![])?
+            .create_session(&session, "fixture")
+            .await?;
+        for turn in 0..4 {
+            let mut req = request();
+            req.history = session.history.clone();
+            req.tools = vec![ToolDefinition {
+                name: "read_file".into(),
+                description: "read".into(),
+                input_schema: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
+            }];
+            let (items, _, delta) = collect(&model, &req).await?;
+            assert!(!delta.contains("opaque-"));
+            if turn < 3 {
+                assert!(matches!(
+                    &items[0],
+                    HistoryItem::ProviderItem {
+                        protocol: ModelProtocol::ChatCompletions,
+                        value
+                    } if value.as_object().unwrap().len() == 1
+                ));
+            } else {
+                assert_eq!(items, vec![HistoryItem::AssistantText("followup".into())]);
+            }
+            let calls: Vec<_> = items
+                .iter()
+                .filter_map(|item| {
+                    if let HistoryItem::ToolCall(call) = item {
+                        Some(call.call_id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            session.history.extend(items);
+            for call_id in calls {
+                session.history.push(HistoryItem::ToolResult {
+                    call_id,
+                    result: ToolResult {
+                        ok: true,
+                        data: Some(json!({"text":"a"})),
+                        error: None,
+                        truncated: false,
+                    },
+                });
+            }
+            if turn == 2 {
+                session
+                    .history
+                    .push(HistoryItem::UserText("next task".into()));
+            }
+            let store = SqliteStore::open(&root, vec![])?;
+            store
+                .commit(&[StoreChange::Session(session.clone())])
+                .await?;
+            drop(store);
+            session = SqliteStore::open(&root, vec![])?
+                .load_session(session.id)
+                .await?
+                .ok_or("session lost")?;
+        }
+        let mut captured = Vec::new();
+        for _ in 0..4 {
+            captured.push(requests.recv_timeout(Duration::from_secs(1))?);
+        }
+        let assistants: Vec<_> = captured[3]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["role"] == "assistant")
+            .collect();
+        assert_eq!(assistants.len(), 3);
+        for (index, (text, reasoning)) in [
+            ("checking", "opaque-first"),
+            ("checking again", "opaque-second"),
+            ("done", "opaque-final"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(assistants[index]["content"], text);
+            assert_eq!(assistants[index]["reasoning_content"], reasoning);
+        }
+        assert_eq!(assistants[0]["tool_calls"][0]["id"], "call-a");
+        assert_eq!(assistants[1]["tool_calls"][0]["id"], "call-b");
+        assert!(assistants[2].get("tool_calls").is_none());
+        let snapshot = SqliteStore::read_snapshot(
+            &root,
+            session.id,
+            SnapshotLimits::default(),
+            Arc::new(Never),
+        )
+        .await?;
+        for scope in [ExportScope::Transcript, ExportScope::Full] {
+            let export = SessionExport::from_snapshot(
+                &snapshot,
+                ExportOptions {
+                    scope,
+                    include_tools: true,
+                    ..Default::default()
+                },
+                &[],
+            )?;
+            for bytes in [export.to_json()?, export.to_markdown()?] {
+                assert!(!String::from_utf8(bytes)?.contains("opaque-"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_reasoning_replay_is_rejected_before_http() -> Result<(), Box<dyn std::error::Error>>
+{
+    let model = ChatModel::new(
+        transport("http://127.0.0.1:1/v1".into())?,
+        settings(false),
+        ChatCompatibility::default(),
+    );
+    let opaque = |value| HistoryItem::ProviderItem {
+        protocol: ModelProtocol::ChatCompletions,
+        value,
+    };
+    let valid = || opaque(json!({"reasoning_content":"opaque"}));
+    let assistant = || HistoryItem::AssistantText("visible".into());
+    let mut cases = vec![
+        vec![valid()],
+        vec![valid(), valid(), assistant()],
+        vec![valid(), HistoryItem::UserText("user".into())],
+        vec![valid(), HistoryItem::AssistantPartial("partial".into())],
+        vec![valid(), HistoryItem::AssistantText(String::new())],
+        vec![
+            HistoryItem::ProviderItem {
+                protocol: ModelProtocol::Responses,
+                value: json!({"reasoning_content":"opaque"}),
+            },
+            assistant(),
+        ],
+    ];
+    for value in [
+        json!({}),
+        json!({"reasoning_content":null}),
+        json!({"reasoning_content":7}),
+        json!({"reasoning_content":[]}),
+        json!({"reasoning_content":"opaque","role":"assistant"}),
+    ] {
+        cases.push(vec![opaque(value), assistant()]);
+    }
+    cases.push(vec![
+        opaque(json!({"reasoning_content":"a".repeat(16*1024*1024+1)})),
+        assistant(),
+    ]);
+    cases.push(vec![
+        opaque(json!({"reasoning_content":"a".repeat(8*1024*1024)})),
+        HistoryItem::AssistantText("b".repeat(8 * 1024 * 1024 + 1)),
+    ]);
+    for history in cases {
+        let mut req = request();
+        req.history = history;
+        let error = match model.start(&req, &Never).await {
+            Ok(_) => return Err("invalid replay reached transport".into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.0.code, "invalid_history");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_or_reasoning_only_responses_never_finish_as_visible_output()
+-> Result<(), Box<dyn std::error::Error>> {
+    for stream in [false, true] {
+        for reasoning in [
+            json!(true),
+            json!([]),
+            json!({"content":"bad"}),
+            json!("opaque-only"),
+        ] {
+            let body = if stream {
+                fixture::sse(&[
+                    chunk(json!({"reasoning_content":reasoning}), Value::Null),
+                    chunk(json!({}), json!("stop")),
+                ])
+            } else {
+                json!({"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","reasoning_content":reasoning}}]}).to_string()
+            };
+            let (url, _) = fixture::server(vec![(
+                if stream {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                },
+                body,
+            )])?;
+            let model = ChatModel::new(
+                transport(url)?,
+                settings(stream),
+                ChatCompatibility::default(),
+            );
+            let error = collect(&model, &request())
+                .await
+                .err()
+                .ok_or("invalid response finished")?;
+            assert_eq!(
+                error
+                    .downcast_ref::<saya_core::contract::BoundaryError>()
+                    .ok_or("wrong error type")?
+                    .0
+                    .code,
+                "invalid_model_response"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_rejects_secret_bearing_chat_reasoning_without_partial_history_writes()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{boundary::StoreChange, sqlite::SqliteStore};
+    let temp = support::temp_workspace()?;
+    let store = SqliteStore::open(temp.path(), vec!["fixture-private-token".into()])?;
+    let session = Session {
+        id: SessionId::new(),
+        workspace: temp.path().into(),
+        work_mode: WorkMode::Work,
+        profile: "test".into(),
+        protocol: ModelProtocol::ChatCompletions,
+        model: "fixture-model".into(),
+        history: vec![HistoryItem::UserText("original message".into())],
+    };
+    store.create_session(&session, "fixture").await?;
+    let error = store
+        .commit(&[
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::UserText("must remain uncommitted".into()),
+            },
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::ProviderItem {
+                    protocol: ModelProtocol::ChatCompletions,
+                    value: json!({"reasoning_content": "opaque fixture-private-token"}),
+                },
+            },
+            StoreChange::History {
+                session_id: session.id,
+                item: HistoryItem::AssistantText("visible".into()),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_eq!(error.0.code, "storage_sensitive_data");
+    assert!(!error.0.message.contains("fixture-private-token"));
+    assert_eq!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing session")?
+            .history,
+        session.history
     );
     Ok(())
 }

@@ -95,6 +95,9 @@ impl AnthropicModel {
         let map = body
             .as_object_mut()
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;
+        if let Some(effort) = self.settings.thinking_effort {
+            map.insert("output_config".into(), json!({"effort":effort}));
+        }
         if !request.tools.is_empty() {
             let tools:Vec<_>=request.tools.iter().map(|tool|json!({"name":tool.name,"description":tool.description,"input_schema":tool.input_schema,"strict":self.settings.strict_tools})).collect();
             map.insert("tools".into(), Value::Array(tools));

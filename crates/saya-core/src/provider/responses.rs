@@ -45,6 +45,9 @@ impl ResponsesModel {
         let map = body
             .as_object_mut()
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;
+        if let Some(effort) = self.settings.thinking_effort {
+            map.insert("reasoning".into(), json!({"effort":effort}));
+        }
         if !self.compatibility.omit_reasoning_include {
             map.insert("include".into(), json!(["reasoning.encrypted_content"]));
         }

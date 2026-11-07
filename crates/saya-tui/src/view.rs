@@ -27,6 +27,10 @@ const MUTED: Color = Color::Rgb(147, 155, 174);
 const BACKGROUND: Color = Color::Rgb(20, 23, 31);
 const FOREGROUND: Color = Color::Rgb(225, 229, 238);
 const MAX_COMPLETION_ROWS: usize = 6;
+const COMPACT_BACKGROUND: Color = Color::Black;
+const INPUT_BACKGROUND: Color = Color::Rgb(52, 52, 52);
+const COMPACT_BLUE: Color = Color::Rgb(47, 116, 196);
+const EFFORT_COLOR: Color = Color::Rgb(255, 154, 40);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -54,6 +58,7 @@ pub struct Details {
 
 #[derive(Debug)]
 pub struct State {
+    pub session_title: String,
     pub workspace: String,
     pub profile: String,
     pub model: String,
@@ -62,6 +67,10 @@ pub struct State {
     pub status: String,
     pub pending_mode: Option<String>,
     pub usage: String,
+    pub context_window_tokens: Option<u64>,
+    pub context_input_tokens: Option<u64>,
+    pub context_estimated: bool,
+    pub thinking_effort: Option<String>,
     pub editor: Editor,
     pub completion: Completion,
     pub messages: VecDeque<Message>,
@@ -79,6 +88,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            session_title: "New session".into(),
             workspace: ".".into(),
             profile: "unconfigured".into(),
             model: String::new(),
@@ -87,6 +97,10 @@ impl Default for State {
             status: "Ready".into(),
             pending_mode: None,
             usage: String::new(),
+            context_window_tokens: None,
+            context_input_tokens: None,
+            context_estimated: false,
+            thinking_effort: None,
             editor: Editor::default(),
             completion: Completion::default(),
             messages: VecDeque::new(),
@@ -297,8 +311,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     state.enforce_limits();
     state.enforce_details_limits();
     let area = frame.area();
+    let compact = area.width < 100 || area.height < 24;
     frame.render_widget(
-        Block::default().style(Style::default().fg(FOREGROUND).bg(BACKGROUND)),
+        Block::default().style(Style::default().fg(FOREGROUND).bg(if compact {
+            COMPACT_BACKGROUND
+        } else {
+            BACKGROUND
+        })),
         area,
     );
     if area.width < 20 || area.height < 6 {
@@ -306,6 +325,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
             Paragraph::new("Saya: enlarge terminal to at least 20 x 6"),
             area,
         );
+        return;
+    }
+    if compact {
+        draw_compact(frame, state, area);
         return;
     }
     let input_lines = state
@@ -327,22 +350,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     .split(area);
     draw_header(frame, state, areas[0]);
     let body = areas[1];
-    if state.details.is_some() && body.width >= 100 {
-        let columns = Layout::horizontal([
-            Constraint::Min(50),
-            Constraint::Length((body.width / 3).clamp(32, 48)),
-        ])
-        .split(body);
-        draw_transcript(frame, state, columns[0]);
-        if let Some(details) = &state.details {
-            draw_details(frame, details, &mut state.details_scroll, columns[1]);
-        }
-    } else if let Some(details) = &state.details {
-        draw_details(frame, details, &mut state.details_scroll, body);
-    } else {
-        draw_transcript(frame, state, body);
-    }
-    draw_editor(frame, state, areas[2]);
+    draw_body(frame, state, body, true);
+    draw_editor(frame, state, areas[2], false);
     draw_completion(frame, state, body);
     let footer = if state.completion.visible() {
         "↑/↓ select  Tab/→ complete  Esc dismiss  Enter run"
@@ -357,6 +366,258 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         Paragraph::new(footer).style(Style::default().fg(MUTED)),
         areas[3],
     );
+}
+
+fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect, framed: bool) {
+    if state.details.is_some() && body.width >= 100 {
+        let columns = Layout::horizontal([
+            Constraint::Min(50),
+            Constraint::Length((body.width / 3).clamp(32, 48)),
+        ])
+        .split(body);
+        draw_transcript(frame, state, columns[0], framed);
+        if let Some(details) = &state.details {
+            draw_details(
+                frame,
+                details,
+                &mut state.details_scroll,
+                columns[1],
+                framed,
+            );
+        }
+    } else if let Some(details) = &state.details {
+        draw_details(frame, details, &mut state.details_scroll, body, framed);
+    } else {
+        draw_transcript(frame, state, body, framed);
+    }
+}
+
+fn draw_compact(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
+    let title = if area.width < 44 {
+        Line::from("Saya Harness")
+    } else {
+        Line::from(vec![
+            Span::raw("Saya Harness "),
+            Span::styled(
+                format!("(v{})", env!("CARGO_PKG_VERSION")),
+                Style::default().fg(MUTED),
+            ),
+        ])
+    };
+    let hint = if state.completion.visible() {
+        if area.width < 28 {
+            "Tab/→"
+        } else {
+            "↑↓ Tab/→ Esc"
+        }
+    } else if area.width < 44 {
+        "Ctrl+P"
+    } else {
+        "Ctrl+P commands"
+    };
+    draw_split_line(
+        frame,
+        title,
+        Line::styled(hint, Style::default().fg(MUTED)),
+        Rect::new(area.x, area.y, area.width, 1),
+        12,
+    );
+    let outer = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(MUTED))
+        .title(format!(" • {} ", safe_line(&state.workspace)));
+    let inner = block.inner(outer);
+    frame.render_widget(block, outer);
+    let input_lines = state
+        .editor
+        .text()
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    let input_height = (input_lines + 2)
+        .clamp(3, 5)
+        .min(usize::from(inner.height.saturating_sub(1))) as u16;
+    let rows = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(input_height),
+    ])
+    .split(inner);
+    draw_body(frame, state, rows[0], false);
+    draw_compact_status(frame, state, rows[1]);
+    draw_editor(frame, state, rows[2], true);
+    draw_completion(frame, state, rows[0]);
+    draw_compact_footer(
+        frame,
+        state,
+        Rect::new(inner.x, outer.bottom() - 1, inner.width, 1),
+    );
+}
+
+fn draw_split_line(
+    frame: &mut Frame<'_>,
+    left: Line<'_>,
+    right: Line<'_>,
+    area: Rect,
+    minimum_left: usize,
+) {
+    let right_width = right
+        .width()
+        .min(usize::from(area.width).saturating_sub(minimum_left + 1)) as u16;
+    let left_width = area
+        .width
+        .saturating_sub(right_width + u16::from(right_width > 0));
+    frame.render_widget(
+        Paragraph::new(left),
+        Rect::new(area.x, area.y, left_width, area.height),
+    );
+    frame.render_widget(
+        Paragraph::new(right.right_aligned()),
+        Rect::new(area.right() - right_width, area.y, right_width, area.height),
+    );
+}
+
+fn draw_compact_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let status = if area.width < 40 {
+        match state.status.as_str() {
+            "Awaiting approval" => "Approval",
+            "Awaiting input" => "Input",
+            "Cancelling" => "Cancel",
+            "Completed" => "Done",
+            _ => &state.status,
+        }
+    } else {
+        &state.status
+    };
+    let permissions = if area.width < 48 {
+        match state.permissions.as_str() {
+            "Manual Approval" => "manual",
+            "bypass permissions" => "bypass",
+            _ => &state.permissions,
+        }
+    } else {
+        &state.permissions
+    };
+    let ready = matches!(state.status.as_str(), "Ready" | "Completed");
+    draw_split_line(
+        frame,
+        Line::from(vec![
+            Span::styled(
+                if ready { "✓ " } else { "● " },
+                Style::default().fg(if ready { Color::Green } else { COMPACT_BLUE }),
+            ),
+            Span::raw(safe_line(status)),
+        ]),
+        Line::styled(safe_line(permissions), Style::default().fg(MUTED)),
+        area,
+        6,
+    );
+}
+
+fn draw_compact_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let mode = if let Some(pending) = &state.pending_mode {
+        format!("{}→{}", safe_line(&state.mode), safe_line(pending))
+    } else {
+        safe_line(&state.mode)
+    };
+    let minimum_left = UnicodeWidthStr::width(state.mode.as_str());
+    let full_meter = context_meter(state, false);
+    let meter = if full_meter.width() + minimum_left < usize::from(area.width) {
+        full_meter
+    } else {
+        context_meter(state, true)
+    };
+    let left_width = usize::from(area.width).saturating_sub(meter.width() + 1);
+    let effort = state
+        .thinking_effort
+        .as_deref()
+        .map(safe_line)
+        .unwrap_or_else(|| "—".into());
+    let show_effort = area.width >= 32 && mode.width() + effort.width() + 2 < left_width;
+    let model_width = left_width
+        .saturating_sub(mode.width() + 1 + if show_effort { effort.width() + 1 } else { 0 });
+    let mut left = Line::from(vec![
+        Span::styled(mode, Style::default().fg(COMPACT_BLUE)),
+        Span::raw(format!(
+            " {}",
+            crop_display(&safe_line(&state.model), 0, model_width)
+        )),
+    ]);
+    if show_effort {
+        left.spans.push(Span::styled(
+            format!(" {effort}"),
+            Style::default().fg(EFFORT_COLOR),
+        ));
+    }
+    draw_split_line(
+        frame,
+        left,
+        Line::styled(meter, Style::default().fg(MUTED)),
+        area,
+        minimum_left,
+    );
+}
+
+fn context_meter(state: &State, short: bool) -> String {
+    let window = state.context_window_tokens.filter(|window| *window > 0);
+    let percent = state
+        .context_input_tokens
+        .zip(window)
+        .map(|(input, window)| {
+            if input > window {
+                101
+            } else {
+                (u128::from(input) * 100 / u128::from(window)) as u64
+            }
+        });
+    let ring = match percent {
+        Some(0) | None => "○",
+        Some(1..=25) => "◔",
+        Some(26..=50) => "◑",
+        Some(51..=75) => "◕",
+        Some(_) => "●",
+    };
+    let percentage = match percent {
+        Some(101) => ">100%".into(),
+        Some(value) => format!("{value}%"),
+        None => "—".into(),
+    };
+    let estimated = if state.context_estimated && state.context_input_tokens.is_some() {
+        "~"
+    } else {
+        ""
+    };
+    if short {
+        return format!("{ring} input {estimated}{percentage}");
+    }
+    let input = state
+        .context_input_tokens
+        .map(token_label)
+        .unwrap_or_else(|| "—".into());
+    let window = window.map(token_label).unwrap_or_else(|| "—".into());
+    format!("{ring} input {estimated}{input}/{window} ({percentage})")
+}
+
+fn token_label(value: u64) -> String {
+    for (divisor, suffix) in [
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "G"),
+        (1_000_000, "M"),
+        (1_000, "k"),
+    ] {
+        if value >= divisor {
+            let whole = value / divisor;
+            let decimal = value % divisor / (divisor / 10);
+            return if decimal == 0 {
+                format!("{whole}{suffix}")
+            } else {
+                format!("{whole}.{decimal}{suffix}")
+            };
+        }
+    }
+    value.to_string()
 }
 
 fn draw_header(frame: &mut Frame<'_>, state: &State, area: Rect) {
@@ -383,15 +644,29 @@ fn draw_header(frame: &mut Frame<'_>, state: &State, area: Rect) {
             Style::default().fg(FOREGROUND),
         ),
     ])];
-    lines.push(Line::styled(
-        format!(
+    let effort = state
+        .thinking_effort
+        .as_deref()
+        .map(safe_line)
+        .unwrap_or_else(|| "—".into());
+    let effort_width = "Effort ".width() + effort.width();
+    let metadata = crop_display(
+        &format!(
             " {}  ·  {} / {}",
             safe_line(&state.workspace),
             safe_line(&state.profile),
             safe_line(&state.model)
         ),
-        Style::default().fg(MUTED),
-    ));
+        0,
+        usize::from(area.width).saturating_sub(effort_width + 1),
+    );
+    let padding = usize::from(area.width).saturating_sub(metadata.width() + effort_width);
+    lines.push(Line::from(vec![
+        Span::styled(metadata, Style::default().fg(MUTED)),
+        Span::raw(" ".repeat(padding)),
+        Span::styled("Effort ", Style::default().fg(MUTED)),
+        Span::styled(effort, Style::default().fg(EFFORT_COLOR)),
+    ]));
     if !state.usage.is_empty() && area.height >= 3 {
         lines.push(Line::styled(
             format!(" {}", safe_line(&state.usage)),
@@ -414,11 +689,15 @@ fn role_style(role: Role) -> Style {
     })
 }
 
-fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(65, 73, 92)))
-        .title(" Conversation ");
+fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, area: Rect, framed: bool) {
+    let block = if framed {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(65, 73, 92)))
+            .title(" Conversation ")
+    } else {
+        Block::default()
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -515,10 +794,16 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     frame.render_widget(Paragraph::new(visible), inner);
 }
 
-fn draw_details(frame: &mut Frame<'_>, details: &Details, scroll: &mut usize, area: Rect) {
+fn draw_details(
+    frame: &mut Frame<'_>,
+    details: &Details,
+    scroll: &mut usize,
+    area: Rect,
+    framed: bool,
+) {
     let title = safe_line(&details.title[..prefix_boundary(&details.title, 256)]);
     let mut block = Block::default()
-        .borders(Borders::ALL)
+        .borders(if framed { Borders::ALL } else { Borders::TOP })
         .title(format!(" {title} "))
         .border_style(Style::default().fg(ACCENT));
     let inner = block.inner(area);
@@ -589,18 +874,40 @@ fn draw_details(frame: &mut Frame<'_>, details: &Details, scroll: &mut usize, ar
     frame.render_widget(Paragraph::new(visible), inner);
 }
 
-fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
+fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect, compact: bool) {
     let title = if state.editor.truncated {
         " Input · paste truncated at 64 KiB "
     } else {
         " Message "
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(ACCENT));
-    let inner = block.inner(area);
+    let block = if compact {
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(COMPACT_BLUE))
+            .style(Style::default().fg(FOREGROUND).bg(INPUT_BACKGROUND))
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(ACCENT))
+    };
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    if compact && inner.height > 0 {
+        inner.x += 1;
+        inner.width = inner.width.saturating_sub(1);
+        let label = if state.editor.truncated {
+            "Message · paste truncated at 64 KiB"
+        } else {
+            "Message"
+        };
+        frame.render_widget(
+            Paragraph::new(label),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        inner.y += 1;
+        inner.height = inner.height.saturating_sub(1 + u16::from(area.height > 2));
+    }
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -804,6 +1111,12 @@ mod tests {
             .content
             .iter()
             .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, row: u16) -> String {
+        (0..buffer.area.width)
+            .map(|column| buffer[(column, row)].symbol())
             .collect()
     }
 
@@ -1036,7 +1349,7 @@ mod tests {
         assert!(!image.contains("Command suggestions"));
         assert!(!image.contains('›'));
         assert!(!image.contains("/permissions"));
-        assert_eq!(terminal.backend().buffer()[(5, 21)].symbol(), " ");
+        assert_eq!(terminal.backend().buffer()[(7, 21)].symbol(), " ");
         assert_eq!(state.editor.text(), "/per");
     }
 
@@ -1052,14 +1365,14 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();
         let row = (0..16)
-            .find(|row| buffer[(2, *row)].symbol() == "›")
+            .find(|row| buffer[(3, *row)].symbol() == "›")
             .unwrap();
-        assert_eq!(row, 10);
-        assert_eq!(buffer[(2, row)].bg, ACCENT);
-        let actual = (4..24)
+        assert_eq!(row, 9);
+        assert_eq!(buffer[(3, row)].bg, ACCENT);
+        let actual = (5..23)
             .map(|column| buffer[(column, row)].symbol())
             .collect::<String>();
-        assert_eq!(actual.trim_end(), crop_display(selected, 0, 20));
+        assert_eq!(actual.trim_end(), crop_display(selected, 0, 18));
         assert_eq!(
             buffer
                 .content
@@ -1082,7 +1395,7 @@ mod tests {
         }];
         let mut terminal = Terminal::new(TestBackend::new(6, 3)).unwrap();
         terminal
-            .draw(|frame| draw_editor(frame, &state, frame.area()))
+            .draw(|frame| draw_editor(frame, &state, frame.area(), false))
             .unwrap();
         let cursor = terminal.backend_mut().get_cursor_position().unwrap();
         assert_eq!((cursor.x, cursor.y), (4, 1));
@@ -1094,7 +1407,7 @@ mod tests {
         assert_eq!(state.editor.text(), "/界界界");
         state.editor.move_left();
         terminal
-            .draw(|frame| draw_editor(frame, &state, frame.area()))
+            .draw(|frame| draw_editor(frame, &state, frame.area(), false))
             .unwrap();
         assert!(
             terminal
@@ -1125,5 +1438,162 @@ mod tests {
         assert!(!image.contains('›'));
         assert!(state.dropped_messages > 0);
         assert!(state.messages.len() <= MAX_MESSAGES);
+    }
+
+    #[test]
+    fn compact_layout_keeps_status_input_and_footer_in_their_observable_regions() {
+        let mut state = State {
+            workspace: "/tmp/project".into(),
+            model: "configured-model".into(),
+            context_window_tokens: Some(128_000),
+            context_input_tokens: Some(64_000),
+            ..State::default()
+        };
+        state.editor.set_text("hello");
+        for (width, height, status_row, title_row, input_row) in
+            [(80, 24, 19, 20, 21), (60, 18, 13, 14, 15), (20, 6, 2, 3, 4)]
+        {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+            assert_eq!((cursor.x, cursor.y), (8, input_row));
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(0, 0)].bg, COMPACT_BACKGROUND);
+            assert!(row_text(buffer, 0).contains("Saya Harness"));
+            assert!(row_text(buffer, 0).contains("Ctrl+P"));
+            assert!(row_text(buffer, 1).contains("/tmp/project"));
+            assert!(row_text(buffer, status_row).contains("✓ Ready"));
+            assert!(row_text(buffer, status_row).ends_with("auto│"));
+            assert_eq!(buffer[(3, title_row)].symbol(), "M");
+            assert_eq!(buffer[(1, title_row)].symbol(), "│");
+            assert_eq!(buffer[(1, title_row)].fg, COMPACT_BLUE);
+            assert_eq!(buffer[(2, title_row)].bg, INPUT_BACKGROUND);
+            assert_eq!(buffer[(3, input_row)].symbol(), "h");
+            assert_eq!(buffer[(3, input_row)].bg, INPUT_BACKGROUND);
+            let footer = row_text(buffer, height - 1);
+            assert!(footer.starts_with("└WORK"));
+            assert!(footer.contains("input"));
+            assert!(footer.contains("50%"));
+            assert!(footer.contains('◑'));
+            if width >= 44 {
+                assert!(row_text(buffer, 0).contains(env!("CARGO_PKG_VERSION")));
+                assert!(footer.contains("64k/128k"));
+            }
+            assert_eq!(state.editor.text(), "hello");
+        }
+    }
+
+    #[test]
+    fn compact_breakpoints_preserve_the_large_terminal_header_and_usage() {
+        let mut state = State {
+            usage: "wide-usage-marker".into(),
+            ..State::default()
+        };
+        for (width, height) in [(100, 24), (120, 30)] {
+            let image = render(&mut state, width, height);
+            assert!(image.contains("SAYA"));
+            assert!(image.contains("wide-usage-marker"));
+            assert!(image.contains("Conversation"));
+            assert!(!image.contains("Saya Harness"));
+        }
+        for (width, height) in [(99, 24), (100, 23)] {
+            let image = render(&mut state, width, height);
+            assert!(image.contains("Saya Harness"));
+            assert!(!image.contains("wide-usage-marker"));
+            assert!(!image.contains("Conversation"));
+        }
+    }
+
+    #[test]
+    fn input_meter_distinguishes_unknown_estimated_and_reported_input_without_overflow() {
+        let mut state = State::default();
+        assert_eq!(state.session_title, "New session");
+        assert_eq!(context_meter(&state, false), "○ input —/— (—)");
+        state.context_window_tokens = Some(128_000);
+        assert_eq!(context_meter(&state, false), "○ input —/128k (—)");
+        state.context_input_tokens = Some(64_000);
+        state.context_estimated = true;
+        assert_eq!(context_meter(&state, false), "◑ input ~64k/128k (50%)");
+        assert_eq!(context_meter(&state, true), "◑ input ~50%");
+        state.context_estimated = false;
+        state.context_window_tokens = Some(100);
+        for (input, ring) in [(0, '○'), (25, '◔'), (50, '◑'), (75, '◕'), (100, '●')] {
+            state.context_input_tokens = Some(input);
+            assert!(context_meter(&state, false).starts_with(ring));
+        }
+        state.context_input_tokens = Some(u64::MAX);
+        state.context_window_tokens = Some(1);
+        assert!(context_meter(&state, false).ends_with("(>100%)"));
+        assert_eq!(context_meter(&state, true), "● input >100%");
+        state.context_window_tokens = Some(0);
+        assert!(context_meter(&state, false).ends_with("/— (—)"));
+        assert_eq!(context_meter(&state, true), "○ input —");
+    }
+
+    #[test]
+    fn compact_multiline_editor_scrolls_within_its_gray_input_and_keeps_safety_markers() {
+        let mut state = State {
+            status: "Awaiting approval".into(),
+            permissions: "Manual Approval".into(),
+            workspace: "project\x1b[2J\u{202e}".into(),
+            thinking_effort: Some("high".into()),
+            ..State::default()
+        };
+        state
+            .editor
+            .set_text("one\ntwo\nthree\nfour\nfive\ne\u{301}界👩‍💻");
+        let mut terminal = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(cursor.y, 15);
+        assert!(cursor.x < 59);
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 11).contains("Awaiting approval"));
+        assert!(row_text(buffer, 11).ends_with("Manual Approval│"));
+        assert_eq!(buffer[(3, 12)].symbol(), "M");
+        assert!(row_text(buffer, 13).contains("four"));
+        assert!(row_text(buffer, 14).contains("five"));
+        assert!(row_text(buffer, 15).contains("e\u{301}界"));
+        assert_eq!(buffer[(3, 16)].bg, INPUT_BACKGROUND);
+        assert!(row_text(buffer, 17).contains("high"));
+        let image = render(&mut state, 60, 18);
+        assert!(image.contains("\\u{1b}"));
+        assert!(!image.contains('\x1b'));
+        assert!(!image.contains('\u{202e}'));
+        state.editor.clear();
+        let tiny = render(&mut state, 20, 6);
+        assert!(tiny.contains("Approval"));
+        assert!(tiny.contains("manual"));
+    }
+
+    #[test]
+    fn selected_effort_remains_visible_when_model_or_workspace_names_are_long() {
+        let mut state = State {
+            workspace: "/long-workspace".repeat(12),
+            model: "long-model-name".repeat(12),
+            thinking_effort: Some("max".into()),
+            context_window_tokens: Some(128_000),
+            context_input_tokens: Some(64_000),
+            ..State::default()
+        };
+        for (width, height) in [(80, 24), (60, 18)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let footer = row_text(buffer, height - 1);
+            assert!(footer.contains(" max"));
+            assert!(footer.contains("input 64k/128k (50%)"));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|cell| cell.symbol() == "m" && cell.fg == EFFORT_COLOR)
+            );
+        }
+        let mut terminal = Terminal::new(TestBackend::new(110, 32)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(row_text(terminal.backend().buffer(), 1).ends_with("Effort max"));
+        state.thinking_effort = None;
+        assert!(render(&mut state, 110, 32).contains("Effort —"));
     }
 }

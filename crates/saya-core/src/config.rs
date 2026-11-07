@@ -107,6 +107,28 @@ pub enum Auth {
     #[serde(rename = "none")]
     None,
 }
+
+/// An explicit provider effort request. Supported levels depend on the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+impl ThinkingEffort {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
 fn default_output_tokens() -> u32 {
     8192
 }
@@ -132,6 +154,10 @@ pub struct Profile {
     pub context_window_tokens: u64,
     #[serde(default = "default_output_tokens")]
     pub max_output_tokens: u32,
+    /// Passed unchanged to the selected protocol. Omitted settings retain the
+    /// legacy serialized profile and leave provider defaults unspecified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<ThinkingEffort>,
     #[serde(default)]
     pub allow_remote_http: bool,
     #[serde(default)]
