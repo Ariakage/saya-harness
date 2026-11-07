@@ -10,8 +10,13 @@ use std::{
     },
     path::Path,
     process::{Child, Command, Stdio},
+    sync::Mutex,
     time::{Duration, Instant},
 };
+
+// openpty cannot set CLOEXEC atomically. Keep parallel test threads from
+// spawning while another fixture is between openpty and its fcntl calls.
+static PTY_TESTS: Mutex<()> = Mutex::new(());
 
 #[test]
 fn terminal_child_probe() -> io::Result<()> {
@@ -25,7 +30,7 @@ fn terminal_child_probe() -> io::Result<()> {
         );
         return Ok(());
     }
-    if matches!(mode.as_str(), "slow" | "slow-panic" | "closed") {
+    if matches!(mode.as_str(), "slow" | "slow-panic" | "closed" | "drip") {
         return output_fault_child(&mode);
     }
     let original_flags = fd_flags(libc::STDOUT_FILENO)?;
@@ -256,6 +261,7 @@ fn run_terminal_probe(mode: &str) -> io::Result<Vec<u8>> {
 
 #[test]
 fn normal_error_panic_and_nested_entry_restore_real_terminal_state() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
     for mode in ["normal", "error", "panic", "nested"] {
         let output = run_terminal_probe(mode)?;
         let text = String::from_utf8_lossy(&output);
@@ -281,6 +287,7 @@ fn normal_error_panic_and_nested_entry_restore_real_terminal_state() -> io::Resu
 
 #[test]
 fn non_terminal_entry_has_no_terminal_side_effects() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
     let output = Command::new(std::env::current_exe()?)
         .args(["--exact", "terminal_child_probe", "--nocapture"])
         .env("SAYA_TERMINAL_PROBE", "notty")
@@ -328,6 +335,36 @@ fn output_fault_child(mode: &str) -> io::Result<()> {
     }
     let original_flags = fd_flags(libc::STDOUT_FILENO)?;
     let mut terminal = TerminalGuard::enter()?;
+    if mode == "drip" {
+        report(path, serde_json::json!({"phase":"ready"}))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.with_extension("start").exists() {
+            if Instant::now() > deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let text = ("D".repeat(200) + "\n").repeat(160);
+        let started = Instant::now();
+        let error = terminal
+            .draw(|frame| frame.render_widget(ratatui::widgets::Paragraph::new(text), frame.area()))
+            .err()
+            .ok_or_else(|| io::Error::other("drip output unexpectedly completed"))?;
+        let draw_ms = started.elapsed().as_millis();
+        let _ = terminal.restore();
+        report(
+            path,
+            serde_json::json!({"phase":"done", "draw_ms":draw_ms,
+                "frame_deadline":error.to_string().contains("frame write budget"),
+                "would_block":error.kind()==io::ErrorKind::WouldBlock,
+                "original_flags":original_flags,
+                "flags_restored":fd_flags(libc::STDOUT_FILENO)?==original_flags,
+                "raw_restored":!crossterm::terminal::is_raw_mode_enabled()?}),
+        )?;
+        let mut release = String::new();
+        std::io::stdin().read_line(&mut release)?;
+        return Ok(());
+    }
     if mode == "closed" {
         report(path, serde_json::json!({"phase":"ready"}))?;
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -423,6 +460,7 @@ fn wait_for_report(path: &Path, phase: &str, child: &mut Child) -> io::Result<se
 #[test]
 fn stalled_terminal_and_panic_restore_raw_and_descriptor_flags_with_bounded_output()
 -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
     for mode in ["slow", "slow-panic"] {
         let root = tempfile::tempdir()?;
         let path = root.path().join("report.json");
@@ -475,6 +513,7 @@ fn stalled_terminal_and_panic_restore_raw_and_descriptor_flags_with_bounded_outp
 }
 #[test]
 fn disconnected_peer_returns_and_restores_original_descriptor_flags() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
     let root = tempfile::tempdir()?;
     let path = root.path().join("report.json");
     let PtyProbe {
@@ -502,6 +541,88 @@ fn disconnected_peer_returns_and_restores_original_descriptor_flags() -> io::Res
         }
         if Instant::now() > deadline {
             child.kill()?;
+            child.wait()?;
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
+#[test]
+fn continuously_slow_output_obeys_one_frame_deadline() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("report.json");
+    let PtyProbe {
+        mut master,
+        slave,
+        mut child,
+        original,
+    } = spawn_probe("drip", Some(&path))?;
+    wait_for_report(&path, "ready", &mut child)?;
+    let size = libc::winsize {
+        ws_col: 200,
+        ws_row: 160,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: the live slave descriptor accepts a complete winsize value.
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &size) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    std::fs::write(path.with_extension("start"), b"start")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut chunk = [0; 256];
+    let value = loop {
+        // Keep making progress faster than the per-write retry interval while
+        // limiting total throughput, exercising the separate frame deadline.
+        match master.read(&mut chunk) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(error),
+        }
+        if let Ok(bytes) = std::fs::read(&path) {
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            if value["phase"] == "done" {
+                break value;
+            }
+        }
+        if child.try_wait()?.is_some() || Instant::now() > deadline {
+            let _ = child.kill();
+            // SAFETY: discard pending test output so Darwin can finish exit.
+            unsafe { libc::tcflush(slave.as_raw_fd(), libc::TCIOFLUSH) };
+            let _ = child.wait();
+            return Err(io::Error::other("drip probe did not finish one frame"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(value["frame_deadline"], true, "{value}");
+    assert_eq!(value["would_block"], true);
+    assert_eq!(value["raw_restored"], true);
+    assert_eq!(value["flags_restored"], true);
+    assert!(value["draw_ms"].as_u64().unwrap() < 600, "{value}");
+    let restored = terminal_attributes(&slave)?;
+    assert_eq!(restored.c_iflag, original.c_iflag);
+    assert_eq!(restored.c_oflag, original.c_oflag);
+    assert_eq!(restored.c_cflag, original.c_cflag);
+    assert_eq!(restored.c_lflag, original.c_lflag);
+    assert_eq!(restored.c_cc, original.c_cc);
+    let mut output = Vec::new();
+    drain_terminal(&mut master, &mut output)?;
+    master.write_all(b"release\n")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        drain_terminal(&mut master, &mut output)?;
+        if let Some(status) = child.try_wait()? {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            // SAFETY: discard pending test output so Darwin can finish exit.
+            unsafe { libc::tcflush(slave.as_raw_fd(), libc::TCIOFLUSH) };
             child.wait()?;
             return Err(io::ErrorKind::TimedOut.into());
         }

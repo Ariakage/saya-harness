@@ -42,3 +42,4 @@ jobs:
           python3 scripts/release/smoke.py target/release/saya
           python3 scripts/release/journey.py target/release/saya
           python3 scripts/release/review_regressions.py target/release/saya
+          python3 scripts/release/tui_journey.py target/release/saya

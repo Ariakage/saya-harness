@@ -18,6 +18,7 @@ static OUTPUT: Mutex<Option<Weak<Output>>> = Mutex::new(None);
 static PANIC_HOOK: Once = Once::new();
 const RESTORE_WAIT: Duration = Duration::from_millis(100);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
+const FRAME_WRITE_WAIT: Duration = Duration::from_millis(250);
 const RESTORE_BYTES: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
 
 /// A single owner of raw mode, alternate screen, bracketed paste and the cursor.
@@ -25,8 +26,9 @@ const RESTORE_BYTES: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
 /// Entry requires terminal stdin and stdout. The application handles signals by
 /// cancelling its work and returning through the same guard lifetime. Output
 /// uses a private unbuffered descriptor and retries transient backpressure for
-/// at most 100 ms per write. Restoration always attempts termios and original FD
-/// flags, with at most 100 ms for screen-control bytes to leave the process.
+/// at most 100 ms per write within a 250 ms frame budget. Restoration always
+/// attempts termios and original FD flags, with at most 100 ms for
+/// screen-control bytes to leave the process.
 pub struct TerminalGuard {
     terminal: Option<Terminal<CrosstermBackend<TerminalOutput>>>,
     output: Arc<Output>,
@@ -42,6 +44,7 @@ struct OutputState {
     ended: bool,
     presentation_started: bool,
     restoration_error: Option<io::ErrorKind>,
+    frame_deadline: Option<Instant>,
 }
 struct TerminalOutput(Arc<Output>);
 
@@ -112,6 +115,7 @@ impl Output {
                 ended: false,
                 presentation_started: false,
                 restoration_error: None,
+                frame_deadline: None,
             }),
         })
     }
@@ -155,8 +159,20 @@ impl Write for TerminalOutput {
         if state.ended {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
-        let deadline = Instant::now() + WRITE_WAIT;
+        let write_deadline = Instant::now() + WRITE_WAIT;
+        let deadline = state
+            .frame_deadline
+            .map_or(write_deadline, |frame| frame.min(write_deadline));
         loop {
+            if state
+                .frame_deadline
+                .is_some_and(|frame| Instant::now() >= frame)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "terminal frame write budget exceeded",
+                ));
+            }
             match write_descriptor(self.0.file.as_raw_fd(), bytes) {
                 Err(error)
                     if matches!(
@@ -265,15 +281,27 @@ impl TerminalGuard {
     }
 
     /// Draw a frame, tolerating transient backpressure for at most 100 ms per
-    /// write. A stalled or closed terminal returns an I/O error so the
+    /// write within a 250 ms frame budget. The render closure is synchronous.
+    /// A stalled or closed terminal returns an I/O error so the
     /// application can cancel its owned run before leaving.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
         self.check_active()?;
-        self.terminal
+        let terminal = self
+            .terminal
             .as_mut()
-            .ok_or_else(|| io::Error::other("terminal initialization is incomplete"))?
-            .draw(render)
-            .map(|_| ())
+            .ok_or_else(|| io::Error::other("terminal initialization is incomplete"))?;
+        self.output
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .frame_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
+        let result = terminal.draw(render).map(|_| ());
+        self.output
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .frame_deadline = None;
+        result
     }
     /// Read the current terminal size, including after a resize event.
     pub fn size(&self) -> io::Result<Size> {
