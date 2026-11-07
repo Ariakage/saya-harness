@@ -11,7 +11,7 @@
 - 开发计划：已准备，包含 P0 至 P7、DEV-001 至 DEV-037；工作量估算不是发布日期承诺。
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
-- 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
+- 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-089 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
 - DEV-038 至 DEV-053 已完成并按阶段提交，445项Rust测试、四平台CI与四个平台候选解包验收通过，下载摘要及源码关联复核通过。下一步按项目负责人要求进行代码review与补充测试，正式发布另行安排。
 
 ## 后续开发状态
@@ -23,9 +23,15 @@
 | N0 共享基础 | DEV-038 至 DEV-046 | 完成（本机验收） | 共享应用、日志／追踪与会话导出均通过正常 CLI 入口及故障回归，见下表 |
 | N1 默认 TUI | DEV-047 至 DEV-053 | 完成（四平台候选验收） | 默认入口、对话／审批／会话／后台／导出已接入共享服务，候选与本机试用程序通过验证，设计与双语说明已交付 |
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 待开始 | Linux 采用 Bubblewrap + Seccomp + socat，macOS 为独立 SeatbeltBackend，能力与性能待实测 |
-| N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078 | 待开始 | 已有指令／Skill 发现，OutputStore、Compact、插件 loader、检查点及 Hooks 待开发 |
+| N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 待开始 | 已有指令／Skill 发现与显式记忆文件注入，OutputStore、Compact、插件、检查点、Hooks及模型可编辑全局记忆待开发 |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 待开始 | 先做目标数据和手动步骤，后续自动阶段依赖持久调度等能力 |
 | N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
+
+### 全局记忆规划补充
+
+2026-11-08，按 D-045 将F-07细化为模型可读取、检索、编辑和遗忘的全局记忆。候选入口为 `~/.saya/MEMORY.md`，主题资料放入 `~/.saya/memory/`。新增DEV-084至DEV-089六项N3任务，覆盖可读文件、来源与作用域、上下文预算、三权限模式、并发发布、回滚、人工审阅和跨会话验收。后续计划共52项任务。
+
+[设计草案](memory.md)与路线图、任务表已同步，任务编号、依赖无环及仓库内Markdown链接已检查。上述能力均待开发，当前已有的 `--memory-file` 显式注入见使用指南。
 
 ### N1 实施记录
 

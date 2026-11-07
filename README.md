@@ -58,7 +58,8 @@
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规范](docs/saya-plugin.md) | manifest v1 草案、结构 schema、权限与生命周期 |
 | [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
-| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 候选范围、六个阶段与 DEV-038 至 DEV-083 |
+| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 候选范围、六个阶段与 DEV-038 至 DEV-089 |
+| [全局记忆](docs/memory.md) | 可读 MEMORY.md、模型编辑、检索、遗忘与回滚的后续设计 |
 | [原生 Sandbox](docs/sandbox.md) | Seatbelt 独立后端、Bubblewrap／Seccomp／socat 和 AST |
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
