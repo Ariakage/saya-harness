@@ -1,12 +1,18 @@
 # 日志与追踪设计
 
-**状态为后续设计草案。增强日志需求已明确，F-12 的实现任务为 DEV-040 至 DEV-042，实际状态见[开发进度](progress.md)。**
+**DEV-040 已实现五级类型化日志。tracing 接入与查询接口按 DEV-041／042 推进，实际状态见[开发进度](progress.md)。**
 
 ## 已有实现
 
-[logging.rs](../crates/saya-core/src/logging.rs) 提供 `JsonLog`，当前接受 `warn`、`error`，在已选 state 目录写 JSON 行，单文件 10 MiB、最多五份备份，写入前进行已知凭据脱敏，并用跨进程锁保护轮转。CLI 的 `log_run_result` 记录未完成运行的摘要，`log_warning` 处理写入失败。
+[logging.rs](../crates/saya-core/src/logging.rs) 提供 `JsonLog`，接受 `trace`、`debug`、`info`、`warn`、`error`，默认严重程度阈值为 `warn`，在已选 state 目录写 JSON 行，单文件 10 MiB、最多五份备份，写入前进行已知凭据脱敏，并用跨进程锁保护轮转。CLI 的 `log_run_result` 记录未完成运行的摘要，`log_warning` 处理写入失败。
 
 [events.rs](../crates/saya-cli/src/events.rs) 的事件输出与 SQLite 持久事件负责运行展示及恢复。新增诊断日志与这些数据分别维护，并通过 ID 关联。
+
+## 类型化记录
+
+`DiagnosticRecord` 使用 `LogContext` 关联 session／run／request／call／job／span，`LogFields` 白名单接受状态、错误码、profile、协议、目的、耗时、字节数、数量及丢弃数。新记录保存 `schema_version = 1`、UTC 时间、进程号和本 logger 的单调序号。旧 `record` API 与旧行解码继续可用。
+
+每条记录最多 64 KiB，写入前使用统一脱敏处理已知凭据与嵌套 JSON。默认阈值在打开目录前过滤，配置为 trace 后可记录全部五级。日志文件为 0600，新建目录为 0700，拒绝符号链接、硬链接、其他用户拥有的文件及过宽文件权限。写锁最多等待一秒，失败通过 `log_error` 返回。轮转维持 10 MiB 与五份备份。
 
 ## 五级日志
 

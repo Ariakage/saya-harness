@@ -31,6 +31,7 @@
 
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
+| DEV-040 | 完成 | 五级 LogLevel、类型化白名单记录、旧行解码和安全文件边界已实现。日志9项测试及 core Clippy 通过 |
 | DEV-038 | 完成 | 新 saya-app 迁移模型组装与会话生命周期，CLI 正常入口回归通过，独立审查通过。`./scripts/check.sh` 的格式、Clippy、全套离线测试及 release 构建通过，日志为本机 target/n0-dev038-check.log |
 
 ### 2026-11-08 专项设计细化
