@@ -46,7 +46,7 @@
 
 - 命令名 `saya`，首个版本 `0.1.0`，Cargo workspace 包含 `saya-core` 与 `saya-cli`；CLI 产生 `saya` 二进制。核心包含运行时、模型适配、工具、权限和存储，不依赖终端渲染。
 - 固定 Rust `1.99.1`、edition `2024`，最低支持版本同为 `1.99.1`；提交 `Cargo.lock`。workspace 通过 `rust-toolchain.toml` 固定该版本。版本依据见 [Rust 官方发布](https://blog.rust-lang.org/2026/10/15/Rust-1.99.1/)。
-- 首批支持 macOS 13+、Linux glibc 2.35+，均覆盖 x86_64 和 aarch64；Windows、musl、移动端与浏览器构建不进入 0.1。
+- 首批支持 macOS 15+、Linux glibc 2.35+，均覆盖 x86_64 和 aarch64；Windows、musl、移动端与浏览器构建不进入 0.1。
 - 依赖职责确定为 Tokio（异步）、clap（CLI）、reqwest＋rustls（HTTP／TLS）、serde／serde_json／toml（序列化）、thiserror（核心错误）、tracing（日志）、rusqlite bundled（SQLite）。搜索、哈希和标识等辅助依赖按实际需要加入；初始化时选择与工具链兼容的稳定版本并锁定，不为补丁版本另开需求讨论。
 - 许可证为 [MIT](../LICENSE)，已写入仓库根目录，版权行为 `Copyright (c) 2026 Saya Harness contributors`；标准文本参见 [SPDX](https://spdx.org/licenses/MIT.html)。
 - 首版从源码构建并提供手动触发的 release 压缩包流程，不自动上传、发布、签名或安装。自动更新不进入 0.1。
@@ -369,7 +369,7 @@ error 为 null 或 `{ "code": "稳定标识", "message": "可读说明" }`；art
 - 权限矩阵覆盖四种工作模式×三种权限模式，尤其验证 PLAN 禁用写入／命令、bypass 的路径豁免、auto 的核查与兜底、单次命令预授权和历史授权不恢复。
 - 会话验证执行前后保存、崩溃 unknown、不自动重放、配置／工作区变更、写锁、迁移和存储失败。JSON／JSONL 检查 schema、顺序、无日志混入与退出码。
 - 验收夹具确定为：PLAN 阅读示例 Rust 工程产出方案且文件不变；BUILD 从需求完成一个小型文本统计程序；CODE 修复该程序的可复现缺陷；WORK 将三份文本汇总为报告。模型能力的真实表现由手动联调补充，替身只验证运行时契约。
-- Linux／macOS CI 执行 fmt、Clippy `-D warnings`、workspace tests 和 release build；Linux 发行在 Ubuntu 22.04 基线环境构建以匹配 glibc 2.35，macOS deployment target 为 13。首版发行覆盖两类系统的 x86_64／aarch64，非主机架构至少做构建与手动 smoke 验证，未验证的产物不标记已支持。
+- Linux／macOS CI 执行 fmt、Clippy `-D warnings`、workspace tests 和 release build；Linux 发行在 Ubuntu 22.04 基线环境构建以匹配 glibc 2.35，macOS deployment target 为 15.0（D-035 更新原 13.0 基线）。首版发行覆盖两类系统的 x86_64／aarch64，非主机架构至少做构建与手动 smoke 验证，未验证的产物不标记已支持。
 - 实现顺序：核心类型与假模型闭环 → 文件与命令／权限 → 三协议 → CLI → SQLite 恢复 → 结构化输出与全流程验收。阶段可以并行组织，但不以占位实现宣称需求完成。
 
 ## B-24 版本与后续变更

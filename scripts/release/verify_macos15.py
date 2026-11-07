@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify an existing candidate on macOS 13 and save a bounded evidence record."""
+"""Verify an existing candidate on macOS 15 and save a bounded evidence record."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import struct
 import sys
@@ -28,10 +29,10 @@ def main():
     args = parser.parse_args()
     try:
         if platform.system() != 'Darwin':
-            raise ValueError('this check must run on macOS 13')
+            raise ValueError('this check must run on macOS 15')
         version = command('sw_vers', '-productVersion')
-        if version.split('.')[0] != '13':
-            raise ValueError('this check requires macOS 13; found ' + version)
+        if version.split('.')[0] != '15':
+            raise ValueError('this check requires macOS 15; found ' + version)
         digest = hashlib.sha256(args.archive.read_bytes()).hexdigest()
         if digest != args.sha256.lower():
             raise ValueError('archive SHA-256 mismatch')
@@ -52,13 +53,13 @@ def main():
                 raise ValueError('binary architecture does not match target')
             if binary_hash != metadata.get('binary_sha256'):
                 raise ValueError('binary SHA-256 mismatch')
-        with tempfile.TemporaryDirectory(prefix='saya-macos13-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='saya-macos15-') as temporary:
             path = Path(temporary) / 'saya'
             path.write_bytes(binary)
             path.chmod(0o755)
             build_info = command('otool', '-l', str(path))
-            if 'minos 13.0' not in build_info:
-                raise ValueError('Mach-O does not declare minimum macOS 13.0')
+            if not re.search(r'(?m)^\s*minos\s+15\.0(?:\.0)?\s*$', build_info):
+                raise ValueError('Mach-O does not declare minimum macOS 15.0')
             for script in ('smoke.py', 'journey.py'):
                 subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
         try:
@@ -70,14 +71,14 @@ def main():
             'macos_version': version, 'machine': platform.machine(), 'arm64_capable': arm64_capable,
             'target': target, 'archive_name': args.archive.name, 'archive_sha256': digest,
             'binary_sha256': binary_hash, 'declared_source_commit': metadata.get('declared_source_commit'),
-            'mach_o_minimum': '13.0', 'offline_tool_smoke': 'passed', 'interactive_journey': 'passed',
+            'mach_o_minimum': '15.0', 'offline_tool_smoke': 'passed', 'interactive_journey': 'passed',
             'smoke_script_sha256': hashlib.sha256((HERE / 'smoke.py').read_bytes()).hexdigest(),
             'journey_script_sha256': hashlib.sha256((HERE / 'journey.py').read_bytes()).hexdigest(),
         }
         with args.output.open('x', encoding='utf-8') as output:
             json.dump(evidence, output, indent=2, sort_keys=True)
             output.write('\n')
-        print('Saved macOS 13 evidence:', args.output)
+        print('Saved macOS 15 evidence:', args.output)
         return 0
     except (OSError, ValueError, KeyError, tarfile.TarError, json.JSONDecodeError,
             subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:

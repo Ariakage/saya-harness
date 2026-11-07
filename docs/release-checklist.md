@@ -1,6 +1,6 @@
 # 0.1.0 发行检查草案
 
-**P7 尚未完成：项目负责人确认暂时没有 macOS 13 验证环境。** 本清单用于汇总证据和阻碍，不是发布批准或发布公告。候选及平台的实际验证边界见[发行候选验证](release-validation.md)，真实模型测试见[联调记录](live-model-validation.md)。
+**P7 尚未完成：D-035 调整为 macOS 15 后，新候选尚待最低环境双架构实测。** 本清单用于汇总证据和阻碍，不是发布批准或发布公告。候选及平台的实际验证边界见[发行候选验证](release-validation.md)，真实模型测试见[联调记录](live-model-validation.md)。
 
 ## 基线证据索引
 
@@ -9,7 +9,7 @@
 | 基线 | 主要证据／当前缺口 |
 | --- | --- |
 | B-01 产品边界 | [项目范围](vision.md)、[CLI 使用指南](usage.md)；插件、MCP 等属于后续规划 |
-| B-02 工程与分发 | [workspace](../Cargo.toml)、[工具链](../rust-toolchain.toml)、[许可证](../LICENSE)；四目标候选已构建，macOS 13 实测待补 |
+| B-02 工程与分发 | [workspace](../Cargo.toml)、[工具链](../rust-toolchain.toml)、[许可证](../LICENSE)；四目标候选已构建，macOS 15 新候选实测待补 |
 | B-03 CLI 与输入 | [CLI 端到端测试](../crates/saya-cli/tests/cli.rs)、[交互测试](../crates/saya-cli/tests/chat.rs) |
 | B-04 配置 | [配置测试](../crates/saya-core/tests/config.rs)、[配置说明](configuration.md) |
 | B-05 模型接入 | [协议说明](model-protocols.md)、[真实服务记录](live-model-validation.md)；仅一个服务和模型抽样 |
@@ -30,10 +30,10 @@
 | B-20 并发、配置变更与兼容 | [SQLite 测试](../crates/saya-core/tests/sqlite.rs)、[CLI 测试](../crates/saya-cli/tests/cli.rs)；schema 1→2 迁移说明见存储文档 |
 | B-21 日志、凭据与用量 | [CLI 测试](../crates/saya-cli/tests/cli.rs)、[开发进度 DEV-027](progress.md)、[配置说明](configuration.md)；未知秘密不保证识别 |
 | B-22 项目指令与提示词 | [项目上下文测试](../crates/saya-core/tests/project_context.rs)、[提示词测试](../crates/saya-core/tests/prompts.rs)、[来源说明](project-context.md) |
-| B-23 验收与 CI | [验收索引](acceptance.md)、[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42369396145)、[发行候选](release-validation.md)；macOS 13 待验证 |
+| B-23 验收与 CI | [验收索引](acceptance.md)、[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42369396145)、[发行候选](release-validation.md)；macOS 15 新候选待验证 |
 | B-24 版本与后续变更 | [完整基线](mvp-baseline.md)、[存储说明](storage.md)、[决策记录](decisions.md)；发行说明仍为草案 |
 
-AC-01 至 AC-23 的具体测试名见[验收索引](acceptance.md)。AC-24 已有四目标构建、部分运行环境 smoke 和 P6 四平台 CI；**macOS 13 aarch64／x86_64 实际执行仍缺证据**，不能标记 AC-24 或 P7 完成。
+AC-01 至 AC-23 的具体测试名见[验收索引](acceptance.md)。AC-24 已有四目标构建、部分运行环境 smoke 和 P6 四平台 CI；**macOS 15 aarch64／x86_64 新候选实际执行仍缺证据**，不能标记 AC-24 或 P7 完成。
 
 ## 已知限制与待办
 

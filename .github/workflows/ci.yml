@@ -17,7 +17,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
     env:
-      MACOSX_DEPLOYMENT_TARGET: '13.0'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -26,3 +26,17 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Check workspace
         run: ./scripts/check.sh
+      - name: Check release tooling
+        run: |
+          python3 scripts/release/test_package.py
+          python3 scripts/release/test_verify_macos15.py
+      - name: Verify macOS 15 release smoke
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          test "$(sw_vers -productVersion | cut -d. -f1)" = 15
+          otool -l target/release/saya > "$RUNNER_TEMP/saya-otool.txt"
+          grep -Eq '^[[:space:]]*minos[[:space:]]+15\.0([[:space:]]|$)' "$RUNNER_TEMP/saya-otool.txt"
+      - name: Exercise release binary
+        run: |
+          python3 scripts/release/smoke.py target/release/saya
+          python3 scripts/release/journey.py target/release/saya

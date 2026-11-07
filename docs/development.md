@@ -36,7 +36,7 @@ cargo test --workspace --locked
 cargo build --workspace --release --locked
 ```
 
-GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner：Ubuntu 22.04 x86_64／aarch64（`ubuntu-22.04`／`ubuntu-22.04-arm`），macOS 15 aarch64／x86_64（`macos-15`／`macos-15-intel`）；macOS 构建设置最低部署版本 13.0。runner 的可用性和 CI 结果须以实际运行记录为准，发布前仍需验证最低运行环境。
+GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner：Ubuntu 22.04 x86_64／aarch64（`ubuntu-22.04`／`ubuntu-22.04-arm`），macOS 15 aarch64／x86_64（`macos-15`／`macos-15-intel`）；macOS 构建设置最低部署版本 15.0，并在两种 macOS runner 执行离线工具往返与交互会话 smoke。四个 runner 均执行离线 release smoke；不自动上传构建产物。runner 可用性与结果须以实际运行记录为准；运行记录未覆盖的候选仍需独立验证。
 
 核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 用于运行时、异步 HTTP、工具与 CLI。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
 
