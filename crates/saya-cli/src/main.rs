@@ -1,6 +1,7 @@
 mod chat;
 mod events;
 mod export;
+mod logs;
 use saya_app::{new_session, session};
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
@@ -48,6 +49,8 @@ struct Cli {
     /// Enable Anthropic ephemeral prompt caching on endpoints that support it.
     #[arg(long, global = true)]
     anthropic_prompt_cache: bool,
+    #[arg(long, global = true, value_parser = ["trace", "debug", "info", "warn", "error"])]
+    log_level: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -100,6 +103,10 @@ impl From<OutputOption> for Output {
 }
 #[derive(Subcommand)]
 enum Command {
+    Logs {
+        #[command(subcommand)]
+        action: logs::LogsAction,
+    },
     Run(RunArgs),
     Chat,
     Resume {
@@ -201,11 +208,12 @@ fn output_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
     2
 }
 fn query_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
-    if output == Some(Output::Json) {
-        println!(
-            "{}",
-            serde_json::json!({"schema_version":1,"data":null,"error":{"code":"invalid_query","message":message.to_string()}})
-        );
+    if matches!(output, Some(Output::Json | Output::Jsonl)) {
+        let mut value = serde_json::json!({"schema_version":1,"data":null,"error":{"code":"invalid_query","message":message.to_string()}});
+        if output == Some(Output::Jsonl) {
+            value["type"] = "query.failed".into();
+        }
+        println!("{value}");
         2
     } else {
         fail(message)
@@ -504,6 +512,7 @@ fn personal_context(
         memory: read(&cli.memory_file, &secrets)?,
     })
 }
+static LOG_LEVEL: std::sync::OnceLock<saya_core::logging::LogLevel> = std::sync::OnceLock::new();
 static DIAGNOSTICS: std::sync::Mutex<Option<saya_core::logging::diagnostics::Diagnostics>> =
     std::sync::Mutex::new(None);
 fn install_diagnostics(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
@@ -515,7 +524,8 @@ fn install_diagnostics(config: &Config) -> Result<(), Box<dyn std::error::Error>
             .map(|name| config.secret(name).map(str::to_owned))
             .collect::<Result<Vec<_>, _>>()?;
         let diagnostic = saya_core::logging::diagnostics::Diagnostics::start(
-            saya_core::logging::JsonLog::new(&config.state_dir, secrets),
+            saya_core::logging::JsonLog::new(&config.state_dir, secrets)
+                .with_level(LOG_LEVEL.get().copied().unwrap_or_default()),
         )?;
         tracing::dispatcher::set_global_default(diagnostic.dispatch())
             .map_err(|_| "diagnostics subscriber already installed")?;
@@ -585,7 +595,8 @@ fn log_warning(config: &Config, level: &str, event: &str, data: serde_json::Valu
         eprintln!("saya: structured log unavailable");
         return;
     };
-    let log = saya_core::logging::JsonLog::new(&config.state_dir, secrets);
+    let log = saya_core::logging::JsonLog::new(&config.state_dir, secrets)
+        .with_level(LOG_LEVEL.get().copied().unwrap_or_default());
     if log.record(level, event, data).is_err() {
         eprintln!("saya: structured log unavailable");
     }
@@ -907,9 +918,37 @@ async fn query_sessions(
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    let raw_level = cli
+        .log_level
+        .clone()
+        .or_else(|| std::env::var("SAYA_LOG_LEVEL").ok())
+        .unwrap_or_else(|| "warn".into());
+    let level = match raw_level.parse::<saya_core::logging::LogLevel>() {
+        Ok(level) => level,
+        Err(_) => {
+            return std::process::ExitCode::from(output_error(
+                "invalid log level",
+                cli.output.map(Into::into),
+            ));
+        }
+    };
+    let _ = LOG_LEVEL.set(level);
     let o = overrides(&cli);
     let env = Environment::capture();
     let code = match &cli.command {
+        Some(Command::Logs { action }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
+        {
+            Err(error) => query_error(error, cli.output.map(Into::into)),
+            Ok(config) => match logs::run(&config, action).await {
+                Ok(code) => code,
+                Err(error) => query_error(
+                    safe_output(&error.to_string(), &config),
+                    Some(config.output),
+                ),
+            },
+        },
         Some(Command::Config {
             action: ConfigAction::Init,
         }) => match init(&o, &env) {

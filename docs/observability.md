@@ -1,6 +1,6 @@
 # 日志与追踪设计
 
-**DEV-040／041 已实现五级类型化日志与受控 tracing 接入。查询接口按 DEV-042 推进，实际状态见[开发进度](progress.md)。**
+**DEV-040 至 DEV-042 已实现五级类型化日志、受控 tracing 接入与 CLI 查询。实际验证记录见[开发进度](progress.md)。**
 
 ## 已有实现
 
@@ -30,23 +30,32 @@ subscriber 只接收 `saya`／`saya::` target，按类型化白名单采集字�
 | warn | 可恢复错误、重试、权限拒绝及能力降级原因 |
 | error | 运行失败、存储失败及需要处理的系统错误 |
 
-候选默认级别为 `warn`，通过 `--log-level` 或 `SAYA_LOG_LEVEL` 显式选择其他级别，优先级为 CLI 高于环境变量、高于默认值。首批保留现有配置文件加载方式。
+默认级别为 `warn`，通过 `--log-level` 或 `SAYA_LOG_LEVEL` 显式选择其他级别，优先级为 CLI 高于环境变量、高于默认值。首批保留现有配置文件加载方式。
 
 ```sh
-# 以下为后续接口草案
 saya --log-level debug chat
 saya --log-level trace run "Investigate the failure"
 saya logs show --session SESSION_ID --level warn
-saya logs tail --session SESSION_ID
+saya --output jsonl logs tail --session SESSION_ID
+saya --output json logs show --level info --limit 100 --offset 0
+saya logs show --since 2026-11-08T08:00:00+08:00
 ```
 
 级别过滤按严重程度阈值处理，`warn` 同时包含 `error`。时间范围使用带时区输入，保存的时间为 UTC。耗时使用单调时钟，日志排序同时参考进程、关联 ID 和本地序号。
 
+## 日志查询
+
+`logs show` 支持 `--session`、`--run`、`--level`、`--since`、`--until`、`--limit` 与 `--offset`，查询阈值默认 trace，包含所有已保存级别。每页默认 100 行、最多 1,000 行，offset 最大 1,000,000。时间使用显式时区的 RFC 3339，起止边界均包含。查询返回 `records`、`next_offset` 与 `malformed_lines`，兼容旧记录中 data 的 session／run 关联。
+
+查询只读当前与五份轮转文件，缺失日志返回空页。每文件最多读取 10 MiB、每行最多 64 KiB，超长、损坏及末尾部分行有明确省略计数，并按当前配置重新脱敏。JSON 使用版本信封，JSONL 逐行输出 `log.entry` 和 `logs.page`。text 输出 JSON 转义文本，额外转换 DEL／C1 等控制字符。
+
+`logs tail` 使用同一筛选与每批 limit，按 inode、持有的文件描述符及完整行 offset 跟随轮转，重复观察保持游标，部分行等待写完。扫描由 blocking worker 执行并检查共享取消，管道输出使用非阻塞小块写入，慢消费者时仍可响应 SIGINT／SIGTERM，退出码 130。tail 提供 text／JSONL 表达，选择 JSON 返回用法错误。
+
 ## 接入与记录结构
 
-采用 `tracing` 的 span／event 作为进程内诊断入口，在可执行入口安装 subscriber，安全记录层负责字段选择、脱敏、大小检查和轮转。库层发出结构化诊断，应用入口管理订阅生命周期。异步任务通过显式 span 传播归属。设计参考官方 [tracing](https://docs.rs/tracing/latest/tracing/) 和 [tracing-subscriber](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/) 文档。
+使用 `tracing` 的 span／event 作为进程内诊断入口，在可执行入口安装 subscriber，安全记录层负责字段选择、脱敏、大小检查和轮转。库层发出结构化诊断，应用入口管理订阅生命周期。异步任务通过显式 span 传播归属。设计参考官方 [tracing](https://docs.rs/tracing/latest/tracing/) 和 [tracing-subscriber](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/) 文档。
 
-候选记录保留 `timestamp`、`level`、`event`、`data`，在兼容读取旧行的基础上扩展格式版本、target、trace／span、session／run／request／call／job ID、状态、耗时和字节计数。具体 schema 在 DEV-040 固定，并覆盖旧日志查询。
+记录保留 `timestamp`、`level`、`event`、`data`，在兼容读取旧行的基础上扩展格式版本、target、trace／span、session／run／request／call／job ID、状态、耗时和字节计数。新增字段由 DEV-040 的类型化记录固定，旧日志按缺失元数据读取。
 
 记录路径采用以下顺序。
 

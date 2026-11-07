@@ -87,3 +87,15 @@ saya --output json session export SESSION_ID --format json --scope full --includ
 ```
 
 当前调用显式使用 PLAN 时，目标须位于工作区外。JSON／JSONL 的确认包含文件路径、字节数、SHA256及快照水位。取消退出130，其他导出错误退出2，错误码及文件发布保证见[导出说明](session-export.md)。
+
+## 本地日志查询
+
+当前开发线支持 trace、debug、info、warn、error 五级诊断，默认阈值为warn。优先级为命令行、SAYA_LOG_LEVEL、默认值。日志与运行JSON／JSONL的stdout分别处理。
+
+```sh
+saya --log-level debug run "Inspect this project"
+saya logs show --session SESSION_ID --level info --limit 50
+saya --output jsonl logs tail --session SESSION_ID
+```
+
+show支持text／json／jsonl，tail支持text／jsonl并以Ctrl-C退出。查询支持run、时间范围、offset和limit，具体字段与轮转边界见[日志说明](observability.md)。
