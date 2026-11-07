@@ -1,6 +1,6 @@
-# Saya CLI 使用指南
+# Saya 使用指南
 
-Saya 当前为 CLI 开发预览。本指南中的运行示例需要可访问且兼容所选协议的模型服务；仓库不提供模型账号、凭据或模型服务。[验收索引](acceptance.md)区分本机替身测试与真实服务验证，发行平台和最低环境验收仍属 P7。
+0.1.0 已发布 CLI，当前开发线增加默认 TUI、增强日志和会话导出。本指南说明当前开发线行为，版本与实际验收见[开发进度](progress.md)。运行模型任务需要兼容所选协议的模型服务和用户配置的凭据。[验收索引](acceptance.md)区分受控替身与真实服务验证。
 
 ## 构建与配置
 
@@ -23,7 +23,22 @@ cp examples/config.example.toml "$config_path"
 
 支持 `openai-chat-completions`、`openai-responses`、`anthropic-messages`。`base_url` 是 API 根地址，程序分别追加 `/chat/completions`、`/responses`、`/messages`；应核对服务商实际接口，兼容协议不代表支持全部参数。远程明文 HTTP 默认禁用。本机样例无需鉴权；远程服务可参考样例中注释的 profile，凭据只通过 `api_key_env` 指定**环境变量名**，值由使用者在启动前安全提供，不写入配置、提交或日志。配置校验会检查所有 profile 引用的环境变量，即使该 profile 未选中。具体鉴权和可选参数见[配置](configuration.md)。
 
-## 单次任务与会话
+## 默认 TUI 与兼容入口
+
+当前开发线中，stdin 和 stdout 均连接终端时，直接运行 `saya` 进入 TUI。全局配置、工作区、profile、工作模式和权限参数继续适用。
+
+```sh
+./target/release/saya --config "$config_path"
+./target/release/saya --config "$config_path" --cwd /path/to/project --mode code
+```
+
+Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。Ctrl+C 取消运行或界面操作，空闲时清空草稿。输入为空时 Ctrl+D 退出，活跃操作先取消并等待收尾。PgUp／PgDn 滚动对话或详情，End 跟随最新对话，Esc 关闭详情。待批准时，y 批准，n 或 Esc 拒绝。需要澄清时在输入框回复。
+
+`/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
+
+`saya chat` 保留文本交互，`run`、`resume`、`session`、`config` 和 `logs` 继续通过显式子命令使用。无子命令的管道／非终端调用、JSON／JSONL 输出冲突返回用法错误2，stdout为空，并在打开配置、会话或终端之前提示选择具体子命令。脚本输入使用 `saya run --stdin`。
+
+## 单次任务与文本会话
 
 以下示例假定在仓库根目录执行，`config_path` 指向已修改且可连接的配置；如要使用其他工作区，在子命令前加全局参数 `--cwd PATH`。模型可能根据任务请求工具，执行前按当前权限策略判断：
 
@@ -75,7 +90,7 @@ Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工�
 - **会话正在使用、配置改变或恢复失败**：先确认是否有另一 Saya 进程持有会话锁；核对 profile 和工作区。不要删除数据库或 WAL 来强行解锁；涉及损坏时先保留原文件及备份，再调查错误。
 - **日志不可写**：检查状态目录权限与剩余空间；日志路径不应指向不安全的符号链接。
 
-当前不提供 OS 沙箱、MCP、插件系统、自动上下文压缩、TUI 或 GUI；后续规划见[能力路线图](capability-roadmap.md)。
+OS 沙箱、MCP、可执行插件、自动上下文压缩和 GUI 按后续版本规划推进，见[能力路线图](capability-roadmap.md)。
 
 ## 会话导出
 

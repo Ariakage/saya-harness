@@ -306,7 +306,7 @@ fn profile_selection_and_slash_escape_are_handled() {
     let temp = TempDir::new().unwrap();
     let (url, requests) = fixture::server(vec![("application/json", answer("ok"))]).unwrap();
     let cfg = config(temp.path(), &url, "auto", false);
-    let mut pty = Pty::start(temp.path(), &cfg, &[]);
+    let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
     pty.until("Profile (number or name; /exit to quit): ");
     pty.send("1\n");
     pty.until("> ");

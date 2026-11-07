@@ -1712,6 +1712,7 @@ dependencies = [
  "rusqlite",
  "saya-app",
  "saya-core",
+ "saya-tui",
  "serde_json",
  "tempfile",
  "tokio",

@@ -18,7 +18,7 @@ use saya_core::{
 };
 use std::{
     fs::OpenOptions,
-    io::{self, Read, Write},
+    io::{self, IsTerminal, Read, Write},
     path::PathBuf,
     sync::Arc,
 };
@@ -915,9 +915,103 @@ async fn query_sessions(
     }
     Ok(0)
 }
+fn tui_error(message: &str) -> u8 {
+    use std::os::fd::RawFd;
+    let descriptor: RawFd = libc::STDERR_FILENO;
+    // SAFETY: fcntl and write operate on the existing stderr descriptor.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return 1;
+    }
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return 1;
+    }
+    let message = format!("saya: {}\n", safe_terminal_text(message));
+    let bytes = message.as_bytes();
+    let mut offset = 0;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    while offset < bytes.len() && std::time::Instant::now() < deadline {
+        let written = unsafe {
+            libc::write(
+                descriptor,
+                bytes[offset..].as_ptr().cast(),
+                bytes.len() - offset,
+            )
+        };
+        if written > 0 {
+            offset += written as usize;
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::WouldBlock {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        } else if error.kind() != io::ErrorKind::Interrupted {
+            break;
+        }
+    }
+    unsafe {
+        libc::fcntl(descriptor, libc::F_SETFL, flags);
+    }
+    1
+}
+async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -> u8 {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return fail("cannot determine current directory"),
+    };
+    let config = match config::load(overrides, environment, &cwd) {
+        Ok(config) => config,
+        Err(error) => return fail(error),
+    };
+    if config.output != Output::Text {
+        return fail("Choose an explicit CLI subcommand for JSON or JSONL output");
+    }
+    if let Err(error) = session::check_roots(&config, &config.cwd, config.mode) {
+        return fail(safe_output(&error.to_string(), &config));
+    }
+    let context = match personal_context(cli, &config) {
+        Ok(context) => context,
+        Err(error) => return fail(safe_output(&error.to_string(), &config)),
+    };
+    if let Err(error) = install_diagnostics(&config) {
+        return fail(safe_output(&error.to_string(), &config));
+    }
+    let secrets = match config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(secrets) => secrets,
+        Err(_) => return fail("sensitive settings unavailable"),
+    };
+    let options = saya_tui::Options {
+        personal_context: context,
+        anthropic_prompt_cache: cli.anthropic_prompt_cache,
+        cwd_explicit: cli.cwd.is_some(),
+        profile_explicit: cli.profile.is_some(),
+        mode_override: cli.mode.map(Into::into),
+    };
+    match saya_tui::run(config, options).await {
+        Ok(code) => code,
+        Err(error) => tui_error(&redacted_text(&error.to_string(), &secrets)),
+    }
+}
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    if cli.command.is_none() {
+        if matches!(cli.output, Some(OutputOption::Json | OutputOption::Jsonl)) {
+            return std::process::ExitCode::from(fail(
+                "Choose an explicit CLI subcommand for JSON or JSONL output",
+            ));
+        }
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return std::process::ExitCode::from(fail(
+                "TUI requires terminal stdin and stdout. Use saya run --stdin or saya chat",
+            ));
+        }
+    }
     let raw_level = cli
         .log_level
         .clone()
@@ -936,6 +1030,7 @@ async fn main() -> std::process::ExitCode {
     let o = overrides(&cli);
     let env = Environment::capture();
     let code = match &cli.command {
+        None => launch_tui(&cli, o, env).await,
         Some(Command::Logs { action }) => match std::env::current_dir()
             .map_err(|_| "cannot determine current directory".to_owned())
             .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
@@ -1015,7 +1110,7 @@ async fn main() -> std::process::ExitCode {
                 },
             },
         },
-        Some(Command::Chat) | None => match std::env::current_dir()
+        Some(Command::Chat) => match std::env::current_dir()
             .map_err(|_| "cannot determine current directory".to_owned())
             .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
         {
@@ -1104,7 +1199,11 @@ async fn main() -> std::process::ExitCode {
             .flush(std::time::Duration::from_secs(2))
             .is_err()
     {
-        eprintln!("saya: diagnostic log flush failed");
+        if cli.command.is_none() {
+            tui_error("diagnostic log flush failed");
+        } else {
+            eprintln!("saya: diagnostic log flush failed");
+        }
     }
     std::process::ExitCode::from(code)
 }
