@@ -30,10 +30,10 @@
 | B-20 并发、配置变更与兼容 | [SQLite 测试](../crates/saya-core/tests/sqlite.rs)、[CLI 测试](../crates/saya-cli/tests/cli.rs)；schema 1→2 迁移说明见存储文档 |
 | B-21 日志、凭据与用量 | [CLI 测试](../crates/saya-cli/tests/cli.rs)、[开发进度 DEV-027](progress.md)、[配置说明](configuration.md)；未知秘密不保证识别 |
 | B-22 项目指令与提示词 | [项目上下文测试](../crates/saya-core/tests/project_context.rs)、[提示词测试](../crates/saya-core/tests/prompts.rs)、[来源说明](project-context.md) |
-| B-23 验收与 CI | [验收索引](acceptance.md)、[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42369396145)、[发行候选](release-validation.md)；macOS 15 新候选待验证 |
+| B-23 验收与 CI | [验收索引](acceptance.md)、[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42373322880)、[发行候选](release-validation.md)；macOS 15 新候选待验证 |
 | B-24 版本与后续变更 | [完整基线](mvp-baseline.md)、[存储说明](storage.md)、[决策记录](decisions.md)；发行说明仍为草案 |
 
-AC-01 至 AC-23 的具体测试名见[验收索引](acceptance.md)。AC-24 已有四目标构建、部分运行环境 smoke 和 P6 四平台 CI；**macOS 15 aarch64／x86_64 新候选实际执行仍缺证据**，不能标记 AC-24 或 P7 完成。
+AC-01 至 AC-23 的具体测试名见[验收索引](acceptance.md)。AC-24 已有四目标构建、部分运行环境 smoke 和 macOS 15／Ubuntu 22.04 四平台 CI；**macOS 15 aarch64／x86_64 新候选实际执行仍缺证据**，不能标记 AC-24 或 P7 完成。
 
 ## 已知限制与待办
 

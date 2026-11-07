@@ -28,7 +28,7 @@ b0f0fa786d4cf3c4263d624207818ee240a1aac46ececd7fcb95f2e826ad9489  saya-0.1.0-mac
 
 ## 待完成的最低环境验证
 
-P6 提交 `a58da26` 的 [GitHub Actions 运行 42369396145](https://github.com/Ariakage/saya-harness/actions/runs/42369396145) 已在 macOS 15 ARM／Intel 和 Ubuntu 22.04 ARM／Intel 通过，但它使用旧的 13.0 部署目标，也未运行当前候选包的验证，不能代替本候选验收。新的 CI 配置将对 macOS 15 的两架构执行部署版本检查，并对四目标执行 [smoke.py](../scripts/release/smoke.py) 与 [journey.py](../scripts/release/journey.py)；尚须运行并核对结果。CI 构建产物与此本地候选不同，不能把 CI 测试归因于本地包。
+P6 提交 `a58da26` 的 [GitHub Actions 运行 42369396145](https://github.com/Ariakage/saya-harness/actions/runs/42369396145) 已在 macOS 15 ARM／Intel 和 Ubuntu 22.04 ARM／Intel 通过，但它使用旧的 13.0 部署目标，也未运行当前候选包的验证，不能代替本候选验收。更新后的 [GitHub Actions 运行 42373322880](https://github.com/Ariakage/saya-harness/actions/runs/42373322880) 在提交 `47452e6` 上四平台全部通过：macOS 15 的两架构均通过 15.0 部署版本检查，四个目标均通过 [smoke.py](../scripts/release/smoke.py) 与 [journey.py](../scripts/release/journey.py)。CI 构建产物与此本地候选不同，不能把 CI 测试归因于本地包；该工作流不上传构建产物。
 
 macOS 15 机器上可使用 Python 3 运行下列命令，路径替换为实际位置且输出文件必须不存在。脚本检查系统版本、包与二进制哈希、Mach-O 架构和部署目标，并对解包后的二进制运行两项离线演练：
 
