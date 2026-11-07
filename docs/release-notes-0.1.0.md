@@ -8,6 +8,10 @@ Saya 是 Rust 实现的 CLI Agent Runtime，提供 PLAN、BUILD、CODE、WORK �
 
 配置文件及输出使用 schema v1；现有会话内部数据库 schema 为 2。识别到 schema 1 会先在线备份、再事务迁移；失败时保留原库与备份，更高版本或损坏数据库拒绝打开。详见[存储说明](storage.md)。实际使用前应自行保留数据备份；不恢复历史授权，也不自动重放未完成工具。
 
-三协议已有本机替身测试和指定服务／模型的有限真实联调。Linux 两目标已在 Ubuntu 22.04 用户空间 smoke，macOS 两目标已在 macOS 27.2 smoke；x86_64 均使用模拟。macOS 15 双架构 CI 构建及 smoke 已通过；**先前本地候选包尚未在 macOS 15 实测，不能把 CI 结果归因于这些包。** 包哈希见[候选记录](release-validation.md)。
+审查确认并修复恢复时忽略显式 PLAN、嵌套凭据进入核查／确认、配置写入上限失效、Responses 混合历史失败及无效工具路径错误终止五项问题。342 个测试、独立复核及四个候选解包后的五项回归通过。[审查记录](review-2026-11-07.md)
+
+三协议已有本机替身测试和指定服务／模型的有限真实联调。当前候选源码为 `854be1b`。Linux 两目标已在 Ubuntu 22.04 用户空间完成 smoke、交互演练与审查回归，Intel 使用 ARM 交叉构建及 QEMU 运行。macOS 两目标已在 macOS 27.2 完成相同演练，Intel 使用 Rosetta。macOS 15 双架构 CI 已有提交 `47452e6` 的历史证据，**当前候选尚待 macOS 15 实测**。包哈希与对应测试对象见[候选记录](release-validation.md)。
+
+凭据保护采用失败关闭，重复键、过深嵌套及无法安全解析或保真重编码的数值可能使部分无秘密内容被拒绝。macOS ARM 带有链接器 ad-hoc 签名，Intel 二进制未签名，当前包尚未进行开发者身份签名或公证。
 
 当前不包含 OS 沙箱、MCP、插件运行、自动上下文压缩、TUI 或 GUI；已知凭据遮蔽无法保证识别所有未知秘密。完整范围、后续计划和发行检查见[后续能力路线图](capability-roadmap.md)及[发行检查草案](release-checklist.md)。
