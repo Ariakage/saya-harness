@@ -19,7 +19,12 @@ fn fail(code: &str, message: &str) -> BoundaryError {
         None,
     )
 }
-fn read_file(path: &Path) -> Result<Vec<u8>, BoundaryError> {
+fn read_file(
+    path: &Path,
+    max_bytes: u64,
+    check: &dyn Fn() -> Result<(), BoundaryError>,
+) -> Result<Vec<u8>, BoundaryError> {
+    check()?;
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -28,17 +33,26 @@ fn read_file(path: &Path) -> Result<Vec<u8>, BoundaryError> {
     let metadata = file
         .metadata()
         .map_err(|_| fail("storage_error", "cannot inspect stranded database snapshot"))?;
-    if !metadata.is_file() || metadata.len() > MAX_SNAPSHOT {
+    if !metadata.is_file() || metadata.len() > max_bytes {
         return Err(fail(
             "storage_error",
             "stranded database snapshot is too large or not a regular file",
         ));
     }
     let mut data = Vec::new();
-    file.take(MAX_SNAPSHOT + 1)
-        .read_to_end(&mut data)
-        .map_err(|_| fail("storage_error", "cannot read stranded database snapshot"))?;
-    if data.len() as u64 > MAX_SNAPSHOT {
+    let mut input = file.take(max_bytes + 1);
+    let mut buffer = [0u8; 65_536];
+    loop {
+        check()?;
+        let count = input
+            .read(&mut buffer)
+            .map_err(|_| fail("storage_error", "cannot read database snapshot"))?;
+        if count == 0 {
+            break;
+        }
+        data.extend_from_slice(&buffer[..count]);
+    }
+    if data.len() as u64 > max_bytes {
         return Err(fail(
             "storage_error",
             "stranded database snapshot is too large",
@@ -46,7 +60,12 @@ fn read_file(path: &Path) -> Result<Vec<u8>, BoundaryError> {
     }
     Ok(data)
 }
-fn hash_file(path: &Path) -> Result<sha2::digest::Output<Sha256>, BoundaryError> {
+fn hash_file(
+    path: &Path,
+    max_bytes: u64,
+    check: &dyn Fn() -> Result<(), BoundaryError>,
+) -> Result<sha2::digest::Output<Sha256>, BoundaryError> {
+    check()?;
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -55,17 +74,18 @@ fn hash_file(path: &Path) -> Result<sha2::digest::Output<Sha256>, BoundaryError>
     let metadata = file
         .metadata()
         .map_err(|_| fail("storage_error", "cannot inspect stranded database snapshot"))?;
-    if !metadata.is_file() || metadata.len() > MAX_SNAPSHOT {
+    if !metadata.is_file() || metadata.len() > max_bytes {
         return Err(fail(
             "storage_error",
             "stranded database snapshot is too large or not a regular file",
         ));
     }
-    let mut input = file.take(MAX_SNAPSHOT + 1);
+    let mut input = file.take(max_bytes + 1);
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 65_536];
     let mut total = 0u64;
     loop {
+        check()?;
         let count = input
             .read(&mut buffer)
             .map_err(|_| fail("storage_error", "cannot read stranded database snapshot"))?;
@@ -73,7 +93,7 @@ fn hash_file(path: &Path) -> Result<sha2::digest::Output<Sha256>, BoundaryError>
             break;
         }
         total += count as u64;
-        if total > MAX_SNAPSHOT {
+        if total > max_bytes {
             return Err(fail(
                 "storage_error",
                 "stranded database snapshot is too large",
@@ -179,35 +199,70 @@ fn build_image(mut db: Vec<u8>, wal: &[u8]) -> Result<Vec<u8>, BoundaryError> {
 /// Obtain a stable, checksum-verified in-memory SQLite image. No filesystem
 /// writes or SQLite -shm creation occur, including for interrupted WALs.
 pub(crate) fn snapshot(root: &Path) -> Result<Connection, BoundaryError> {
+    snapshot_checked(root, MAX_SNAPSHOT, &|| Ok(()))
+}
+
+/// Stable source image with cooperative checks during I/O. Supports an empty
+/// or absent WAL, and never opens SQLite against the source files.
+pub(crate) fn snapshot_checked(
+    root: &Path,
+    max_bytes: u64,
+    check: &dyn Fn() -> Result<(), BoundaryError>,
+) -> Result<Connection, BoundaryError> {
     let db_path = root.join("sessions.sqlite3");
     let wal_path = root.join("sessions.sqlite3-wal");
+    let wal_bytes = || -> Result<Vec<u8>, BoundaryError> {
+        match std::fs::symlink_metadata(&wal_path) {
+            Ok(_) => read_file(&wal_path, max_bytes, check),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(_) => Err(fail("storage_error", "cannot inspect database WAL")),
+        }
+    };
     for _ in 0..3 {
-        let db = read_file(&db_path)?;
-        let wal = read_file(&wal_path)?;
+        check()?;
+        let db = read_file(&db_path, max_bytes, check)?;
+        let wal = wal_bytes()?;
+        if (db.len() as u64).saturating_add(wal.len() as u64) > max_bytes {
+            return Err(fail(
+                "snapshot_limit",
+                "database and WAL exceed snapshot source limit",
+            ));
+        }
         let db_hash = Sha256::digest(&db);
         let wal_hash = Sha256::digest(&wal);
-        if db_hash != hash_file(&db_path)? || wal_hash != hash_file(&wal_path)? {
+        if db_hash != hash_file(&db_path, max_bytes, check)?
+            || wal_hash != Sha256::digest(wal_bytes()?)
+        {
             continue;
         }
-        let image = build_image(db, &wal)?;
+        let image = if wal.is_empty() {
+            let mut db = db;
+            if db.len() < 100 || &db[..16] != b"SQLite format 3\0" {
+                return Err(fail("storage_corrupt", "invalid database snapshot header"));
+            }
+            db[18] = 1;
+            db[19] = 1;
+            db
+        } else {
+            build_image(db, &wal)?
+        };
+        check()?;
         let mut conn = Connection::open_in_memory()
             .map_err(|_| fail("storage_error", "cannot open in-memory database snapshot"))?;
         conn.deserialize_read_exact(MAIN_DB, image.as_slice(), image.len(), true)
-            .map_err(|_| fail("storage_corrupt", "cannot read stranded database snapshot"))?;
-        let check: String = conn
+            .map_err(|_| fail("storage_corrupt", "cannot read database snapshot"))?;
+        let result: String = conn
             .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
-            .map_err(|_| fail("storage_corrupt", "invalid stranded database snapshot"))?;
-        if check != "ok" {
-            return Err(fail(
-                "storage_corrupt",
-                "invalid stranded database snapshot",
-            ));
+            .map_err(|_| fail("storage_corrupt", "invalid database snapshot"))?;
+        check()?;
+        if result != "ok" {
+            return Err(fail("storage_corrupt", "invalid database snapshot"));
         }
         return Ok(conn);
     }
     Err(fail(
         "storage_busy",
-        "database changed during read-only preflight",
+        "database changed during read-only snapshot",
     ))
 }
 

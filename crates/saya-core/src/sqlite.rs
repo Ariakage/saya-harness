@@ -22,6 +22,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod snapshot;
+pub use snapshot::{SessionSnapshot, SnapshotLimits};
+
 const DB_NAME: &str = "sessions.sqlite3";
 const APPLICATION_ID: i64 = 0x5341_5941;
 const VERSION: i64 = 2;

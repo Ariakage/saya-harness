@@ -1,6 +1,6 @@
 # Session 导出设计
 
-**状态为后续设计草案。Markdown／JSON 导出需求已明确，能力编号 F-19，实现任务为 DEV-043 至 DEV-046。**
+**DEV-043 已实现只读快照。JSON／Markdown 导出与 CLI 接入按 DEV-044 至 DEV-046 继续推进，以下未落地接口保留为草案。**
 
 ## 现有基础与入口
 
@@ -18,7 +18,9 @@ saya --output json session export SESSION_ID --format markdown --file ./session.
 
 ## 一致性快照
 
-在 core 存储层增加只读 Snapshot 查询。一次 SQLite 读事务取得会话、历史、运行、工具、用量、后台状态、上下文来源和相关事件，随后两个导出器读取同一份规范化数据。WAL 模式的读事务具有快照视图，适合此处的跨表读取。实现仍需限制读事务持续时间和 WAL 保留量。[SQLite 隔离说明](https://www.sqlite.org/isolation.html)
+core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits`。源数据库和 WAL 经稳定性哈希及提交帧校验重建为私有内存 image，再通过一次只读事务取得会话、历史、运行、工具、审批、用量、后台状态、上下文来源、持久事件和变更记录。导出器共享该规范化视图。源目录不会因查询创建数据库、SHM、锁或迁移文件，源正在变化且无法取得稳定 image 时返回 `storage_busy`。[SQLite 隔离说明](https://www.sqlite.org/isolation.html)
+
+默认读取限制为源 DB 加 WAL 合计 128 MiB、规范化原始记录合计 32 MiB／100,000 行、5 秒协作期限。调用者可显式缩小或调整限制，源字节硬上限为 512 MiB。I/O 分块和逐行查询检查取消与期限，限额超出返回明确错误。旧数据库返回 `storage_migration_required`，迁移由显式写入入口执行。
 
 快照保存以下元数据。
 
