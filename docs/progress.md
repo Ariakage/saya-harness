@@ -12,7 +12,7 @@
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
-- DEV-038 至 DEV-051 已完成并分别提交，N0 全量本机验收通过。下一任务为 DEV-052 四平台集成验收，随后完成 DEV-053 候选产物与双语说明。
+- DEV-038 至 DEV-052 已完成并分别提交，N0 本机与 N1 四平台集成验收通过。下一任务为 DEV-053 四平台候选产物核验与双语说明。
 
 ## 后续开发状态
 
@@ -32,7 +32,7 @@
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
 | DEV-053 | 进行中（候选准备） | 选择0.2.0-rc.1作为N0／N1测试候选，双语说明、默认入口迁移、设计文档、SemVer打包及四平台原生解包验收接线已准备。最终候选与环境证据见[TUI验证](tui-validation.md)，正式发布安排在后续代码review与其他测试之后 |
-| DEV-052 | 进行中（本机完成，四平台待验收） | 已接入 CI 的13组真实PTY矩阵，覆盖三协议、多行／Unicode／bracketed paste、缩放、4模式×3权限、逐工具审批／澄清、stale approval、会话锁／恢复／导出、后台取消／PLAN清理、unknown、高频流、慢消费者及信号。8项输入／6项终端测试通过，含36轮panic及持续慢读的250ms单帧I/O预算。最终构建与四原生runner证据随后补充 |
+| DEV-052 | 完成（四平台原生验收） | [CI 42407739097](https://github.com/Ariakage/saya-harness/actions/runs/42407739097) 的Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel全部通过，每个平台执行445项Rust测试、优化构建、工具smoke、文本会话、5项审查回归及13组真实PTY场景。包含三协议、多行Unicode／粘贴、4模式×3权限、逐工具审批、模式失效、会话／导出、后台／PLAN、unknown、慢消费者和信号。8项输入／6项终端测试含36轮panic与250ms帧预算，实际证据见[TUI验证](tui-validation.md) |
 | DEV-051 | 完成（本机正常入口） | 无子命令仅在 stdin／stdout 均为 TTY 时进入 TUI，非 TTY／管道及 JSON／JSONL 冲突提前返回2且 stdout为空。3 项新路由回归和 105 项 CLI 测试通过，原 chat／run／resume／session／config 继续使用显式入口，workspace Clippy通过。日志为 target/n1-dev051-*.log，完整本机PTY矩阵结果见 DEV-052 |
 | DEV-050 | 完成（组件与服务验收） | 新建／浏览／恢复会话、profile 选择、工具／后台快照、取消与 JSON／Markdown 导出复用 saya-app。11 项存储服务回归、36 项 TUI lib 测试和全目标 Clippy 通过，覆盖锁释放、unknown／截断及 run_id＋call_id、PLAN 路径、取消／退出后的发布回执、脱敏、SQLite 初始化不阻塞界面，以及工具轮次后的最终回答位置。详情缓存限制为 2 MiB／10,000 逻辑行。日志为 target/n1-dev050-*.log，正常入口在 DEV-051／052 验收 |
 | DEV-049 | 完成 | 复用core RuntimeHandle和输入桥，支持实际／待切换模式、空闲权限、逐工具批准、澄清、命令面板和取消。19项lib测试及Clippy通过，含10项真实受控运行／人机输入边界回归，阻断重复键、组合键与隐藏面板误批准 |

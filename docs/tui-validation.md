@@ -8,7 +8,20 @@ DEV-047 至 DEV-053 覆盖默认 TUI、共享运行控制、会话与记录、�
 
 ## 本机检查
 
-本机为 macOS 27.2 ARM，使用 Rust 1.99.1／edition 2024，macOS 构建部署目标为15.0。0.2.0-rc.1已通过格式检查、workspace全目标Clippy、445项Rust测试与优化构建，日志为本机target/n1-rc-all-check.log。5项发行工具测试通过。最终源码提交与二进制摘要随产物补充，本机系统与最低支持环境分别记录。
+本机为 macOS 27.2 ARM，使用 Rust 1.99.1／edition 2024，macOS 构建部署目标为15.0。源码 `a6c172d4032ec134172c117bdd19fb0acb39a74f` 的0.2.0-rc.1已通过格式检查、workspace全目标Clippy、445项Rust测试与优化构建，最终日志为本机 `target/n1-final-check.log`。5项发行工具测试通过，本机系统与最低支持环境分别记录。
+
+本机候选位于 `target/tui-candidate-a6c172d/`，解包程序完成工具smoke、文本会话、5项审查回归与13组TUI场景。归档成员、包内外二进制、源码声明、版本及Mach-O15.0部署目标均已核对，已配置测试凭据精确值检查通过。证据为同目录的 `local-verification.json`、`tui-journey.json` 与实际110×32终端文本预览。
+
+| 本机对象 | SHA-256 |
+| --- | --- |
+| `saya-0.2.0-rc.1-macos-aarch64.tar.gz` | `9ca4b75f3823da881c0b42821a9723fb0bb8663958a78598988249d76147c486` |
+| 解包 `saya` | `facd68f0fe189c1b0d541c28cbd9a91f91e48b7814227da3cf2e7b2c568cdebb` |
+
+## 原生 CI 修复
+
+首轮Linux ARM检查发现测试将C字符缓冲固定为 `i8`，已改为 `libc::c_char`。Linux x86_64 的满终端恢复测试发现Ratatui析构在恢复blocking文件标志后输出诊断并阻塞，已由私有析构sink和公开draw拒绝恢复后调用的回归修复。另将PTY观察器的后续输入门槛修正为数据库完成和界面最终状态同时成立。旧失败或取消运行分别保留在Actions历史中。
+
+[CI 42407739097](https://github.com/Ariakage/saya-harness/actions/runs/42407739097) 已在Ubuntu22.04的ARM／x86_64和macOS15的ARM／Intel全部通过。四个job均针对 `a6c172d4032ec134172c117bdd19fb0acb39a74f` 执行完整workspace检查与13组TUI验收，Linux两项平台修复已在原生环境复核。
 
 `./scripts/check.sh` 执行格式、workspace Clippy、全部 Rust 测试与优化构建。发行工具包含3项打包测试和各1项 Linux／macOS 验证器测试。默认测试使用本地协议夹具和临时工作区。
 
