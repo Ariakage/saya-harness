@@ -77,6 +77,55 @@ fn request() -> ModelRequest {
 fn chunk(delta: Value, finish: Value) -> Value {
     json!({"choices":[{"index":0,"delta":delta,"finish_reason":finish}],"usage":null})
 }
+#[tokio::test]
+async fn combined_reasoning_and_visible_deltas_are_delivered_independently()
+-> Result<(), Box<dyn std::error::Error>> {
+    let body = fixture::sse(&[
+        chunk(
+            json!({"role":"assistant","reasoning_content":"first ","content":"visible "}),
+            Value::Null,
+        ),
+        chunk(
+            json!({"reasoning_content":"second","content":"answer"}),
+            Value::Null,
+        ),
+        chunk(json!({}), json!("stop")),
+    ]);
+    let (url, _) = fixture::server(vec![("text/event-stream", body)])?;
+    let model = ChatModel::new(
+        transport(url)?,
+        settings(true),
+        ChatCompatibility::default(),
+    );
+    let request = request();
+    let mut stream = model.start(&request, &Never).await?;
+    let mut updates = Vec::new();
+    loop {
+        match stream.next(&Never).await? {
+            Some(ModelUpdate::ThinkingDelta { text }) => updates.push(("thinking", text)),
+            Some(ModelUpdate::TextDelta(text)) => updates.push(("visible", text)),
+            Some(ModelUpdate::Finished { items, .. }) => {
+                assert!(
+                    matches!(&items[..], [HistoryItem::ProviderItem { value, .. }, HistoryItem::AssistantText(text)]
+                    if value["reasoning_content"]=="first second" && text=="visible answer")
+                );
+                break;
+            }
+            Some(ModelUpdate::Progress) => {}
+            None => return Err("missing completion".into()),
+        }
+    }
+    assert_eq!(
+        updates,
+        vec![
+            ("thinking", "first ".into()),
+            ("visible", "visible ".into()),
+            ("thinking", "second".into()),
+            ("visible", "answer".into()),
+        ]
+    );
+    Ok(())
+}
 async fn collect(
     model: &dyn Model,
     request: &ModelRequest,
@@ -89,7 +138,7 @@ async fn collect(
     loop {
         match stream.next(&Never).await? {
             Some(ModelUpdate::TextDelta(delta)) => text.push_str(&delta),
-            Some(ModelUpdate::Progress) => {}
+            Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {}
             Some(ModelUpdate::Finished { items, usage }) => return Ok((items, usage, text)),
             None => return Err("missing finished event".into()),
         }

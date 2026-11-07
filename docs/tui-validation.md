@@ -56,3 +56,17 @@ Darwin PTY在首次输出及canonical/raw切换时会增加内核状态。观察
 ## 验证边界
 
 模型测试使用受控本地HTTP服务，真实模型行为和人机界面主观体验由后续试用补充。命令使用宿主权限，OS Sandbox、MCP和自动Compact按后续计划实施。SIGKILL、崩溃、断电或已断开的物理终端可能需要人工恢复并核查副作用，恢复命令见双语候选说明。
+
+## RC1之后的运行信息与交互完善
+
+2026-11-08，开发线在参考布局和正文配色基础上加入 `todo_write` 会话任务清单、可读Thinking卡片、长工具折叠及鼠标分区滚动。新功能以[开发进度](progress.md#任务清单thinking与可折叠工具)记录实际状态，交互契约见[TUI](tui.md#thinking任务清单与折叠)。
+
+macOS27.2 ARM／Rust1.99.1通过部署目标15.0的完整格式、workspace全目标Clippy、562项Rust测试及优化构建。独立复核包括111项TUI lib、7项终端和41项runtime测试，新增真实进程panic／abort清理、最终Tasks快照及异常句柄消费回归。
+
+优化程序通过18组正常入口PTY，包含三协议明文推理／opaque隔离、默认折叠与鼠标／Ctrl+O展开、单call工具卡、正文伪标题、左右滚轮、逐次Todo批准、PLAN拒写、24行侧栏和SQLite恢复。观察器等待完整UTF-8／控制序列帧，supervisor收尾持续有界排空，终端termios／文件标志／屏幕恢复门槛继续核对。5项发行工具测试、smoke、文本journey及5项审查回归通过。
+
+- 完整日志为 `target/tui-interactive-check-final.log`，PTY报告为 `target/tui-interactive-release-matrix.json`。
+- 二进制SHA-256为 `9050acb2510c02e698f199a7aaf3dbb17a4151a46b12e9e60193ed91fb2ea76b`，实际Mach-O部署目标15.0。
+- 两张PNG由该程序的受控PTY单元格快照渲染，分别为 `target/tui-interactive-thinking-tasks-160x40.png` 和 `target/tui-interactive-expanded-tool-110x36.png`。
+
+本节证据来自本机和本地协议替身，RC1的四平台原生候选验收按上方固定源码记录。

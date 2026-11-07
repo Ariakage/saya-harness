@@ -17,7 +17,7 @@ use std::{ffi::OsString, time::Duration};
 use tokio::sync::{Notify, oneshot};
 
 type ApprovalReceiver = oneshot::Receiver<std::result::Result<Option<bool>, BoundaryError>>;
-fn fixture() -> (tempfile::TempDir, App) {
+pub(super) fn fixture() -> (tempfile::TempDir, App) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
@@ -59,7 +59,7 @@ stream = false
     .unwrap();
     (root, app)
 }
-fn approval(app: &App, id: &str) -> (Request, ApprovalReceiver) {
+pub(super) fn approval(app: &App, id: &str) -> (Request, ApprovalReceiver) {
     let (reply, receiver) = oneshot::channel();
     (
         Request::Approval(
@@ -486,7 +486,7 @@ impl Model for HoldingModel {
         })
     }
 }
-async fn attach_active_call(app: &mut App) {
+pub(super) async fn attach_active_call(app: &mut App) {
     let mut prepared = session::create(&app.config, saya_app::new_session(&app.config).unwrap())
         .await
         .unwrap();
@@ -524,6 +524,7 @@ async fn attach_active_call(app: &mut App) {
     });
     let (_sender, events) = mpsc::channel(1);
     let (_context_sender, context) = watch::channel(None);
+    let (_thinking_sender, thinking) = watch::channel(ThinkingLog::default());
     let (_interaction, requests) = input_channel(1).unwrap();
     app.active = Some(Active {
         cancel,
@@ -531,7 +532,11 @@ async fn attach_active_call(app: &mut App) {
         events,
         events_open: false,
         context,
-        assistant_id: app.state.push_message(Role::Assistant, "fixture", ""),
+        thinking,
+        thinking_ids: HashMap::new(),
+        execution_request: None,
+        assistant_id: None,
+        tool_cards: HashMap::new(),
         handle,
         requests,
         requests_open: false,
@@ -541,13 +546,13 @@ async fn attach_active_call(app: &mut App) {
         .await
         .unwrap();
 }
-async fn stop_active_call(app: &mut App) {
+pub(super) async fn stop_active_call(app: &mut App) {
     app.cancel();
     let active = app.active.as_mut().unwrap();
     let outcome = tokio::time::timeout(Duration::from_secs(5), &mut active.join)
         .await
         .unwrap();
-    app.finish(outcome).unwrap();
+    app.finish(outcome).await.unwrap();
 }
 
 #[tokio::test]
@@ -615,6 +620,11 @@ async fn execution_rounds_follow_their_tool_results_in_the_visible_conversation(
         timestamp: "fixture".into(),
         payload,
     };
+    app.event(event(EventPayload::ModelStarted {
+        request_id: "first".into(),
+        purpose: ModelPurpose::Execution,
+        profile: "fixture".into(),
+    }));
     app.event(event(EventPayload::ModelTextDelta {
         request_id: "first".into(),
         text: "Before the tool".into(),
@@ -742,7 +752,7 @@ async fn final_event_drain_keeps_latest_request_usage_separate_from_run_totals()
         output_tokens: Some(2000),
         estimated: false,
     });
-    app.finish(Ok((Ok(result), session))).unwrap();
+    app.finish(Ok((Ok(result), session))).await.unwrap();
     assert_eq!(app.state.context_input_tokens, Some(512));
     assert!(!app.state.context_estimated);
     assert!(app.state.usage.contains("9000"));

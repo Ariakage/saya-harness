@@ -90,6 +90,69 @@ fn message(text: &str) -> Value {
 fn call_item(id: &str, name: &str, args: &str) -> Value {
     json!({"type":"function_call","id":format!("fc_{id}"),"status":"completed","call_id":id,"name":name,"arguments":args})
 }
+#[tokio::test]
+async fn public_reasoning_deltas_exclude_encrypted_native_content()
+-> Result<(), Box<dyn std::error::Error>> {
+    let reasoning = json!({"type":"reasoning","id":"rs_public","summary":[{"type":"summary_text","text":"summary"}],
+        "content":[{"type":"reasoning_text","text":"public"}],"encrypted_content":"opaque-encrypted"});
+    let output = message("answer");
+    let body = fixture::sse(&[
+        event(
+            "response.reasoning_summary_text.delta",
+            json!({"output_index":0,"summary_index":0,"delta":"summary"}),
+        ),
+        event(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":0,"delta":"public"}),
+        ),
+        event(
+            "response.output_text.delta",
+            json!({"output_index":1,"content_index":0,"delta":"answer"}),
+        ),
+        event(
+            "response.output_item.done",
+            json!({"output_index":0,"item":reasoning}),
+        ),
+        event(
+            "response.output_item.done",
+            json!({"output_index":1,"item":output}),
+        ),
+        done(vec![reasoning.clone(), output]),
+    ]);
+    let (url, requests) = fixture::server(vec![("text/event-stream", body)])?;
+    let model = ResponsesModel::new(
+        transport(url)?,
+        settings(true),
+        ResponsesCompatibility::default(),
+    );
+    let request = request();
+    let mut stream = model.start(&request, &Never).await?;
+    let mut thinking = Vec::new();
+    let mut visible = String::new();
+    loop {
+        match stream.next(&Never).await? {
+            Some(ModelUpdate::ThinkingDelta { text }) => thinking.push(text),
+            Some(ModelUpdate::TextDelta(text)) => visible.push_str(&text),
+            Some(ModelUpdate::Finished { items, .. }) => {
+                assert!(
+                    matches!(&items[0], HistoryItem::ProviderItem { value, .. } if *value==reasoning)
+                );
+                break;
+            }
+            Some(ModelUpdate::Progress) => {}
+            None => return Err("missing completion".into()),
+        }
+    }
+    assert_eq!(thinking, ["summary", "public"]);
+    assert_eq!(visible, "answer");
+    assert!(
+        requests
+            .recv_timeout(Duration::from_secs(1))?
+            .get("reasoning")
+            .is_none()
+    );
+    Ok(())
+}
 async fn collect(
     model: &dyn Model,
     req: &ModelRequest,
@@ -102,7 +165,7 @@ async fn collect(
     loop {
         match stream.next(&Never).await? {
             Some(ModelUpdate::TextDelta(s)) => text.push_str(&s),
-            Some(ModelUpdate::Progress) => {}
+            Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {}
             Some(ModelUpdate::Finished { items, usage }) => return Ok((items, usage, text)),
             None => return Err("missing completion".into()),
         }

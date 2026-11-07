@@ -11,7 +11,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -238,6 +238,7 @@ impl Model for ChatModel {
                     events: response.events()?,
                     state: ChatState::default(),
                     ended: false,
+                    pending: VecDeque::new(),
                 }) as Box<dyn ModelStream>)
             } else {
                 let value = response.json(cancel).await?;
@@ -280,12 +281,19 @@ struct ChatStream {
     events: EventStream,
     state: ChatState,
     ended: bool,
+    pending: VecDeque<ModelUpdate>,
 }
 impl ModelStream for ChatStream {
     fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
         Box::pin(async move {
             if self.ended {
                 return Ok(None);
+            }
+            if cancel.is_cancelled() {
+                return Err(failure("cancelled", "request cancelled"));
+            }
+            if let Some(update) = self.pending.pop_front() {
+                return Ok(Some(update));
             }
             let event = self.events.next(cancel).await?.ok_or_else(|| {
                 failure(
@@ -311,8 +319,18 @@ impl ModelStream for ChatStream {
                 )
             })?;
             let delta = self.state.update(&value)?;
+            if let Some(text) = value["choices"][0]["delta"]["reasoning_content"]
+                .as_str()
+                .filter(|text| !text.is_empty())
+            {
+                self.pending
+                    .push_back(ModelUpdate::ThinkingDelta { text: text.into() });
+            }
+            if let Some(text) = delta {
+                self.pending.push_back(ModelUpdate::TextDelta(text));
+            }
             Ok(Some(
-                delta.map_or(ModelUpdate::Progress, ModelUpdate::TextDelta),
+                self.pending.pop_front().unwrap_or(ModelUpdate::Progress),
             ))
         })
     }

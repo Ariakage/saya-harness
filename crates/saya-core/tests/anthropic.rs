@@ -96,6 +96,61 @@ fn delta(index: usize, delta: Value) -> Value {
 fn block_stop(index: usize) -> Value {
     event("content_block_stop", json!({"index":index}))
 }
+#[tokio::test]
+async fn thinking_deltas_exclude_signatures_and_redacted_blocks()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut events = vec![
+        start(),
+        block_start(0, json!({"type":"thinking","thinking":""})),
+        delta(
+            0,
+            json!({"type":"thinking_delta","thinking":"public thought"}),
+        ),
+        delta(
+            0,
+            json!({"type":"signature_delta","signature":"opaque-signature"}),
+        ),
+        block_stop(0),
+        block_start(
+            1,
+            json!({"type":"redacted_thinking","data":"opaque-redacted"}),
+        ),
+        block_stop(1),
+        block_start(2, json!({"type":"text","text":"answer"})),
+        block_stop(2),
+    ];
+    events.extend(stop("end_turn"));
+    let (url, requests) = fixture::server(vec![("text/event-stream", sse(&events))])?;
+    let model = AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default());
+    let request = request();
+    let mut stream = model.start(&request, &Never).await?;
+    let mut thinking = String::new();
+    loop {
+        match stream.next(&Never).await? {
+            Some(ModelUpdate::ThinkingDelta { text }) => thinking.push_str(&text),
+            Some(ModelUpdate::Finished { items, .. }) => {
+                assert!(items.iter().any(
+                    |item| matches!(item, HistoryItem::ProviderItem { value, .. }
+                    if value["signature"]=="opaque-signature")
+                ));
+                assert!(items.iter().any(
+                    |item| matches!(item, HistoryItem::AssistantText(text) if text=="answer")
+                ));
+                break;
+            }
+            Some(_) => {}
+            None => return Err("missing completion".into()),
+        }
+    }
+    assert_eq!(thinking, "public thought");
+    assert!(
+        requests
+            .recv_timeout(Duration::from_secs(1))?
+            .get("thinking")
+            .is_none()
+    );
+    Ok(())
+}
 fn stop(reason: &str) -> Vec<Value> {
     vec![
         event(
@@ -129,7 +184,7 @@ async fn collect(
     loop {
         match stream.next(&Never).await? {
             Some(ModelUpdate::TextDelta(s)) => text.push_str(&s),
-            Some(ModelUpdate::Progress) => {}
+            Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {}
             Some(ModelUpdate::Finished { items, usage }) => return Ok((items, usage, text)),
             None => return Err("missing completion".into()),
         }

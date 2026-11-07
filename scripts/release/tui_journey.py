@@ -283,6 +283,24 @@ class Screen:
                     return self.colors[row][column]
         return None
 
+    def fold_headers(self, role=None, details=False):
+        width = self.main_width()
+        end = self.status_row()
+        if width is None or end is None:
+            return []
+        if details and width >= 100:
+            width -= min(48, max(32, (width - 2) // 3))
+        headers = []
+        for row in range(2, end):
+            for column in range(1, width - 1):
+                text = ''.join(self.cells[row][column:width - 1]).rstrip()
+                if (text.startswith(('▶ Thinking', '▼ Thinking', '▶ Tool', '▼ Tool')) and
+                        self.colors[row][column][1] == (23, 23, 27) and
+                        (role is None or text[2:].startswith(role))):
+                    headers.append((column, row, text))
+                    break
+        return headers
+
     def popup_text(self):
         width = self.main_width()
         if width is None:
@@ -370,7 +388,7 @@ class SupervisedProcess:
         except ProcessLookupError:
             pass
 
-    def close(self):
+    def close(self, drain=None):
         if self.poll() is None:
             self.kill()
             self.wait(timeout=10)
@@ -382,11 +400,20 @@ class SupervisedProcess:
         os.close(self.status_read)
         deadline = time.monotonic() + 10
         while self.supervisor.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.01)
+            if drain is None:
+                time.sleep(0.01)
+            else:
+                drain()
         if self.supervisor.poll() is None:
             self.supervisor.kill()
-            _, status = os.waitpid(self.supervisor.pid, 0)
-            self.supervisor.returncode = os.waitstatus_to_exitcode(status)
+            deadline = time.monotonic() + 5
+            while self.supervisor.poll() is None and time.monotonic() < deadline:
+                if drain is None:
+                    time.sleep(0.01)
+                else:
+                    drain()
+            if self.supervisor.poll() is None:
+                raise RuntimeError('terminal supervisor did not exit after bounded output drain and SIGKILL')
 
 
 class Terminal:
@@ -448,6 +475,15 @@ class Terminal:
     def until(self, text, timeout=20):
         self.wait(lambda: text in self.screen.text, repr(text), timeout)
 
+    def settle(self):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([self.master], [], [], 0.05)
+            if not ready and not self.screen.pending and not self.screen.decoder.getstate()[0]:
+                return
+            self.pump(0)
+        raise RuntimeError('terminal output did not reach a complete quiet frame\n' + self.screen.text)
+
     def title(self):
         self.wait(lambda: self.screen.main_row_text(0).startswith('Saya Harness'), 'TUI title in its header region')
 
@@ -465,6 +501,12 @@ class Terminal:
 
     def line(self, value):
         self.send(value + '\r')
+
+    def click(self, column, row):
+        self.send(f'\x1b[<0;{column + 1};{row + 1}M\x1b[<0;{column + 1};{row + 1}m')
+
+    def wheel(self, column, row, down=True):
+        self.send(f'\x1b[<{65 if down else 64};{column + 1};{row + 1}M')
 
     def finish(self, code=0):
         self.send(b'\x04')
@@ -488,12 +530,12 @@ class Terminal:
         # controlling session leader exits. Darwin may otherwise drain on exit.
         for _ in range(16):
             self.pump(0)
-        self.process.close()
+        self.process.close(lambda: self.pump(0.01))
         os.close(self.master)
         os.close(self.slave)
 
 
-def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, chat_reasoning=None):
+def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, chat_reasoning=None, thinking=None):
     pieces = pieces if pieces is not None else [text]
     if protocol == 'openai-chat-completions':
         delta = {'content': text}
@@ -502,8 +544,9 @@ def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, 
             delta = {'tool_calls': [{'index': 0, 'id': identifier, 'type': 'function',
                                     'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
         deltas = [delta] if call else [{'content': piece} for piece in pieces]
-        if chat_reasoning is not None:
-            deltas = [{'reasoning_content': piece} for piece in chat_reasoning] + deltas
+        reasoning = chat_reasoning if chat_reasoning is not None else thinking
+        if reasoning is not None:
+            deltas = [{'reasoning_content': piece} for piece in reasoning] + deltas
         events = [{'choices': [{'index': 0, 'delta': piece, 'finish_reason': None}]} for piece in deltas]
         events.append({'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls' if call else 'stop'}]})
         if chat_usage is not None:
@@ -520,8 +563,19 @@ def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, 
                     'content': [{'type': 'output_text', 'text': text}]}
             events = [{'type': 'response.output_text.delta', 'output_index': 0,
                        'content_index': 0, 'delta': piece} for piece in pieces]
-        events += [{'type': 'response.output_item.done', 'output_index': 0, 'item': item},
-                   {'type': 'response.completed', 'response': {'status': 'completed', 'output': [item]}}]
+        output = [item]
+        if thinking is not None:
+            reasoning = {'type': 'reasoning', 'id': 'reasoning-fixture',
+                         'summary': [{'type': 'summary_text', 'text': ''.join(thinking)}],
+                         'encrypted_content': 'OPAQUE_ENCRYPTED_FIXTURE'}
+            for event in events:
+                event['output_index'] = 1
+            events = [{'type': 'response.reasoning_summary_text.delta', 'output_index': 0,
+                       'summary_index': 0, 'delta': piece} for piece in thinking] + events
+            events.append({'type': 'response.output_item.done', 'output_index': 0, 'item': reasoning})
+            output.insert(0, reasoning)
+        events += [{'type': 'response.output_item.done', 'output_index': len(output) - 1, 'item': item},
+                   {'type': 'response.completed', 'response': {'status': 'completed', 'output': output}}]
         return ''.join('data: ' + json.dumps(event) + '\n\n' for event in events)
     if call:
         identifier, name, arguments = call
@@ -531,9 +585,22 @@ def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, 
         block = {'type': 'text', 'text': ''}
         deltas = [{'type': 'content_block_delta', 'index': 0,
                    'delta': {'type': 'text_delta', 'text': piece}} for piece in pieces]
-    events = [{'type': 'message_start', 'message': {'role': 'assistant', 'content': []}},
-              {'type': 'content_block_start', 'index': 0, 'content_block': block}, *deltas,
-              {'type': 'content_block_stop', 'index': 0},
+    prefix = []
+    index = 0
+    if thinking is not None:
+        index = 1
+        prefix = [{'type': 'content_block_start', 'index': 0,
+                   'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}},
+                  *[{'type': 'content_block_delta', 'index': 0,
+                     'delta': {'type': 'thinking_delta', 'thinking': piece}} for piece in thinking],
+                  {'type': 'content_block_delta', 'index': 0,
+                   'delta': {'type': 'signature_delta', 'signature': 'OPAQUE_SIGNATURE_FIXTURE'}},
+                  {'type': 'content_block_stop', 'index': 0}]
+        for event in deltas:
+            event['index'] = index
+    events = [{'type': 'message_start', 'message': {'role': 'assistant', 'content': []}}, *prefix,
+              {'type': 'content_block_start', 'index': index, 'content_block': block}, *deltas,
+              {'type': 'content_block_stop', 'index': index},
               {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use' if call else 'end_turn'}},
               {'type': 'message_stop'}]
     return ''.join(f'event: {event["type"]}\ndata: {json.dumps(event)}\n\n' for event in events)
@@ -559,7 +626,8 @@ class Fixture:
                 if 'delay' in reply:
                     time.sleep(reply['delay'])
                 body = protocol_stream(protocol, reply.get('text', ''), reply.get('call'),
-                                       reply.get('pieces'), reply.get('chat_usage'), reply.get('chat_reasoning')).encode()
+                                       reply.get('pieces'), reply.get('chat_usage'), reply.get('chat_reasoning'),
+                                       reply.get('thinking')).encode()
                 if reply.get('partial'):
                     body = body.split(b'\n\n', 1)[0] + b'\n\n'
                 try:
@@ -609,7 +677,9 @@ def stream_journey(binary, protocol):
                           'https://example.test', '<b>literal html</b>', '```rust',
                           'let x = **literal**;', '```', 'RichTextEnd'])
     response = 'TUI_STREAM_你好_🌸\n' + markdown
-    fixture = Fixture(protocol, [{'text': response, 'pieces': ['TUI_STREAM_', '你好_', '🌸', '\n' + markdown]}])
+    thought = 'PROTOCOL_THINKING_你好_FIXTURE'
+    fixture = Fixture(protocol, [{'text': response, 'pieces': ['TUI_STREAM_', '你好_', '🌸', '\n' + markdown],
+                                 'thinking': [thought]}])
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-stream-') as directory:
             root = Path(directory)
@@ -632,6 +702,15 @@ def stream_journey(binary, protocol):
                 result = wait_idle(terminal, root)
                 if result.get('text') != response:
                     raise RuntimeError('Markdown presentation changed the persisted model response')
+                if thought in terminal.screen.body_text():
+                    raise RuntimeError('provider plaintext thinking was expanded by default')
+                terminal.send(b'\x0f')
+                terminal.wait(lambda: thought in terminal.screen.body_text(), 'protocol thinking expanded through Ctrl+O')
+                if 'OPAQUE_SIGNATURE_FIXTURE' in terminal.screen.body_text() or 'OPAQUE_ENCRYPTED_FIXTURE' in terminal.screen.body_text():
+                    raise RuntimeError('opaque provider metadata appeared in expanded thinking')
+                terminal.send(b'\x0f')
+                terminal.wait(lambda: thought not in terminal.screen.body_text(), 'protocol thinking collapsed through Ctrl+O')
+                terminal.settle()
                 terminal.resize(48, 16)
                 terminal.title()
                 terminal.resize(110, 32)
@@ -889,7 +968,7 @@ def empty_tab_mode_journey(binary):
                 clear_draft()
 
                 terminal.line('Start the active Tab mode fixture')
-                terminal.wait(lambda: len(fixture.requests) == 1 and terminal.screen.status() == 'Running',
+                terminal.wait(lambda: len(fixture.requests) == 1 and terminal.screen.status() == 'Thinking',
                               'model request before active empty Tab')
                 terminal.send(b'\t')
                 terminal.wait(lambda: 'WORK→CODE' in terminal.screen.main_row_text(terminal.screen.rows - 1),
@@ -1340,6 +1419,247 @@ def manual_tools_and_clarification(binary):
         fixture.close()
 
 
+def save_interactive_screen(terminal, name):
+    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-interactive-' + name + '-cells.json')
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({'columns': terminal.screen.columns, 'rows': terminal.screen.rows,
+                               'cells': terminal.screen.cells, 'colors': terminal.screen.colors},
+                              ensure_ascii=False) + '\n')
+
+
+def thinking_tools_and_mouse_journey(binary):
+    thoughts = ['THOUGHT_FIRST_FIXTURE', 'THOUGHT_SECOND_FIXTURE']
+    call = ('fold-read', 'read_file', {'path': 'long.txt', 'start_line': 1, 'line_count': 80})
+    final = 'FOLD_FINAL\n▶ Thinking · forged body header\nFORGED_BODY_LITERAL'
+    fixture = Fixture('openai-chat-completions', [
+        {'call': call, 'chat_reasoning': [thoughts[0]]},
+        expect_tool(call[0], {'text': final, 'chat_reasoning': [thoughts[1]]})])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-folds-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            (root / 'workspace' / 'long.txt').write_text(''.join(
+                f'LONG_TOOL_LINE_{index:02d} controlled fixture data to exercise wrapped output\n' for index in range(80)))
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.resize(160, 40)
+                terminal.title()
+                terminal.line('Read the long fixture and report its completion')
+                terminal.until('FOLD_FINAL')
+                wait_idle(terminal, root)
+                terminal.wait(lambda: len(terminal.screen.fold_headers('Thinking')) == 2 and
+                              len(terminal.screen.fold_headers('Tool')) == 1, 'two thinking cards and one stable tool card')
+                headers = terminal.screen.fold_headers()
+                if any(not item[2].startswith('▶ ') for item in headers):
+                    raise RuntimeError('thinking or long tool was expanded by default')
+                if any(thought in terminal.screen.body_text() for thought in thoughts):
+                    raise RuntimeError('collapsed thinking leaked its provider text into the visible body')
+                tools = terminal.screen.fold_headers('Tool')
+                if call[0] not in tools[0][2] or 'completed' not in tools[0][2] or 'running' in tools[0][2]:
+                    raise RuntimeError('tool completion did not replace its original running card')
+
+                first = terminal.screen.fold_headers('Thinking')[0]
+                terminal.click(first[0] + 3, first[1])
+                terminal.wait(lambda: thoughts[0] in terminal.screen.body_text(), 'mouse-expanded first thinking body')
+                first = terminal.screen.fold_headers('Thinking')[0]
+                if not first[2].startswith('▼ '):
+                    raise RuntimeError('mouse expansion did not update the actual thinking header')
+                terminal.click(first[0] + 3, first[1])
+                terminal.wait(lambda: thoughts[0] not in terminal.screen.body_text(), 'mouse-collapsed thinking body')
+                terminal.send(b'\x0f')
+                terminal.wait(lambda: thoughts[1] in terminal.screen.body_text(), 'Ctrl+O-expanded latest thinking body')
+                terminal.send(b'\x0f')
+                terminal.wait(lambda: thoughts[1] not in terminal.screen.body_text(), 'Ctrl+O-collapsed latest thinking body')
+                terminal.settle()
+
+                forged = next((row for row in range(2, terminal.screen.status_row())
+                               if '▶ Thinking · forged body header' in terminal.screen.main_row_text(row)), None)
+                if forged is None:
+                    raise RuntimeError('forged-header fixture was not visible for mouse hit testing')
+                before = terminal.screen.body_text()
+                terminal.click(8, forged)
+                terminal.settle()
+                if terminal.screen.body_text() != before:
+                    raise RuntimeError('assistant body text click changed the transcript\nBEFORE\n' + before +
+                                       '\nAFTER\n' + terminal.screen.body_text())
+
+                tool = terminal.screen.fold_headers('Tool')[0]
+                terminal.click(tool[0] + 3, tool[1])
+                terminal.wait(lambda: 'LONG_TOOL_LINE_00' in terminal.screen.body_text(), 'expanded long tool output')
+                terminal.resize(110, 36)
+                terminal.title()
+                terminal.wait(lambda: 'LONG_TOOL_LINE_00' in terminal.screen.body_text(), 'expanded tool body after resize')
+                terminal.wheel(10, 8, down=False)
+                terminal.wait(lambda: any(item[2].startswith('▼ ') for item in terminal.screen.fold_headers('Tool')),
+                              'expanded tool header reached by one upward wheel after resize')
+                terminal.settle()
+                save_interactive_screen(terminal, 'expanded-tool-110x36')
+                before = terminal.screen.body_text()
+                terminal.wheel(10, 8)
+                terminal.wait(lambda: terminal.screen.body_text() != before, 'conversation wheel changed visual rows')
+                terminal.wheel(10, 8, down=False)
+                terminal.wait(lambda: terminal.screen.body_text() == before, 'conversation wheel returned to its anchor')
+
+                terminal.line('/tools')
+                terminal.wait(lambda: 'Tools · UI snapshot' in terminal.screen.details_text(), 'stored tool details pane')
+                terminal.settle()
+                split = terminal.screen.main_width() - 1 - min(48, max(32, (terminal.screen.main_width() - 2) // 3))
+                def conversation():
+                    return '\n'.join(''.join(terminal.screen.cells[row][1:split]) for row in range(2, terminal.screen.status_row()))
+                left, right = conversation(), terminal.screen.details_text()
+                terminal.wheel(split + 4, 8)
+                terminal.wait(lambda: terminal.screen.details_text() != right, 'hovered details wheel advanced the details viewport')
+                terminal.settle()
+                if conversation() != left:
+                    raise RuntimeError('details wheel changed the conversation viewport')
+                right = terminal.screen.details_text()
+                terminal.wheel(10, 8)
+                terminal.wait(lambda: conversation() != left, 'hovered conversation wheel advanced only the conversation')
+                terminal.settle()
+                if terminal.screen.details_text() != right:
+                    raise RuntimeError('conversation wheel changed the details viewport')
+                left = conversation()
+                terminal.wheel(10, terminal.screen.rows - 4)
+                terminal.settle()
+                if conversation() != left or terminal.screen.details_text() != right:
+                    raise RuntimeError('editor wheel changed a transcript or details viewport')
+                identifier = session_data(binary, root, config)[0]['id']
+                terminal.finish()
+                for marker in (b'\x1b[?1000h', b'\x1b[?1006h', b'\x1b[?1000l', b'\x1b[?1006l'):
+                    if marker not in terminal.raw:
+                        raise RuntimeError('terminal mouse capture was not enabled and restored')
+            finally:
+                terminal.close()
+
+            restored = invoke(binary, root, config)
+            try:
+                restored.resize(160, 40)
+                restored.title()
+                restored.line('/resume ' + identifier)
+                restored.until('Session restored.')
+                restored.wait(lambda: len(restored.screen.fold_headers('Thinking')) == 2 and
+                              len(restored.screen.fold_headers('Tool')) == 1, 'restored thinking and linked tool cards')
+                if len(fixture.requests) != 2 or any(thought in restored.screen.body_text() for thought in thoughts):
+                    raise RuntimeError('restoring folded provider history replayed a model or displayed hidden text')
+                restored.send(b'\x0f')
+                restored.wait(lambda: thoughts[1] in restored.screen.body_text(), 'restored provider plaintext thinking expansion')
+                exported = root / 'fold transcript.json'
+                restored.line('/export json ' + str(exported))
+                restored.wait(exported.exists, 'restored transcript export')
+                restored.until('Exported')
+                if any(thought in exported.read_text() for thought in thoughts):
+                    raise RuntimeError('default session export exposed provider thinking')
+                restored.finish()
+            finally:
+                restored.close()
+    finally:
+        fixture.close()
+
+
+def todos_manual_plan_and_restore_journey(binary):
+    def items(first, second):
+        return [{'id': 'step-1', 'content': 'Inspect controlled fixture', 'status': first},
+                {'id': 'step-2', 'content': 'Verify terminal interaction', 'status': second}]
+    snapshots = [items('pending', 'pending'), items('in_progress', 'pending'), items('completed', 'completed')]
+    calls = [('todo-' + str(index + 1), 'todo_write', {'todos': snapshot}) for index, snapshot in enumerate(snapshots)]
+    write = ('todo-plan-write', 'write_file', {'path': 'must-not-exist.txt', 'content': 'forbidden in PLAN'})
+    def after_todo(index):
+        def reply(request):
+            result = tool_result(request, calls[index][0])
+            if not result.get('ok') or result.get('data', {}).get('todos') != snapshots[index]:
+                raise RuntimeError('todo_write did not return its canonical full-list replacement')
+            contexts = []
+            for message in request.get('messages', []):
+                if message.get('role') == 'user' and isinstance(message.get('content'), str):
+                    for line in message['content'].splitlines():
+                        try:
+                            value = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if 'saya_runtime_context_v1' in value:
+                            contexts.append(value['saya_runtime_context_v1'])
+            if not contexts or contexts[-1].get('todos') != snapshots[index]:
+                raise RuntimeError('latest canonical todos were omitted from the next runtime context')
+            return {'call': calls[index + 1] if index < 2 else write}
+        return reply
+    def denied(request):
+        result = tool_result(request, write[0])
+        if result.get('ok') or result.get('error', {}).get('code') != 'permission_denied':
+            raise RuntimeError('PLAN task metadata support allowed a workspace write')
+        return {'text': 'TODO_PLAN_DONE', 'chat_reasoning': ['TODO_THOUGHT_FINAL_FIXTURE']}
+    fixture = Fixture('openai-chat-completions', [
+        {'call': calls[0], 'chat_reasoning': ['TODO_THOUGHT_FIRST_FIXTURE']},
+        after_todo(0), after_todo(1), after_todo(2), denied])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-todos-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            config = configuration(root, fixture, 'manual')
+            terminal = invoke(binary, root, config, ['--mode', 'plan'])
+            try:
+                terminal.resize(160, 40)
+                terminal.title()
+                terminal.line('Track and finish two fixture tasks in PLAN')
+                terminal.wait(lambda: calls[0][0] in terminal.screen.details_text() and
+                              terminal.screen.status() == 'Awaiting approval', 'first todo manual approval')
+                if terminal.screen.sidebar_row_text(21) != 'No tasks' or len(fixture.requests) != 1:
+                    raise RuntimeError('an unapproved todo_write changed the task list')
+                terminal.send('y')
+                terminal.wait(lambda: calls[1][0] in terminal.screen.details_text() and
+                              terminal.screen.status() == 'Awaiting approval', 'second todo manual approval')
+                terminal.wait(lambda: 'Tasks · 0/2' in terminal.screen.sidebar_row_text(20), 'two pending tasks after approval')
+                if not terminal.screen.sidebar_row_text(21).startswith('○ ') or len(fixture.requests) != 2:
+                    raise RuntimeError('pending tasks or the second manual approval were skipped')
+                terminal.resize(120, 24)
+                terminal.title()
+                terminal.wait(lambda: 'Tasks · 0/2' in terminal.screen.sidebar_row_text(12) and
+                              'Extensions' in terminal.screen.sidebar_row_text(19), 'short sidebar prioritizes real task metadata')
+                if not terminal.screen.sidebar_row_text(13).startswith('○ '):
+                    raise RuntimeError('unapproved in_progress replacement changed the short task list')
+                terminal.send('y')
+                terminal.wait(lambda: calls[2][0] in terminal.screen.details_text() and
+                              terminal.screen.status() == 'Awaiting approval', 'third todo manual approval')
+                terminal.wait(lambda: terminal.screen.sidebar_row_text(13).startswith('◐ '), 'approved in_progress task icon')
+                if 'Tasks · 0/2' not in terminal.screen.sidebar_row_text(12) or len(fixture.requests) != 3:
+                    raise RuntimeError('completion metadata changed before its third approval')
+                terminal.send('y')
+                terminal.until('TODO_PLAN_DONE')
+                wait_idle(terminal, root)
+                terminal.resize(160, 40)
+                terminal.title()
+                terminal.wait(lambda: 'Tasks · 2/2' in terminal.screen.sidebar_row_text(20), 'completed canonical task count')
+                if any(not terminal.screen.sidebar_row_text(row).startswith('✓ ') for row in (21, 22)):
+                    raise RuntimeError('completed task icons were not rendered from successful results')
+                if len(fixture.requests) != 5 or (root / 'workspace' / 'must-not-exist.txt').exists():
+                    raise RuntimeError('PLAN task tracking changed the workspace or required an unexpected request')
+                if any('TODO_THOUGHT_' in terminal.screen.main_row_text(row) for row in range(2, terminal.screen.status_row())):
+                    raise RuntimeError('default folded task thinking was visible')
+                terminal.settle()
+                save_interactive_screen(terminal, 'thinking-tasks-160x40')
+                identifier = session_data(binary, root, config)[0]['id']
+                terminal.finish()
+            finally:
+                terminal.close()
+            restored = invoke(binary, root, config)
+            try:
+                restored.resize(160, 40)
+                restored.title()
+                restored.line('/resume ' + identifier)
+                restored.until('Session restored.')
+                restored.wait(lambda: 'Tasks · 2/2' in restored.screen.sidebar_row_text(20) and restored.mode() == 'PLAN',
+                              'task list and PLAN mode restored from canonical history')
+                if len(fixture.requests) != 5 or restored.mode() != 'PLAN':
+                    raise RuntimeError('task restoration replayed tools or changed the stored work mode')
+                if any(not restored.screen.sidebar_row_text(row).startswith('✓ ') for row in (21, 22)):
+                    raise RuntimeError('restored tasks did not preserve completion')
+                restored.finish()
+            finally:
+                restored.close()
+    finally:
+        fixture.close()
+
+
 def mode_change_invalidates_approval(binary):
     call = ('stale-write', 'write_file', {'path': 'must-not-exist.txt', 'content': 'unapproved'})
     def after(request):
@@ -1688,6 +2008,10 @@ def main():
     passed('reference-layout-input-meter-and-window-title')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
+    thinking_tools_and_mouse_journey(binary)
+    passed('thinking-tool-folds-mouse-scroll-and-restore')
+    todos_manual_plan_and_restore_journey(binary)
+    passed('todos-manual-plan-sidebar-and-restore')
     mode_change_invalidates_approval(binary)
     passed('mode-change-invalidates-write-approval')
     session_restore_and_export(binary)

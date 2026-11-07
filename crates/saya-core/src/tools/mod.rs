@@ -1,5 +1,6 @@
-//! Local tool building blocks. These are not wired to the CLI or an agent loop.
+//! Local tool adapters and session task metadata used by runtime dispatch.
 
 pub mod exec;
 pub mod read;
+pub mod todo;
 pub mod write;

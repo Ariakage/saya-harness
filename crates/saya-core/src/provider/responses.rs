@@ -602,17 +602,21 @@ impl StreamState {
             "response.refusal.delta" | "response.refusal.done" => {
                 Err(failure("provider_refusal", "provider refused the request"))
             }
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                obj.get("delta").and_then(Value::as_str).ok_or_else(|| {
+                    failure("invalid_model_response", "invalid reasoning text delta")
+                })?;
+                Ok(None)
+            }
             "response.created"
             | "response.in_progress"
             | "response.output_item.added"
             | "response.content_part.added"
             | "response.content_part.done"
             | "response.output_text.done"
-            | "response.reasoning_summary_text.delta"
             | "response.reasoning_summary_text.done"
             | "response.reasoning_summary_part.added"
             | "response.reasoning_summary_part.done"
-            | "response.reasoning_text.delta"
             | "response.reasoning_text.done" => Ok(None),
             _ => Err(failure(
                 "invalid_model_response",
@@ -691,11 +695,14 @@ impl ModelStream for ResponsesStream {
                             "provider event type mismatch",
                         ));
                     }
-                    Ok(Some(
-                        self.state
-                            .update(&value)?
-                            .map_or(ModelUpdate::Progress, ModelUpdate::TextDelta),
-                    ))
+                    let visible = self.state.update(&value)?;
+                    Ok(Some(match kind {
+                        "response.reasoning_summary_text.delta"
+                        | "response.reasoning_text.delta" => ModelUpdate::ThinkingDelta {
+                            text: value["delta"].as_str().unwrap_or_default().into(),
+                        },
+                        _ => visible.map_or(ModelUpdate::Progress, ModelUpdate::TextDelta),
+                    }))
                 }
             }
         })

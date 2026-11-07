@@ -44,6 +44,8 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 `saya chat` 保留文本交互，`run`、`resume`、`session`、`config` 和 `logs` 继续通过显式子命令使用。无子命令的管道／非终端调用、JSON／JSONL 输出冲突返回用法错误2，stdout为空，并在打开配置、会话或终端之前提示选择具体子命令。脚本输入使用 `saya run --stdin`。
 
+Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制指针所在的对话／详情区域。全屏Tasks展示模型通过 `todo_write` 维护的会话进度，恢复后沿用最近成功列表。可读推理的服务范围与显示限制见[TUI说明](tui.md#thinking任务清单与折叠)。
+
 ## 单次任务与文本会话
 
 以下示例假定在仓库根目录执行，`config_path` 指向已修改且可连接的配置；如要使用其他工作区，在子命令前加全局参数 `--cwd PATH`。模型可能根据任务请求工具，执行前按当前权限策略判断：

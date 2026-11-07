@@ -219,7 +219,7 @@ pub fn system_context(
 
 /// Encode known per-request facts as data, never as high-priority instructions.
 /// The caller supplies the effective run mode after applying pending changes.
-/// No filesystem probes, configuration loading, credentials or history copying.
+/// Session tasks are derived from successful persisted tool pairs.
 pub fn runtime_context(session: &Session, run: &Run) -> Result<HistoryItem, BoundaryError> {
     if session.id != run.session_id {
         return Err(BoundaryError(
@@ -248,7 +248,8 @@ pub fn runtime_context(session: &Session, run: &Run) -> Result<HistoryItem, Boun
             "model": session.model,
             "protocol": session.protocol,
             "work_mode": run.work_mode,
-            "permission_mode": run.permissions
+            "permission_mode": run.permissions,
+            "todos": crate::tools::todo::current_todos(&session.history)
         }
     });
     Ok(HistoryItem::UserText(data.to_string()))

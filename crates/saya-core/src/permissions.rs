@@ -99,6 +99,7 @@ enum Target {
     },
     Input,
     BackgroundControl,
+    Metadata,
 }
 impl Operation {
     /// Construct a file operation. Existing targets and existing parents of new
@@ -190,7 +191,7 @@ impl Operation {
                         .map_err(|e| failure("invalid_args", e.to_string()))?,
                 );
             }
-            Target::Input | Target::BackgroundControl => {}
+            Target::Input | Target::BackgroundControl | Target::Metadata => {}
         }
         Ok(serde_json::Value::Object(map.clone()))
     }
@@ -221,6 +222,13 @@ impl Operation {
         Self {
             tool: "ask_user".into(),
             target: Target::Input,
+        }
+    }
+    /// Construct a session metadata update with no workspace target.
+    pub fn todo_write() -> Self {
+        Self {
+            tool: "todo_write".into(),
+            target: Target::Metadata,
         }
     }
     /// Construct a model-facing background status or cancellation operation.
@@ -303,6 +311,7 @@ impl Policy {
                         | "ask_user"
                         | "background_status"
                         | "background_cancel"
+                        | "todo_write"
                 ) {
                     return Err(failure("invalid_config", "unknown rule tool"));
                 }
@@ -359,13 +368,14 @@ impl Policy {
         );
         let input = op.tool == "ask_user";
         let control = matches!(op.target, Target::BackgroundControl);
-        if mode == WorkMode::Plan && !read && !input && !control {
+        let metadata = matches!(op.target, Target::Metadata);
+        if mode == WorkMode::Plan && !read && !input && !control && !metadata {
             return decision(Decision::Deny, "plan_read_only");
         }
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input | Target::BackgroundControl => None,
+            Target::Input | Target::BackgroundControl | Target::Metadata => None,
         };
         if permissions != PermissionMode::Bypass
             && path.is_some_and(|path| !self.roots.iter().any(|root| path.starts_with(root)))
@@ -397,6 +407,7 @@ impl Policy {
             || read
             || input
             || control
+            || metadata
             || matches!(op.tool.as_str(), "write_file" | "apply_patch")
         {
             return decision(
@@ -424,7 +435,7 @@ impl Rule {
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input | Target::BackgroundControl => None,
+            Target::Input | Target::BackgroundControl | Target::Metadata => None,
         };
         if let Some(pattern) = &self.path
             && !path.is_some_and(|path| pattern.is_match(path))

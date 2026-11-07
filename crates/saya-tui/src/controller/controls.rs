@@ -349,6 +349,8 @@ impl App {
                             "Empty draft · Tab cycles WORK → CODE → PLAN → BUILD".into(),
                             "Ctrl+P commands · Ctrl+C cancel · Ctrl+D exit".into(),
                             "PgUp/PgDn scroll · End follow output".into(),
+                            "Click thinking / long tool headers to expand or collapse".into(),
+                            "Ctrl+O toggles the latest foldable card · wheel scrolls the pane under the pointer".into(),
                             "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"
                                 .into(),
                         ])

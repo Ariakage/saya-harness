@@ -320,6 +320,16 @@ fn normal_error_panic_and_nested_entry_restore_real_terminal_state() -> io::Resu
             text.contains("\u{1b}[?2004l"),
             "{mode} restored bracketed paste"
         );
+        for sequence in ["\u{1b}[?1000h", "\u{1b}[?1006h"] {
+            assert!(text.contains(sequence), "{mode} enabled mouse reporting");
+        }
+        for sequence in ["\u{1b}[?1006l", "\u{1b}[?1000l"] {
+            assert!(text.contains(sequence), "{mode} restored mouse reporting");
+        }
+        assert!(
+            !text.contains("\u{1b}[?1003h"),
+            "motion tracking is unnecessary"
+        );
         if mode == "panic" {
             assert!(text.contains("previous panic hook ran"));
         }

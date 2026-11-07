@@ -811,11 +811,20 @@ impl ModelStream for AnthropicStream {
                             "provider event type mismatch",
                         ));
                     }
-                    Ok(Some(
-                        self.state
-                            .update(&value)?
-                            .map_or(ModelUpdate::Progress, ModelUpdate::TextDelta),
-                    ))
+                    let visible = self.state.update(&value)?;
+                    let thinking = match kind {
+                        "content_block_delta" if value["delta"]["type"] == "thinking_delta" => {
+                            value["delta"]["thinking"].as_str()
+                        }
+                        "content_block_start" if value["content_block"]["type"] == "thinking" => {
+                            value["content_block"]["thinking"].as_str()
+                        }
+                        _ => None,
+                    };
+                    Ok(Some(match thinking.filter(|text| !text.is_empty()) {
+                        Some(text) => ModelUpdate::ThinkingDelta { text: text.into() },
+                        None => visible.map_or(ModelUpdate::Progress, ModelUpdate::TextDelta),
+                    }))
                 }
             }
         })

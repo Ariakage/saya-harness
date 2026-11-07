@@ -3,7 +3,7 @@ use super::*;
 use crate::view::Details;
 use saya_core::{
     boundary::Cancellation,
-    contract::{ErrorInfo, HistoryItem},
+    contract::ErrorInfo,
     export::{ExportOptions, ExportScope, SessionExport},
     sqlite::{SnapshotLimits, SqliteStore},
 };
@@ -396,46 +396,10 @@ impl App {
                 self.reset_context();
                 self.state.details = None;
                 self.state.pending_mode = None;
+                self.prepared = None;
+                self.refresh_header();
                 let history = &prepared.session.history;
-                for item in history.iter().skip(history.len().saturating_sub(512)) {
-                    match item {
-                        HistoryItem::UserText(text) => {
-                            self.state.push_message(Role::User, "You", self.safe(text));
-                        }
-                        HistoryItem::AssistantText(text) => {
-                            self.state
-                                .push_message(Role::Assistant, "Assistant", self.safe(text));
-                        }
-                        HistoryItem::AssistantPartial(text) => {
-                            self.state.push_message(
-                                Role::Assistant,
-                                "Assistant · interrupted partial",
-                                self.safe(text),
-                            );
-                        }
-                        HistoryItem::ToolCall(call) => {
-                            self.state.push_message(
-                                Role::Tool,
-                                self.safe(&call.name),
-                                self.safe(&format!(
-                                    "Stored request {} · /tools shows linked records",
-                                    call.call_id
-                                )),
-                            );
-                        }
-                        HistoryItem::ToolResult { call_id, result } => {
-                            self.state.push_message(
-                                Role::Tool,
-                                "Stored result",
-                                self.safe(&format!(
-                                    "{call_id} · {}",
-                                    serde_json::to_string(result).unwrap_or_default()
-                                )),
-                            );
-                        }
-                        HistoryItem::ProviderItem { .. } => {}
-                    }
-                }
+                self.restore_messages(history);
                 if history.len() > 512 {
                     self.notice("Earlier stored history is omitted from this view. Use session export to inspect the full history.");
                 }

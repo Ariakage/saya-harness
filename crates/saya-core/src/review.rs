@@ -321,7 +321,9 @@ pub async fn review_operation(
                     Some(ModelUpdate::TextDelta(_)) => {
                         received = true;
                     }
-                    Some(ModelUpdate::Progress) => received = true,
+                    Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {
+                        received = true
+                    }
                     Some(ModelUpdate::Finished { items, .. }) => {
                         let mut text = String::new();
                         for item in items {

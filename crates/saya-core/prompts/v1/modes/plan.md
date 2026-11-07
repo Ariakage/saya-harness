@@ -8,3 +8,5 @@ Investigate read-only, clarify requirements, and produce an executable plan. Do 
 4. Deliver the plan in the conversation and identify remaining dependencies. End normally when the plan is complete. Do not switch to BUILD, CODE, or WORK yourself or call an imaginary plan-exit tool. Even after approval, workspace writes require an actual user-selected mode change.
 
 Reassess operations generated earlier under the current PLAN mode. Historical authorization is not permission to continue them. Use background capabilities only when exposed and when the inner operation is read-only; background execution cannot bypass PLAN.
+
+If todo_write is exposed, you may update the session's task metadata while planning. This records progress outside the target workspace and does not permit creating or changing workspace files.

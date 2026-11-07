@@ -1,5 +1,6 @@
 //! Render the unified session view from a synthetic state using TestBackend.
 use ratatui::{Terminal, backend::TestBackend};
+use saya_core::tools::todo::{TodoItem, TodoStatus};
 use saya_tui::commands::COMMANDS;
 use saya_tui::view::{self, ContextEntry, Details, Role, State};
 use std::{error::Error, io::Write};
@@ -159,6 +160,51 @@ fn fixture(scene: &str) -> State {
             );
             state.editor.set_text("补充取消过程中的恢复测试。");
         }
+        "tasks" | "folded" | "expanded" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.session_title = "完善任务面板与取消验证".into();
+            state.permissions = "auto".into();
+            state.status = "Running".into();
+            state.push_message(Role::User, "You", "实现待办进度面板，并检查取消边界。");
+            let thinking = state.push_message(
+                Role::Thinking,
+                "provider thought text",
+                "先检查已有运行状态与会话存储接口。\n随后通过受控用例验证取消后的清理结果。",
+            );
+            state.append_message(thinking, "");
+            if scene == "expanded" {
+                state.toggle_latest();
+            }
+            state.push_message(
+                Role::Tool,
+                "exec · call-demo-3 · completed",
+                "running controlled tests\npermission boundary ok\nsession history ok\nstream cancellation ok\nbackground cleanup ok\nterminal restoration ok\nno duplicate execution\n8 checks completed",
+            );
+            if scene == "expanded" {
+                state.toggle_latest();
+            }
+            state.push_message(
+                Role::Assistant,
+                "configured-model",
+                "已完成取消链路检查，继续整理任务面板。",
+            );
+            state.todos = (0..12)
+                .map(|index| TodoItem {
+                    id: format!("task-{index}"),
+                    content: match index {
+                        0 => "检查会话存储与恢复接口".into(),
+                        1 => "实现任务状态与侧栏进度显示".into(),
+                        _ => format!("补充第 {index} 项取消和输入边界验证"),
+                    },
+                    status: match index {
+                        0 => TodoStatus::Completed,
+                        1 => TodoStatus::InProgress,
+                        _ => TodoStatus::Pending,
+                    },
+                })
+                .collect();
+        }
         _ => {}
     }
     state
@@ -187,13 +233,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.iter().any(|argument| argument == "--help") {
         writeln!(
             std::io::stdout().lock(),
-            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown]"
+            "render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown|tasks|folded|expanded]"
         )?;
         return Ok(());
     }
     if args.len() > 3 {
         return Err(
-            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown]".into(),
+            "usage: render_preview [WIDTH HEIGHT] [chat|approval|tool|commands|completion|idle|compact|effort|sidebar|polish|markdown|tasks|folded|expanded]".into(),
         );
     }
     let width = dimension(args.first(), 120, 240)?;
@@ -212,9 +258,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             | "sidebar"
             | "polish"
             | "markdown"
+            | "tasks"
+            | "folded"
+            | "expanded"
     ) {
         return Err(
-            "scene must be chat, approval, tool, commands, completion, idle, compact, effort, sidebar, polish or markdown"
+            "scene must be chat, approval, tool, commands, completion, idle, compact, effort, sidebar, polish, markdown, tasks, folded or expanded"
                 .into(),
         );
     }

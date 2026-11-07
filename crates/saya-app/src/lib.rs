@@ -5,6 +5,7 @@ pub mod events;
 pub mod export;
 pub mod interaction;
 pub mod session;
+pub mod thinking;
 use saya_core::{
     approvals::Preauthorizations,
     boundary::{Cancellation, Model, Store},

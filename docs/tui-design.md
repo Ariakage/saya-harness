@@ -99,6 +99,9 @@ Assistant正文支持有界的基础Markdown呈现，包括ATX标题、无序／
 | ↑／↓ | 建议可见时循环选择候选 |
 | Tab／末尾→ | 将选中的建议填入草稿，Enter执行完整输入 |
 | 空输入按Tab | 按WORK→CODE→PLAN→BUILD→WORK循环工作模式 |
+| 点击折叠标题 | 展开／收起对应Thinking或长工具卡片 |
+| Ctrl+O | 展开／收起最近保留的Thinking或长工具卡片 |
+| 鼠标滚轮 | 在指针所在对话／详情区域滚动，每次3行 |
 | Ctrl+C | 请求取消当前运行及 UI 任务，空闲时清空草稿 |
 | Ctrl+D | 输入为空时请求退出，运行中的任务先取消并收尾 |
 | Esc | 先隐藏可见建议，再处理详情或当前等待的审批／问题 |
@@ -114,6 +117,14 @@ Assistant正文支持有界的基础Markdown呈现，包括ATX标题、无序／
 斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/saya-tui/src/commands.rs)。24项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
 
 Esc先隐藏可见建议并保留草稿，再沿普通详情／审批优先级处理。Tab可重新接受已隐藏建议，输入前缀变化会重置选择。补全仅匹配末尾光标的单行 `/`输入，`//`和多行文本使用常规编辑。输入框中需要用户填写的profile名、会话／任务ID和路径跟在补全保留的空格之后。
+
+## Thinking与任务清单
+
+Thinking与工具长输出使用可折叠卡片，命中区域按本帧实际可见标题记录。消息正文中的相似标题文本不产生点击动作。卡片展开状态绑定稳定消息ID，消息移除时清理。弹层拦截其覆盖位置，缩放后重新生成命中区域。
+
+执行轮次按ModelStarted事件顺序显示Thinking，watch日志更新已存在的卡片。可读推理在应用层独立投影、完整脱敏后截断，日志最多64轮／合计2MiB，每轮显示最多256KiB。原始聚合超过16MiB时仅保留受限提示，执行继续遵守原有预算。内容不可用时显示实际状态。
+
+Tasks使用core的TodoItem类型，最多64条。侧栏用○／◐／✓标记pending／in_progress／completed，任务正文保留为安全单行，长项按可用宽度截短，条目超出可见区时显示余项数量。列表来自成功工具结果，恢复时从历史重建。
 
 ## 显示预算与安全呈现
 
@@ -196,6 +207,9 @@ cargo run --locked -p saya-tui --example render_preview -- 80 24 idle
 cargo run --locked -p saya-tui --example render_preview -- 80 24 effort
 cargo run --locked -p saya-tui --example render_preview -- 60 18 compact
 cargo run --locked -p saya-tui --example render_preview -- 20 6 idle
+cargo run --locked -p saya-tui --example render_preview -- 160 40 tasks
+cargo run --locked -p saya-tui --example render_preview -- 160 40 folded
+cargo run --locked -p saya-tui --example render_preview -- 110 36 expanded
 ```
 
 文本输出保留字符布局，配色由上方 token 表描述。真实终端交互和恢复由 PTY 及候选程序验收覆盖。预览程序源码见[render_preview.rs](../crates/saya-tui/examples/render_preview.rs)。

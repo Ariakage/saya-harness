@@ -641,6 +641,16 @@ pub struct OneShotPermit {
     lease_active: AtomicBool,
 }
 impl OneShotPermit {
+    pub(crate) fn authorize_todo(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<bool, BoundaryError> {
+        self.check(call, context, &Operation::todo_write())
+    }
+    pub(crate) fn finish_todo(&self) -> Result<(), BoundaryError> {
+        self.end()
+    }
     pub(crate) fn consume_input(
         &self,
         call: &ToolCall,

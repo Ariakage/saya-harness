@@ -59,6 +59,11 @@ pub struct ToolDefinition {
 #[derive(Debug, Clone)]
 pub enum ModelUpdate {
     TextDelta(String),
+    /// Provider-returned plaintext thinking, separate from the visible answer.
+    /// Signature, redacted and encrypted provider fields are never text deltas.
+    ThinkingDelta {
+        text: String,
+    },
     /// A provider response event with no visible text. A later failure must
     /// not be retried after receiving any part of the response.
     Progress,

@@ -19,12 +19,13 @@ static PANIC_HOOK: Once = Once::new();
 const RESTORE_WAIT: Duration = Duration::from_millis(100);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
 const FRAME_WRITE_WAIT: Duration = Duration::from_millis(250);
-const RESTORE_BYTES: &[u8] = b"\x1b[?2004l\x1b[?25h\x1b[?1049l";
+const MOUSE_BYTES: &[u8] = b"\x1b[?1000h\x1b[?1006h";
+const RESTORE_BYTES: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l";
 const PUSH_TITLE: &[u8] = b"\x1b[22;2t";
 const POP_TITLE: &[u8] = b"\x1b[23;2t";
 const MAX_TITLE_BYTES: usize = 512;
 
-/// A single owner of raw mode, alternate screen, bracketed paste and the cursor.
+/// A single owner of raw mode, alternate screen, bracketed paste, mouse and cursor.
 ///
 /// Entry requires terminal stdin and stdout. The application handles signals by
 /// cancelling its work and returning through the same guard lifetime. Output
@@ -365,6 +366,8 @@ impl TerminalGuard {
             EnableBracketedPaste,
             Hide
         )?;
+        // Normal and SGR tracking cover clicks and wheels without motion noise.
+        guard.output.write_control(MOUSE_BYTES)?;
         // XTWINOPS saves only the window title, leaving the icon label alone.
         // https://www.invisible-island.net/xterm/ctlseqs/ctlseqs.html
         guard.output.save_title()?;

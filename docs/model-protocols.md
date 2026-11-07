@@ -43,3 +43,9 @@ DEV-034 使用三种协议各自的本地 HTTP 夹具验证后台启动回执、
 2026-11-07，使用项目负责人提供的 `deepseek-flash` 测试配置，对其 Chat Completions、Responses 和 Anthropic Messages 接口分别完成流式文本、单次工具调用及工具结果回传。Anthropic 测试使用默认 `2026-10-21` 版本；工具为无本地副作用的测试替身。这是单一模型和服务的抽样，不证明其他模型、供应商或全部功能均已联调。Responses 在联调中发现并补充支持了 [reasoning 文本流事件](https://api-docs.deepseek.com/guides/responses_api/)；内容不作为普通答案展示。
 
 可选探测程序为 `cargo run -p saya-core --example protocol_probe -- 协议 API根路径 模型`；协议为 `chat`、`responses` 或 `anthropic`，凭据从标准输入读取，不写入项目配置。终端直接输入可能被回显，应通过关闭回显的安全输入方式提供。程序只输出检查阶段及状态，不执行本地工具或打印模型正文。不要将凭据写进命令行参数、示例或 Git。
+
+## TUI可读推理投影
+
+开发线为适配器增加 `ModelUpdate::ThinkingDelta`，供应用层区分正文和服务返回的可读推理。Chat的 `reasoning_content`、Anthropic的thinking增量和Responses的reasoning／summary增量均经已有协议校验后投影。单个Chat事件同时包含正文和推理时保持二者顺序，签名、redacted与加密字段保持原有协议表示。
+
+应用层ThinkingModel为TUI维护有界日志，并将已消费的推理增量转为Progress，沿用原有错误、重试与预算处理。完整JSON可从最终协议项提取允许的明文字段，TUI恢复时沿对应轮次重建。详细显示、凭据处理与限额见[TUI](tui.md#thinking任务清单与折叠)。

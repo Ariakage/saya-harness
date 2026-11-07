@@ -86,6 +86,18 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 
 生产组件的合成状态预览为 `target/tui-polish-preview-160x40.png`、`target/tui-polish-preview-110x36.png` 和 `target/tui-polish-preview-idle.png`。模型服务验证使用本地可控夹具，平台范围为上述本机环境。
 
+#### 任务清单、Thinking与可折叠工具
+
+2026-11-08，按D-046加入模型可维护的 `todo_write` 会话任务清单。成功快照通过调用／结果历史重建，运行上下文提供最新列表，TUI侧栏显示进行中及完成数。参数、64项／64KiB限额、一次性许可、三权限模式、PLAN元数据、失败／取消／存储错误及SQLite恢复有回归，工具与PLAN英文提示词及文档快照同步。
+
+三协议为应用层提供可读Thinking投影，审核、签名、redacted和加密内容保持隔离。watch日志按轮次有序显示，单轮256KiB、合计2MiB／64轮，完整脱敏后截断，已知凭据配置下等待该请求结束后发布正文。Thinking默认折叠，长工具结果超过6行或512字节也默认折叠，可点标题或Ctrl+O展开。同一工具调用复用执行中／完成卡片，鼠标滚轮在指针所在对话／详情内滚动，启停及异常退出恢复鼠标报告。
+
+独立复核补齐最终历史重建Tasks、空回答惰性卡片、日志驱逐后的结束提示、最终事件排空，以及JoinError已消费句柄后的后台清理等待。`RuntimeHandle::shutdown_background`复用现有取消与清理，真实exec在模型panic／任务abort后均等待到PID消失，重复清理有回归。
+
+本机macOS27.2 ARM／Rust1.99.1的 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh` 完整通过格式、workspace全目标Clippy、562项Rust测试与优化构建。该程序通过18组正常入口PTY、5项发行工具测试、工具smoke、文本会话和5项审查回归，私有配置离线校验通过。PTY使用本地受控服务，覆盖三协议可读推理展开与opaque隔离、任务逐次审批／PLAN拒写／恢复、长工具与伪标题点击、左右分区滚轮、短侧栏、终端恢复及既有流程。观察器为完整差分帧和有界排空补了回归门槛。
+
+日志为 `target/tui-interactive-check-final.log`，正常入口报告为 `target/tui-interactive-release-matrix.json`，程序SHA-256为 `9050acb2510c02e698f199a7aaf3dbb17a4151a46b12e9e60193ed91fb2ea76b`，Mach-O最低部署版本为15.0。`target/tui-interactive-thinking-tasks-160x40.png` 与 `target/tui-interactive-expanded-tool-110x36.png` 来自该程序的受控PTY单元格快照。当前证据为本机离线验收，四平台候选证据仍对应上方固定RC1源码。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

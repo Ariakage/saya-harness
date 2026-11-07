@@ -55,6 +55,8 @@
 
 工具为 read_file、list_dir、find_files、search_text、write_file、apply_patch、exec，以及人工澄清用的 ask_user；后台控制工具为 background_start、background_status 和 background_cancel。核心输入输出见 B-14。
 
+开发线按D-046增加 `todo_write` 会话任务清单工具，PLAN可更新任务元数据，Manual Approval每次调用均需批准。完整列表替换、校验限额及恢复规则见[运行时](runtime.md#会话任务清单)。
+
 工具按下面的顺序处理：
 
 1. 获取完整工具请求并校验工具名称、参数和目标。

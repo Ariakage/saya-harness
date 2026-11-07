@@ -2128,3 +2128,131 @@ async fn diagnostics_correlate_execution_review_tools_and_background_jobs()
     }));
     Ok(())
 }
+
+struct InterruptedAfterBackground {
+    marker: std::path::PathBuf,
+    requests: std::sync::atomic::AtomicUsize,
+    waiting: std::sync::atomic::AtomicBool,
+    panic: bool,
+}
+impl Model for InterruptedAfterBackground {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            if self
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                let launch = call(
+                    "launch-before-interruption",
+                    "background_start",
+                    serde_json::json!({
+                        "tool": "exec",
+                        "arguments": {
+                            "argv": [
+                                "/bin/sh", "-c",
+                                "printf '%s\\n' \"$$\" > \"$1\"; exec /bin/sleep 30",
+                                "sh", self.marker
+                            ]
+                        }
+                    }),
+                );
+                return Ok(Box::new(Stream(Some(vec![launch]))) as Box<dyn ModelStream>);
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !self.marker.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .map_err(|_| err("fixture_process_not_started"))?;
+            self.waiting
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                !self.panic,
+                "fixture model panic after background process started"
+            );
+            pending::<Result<Box<dyn ModelStream>, BoundaryError>>().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn runtime_handle_awaits_background_process_cleanup_after_run_panic_or_abort()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::background::{BackgroundEventKind, JobStatus};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    for panic in [false, true] {
+        let root = support::temp_workspace()?;
+        let marker = root.path().join("background.pid");
+        let model = Arc::new(InterruptedAfterBackground {
+            marker: marker.clone(),
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            waiting: std::sync::atomic::AtomicBool::new(false),
+            panic,
+        });
+        let (mut session, run) = fixture(root.path(), PermissionMode::Bypass);
+        let mut runtime = runtime(
+            root.path(),
+            run,
+            model.clone(),
+            Arc::new(MemoryStore::default()),
+            Arc::new(NoCancel),
+        )?;
+        let handle = runtime.handle();
+        let task = tokio::spawn(async move { runtime.run(&mut session).await });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !model.waiting.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let pid: i32 = std::fs::read_to_string(&marker)?.trim().parse()?;
+        assert!(pid > 0);
+        if !panic {
+            task.abort();
+        }
+        let failure = tokio::time::timeout(Duration::from_secs(3), task)
+            .await?
+            .unwrap_err();
+        assert_eq!(failure.is_panic(), panic);
+        assert_eq!(failure.is_cancelled(), !panic);
+        // SAFETY: signal zero probes the owned fixture process without signaling it.
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "background work still needs cleanup"
+        );
+        let job_id = handle
+            .background_events()?
+            .into_iter()
+            .find_map(|event| {
+                matches!(event.kind, BackgroundEventKind::Accepted { .. }).then_some(event.job_id)
+            })
+            .ok_or("accepted background job")?;
+        tokio::time::timeout(Duration::from_secs(3), handle.shutdown_background()).await??;
+        // Cleanup has reaped the leader before this handle method resolves.
+        // SAFETY: signal zero only checks the previously owned fixture PID.
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+        match handle.background_status(&job_id)? {
+            Some(JobStatus::Finished(result)) => assert_eq!(
+                result.error.as_ref().map(|error| error.code.as_str()),
+                Some("cancelled")
+            ),
+            Some(JobStatus::Failed(error)) => assert_eq!(error.0.code, "cancelled"),
+            other => panic!("background job did not settle: {other:?}"),
+        }
+        tokio::time::timeout(Duration::from_secs(1), handle.shutdown_background()).await??;
+    }
+    Ok(())
+}

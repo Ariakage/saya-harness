@@ -279,6 +279,12 @@ impl RuntimeHandle {
     pub fn cancel_background(&self, id: &str) -> Result<bool, BoundaryError> {
         self.jobs.cancel(id)
     }
+    /// Stop new background submissions, cancel existing jobs, and wait for their
+    /// cleanup. This remains available after the owning run future fails or is
+    /// aborted. Repeated calls are safe; completed job status stays readable.
+    pub async fn shutdown_background(&self) -> Result<(), BoundaryError> {
+        self.jobs.shutdown().await
+    }
     /// Snapshot background lifecycle transitions in the order observed by this run.
     pub fn background_events(
         &self,
@@ -437,7 +443,7 @@ impl AgentRuntime {
             tools.retain(|d| {
                 matches!(
                     d.name.as_str(),
-                    "read_file" | "list_dir" | "find_files" | "search_text"
+                    "read_file" | "list_dir" | "find_files" | "search_text" | "todo_write"
                 )
             });
         }
@@ -605,7 +611,9 @@ impl AgentRuntime {
                             received = true;
                             partial.push_str(&text);
                         }
-                        Some(ModelUpdate::Progress) => received = true,
+                        Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {
+                            received = true
+                        }
                         Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
                         None => {
                             return Err(error(

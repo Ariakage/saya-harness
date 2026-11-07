@@ -17,6 +17,7 @@ use crate::{
     tools::{
         exec::{ExecConfig, ExecTool},
         read::{ReadTool, ReadToolKind, ReadTools},
+        todo::TodoTool,
         write::{DEFAULT_WRITE_MAX_BYTES, WriteTool, WriteToolKind, save_result},
     },
 };
@@ -107,6 +108,12 @@ pub struct ToolDispatcher {
     known_secrets: Vec<String>,
 }
 type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
+struct TodoLease<'a>(&'a OneShotPermit);
+impl Drop for TodoLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.finish_todo();
+    }
+}
 /// Review dependencies shared with the surrounding execution loop.
 pub struct DispatchReview<'a> {
     pub model: &'a dyn Model,
@@ -126,6 +133,7 @@ impl ToolDispatcher {
         ] {
             definitions.push(ReadTool::new(self.files.clone(), kind).definition());
         }
+        definitions.push(TodoTool.definition());
         if self.read_only {
             return definitions;
         }
@@ -242,6 +250,9 @@ impl ToolDispatcher {
         } else if call.name == "ask_user" {
             crate::input::InputRequest::parse(call)?;
             Operation::ask_user()
+        } else if call.name == "todo_write" {
+            crate::tools::todo::parse(call)?;
+            Operation::todo_write()
         } else if matches!(
             call.name.as_str(),
             "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
@@ -351,6 +362,48 @@ impl ToolDispatcher {
         };
         tracing::info!(target: "saya::tools", event = "tool.dispatched");
         match call.name.as_str() {
+            "todo_write" => {
+                if !permit.authorize_todo(call, context)? {
+                    return Err(failure(
+                        if cancel.is_cancelled() {
+                            "cancelled"
+                        } else {
+                            "stale_approval"
+                        },
+                        "todo update cancelled or approval is stale",
+                    ));
+                }
+                let _lease = TodoLease(&permit);
+                store
+                    .commit(&[StoreChange::ToolIntent {
+                        run_id: context.run.id,
+                        call: call.clone(),
+                    }])
+                    .await?;
+                let outcome = if permit.authorize_todo(call, context)? {
+                    TodoTool.execute(call, context, cancel).await
+                } else {
+                    Err(failure(
+                        if cancel.is_cancelled() {
+                            "cancelled"
+                        } else {
+                            "stale_approval"
+                        },
+                        "todo update cancelled or approval is stale",
+                    ))
+                };
+                let result = match &outcome {
+                    Ok(result) => crate::redaction::tool_result(result, &self.known_secrets)?,
+                    Err(error) => ToolResult {
+                        ok: false,
+                        data: None,
+                        error: Some(error.0.clone()),
+                        truncated: false,
+                    },
+                };
+                save_result(store.as_ref(), call, context, &result).await?;
+                outcome.map(|_| result)
+            }
             "read_file" | "list_dir" | "find_files" | "search_text" => {
                 let kind = match call.name.as_str() {
                     "read_file" => ReadToolKind::ReadFile,

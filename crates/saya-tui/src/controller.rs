@@ -3,6 +3,9 @@
 mod control_tests;
 mod controls;
 #[cfg(test)]
+mod message_tests;
+mod messages;
+#[cfg(test)]
 mod service_tests;
 mod services;
 use crate::{
@@ -11,12 +14,16 @@ use crate::{
     terminal::TerminalGuard,
     view::{self, Role, State},
 };
-use crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use saya_app::{
     context::{ContextModel, ContextSnapshot, ContextSources},
     events::{ChannelSink, EventModel, EventStore, EventWriter},
     interaction::{Request, RunCancellation, input_channel},
     session::{self, Prepared},
+    thinking::{ThinkingLog, ThinkingModel},
 };
 use saya_core::{
     approvals::Preauthorizations,
@@ -28,7 +35,7 @@ use saya_core::{
     },
     runtime::{PersonalContext, RuntimeHandle},
 };
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{mpsc, watch};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -47,7 +54,11 @@ struct Active {
     events: mpsc::Receiver<Event>,
     events_open: bool,
     context: watch::Receiver<Option<ContextSnapshot>>,
-    assistant_id: u64,
+    thinking: watch::Receiver<ThinkingLog>,
+    thinking_ids: HashMap<String, u64>,
+    execution_request: Option<String>,
+    assistant_id: Option<u64>,
+    tool_cards: HashMap<String, messages::ToolCard>,
     handle: RuntimeHandle,
     requests: mpsc::Receiver<Request>,
     requests_open: bool,
@@ -224,6 +235,8 @@ impl App {
         let run_id = RunId::new();
         let (sender, events) = mpsc::channel(256);
         let (context_sender, context) = watch::channel(None);
+        let (thinking_sender, thinking) = watch::channel(ThinkingLog::default());
+        let thinking_secrets = self.secrets.clone();
         let context_sources = ContextSources {
             project: true,
             personal: self.options.personal_context.preferences.is_some()
@@ -256,7 +269,10 @@ impl App {
             },
             move |model, _| {
                 Arc::new(ContextModel::new(
-                    Arc::new(EventModel(model, writer)),
+                    Arc::new(EventModel(
+                        Arc::new(ThinkingModel::new(model, thinking_sender, thinking_secrets)),
+                        writer,
+                    )),
                     context_sender,
                     context_sources,
                 ))
@@ -276,9 +292,6 @@ impl App {
         self.refresh_header();
         self.reset_context();
         self.state.push_message(Role::User, "You", display);
-        let assistant_id = self
-            .state
-            .push_message(Role::Assistant, self.state.model.clone(), "");
         let handle = runtime.handle();
         let join = tokio::spawn(async move {
             let result = runtime.run(&mut current).await;
@@ -290,7 +303,11 @@ impl App {
             events,
             events_open: true,
             context,
-            assistant_id,
+            thinking,
+            thinking_ids: HashMap::new(),
+            execution_request: None,
+            assistant_id: None,
+            tool_cards: HashMap::new(),
             handle,
             requests,
             requests_open: true,
@@ -298,61 +315,6 @@ impl App {
         self.state.status = "Running".into();
         self.state.scroll_to_bottom();
         Ok(())
-    }
-    fn event(&mut self, event: Event) {
-        if matches!(
-            &event.payload,
-            EventPayload::ModelStarted {
-                purpose: ModelPurpose::Execution,
-                ..
-            }
-        ) {
-            self.record_context_input(None);
-        }
-        match event.payload {
-            EventPayload::ModelTextDelta { text, .. } => {
-                let text = self.safe(&text);
-                if let Some(active) = &self.active {
-                    self.state.append_message(active.assistant_id, &text);
-                }
-            }
-            EventPayload::ModelStarted { purpose, .. } if self.pending.is_none() => {
-                if purpose == ModelPurpose::Execution
-                    && let Some(active) = &mut self.active
-                    && self.state.messages.back().is_none_or(|message| {
-                        message.id != active.assistant_id || !message.text.is_empty()
-                    })
-                {
-                    self.state.finish_message(active.assistant_id);
-                    active.assistant_id =
-                        self.state
-                            .push_message(Role::Assistant, self.state.model.clone(), "");
-                }
-                self.state.status = if purpose == ModelPurpose::Review {
-                    "Reviewing"
-                } else {
-                    "Running"
-                }
-                .into();
-            }
-            EventPayload::ModelFinished {
-                purpose: ModelPurpose::Execution,
-                usage,
-                ..
-            } => self.record_context_input(usage),
-            EventPayload::ToolStarted { name, call_id } => {
-                self.state
-                    .push_message(Role::Tool, name, format!("Running {call_id}"));
-            }
-            EventPayload::ToolFinished { name, result, .. } => {
-                self.state.push_message(
-                    Role::Tool,
-                    name,
-                    self.safe(&serde_json::to_string(&result).unwrap_or_default()),
-                );
-            }
-            _ => {}
-        };
     }
     fn cancel(&mut self) {
         if let Some(job) = &self.ui_job {
@@ -372,65 +334,99 @@ impl App {
             self.state.editor.take();
         }
     }
-    fn finish(
+    async fn finish(
         &mut self,
         result: std::result::Result<RunOutcome, tokio::task::JoinError>,
     ) -> Result<()> {
-        let mut active = self.active.take().ok_or("run is unavailable")?;
+        if self.active.is_none() {
+            return Err("run is unavailable".into());
+        }
         self.invalidate_pending();
         self.state.pending_mode = None;
-        let (outcome, session) = result.map_err(|_| "run task failed")?;
-        while let Ok(event) = active.events.try_recv() {
-            match event.payload {
-                EventPayload::ModelTextDelta { text, .. } => {
-                    self.state
-                        .append_message(active.assistant_id, &self.safe(&text));
-                }
-                EventPayload::ModelFinished {
-                    purpose: ModelPurpose::Execution,
-                    usage,
-                    ..
-                } => self.record_context_input(usage),
-                EventPayload::ModelStarted {
-                    purpose: ModelPurpose::Execution,
-                    ..
-                } => self.record_context_input(None),
-                _ => {}
-            }
+        loop {
+            let event = self
+                .active
+                .as_mut()
+                .and_then(|active| active.events.try_recv().ok());
+            let Some(event) = event else { break };
+            self.event(event);
         }
-        if let Some(snapshot) = active.context.borrow_and_update().clone() {
+        self.sync_thinking();
+        let snapshot = self
+            .active
+            .as_mut()
+            .and_then(|active| active.context.borrow_and_update().clone());
+        if let Some(snapshot) = snapshot {
             self.record_context_snapshot(snapshot);
         }
-        self.config.mode = session.work_mode;
-        if let Some(prepared) = &mut self.prepared {
-            prepared.session = session;
-        }
-        match outcome {
-            Ok(result) => {
-                if let Some(text) = &result.text {
-                    self.state
-                        .replace_message(active.assistant_id, self.safe(text));
+        let mut failure = None;
+        match result {
+            Ok((outcome, session)) => {
+                self.config.mode = session.work_mode;
+                self.install_todos(saya_core::tools::todo::current_todos(&session.history));
+                if let Some(prepared) = &mut self.prepared {
+                    prepared.session = session;
                 }
-                self.state.status = format!("{:?}", result.status);
-                if let Some(error) = result.error {
-                    self.notice(&format!("{} — {}", error.code, error.message));
+                match outcome {
+                    Ok(result) => {
+                        if let Some(text) = result.text.filter(|text| !text.is_empty()) {
+                            let id = self.assistant_message();
+                            self.state.replace_message(id, self.safe(&text));
+                        }
+                        self.state.status = format!("{:?}", result.status);
+                        if let Some(error) = result.error {
+                            self.notice(&format!("{} — {}", error.code, error.message));
+                        }
+                        self.state.usage = result
+                            .usage
+                            .map(|usage| {
+                                self.safe(&serde_json::to_string(&usage).unwrap_or_default())
+                            })
+                            .unwrap_or_default();
+                    }
+                    Err(error) => {
+                        self.state.status = "Failed".into();
+                        self.notice(&error.to_string());
+                        if error.0.code == "storage_error" || error.2.is_some() {
+                            failure = Some(Box::new(error) as Box<dyn std::error::Error>);
+                        }
+                    }
                 }
-                self.state.usage = result
-                    .usage
-                    .map(|usage| self.safe(&serde_json::to_string(&usage).unwrap_or_default()))
-                    .unwrap_or_default();
             }
-            Err(error) => {
+            Err(_) => {
+                let mut active = self.active.take().ok_or("run is unavailable")?;
+                active.cancel.cancel();
+                active.events.close();
+                active.requests.close();
+                let cleanup = active.handle.shutdown_background().await;
+                self.close_run_messages(&active);
                 self.state.status = "Failed".into();
-                self.notice(&error.to_string());
-                if error.0.code == "storage_error" || error.2.is_some() {
+                self.notice("Run task failed. Inspect stored tool records before retrying.");
+                self.refresh_header();
+                if let Err(error) = cleanup {
+                    self.notice(&format!("Background cleanup failed — {error}"));
                     return Err(Box::new(error));
                 }
+                return Err("run task failed".into());
             }
         }
-        self.state.finish_message(active.assistant_id);
+        let active = self.active.take().ok_or("run is unavailable")?;
+        self.close_run_messages(&active);
         self.refresh_header();
+        if let Some(error) = failure {
+            return Err(error);
+        }
         Ok(())
+    }
+    fn mouse(&mut self, event: MouseEvent) -> bool {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.state.toggle_at(event.column, event.row)
+            }
+            MouseEventKind::ScrollUp => self.state.scroll_at(event.column, event.row, true),
+            MouseEventKind::ScrollDown => self.state.scroll_at(event.column, event.row, false),
+            _ => false,
+        }
     }
     async fn key(&mut self, key: KeyEvent) -> Result<bool> {
         self.refresh_completion();
@@ -463,6 +459,15 @@ impl App {
             match key.code {
                 KeyCode::Char('c') => {
                     self.cancel();
+                    return Ok(false);
+                }
+                KeyCode::Char('o') => {
+                    if key.kind == KeyEventKind::Press
+                        && self.palette.is_none()
+                        && !self.state.completion.visible()
+                    {
+                        self.state.toggle_latest();
+                    }
                     return Ok(false);
                 }
                 KeyCode::Char('p') => {
@@ -695,6 +700,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             Finished(std::result::Result<RunOutcome, tokio::task::JoinError>),
         }
         dirty |= app.refresh_context();
+        dirty |= app.refresh_thinking();
         dirty |= app.refresh_mode()?;
         let pending_free = app.pending.is_none();
         let action = if let Some(active) = &mut app.active {
@@ -728,6 +734,9 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                     app.notice(&error.to_string());
                 }
             },
+            Action::Input(Some(Ok(TerminalEvent::Mouse(event)))) => {
+                app.mouse(event);
+            }
             Action::Input(Some(Ok(TerminalEvent::Paste(text)))) => {
                 app.state.editor.insert(&text);
             }
@@ -765,7 +774,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 }
             }
             Action::Finished(result) => {
-                app.finish(result)?;
+                app.finish(result).await?;
             }
         }
         app.refresh_completion();

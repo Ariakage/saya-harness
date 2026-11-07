@@ -15,7 +15,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use std::collections::VecDeque;
+use saya_core::tools::todo::{TodoItem, TodoStatus};
+use std::collections::{HashSet, VecDeque};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -29,12 +30,17 @@ const TRUNCATED_DETAIL_PREFIX: &str = "Truncated · ";
 const DETAIL_TRUNCATION_NOTICE: &str = "[details display truncated]";
 const MAX_COMPLETION_ROWS: usize = 6;
 const MAX_CONTEXT_ENTRIES: usize = 9;
+const TOOL_COLLAPSE_BYTES: usize = 512;
+const TOOL_COLLAPSE_LINES: usize = 6;
+const MAX_TODOS: usize = 64;
+const WHEEL_LINES: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,
     Assistant,
     Tool,
+    Thinking,
     System,
 }
 
@@ -61,6 +67,12 @@ pub struct ContextEntry {
 }
 
 #[derive(Debug)]
+struct MessageHit {
+    area: Rect,
+    id: u64,
+}
+
+#[derive(Debug)]
 pub struct State {
     pub session_title: String,
     pub workspace: String,
@@ -78,6 +90,7 @@ pub struct State {
     pub context_breakdown_estimated: bool,
     pub skills_count: Option<usize>,
     pub thinking_effort: Option<String>,
+    pub todos: Vec<TodoItem>,
     pub editor: Editor,
     pub completion: Completion,
     pub messages: VecDeque<Message>,
@@ -92,6 +105,12 @@ pub struct State {
     next_id: u64,
     last_width: u16,
     last_line_count: usize,
+    expanded_messages: HashSet<u64>,
+    message_hits: Vec<MessageHit>,
+    transcript_viewport: Option<Rect>,
+    details_viewport: Option<Rect>,
+    completion_viewport: Option<Rect>,
+    fold_anchor: Option<(u64, u16)>,
 }
 
 impl Default for State {
@@ -113,6 +132,7 @@ impl Default for State {
             context_breakdown_estimated: true,
             skills_count: None,
             thinking_effort: None,
+            todos: Vec::new(),
             editor: Editor::default(),
             completion: Completion::default(),
             messages: VecDeque::new(),
@@ -124,6 +144,12 @@ impl Default for State {
             next_id: 1,
             last_width: 0,
             last_line_count: 0,
+            expanded_messages: HashSet::new(),
+            message_hits: Vec::new(),
+            transcript_viewport: None,
+            details_viewport: None,
+            completion_viewport: None,
+            fold_anchor: None,
         }
     }
 }
@@ -187,12 +213,19 @@ impl State {
     /// Reset the viewport for a session switch while keeping message IDs distinct.
     pub fn clear_messages(&mut self) {
         self.messages.clear();
+        self.todos.clear();
         self.scroll = 0;
         self.details_scroll = 0;
         self.details_page_rows = 10;
         self.dropped_messages = 0;
         self.last_width = 0;
         self.last_line_count = 0;
+        self.expanded_messages.clear();
+        self.message_hits.clear();
+        self.transcript_viewport = None;
+        self.details_viewport = None;
+        self.completion_viewport = None;
+        self.fold_anchor = None;
     }
 
     pub fn finish_message(&mut self, id: u64) {
@@ -217,15 +250,93 @@ impl State {
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
+        self.fold_anchor = None;
         self.scroll = self.scroll.saturating_add(lines);
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
+        self.fold_anchor = None;
         self.scroll = self.scroll.saturating_sub(lines);
     }
 
     pub fn scroll_to_bottom(&mut self) {
+        self.fold_anchor = None;
         self.scroll = 0;
+    }
+
+    /// Toggle a foldable message only when its actual visible header was clicked.
+    /// Coordinates are terminal cells from the most recent render.
+    pub fn toggle_at(&mut self, x: u16, y: u16) -> bool {
+        if contains(self.completion_viewport, x, y) {
+            return false;
+        }
+        let Some(hit) = self
+            .message_hits
+            .iter()
+            .find(|hit| hit.area.contains((x, y).into()))
+        else {
+            return false;
+        };
+        let id = hit.id;
+        self.toggle_message(id, hit.area.y)
+    }
+
+    /// Toggle the latest retained thinking or long tool message.
+    /// This supplies a keyboard fallback for mouse interaction.
+    pub fn toggle_latest(&mut self) -> bool {
+        let Some(message) = self.messages.iter().rev().find(|message| foldable(message)) else {
+            return false;
+        };
+        let id = message.id;
+        let row = self
+            .message_hits
+            .iter()
+            .find(|hit| hit.id == id)
+            .map_or_else(
+                || self.transcript_viewport.map_or(0, |area| area.y),
+                |hit| hit.area.y,
+            );
+        self.toggle_message(id, row)
+    }
+
+    fn toggle_message(&mut self, id: u64, row: u16) -> bool {
+        if !self
+            .messages
+            .iter()
+            .any(|message| message.id == id && foldable(message))
+        {
+            return false;
+        }
+        if !self.expanded_messages.remove(&id) {
+            self.expanded_messages.insert(id);
+        }
+        self.fold_anchor = Some((id, row));
+        true
+    }
+
+    /// Scroll the rendered transcript or details viewport by three visual rows.
+    /// Editor, sidebar, popup and terminal chrome have no scroll side effects.
+    pub fn scroll_at(&mut self, x: u16, y: u16, up: bool) -> bool {
+        if contains(self.completion_viewport, x, y) {
+            return false;
+        }
+        if contains(self.details_viewport, x, y) {
+            self.details_scroll = if up {
+                self.details_scroll.saturating_sub(WHEEL_LINES)
+            } else {
+                self.details_scroll.saturating_add(WHEEL_LINES)
+            };
+            return true;
+        }
+        if contains(self.transcript_viewport, x, y) {
+            if up {
+                self.scroll_up(WHEEL_LINES);
+            } else {
+                self.scroll_down(WHEEL_LINES);
+            }
+            return true;
+        }
+        false
     }
 
     /// Limit direct state population as well as streamed updates.
@@ -250,7 +361,26 @@ impl State {
             retained = retained.saturating_sub(message.text.len() + message.label.len());
             self.dropped_messages = self.dropped_messages.saturating_add(1);
         }
+        self.expanded_messages
+            .retain(|id| self.messages.iter().any(|message| message.id == *id));
+        self.todos.truncate(MAX_TODOS);
     }
+}
+
+fn contains(area: Option<Rect>, x: u16, y: u16) -> bool {
+    area.is_some_and(|area| area.contains((x, y).into()))
+}
+
+fn foldable(message: &Message) -> bool {
+    message.role == Role::Thinking
+        || (message.role == Role::Tool
+            && (message.text.len() > TOOL_COLLAPSE_BYTES
+                || message
+                    .text
+                    .split('\n')
+                    .take(TOOL_COLLAPSE_LINES + 1)
+                    .count()
+                    > TOOL_COLLAPSE_LINES))
 }
 
 fn details_need_limits(details: &Details) -> bool {
@@ -324,6 +454,10 @@ pub(crate) fn bound_details(details: &mut Details) {
 pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     state.enforce_limits();
     state.enforce_details_limits();
+    state.message_hits.clear();
+    state.transcript_viewport = None;
+    state.details_viewport = None;
+    state.completion_viewport = None;
     let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().fg(FOREGROUND).bg(BACKGROUND)),
@@ -363,6 +497,7 @@ fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
         .split(body);
         draw_transcript(frame, state, columns[0]);
         if let Some(details) = &state.details {
+            state.details_viewport = Some(columns[1]);
             draw_details(
                 frame,
                 details,
@@ -372,6 +507,7 @@ fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
             );
         }
     } else if let Some(details) = &state.details {
+        state.details_viewport = Some(body);
         draw_details(
             frame,
             details,
@@ -479,7 +615,20 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         area.height,
     );
     let heading = Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD);
-    let mut lines = vec![Line::default(); 27];
+    let compact_tasks = area.height < 32 && !state.todos.is_empty();
+    let context_limit = if compact_tasks {
+        6
+    } else {
+        MAX_CONTEXT_ENTRIES
+    };
+    let total_row = if compact_tasks { 10 } else { 13 };
+    let extensions_row = if compact_tasks {
+        usize::from(area.height) - 5
+    } else {
+        15
+    };
+    let tasks_row = if compact_tasks { 12 } else { 20 };
+    let mut lines = vec![Line::default(); usize::from(area.height.min(40))];
     lines[0] = Line::styled(
         safe_line(&state.session_title[..prefix_boundary(&state.session_title, 256)]),
         heading,
@@ -513,12 +662,14 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
     } else {
         for (index, line) in context_rows(state, usize::from(content.width))
             .into_iter()
+            .take(context_limit)
             .enumerate()
         {
             lines[index + 4] = line;
         }
-        if state.context_breakdown.len() > MAX_CONTEXT_ENTRIES {
-            lines[13] = Line::styled("Additional entries omitted", Style::default().fg(MUTED));
+        if state.context_breakdown.len() > context_limit {
+            lines[total_row] =
+                Line::styled("Additional entries omitted", Style::default().fg(MUTED));
         } else {
             let total = state
                 .context_breakdown
@@ -538,20 +689,87 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
                 ),
                 Err(_) => "Total estimate exceeds range".into(),
             };
-            lines[13] = Line::styled(summary, Style::default().fg(MUTED));
+            lines[total_row] = Line::styled(summary, Style::default().fg(MUTED));
         }
     }
-    lines[15] = Line::styled("Extensions", heading);
-    lines[16] = Line::styled("MCP  Not implemented", Style::default().fg(MUTED));
-    lines[17] = Line::styled("Plugins  Not implemented", Style::default().fg(MUTED));
-    lines[18] = Line::styled(
+    lines[extensions_row] = Line::styled("Extensions", heading);
+    lines[extensions_row + 1] = Line::styled("MCP  Not implemented", Style::default().fg(MUTED));
+    lines[extensions_row + 2] =
+        Line::styled("Plugins  Not implemented", Style::default().fg(MUTED));
+    lines[extensions_row + 3] = Line::styled(
         match state.skills_count {
             Some(count) => format!("Skills {count} discovered"),
             None => "Skills —".into(),
         },
         Style::default().fg(MUTED),
     );
-    lines[20] = Line::styled("Details", heading);
+    let completed = state
+        .todos
+        .iter()
+        .filter(|todo| todo.status == TodoStatus::Completed)
+        .count();
+    lines[tasks_row] = Line::from(vec![
+        Span::styled("Tasks", heading),
+        Span::styled(
+            format!(" · {completed}/{}", state.todos.len()),
+            Style::default().fg(MUTED),
+        ),
+    ]);
+    let task_capacity = if compact_tasks {
+        extensions_row.saturating_sub(tasks_row + 2)
+    } else {
+        usize::from(area.height)
+            .saturating_sub(tasks_row + 3)
+            .min(9)
+    };
+    let mut task_end = tasks_row + 1;
+    if state.todos.is_empty() {
+        lines[task_end] = Line::styled("No tasks", Style::default().fg(MUTED));
+        task_end += 1;
+    } else {
+        let visible = state
+            .todos
+            .len()
+            .min(task_capacity.saturating_sub(usize::from(state.todos.len() > task_capacity)));
+        for todo in state.todos.iter().take(visible) {
+            let (icon, color) = match todo.status {
+                TodoStatus::Pending => ("○", MUTED),
+                TodoStatus::InProgress => ("◐", BLUE),
+                TodoStatus::Completed => ("✓", GREEN),
+            };
+            let text = safe_line(&todo.content[..prefix_boundary(&todo.content, 1024)]);
+            let text_width = usize::from(content.width.saturating_sub(2));
+            let cropped = crop_display(&text, 0, text_width);
+            let text = if cropped.len() < text.len() && text_width > 0 {
+                format!("{}…", crop_display(&text, 0, text_width - 1))
+            } else {
+                cropped
+            };
+            lines[task_end] = Line::from(vec![
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
+                Span::styled(
+                    text,
+                    Style::default().fg(if todo.status == TodoStatus::Completed {
+                        MUTED
+                    } else {
+                        FOREGROUND
+                    }),
+                ),
+            ]);
+            task_end += 1;
+        }
+        if visible < state.todos.len() {
+            lines[task_end] = Line::styled(
+                format!("+{} more tasks", state.todos.len() - visible),
+                Style::default().fg(MUTED),
+            );
+            task_end += 1;
+        }
+    }
+    let details_row = task_end + 1;
+    if !compact_tasks && details_row + 1 < usize::from(area.height.saturating_sub(1)) {
+        lines[details_row] = Line::styled("Details", heading);
+    }
     for (index, (label, value)) in [
         ("Profile", state.profile.as_str()),
         ("Model", state.model.as_str()),
@@ -563,8 +781,8 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
     .into_iter()
     .enumerate()
     {
-        let row = index + 21;
-        if row < usize::from(area.height.saturating_sub(2)) {
+        let row = index + details_row + 1;
+        if !compact_tasks && row < usize::from(area.height.saturating_sub(2)).min(lines.len()) {
             lines[row] = Line::styled(
                 format!("{label} {}", safe_line(value)),
                 Style::default().fg(MUTED),
@@ -732,7 +950,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
         "Failed" => RED,
         "Awaiting approval" | "Awaiting input" | "NeedsConfirmation" | "NeedsInput"
         | "LimitReached" => AMBER,
-        "Running" | "Reviewing" => BLUE,
+        "Running" | "Reviewing" | "Thinking" | "Responding" => BLUE,
         _ => MUTED,
     };
     draw_split_line(
@@ -852,11 +1070,14 @@ fn role_style(role: Role) -> Style {
         Role::User => BLUE,
         Role::Assistant => FOREGROUND,
         Role::Tool => AMBER,
+        Role::Thinking => MUTED,
         Role::System => MUTED,
     })
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
+    state.message_hits.clear();
+    state.transcript_viewport = Some(inner);
     if inner.width >= 40 {
         inner.x += 1;
         inner.width -= 2;
@@ -867,6 +1088,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     let width = usize::from(inner.width);
     let mut lines = VecDeque::new();
     let mut line_count = 0;
+    let mut headers = Vec::new();
     if state.dropped_messages > 0 {
         append_wrapped(
             &format!(
@@ -884,19 +1106,35 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
             Role::User => "You",
             Role::Assistant => "Saya",
             Role::Tool => "Tool",
+            Role::Thinking => "Thinking",
             Role::System => "System",
         };
-        let mut heading = Line::from(vec![Span::styled(
-            role_label,
-            role_style(message.role).add_modifier(Modifier::BOLD),
-        )]);
-        if !message.label.is_empty() && message.label != role_label {
+        let can_fold = foldable(message);
+        let expanded = state.expanded_messages.contains(&message.id);
+        let mut heading = Line::from(vec![
+            Span::styled(
+                if can_fold {
+                    if expanded { "▼ " } else { "▶ " }
+                } else {
+                    ""
+                },
+                Style::default().fg(MUTED),
+            ),
+            Span::styled(
+                role_label,
+                role_style(message.role).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        if message.role == Role::Thinking {
             heading.spans.push(Span::styled(
-                format!(" · {}", safe_line(&message.label)),
+                if message.streaming {
+                    " · thinking"
+                } else {
+                    " · finished"
+                },
                 Style::default().fg(MUTED),
             ));
-        }
-        if message.streaming {
+        } else if message.streaming {
             heading
                 .spans
                 .push(Span::styled(" · streaming", Style::default().fg(MUTED)));
@@ -906,9 +1144,27 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
                 .spans
                 .push(Span::styled(" · truncated", Style::default().fg(AMBER)));
         }
-        if message.role == Role::Tool {
+        if !message.label.is_empty() && message.label != role_label {
+            heading.spans.push(Span::styled(
+                format!(" · {}", safe_line(&message.label)),
+                Style::default().fg(MUTED),
+            ));
+        }
+        if can_fold {
+            heading
+                .spans
+                .push(Span::styled(" · Ctrl+O", Style::default().fg(MUTED)));
+            let mut remaining = width;
+            for span in &mut heading.spans {
+                let text = crop_display(&span.content, 0, remaining);
+                remaining = remaining.saturating_sub(text.width());
+                span.content = text.into();
+            }
+        }
+        if matches!(message.role, Role::Tool | Role::Thinking) {
             heading = heading.style(Style::default().bg(CODE_BACKGROUND));
         }
+        let header_start = line_count;
         append_wrapped_line(
             heading,
             width,
@@ -916,6 +1172,13 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
             &mut line_count,
             MAX_RENDER_LINES,
         );
+        if can_fold {
+            headers.push((message.id, header_start..line_count));
+        }
+        if can_fold && !expanded {
+            append_wrapped("", width, Style::default(), &mut lines, &mut line_count);
+            continue;
+        }
         let text = safe_text(&message.text);
         if message.role == Role::Assistant {
             for line in markdown_lines(&text) {
@@ -924,6 +1187,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         } else {
             let style = match message.role {
                 Role::Tool => Style::default().fg(CODE_FOREGROUND).bg(CODE_BACKGROUND),
+                Role::Thinking => Style::default().fg(MUTED).bg(CODE_BACKGROUND),
                 Role::System => Style::default().fg(MUTED),
                 _ => Style::default().fg(FOREGROUND),
             };
@@ -940,7 +1204,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         }
         append_wrapped("", width, Style::default(), &mut lines, &mut line_count);
     }
-    if line_count > MAX_RENDER_LINES {
+    let retained_start = line_count.saturating_sub(lines.len());
+    let omitted = usize::from(line_count > MAX_RENDER_LINES);
+    if omitted > 0 {
         lines.push_front(Line::styled(
             "[earlier display lines omitted]",
             Style::default().fg(MUTED),
@@ -953,11 +1219,41 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     }
     state.last_width = inner.width;
     state.last_line_count = line_count;
+    if let Some((id, row)) = state.fold_anchor.take()
+        && let Some((_, range)) = headers.iter().find(|(header_id, _)| *header_id == id)
+    {
+        let header_row = range.start.saturating_sub(retained_start) + omitted;
+        let offset = usize::from(row.saturating_sub(inner.y)).min(usize::from(inner.height - 1));
+        let start = header_row.saturating_sub(offset);
+        state.scroll = lines
+            .len()
+            .saturating_sub(start.saturating_add(usize::from(inner.height)));
+    }
     state.scroll = state
         .scroll
         .min(lines.len().saturating_sub(usize::from(inner.height)));
     let end = lines.len().saturating_sub(state.scroll);
     let start = end.saturating_sub(usize::from(inner.height));
+    for (id, range) in headers {
+        if range.end <= retained_start {
+            continue;
+        }
+        let header_start = range.start.saturating_sub(retained_start) + omitted;
+        let header_end = range.end.saturating_sub(retained_start) + omitted;
+        let visible_start = header_start.max(start);
+        let visible_end = header_end.min(end);
+        if visible_start < visible_end {
+            state.message_hits.push(MessageHit {
+                area: Rect::new(
+                    inner.x,
+                    inner.y + (visible_start - start) as u16,
+                    inner.width,
+                    (visible_end - visible_start) as u16,
+                ),
+                id,
+            });
+        }
+    }
     for (row, line) in lines.into_iter().skip(start).take(end - start).enumerate() {
         frame.render_widget(
             line,
@@ -1131,7 +1427,7 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
     ));
 }
 
-fn draw_completion(frame: &mut Frame<'_>, state: &State, area: Rect) {
+fn draw_completion(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     if !state.completion.visible() || area.height < 3 || area.width < 4 {
         return;
     }
@@ -1152,6 +1448,7 @@ fn draw_completion(frame: &mut Frame<'_>, state: &State, area: Rect) {
         (area.width - 2).min(80),
         rows as u16 + 2,
     );
+    state.completion_viewport = Some(popup);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Command suggestions ")
@@ -1309,6 +1606,11 @@ mod tests {
                 .iter()
                 .all(|message| message.text.is_char_boundary(message.text.len()))
         );
+        let collapsed = render(&mut state, 80, 24);
+        assert!(collapsed.contains("truncated"));
+        assert!(!collapsed.contains("display truncated"));
+        assert!(state.toggle_latest());
+        state.scroll_to_bottom();
         assert!(render(&mut state, 80, 24).contains("display truncated"));
     }
 
@@ -2110,5 +2412,234 @@ mod tests {
         let top = row_text(terminal.backend().buffer(), 0);
         assert!(top.contains("↑↓ Tab/→ Esc"));
         assert!(!top.contains("Tab mode"));
+    }
+
+    #[test]
+    fn thinking_and_long_tools_fold_by_stable_id_and_keep_stream_updates() {
+        let mut state = State::default();
+        let id = state.push_message(
+            Role::Thinking,
+            "provider thought text",
+            "private thought marker",
+        );
+        state.append_message(id, " · more");
+        let image = render(&mut state, 80, 24);
+        assert!(image.contains("▶ Thinking"));
+        assert!(image.contains("thinking"));
+        assert!(!image.contains("private thought marker"));
+        let header = state.message_hits[0].area;
+        assert!(state.toggle_at(header.x, header.y));
+        assert!(render(&mut state, 80, 24).contains("private thought marker"));
+        state.append_message(id, " · streamed addition");
+        assert!(render(&mut state, 80, 24).contains("streamed addition"));
+        assert!(state.expanded_messages.contains(&id));
+        state.finish_message(id);
+        assert!(render(&mut state, 80, 24).contains("finished"));
+        let body = state.message_hits[0].area.bottom();
+        assert!(!state.toggle_at(header.x, body));
+        assert!(state.toggle_latest());
+        assert!(!render(&mut state, 80, 24).contains("private thought marker"));
+
+        for (text, expected) in [
+            ("x".repeat(512), false),
+            ("x".repeat(513), true),
+            ("a\nb\nc\nd\ne\nf".into(), false),
+            ("a\nb\nc\nd\ne\nf\ng".into(), true),
+        ] {
+            let tool_id = state.push_message(Role::Tool, "exec · call-1", &text);
+            assert_eq!(foldable(state.messages.back().unwrap()), expected);
+            assert_eq!(state.messages.back().unwrap().text, text);
+            if expected {
+                assert!(state.toggle_latest());
+                assert!(state.expanded_messages.contains(&tool_id));
+            }
+        }
+    }
+
+    #[test]
+    fn header_hits_ignore_forged_body_popup_occlusion_and_stale_resizes() {
+        let mut state = State::default();
+        state.push_message(Role::User, "You", "▶ Thinking · forged\n▶ Tool · forged");
+        let thought = state.push_message(Role::Thinking, "provider", "actual source");
+        render(&mut state, 80, 24);
+        let hit = state.message_hits[0].area;
+        assert!(!state.toggle_at(hit.x, hit.y - 2));
+        assert!(state.expanded_messages.is_empty());
+        assert!(state.toggle_at(hit.x, hit.y));
+        assert!(state.expanded_messages.contains(&thought));
+        render(&mut state, 20, 6);
+        assert!(state.message_hits.is_empty());
+        assert!(!state.toggle_at(hit.x, hit.y));
+
+        state.clear_messages();
+        state.push_message(Role::Thinking, "provider", "new thought");
+        state.editor.set_text("/per");
+        state.completion.update("/per", 4, true);
+        render(&mut state, 80, 12);
+        let hit = state.message_hits[0].area;
+        assert!(contains(state.completion_viewport, hit.x + 1, hit.y));
+        assert!(!state.toggle_at(hit.x + 1, hit.y));
+        assert!(!state.scroll_at(hit.x + 1, hit.y, true));
+        assert!(state.expanded_messages.is_empty());
+    }
+
+    #[test]
+    fn fold_anchor_keeps_opened_header_visible_and_eviction_releases_fold_state() {
+        let mut state = State::default();
+        let id = state.push_message(Role::Tool, "exec · call-long", "line\n".repeat(200));
+        state.push_message(Role::Assistant, "Saya", "result");
+        render(&mut state, 80, 24);
+        let row = state.message_hits[0].area.y;
+        assert!(state.toggle_at(3, row));
+        render(&mut state, 80, 24);
+        assert_eq!(state.message_hits[0].id, id);
+        assert_eq!(state.message_hits[0].area.y, row);
+        assert!(state.scroll > 0);
+        state.scroll_to_bottom();
+        render(&mut state, 80, 24);
+        assert!(state.message_hits.is_empty());
+        assert!(state.toggle_latest());
+        render(&mut state, 80, 24);
+        assert_eq!(state.message_hits[0].id, id);
+        assert!(state.toggle_latest());
+        assert!(state.expanded_messages.contains(&id));
+        for _ in 0..MAX_MESSAGES {
+            state.push_message(Role::User, "You", "next");
+        }
+        assert!(!state.expanded_messages.contains(&id));
+        assert!(state.expanded_messages.len() <= MAX_MESSAGES);
+        state.clear_messages();
+        assert!(state.expanded_messages.is_empty());
+        assert!(state.message_hits.is_empty());
+        assert!(!state.toggle_latest());
+    }
+
+    #[test]
+    fn mouse_wheel_targets_only_actual_conversation_and_details_viewports() {
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", "line\n".repeat(200));
+        state.set_details(Details {
+            title: "Approval required".into(),
+            lines: (0..100).map(|index| format!("line {index}")).collect(),
+        });
+        render(&mut state, 160, 45);
+        let transcript = state.transcript_viewport.unwrap();
+        let details = state.details_viewport.unwrap();
+        assert!(state.scroll_at(transcript.x + 1, transcript.y + 1, true));
+        assert_eq!(state.scroll, 3);
+        assert_eq!(state.details_scroll, 0);
+        assert!(state.scroll_at(transcript.x + 1, transcript.y + 1, false));
+        assert_eq!(state.scroll, 0);
+        assert!(state.scroll_at(details.x + 1, details.y + 1, false));
+        assert_eq!(state.details_scroll, 3);
+        assert!(state.scroll_at(details.x + 1, details.y + 1, true));
+        assert_eq!(state.details_scroll, 0);
+        for (x, y) in [(0, 0), (3, 39), (3, 41), (121, 4)] {
+            assert!(!state.scroll_at(x, y, true));
+        }
+        render(&mut state, 20, 6);
+        assert!(state.transcript_viewport.is_none());
+        assert!(state.scroll_at(2, 2, false));
+        assert_eq!(state.details_scroll, 3);
+        assert!(!state.toggle_at(2, 2));
+    }
+
+    #[test]
+    fn hit_mapping_tracks_only_headers_retained_inside_the_render_line_budget() {
+        let mut state = State::default();
+        let source = "thought body\n".repeat(MAX_RENDER_LINES + 32);
+        let id = state.push_message(Role::Thinking, "provider", &source);
+        assert!(state.toggle_latest());
+        state.scroll_to_bottom();
+        render(&mut state, 80, 24);
+        assert!(state.message_hits.is_empty());
+        state.scroll_up(usize::MAX);
+        assert!(render(&mut state, 80, 24).contains("earlier display lines omitted"));
+        assert!(state.message_hits.is_empty());
+        assert!(state.toggle_latest());
+        render(&mut state, 80, 24);
+        assert_eq!(state.message_hits.len(), 1);
+        assert_eq!(state.message_hits[0].id, id);
+        assert_eq!(state.messages[0].text, source);
+
+        state.clear_messages();
+        state.push_message(
+            Role::Assistant,
+            "Saya",
+            "▶ Thinking forged\n".repeat(MAX_RENDER_LINES + 32),
+        );
+        let actual = state.push_message(Role::Thinking, "provider", "hidden body");
+        render(&mut state, 80, 24);
+        let hit = state.message_hits[0].area;
+        assert_eq!(state.message_hits.len(), 1);
+        assert_eq!(state.message_hits[0].id, actual);
+        assert!(!state.toggle_at(hit.x, hit.y - 2));
+        assert!(state.toggle_at(hit.x, hit.y));
+        assert!(state.expanded_messages.contains(&actual));
+    }
+
+    #[test]
+    fn folded_headers_reserve_visible_state_before_clipping_long_untrusted_labels() {
+        let mut state = State::default();
+        state.push_message(
+            Role::Tool,
+            "long-label-".repeat(30),
+            "x".repeat(MAX_MESSAGE_BYTES + 1),
+        );
+        let image = render(&mut state, 80, 24);
+        assert!(image.contains("▶ Tool · truncated"));
+        assert_eq!(state.message_hits[0].area.height, 1);
+        state.clear_messages();
+        let id = state.push_message(Role::Thinking, "long-label-".repeat(30), "hidden");
+        state.append_message(id, "");
+        assert!(render(&mut state, 30, 10).contains("▶ Thinking · thinking"));
+        assert_eq!(state.message_hits[0].area.height, 1);
+    }
+
+    #[test]
+    fn sidebar_tasks_keep_real_statuses_counts_and_bounded_omission_at_both_heights() {
+        let mut state = State::default();
+        assert!(render(&mut state, 120, 40).contains("No tasks"));
+        state.todos = (0..64)
+            .map(|index| TodoItem {
+                id: format!("task-{index}"),
+                content: if index == 1 {
+                    "unsafe\x1b[2J\u{202e} 中文👩‍💻".into()
+                } else {
+                    format!("Task {index} {}", "content ".repeat(20))
+                },
+                status: match index {
+                    0 => TodoStatus::InProgress,
+                    1 => TodoStatus::Completed,
+                    _ => TodoStatus::Pending,
+                },
+            })
+            .collect();
+        for (height, tasks_row, extensions_row, first_task_row, omitted_row, omitted_count) in
+            [(24, 12, 19, 13, 17, 60), (40, 20, 15, 21, 29, 56)]
+        {
+            let mut terminal = Terminal::new(TestBackend::new(120, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            assert!(row_text(buffer, tasks_row).contains("Tasks · 1/64"));
+            assert!(row_text(buffer, extensions_row).contains("Extensions"));
+            assert!(
+                row_text(buffer, omitted_row).contains(&format!("+{omitted_count} more tasks"))
+            );
+            assert_eq!(buffer[(91, first_task_row)].symbol(), "◐");
+            assert_eq!(buffer[(91, first_task_row)].fg, BLUE);
+            assert_eq!(buffer[(91, first_task_row + 1)].symbol(), "✓");
+            assert_eq!(buffer[(91, first_task_row + 1)].fg, GREEN);
+            let image = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(image.contains('…'));
+            assert!(!image.contains('\x1b'));
+            assert!(!image.contains('\u{202e}'));
+        }
+        state.clear_messages();
+        assert!(state.todos.is_empty());
     }
 }
