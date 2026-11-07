@@ -303,3 +303,136 @@ async fn concurrent_writer_never_produces_mixed_collections()
     assert!(successes > 0);
     Ok(())
 }
+
+#[tokio::test]
+async fn valid_json_with_invalid_record_types_or_associations_is_rejected()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::contract::{ApprovalRequest, Event, EventPayload};
+    let mutations = [
+        "UPDATE runs SET run=json_set(run,'$.id','00000000-0000-0000-0000-000000000000')",
+        "UPDATE runs SET run=json_set(run,'$.permissions','unsupported')",
+        "UPDATE tool_calls SET call=json_set(call,'$.call_id','different')",
+        "UPDATE tool_calls SET state='unsupported'",
+        "UPDATE tool_calls SET result='{\"ok\":\"yes\",\"truncated\":false}'",
+        "UPDATE events SET event=json_set(event,'$.type','unsupported.event')",
+        "UPDATE events SET event=json_set(event,'$.seq',99)",
+        "UPDATE events SET event=json_set(event,'$.run_id','00000000-0000-0000-0000-000000000000')",
+        "UPDATE approval_requests SET request=json_set(request,'$.approval_id','different')",
+        "UPDATE change_log SET reference=json_set(reference,'$.type','unsupported.event') WHERE kind='activity'",
+    ];
+    for mutation in mutations {
+        let data = tempfile::tempdir()?;
+        let store = SqliteStore::open(data.path(), vec![])?;
+        let session = session(data.path());
+        store.create_session(&session, "hash").await?;
+        let run = Run {
+            id: RunId::new(),
+            session_id: session.id,
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Manual,
+        };
+        store
+            .commit(&[
+                StoreChange::RunStarted(run.clone()),
+                StoreChange::ToolIntent {
+                    run_id: run.id,
+                    call: ToolCall {
+                        call_id: "call".into(),
+                        name: "read_file".into(),
+                        arguments: "{}".into(),
+                    },
+                },
+                StoreChange::Activity {
+                    run_id: run.id,
+                    payload: EventPayload::ToolRequested {
+                        call_id: "call".into(),
+                        name: "read_file".into(),
+                        args: serde_json::json!({}),
+                    },
+                },
+                StoreChange::ApprovalRequested(ApprovalRequest {
+                    approval_id: "approval".into(),
+                    call_id: "call".into(),
+                    run_id: run.id,
+                    tool: "read_file".into(),
+                    operation_summary: "read".into(),
+                    arguments: serde_json::json!({}),
+                    cwd: data.path().into(),
+                    work_mode: WorkMode::Work,
+                }),
+                StoreChange::Event(Event {
+                    schema_version: 1,
+                    session_id: session.id,
+                    run_id: Some(run.id),
+                    seq: 1,
+                    timestamp: "2026-11-08T00:00:00Z".into(),
+                    payload: EventPayload::ToolRequested {
+                        call_id: "call".into(),
+                        name: "read_file".into(),
+                        args: serde_json::json!({}),
+                    },
+                }),
+            ])
+            .await?;
+        let conn = rusqlite::Connection::open(data.path().join("sessions.sqlite3"))?;
+        conn.execute_batch(mutation)?;
+        drop(conn);
+        let result = SqliteStore::read_snapshot(
+            data.path(),
+            session.id,
+            SnapshotLimits::default(),
+            Arc::new(Cancel::default()),
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().0.code,
+            "storage_corrupt",
+            "accepted {mutation}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn optional_tool_fields_and_unknown_outcomes_remain_readable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data = tempfile::tempdir()?;
+    let store = SqliteStore::open(data.path(), vec![])?;
+    let session = session(data.path());
+    store.create_session(&session, "hash").await?;
+    let run = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    store
+        .commit(&[
+            StoreChange::RunStarted(run.clone()),
+            StoreChange::ToolIntent {
+                run_id: run.id,
+                call: ToolCall {
+                    call_id: "call".into(),
+                    name: "exec".into(),
+                    arguments: "{}".into(),
+                },
+            },
+        ])
+        .await?;
+    let conn = rusqlite::Connection::open(data.path().join("sessions.sqlite3"))?;
+    conn.execute_batch(
+        "UPDATE tool_calls SET state='unknown',result='{\"ok\":false,\"truncated\":false}'",
+    )?;
+    drop(conn);
+    let snapshot = SqliteStore::read_snapshot(
+        data.path(),
+        session.id,
+        SnapshotLimits::default(),
+        Arc::new(Cancel::default()),
+    )
+    .await?;
+    assert_eq!(snapshot.tool_calls[0]["state"], "unknown");
+    assert!(snapshot.tool_calls[0]["result"]["data"].is_null());
+    assert!(snapshot.tool_calls[0]["result"]["error"].is_null());
+    Ok(())
+}

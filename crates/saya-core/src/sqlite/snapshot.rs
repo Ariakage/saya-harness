@@ -2,12 +2,16 @@
 use super::{APPLICATION_ID, VERSION, check_schema, error, session_metadata, sql_error};
 use crate::{
     boundary::Cancellation,
-    contract::{BoundaryError, HistoryItem, Session, SessionId},
+    contract::{
+        ApprovalRequest, BoundaryError, Event, EventPayload, HistoryItem, Run, RunId, RunResult,
+        SCHEMA_VERSION, Session, SessionId, ToolCall, ToolResult, ToolState,
+    },
 };
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -93,6 +97,113 @@ fn rows(
         );
     }
     Ok(values)
+}
+fn decode<T: DeserializeOwned>(value: &Value) -> Result<T, BoundaryError> {
+    serde_json::from_value(value.clone())
+        .map_err(|_| error("storage_corrupt", "invalid typed snapshot record"))
+}
+fn encode<T: Serialize>(value: &T) -> Result<Value, BoundaryError> {
+    serde_json::to_value(value)
+        .map_err(|_| error("storage_corrupt", "cannot normalize snapshot record"))
+}
+fn validate_runs(
+    rows: &mut [Value],
+    session: SessionId,
+    budget: &Budget,
+) -> Result<HashSet<RunId>, BoundaryError> {
+    let mut ids = HashSet::new();
+    for row in rows {
+        budget.check()?;
+        let run: Run = decode(&row["run"])?;
+        let stored: RunId = decode(&row["run_id"])?;
+        if run.id != stored || run.session_id != session || !ids.insert(stored) {
+            return Err(error("storage_corrupt", "snapshot run identity mismatch"));
+        }
+        row["run"] = encode(&run)?;
+        if !row["result"].is_null() {
+            let result: RunResult = decode(&row["result"])?;
+            if result.schema_version != SCHEMA_VERSION
+                || result.run_id != Some(stored)
+                || result.session_id.is_some_and(|id| id != session)
+            {
+                return Err(error(
+                    "storage_corrupt",
+                    "snapshot run result identity mismatch",
+                ));
+            }
+            row["result"] = encode(&result)?;
+        }
+    }
+    Ok(ids)
+}
+fn validate_calls(
+    rows: &mut [Value],
+    runs: &HashSet<RunId>,
+    budget: &Budget,
+) -> Result<(), BoundaryError> {
+    for row in rows {
+        budget.check()?;
+        let run: RunId = decode(&row["run_id"])?;
+        let call: ToolCall = decode(&row["call"])?;
+        let state: ToolState = decode(&row["state"])?;
+        if !runs.contains(&run) || row["call_id"].as_str() != Some(call.call_id.as_str()) {
+            return Err(error("storage_corrupt", "snapshot tool identity mismatch"));
+        }
+        row["call"] = encode(&call)?;
+        row["state"] = encode(&state)?;
+        if !row["result"].is_null() {
+            let result: ToolResult = decode(&row["result"])?;
+            row["result"] = encode(&result)?;
+        }
+    }
+    Ok(())
+}
+fn validate_approvals(
+    rows: &mut [Value],
+    runs: &HashSet<RunId>,
+    budget: &Budget,
+) -> Result<(), BoundaryError> {
+    for row in rows {
+        budget.check()?;
+        let run: RunId = decode(&row["run_id"])?;
+        let request: ApprovalRequest = decode(&row["request"])?;
+        if !runs.contains(&run)
+            || request.run_id != run
+            || row["approval_id"].as_str() != Some(request.approval_id.as_str())
+        {
+            return Err(error(
+                "storage_corrupt",
+                "snapshot approval identity mismatch",
+            ));
+        }
+        row["request"] = encode(&request)?;
+    }
+    Ok(())
+}
+fn validate_events(
+    rows: Vec<Value>,
+    session: SessionId,
+    runs: &HashSet<RunId>,
+    budget: &Budget,
+) -> Result<Vec<Value>, BoundaryError> {
+    let mut events = Vec::with_capacity(rows.len());
+    for row in rows {
+        budget.check()?;
+        let event: Event = decode(&row["event"])?;
+        let seq: u64 = decode(&row["stored_seq"])?;
+        let run: Option<RunId> = decode(&row["stored_run_id"])?;
+        if event.schema_version != SCHEMA_VERSION
+            || event.session_id != session
+            || event.seq != seq
+            || seq == 0
+            || event.run_id != run
+            || run.is_some_and(|id| !runs.contains(&id))
+        {
+            return Err(error("storage_corrupt", "snapshot event identity mismatch"));
+        }
+        events.push(encode(&event)?);
+    }
+    Ok(events)
 }
 fn background_jobs(
     calls: &[Value],
@@ -237,19 +348,19 @@ fn read_checked(
                 .map_err(|_| error("storage_corrupt", "invalid stored history"))
         })
         .collect::<Result<_, _>>()?;
-    let runs = rows(
+    let mut runs = rows(
         &tx,
         "SELECT json_object('run_id',id,'run',json(run),'result',json(result),'started_at',started_at,'finished_at',finished_at) FROM runs WHERE session_id=?1 ORDER BY started_at,rowid",
         &key,
         &mut budget,
     )?;
-    let tool_calls = rows(
+    let mut tool_calls = rows(
         &tx,
         "SELECT json_object('run_id',c.run_id,'call_id',c.call_id,'call',json(c.call),'state',c.state,'result',json(c.result)) FROM tool_calls c JOIN runs r ON r.id=c.run_id WHERE r.session_id=?1 ORDER BY r.started_at,r.rowid,c.rowid",
         &key,
         &mut budget,
     )?;
-    let approval_requests = rows(
+    let mut approval_requests = rows(
         &tx,
         "SELECT json_object('run_id',a.run_id,'approval_id',a.approval_id,'request',json(a.request)) FROM approval_requests a JOIN runs r ON r.id=a.run_id WHERE r.session_id=?1 ORDER BY a.rowid",
         &key,
@@ -257,11 +368,15 @@ fn read_checked(
     )?;
     let events = rows(
         &tx,
-        "SELECT event FROM events WHERE session_id=?1 ORDER BY seq",
+        "SELECT json_object('stored_seq',seq,'stored_run_id',run_id,'event',json(event)) FROM events WHERE session_id=?1 ORDER BY seq",
         &key,
         &mut budget,
     )?;
-    let changes = rows(
+    let run_ids = validate_runs(&mut runs, session_id, &budget)?;
+    validate_calls(&mut tool_calls, &run_ids, &budget)?;
+    validate_approvals(&mut approval_requests, &run_ids, &budget)?;
+    let events = validate_events(events, session_id, &run_ids, &budget)?;
+    let mut changes = rows(
         &tx,
         "SELECT json_object('seq',seq,'run_id',run_id,'kind',kind,'reference',reference) FROM change_log WHERE session_id=?1 ORDER BY seq",
         &key,
@@ -275,18 +390,47 @@ fn read_checked(
         .map_err(sql_error)?;
     let mut metrics = Vec::new();
     let mut project_context = Vec::new();
-    for change in &changes {
-        let destination = match change["kind"].as_str() {
-            Some("run_metrics") => &mut metrics,
-            Some("project_context") => &mut project_context,
-            _ => continue,
-        };
+    for change in &mut changes {
+        budget.check()?;
+        let seq: u64 = decode(&change["seq"])?;
+        let run: Option<RunId> = decode(&change["run_id"])?;
+        if seq == 0 || run.is_some_and(|id| !run_ids.contains(&id)) {
+            return Err(error(
+                "storage_corrupt",
+                "snapshot change identity mismatch",
+            ));
+        }
+        let kind = change["kind"]
+            .as_str()
+            .ok_or_else(|| error("storage_corrupt", "invalid change kind"))?;
+        if !matches!(kind, "activity" | "run_metrics" | "project_context") {
+            continue;
+        }
+        if run.is_none() {
+            return Err(error("storage_corrupt", "missing snapshot change run"));
+        }
         let raw = change["reference"]
             .as_str()
             .ok_or_else(|| error("storage_corrupt", "missing snapshot reference"))?;
-        let value: Value = serde_json::from_str(raw)
+        let parsed: Value = serde_json::from_str(raw)
             .map_err(|_| error("storage_corrupt", "invalid snapshot reference"))?;
-        destination.push(json!({"run_id":change["run_id"],"seq":change["seq"],"data":value}));
+        let value = match kind {
+            "activity" => encode(&decode::<EventPayload>(&parsed)?)?,
+            "run_metrics" => encode(&decode::<crate::metrics::RunMetrics>(&parsed)?)?,
+            _ => encode(&decode::<crate::project_context::ContextRecord>(&parsed)?)?,
+        };
+        let normalized = serde_json::to_string(&value)
+            .map_err(|_| error("storage_corrupt", "cannot normalize snapshot reference"))?;
+        match kind {
+            "run_metrics" => {
+                metrics.push(json!({"run_id":change["run_id"],"seq":seq,"data":value}))
+            }
+            "project_context" => {
+                project_context.push(json!({"run_id":change["run_id"],"seq":seq,"data":value}))
+            }
+            _ => {}
+        }
+        change["reference"] = normalized.into();
     }
     // Read the optional config record in this transaction as an integrity check.
     let _: Option<String> = tx
