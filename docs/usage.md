@@ -52,7 +52,7 @@ cp examples/config.example.toml "$config_path"
 ./target/release/saya --config "$config_path" --permissions manual run --approval-file examples/approval.example.json 'Run /bin/echo with the argument hello'
 ```
 
-该文件仅匹配工作区内默认 cwd 的 `[/bin/echo, hello]`，不会自行运行命令；只有模型提出匹配的调用才会使用，且不覆盖 PLAN、deny 或路径规则。预授权不会在恢复会话后继承。使用者应在授权前检查完整 argv 和 cwd；详细规则见[执行与恢复契约](execution.md)。
+该文件仅匹配工作区内默认 cwd 的 `[/bin/echo, hello]`，不会自行运行命令；只有模型提出匹配的调用才会使用，且不覆盖 PLAN、deny 或路径规则。预授权不会在恢复会话后继承。使用者应在授权前检查完整 argv 和 cwd；详细规则见[执行与恢复契约](execution.md)。文件写入要求父目录已存在；需要创建目录时须通过适用权限允许的命令完成。
 
 模型可显式启动运行内后台工具；交互期间 `/jobs`、`/job ID`、`/cancel-job ID` 可查询和取消。运行结束会清理未完成任务。Saya 被强制终止后，失去管理的进程可能仍在运行；恢复时不重放工具，结果未知不等于已停止。
 
