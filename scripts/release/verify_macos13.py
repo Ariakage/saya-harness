@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Verify an existing candidate on macOS 13 and save a bounded evidence record."""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import subprocess
+import struct
+import sys
+import tarfile
+import tempfile
+
+HERE = Path(__file__).resolve().parent
+
+
+def command(*args):
+    return subprocess.check_output(args, text=True).strip()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('archive', type=Path)
+    parser.add_argument('--sha256', required=True, help='expected archive SHA-256 from SHA256SUMS')
+    parser.add_argument('--output', type=Path, required=True, help='new evidence JSON file')
+    args = parser.parse_args()
+    try:
+        if platform.system() != 'Darwin':
+            raise ValueError('this check must run on macOS 13')
+        version = command('sw_vers', '-productVersion')
+        if version.split('.')[0] != '13':
+            raise ValueError('this check requires macOS 13; found ' + version)
+        digest = hashlib.sha256(args.archive.read_bytes()).hexdigest()
+        if digest != args.sha256.lower():
+            raise ValueError('archive SHA-256 mismatch')
+        with tarfile.open(args.archive, 'r:gz') as archive:
+            members = archive.getmembers()
+            if len(members) != 4 or {item.name for item in members} != {'saya', 'LICENSE', 'README.md', 'BUILD-INFO.json'}:
+                raise ValueError('unexpected archive members')
+            if any(not item.isfile() or item.size > 100 * 1024 * 1024 for item in members):
+                raise ValueError('unexpected archive member type or size')
+            metadata = json.load(archive.extractfile('BUILD-INFO.json'))
+            target = metadata.get('target')
+            if target not in ('macos-aarch64', 'macos-x86_64'):
+                raise ValueError('candidate is not a macOS target')
+            binary = archive.extractfile('saya').read()
+            binary_hash = hashlib.sha256(binary).hexdigest()
+            expected_cpu = 0x0100000c if target == 'macos-aarch64' else 0x01000007
+            if len(binary) < 8 or binary[:4] != b'\xcf\xfa\xed\xfe' or struct.unpack_from('<I', binary, 4)[0] != expected_cpu:
+                raise ValueError('binary architecture does not match target')
+            if binary_hash != metadata.get('binary_sha256'):
+                raise ValueError('binary SHA-256 mismatch')
+        with tempfile.TemporaryDirectory(prefix='saya-macos13-') as temporary:
+            path = Path(temporary) / 'saya'
+            path.write_bytes(binary)
+            path.chmod(0o755)
+            build_info = command('otool', '-l', str(path))
+            if 'minos 13.0' not in build_info:
+                raise ValueError('Mach-O does not declare minimum macOS 13.0')
+            for script in ('smoke.py', 'journey.py'):
+                subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
+        try:
+            arm64_capable = command('sysctl', '-n', 'hw.optional.arm64') == '1'
+        except subprocess.CalledProcessError:
+            arm64_capable = False
+        evidence = {
+            'schema_version': 1, 'captured_at_utc': datetime.now(timezone.utc).isoformat(),
+            'macos_version': version, 'machine': platform.machine(), 'arm64_capable': arm64_capable,
+            'target': target, 'archive_name': args.archive.name, 'archive_sha256': digest,
+            'binary_sha256': binary_hash, 'declared_source_commit': metadata.get('declared_source_commit'),
+            'mach_o_minimum': '13.0', 'offline_tool_smoke': 'passed', 'interactive_journey': 'passed',
+            'smoke_script_sha256': hashlib.sha256((HERE / 'smoke.py').read_bytes()).hexdigest(),
+            'journey_script_sha256': hashlib.sha256((HERE / 'journey.py').read_bytes()).hexdigest(),
+        }
+        with args.output.open('x', encoding='utf-8') as output:
+            json.dump(evidence, output, indent=2, sort_keys=True)
+            output.write('\n')
+        print('Saved macOS 13 evidence:', args.output)
+        return 0
+    except (OSError, ValueError, KeyError, tarfile.TarError, json.JSONDecodeError,
+            subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        print('Verification failed:', str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

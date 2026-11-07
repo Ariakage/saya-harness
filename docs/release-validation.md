@@ -1,6 +1,6 @@
 # 0.1.0 发行候选验证记录
 
-**状态：待验证，尚非可发布版本。** 本记录对应本地候选的源码提交 `a1b1b02d9fcc789b3f1634c4bdf654fd6e01c45a`，不是本文所在的后续文档提交。候选包仅在本机 `target/release-candidate-a1b1b02/`，不随 Git 提交；`target/p7-evidence/` 保存 Linux 构建与 smoke 日志。候选未经签名、公证或外部发布。
+**状态：受阻，尚非可发布版本。** 项目负责人确认暂时没有 macOS 13 验证环境。 本记录对应本地候选的源码提交 `a1b1b02d9fcc789b3f1634c4bdf654fd6e01c45a`，不是本文所在的后续文档提交。候选包仅在本机 `target/release-candidate-a1b1b02/`，不随 Git 提交；`target/p7-evidence/` 保存 Linux 构建与 smoke 日志。候选未经签名、公证或外部发布。
 
 ## 平台与验证范围
 
@@ -35,6 +35,15 @@ P6 源码提交 `a58da26` 的 [GitHub Actions 运行 42369396145](https://github
 
 ## 发行前未关闭项
 
-1. 在 macOS 13 aarch64 和 x86_64 分别运行对应候选的 smoke 与使用流程，记录实际系统版本、架构、哈希和结果；如只有单一架构，不得把另一架构标为最低环境已验证。
+1. 在 macOS 13 运行两个候选的 smoke 与使用流程，记录实际系统版本、宿主与目标架构、哈希和结果；macOS 13 ARM 可在 Rosetta 可用时同时验证 x86_64 候选，并明确标注模拟。仅运行单个候选时，不得把另一目标标为最低环境已验证。
 2. 汇总 B-01 至 B-24、AC-01 至 AC-24、已知限制及最终发布检查；补齐候选产物的版本说明及准确的支持范围。只有所有退出条件满足后才可标记 P7 完成。
 3. 外部发布、推送和签名需遵循当时的用户指令；本记录本身不授权发布。
+
+在 macOS 13 机器上，将两个对应候选包和本仓库的 `scripts/release` 脚本放到可访问位置，使用 Python 3 依次执行；输出路径必须不存在。脚本拒绝非 macOS 13 系统，检查包和二进制哈希、架构及部署目标，并运行两个离线演练：
+
+```sh
+python3 scripts/release/verify_macos13.py /path/to/saya-0.1.0-macos-aarch64.tar.gz --sha256 f7ed458ecd3d3549d7a072a98907bb8f262f4d69b0813485d78897490407d816 --output macos13-aarch64.json
+python3 scripts/release/verify_macos13.py /path/to/saya-0.1.0-macos-x86_64.tar.gz --sha256 c76e3e2b663559eaf7b30469367de6e2fa7ac70dde8159e4b754eb7a9a33555b --output macos13-x86_64.json
+```
+
+脚本及其拒绝不匹配系统／哈希／架构和拒绝覆盖的逻辑经过受控测试；模拟测试本身不是 macOS 13 验收证据。证据 JSON 必须对应当前候选哈希；在 ARM 上运行 Intel 候选时记录宿主架构并注明 Rosetta。
