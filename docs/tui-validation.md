@@ -42,14 +42,16 @@ Darwin PTY在首次输出及canonical/raw切换时会增加内核状态。观察
 
 ## 四平台候选
 
-| 目标 | 原生最低环境要求 | 状态 |
+| 目标 | 实际原生验收环境 | 归档 SHA-256 |
 | --- | --- | --- |
-| linux-x86_64 | Ubuntu22.04，glibc2.35，x86_64 | 待验证 |
-| linux-aarch64 | Ubuntu22.04，glibc2.35，aarch64 | 待验证 |
-| macos-x86_64 | macOS15，Intel原生，部署目标15.0 | 待验证 |
-| macos-aarch64 | macOS15，ARM原生，部署目标15.0 | 待验证 |
+| linux-x86_64 | Ubuntu 22.04，glibc 2.35，x86_64 | `d06b06335bc515e735af382c4ba5394c51174549e048b42f1a3b135daaa5464b` |
+| linux-aarch64 | Ubuntu 22.04，glibc 2.35，aarch64 | `e2a72096c60b22527353365b381601b696efe83ce6dc1573bb35be6042f410ae` |
+| macos-x86_64 | macOS 15.7.9，x86_64，minos 15.0 | `e5178fe2c4fda565854a4283c65fb17226431e73bca32130ff778182ae18d78d` |
+| macos-aarch64 | macOS 15.8.2，arm64，minos 15.0 | `7c30ebf7df4fefdb718146e22c055ef99dc1dacc73e30b319acb0e31979e64ae` |
 
-候选工作流对解包程序执行工具smoke、文本会话、审查回归与全部TUI场景，记录归档／二进制SHA-256、源码声明、脚本摘要及实际系统。Linux检查GLIBC符号上限与共享库，macOS检查硬件／进程架构及Mach-O最低版本。产物与证据作为Actions artifacts保存14天。
+[候选工作流42407739653](https://github.com/Ariakage/saya-harness/actions/runs/42407739653)的四个原生目标全部通过。四个包已回下载到本机 `target/n1-four-platform-a6c172d/`，逐一核对归档成员、权限、归档及二进制摘要、源码声明、测试脚本摘要和已知测试凭据。汇总证据为同目录 `release-evidence.json`。
+
+工作流对解包程序执行工具smoke、文本会话、审查回归与全部TUI场景，记录归档／二进制SHA-256、源码声明、脚本摘要及实际系统。Linux检查GLIBC符号上限与共享库，macOS检查硬件／进程架构及Mach-O最低版本。产物与证据作为Actions artifacts保存14天。
 
 ## 验证边界
 

@@ -53,14 +53,14 @@ printf '\033[?2004l\033[?25h\033[?1049l'
 | Linux，glibc 2.35+ | x86_64、aarch64 |
 | macOS 15+ | Intel x86_64、Apple Silicon aarch64 |
 
-构建继续使用 Rust 1.99.1／edition 2024。N0 已有本机验收证据，N1 的最终正常入口、解包程序及四平台验收按开发进度继续记录。本草案尚未确认候选下载、哈希、签名或正式发行状态。
+构建使用 Rust 1.99.1／edition 2024。候选源码 `a6c172d` 已通过四平台 CI 与原生最低环境解包验收，每个平台执行445项Rust测试及13组TUI场景。四个归档下载后的SHA-256、二进制、源码声明与脚本摘要均已核对，环境和校验和见[TUI验证](tui-validation.md)。候选保存在Actions artifacts，保留14天。正式发布安排在后续代码review与其他测试之后。
 
 ### 已知限制与后续范围
 
 - OS Sandbox、MCP、自动上下文压缩和可执行插件仍属后续开发范围。命令继续使用宿主权限，进程组清理无法约束主动脱离的后代进程。
 - TUI 的有界显示窗口可能省略较早或较长内容，导出也有明确限额。恢复和工具快照保留未知结果，需要结合工作区核查实际副作用。
 - 凭据脱敏依据当前可解析的已知配置值及持久化标记。文件操作保持单文件保证，外部并发改动仍可能竞争。
-- macOS 候选程序的开发者签名、公证与实际产物状态待发行记录确认。跨运行持久任务、跨协议会话迁移、GUI、Goal 和 Browser 按后续计划推进。[后续开发计划](post-mvp-plan.md)
+- macOS开发者身份签名与Apple公证仍属后续发行工作。跨运行持久任务、跨协议会话迁移、GUI、Goal 和 Browser 按后续计划推进。[后续开发计划](post-mvp-plan.md)
 
 ## English
 
@@ -113,11 +113,11 @@ printf '\033[?2004l\033[?25h\033[?1049l'
 | Linux with glibc 2.35+ | x86_64, aarch64 |
 | macOS 15+ | Intel x86_64, Apple Silicon aarch64 |
 
-Builds continue to use Rust 1.99.1 and edition 2024. N0 has local acceptance evidence. Final N1 entry-point, unpacked-binary, and four-platform checks continue to be recorded in development progress. Candidate downloads, hashes, signatures, and final publication status remain unconfirmed in this draft.
+Builds use Rust 1.99.1 and edition 2024. Candidate source `a6c172d` passed four-platform CI and native minimum-environment validation of the unpacked programs, with 445 Rust tests and 13 TUI scenarios on each platform. Downloaded archives were checked against their SHA-256 values, binaries, source declarations, and script hashes. Environments and checksums are recorded in [TUI validation](tui-validation.md). Candidates are retained as Actions artifacts for 14 days. Formal publication follows subsequent code review and additional testing.
 
 ### Known limitations and subsequent scope
 
 - OS sandboxing, MCP, automatic context compaction, and executable plugins remain subsequent work. Commands continue to run with host permissions, and process groups cannot constrain descendants that detach themselves.
 - Bounded TUI windows can omit earlier or longer content, and exports also have explicit limits. Restored sessions and tool snapshots retain unknown outcomes, which require checking actual workspace effects.
 - Credential redaction depends on currently resolvable configured values and persisted markers. File operations provide single-file guarantees and may race with external concurrent changes.
-- Developer signing, notarization, and actual macOS candidate artifacts remain subject to release records. Persistent jobs across runs, cross-protocol session migration, GUI, Goal, and Browser follow the subsequent development plan. [Post-MVP plan](post-mvp-plan.md)
+- macOS developer identity signing and Apple notarization remain release-preparation work. Persistent jobs across runs, cross-protocol session migration, GUI, Goal, and Browser follow the subsequent development plan. [Post-MVP plan](post-mvp-plan.md)
