@@ -12,7 +12,7 @@
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-083 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
-- DEV-038 共享应用服务已完成本机验收，下一项为 DEV-039 事件与交互桥接。
+- DEV-038／039 共享应用与交互桥已完成本机验收，日志与会话导出按 N0 依赖继续推进。
 
 ## 后续开发状态
 
@@ -31,6 +31,7 @@
 
 | 任务 | 状态 | 证据 |
 | --- | --- | --- |
+| DEV-039 | 完成 | 共享 EventWriter／EventModel、1秒有界 EventSink、人工输入桥与取消句柄已接入 CLI。3项桥接测试、CLI完整回归及 app／CLI Clippy 通过，覆盖队列背压／断开／过期回复，日志为 target/n0-dev039-*.log |
 | DEV-043 | 完成 | 单只读事务快照与 WAL image 校验，包含全集合及真实持久水位。5项快照测试、2项 WAL 回归和 core Clippy 通过，源128MiB／记录32MiB／100k行／5秒默认限额已固定 |
 | DEV-040 | 完成 | 五级 LogLevel、类型化白名单记录、旧行解码和安全文件边界已实现。日志9项测试及 core Clippy 通过 |
 | DEV-038 | 完成 | 新 saya-app 迁移模型组装与会话生命周期，CLI 正常入口回归通过，独立审查通过。`./scripts/check.sh` 的格式、Clippy、全套离线测试及 release 构建通过，日志为本机 target/n0-dev038-check.log |

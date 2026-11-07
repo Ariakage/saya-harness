@@ -18,7 +18,7 @@
 
 0.1.0 Cargo workspace 包含 saya-core 与 saya-cli，二进制为 saya。CLI 负责终端、命令参数、运行组装与输出呈现，core 提供复用运行时。Rust 1.99.1／edition 2024、依赖职责与平台基线见 B-02。
 
-DEV-038 已建立 saya-app，负责模型组装、会话创建／恢复和锁生命周期，CLI 使用同一服务。模型装饰通过调用者提供的适配器接入。TUI 拟采用 saya-tui library，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
+DEV-038 已建立 saya-app，负责模型组装、会话创建／恢复和锁生命周期，CLI 使用同一服务。模型装饰通过调用者提供的适配器接入。DEV-039 的有界事件及人工输入桥由 saya-app 提供，CLI 负责 stdout 与终端呈现，取消句柄与 RuntimeHandle 连接运行控制。TUI 拟采用 saya-tui library，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
 
 执行层拟通过 ExecutionBackend 连接独立 SeatbeltBackend 及 Linux Bubblewrap／Seccomp／socat 组合，预留容器／VM 的实现路径，实际能力分级见[原生隔离设计](sandbox.md)。BrowserProvider、ContextBuilder／OutputStore 与插件规范分别见[Browser](browser.md)、[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。
 

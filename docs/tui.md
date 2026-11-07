@@ -34,13 +34,13 @@ crates/
 
 依赖方向为 `saya-cli -> saya-app / saya-tui`、`saya-tui -> saya-app`、`saya-app -> saya-core`。`saya-core` 保持宿主界面独立，发布产物使用统一 `saya` 可执行入口。
 
-先将 `main.rs` 的模型组装、`build_runtime`、`session.rs` 的准备／恢复，以及 `events.rs` 的共享能力迁入应用服务。会话写锁随应用会话句柄持有，UI 切换和退出由服务完成运行清理与锁释放。
+DEV-038／039 已将模型组装、`build_runtime`、会话准备／恢复与 `events.rs` 的共享能力迁入 saya-app。会话写锁随应用会话句柄持有，UI 切换和退出由服务完成运行清理与锁释放。
 
 ## 命令、事件与背压
 
 界面向应用服务提交发送消息、请求模式、空闲时修改权限、回复确认／澄清、取消运行、新建／恢复会话及导出等命令。服务验证 ID、运行阶段和请求版本后调用现有 core 接口。
 
-事件包含持久业务事件、文本增量和应用状态。已有 `ModelTextDelta`、EventWriter／EventModel、RuntimeHandle 可作为迁移基础。UI 侧 reducer 更新状态，渲染使用状态快照。
+事件包含持久业务事件、文本增量和应用状态。saya-app 提供 EventWriter／EventModel、带背压的事件 sink、确认／澄清桥和 RunCancellation，控制继续复用 core RuntimeHandle。ChannelSink 满队列投递最多等待一秒，超限返回 event_consumer_stalled，消费者关闭返回 event_consumer_closed。人工输入桥容量由调用者选择 1 至 1024，取消同时覆盖发送与回复等待。UI 侧 reducer 更新状态，渲染使用状态快照。
 
 - 有界队列合并文本刷新，持久化序列及最终文本保留原有语义。
 - 审批、错误、模式生效、最终结果等关键变化可靠传递，或通过持久水位和快照重建。

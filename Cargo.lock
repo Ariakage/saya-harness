@@ -1240,8 +1240,11 @@ dependencies = [
 name = "saya-app"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "saya-core",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

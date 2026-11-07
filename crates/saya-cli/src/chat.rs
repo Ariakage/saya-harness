@@ -7,59 +7,9 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     thread::JoinHandle,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
-enum UiRequest {
-    Approval(
-        ApprovalRequest,
-        oneshot::Sender<Result<Option<bool>, BoundaryError>>,
-    ),
-    Input(
-        InputRequest,
-        oneshot::Sender<Result<Option<String>, BoundaryError>>,
-    ),
-}
-struct Ui {
-    requests: mpsc::UnboundedSender<UiRequest>,
-}
-impl ApprovalHandler for Ui {
-    fn confirm<'a>(
-        &'a self,
-        request: &'a ApprovalRequest,
-        cancel: &'a dyn Cancellation,
-    ) -> Operation<'a, Option<bool>> {
-        Box::pin(async move {
-            let (send, receive) = oneshot::channel();
-            if self
-                .requests
-                .send(UiRequest::Approval(request.clone(), send))
-                .is_err()
-            {
-                return Ok(None);
-            }
-            tokio::select! { biased; ()=cancel.cancelled()=>Ok(None), result=receive=>result.unwrap_or(Ok(None)) }
-        })
-    }
-}
-impl InputHandler for Ui {
-    fn ask<'a>(
-        &'a self,
-        request: &'a InputRequest,
-        cancel: &'a dyn Cancellation,
-    ) -> Operation<'a, Option<String>> {
-        Box::pin(async move {
-            let (send, receive) = oneshot::channel();
-            if self
-                .requests
-                .send(UiRequest::Input(request.clone(), send))
-                .is_err()
-            {
-                return Ok(None);
-            }
-            tokio::select! { biased; ()=cancel.cancelled()=>Ok(None), result=receive=>result.unwrap_or(Ok(None)) }
-        })
-    }
-}
+use saya_app::interaction::{Request as UiRequest, input_channel};
 struct Console {
     tty: std::fs::File,
     secrets: Vec<String>,
@@ -156,7 +106,7 @@ struct Active {
     handle: RuntimeHandle,
     cancel: Arc<Cancel>,
     join: tokio::task::JoinHandle<(Result<RunResult, BoundaryError>, Session)>,
-    requests: mpsc::UnboundedReceiver<UiRequest>,
+    requests: mpsc::Receiver<UiRequest>,
     requests_open: bool,
     streamed: bool,
     cancelling: bool,
@@ -167,7 +117,7 @@ fn interrupt_active(cancelling: &mut bool, cancel: &Cancel) -> bool {
         return true;
     }
     *cancelling = true;
-    cancel.0.send_replace(true);
+    cancel.cancel();
     false
 }
 fn work_mode(input: &str) -> Option<WorkMode> {
@@ -451,7 +401,7 @@ pub async fn chat(
                 if let Some(run) = active.as_mut() {
                     terminal_open = false;
                     run.cancelling = true;
-                    run.cancel.0.send_replace(true);
+                    run.cancel.cancel();
                     pending = None;
                     exit_after_run = Some(0);
                     continue;
@@ -463,7 +413,7 @@ pub async fn chat(
                     eprintln!("saya: {error}");
                     terminal_open = false;
                     run.cancelling = true;
-                    run.cancel.0.send_replace(true);
+                    run.cancel.cancel();
                     pending = None;
                     exit_after_run = Some(1);
                     continue;
@@ -497,7 +447,7 @@ pub async fn chat(
                         "/exit" => {
                             if let Some(run) = active.as_mut() {
                                 run.cancelling = true;
-                                run.cancel.0.send_replace(true);
+                                run.cancel.cancel();
                                 pending = None;
                                 exit_after_run = Some(0);
                                 console.print("Cancelling run...\n")?;
@@ -509,7 +459,7 @@ pub async fn chat(
                         "/cancel" => {
                             if let Some(run) = active.as_mut() {
                                 run.cancelling = true;
-                                run.cancel.0.send_replace(true);
+                                run.cancel.cancel();
                                 pending = None;
                                 console.print("Cancelling run...\n")?;
                             } else {
@@ -695,11 +645,8 @@ pub async fn chat(
                     .load_session(current.id)
                     .await?
                     .ok_or("session not found")?;
-                let cancel = Arc::new(Cancel(tokio::sync::watch::channel(false).0));
-                let (requests_tx, requests_rx) = mpsc::unbounded_channel();
-                let ui = Arc::new(Ui {
-                    requests: requests_tx,
-                });
+                let cancel = Arc::new(Cancel::new());
+                let (ui, requests_rx) = input_channel(16)?;
                 let launch = Launch {
                     permissions,
                     store: store.clone(),
@@ -746,7 +693,7 @@ mod tests {
     use super::*;
     #[test]
     fn first_interrupt_cancels_and_second_forces_exit() {
-        let cancel = Cancel(tokio::sync::watch::channel(false).0);
+        let cancel = Cancel::new();
         let mut cancelling = false;
         assert!(!interrupt_active(&mut cancelling, &cancel));
         assert!(cancel.is_cancelled());

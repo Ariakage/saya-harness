@@ -5,23 +5,19 @@ use saya_app::{new_session, session};
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use saya_core::{
     approvals::Preauthorizations,
-    boundary::{
-        Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store, StoreChange,
-    },
+    boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store},
     config::{self, Config, Environment, Output, Overrides},
     contract::{
         ApprovalRequest, BoundaryError, ErrorInfo, HistoryItem, ModelPurpose, PermissionMode,
-        Persistence, RunId, RunResult, RunStatus, SCHEMA_VERSION, Session, SessionId, WorkMode,
+        Persistence, RunId, RunResult, RunStatus, SCHEMA_VERSION, Session, WorkMode,
     },
     input::{InputHandler, InputRequest},
     runtime::{AgentRuntime, ApprovalHandler, PersonalContext},
 };
 use std::{
     fs::OpenOptions,
-    future::Future,
     io::{self, Read, Write},
     path::PathBuf,
-    pin::Pin,
     sync::Arc,
 };
 
@@ -237,22 +233,7 @@ fn prompt(args: &RunArgs) -> Result<String, Box<dyn std::error::Error>> {
     }
     Ok(text)
 }
-struct Cancel(tokio::sync::watch::Sender<bool>);
-impl Cancellation for Cancel {
-    fn is_cancelled(&self) -> bool {
-        *self.0.borrow()
-    }
-    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            let mut rx = self.0.subscribe();
-            while !*rx.borrow_and_update() {
-                if rx.changed().await.is_err() {
-                    break;
-                }
-            }
-        })
-    }
-}
+use saya_app::interaction::RunCancellation as Cancel;
 struct Terminal {
     file: tokio::sync::Mutex<std::fs::File>,
     secrets: Vec<String>,
@@ -714,12 +695,12 @@ async fn run(
     } else {
         Preauthorizations::default()
     };
-    let cancel = Arc::new(Cancel(tokio::sync::watch::channel(false).0));
+    let cancel = Arc::new(Cancel::new());
     let signal = cancel.clone();
     let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     tokio::spawn(async move {
         if interrupts.recv().await.is_some() {
-            signal.0.send_replace(true);
+            signal.cancel();
             if interrupts.recv().await.is_some() {
                 std::process::exit(130);
             }
@@ -741,6 +722,7 @@ async fn run(
             session.id,
             run_id,
             secrets,
+            Arc::new(events::StdoutSink),
         )))
     } else {
         None
