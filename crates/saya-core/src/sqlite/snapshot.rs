@@ -17,6 +17,7 @@ use std::{
 /// rather than presenting a partial snapshot as complete.
 #[derive(Debug, Clone, Copy)]
 pub struct SnapshotLimits {
+    /// Bounds combined source files and the reconstructed database image.
     pub max_source_bytes: u64,
     pub max_bytes: usize,
     pub max_rows: usize,
@@ -50,25 +51,15 @@ pub struct SessionSnapshot {
     pub project_context: Vec<Value>,
     pub background_jobs: Vec<Value>,
 }
-struct Budget<'a> {
+struct Budget {
     limits: SnapshotLimits,
-    deadline: Instant,
-    cancel: &'a dyn Cancellation,
+    check: crate::wal_recovery::SnapshotCheck,
     rows: usize,
     bytes: usize,
 }
-impl Budget<'_> {
+impl Budget {
     fn check(&self) -> Result<(), BoundaryError> {
-        if self.cancel.is_cancelled() {
-            return Err(error("cancelled", "session snapshot cancelled"));
-        }
-        if Instant::now() >= self.deadline {
-            return Err(error(
-                "snapshot_timeout",
-                "session snapshot deadline exceeded",
-            ));
-        }
-        Ok(())
+        (self.check)()
     }
     fn account(&mut self, bytes: usize) -> Result<(), BoundaryError> {
         self.check()?;
@@ -87,7 +78,7 @@ fn rows(
     conn: &Connection,
     sql: &str,
     id: &str,
-    budget: &mut Budget<'_>,
+    budget: &mut Budget,
 ) -> Result<Vec<Value>, BoundaryError> {
     budget.check()?;
     let mut statement = conn.prepare(sql).map_err(sql_error)?;
@@ -106,7 +97,7 @@ fn rows(
 fn background_jobs(
     calls: &[Value],
     runs: &[Value],
-    budget: &Budget<'_>,
+    budget: &Budget,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut jobs = Vec::new();
     for parent in calls
@@ -162,10 +153,31 @@ fn read(
     let deadline = Instant::now()
         .checked_add(limits.timeout)
         .ok_or_else(|| error("invalid_argument", "invalid snapshot timeout"))?;
+    let check: crate::wal_recovery::SnapshotCheck = Arc::new(move || {
+        if cancel.is_cancelled() {
+            return Err(error("cancelled", "session snapshot cancelled"));
+        }
+        if Instant::now() >= deadline {
+            return Err(error(
+                "snapshot_timeout",
+                "session snapshot deadline exceeded",
+            ));
+        }
+        Ok(())
+    });
+    let result = read_checked(root, session_id, limits, check.clone());
+    check()?;
+    result
+}
+fn read_checked(
+    root: PathBuf,
+    session_id: SessionId,
+    limits: SnapshotLimits,
+    check: crate::wal_recovery::SnapshotCheck,
+) -> Result<SessionSnapshot, BoundaryError> {
     let mut budget = Budget {
         limits,
-        deadline,
-        cancel: cancel.as_ref(),
+        check: check.clone(),
         rows: 0,
         bytes: 0,
     };
@@ -179,8 +191,7 @@ fn read(
     }
     let root = std::fs::canonicalize(root)
         .map_err(|_| error("storage_error", "data directory is unavailable"))?;
-    let mut conn =
-        crate::wal_recovery::snapshot_checked(&root, limits.max_source_bytes, &|| budget.check())?;
+    let mut conn = crate::wal_recovery::snapshot_checked(&root, limits.max_source_bytes, check)?;
     conn.execute_batch("PRAGMA query_only=ON")
         .map_err(sql_error)?;
     let tx = conn.transaction().map_err(sql_error)?;

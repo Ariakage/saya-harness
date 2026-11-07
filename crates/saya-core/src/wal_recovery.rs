@@ -4,11 +4,12 @@
 use crate::contract::{BoundaryError, ErrorInfo};
 use rusqlite::{Connection, MAIN_DB};
 use sha2::{Digest, Sha256};
-use std::{fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt, path::Path};
+use std::{fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt, path::Path, sync::Arc};
 
 // This is only a fallback for sessions created before guarded preflight. New
 // sessions use the small durable guard and never need to copy the database.
 const MAX_SNAPSHOT: u64 = 512 * 1024 * 1024;
+pub(crate) type SnapshotCheck = Arc<dyn Fn() -> Result<(), BoundaryError> + Send + Sync>;
 fn fail(code: &str, message: &str) -> BoundaryError {
     BoundaryError(
         ErrorInfo {
@@ -120,7 +121,19 @@ fn checksum(bytes: &[u8], big: bool, mut state: (u32, u32)) -> (u32, u32) {
     }
     state
 }
-fn build_image(mut db: Vec<u8>, wal: &[u8]) -> Result<Vec<u8>, BoundaryError> {
+fn build_image(
+    mut db: Vec<u8>,
+    wal: &[u8],
+    max_bytes: u64,
+    check: &dyn Fn() -> Result<(), BoundaryError>,
+) -> Result<Vec<u8>, BoundaryError> {
+    check()?;
+    if db.len() as u64 > max_bytes {
+        return Err(fail(
+            "snapshot_limit",
+            "database image exceeds snapshot source limit",
+        ));
+    }
     if db.len() < 100 || &db[..16] != b"SQLite format 3\0" || wal.len() < 32 {
         return Err(fail(
             "storage_corrupt",
@@ -152,6 +165,7 @@ fn build_image(mut db: Vec<u8>, wal: &[u8]) -> Result<Vec<u8>, BoundaryError> {
     let mut frames = Vec::new();
     let mut committed = None;
     for frame in wal[32..].chunks_exact(frame_size) {
+        check()?;
         if frame[8..16] != wal[16..24] {
             break;
         }
@@ -176,10 +190,17 @@ fn build_image(mut db: Vec<u8>, wal: &[u8]) -> Result<Vec<u8>, BoundaryError> {
     if let Some((count, pages)) = committed {
         let size = (pages as usize)
             .checked_mul(page)
-            .filter(|size| *size as u64 <= MAX_SNAPSHOT)
-            .ok_or_else(|| fail("storage_error", "stranded database snapshot is too large"))?;
+            .filter(|size| *size as u64 <= max_bytes)
+            .ok_or_else(|| {
+                fail(
+                    "snapshot_limit",
+                    "database image exceeds snapshot source limit",
+                )
+            })?;
+        check()?;
         db.resize(size, 0);
         for (number, contents) in frames.into_iter().take(count) {
+            check()?;
             if number > pages {
                 continue;
             }
@@ -199,7 +220,7 @@ fn build_image(mut db: Vec<u8>, wal: &[u8]) -> Result<Vec<u8>, BoundaryError> {
 /// Obtain a stable, checksum-verified in-memory SQLite image. No filesystem
 /// writes or SQLite -shm creation occur, including for interrupted WALs.
 pub(crate) fn snapshot(root: &Path) -> Result<Connection, BoundaryError> {
-    snapshot_checked(root, MAX_SNAPSHOT, &|| Ok(()))
+    snapshot_checked(root, MAX_SNAPSHOT, Arc::new(|| Ok(())))
 }
 
 /// Stable source image with cooperative checks during I/O. Supports an empty
@@ -207,20 +228,20 @@ pub(crate) fn snapshot(root: &Path) -> Result<Connection, BoundaryError> {
 pub(crate) fn snapshot_checked(
     root: &Path,
     max_bytes: u64,
-    check: &dyn Fn() -> Result<(), BoundaryError>,
+    check: SnapshotCheck,
 ) -> Result<Connection, BoundaryError> {
     let db_path = root.join("sessions.sqlite3");
     let wal_path = root.join("sessions.sqlite3-wal");
     let wal_bytes = || -> Result<Vec<u8>, BoundaryError> {
         match std::fs::symlink_metadata(&wal_path) {
-            Ok(_) => read_file(&wal_path, max_bytes, check),
+            Ok(_) => read_file(&wal_path, max_bytes, check.as_ref()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(_) => Err(fail("storage_error", "cannot inspect database WAL")),
         }
     };
     for _ in 0..3 {
         check()?;
-        let db = read_file(&db_path, max_bytes, check)?;
+        let db = read_file(&db_path, max_bytes, check.as_ref())?;
         let wal = wal_bytes()?;
         if (db.len() as u64).saturating_add(wal.len() as u64) > max_bytes {
             return Err(fail(
@@ -230,7 +251,7 @@ pub(crate) fn snapshot_checked(
         }
         let db_hash = Sha256::digest(&db);
         let wal_hash = Sha256::digest(&wal);
-        if db_hash != hash_file(&db_path, max_bytes, check)?
+        if db_hash != hash_file(&db_path, max_bytes, check.as_ref())?
             || wal_hash != Sha256::digest(wal_bytes()?)
         {
             continue;
@@ -244,17 +265,18 @@ pub(crate) fn snapshot_checked(
             db[19] = 1;
             db
         } else {
-            build_image(db, &wal)?
+            build_image(db, &wal, max_bytes, check.as_ref())?
         };
         check()?;
         let mut conn = Connection::open_in_memory()
             .map_err(|_| fail("storage_error", "cannot open in-memory database snapshot"))?;
         conn.deserialize_read_exact(MAIN_DB, image.as_slice(), image.len(), true)
             .map_err(|_| fail("storage_corrupt", "cannot read database snapshot"))?;
-        let result: String = conn
-            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
-            .map_err(|_| fail("storage_corrupt", "invalid database snapshot"))?;
+        let vm_check = check.clone();
+        conn.progress_handler(1000, Some(move || vm_check().is_err()));
+        let result = conn.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0));
         check()?;
+        let result = result.map_err(|_| fail("storage_corrupt", "invalid database snapshot"))?;
         if result != "ok" {
             return Err(fail("storage_corrupt", "invalid database snapshot"));
         }
@@ -298,7 +320,7 @@ mod tests {
             .await?;
         let db = std::fs::read(temp.path().join("sessions.sqlite3"))?;
         let wal = std::fs::read(temp.path().join("sessions.sqlite3-wal"))?;
-        let image = build_image(db.clone(), &wal)?;
+        let image = build_image(db.clone(), &wal, MAX_SNAPSHOT, &|| Ok(()))?;
         let mut conn = Connection::open_in_memory()?;
         conn.deserialize_read_exact(MAIN_DB, image.as_slice(), image.len(), true)?;
         let count: i64 = conn.query_row(
@@ -309,12 +331,15 @@ mod tests {
         assert_eq!(count, 1);
         let mut partial = wal.clone();
         partial.extend_from_slice(&[0x42; 13]);
-        assert_eq!(build_image(db.clone(), &partial)?, image);
+        assert_eq!(
+            build_image(db.clone(), &partial, MAX_SNAPSHOT, &|| Ok(()))?,
+            image
+        );
         let mut bad = wal.clone();
         let frame = 32 + 24;
         bad[frame] ^= 1;
         assert_eq!(
-            build_image(db.clone(), &bad)
+            build_image(db.clone(), &bad, MAX_SNAPSHOT, &|| Ok(()))
                 .expect_err("bad checksum")
                 .0
                 .code,
@@ -335,7 +360,95 @@ mod tests {
             frame[16..20].copy_from_slice(&sum.0.to_be_bytes());
             frame[20..24].copy_from_slice(&sum.1.to_be_bytes());
         }
-        assert_eq!(build_image(db, &big)?, image);
+        assert_eq!(build_image(db, &big, MAX_SNAPSHOT, &|| Ok(()))?, image);
+        Ok(())
+    }
+
+    #[test]
+    fn wal_image_growth_obeys_the_callers_limit_before_allocation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut db = vec![0u8; 512];
+        db[..16].copy_from_slice(b"SQLite format 3\0");
+        db[16..18].copy_from_slice(&512u16.to_be_bytes());
+        let mut wal = vec![0u8; 32 + 24 + 512];
+        wal[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+        wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+        wal[8..12].copy_from_slice(&512u32.to_be_bytes());
+        let mut sum = checksum(&wal[..24], false, (0, 0));
+        wal[24..28].copy_from_slice(&sum.0.to_be_bytes());
+        wal[28..32].copy_from_slice(&sum.1.to_be_bytes());
+        wal[32..36].copy_from_slice(&1u32.to_be_bytes());
+        wal[36..40].copy_from_slice(&8u32.to_be_bytes());
+        wal[56..].copy_from_slice(&db);
+        sum = checksum(&wal[32..40], false, sum);
+        sum = checksum(&wal[56..], false, sum);
+        wal[48..52].copy_from_slice(&sum.0.to_be_bytes());
+        wal[52..56].copy_from_slice(&sum.1.to_be_bytes());
+        assert!(db.len() + wal.len() < 2048);
+        assert_eq!(
+            build_image(db, &wal, 2048, &|| Ok(())).unwrap_err().0.code,
+            "snapshot_limit"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wal_frames_and_sqlite_vm_observe_cancellation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let temp = tempfile::tempdir()?;
+        let store = SqliteStore::open(temp.path(), vec![])?;
+        let session = Session {
+            id: SessionId::new(),
+            workspace: temp.path().into(),
+            work_mode: WorkMode::Work,
+            profile: "test".into(),
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fake".into(),
+            history: vec![],
+        };
+        store.create_session(&session, "hash").await?;
+        let db = std::fs::read(temp.path().join("sessions.sqlite3"))?;
+        let wal = std::fs::read(temp.path().join("sessions.sqlite3-wal"))?;
+        let checks = AtomicUsize::new(0);
+        let check = || {
+            if checks.fetch_add(1, Ordering::SeqCst) >= 1 {
+                Err(fail("cancelled", "cancel while checking frames"))
+            } else {
+                Ok(())
+            }
+        };
+        assert_eq!(
+            build_image(db, &wal, MAX_SNAPSHOT, &check)
+                .unwrap_err()
+                .0
+                .code,
+            "cancelled"
+        );
+        assert!(checks.load(Ordering::SeqCst) > 1);
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let conn = snapshot_checked(
+            temp.path(),
+            MAX_SNAPSHOT,
+            Arc::new(move || {
+                if flag.load(Ordering::SeqCst) {
+                    Err(fail("cancelled", "cancel during SQLite execution"))
+                } else {
+                    Ok(())
+                }
+            }),
+        )?;
+        cancelled.store(true, Ordering::SeqCst);
+        let error = conn.query_row(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT sum(x) FROM n",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_err();
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::OperationInterrupted)
+        );
         Ok(())
     }
 

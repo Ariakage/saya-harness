@@ -27,4 +27,4 @@ tokio = { version = "1.54.1", features = ["io-util", "macros", "process", "rt", 
 toml = "1.2.0"
 uuid = { version = "1.29.0", features = ["v7", "serde"] }
 serde_yaml_ng = "0.10"
-rusqlite = { version = "0.37", features = ["bundled", "backup", "serialize"] }
+rusqlite = { version = "0.37", features = ["bundled", "backup", "serialize", "hooks"] }
