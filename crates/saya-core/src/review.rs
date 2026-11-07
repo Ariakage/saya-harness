@@ -191,31 +191,6 @@ enum ModelChoice {
     Deny,
 }
 
-fn redact(value: &mut Value, secrets: &[String]) {
-    match value {
-        Value::String(text) => {
-            for secret in secrets.iter().filter(|s| !s.is_empty()) {
-                *text = text.replace(secret, "[REDACTED]");
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact(item, secrets);
-            }
-        }
-        Value::Object(map) => {
-            let old = std::mem::take(map);
-            for (mut key, mut value) in old {
-                for secret in secrets.iter().filter(|s| !s.is_empty()) {
-                    key = key.replace(secret, "[REDACTED]");
-                }
-                redact(&mut value, secrets);
-                map.insert(key, value);
-            }
-        }
-        _ => {}
-    }
-}
 fn jitter(max: Duration) -> Duration {
     let millis = max.as_millis().min(u128::from(u64::MAX - 1)) as u64;
     if millis == 0 {
@@ -286,22 +261,9 @@ pub async fn review_operation(
     let normalized = input.operation.normalized_arguments(input.arguments)?;
     // If an operation contains a known secret, do not ask the model to approve
     // an incomplete redacted view; fall back to a human decision.
-    fn contains_secret(value: &Value, secrets: &[String]) -> bool {
-        match value {
-            Value::String(text) => secrets
-                .iter()
-                .any(|secret| !secret.is_empty() && text.contains(secret)),
-            Value::Array(items) => items.iter().any(|item| contains_secret(item, secrets)),
-            Value::Object(map) => map.iter().any(|(key, value)| {
-                secrets
-                    .iter()
-                    .any(|secret| !secret.is_empty() && key.contains(secret))
-                    || contains_secret(value, secrets)
-            }),
-            _ => false,
-        }
-    }
-    if contains_secret(&normalized, &config.known_secrets) {
+    let encoded = serde_json::to_string(&normalized)
+        .map_err(|_| failure("invalid_args", "cannot encode review arguments"))?;
+    if crate::redaction::contains_secret(&encoded, &config.known_secrets) {
         return Ok(ReviewOutcome {
             decision: Decision::Ask,
             reason: "review_sensitive_data".into(),
@@ -309,7 +271,13 @@ pub async fn review_operation(
         });
     }
     let mut data = json!({"tool": input.operation.tool_name(), "arguments": normalized, "work_mode": input.mode, "permissions": input.permissions, "goal_summary": input.goal_summary});
-    redact(&mut data, &config.known_secrets);
+    if crate::redaction::redact(&mut data, &config.known_secrets).is_err() {
+        return Ok(ReviewOutcome {
+            decision: Decision::Ask,
+            reason: "review_sensitive_data".into(),
+            source: ReviewDecisionSource::HumanFallback,
+        });
+    }
     let profile = config
         .review_profile
         .as_ref()
@@ -382,7 +350,13 @@ pub async fn review_operation(
                     && parsed.reason.chars().count() <= 512
                 {
                     let mut reason = Value::String(parsed.reason);
-                    redact(&mut reason, &config.known_secrets);
+                    if crate::redaction::redact(&mut reason, &config.known_secrets).is_err() {
+                        return Ok(ReviewOutcome {
+                            decision: Decision::Ask,
+                            reason: "review_sensitive_data".into(),
+                            source: ReviewDecisionSource::HumanFallback,
+                        });
+                    }
                     let reason = reason.as_str().unwrap_or_default().to_owned();
                     let decision = match parsed.decision {
                         ModelChoice::Allow => Decision::Allow,

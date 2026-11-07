@@ -140,6 +140,67 @@ fn finished(text: &str) -> Step {
 }
 
 #[tokio::test]
+async fn encoded_credentials_in_arguments_never_reach_the_review_model()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let (policy, op) = setup(root.path())?;
+    let secret = "fixture\"secret\\tail";
+    let mut nested = serde_json::json!({"token":secret}).to_string();
+    for _ in 0..3 {
+        let model = FakeModel::new(vec![finished(r#"{"decision":"allow","reason":"fixture"}"#)]);
+        let mut config = ReviewConfig::new("execution".into());
+        config.known_secrets.push(secret.into());
+        let mut request = input(&op);
+        request.arguments =
+            serde_json::json!({"env":{"PAYLOAD":{"source":"literal","value":nested}}});
+        let outcome = review_operation(
+            &policy,
+            request,
+            &model,
+            &SharedBudget::default(),
+            &config,
+            &NeverCancel,
+        )
+        .await?;
+        assert!(
+            model.seen.lock().map_err(|_| "lock")?.is_empty(),
+            "encoded credential was sent to the reviewer"
+        );
+        assert_eq!(outcome.decision, Decision::Ask);
+        assert_eq!(outcome.reason, "review_sensitive_data");
+        nested = serde_json::to_string(&nested)?;
+    }
+    let model = FakeModel::new(vec![finished(
+        &serde_json::json!({"decision":"allow","reason":nested}).to_string(),
+    )]);
+    let mut config = ReviewConfig::new("execution".into());
+    config.known_secrets.push(secret.into());
+    let mut request = input(&op);
+    request.goal_summary = &nested;
+    let outcome = review_operation(
+        &policy,
+        request,
+        &model,
+        &SharedBudget::default(),
+        &config,
+        &NeverCancel,
+    )
+    .await?;
+    assert_eq!(outcome.decision, Decision::Allow);
+    assert!(!saya_core::redaction::contains_secret(
+        &outcome.reason,
+        &config.known_secrets
+    ));
+    let seen = model.seen.lock().map_err(|_| "lock")?;
+    assert_eq!(seen.len(), 1);
+    assert!(!saya_core::redaction::contains_secret(
+        &serde_json::to_string(&seen[0].history)?,
+        &config.known_secrets
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn review_is_isolated_tool_free_normalized_and_profile_scoped()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = support::temp_workspace()?;

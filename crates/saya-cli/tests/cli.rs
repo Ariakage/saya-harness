@@ -124,6 +124,132 @@ fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
 }
 
 #[test]
+fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
+    for permissions in ["auto", "manual", "bypass"] {
+        let workspace = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let (url, requests) = fixture::server(vec![
+            (
+                "application/json",
+                response(json!({"role":"assistant","content":"started"}), "stop"),
+            ),
+            (
+                "application/json",
+                tool_response(
+                    "write",
+                    "write_file",
+                    json!({"path":"forbidden.txt","content":"changed","expected_version":null}),
+                ),
+            ),
+            (
+                "application/json",
+                response(json!({"role":"assistant","content":"plan ready"}), "stop"),
+            ),
+        ])
+        .unwrap();
+        let cfg = config(workspace.path(), &url, permissions);
+        let mut first = command(workspace.path());
+        first
+            .arg("--config")
+            .arg(&cfg)
+            .args(["--output", "json", "run", "start"]);
+        for name in ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
+            first.env(name, external.path().join(name));
+        }
+        let first = first.output().unwrap();
+        assert!(
+            first.status.success(),
+            "{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+        let id = first["session_id"].as_str().unwrap();
+        let mut resumed = command(workspace.path());
+        resumed.arg("--config").arg(&cfg).args([
+            "--mode",
+            "plan",
+            "--output",
+            "json",
+            "run",
+            "--session",
+            id,
+            "inspect",
+        ]);
+        for name in ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
+            resumed.env(name, external.path().join(name));
+        }
+        let resumed = resumed.output().unwrap();
+        assert!(
+            !workspace.path().join("forbidden.txt").exists(),
+            "{permissions} resumed with a writable mode"
+        );
+        assert!(
+            resumed.status.success(),
+            "{permissions}: {}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        let context: serde_json::Value =
+            serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(context["saya_runtime_context_v1"]["work_mode"], "plan");
+        let mut show = command(workspace.path());
+        show.arg("--config")
+            .arg(&cfg)
+            .args(["--output", "json", "session", "show", id])
+            .env("XDG_DATA_HOME", external.path().join("XDG_DATA_HOME"));
+        let show = show.output().unwrap();
+        assert!(show.status.success());
+        let show: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        assert_eq!(show["data"]["work_mode"], "plan");
+    }
+}
+
+#[test]
+fn configured_write_limit_reaches_the_real_dispatcher() {
+    let temp = TempDir::new().unwrap();
+    let (url, requests) = fixture::server(vec![
+        (
+            "application/json",
+            tool_response(
+                "write",
+                "write_file",
+                json!({"path":"large.txt","content":"123456789","expected_version":null}),
+            ),
+        ),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"done"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    fs::write(
+        &cfg,
+        format!(
+            "{}\n[limits]\nwrite_max_bytes = 8\n",
+            fs::read_to_string(&cfg).unwrap()
+        ),
+    )
+    .unwrap();
+    let result = command(temp.path())
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "write"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!temp.path().join("large.txt").exists());
+    requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.to_string().contains("write_too_large"));
+}
+
+#[test]
 fn resume_requires_explicit_acceptance_for_profile_changes() {
     let temp = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![
@@ -204,50 +330,61 @@ fn resuming_plan_checks_workspace_before_creating_sqlite_side_files() {
         contract::{ModelProtocol, Session, SessionId, WorkMode},
         sqlite::SqliteStore,
     };
-    let temp = TempDir::new().unwrap();
-    let root = fs::canonicalize(temp.path()).unwrap();
-    let data = root.join(".local/share/saya");
-    let id = SessionId::new();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let store = SqliteStore::open(&data, vec![]).unwrap();
-        let session = Session {
-            id,
-            workspace: root.clone(),
-            work_mode: WorkMode::Plan,
-            profile: "test".into(),
-            protocol: ModelProtocol::ChatCompletions,
-            model: "fake".into(),
-            history: vec![],
-        };
-        store
-            .commit(&[StoreChange::Session(session)])
-            .await
+    for saved_mode in [WorkMode::Plan, WorkMode::Work] {
+        let temp = TempDir::new().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let data = root.join(".local/share/saya");
+        let id = SessionId::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
             .unwrap();
-    });
-    let db = data.join("sessions.sqlite3");
-    let before = fs::read(&db).unwrap();
-    let before_names: std::collections::BTreeSet<_> = fs::read_dir(&data)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
-    let result = command(temp.path())
-        .arg("--config")
-        .arg(cfg)
-        .args(["run", "--session", &id.0.to_string(), "inspect"])
-        .output()
-        .unwrap();
-    assert_eq!(result.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&result.stderr).contains("PLAN storage directories overlap"));
-    assert_eq!(fs::read(db).unwrap(), before);
-    let after_names: std::collections::BTreeSet<_> = fs::read_dir(data)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    assert_eq!(before_names, after_names);
+        runtime.block_on(async {
+            let store = SqliteStore::open(&data, vec![]).unwrap();
+            let session = Session {
+                id,
+                workspace: root.clone(),
+                work_mode: saved_mode,
+                profile: "test".into(),
+                protocol: ModelProtocol::ChatCompletions,
+                model: "fake".into(),
+                history: vec![],
+            };
+            store
+                .commit(&[StoreChange::Session(session)])
+                .await
+                .unwrap();
+        });
+        let db = data.join("sessions.sqlite3");
+        let before = fs::read(&db).unwrap();
+        let before_names: std::collections::BTreeSet<_> = fs::read_dir(&data)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
+        let result = command(temp.path())
+            .arg("--config")
+            .arg(cfg)
+            .args([
+                "--mode",
+                "plan",
+                "run",
+                "--session",
+                &id.0.to_string(),
+                "inspect",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("PLAN storage directories overlap")
+        );
+        assert_eq!(fs::read(db).unwrap(), before);
+        let after_names: std::collections::BTreeSet<_> = fs::read_dir(data)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(before_names, after_names);
+    }
 }
 
 #[test]

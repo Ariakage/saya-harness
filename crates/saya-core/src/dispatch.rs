@@ -97,6 +97,7 @@ pub struct ToolDispatcher {
     store: Arc<dyn Store>,
     cancel: Arc<dyn Cancellation>,
     exec_config: ExecConfig,
+    write_max_bytes: usize,
     modes: ModeController,
     read_only: bool,
     context_guard: OnceLock<Arc<ContextGuard>>,
@@ -132,7 +133,7 @@ impl ToolDispatcher {
                     self.store.clone(),
                     Arc::new(PolicyGate::new(self.policy.clone())),
                     kind,
-                    DEFAULT_WRITE_MAX_BYTES,
+                    self.write_max_bytes,
                 )
                 .definition(),
             );
@@ -173,11 +174,16 @@ impl ToolDispatcher {
             store,
             cancel,
             exec_config,
+            write_max_bytes: DEFAULT_WRITE_MAX_BYTES,
             modes,
             read_only: false,
             context_guard: OnceLock::new(),
             known_secrets,
         })
+    }
+    pub(crate) fn with_write_limit(mut self, max_bytes: usize) -> Self {
+        self.write_max_bytes = max_bytes;
+        self
     }
     pub(crate) fn set_context_guard(&self, guard: Arc<ContextGuard>) -> Result<(), BoundaryError> {
         self.context_guard.set(guard).map_err(|_| {
@@ -394,7 +400,7 @@ impl ToolDispatcher {
                         } else {
                             WriteToolKind::ApplyPatch
                         },
-                        DEFAULT_WRITE_MAX_BYTES,
+                        self.write_max_bytes,
                     )),
                 };
                 let result = tool.execute(call, context, cancel).await?;

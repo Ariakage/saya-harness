@@ -366,9 +366,7 @@ fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
                         index += 1;
                     }
                     Some(HistoryItem::AssistantText(text)) => {
-                        if !pending.is_empty()
-                            || items.get(index + 1) != Some(&HistoryItem::AssistantText(text))
-                        {
+                        if items.get(index + 1) != Some(&HistoryItem::AssistantText(text)) {
                             return Err(failure(
                                 "invalid_history",
                                 "provider message does not match local text",

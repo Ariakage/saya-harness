@@ -1020,6 +1020,8 @@ async fn waiting_confirmation_is_invalidated_by_mode_or_policy_change()
 async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
+    let secret = "fixture\"secret\\tail".to_owned();
+    let payload = serde_json::json!({"token":secret}).to_string();
     let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
     let store = store_for(&session, &run).await?;
     let signal = Arc::new(Signal::default());
@@ -1034,14 +1036,14 @@ async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants(
             session_id: run.session_id,
             initial_permissions: run.permissions,
             preauthorizations: Preauthorizations::default(),
-            known_secrets: vec!["secret-token".into()],
+            known_secrets: vec![secret.clone()],
             cancellation: signal,
         },
     )?;
-    let call = write_call("a", "secret-token");
+    let call = write_call("a", &payload);
     let operation = Operation::file(temp.path(), "write_file", Path::new("out.txt"))?;
     let mut request_input = input(&operation, &call, &context, false);
-    request_input.summary = "goal secret-token";
+    request_input.summary = &payload;
     let request = match manager
         .authorize(
             request_input,
@@ -1055,7 +1057,10 @@ async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants(
         _ => return Err("needs confirmation".into()),
     };
     let serialized = serde_json::to_string(&request)?;
-    assert!(!serialized.contains("secret-token"));
+    assert!(!saya_core::redaction::contains_secret(
+        &serialized,
+        &[secret]
+    ));
     assert!(serialized.contains("[REDACTED]"));
     assert_eq!(store.requests.lock().map_err(|_| "lock")?.len(), 1);
     assert!(!temp.path().join("out.txt").exists());

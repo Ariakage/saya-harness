@@ -233,7 +233,7 @@ fn resume_waits_for_input_and_uses_original_mode_with_new_permissions() {
         temp.path(),
         &cfg,
         &["--permissions", "manual", "resume", id],
-        storage,
+        storage.clone(),
     );
     resumed.until("> ");
     assert!(requests.try_recv().is_err());
@@ -250,6 +250,18 @@ fn resume_waits_for_input_and_uses_original_mode_with_new_permissions() {
         .to_string();
     assert!(request.contains("first task"));
     assert!(request.contains("first answer"));
+    let mut overridden = Pty::start_with_storage(
+        temp.path(),
+        &cfg,
+        &["--mode", "work", "--permissions", "bypass", "resume", id],
+        storage,
+    );
+    overridden.until("> ");
+    assert!(requests.try_recv().is_err());
+    overridden.send("/status\n");
+    overridden.until("mode: work; pending: none; permissions: bypass");
+    overridden.until("> ");
+    assert!(overridden.finish().success());
     assert!(request.contains("second task"));
 }
 

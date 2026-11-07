@@ -510,17 +510,15 @@ impl ApprovalManager {
         }
         let mut arguments: Value = serde_json::from_str(&binding.normalized_args)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
-        redact(&mut arguments, &self.secrets);
-        let mut summary = input.summary.to_owned();
-        for secret in self.secrets.iter().filter(|s| !s.is_empty()) {
-            summary = summary.replace(secret, "[REDACTED]");
-        }
+        crate::redaction::redact(&mut arguments, &self.secrets)?;
+        let mut summary = Value::String(input.summary.to_owned());
+        crate::redaction::redact(&mut summary, &self.secrets)?;
         let request = ApprovalRequest {
             approval_id: uuid::Uuid::now_v7().to_string(),
             call_id: input.call.call_id.clone(),
             run_id: self.run_id,
             tool: input.call.name.clone(),
-            operation_summary: summary,
+            operation_summary: summary.as_str().unwrap_or_default().to_owned(),
             arguments,
             cwd: input
                 .operation
@@ -628,32 +626,6 @@ fn rejection_key(binding: &Binding) -> RejectionKey {
         cwd: binding.cwd.clone(),
     }
 }
-fn redact(value: &mut Value, secrets: &[String]) {
-    match value {
-        Value::String(text) => {
-            for secret in secrets.iter().filter(|s| !s.is_empty()) {
-                *text = text.replace(secret, "[REDACTED]");
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact(item, secrets);
-            }
-        }
-        Value::Object(map) => {
-            let old = std::mem::take(map);
-            for (mut key, mut value) in old {
-                for secret in secrets.iter().filter(|s| !s.is_empty()) {
-                    key = key.replace(secret, "[REDACTED]");
-                }
-                redact(&mut value, secrets);
-                map.insert(key, value);
-            }
-        }
-        _ => {}
-    }
-}
-
 /// A single-operation, non-serializable grant. Tool adapters call it twice:
 /// before intent persistence and immediately before dispatch. It becomes spent
 /// on the second successful check; another call cannot reuse it.

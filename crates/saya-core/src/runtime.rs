@@ -54,6 +54,18 @@ fn failed(code: &str, message: &str) -> ToolResult {
         truncated: false,
     }
 }
+fn invalid_tool_request(error: &BoundaryError) -> bool {
+    matches!(
+        error.0.code.as_str(),
+        "unknown_tool"
+            | "durability_required"
+            | "invalid_args"
+            | "invalid_path"
+            | "path_denied"
+            | "stale_approval"
+            | "executable_not_found"
+    )
+}
 fn context_target(call: &ToolCall) -> Option<PathBuf> {
     let value: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
     let (tool, args) = if call.name == "background_start" {
@@ -153,6 +165,7 @@ pub struct RuntimeLimits {
     pub retry_jitter_max: Duration,
     pub background_running: usize,
     pub background_jobs: usize,
+    pub write_max_bytes: usize,
 }
 impl Default for RuntimeLimits {
     fn default() -> Self {
@@ -167,6 +180,7 @@ impl Default for RuntimeLimits {
             retry_jitter_max: Duration::from_millis(250),
             background_running: 4,
             background_jobs: 256,
+            write_max_bytes: crate::tools::write::DEFAULT_WRITE_MAX_BYTES,
         }
     }
 }
@@ -290,11 +304,9 @@ impl AgentRuntime {
             || limits.model_idle.is_zero()
             || limits.model_total.is_zero()
             || limits.tool_timeout.is_zero()
+            || limits.write_max_bytes == 0
         {
-            return Err(error(
-                "invalid_config",
-                "runtime budgets and timeouts must be positive",
-            ));
+            return Err(error("invalid_config", "runtime limits must be positive"));
         }
         let metrics = Arc::new(Metrics::default());
         let store: Arc<dyn Store> = Arc::new(RuntimeStore {
@@ -329,7 +341,8 @@ impl AgentRuntime {
             },
             setup.files,
             setup.exec,
-        )?;
+        )?
+        .with_write_limit(limits.write_max_bytes);
         let dispatcher = Arc::new(if read_only {
             dispatcher.restrict_to_read_only()
         } else {
@@ -874,7 +887,13 @@ impl AgentRuntime {
                 .tool(kind)
                 .execute(call, &context, self.cancel.as_ref())
                 .await;
-            let result = outcome?;
+            let result = match outcome {
+                Ok(result) => result,
+                Err(error) if invalid_tool_request(&error) => {
+                    failed(&error.0.code, &error.0.message)
+                }
+                Err(error) => return Err(error),
+            };
             if result
                 .error
                 .as_ref()
@@ -958,17 +977,7 @@ impl AgentRuntime {
             .await
         {
             Ok(value) => value,
-            Err(e)
-                if matches!(
-                    e.0.code.as_str(),
-                    "unknown_tool"
-                        | "durability_required"
-                        | "invalid_args"
-                        | "invalid_path"
-                        | "path_denied"
-                        | "stale_approval"
-                ) =>
-            {
+            Err(e) if invalid_tool_request(&e) => {
                 return self
                     .save_local(session, call, failed(&e.0.code, &e.0.message))
                     .await;

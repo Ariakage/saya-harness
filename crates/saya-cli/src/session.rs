@@ -13,6 +13,13 @@ pub struct Prepared {
     pub recovery: RecoverySummary,
 }
 
+pub struct ResumeOptions {
+    pub accept_config_change: bool,
+    pub cwd_explicit: bool,
+    pub profile_explicit: bool,
+    pub mode_override: Option<WorkMode>,
+}
+
 fn resolved(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut current = path.to_path_buf();
     let mut missing = Vec::new();
@@ -82,9 +89,7 @@ pub async fn create(
 pub async fn resume(
     config: &Config,
     raw: &str,
-    accept: bool,
-    cwd_explicit: bool,
-    profile_explicit: bool,
+    options: ResumeOptions,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     let id = parse_id(raw)?;
     let read_candidates =
@@ -101,8 +106,8 @@ pub async fn resume(
         };
     let preflight = |candidates: &[saya_core::sqlite::GuardCandidate]| -> Result<(), Box<dyn std::error::Error>> {
         for candidate in candidates {
-            let workspace = if cwd_explicit { &config.cwd } else { &candidate.workspace };
-            check_roots(config, workspace, candidate.work_mode)?;
+            let workspace = if options.cwd_explicit { &config.cwd } else { &candidate.workspace };
+            check_roots(config, workspace, options.mode_override.unwrap_or(candidate.work_mode))?;
         }
         Ok(())
     };
@@ -117,7 +122,7 @@ pub async fn resume(
     }) {
         return Err("session guard does not match stored metadata".into());
     }
-    if profile_explicit && config.profile.as_ref() != Some(&session.profile) {
+    if options.profile_explicit && config.profile.as_ref() != Some(&session.profile) {
         return Err("session profile differs; start a new session".into());
     }
     let profile = config
@@ -134,21 +139,23 @@ pub async fn resume(
     }
     let fingerprint = profile.fingerprint()?;
     let original = store.fingerprint(id).await?;
-    if original != fingerprint && !accept {
+    if original != fingerprint && !options.accept_config_change {
         return Err("session configuration changed; use --accept-config-change".into());
     }
-    let workspace = if cwd_explicit {
+    let workspace = if options.cwd_explicit {
         std::fs::canonicalize(&config.cwd)?
     } else {
         std::fs::canonicalize(&session.workspace)
             .map_err(|_| "workspace is unavailable; use --cwd")?
     };
-    if !cwd_explicit && workspace != session.workspace {
+    if !options.cwd_explicit && workspace != session.workspace {
         return Err("workspace moved; use --cwd".into());
     }
-    check_roots(config, &workspace, session.work_mode)?;
-    if original != fingerprint || session.workspace != workspace {
+    let mode = options.mode_override.unwrap_or(session.work_mode);
+    check_roots(config, &workspace, mode)?;
+    if original != fingerprint || session.workspace != workspace || session.work_mode != mode {
         session.workspace = workspace;
+        session.work_mode = mode;
         store.update_session_config(&session, &fingerprint).await?;
     }
     if SqliteStore::guard_candidates(&config.data_dir, id)?.is_none() || locked_preview.len() > 1 {

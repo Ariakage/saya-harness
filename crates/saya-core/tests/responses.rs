@@ -476,6 +476,7 @@ async fn multiple_function_calls_preserve_order_and_each_call_id()
 -> Result<(), Box<dyn std::error::Error>> {
     let first_call = call_item("first", "read_file", "{\"path\":\"a\"}");
     let second_call = call_item("second", "list_dir", "{\"path\":\".\"}");
+    let commentary = message("I will inspect both paths.");
     let first = fixture::sse(&[
         event(
             "response.output_item.done",
@@ -483,9 +484,13 @@ async fn multiple_function_calls_preserve_order_and_each_call_id()
         ),
         event(
             "response.output_item.done",
-            json!({"output_index":1,"item":second_call}),
+            json!({"output_index":1,"item":commentary}),
         ),
-        done(vec![first_call, second_call]),
+        event(
+            "response.output_item.done",
+            json!({"output_index":2,"item":second_call}),
+        ),
+        done(vec![first_call, commentary.clone(), second_call]),
     ]);
     let second = fixture::sse(&[done(vec![message("done")])]);
     let (url, requests) = fixture::server(vec![
@@ -525,6 +530,7 @@ async fn multiple_function_calls_preserve_order_and_each_call_id()
     collect(&model, &req).await?;
     let _ = requests.recv_timeout(Duration::from_secs(1))?;
     let replay = requests.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(replay["input"][2], commentary);
     let output_ids: Vec<_> = replay["input"]
         .as_array()
         .ok_or("missing input")?

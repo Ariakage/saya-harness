@@ -721,6 +721,7 @@ fn build_runtime(
         tool_timeout: timeout(lim.command_timeout_seconds),
         background_running: lim.max_background_running,
         background_jobs: lim.max_background_jobs,
+        write_max_bytes: lim.write_max_bytes,
         ..Default::default()
     };
     let mut review = ReviewConfig::new(profile.clone());
@@ -888,8 +889,7 @@ async fn run(
     text: String,
     personal_context: PersonalContext,
     anthropic_prompt_cache: bool,
-    cwd_explicit: bool,
-    profile_explicit: bool,
+    resume_options: session::ResumeOptions,
 ) -> Result<u8, Box<dyn std::error::Error>> {
     let terminal = if args.interactive {
         let secrets = config
@@ -908,14 +908,7 @@ async fn run(
         None
     };
     let mut prepared = if let Some(id) = &args.session {
-        session::resume(
-            config,
-            id,
-            args.accept_config_change,
-            cwd_explicit,
-            profile_explicit,
-        )
-        .await?
+        session::resume(config, id, resume_options).await?
     } else {
         session::create(config, new_session(config)?).await?
     };
@@ -1158,8 +1151,12 @@ async fn main() -> std::process::ExitCode {
                             text,
                             personal,
                             cli.anthropic_prompt_cache,
-                            cli.cwd.is_some(),
-                            cli.profile.is_some(),
+                            session::ResumeOptions {
+                                accept_config_change: args.accept_config_change,
+                                cwd_explicit: cli.cwd.is_some(),
+                                profile_explicit: cli.profile.is_some(),
+                                mode_override: cli.mode.map(Into::into),
+                            },
                         )
                         .await
                         {
@@ -1228,9 +1225,12 @@ async fn main() -> std::process::ExitCode {
                 Ok(personal) => match session::resume(
                     &config,
                     session_id,
-                    *accept_config_change,
-                    cli.cwd.is_some(),
-                    cli.profile.is_some(),
+                    session::ResumeOptions {
+                        accept_config_change: *accept_config_change,
+                        cwd_explicit: cli.cwd.is_some(),
+                        profile_explicit: cli.profile.is_some(),
+                        mode_override: cli.mode.map(Into::into),
+                    },
                 )
                 .await
                 {
