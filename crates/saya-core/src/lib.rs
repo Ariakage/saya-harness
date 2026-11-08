@@ -27,6 +27,7 @@ pub mod redaction;
 pub mod review;
 pub mod runtime;
 pub mod sqlite;
+pub mod text;
 pub mod tools;
 mod wal_recovery;
 

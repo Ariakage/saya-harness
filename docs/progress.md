@@ -33,6 +33,8 @@
 
 - R2-16日志收尾及R2-19跟随查询已修复。析构先关闭生产者再有界等待优先队列排空，日志读写共用打开后的目录身份校验，follow保留末尾半行且不计为损坏。18项logging测试及core Clippy通过，日志为 `target/r02-fix/logging-boundaries-{tests,clippy}.log`。
 
+- R2-20恢复提示与终端字符边界已修复。恢复超大明文thinking显示可见扣留提示，恰好16MiB保留，opaque字段不投影。core提供共享控制字符谓词，CLI、TUI及Markdown保留各自换行／转义规则。318项app／CLI／TUI测试、七项core字符相关测试及四crate严格Clippy通过，日志为 `target/r220-{interface-tests,clippy}.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

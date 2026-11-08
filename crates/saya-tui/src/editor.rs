@@ -208,10 +208,7 @@ pub fn safe_text(text: &str) -> String {
         match character {
             '\n' => visible.push('\n'),
             '\t' => visible.push_str("    "),
-            character
-                if character.is_control()
-                    || matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') =>
-            {
+            character if saya_core::text::is_terminal_control(character) => {
                 use std::fmt::Write;
                 let _ = write!(visible, "\\u{{{:x}}}", character as u32);
             }
@@ -302,6 +299,29 @@ mod tests {
         assert_eq!(
             safe_text("a\x1b[2J\u{9b}x\u{202e}\t\n"),
             "a\\u{1b}[2J\\u{9b}x\\u{202e}    \n"
+        );
+    }
+
+    #[test]
+    fn shared_control_ranges_keep_editor_escaping_and_unicode_layout() {
+        for value in (0..=0x1f)
+            .chain(0x7f..=0x9f)
+            .chain([0x061c, 0x200e, 0x200f])
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x206f)
+        {
+            let character = char::from_u32(value).unwrap();
+            if matches!(character, '\n' | '\t') {
+                continue;
+            }
+            assert_eq!(
+                safe_text(&character.to_string()),
+                format!("\\u{{{value:x}}}")
+            );
+        }
+        assert_eq!(
+            safe_text("中文 e\u{301} 👩\u{200d}💻\n\t"),
+            "中文 e\u{301} 👩\u{200d}💻\n    "
         );
     }
 

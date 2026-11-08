@@ -52,10 +52,7 @@ fn safe_text(text: &str) -> String {
             '<' => safe.push_str("&lt;"),
             '>' => safe.push_str("&gt;"),
             '\n' | '\t' => safe.push(character),
-            character
-                if character.is_control()
-                    || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') =>
-            {
+            character if crate::text::is_terminal_control(character) => {
                 use std::fmt::Write;
                 // Writing into a String has no fallible external sink.
                 let _ = write!(safe, "\\u{{{:x}}}", character as u32);
@@ -65,6 +62,7 @@ fn safe_text(text: &str) -> String {
     }
     safe
 }
+
 impl SessionExport {
     /// Render the same sanitized projection as JSON. Untrusted text stays in
     /// a dynamically sized fence, with explicit control/HTML escaping. The
@@ -116,5 +114,32 @@ impl SessionExport {
         markdown.section("Omitted fields", &self.omitted_fields)?;
         markdown.section("Truncated fields", &self.truncated_fields)?;
         Ok(markdown.text.into_bytes())
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+    #[test]
+    fn shared_control_ranges_preserve_markdown_escape_and_layout_rules() {
+        for value in (0..=0x1f)
+            .chain(0x7f..=0x9f)
+            .chain([0x061c, 0x200e, 0x200f])
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x206f)
+        {
+            let character = char::from_u32(value).unwrap();
+            if matches!(character, '\n' | '\t') {
+                continue;
+            }
+            assert_eq!(
+                safe_text(&character.to_string()),
+                format!("\\u{{{value:x}}}")
+            );
+        }
+        assert_eq!(
+            safe_text("<中文 & e\u{301} 👩\u{200d}💻>\n\t"),
+            "&lt;中文 &amp; e\u{301} 👩\u{200d}💻&gt;\n\t"
+        );
     }
 }

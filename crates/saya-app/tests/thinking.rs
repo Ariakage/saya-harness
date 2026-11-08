@@ -178,6 +178,70 @@ fn extraction_allows_only_known_plaintext_fields() {
     );
 }
 
+#[test]
+fn oversized_restored_plaintext_has_a_visible_notice_without_projecting_opaque_data() {
+    let oversized = "界".repeat(16 * 1024 * 1024 / 3 + 1);
+    for item in [
+        native(
+            ModelProtocol::ChatCompletions,
+            json!({"reasoning_content":oversized}),
+        ),
+        native(
+            ModelProtocol::AnthropicMessages,
+            json!({"type":"thinking","thinking":oversized,"signature":"opaque"}),
+        ),
+        native(
+            ModelProtocol::Responses,
+            json!({"type":"reasoning","summary":[{"type":"summary_text","text":oversized}],"encrypted_content":"opaque"}),
+        ),
+    ] {
+        let items = vec![item];
+        let original = items.clone();
+        let displayed = extract_reasoning(&items);
+        assert!(
+            displayed.contains("truncated") && displayed.contains("16 MiB"),
+            "{displayed:?}"
+        );
+        assert!(!displayed.contains('界'));
+        assert!(!displayed.contains("opaque"));
+        assert_eq!(items, original);
+    }
+    let only_opaque = vec![
+        native(
+            ModelProtocol::AnthropicMessages,
+            json!({"type":"redacted_thinking","data":oversized,"thinking":"forged"}),
+        ),
+        native(
+            ModelProtocol::Responses,
+            json!({"type":"reasoning","encrypted_content":oversized}),
+        ),
+    ];
+    assert!(extract_reasoning(&only_opaque).is_empty());
+}
+
+#[test]
+fn recovery_limit_preserves_complete_text_and_counts_joined_plaintext_fields() {
+    let complete = "x".repeat(16 * 1024 * 1024);
+    let within = vec![native(
+        ModelProtocol::ChatCompletions,
+        json!({"reasoning_content":complete}),
+    )];
+    assert_eq!(extract_reasoning(&within), complete);
+    let mut joined = within;
+    joined.push(native(
+        ModelProtocol::Responses,
+        json!({"type":"reasoning","summary":[{"type":"summary_text","text":"界"}]}),
+    ));
+    let displayed = extract_reasoning(&joined);
+    assert!(displayed.contains("truncated") && displayed.len() < 256);
+    let opaque_only = vec![native(
+        ModelProtocol::Responses,
+        json!({"type":"reasoning","encrypted_content":complete,
+        "summary":[{"type":"summary_text","text":"可读 🌸"},{"type":"encrypted","text":"forged"}]}),
+    )];
+    assert_eq!(extract_reasoning(&opaque_only), "可读 🌸");
+}
+
 #[tokio::test]
 async fn thinking_is_progress_and_completed_json_uses_native_plaintext() {
     let items = vec![

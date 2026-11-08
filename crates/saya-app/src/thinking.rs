@@ -14,6 +14,8 @@ const MAX_ENTRIES: usize = 64;
 const MAX_ENTRY_BYTES: usize = 256 * 1024;
 const MAX_LOG_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RAW_BYTES: usize = 16 * 1024 * 1024;
+const RECOVERY_TRUNCATION_NOTICE: &str =
+    "[Thinking text truncated: retained plaintext exceeds 16 MiB and was withheld.]";
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -299,8 +301,14 @@ fn reasoning(items: &[HistoryItem]) -> Reasoning {
 }
 /// Read only documented plaintext fields from native provider history.
 /// Opaque signatures, encrypted and redacted blocks are ignored. Aggregate
-/// plaintext exceeding 16 MiB is withheld. Callers must redact the returned full
-/// text with current known credentials before applying their display limit.
+/// plaintext exceeding 16 MiB is replaced by a visible truncation notice.
+/// Callers must redact the returned full text with current known credentials
+/// before applying their display limit.
 pub fn extract_reasoning(items: &[HistoryItem]) -> String {
-    reasoning(items).text
+    let projection = reasoning(items);
+    if projection.overflow {
+        RECOVERY_TRUNCATION_NOTICE.into()
+    } else {
+        projection.text
+    }
 }

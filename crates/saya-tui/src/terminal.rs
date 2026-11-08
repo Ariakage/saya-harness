@@ -127,9 +127,7 @@ pub(crate) fn safe_title(text: &str) -> String {
                 continue;
             }
             ' '
-        } else if character.is_control()
-            || matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')
-        {
+        } else if saya_core::text::is_terminal_control(character) {
             continue;
         } else {
             character
@@ -476,5 +474,23 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = self.restore();
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    #[test]
+    fn shared_direction_controls_are_removed_without_changing_unicode_title_text() {
+        let directions: String = [0x061c, 0x200e, 0x200f]
+            .into_iter()
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x206f)
+            .map(|value| char::from_u32(value).unwrap())
+            .collect();
+        assert_eq!(
+            safe_title(&format!(" A{directions}\x1b\u{9b} B\n中文\t👩\u{200d}💻 ")),
+            "A B 中文 👩\u{200d}💻"
+        );
     }
 }

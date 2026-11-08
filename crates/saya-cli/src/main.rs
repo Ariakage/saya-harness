@@ -258,9 +258,7 @@ impl Drop for PollGuard {
 fn safe_terminal_text(s: &str) -> String {
     s.chars()
         .map(|c| {
-            if (c.is_control() && c != '\n' && c != '\t')
-                || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-            {
+            if saya_core::text::is_terminal_control(c) && c != '\n' && c != '\t' {
                 '\u{fffd}'
             } else {
                 c
@@ -1210,6 +1208,23 @@ async fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod report_tests {
     use super::*;
+    #[test]
+    fn shared_controls_are_replaced_while_unicode_and_layout_remain_readable() {
+        let controls: String = (0..=0x1f)
+            .chain(0x7f..=0x9f)
+            .chain([0x061c, 0x200e, 0x200f])
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x206f)
+            .map(|value| char::from_u32(value).unwrap())
+            .filter(|c| !matches!(c, '\n' | '\t'))
+            .collect();
+        assert_eq!(
+            safe_terminal_text(&controls),
+            "�".repeat(controls.chars().count())
+        );
+        let normal = "中文 e\u{301} 👩\u{200d}💻 🌸\n\t";
+        assert_eq!(safe_terminal_text(normal), normal);
+    }
     #[test]
     fn redaction_detects_nested_encoded_credentials() {
         let secret = r#"fake\"key\\tail"#.to_string();
