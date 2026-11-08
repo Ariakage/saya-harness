@@ -277,7 +277,7 @@ pub fn redact(value: &mut Value, secrets: &[String]) -> Result<(), BoundaryError
     }
     redact_inner(value, secrets, 0)?;
     let serialized = serde_json::to_string(value).map_err(|_| failure())?;
-    if contains_raw(&serialized, secrets) {
+    if contains_secret(&serialized, secrets) {
         return Err(failure());
     }
     Ok(())
@@ -293,6 +293,26 @@ pub fn tool_result(result: &ToolResult, secrets: &[String]) -> Result<ToolResult
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn encoded_credentials_in_prose_fail_closed_for_redaction_and_tool_results() {
+        let known = ["fixture-secret".to_owned()];
+        for text in [
+            r#"Notes: {"token":"fixture-\u0073ecret"}"#,
+            "```json\n{\"token\":\"fixture-\\u0073ecret\"}\n```",
+            "{\"safe\":1}\n{\"token\":\"fixture-\\u0073ecret\"}",
+        ] {
+            assert!(contains_secret(text, &known));
+            assert!(redact(&mut Value::String(text.into()), &known).is_err());
+            let result = ToolResult {
+                ok: true,
+                data: Some(json!({"text":text})),
+                error: None,
+                truncated: false,
+            };
+            assert!(tool_result(&result, &known).is_err());
+        }
+    }
+
     #[test]
     fn redacts_nested_json_and_escaped_credentials_without_collisions() {
         let secret = "fixture\"secret\\tail".to_string();

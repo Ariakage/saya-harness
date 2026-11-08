@@ -310,6 +310,27 @@ async fn known_secrets_are_redacted_and_structural_ids_fail_closed()
     Ok(())
 }
 
+#[tokio::test]
+async fn encoded_secret_in_prose_is_rejected_before_session_commit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let (session, _) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec!["fixture-secret".into()])?;
+    store.create_session(&session, "profile-hash").await?;
+    let mut changed = session.clone();
+    changed.history.push(HistoryItem::UserText(
+        r#"Notes: {"token":"fixture-\u0073ecret"}"#.into(),
+    ));
+    assert!(
+        store
+            .commit(&[StoreChange::Session(changed)])
+            .await
+            .is_err()
+    );
+    assert_eq!(store.load_session(session.id).await?, Some(session));
+    Ok(())
+}
+
 #[test]
 fn corrupt_foreign_and_newer_databases_are_never_silently_replaced()
 -> Result<(), Box<dyn std::error::Error>> {
