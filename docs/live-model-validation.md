@@ -36,3 +36,37 @@
 2026-11-07 从 `854be1b` 的已校验 macOS ARM 候选包解出程序，使用本地私有凭据配置进行三协议真实模型 smoke。Chat Completions、Responses 和 Anthropic Messages 各自完成直接回答，以及读取随机标记文件并回传结果，两类检查共六项全部通过。读取任务各有一个成功文件工具结果与两次成功模型响应，测试工作区保持不变。
 
 本轮使用同一 `deepseek-flash` 模型和此前的服务根地址，Anthropic 版本为 `2026-10-21`。后续发行构建新增打包和验证工具，运行时代码、提示词与 Cargo 依赖相对该修复版本保持相同内容。检查脚本仅保存状态及计数，凭据继续保存在 Git 本地排除的私有文件中。
+
+## 0.2.0-rc.2 三协议与四模式抽样：2026-11-09
+
+本次使用源码 `daee043821529e270b876a77d5c6e8f47bed1c33` 对应的最终 macOS aarch64 候选程序，来自候选工作流 `42518738474`。程序与归档的摘要已与本轮真实模型记录核对一致。测试时间为2026-11-08 20:18:01至20:18:55 UTC，对应本地2026-11-09。[候选工作流](https://github.com/Ariakage/saya-harness/actions/runs/42518738474)、[RC2 发行证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0-rc.2/release-evidence.json)
+
+| 项目 | SHA-256 |
+| --- | --- |
+| macOS aarch64 程序 | `cc7174a02970267933ca302c624ae3a659e85c9341a765c930ad8b9d12153c7a` |
+| macOS aarch64 归档 | `e8e8544419153aea06a89d64b9c96fbff31a3197b807b9a6f02940dda0db048d` |
+
+使用同一 DeepSeek 服务与 `deepseek-flash` 模型，三种协议分别执行 PLAN、BUILD、CODE、WORK 四种任务，共12项全部通过。合计42次模型请求及42次成功响应，观察到的服务失败为0。工具请求36次，成功35次，失败1次。
+
+| 协议 | 模式 | 模型请求／成功响应 | 工具请求／成功结果 | 任务结果 |
+| --- | --- | --- | --- | --- |
+| OpenAI Chat Completions | PLAN | 2／2 | 1／1 | passed |
+| OpenAI Chat Completions | BUILD | 3／3 | 2／2 | passed |
+| OpenAI Chat Completions | CODE | 5／5 | 4／3 | passed |
+| OpenAI Chat Completions | WORK | 4／4 | 5／5 | passed |
+| OpenAI Responses | PLAN | 2／2 | 1／1 | passed |
+| OpenAI Responses | BUILD | 4／4 | 3／3 | passed |
+| OpenAI Responses | CODE | 4／4 | 3／3 | passed |
+| OpenAI Responses | WORK | 4／4 | 5／5 | passed |
+| Anthropic Messages | PLAN | 2／2 | 1／1 | passed |
+| Anthropic Messages | BUILD | 4／4 | 3／3 | passed |
+| Anthropic Messages | CODE | 4／4 | 3／3 | passed |
+| Anthropic Messages | WORK | 4／4 | 5／5 | passed |
+
+Chat Completions 的 CODE 运行包含两次 `apply_patch` 请求，一次失败、一次成功，最终运行状态为 `completed`，产物与预期静态内容精确匹配。保留记录没有单次失败的错误码、原因或结果顺序，本文仅记录计数与最终状态。
+
+三个 PLAN 工作区均保持不变，整轮 `exec` 请求和成功执行数均为0。BUILD／CODE 生成的 Rust 源码仅做精确静态文件比较，未编译或执行。每项任务预算为6次模型请求、12次工具调用和180秒活跃时间。[工作模式与权限](execution.md)、[模型协议](model-protocols.md)
+
+原配置中的 `stream = true` 和 `thinking_effort = "max"` 全程保留，本轮没有调整兼容参数。Chat Completions 沿用原私有配置的 `legacy_max_tokens = true`，Anthropic Messages 沿用 `api_version = "2026-10-21"`。含已知凭据时，CLI 对文本事件作安全合并，HTTP wire 分块未独立观察。服务也未独立报告内部实际采用的 effort，配置请求值与服务内部行为分别记录。[Thinking effort 配置](configuration.md#thinking-effort)
+
+证据只保留状态、计数与摘要，原任务提示词、模型回复、生成文件和临时会话数据库已在验证后删除，凭据与完整请求未进入保留证据。本结果限于本次单个服务、模型和时间点的抽样，其他模型兼容性、任务质量与生成程序的运行正确性需另行验证。[RC2 版本范围](release-notes-0.2.0-rc.2.md)

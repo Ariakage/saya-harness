@@ -1,6 +1,23 @@
 # N1 TUI 验证记录
 
-**更新于 2026-11-09。历史候选为 0.2.0-rc.1，RC1 之后的开发线按各节源码及实际环境分别记录。正式发布另行安排。**
+**更新于2026-11-09。0.2.0-rc.2预发行和标签已公开并完成四平台原生验收，历史候选与本机程序按各节源码及环境保留独立记录。**
+
+## 0.2.0-rc.2 发行与验收
+
+2026-11-09，项目负责人授权的0.2.0-rc.2已发布为GitHub预发行。标签 `v0.2.0-rc.2` 固定到 `daee043821529e270b876a77d5c6e8f47bed1c33`。四个原生目标均通过682项Rust测试、九项发行脚本测试及22组PTY，完成工具、文本会话、恢复与审查回归，源码／脚本／包／二进制摘要交叉核对通过。[预发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0-rc.2)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42518737234)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42518738474)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42520065596)
+
+| 目标 | 原生验收环境 | 安装包SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | Ubuntu22.04／glibc2.35／x86_64 | `e0ceba9485cd426d12b40a51fe3fafab15b0fdc6e4efe840eee864f093ceec31` |
+| linux-aarch64 | Ubuntu22.04／glibc2.35／aarch64 | `097e260cfafa43642f6c13b048ac70eefbc5264747fcfbbe487ecc4b0774c733` |
+| macos-x86_64 | macOS15.7.9／Intel | `810d29e182d735494c4d788b65e8e66b6d7f8045399c199258ee7c383283456c` |
+| macos-aarch64 | macOS15.8.2／ARM | `e8e8544419153aea06a89d64b9c96fbff31a3197b807b9a6f02940dda0db048d` |
+
+四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产完成匿名公开下载，逐字节／SHA-256与验收对象一致。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0-rc.2/release-evidence.json)
+
+实际发布的macOS ARM二进制通过24例合成凭据探针，以及deepseek-flash三协议×四模式共12项真实任务。42次模型请求全部成功，36次工具调用中35次成功。Chat CODE运行包含一次未成功的补丁尝试，最终产物准确且任务完成，该失败的具体错误码与两次尝试的先后顺序未留存。三个PLAN工作区保持不变，命令执行为0。生成源码仅静态检查，服务内部effort及实际网络分块未独立核实，抽样范围见[真实模型记录](live-model-validation.md)。
+
+本机试用入口 `.saya/local/saya-trial` 更新为该公开发行的ARM程序，保留之前产物。完整本机、原生工作流、下载及探针记录位于 `target/rc2/`。
 
 ## 2026-11-09 第二轮整改程序
 
