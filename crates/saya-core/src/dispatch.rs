@@ -332,14 +332,6 @@ impl ToolDispatcher {
         cancel: &dyn Cancellation,
         background: bool,
     ) -> Result<ToolResult, BoundaryError> {
-        if let Some(guard) = self.context_guard.get()
-            && !guard(call)?
-        {
-            return Err(failure(
-                "project_context_changed",
-                "applicable project context changed before dispatch",
-            ));
-        }
         if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
             return Err(failure(
                 "durability_required",
@@ -360,6 +352,31 @@ impl ToolDispatcher {
         } else {
             self.store.clone()
         };
+        if let Some(guard) = self.context_guard.get()
+            && !guard(call)?
+        {
+            let error = failure(
+                "project_context_changed",
+                "applicable project context changed before dispatch",
+            );
+            if !background {
+                return Err(error);
+            }
+            let result = ToolResult {
+                ok: false,
+                data: None,
+                error: Some(error.0),
+                truncated: false,
+            };
+            store
+                .commit(&[StoreChange::ToolIntent {
+                    run_id: context.run.id,
+                    call: call.clone(),
+                }])
+                .await?;
+            save_result(store.as_ref(), call, context, &result).await?;
+            return Ok(result);
+        }
         tracing::info!(target: "saya::tools", event = "tool.dispatched");
         match call.name.as_str() {
             "todo_write" => {

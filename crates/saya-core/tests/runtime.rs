@@ -1713,6 +1713,7 @@ async fn scoped_project_context_is_supplied_as_data_before_nested_tool_dispatch(
 struct ChangeContextModel {
     inner: FakeModel,
     path: std::path::PathBuf,
+    after_requests: usize,
 }
 impl Model for ChangeContextModel {
     fn start<'a>(
@@ -1721,8 +1722,10 @@ impl Model for ChangeContextModel {
         cancel: &'a dyn Cancellation,
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
-            if self.inner.seen.lock().map_err(|_| err("test"))?.is_empty() {
+            let count = self.inner.seen.lock().map_err(|_| err("test"))?.len();
+            if count == self.after_requests {
                 std::fs::write(&self.path, "CHANGED_CONVENTION").map_err(|_| err("test"))?;
+                tokio::task::yield_now().await;
             }
             self.inner.start(req, cancel).await
         })
@@ -1740,6 +1743,7 @@ async fn changed_instruction_during_model_call_forces_context_refresh_before_too
     let args = serde_json::json!({"path":"data.txt","start_line":1,"line_count":1});
     let model = Arc::new(ChangeContextModel {
         path: source,
+        after_requests: 0,
         inner: FakeModel::new(vec![
             vec![call("first", "read_file", args.clone())],
             vec![call("retry", "read_file", args)],
@@ -1762,6 +1766,105 @@ async fn changed_instruction_during_model_call_forces_context_refresh_before_too
     assert!(serde_json::to_string(&seen[0].history)?.contains("ORIGINAL_CONVENTION"));
     assert!(serde_json::to_string(&seen[1].history)?.contains("CHANGED_CONVENTION"));
     assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="first" && result.error.as_ref().is_some_and(|e|e.code=="project_context_changed"))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn provided_nested_context_allows_a_parent_directory_tool_in_the_same_turn()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::project_context::ProjectContext;
+    let temp = support::temp_workspace()?;
+    std::fs::create_dir(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("AGENTS.md"), "ROOT_CONVENTION")?;
+    std::fs::write(temp.path().join("src/AGENTS.md"), "NESTED_CONVENTION")?;
+    std::fs::write(temp.path().join("src/data.txt"), "nested")?;
+    std::fs::write(temp.path().join("README.md"), "root")?;
+    let read = serde_json::json!({"path":"src/data.txt","start_line":1,"line_count":1});
+    let model = Arc::new(FakeModel::new(vec![
+        vec![call("discover", "read_file", read.clone())],
+        vec![
+            call("nested", "read_file", read),
+            call(
+                "parent",
+                "read_file",
+                serde_json::json!({"path":"README.md","start_line":1,"line_count":1}),
+            ),
+        ],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model,
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?
+    .with_project_context(ProjectContext::new(temp.path(), None)?)?;
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    for expected in ["nested", "parent"] {
+        assert!(session.history.iter().any(|item| matches!(item, HistoryItem::ToolResult { call_id, result } if call_id == expected && result.ok)), "{expected}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_background_context_returns_a_job_error_without_failing_the_run()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        background::{BackgroundEventKind, JobStatus},
+        project_context::ProjectContext,
+    };
+    let temp = support::temp_workspace()?;
+    let source = temp.path().join("AGENTS.md");
+    std::fs::write(&source, "ORIGINAL_CONVENTION")?;
+    std::fs::write(temp.path().join("data.txt"), "data")?;
+    let model = Arc::new(ChangeContextModel {
+        path: source,
+        after_requests: 1,
+        inner: FakeModel::new(vec![
+            vec![call(
+                "start",
+                "background_start",
+                serde_json::json!({"tool":"read_file","arguments":{"path":"data.txt","start_line":1,"line_count":1}}),
+            )],
+            vec![HistoryItem::AssistantText("done".into())],
+        ]),
+    });
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let mut runtime = runtime(
+        temp.path(),
+        run,
+        model,
+        Arc::new(MemoryStore::default()),
+        Arc::new(NoCancel),
+    )?
+    .with_project_context(ProjectContext::new(temp.path(), None)?)?;
+    let handle = runtime.handle();
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    let id = handle
+        .background_events()?
+        .into_iter()
+        .find_map(|event| {
+            matches!(event.kind, BackgroundEventKind::Accepted { .. }).then_some(event.job_id)
+        })
+        .ok_or("accepted job")?;
+    match handle.background_status(&id)? {
+        Some(JobStatus::Finished(result)) => {
+            assert!(!result.ok);
+            assert_eq!(
+                result.error.ok_or("job error")?.code,
+                "project_context_changed"
+            );
+        }
+        other => return Err(format!("unexpected background result: {other:?}").into()),
+    }
     Ok(())
 }
 

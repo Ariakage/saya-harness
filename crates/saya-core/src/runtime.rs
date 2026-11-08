@@ -234,7 +234,7 @@ pub struct PersonalContext {
 struct ProjectState {
     loader: ProjectContext,
     target: Option<PathBuf>,
-    provided_fingerprint: Option<String>,
+    provided: Option<(Option<PathBuf>, crate::project_context::ContextRecord)>,
 }
 #[derive(Clone, Copy)]
 enum CallProgress {
@@ -248,14 +248,41 @@ fn project_context_is_current(
     state: &Mutex<ProjectState>,
     call: &ToolCall,
 ) -> Result<bool, BoundaryError> {
-    let mut state = state
+    let state = state
         .lock()
         .map_err(|_| error("project_context_error", "project context lock failed"))?;
     let target = context_target(call).or_else(|| state.target.clone());
     let snapshot = state.loader.snapshot(target.as_deref())?;
-    let fingerprint = snapshot.fingerprint()?;
-    state.target = target;
-    Ok(state.provided_fingerprint.as_deref() == Some(fingerprint.as_str()))
+    let Some((provided_target, provided)) = &state.provided else {
+        return Ok(false);
+    };
+    let current_fingerprint = if target == *provided_target {
+        snapshot.fingerprint()?
+    } else {
+        state
+            .loader
+            .snapshot(provided_target.as_deref())?
+            .fingerprint()?
+    };
+    if current_fingerprint != provided.fingerprint {
+        return Ok(false);
+    }
+    Ok(snapshot
+        .instructions
+        .iter()
+        .map(|source| (&source.path, &source.sha256))
+        .chain(
+            snapshot
+                .skills
+                .iter()
+                .map(|source| (&source.path, &source.sha256)),
+        )
+        .all(|(path, hash)| {
+            provided
+                .sources
+                .iter()
+                .any(|source| &source.path == path && &source.sha256 == hash)
+        }))
 }
 /// Handle usable while the run future owns the runtime.
 #[derive(Clone)]
@@ -420,7 +447,7 @@ impl AgentRuntime {
         let state = Arc::new(Mutex::new(ProjectState {
             loader,
             target: None,
-            provided_fingerprint: None,
+            provided: None,
         }));
         let guard = state.clone();
         self.dispatcher.set_context_guard(Arc::new(move |call| {
@@ -543,8 +570,9 @@ impl AgentRuntime {
                         error("project_context_error", "project context lock failed")
                     })?;
                     let snapshot = state.loader.snapshot(state.target.as_deref())?;
-                    state.provided_fingerprint = Some(snapshot.fingerprint()?);
-                    record = Some(snapshot.record(request_id.clone())?);
+                    let context_record = snapshot.record(request_id.clone())?;
+                    state.provided = Some((state.target.clone(), context_record.clone()));
+                    record = Some(context_record);
                     let mut context = serde_json::json!({"saya_project_context_v1": snapshot});
                     crate::redaction::redact(&mut context, &self.review.known_secrets)?;
                     history.push(HistoryItem::UserText(context.to_string()));
@@ -857,6 +885,12 @@ impl AgentRuntime {
     ) -> Result<ToolResult, BoundaryError> {
         self.check()?;
         if let Some(state) = &self.project_context {
+            if let Some(target) = context_target(call) {
+                state
+                    .lock()
+                    .map_err(|_| error("project_context_error", "project context lock failed"))?
+                    .target = Some(target);
+            }
             let changed = !project_context_is_current(state, call)?;
             if changed {
                 return self.save_local(session, call, failed("project_context_changed", "applicable project context changed; review it before requesting this operation again")).await;
