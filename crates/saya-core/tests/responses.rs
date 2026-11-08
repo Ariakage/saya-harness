@@ -106,6 +106,14 @@ async fn public_reasoning_deltas_exclude_encrypted_native_content()
             json!({"output_index":0,"content_index":0,"delta":"public"}),
         ),
         event(
+            "response.reasoning_summary_text.done",
+            json!({"output_index":0,"summary_index":0,"item_id":"rs_public","text":"summary"}),
+        ),
+        event(
+            "response.reasoning_text.done",
+            json!({"output_index":0,"content_index":0,"item_id":"rs_public","text":"public"}),
+        ),
+        event(
             "response.output_text.delta",
             json!({"output_index":1,"content_index":0,"delta":"answer"}),
         ),
@@ -150,6 +158,79 @@ async fn public_reasoning_deltas_exclude_encrypted_native_content()
             .recv_timeout(Duration::from_secs(1))?
             .get("reasoning")
             .is_none()
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn reasoning_events_must_match_their_indices_identity_and_final_plaintext()
+-> Result<(), Box<dyn std::error::Error>> {
+    let reasoning = json!({"type":"reasoning","id":"rs_public",
+        "summary":[{"type":"summary_text","text":"final"}],
+        "content":[{"type":"reasoning_text","text":"final"}]});
+    let cases = [
+        vec![event(
+            "response.reasoning_summary_text.delta",
+            json!({"output_index":0,"summary_index":0,"delta":"conflict"}),
+        )],
+        vec![event(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":0,"delta":"conflict"}),
+        )],
+        vec![event(
+            "response.reasoning_text.delta",
+            json!({"output_index":1,"content_index":0,"delta":"final"}),
+        )],
+        vec![event(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":256,"delta":"final"}),
+        )],
+        vec![event(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":0,"item_id":"wrong","delta":"final"}),
+        )],
+        vec![
+            event(
+                "response.reasoning_text.delta",
+                json!({"output_index":0,"content_index":0,"delta":"final"}),
+            ),
+            event(
+                "response.reasoning_text.done",
+                json!({"output_index":0,"content_index":0,"text":"conflict"}),
+            ),
+        ],
+    ];
+    for (case, mut events) in cases.into_iter().enumerate() {
+        events.push(done(vec![reasoning.clone(), message("answer")]));
+        let (url, _) = fixture::server(vec![("text/event-stream", fixture::sse(&events))])?;
+        let model = ResponsesModel::new(
+            transport(url)?,
+            settings(true),
+            ResponsesCompatibility::default(),
+        );
+        assert!(
+            collect(&model, &request()).await.is_err(),
+            "invalid reasoning case {case} succeeded"
+        );
+    }
+    let body = fixture::sse(&[
+        event(
+            "response.reasoning_text.delta",
+            json!({"output_index":0,"content_index":0,"delta":"discarded"}),
+        ),
+        done(vec![
+            json!({"type":"reasoning","id":"rs_empty","summary":[]}),
+            message("answer"),
+        ]),
+    ]);
+    let (url, _) = fixture::server(vec![("text/event-stream", body)])?;
+    let model = ResponsesModel::new(
+        transport(url)?,
+        settings(true),
+        ResponsesCompatibility::default(),
+    );
+    assert!(
+        collect(&model, &request()).await.is_err(),
+        "reasoning was discarded without opaque replacement"
     );
     Ok(())
 }

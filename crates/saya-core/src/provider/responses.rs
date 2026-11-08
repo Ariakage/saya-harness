@@ -414,7 +414,9 @@ struct StreamState {
     text: BTreeMap<(usize, usize), String>,
     arguments: BTreeMap<usize, String>,
     argument_done: BTreeMap<usize, String>,
-    argument_item_ids: BTreeMap<usize, String>,
+    item_ids: BTreeMap<usize, String>,
+    reasoning: BTreeMap<(usize, &'static str, usize), String>,
+    reasoning_done: BTreeMap<(usize, &'static str, usize), String>,
     completed: Option<(Vec<HistoryItem>, Option<Usage>)>,
     bytes: usize,
 }
@@ -466,7 +468,7 @@ impl StreamState {
             }
             "response.function_call_arguments.delta" => {
                 let key = index(value, "output_index")?;
-                self.check_argument_item_id(key, obj)?;
+                self.check_item_id(key, obj)?;
                 let delta = obj
                     .get("delta")
                     .and_then(Value::as_str)
@@ -476,7 +478,7 @@ impl StreamState {
             }
             "response.function_call_arguments.done" => {
                 let key = index(value, "output_index")?;
-                self.check_argument_item_id(key, obj)?;
+                self.check_item_id(key, obj)?;
                 let arguments = obj
                     .get("arguments")
                     .and_then(Value::as_str)
@@ -548,7 +550,7 @@ impl StreamState {
                         ));
                     }
                 }
-                for (idx, id) in &self.argument_item_ids {
+                for (idx, id) in &self.item_ids {
                     if output
                         .get(*idx)
                         .and_then(|v| v.get("id"))
@@ -557,7 +559,7 @@ impl StreamState {
                     {
                         return Err(failure(
                             "invalid_model_response",
-                            "function item identity differs from final output",
+                            "output item identity differs from final output",
                         ));
                     }
                 }
@@ -574,6 +576,48 @@ impl StreamState {
                         return Err(failure(
                             "invalid_model_response",
                             "text deltas differ from final output",
+                        ));
+                    }
+                }
+                for ((idx, field, part), text) in self.reasoning.iter().chain(&self.reasoning_done)
+                {
+                    let item = output
+                        .get(*idx)
+                        .filter(|item| item["type"] == "reasoning")
+                        .ok_or_else(|| {
+                            failure(
+                                "invalid_model_response",
+                                "reasoning has no matching output item",
+                            )
+                        })?;
+                    // Compatible services can omit plaintext and retain only opaque reasoning.
+                    if let Some(parts) = item.get(*field) {
+                        let expected_kind = if *field == "summary" {
+                            "summary_text"
+                        } else {
+                            "reasoning_text"
+                        };
+                        if parts
+                            .as_array()
+                            .and_then(|parts| parts.get(*part))
+                            .filter(|part| part["type"] == expected_kind)
+                            .and_then(|part| part.get("text"))
+                            .and_then(Value::as_str)
+                            != Some(text)
+                        {
+                            return Err(failure(
+                                "invalid_model_response",
+                                "reasoning text differs from final output",
+                            ));
+                        }
+                    } else if item
+                        .get("encrypted_content")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                    {
+                        return Err(failure(
+                            "invalid_model_response",
+                            "reasoning text missing from final output",
                         ));
                     }
                 }
@@ -602,10 +646,40 @@ impl StreamState {
             "response.refusal.delta" | "response.refusal.done" => {
                 Err(failure("provider_refusal", "provider refused the request"))
             }
-            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-                obj.get("delta").and_then(Value::as_str).ok_or_else(|| {
-                    failure("invalid_model_response", "invalid reasoning text delta")
-                })?;
+            "response.reasoning_summary_text.delta"
+            | "response.reasoning_text.delta"
+            | "response.reasoning_summary_text.done"
+            | "response.reasoning_text.done" => {
+                let (field, part_index) = if kind.starts_with("response.reasoning_summary") {
+                    ("summary", "summary_index")
+                } else {
+                    ("content", "content_index")
+                };
+                let output_index = index(value, "output_index")?;
+                let key = (output_index, field, index(value, part_index)?);
+                self.check_item_id(output_index, obj)?;
+                let completed = kind.ends_with(".done");
+                let text = obj
+                    .get(if completed { "text" } else { "delta" })
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| failure("invalid_model_response", "invalid reasoning text"))?;
+                if self.reasoning_done.contains_key(&key) {
+                    return Err(failure(
+                        "invalid_model_response",
+                        "reasoning text after completion",
+                    ));
+                }
+                if completed {
+                    if self.reasoning.get(&key).is_some_and(|delta| delta != text) {
+                        return Err(failure(
+                            "invalid_model_response",
+                            "completed reasoning differs from deltas",
+                        ));
+                    }
+                    self.reasoning_done.insert(key, text.into());
+                } else {
+                    self.reasoning.entry(key).or_default().push_str(text);
+                }
                 Ok(None)
             }
             "response.created"
@@ -614,17 +688,15 @@ impl StreamState {
             | "response.content_part.added"
             | "response.content_part.done"
             | "response.output_text.done"
-            | "response.reasoning_summary_text.done"
             | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_part.done"
-            | "response.reasoning_text.done" => Ok(None),
+            | "response.reasoning_summary_part.done" => Ok(None),
             _ => Err(failure(
                 "invalid_model_response",
                 "unsupported provider stream event",
             )),
         }
     }
-    fn check_argument_item_id(
+    fn check_item_id(
         &mut self,
         index: usize,
         obj: &serde_json::Map<String, Value>,
@@ -633,20 +705,14 @@ impl StreamState {
             let id = id
                 .as_str()
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    failure("invalid_model_response", "invalid function item identity")
-                })?;
-            if self
-                .argument_item_ids
-                .get(&index)
-                .is_some_and(|old| old != id)
-            {
+                .ok_or_else(|| failure("invalid_model_response", "invalid output item identity"))?;
+            if self.item_ids.get(&index).is_some_and(|old| old != id) {
                 return Err(failure(
                     "invalid_model_response",
-                    "function item identity changed",
+                    "output item identity changed",
                 ));
             }
-            self.argument_item_ids.insert(index, id.into());
+            self.item_ids.insert(index, id.into());
         }
         Ok(())
     }

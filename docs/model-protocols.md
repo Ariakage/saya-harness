@@ -46,6 +46,8 @@ DEV-034 使用三种协议各自的本地 HTTP 夹具验证后台启动回执、
 
 ## TUI可读推理投影
 
+Responses 的 reasoning／summary 流校验输出索引、分段索引、可选 item ID、增量与 done 文本，并在完成前与最终输出对应。冲突或缺失返回 `invalid_model_response`，工具不会派发。兼容服务仅在流中提供明文、最终保留非空 encrypted_content 时仍可接入，该明文在恢复后无法从 opaque 内容重建。
+
 开发线为适配器增加 `ModelUpdate::ThinkingDelta`，供应用层区分正文和服务返回的可读推理。Chat的 `reasoning_content`、Anthropic的thinking增量和Responses的reasoning／summary增量均经已有协议校验后投影。单个Chat事件同时包含正文和推理时保持二者顺序，签名、redacted与加密字段保持原有协议表示。
 
 应用层ThinkingModel为TUI维护有界日志，并将已消费的推理增量转为Progress，沿用原有错误、重试与预算处理。完整JSON可从最终协议项提取允许的明文字段，TUI恢复时沿对应轮次重建。详细显示、凭据处理与限额见[TUI](tui.md#thinking任务清单与折叠)。
