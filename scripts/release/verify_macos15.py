@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('archive', type=Path)
     parser.add_argument('--sha256', required=True, help='expected archive SHA-256 from SHA256SUMS')
+    parser.add_argument('--source-commit', required=True, help='expected declared build source commit')
     parser.add_argument('--output', type=Path, required=True, help='new evidence JSON file')
     args = parser.parse_args()
     try:
@@ -43,6 +44,8 @@ def main():
             if any(not item.isfile() or item.size > 100 * 1024 * 1024 for item in members):
                 raise ValueError('unexpected archive member type or size')
             metadata = json.load(archive.extractfile('BUILD-INFO.json'))
+            if metadata.get('declared_source_commit') != args.source_commit:
+                raise ValueError('source commit mismatch')
             target = metadata.get('target')
             if target not in ('macos-aarch64', 'macos-x86_64'):
                 raise ValueError('candidate is not a macOS target')
@@ -71,7 +74,8 @@ def main():
             if not re.search(r'(?m)^\s*minos\s+15\.0(?:\.0)?\s*$', build_info):
                 raise ValueError('Mach-O does not declare minimum macOS 15.0')
             for script in ('smoke.py', 'journey.py', 'review_regressions.py', 'tui_journey.py'):
-                subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
+                subprocess.run([sys.executable, str(HERE / script), str(path)], check=True,
+                               timeout=300 if script == 'tui_journey.py' else 120)
         evidence = {
             'schema_version': 1, 'captured_at_utc': datetime.now(timezone.utc).isoformat(),
             'macos_version': version, 'machine': machine, 'arm64_capable': arm64_capable,

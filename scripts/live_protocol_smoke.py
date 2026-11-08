@@ -22,13 +22,16 @@ def main():
     parser.add_argument('--responses-root', required=True)
     parser.add_argument('--anthropic-root', required=True)
     parser.add_argument('--context-window', type=int, required=True)
+    parser.add_argument('--legacy-max-tokens', action='store_true',
+                        help='send max_tokens instead of max_completion_tokens for Chat Completions')
     args = parser.parse_args()
     secret = os.environ.get('SAYA_LIVE_API_KEY')
     if not secret:
         parser.error('SAYA_LIVE_API_KEY must be set in the environment')
     binary = args.binary.resolve(strict=True)
     cases = [
-        ('chat', 'openai-chat-completions', args.chat_root, 'legacy_max_tokens = true'),
+        ('chat', 'openai-chat-completions', args.chat_root,
+         'legacy_max_tokens = ' + str(args.legacy_max_tokens).lower()),
         ('responses', 'openai-responses', args.responses_root, ''),
         ('anthropic', 'anthropic-messages', args.anthropic_root, 'api_version = "2026-10-21"'),
     ]

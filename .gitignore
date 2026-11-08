@@ -3,3 +3,6 @@
 
 # Rust build output; Cargo.lock remains tracked.
 /target/
+
+# Private local test configuration and credentials.
+/.saya/local/

@@ -7,6 +7,7 @@ Docker image must contain rustc. Configure DOCKER_HOST as needed. Generated Rust
 runs without network or host mounts in a restricted Linux container; containers
 are not a guarantee against host kernel escapes.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -30,15 +31,19 @@ def snapshot(workspace):
     }
 
 
-def sandbox_check(path, image):
+def sandbox_check(path, image, target_platform=None):
     command = [
         'docker', 'run', '--rm', '-i', '--network', 'none', '--read-only',
         '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=64m', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m',
-        '--platform', os.environ.get('SAYA_LIVE_SANDBOX_PLATFORM', 'linux/arm64'), image,
+    ]
+    if target_platform:
+        command.extend(['--platform', target_platform])
+    command.extend([
+        image,
         'sh', '-c', 'cat > /tmp/main.rs && rustc --edition=2024 /tmp/main.rs -o /tmp/test '
         '&& printf "alpha  beta\\ngamma delta\\n" | /tmp/test',
-    ]
+    ])
     docker_env = os.environ.copy()
     docker_env.pop('SAYA_LIVE_API_KEY', None)
     try:
@@ -50,6 +55,13 @@ def sandbox_check(path, image):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, default=Path('target/release/saya'))
+    parser.add_argument('--sandbox-platform', default=os.environ.get('SAYA_LIVE_SANDBOX_PLATFORM'),
+                        help='Docker platform override; otherwise use the Docker engine default')
+    parser.add_argument('--legacy-max-tokens', action='store_true',
+                        help='send max_tokens instead of max_completion_tokens for Chat Completions')
+    args = parser.parse_args()
     try:
         secret = os.environ['SAYA_LIVE_API_KEY']
         api_root = os.environ['SAYA_LIVE_BASE_URL']
@@ -58,7 +70,7 @@ def main():
     except KeyError as error:
         print('Missing required environment variable:', error.args[0], file=sys.stderr)
         return 2
-    binary = Path('target/release/saya').resolve(strict=True)
+    binary = args.binary.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix='saya-live-modes-') as temporary:
         root = Path(temporary)
         env = {key: os.environ[key] for key in (
@@ -73,7 +85,8 @@ def main():
             'protocol = "openai-chat-completions"', 'base_url = ' + json.dumps(api_root),
             'model = ' + json.dumps(model), 'auth = "bearer"', 'api_key_env = "SAYA_LIVE_API_KEY"',
             'context_window_tokens = 128000', 'max_output_tokens = 8192', 'stream = true',
-            'legacy_max_tokens = true', '[limits]', 'max_model_requests = 10', 'max_tool_calls = 24',
+            'legacy_max_tokens = ' + str(args.legacy_max_tokens).lower(),
+            '[limits]', 'max_model_requests = 10', 'max_tool_calls = 24',
             '[[permissions.rules]]', 'effect = "deny"', 'tool = "exec"', '']), encoding='utf-8')
 
         def run(mode, prompt, files):
@@ -113,7 +126,7 @@ def main():
             'with lines counted by str::lines and words by split_whitespace. Do not run commands; '
             'an external evaluator compiles and tests it.', {'src/.keep': ''})
         path = workspace / 'src/main.rs'
-        ok = ok and path.is_file() and sandbox_check(path, image)
+        ok = ok and path.is_file() and sandbox_check(path, image, args.sandbox_platform)
         results.append(('BUILD implementation and isolated execution', ok, code))
 
         workspace, _, ok, _, code, _ = run('code',
@@ -121,7 +134,7 @@ def main():
             'split_whitespace, preserving its stdin and output interface. Do not run commands; '
             'an external evaluator compiles and tests it.', {'src/main.rs': BUGGY})
         path = workspace / 'src/main.rs'
-        ok = ok and path.is_file() and path.read_text() != BUGGY and sandbox_check(path, image)
+        ok = ok and path.is_file() and path.read_text() != BUGGY and sandbox_check(path, image, args.sandbox_platform)
         results.append(('CODE repair and isolated execution', ok, code))
 
         workspace, _, ok, _, code, _ = run('work',

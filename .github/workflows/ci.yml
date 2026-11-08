@@ -31,6 +31,7 @@ jobs:
           python3 scripts/release/test_package.py
           python3 scripts/release/test_verify_macos15.py
           python3 scripts/release/test_verify_linux.py
+          python3 scripts/release/test_script_helpers.py
       - name: Verify macOS 15 release smoke
         if: startsWith(matrix.os, 'macos-')
         run: |

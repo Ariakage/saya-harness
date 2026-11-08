@@ -42,6 +42,7 @@ jobs:
           python3 scripts/release/test_package.py
           python3 scripts/release/test_verify_macos15.py
           python3 scripts/release/test_verify_linux.py
+          python3 scripts/release/test_script_helpers.py
       - name: Package the native candidate
         run: |
           python3 scripts/release/package.py --source-commit "$GITHUB_SHA" --output candidate --target '${{ matrix.target }}' --binary '${{ matrix.target }}=target/release/saya'
@@ -52,7 +53,7 @@ jobs:
           test "${#archives[@]}" = 1
           checksum=$(cut -d' ' -f1 candidate/SHA256SUMS)
           if [ "$RUNNER_OS" = macOS ]; then
-            python3 scripts/release/verify_macos15.py "${archives[0]}" --sha256 "$checksum" --output candidate/verification.json
+            python3 scripts/release/verify_macos15.py "${archives[0]}" --sha256 "$checksum" --source-commit "$GITHUB_SHA" --output candidate/verification.json
           else
             python3 scripts/release/verify_linux.py "${archives[0]}" --sha256 "$checksum" --source-commit "$GITHUB_SHA" --output candidate/verification.json
           fi

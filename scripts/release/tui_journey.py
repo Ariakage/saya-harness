@@ -1586,8 +1586,12 @@ def manual_tools_and_clarification(binary):
 
 
 def save_interactive_screen(terminal, name):
-    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-command-palette-' + name + '-cells.json')
-    path.parent.mkdir(exist_ok=True)
+    """Save fixture screens only in the explicitly selected debug directory."""
+    directory = os.environ.get('SAYA_TUI_SNAPSHOT_DIR')
+    if not directory:
+        return
+    path = Path(directory) / ('tui-command-palette-' + name + '-cells.json')
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({'columns': terminal.screen.columns, 'rows': terminal.screen.rows,
                                'cells': terminal.screen.cells, 'colors': terminal.screen.colors},
                               ensure_ascii=False) + '\n')

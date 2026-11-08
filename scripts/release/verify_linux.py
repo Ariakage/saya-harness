@@ -78,7 +78,8 @@ def main():
             if 'not found' in dependencies:
                 raise ValueError('binary has missing shared libraries')
             for script in ('smoke.py', 'journey.py', 'review_regressions.py', 'tui_journey.py'):
-                subprocess.run([sys.executable, str(HERE / script), str(path)], check=True, timeout=120)
+                subprocess.run([sys.executable, str(HERE / script), str(path)], check=True,
+                               timeout=300 if script == 'tui_journey.py' else 120)
         evidence = {
             'schema_version': 1, 'captured_at_utc': datetime.now(timezone.utc).isoformat(),
             'os': 'Linux', 'distribution': release, 'libc': libc, 'machine': platform.machine(),

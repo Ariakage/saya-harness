@@ -48,6 +48,7 @@ class LinuxVerifierTest(unittest.TestCase):
                  redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(verify.main(), 0)
                 self.assertEqual(run.call_count, 4)
+                self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [120, 120, 120, 300])
                 evidence = json.loads(output.read_text())
                 self.assertEqual(evidence['maximum_glibc_symbol'], '2.34')
                 self.assertEqual(evidence['tui_journey'], 'passed')

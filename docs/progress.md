@@ -29,6 +29,8 @@
 
 - R2-14共享脱敏边界已修复。逐字符混合转义匹配覆盖字面反斜杠、短转义及UTF-16，纯文本不误扣解码预算，无凭据歧义JSON逐字保留，凭据与占位符重合时安全替换。七项redaction测试通过，独立合成矩阵2456例零漏检，另验歧义JSON、65MiB纯文本和深度上限，日志为 `target/r2-14-redaction.log` 与 `target/r2-14-redaction-matrix-review.log`。
 
+- R2-17及R2-20脚本部分已修复。Git忽略私有测试目录，macOS候选验收强制核对源码提交，PTY快照只写显式调试目录并扩大外层期限，live脚本支持可选二进制／平台和旧token字段。九项Python测试与两个工作流actionlint通过，日志为 `target/r2-script-tests.log` 与 `target/r2-workflow-actionlint.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

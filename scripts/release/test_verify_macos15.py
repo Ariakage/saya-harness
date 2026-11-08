@@ -37,7 +37,7 @@ class MacOS15VerifierTest(unittest.TestCase):
             archive = root / 'candidate.tar.gz'
             checksum = create_archive(archive)
             evidence = root / 'evidence.json'
-            args = ['verify_macos15.py', str(archive), '--sha256', checksum, '--output', str(evidence)]
+            args = ['verify_macos15.py', '--source-commit', 'a' * 40, str(archive), '--sha256', checksum, '--output', str(evidence)]
             def fake_command(*args):
                 return {'sw_vers': '15.7.6', 'otool': 'minos 15.0', 'sysctl': '1'}[args[0]]
             with mock.patch.object(sys, 'argv', args), mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
@@ -46,6 +46,7 @@ class MacOS15VerifierTest(unittest.TestCase):
                  mock.patch.object(verify.subprocess, 'run') as run, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(verify.main(), 0)
                 self.assertEqual(run.call_count, 4)
+                self.assertEqual([call.kwargs['timeout'] for call in run.call_args_list], [120, 120, 120, 300])
                 result = json.loads(evidence.read_text())
                 self.assertEqual(result['target'], 'macos-aarch64')
                 self.assertEqual(result['archive_sha256'], checksum)
@@ -55,9 +56,15 @@ class MacOS15VerifierTest(unittest.TestCase):
                 self.assertEqual(result['review_regressions_script_sha256'], hashlib.sha256((verify.HERE / 'review_regressions.py').read_bytes()).hexdigest())
                 self.assertNotEqual(verify.main(), 0)
                 self.assertEqual(json.loads(evidence.read_text()), result)
+                run.reset_mock()
+                mismatched = args.copy()
+                mismatched[mismatched.index('--source-commit') + 1] = 'b' * 40
+                with mock.patch.object(sys, 'argv', mismatched):
+                    self.assertNotEqual(verify.main(), 0)
+                    run.assert_not_called()
             for machine, arm64 in [('x86_64', '1'), ('x86_64', '0')]:
                 native_output = root / ('native-' + machine + '-' + arm64 + '.json')
-                native_args = ['verify_macos15.py', str(archive), '--sha256', checksum,
+                native_args = ['verify_macos15.py', '--source-commit', 'a' * 40, str(archive), '--sha256', checksum,
                                '--output', str(native_output)]
                 def native_command(*command):
                     return {'sw_vers': '15.7.6', 'otool': 'minos 15.0', 'sysctl': arm64}[command[0]]
@@ -73,7 +80,7 @@ class MacOS15VerifierTest(unittest.TestCase):
             intel_archive = root / 'intel.tar.gz'
             intel_checksum = create_archive(intel_archive, 'macos-x86_64', 0x01000007)
             intel_output = root / 'intel.json'
-            intel_args = ['verify_macos15.py', str(intel_archive), '--sha256', intel_checksum,
+            intel_args = ['verify_macos15.py', '--source-commit', 'a' * 40, str(intel_archive), '--sha256', intel_checksum,
                           '--output', str(intel_output)]
             def intel_command(*command):
                 return {'sw_vers': '15.7.6', 'otool': 'minos 15.0', 'sysctl': '0'}[command[0]]
@@ -89,7 +96,7 @@ class MacOS15VerifierTest(unittest.TestCase):
             wrong = root / 'wrong.tar.gz'
             wrong_checksum = create_archive(wrong, 'macos-x86_64', 0x0100000c)
             bad_output = root / 'bad.json'
-            bad_args = ['verify_macos15.py', str(wrong), '--sha256', wrong_checksum, '--output', str(bad_output)]
+            bad_args = ['verify_macos15.py', '--source-commit', 'a' * 40, str(wrong), '--sha256', wrong_checksum, '--output', str(bad_output)]
             with mock.patch.object(sys, 'argv', bad_args), mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
                  mock.patch.object(verify, 'command', side_effect=fake_command), \
                  mock.patch.object(verify.subprocess, 'run') as run, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -97,7 +104,7 @@ class MacOS15VerifierTest(unittest.TestCase):
                 run.assert_not_called()
                 self.assertFalse(bad_output.exists())
             hash_output = root / 'wrong-hash.json'
-            hash_args = ['verify_macos15.py', str(archive), '--sha256', '0' * 64, '--output', str(hash_output)]
+            hash_args = ['verify_macos15.py', '--source-commit', 'a' * 40, str(archive), '--sha256', '0' * 64, '--output', str(hash_output)]
             with mock.patch.object(sys, 'argv', hash_args), mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
                  mock.patch.object(verify, 'command', side_effect=fake_command), \
                  mock.patch.object(verify.subprocess, 'run') as run, redirect_stderr(io.StringIO()):
@@ -108,7 +115,7 @@ class MacOS15VerifierTest(unittest.TestCase):
                 def bad_command(*args):
                     return {'sw_vers': '15.7.6', 'otool': wrong_minos, 'sysctl': '1'}[args[0]]
                 fresh = root / ('bad-' + wrong_minos.replace(' ', '-') + '.json')
-                invalid_args = ['verify_macos15.py', str(archive), '--sha256', checksum, '--output', str(fresh)]
+                invalid_args = ['verify_macos15.py', '--source-commit', 'a' * 40, str(archive), '--sha256', checksum, '--output', str(fresh)]
                 with mock.patch.object(sys, 'argv', invalid_args), mock.patch.object(verify.platform, 'system', return_value='Darwin'), \
                      mock.patch.object(verify.platform, 'machine', return_value='arm64'), \
                      mock.patch.object(verify, 'command', side_effect=bad_command), \
