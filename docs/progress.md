@@ -37,6 +37,8 @@
 
 - R2-19运行时边界已修复。取消后的Store历史回退返回storage_error并保留本地历史，结果提取使用受检切片。PLAN后台schema仅列四项只读工具，PID转换显式检查正i32范围。58项runtime／exec测试、core全目标Clippy及三项独立复核回归通过，日志为 `target/r2-19-runtime-{before,after,clippy}.log` 和 `target/r02-fix/runtime-guard-independent.log`。
 
+- R2-07／20正常入口已补充PTY回归。首条任务校验失败保留草稿且可准确重试一次。真实HUP并关闭终端时，绘制失败进入所属任务收尾，保留信号退出码130，验证进程终止、cancelled落库及会话锁释放。169项TUI测试、严格Clippy及四项脚本helper测试通过，新增两个PTY场景通过，日志为 `target/r2-{new-pty,pty-tui-tests,pty-tui-clippy,pty-helper-tests}.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

@@ -763,10 +763,10 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             Action::Input(Some(Err(_))) | Action::Input(None) => {
                 input_open = false;
                 if app.active.is_some() || app.ui_job.is_some() {
-                    app.exit_after_run = Some(1);
+                    app.exit_after_run.get_or_insert(1);
                     app.cancel();
                 } else {
-                    return Ok(1);
+                    return Ok(app.exit_after_run.unwrap_or(1));
                 }
             }
             Action::Signal => {
@@ -800,8 +800,19 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
         }
         app.refresh_completion();
         if redraw && dirty && app.exit_after_run.is_none() {
-            terminal.set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))?;
-            terminal.draw(|frame| view::draw(frame, &mut app.state))?;
+            let rendered = terminal
+                .set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))
+                .and_then(|()| terminal.draw(|frame| view::draw(frame, &mut app.state)));
+            if let Err(error) = rendered {
+                if app.active.is_some() || app.ui_job.is_some() {
+                    // A disconnected terminal can fail before its pending HUP
+                    // is consumed. Keep servicing signals and owned cleanup.
+                    app.exit_after_run.get_or_insert(1);
+                    app.cancel();
+                } else {
+                    return Err(error.into());
+                }
+            }
             dirty = false;
         }
         if app.active.is_none()

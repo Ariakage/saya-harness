@@ -369,11 +369,15 @@ class Screen:
 
 SUPERVISOR = r"""
 import os
+import signal
 import subprocess
 import sys
 
 release, ready, status = map(int, sys.argv[1:4])
 child = subprocess.Popen(sys.argv[4:], close_fds=True)
+# Keep the observer alive after a terminal hangup. The child starts with the
+# original disposition and owns its signal handling and tool cleanup.
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
 os.write(ready, (str(child.pid) + '\n').encode())
 os.close(ready)
 _, wait_status = os.waitpid(child.pid, 0)
@@ -2453,6 +2457,96 @@ def slow_terminal_consumer(binary):
         fixture.close()
 
 
+def first_task_validation_failure(binary):
+    fixture = Fixture('openai-chat-completions', [{'text': 'RECOVERED_AFTER_VALIDATION'}])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-first-task-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            additional = root / 'additional'
+            additional.mkdir()
+            config = configuration(root, fixture)
+            with config.open('a') as output:
+                output.write('[permissions]\nadditional_roots = ' + json.dumps([str(additional)]) + '\n')
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.title()
+                additional.rmdir()
+                prompt = 'Preserve this first task after validation'
+                terminal.line(prompt)
+                terminal.wait(lambda: terminal.editor_text() == prompt and 'invalid_config' in terminal.screen.text,
+                              'restored first-task draft after runtime validation')
+                terminal.settle()
+                if fixture.requests or terminal.process.poll() is not None:
+                    raise RuntimeError('runtime validation failure lost the draft or started a model request')
+                additional.mkdir()
+                terminal.send('\r')
+                terminal.until('RECOVERED_AFTER_VALIDATION')
+                wait_idle(terminal, root)
+                if len(fixture.requests) != 1:
+                    raise RuntimeError('restored first task was not sent exactly once')
+                terminal.finish()
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
+def active_hangup_cleanup(binary):
+    call = ('hup-command', 'exec', {'argv': ['/bin/sh', '-c',
+        'echo $$ > child.pid; sleep 20; echo unsafe > late-write.txt'], 'timeout_seconds': 30})
+    fixture = Fixture('openai-chat-completions', [{'call': call}])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-hangup-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            config = configuration(root, fixture, 'bypass')
+            terminal = invoke(binary, root, config)
+            disconnected = False
+            try:
+                terminal.title()
+                terminal.line('Run the controlled hangup fixture')
+                terminal.wait(lambda: (workspace / 'child.pid').exists(), 'active command before hangup')
+                child_pid = int((workspace / 'child.pid').read_text())
+                os.kill(terminal.process.pid, signal.SIGHUP)
+                os.close(terminal.master)
+                disconnected = True
+                terminal.process.wait(timeout=15)
+                if terminal.process.returncode != 130:
+                    raise RuntimeError(f'active hangup returned {terminal.process.returncode}, expected 130')
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise RuntimeError('hangup left the controlled command alive')
+                if (workspace / 'late-write.txt').exists():
+                    raise RuntimeError('hangup command performed its late write')
+                with sqlite3.connect(root / 'data' / 'saya' / 'sessions.sqlite3') as connection:
+                    runs = connection.execute('SELECT result FROM runs').fetchall()
+                    if len(runs) != 1 or json.loads(runs[0][0])['status'] != 'cancelled':
+                        raise RuntimeError('hangup did not persist one cancelled run')
+                # A fresh reader takes the same session lock after owned cleanup.
+                sessions = session_data(binary, root, config)
+                resumed = invoke(binary, root, config)
+                try:
+                    resumed.title()
+                    resumed.line('/resume ' + sessions[0]['id'])
+                    resumed.until('Session restored. Waiting for new input.')
+                    resumed.finish()
+                finally:
+                    resumed.close()
+            finally:
+                if disconnected:
+                    terminal.process.close()
+                    os.close(terminal.slave)
+                else:
+                    terminal.close()
+    finally:
+        fixture.close()
+
+
 def signal_restore(binary):
     for sig in [signal.SIGTERM, signal.SIGHUP]:
         fixture = Fixture('openai-chat-completions', [])
@@ -2547,6 +2641,10 @@ def main():
     passed('slow-terminal-consumer-raw-restore')
     signal_restore(binary)
     passed('signal-terminal-restore')
+    first_task_validation_failure(binary)
+    passed('first-task-validation-draft-and-retry')
+    active_hangup_cleanup(binary)
+    passed('active-hangup-owned-command-cleanup')
     report = {'schema_version': 1, 'binary': str(binary), 'checks': results, 'terminal_screens': screens, 'status': 'passed'}
     if args.report:
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
