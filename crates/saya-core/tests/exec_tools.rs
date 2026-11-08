@@ -1,6 +1,7 @@
 mod support;
 use saya_core::{
     boundary::{Cancellation, Operation, Store, StoreChange, Tool, ToolContext},
+    config::Environment,
     contract::{
         BoundaryError, ErrorInfo, ModelProtocol, PermissionMode, Run, RunId, Session, SessionId,
         ToolCall, WorkMode,
@@ -16,7 +17,7 @@ use std::{
     path::Path,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -196,6 +197,238 @@ async fn filters_credentials_and_redacts_captured_output() -> Result<(), Box<dyn
         .await?
         .ok_or("missing session")?;
     assert!(!format!("{:?}", saved.history).contains(&secret));
+    Ok(())
+}
+
+#[tokio::test]
+async fn encoded_credentials_are_redacted_before_result_storage()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let secret = "fixture\"secret\\tail";
+    let encoded: String = secret
+        .chars()
+        .map(|character| format!("\\u{:04x}", u32::from(character)))
+        .collect();
+    for fail_result in [false, true] {
+        let (session, run) = fixture(temp.path());
+        let store = Arc::new(InspectStore {
+            inner: store_for(&session, &run).await?,
+            changes: Mutex::new(Vec::new()),
+            fail_result,
+        });
+        let mut config = ExecConfig {
+            environment: Environment::from_pairs([("SAYA_EXEC_SECRET".into(), secret.into())]),
+            ..ExecConfig::default()
+        };
+        config.secret_env_names.insert("SAYA_EXEC_SECRET".into());
+        let tool = tool(temp.path(), store.clone(), config)?;
+        let outcome = tool
+            .execute(
+                &call(
+                    "encoded",
+                    serde_json::json!({
+                        "argv":["/bin/echo", format!("{{\"token\":\"{encoded}\"}}")]
+                    }),
+                ),
+                &ToolContext {
+                    run,
+                    workspace: temp.path().into(),
+                },
+                &NeverCancel,
+            )
+            .await;
+        let result = if fail_result {
+            let error = outcome.expect_err("injected result save failure");
+            assert_eq!(error.0.code, "storage_error");
+            *error.2.ok_or("missing observed result")?
+        } else {
+            outcome?
+        };
+        assert!(result.ok);
+        let output = result
+            .data
+            .as_ref()
+            .and_then(|data| data["stdout"].as_str());
+        assert!(output.is_some_and(|text| text.contains("[REDACTED]")));
+        for change in store.changes.lock().map_err(|_| "poisoned changes")?.iter() {
+            match change {
+                StoreChange::ToolIntent { call, .. } => {
+                    assert!(!saya_core::redaction::contains_secret(
+                        &call.arguments,
+                        &[secret.into()]
+                    ));
+                    assert!(call.arguments.contains("[REDACTED]"));
+                }
+                StoreChange::ToolFinished { result, .. } => {
+                    assert_eq!(
+                        result
+                            .data
+                            .as_ref()
+                            .and_then(|data| data["stdout"].as_str()),
+                        output
+                    );
+                }
+                _ => {}
+            }
+        }
+        let saved = store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing session")?;
+        for item in &saved.history {
+            if let saya_core::contract::HistoryItem::ToolResult { result, .. } = item {
+                assert_eq!(
+                    result
+                        .data
+                        .as_ref()
+                        .and_then(|data| data["stdout"].as_str()),
+                    output
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+struct InspectStore {
+    inner: Arc<MemoryStore>,
+    changes: Mutex<Vec<StoreChange>>,
+    fail_result: bool,
+}
+impl Store for InspectStore {
+    fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            self.changes
+                .lock()
+                .map_err(|_| {
+                    BoundaryError(
+                        ErrorInfo {
+                            code: "storage_error".into(),
+                            message: "poisoned capture".into(),
+                        },
+                        None,
+                        None,
+                    )
+                })?
+                .extend_from_slice(changes);
+            if self.fail_result
+                && changes
+                    .iter()
+                    .any(|change| matches!(change, StoreChange::ToolFinished { .. }))
+            {
+                return Err(BoundaryError(
+                    ErrorInfo {
+                        code: "storage_error".into(),
+                        message: "injected result failure".into(),
+                    },
+                    None,
+                    None,
+                ));
+            }
+            self.inner.commit(changes).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn execution_and_references_use_the_explicit_environment_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run) = fixture(temp.path());
+    let config = ExecConfig {
+        environment: Environment::from_pairs([
+            ("PATH".into(), "/bin:/usr/bin".into()),
+            ("HOME".into(), "/synthetic-snapshot-home".into()),
+            ("SAYA_REFERENCE".into(), "captured-reference".into()),
+        ]),
+        inherit_extra: ["SAYA_REFERENCE".into()].into(),
+        ..ExecConfig::default()
+    };
+    let tool = tool(temp.path(), store_for(&session, &run).await?, config)?;
+    let context = ToolContext {
+        run,
+        workspace: temp.path().into(),
+    };
+    let task = call(
+        "snapshot",
+        serde_json::json!({
+            "argv": ["sh", "-c", "printf '%s|%s|%s|%s' \"$HOME\" \"$SAYA_REFERENCE\" \"$COPIED\" \"$PATH\""],
+            "env": {"COPIED": {"source": "reference", "value": "SAYA_REFERENCE"}}
+        }),
+    );
+    let before = tool.plan(&task, &context)?;
+    let result = tool.execute(&task, &context, &NeverCancel).await?;
+    assert!(result.ok);
+    assert_eq!(
+        result
+            .data
+            .as_ref()
+            .and_then(|data| data["stdout"].as_str()),
+        Some("/synthetic-snapshot-home|captured-reference|captured-reference|/bin:/usr/bin")
+    );
+    assert_eq!(tool.plan(&task, &context)?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unredactable_output_preserves_a_sanitized_observation_after_execution()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run) = fixture(temp.path());
+    std::fs::write(
+        temp.path().join("run.sh"),
+        "printf changed > marker.txt; cat output.txt",
+    )?;
+    std::fs::write(
+        temp.path().join("output.txt"),
+        "Notes: fixture-\\u0073ecret",
+    )?;
+    let mut config = ExecConfig {
+        environment: Environment::from_pairs([
+            ("PATH".into(), "/bin:/usr/bin".into()),
+            ("SAYA_EXEC_SECRET".into(), "fixture-secret".into()),
+        ]),
+        ..ExecConfig::default()
+    };
+    config.secret_env_names.insert("SAYA_EXEC_SECRET".into());
+    assert!(!format!("{config:?}").contains("fixture-secret"));
+    let store = store_for(&session, &run).await?;
+    let tool = tool(temp.path(), store.clone(), config)?;
+    let error = tool
+        .execute(
+            &call(
+                "unsafe-output",
+                serde_json::json!({"argv": ["/bin/sh", "run.sh"]}),
+            ),
+            &ToolContext {
+                run,
+                workspace: temp.path().into(),
+            },
+            &NeverCancel,
+        )
+        .await
+        .expect_err("unredactable output");
+    assert_eq!(error.0.code, "sensitive_data");
+    let observed = error.2.ok_or("missing observed result")?;
+    assert!(observed.ok);
+    assert!(observed.truncated);
+    assert!(observed.data.is_none());
+    assert!(observed.error.is_none());
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("marker.txt"))?,
+        "changed"
+    );
+    assert!(
+        store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing session")?
+            .history
+            .is_empty()
+    );
     Ok(())
 }
 

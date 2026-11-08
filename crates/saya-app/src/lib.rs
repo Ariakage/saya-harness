@@ -49,15 +49,18 @@ fn model(
                 .to_owned(),
         ),
     };
-    let t = Arc::new(HttpTransport::new(HttpConfig {
-        base_url: p.base_url.clone(),
-        allow_remote_http: p.allow_remote_http,
-        authentication: auth,
-        headers_env: p.headers_env.clone(),
-        connect_timeout: Duration::from_secs(config.limits.model_connect_timeout_seconds),
-        idle_timeout: Duration::from_secs(config.limits.model_idle_timeout_seconds),
-        total_timeout: Duration::from_secs(config.limits.model_timeout_seconds),
-    })?);
+    let t = Arc::new(HttpTransport::new_with_environment(
+        HttpConfig {
+            base_url: p.base_url.clone(),
+            allow_remote_http: p.allow_remote_http,
+            authentication: auth,
+            headers_env: p.headers_env.clone(),
+            connect_timeout: Duration::from_secs(config.limits.model_connect_timeout_seconds),
+            idle_timeout: Duration::from_secs(config.limits.model_idle_timeout_seconds),
+            total_timeout: Duration::from_secs(config.limits.model_timeout_seconds),
+        },
+        config.environment(),
+    )?);
     let settings = ModelSettings {
         profile: name.into(),
         model: p.model.clone(),
@@ -187,6 +190,7 @@ pub fn build_runtime(
     )?);
     let timeout = |seconds| Duration::from_secs(seconds);
     let exec = ExecConfig {
+        environment: config.environment().clone(),
         default_timeout: timeout(lim.command_timeout_seconds),
         max_timeout: timeout(lim.max_command_timeout_seconds),
         stdout_max: lim.command_stdout_max_bytes,

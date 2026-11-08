@@ -481,19 +481,23 @@ impl ToolDispatcher {
                         permit,
                         self.exec_config.clone(),
                     )),
-                    name => Box::new(WriteTool::new(
-                        self.files.clone(),
-                        observed.clone(),
-                        permit,
-                        if name == "write_file" {
-                            WriteToolKind::WriteFile
-                        } else {
-                            WriteToolKind::ApplyPatch
-                        },
-                        self.write_max_bytes,
-                    )),
+                    name => Box::new(
+                        WriteTool::new(
+                            self.files.clone(),
+                            observed.clone(),
+                            permit,
+                            if name == "write_file" {
+                                WriteToolKind::WriteFile
+                            } else {
+                                WriteToolKind::ApplyPatch
+                            },
+                            self.write_max_bytes,
+                        )
+                        .with_known_secrets(self.known_secrets.clone()),
+                    ),
                 };
                 let result = tool.execute(call, context, cancel).await?;
+                let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
                 if !observed.intent.load(Ordering::Acquire) {
                     // No side effect was dispatched. Avoid storing unvalidated,
                     // potentially credential-bearing arguments in this record.
@@ -509,7 +513,7 @@ impl ToolDispatcher {
                 if !observed.finished.load(Ordering::Acquire) {
                     save_result(observed.as_ref(), call, context, &result).await?;
                 }
-                crate::redaction::tool_result(&result, &self.known_secrets)
+                Ok(result)
             }
             _ => Err(failure("unknown_tool", "unsupported local tool")),
         }

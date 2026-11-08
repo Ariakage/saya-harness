@@ -298,6 +298,7 @@ pub struct WriteTool {
     gate: Arc<dyn WriteGate>,
     kind: WriteToolKind,
     max_bytes: usize,
+    known_secrets: Vec<String>,
 }
 impl WriteTool {
     pub fn new(
@@ -313,7 +314,14 @@ impl WriteTool {
             gate,
             kind,
             max_bytes,
+            known_secrets: Vec::new(),
         }
+    }
+    /// Supply trusted credential values to sanitize persisted intents and
+    /// results. File contents are written unchanged after authorization.
+    pub fn with_known_secrets(mut self, known_secrets: Vec<String>) -> Self {
+        self.known_secrets = known_secrets;
+        self
     }
 }
 #[derive(Deserialize)]
@@ -379,6 +387,35 @@ pub(crate) async fn save_result(
         return Err(error);
     }
     Ok(())
+}
+
+pub(crate) async fn save_result_with_secrets(
+    store: &dyn crate::boundary::Store,
+    call: &crate::contract::ToolCall,
+    context: &crate::boundary::ToolContext,
+    result: &crate::contract::ToolResult,
+    known_secrets: &[String],
+) -> Result<crate::contract::ToolResult, crate::contract::BoundaryError> {
+    let result = sanitize_result(result, known_secrets)?;
+    save_result(store, call, context, &result).await?;
+    Ok(result)
+}
+
+pub(crate) fn sanitize_result(
+    result: &crate::contract::ToolResult,
+    known_secrets: &[String],
+) -> Result<crate::contract::ToolResult, crate::contract::BoundaryError> {
+    crate::redaction::tool_result(result, known_secrets).map_err(|mut error| {
+        // The filesystem/process may already have changed. Preserve that
+        // observation while withholding any data that could not be sanitized.
+        error.2 = Some(Box::new(crate::contract::ToolResult {
+            ok: result.ok,
+            data: None,
+            error: result.error.as_ref().map(|_| error.0.clone()),
+            truncated: true,
+        }));
+        error
+    })
 }
 
 impl crate::boundary::Tool for WriteTool {
@@ -508,15 +545,26 @@ impl crate::boundary::Tool for WriteTool {
                     None,
                 )
             })?;
+            let mut saved_call = call.clone();
+            let mut arguments = serde_json::Value::String(call.arguments.clone());
+            crate::redaction::redact(&mut arguments, &self.known_secrets)?;
+            saved_call.arguments = arguments.as_str().unwrap_or_default().to_owned();
             self.store
                 .commit(&[StoreChange::ToolIntent {
                     run_id: context.run.id,
-                    call: call.clone(),
+                    call: saved_call,
                 }])
                 .await?;
             if cancel.is_cancelled() {
                 let result = failure("cancelled", "tool cancelled before dispatch".into());
-                save_result(self.store.as_ref(), call, context, &result).await?;
+                save_result_with_secrets(
+                    self.store.as_ref(),
+                    call,
+                    context,
+                    &result,
+                    &self.known_secrets,
+                )
+                .await?;
                 return Err(cancelled());
             }
             match self.gate.authorize(call, context, &bound_target) {
@@ -526,12 +574,25 @@ impl crate::boundary::Tool for WriteTool {
                         "permission_denied",
                         "write authorization no longer valid".into(),
                     );
-                    save_result(self.store.as_ref(), call, context, &result).await?;
-                    return Ok(result);
+                    return save_result_with_secrets(
+                        self.store.as_ref(),
+                        call,
+                        context,
+                        &result,
+                        &self.known_secrets,
+                    )
+                    .await;
                 }
                 Err(gate_error) => {
                     let result = failure(&gate_error.0.code, gate_error.0.message.clone());
-                    save_result(self.store.as_ref(), call, context, &result).await?;
+                    save_result_with_secrets(
+                        self.store.as_ref(),
+                        call,
+                        context,
+                        &result,
+                        &self.known_secrets,
+                    )
+                    .await?;
                     return Err(gate_error);
                 }
             }
@@ -585,7 +646,14 @@ impl crate::boundary::Tool for WriteTool {
                 },
                 Err(e) => failure(e.code, e.message),
             };
-            save_result(self.store.as_ref(), call, context, &result).await?;
+            let result = save_result_with_secrets(
+                self.store.as_ref(),
+                call,
+                context,
+                &result,
+                &self.known_secrets,
+            )
+            .await?;
             if result.error.as_ref().is_some_and(|e| e.code == "cancelled") {
                 return Err(cancelled());
             }

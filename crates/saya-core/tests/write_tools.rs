@@ -16,7 +16,7 @@ use std::{
     path::Path,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -309,6 +309,126 @@ async fn applies_only_single_matching_patch_and_never_deletes()
 
 struct FailResult {
     inner: Arc<MemoryStore>,
+}
+
+struct InspectWriteStore {
+    inner: Arc<MemoryStore>,
+    changes: Mutex<Vec<StoreChange>>,
+    fail_result: bool,
+}
+impl Store for InspectWriteStore {
+    fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            self.changes
+                .lock()
+                .map_err(|_| {
+                    BoundaryError(
+                        ErrorInfo {
+                            code: "storage_error".into(),
+                            message: "poisoned capture".into(),
+                        },
+                        None,
+                        None,
+                    )
+                })?
+                .extend_from_slice(changes);
+            if self.fail_result
+                && changes
+                    .iter()
+                    .any(|change| matches!(change, StoreChange::ToolFinished { .. }))
+            {
+                return Err(BoundaryError(
+                    ErrorInfo {
+                        code: "storage_error".into(),
+                        message: "injected result failure".into(),
+                    },
+                    None,
+                    None,
+                ));
+            }
+            self.inner.commit(changes).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn write_intents_results_and_failed_save_observations_are_sanitized()
+-> Result<(), Box<dyn std::error::Error>> {
+    let secret = "synthetic-write-secret";
+    for fail_result in [false, true] {
+        let temp = support::temp_workspace()?;
+        let (session, run) = fixture(temp.path());
+        let store = Arc::new(InspectWriteStore {
+            inner: store_for(&session, &run).await?,
+            changes: Mutex::new(Vec::new()),
+            fail_result,
+        });
+        let files = Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?);
+        let tool = WriteTool::new(
+            files,
+            store.clone(),
+            Arc::new(Gate {
+                count: AtomicUsize::new(0),
+                allowed_checks: usize::MAX,
+            }),
+            WriteToolKind::WriteFile,
+            DEFAULT_WRITE_MAX_BYTES,
+        )
+        .with_known_secrets(vec![secret.into()]);
+        let name = format!("{secret}.txt");
+        let content = serde_json::json!({"token": secret}).to_string();
+        let outcome = tool
+            .execute(
+                &call(
+                    "write_file",
+                    "sanitized-write",
+                    serde_json::json!({
+                        "path": name, "content": content, "expected_version": null
+                    }),
+                ),
+                &ToolContext {
+                    run,
+                    workspace: temp.path().into(),
+                },
+                &NeverCancel,
+            )
+            .await;
+        let result = if fail_result {
+            let error = outcome.expect_err("injected result save failure");
+            assert_eq!(error.0.code, "storage_error");
+            *error.2.ok_or("missing observed result")?
+        } else {
+            outcome?
+        };
+        assert!(result.ok);
+        assert!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data["path"].as_str())
+                .is_some_and(|path| path.ends_with("[REDACTED].txt"))
+        );
+        assert_eq!(std::fs::read_to_string(temp.path().join(name))?, content);
+        {
+            let changes = store.changes.lock().map_err(|_| "poisoned capture")?;
+            assert!(!format!("{changes:?}").contains(secret));
+            assert!(format!("{changes:?}").contains("[REDACTED]"));
+        }
+        let saved = store
+            .load_session(session.id)
+            .await?
+            .ok_or("missing session")?;
+        assert!(!format!("{:?}", saved.history).contains(secret));
+    }
+    Ok(())
 }
 impl Store for FailResult {
     fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {

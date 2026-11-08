@@ -20,6 +20,7 @@
 - R2-13／19的Anthropic部分已修复空文本回放、空缓存system块和用量解析，缓存创建／读取计入总输入，非法或溢出计数拒绝，strict=true按官方能力保留。13项协议及2项thinking_effort测试、core Clippy通过，日志为 `target/r02-fix/anthropic-compat-{tests,clippy}.log`。
 - R2-13的Responses部分已补充queued、增量身份及完成事件校验、最终明文反向覆盖、空summary加opaque兼容，保留完成事件独立提供完整输出的合法路径。12项协议测试和core Clippy通过，日志为 `target/r02-fix/responses-compat-{tests,clippy}.log`。报告中的reasoning_part事件名缺少官方定义依据，按现有标准事件集合处理。
 - R2-16的CLI／app部分已修复。JSONL存储故障在已预留序号内输出唯一终态并保持会话／运行身份，恢复后单调递增。日志补齐Bidi过滤，相对导出统一cwd，PLAN同时保护当前及保存工作区。流式stdout断管改为显式IO错误退出1。146项CLI／app测试、严格Clippy及21项TUI服务测试通过，日志为 `target/r216-{final-tests,clippy,tui-export}.log`。
+- R2-14的工具落库／环境快照部分已修复。写入和命令在保存前共享净化意图与结果，自定义／内存Store及失败返回的观测结果同样覆盖，保留实际副作用状态。命令继承／引用和HTTP额外头使用配置环境快照，缺值沿配置错误处理，Debug仅显示变量计数。41项配置／exec／transport／write测试及core全目标Clippy通过，日志为 `target/r2-14-tools-transport-after.log` 与 `target/r2-14-clippy.log`。其他混合转义与占位符边界继续核实。
 - 权限环境匹配、路径规则、CLI清理、TUI输入与渲染、上下文及协议／存储相关问题继续分组整改，最终验收使用全部修复合入后的程序。
 
 ## 当前状态

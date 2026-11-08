@@ -31,7 +31,21 @@ fn invalid(message: &'static str) -> BoundaryError {
 /// Captured environment, injectable for deterministic tests. Values are never formatted.
 #[derive(Default, Clone)]
 pub struct Environment(BTreeMap<OsString, OsString>);
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Environment")
+            .field("variable_count", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
 impl Environment {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&OsString, &OsString)> {
+        self.0.iter()
+    }
+    pub(crate) fn get_os(&self, name: &str) -> Option<&OsStr> {
+        self.0.get(OsStr::new(name)).map(OsString::as_os_str)
+    }
     pub fn capture() -> Self {
         Self(std::env::vars_os().collect())
     }
@@ -346,6 +360,10 @@ pub struct Config {
     env: Environment,
 }
 impl Config {
+    /// Captured launch environment used by process and transport adapters.
+    pub fn environment(&self) -> &Environment {
+        &self.env
+    }
     /// Access a validated credential or header environment reference; do not log its return value.
     pub fn secret(&self, name: &str) -> Result<&str, BoundaryError> {
         self.env.reference(name)

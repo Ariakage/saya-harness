@@ -1,5 +1,6 @@
 use saya_core::{
     boundary::Cancellation,
+    config::Environment,
     provider::transport::{Authentication, HttpConfig, HttpTransport},
 };
 use std::{
@@ -389,6 +390,57 @@ fn system_proxy_environment_is_respected() -> Result<(), Box<dyn std::error::Err
     let request = rx.recv_timeout(Duration::from_secs(1))?;
     assert!(request.starts_with("POST http://destination.invalid/v1/responses HTTP/1.1\r\n"));
     Ok(())
+}
+
+#[tokio::test]
+async fn additional_headers_use_the_supplied_environment_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (url, receiver) = server(vec![chunk(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    )])?;
+    let mut cfg = config(url);
+    cfg.headers_env
+        .insert("x-captured-header".into(), "PATH".into());
+    let environment = Environment::from_pairs([("PATH".into(), "captured-header-value".into())]);
+    assert!(!format!("{environment:?}").contains("captured-header-value"));
+    let transport = HttpTransport::new_with_environment(cfg, &environment)?;
+    transport
+        .post("responses", &serde_json::json!({}), None, &NeverCancel)
+        .await?
+        .json(&NeverCancel)
+        .await?;
+    let request = receiver.recv_timeout(Duration::from_secs(1))?;
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("x-captured-header: captured-header-value\r\n"),
+        "{request:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn explicit_environment_does_not_fall_back_to_process_header_values() {
+    use std::os::unix::ffi::OsStringExt;
+    for value in [
+        None,
+        Some(std::ffi::OsString::new()),
+        Some(std::ffi::OsString::from_vec(vec![0xff])),
+    ] {
+        let environment = Environment::from_pairs(value.map(|value| ("PATH".into(), value)));
+        let mut cfg = config("http://127.0.0.1:9/v1".into());
+        cfg.headers_env
+            .insert("x-captured-header".into(), "PATH".into());
+        let error = match HttpTransport::new_with_environment(cfg, &environment) {
+            Ok(_) => panic!("invalid captured header reference accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.0.code, "invalid_config");
+        assert_eq!(
+            error.0.message,
+            "HTTP header environment reference is unavailable"
+        );
+    }
 }
 
 #[tokio::test]

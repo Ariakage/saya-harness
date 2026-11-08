@@ -4,6 +4,7 @@
 use super::read::ReadTools;
 use crate::{
     boundary::{Cancellation, Operation, Store, StoreChange, Tool, ToolContext, ToolDefinition},
+    config::Environment,
     contract::{BoundaryError, ErrorInfo, PermissionMode, ToolCall, ToolResult, WorkMode},
 };
 use nix::{
@@ -39,6 +40,9 @@ pub struct ExecConfig {
     pub stderr_max: usize,
     pub inherit_extra: BTreeSet<String>,
     pub secret_env_names: BTreeSet<String>,
+    /// Captured trusted environment used for inheritance, references and
+    /// configured credential redaction. Values are omitted from Debug output.
+    pub environment: Environment,
 }
 impl Default for ExecConfig {
     fn default() -> Self {
@@ -49,6 +53,7 @@ impl Default for ExecConfig {
             stderr_max: 64 * 1024,
             inherit_extra: BTreeSet::new(),
             secret_env_names: BTreeSet::new(),
+            environment: Environment::capture(),
         }
     }
 }
@@ -238,12 +243,12 @@ impl ExecTool {
             .map_err(|e| failure(e.code, e.message))?;
         let cwd_dir = root.dir.open_dir(relative).map_err(cwd_error)?;
         let mut env = BTreeMap::new();
-        for (key, value) in std::env::vars_os() {
+        for (key, value) in self.config.environment.iter() {
             if let Some(name) = key.to_str()
                 && !self.config.secret_env_names.contains(name)
                 && (is_base(name) || self.config.inherit_extra.contains(name))
             {
-                env.insert(key, value);
+                env.insert(key.clone(), value.clone());
             }
         }
         for (key, value) in &args.env {
@@ -260,12 +265,16 @@ impl ExecTool {
                         && !self.config.secret_env_names.contains(name)
                         && (is_base(name) || self.config.inherit_extra.contains(name)) =>
                 {
-                    std::env::var_os(name).ok_or_else(|| {
-                        failure(
-                            "invalid_args",
-                            "referenced environment variable is unavailable",
-                        )
-                    })?
+                    self.config
+                        .environment
+                        .get_os(name)
+                        .map(OsStr::to_owned)
+                        .ok_or_else(|| {
+                            failure(
+                                "invalid_args",
+                                "referenced environment variable is unavailable",
+                            )
+                        })?
                 }
                 _ => {
                     return Err(failure(
@@ -573,35 +582,7 @@ async fn run_process(
     })
 }
 
-fn redact_json(value: &mut serde_json::Value, secrets: &[String]) {
-    match value {
-        serde_json::Value::String(text) => {
-            for secret in secrets {
-                *text = text.replace(secret, "[REDACTED]");
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                redact_json(item, secrets);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            let original = std::mem::take(map);
-            for (mut key, mut item) in original {
-                for secret in secrets {
-                    key = key.replace(secret, "[REDACTED]");
-                }
-                redact_json(&mut item, secrets);
-                map.insert(key, item);
-            }
-        }
-        _ => {}
-    }
-}
-fn redact_and_bound(value: &mut String, secrets: &[String], limit: usize, truncated: &mut bool) {
-    for secret in secrets {
-        *value = value.replace(secret, "[REDACTED]");
-    }
+fn bound_output(value: &mut String, limit: usize, truncated: &mut bool) {
     if value.len() > limit {
         let mut end = limit;
         while !value.is_char_boundary(end) {
@@ -682,13 +663,19 @@ impl Tool for ExecTool {
                 .config
                 .secret_env_names
                 .iter()
-                .filter_map(|name| std::env::var(name).ok())
+                .filter_map(|name| {
+                    self.config
+                        .environment
+                        .get_os(name)?
+                        .to_str()
+                        .map(str::to_owned)
+                })
                 .filter(|value| !value.is_empty())
                 .collect();
             let mut saved_call = call.clone();
             let mut saved_args: serde_json::Value = serde_json::from_str(&call.arguments)
                 .map_err(|e| failure("invalid_args", e.to_string()))?;
-            redact_json(&mut saved_args, &secrets);
+            crate::redaction::redact(&mut saved_args, &secrets)?;
             saved_call.arguments = serde_json::to_string(&saved_args)
                 .map_err(|e| failure("serialization_error", e.to_string()))?;
             self.store
@@ -714,7 +701,7 @@ impl Tool for ExecTool {
                 run_process(&current, cwd, current_env, &self.config, cancel).await
             }
             .await;
-            let mut process_result = match post_intent {
+            let process_result = match post_intent {
                 Ok(value) => value,
                 Err(error) => {
                     // Once spawned, an error can leave side effects unknown. Do
@@ -733,25 +720,20 @@ impl Tool for ExecTool {
                         return Err(error);
                     }
                     let result = tool_failure(error.clone());
-                    super::write::save_result(self.store.as_ref(), call, context, &result).await?;
+                    let result = super::write::save_result_with_secrets(
+                        self.store.as_ref(),
+                        call,
+                        context,
+                        &result,
+                        &secrets,
+                    )
+                    .await?;
                     if error.0.code == "cancelled" {
                         return Err(error);
                     }
                     return Ok(result);
                 }
             };
-            redact_and_bound(
-                &mut process_result.stdout,
-                &secrets,
-                self.config.stdout_max,
-                &mut process_result.stdout_truncated,
-            );
-            redact_and_bound(
-                &mut process_result.stderr,
-                &secrets,
-                self.config.stderr_max,
-                &mut process_result.stderr_truncated,
-            );
             let ok = process_result.exit_code == Some(0)
                 && !process_result.timed_out
                 && !process_result.cancelled;
@@ -782,6 +764,31 @@ impl Tool for ExecTool {
                 error,
                 truncated,
             };
+            let mut result = super::write::sanitize_result(&result, &secrets)?;
+            let mut process_result: ExecResult =
+                serde_json::from_value(result.data.clone().unwrap_or(serde_json::Value::Null))
+                    .map_err(|_| {
+                        let mut error = failure(
+                            "sensitive_data",
+                            "command result schema could not be safely redacted",
+                        );
+                        error.2 = Some(Box::new(result.clone()));
+                        error
+                    })?;
+            bound_output(
+                &mut process_result.stdout,
+                self.config.stdout_max,
+                &mut process_result.stdout_truncated,
+            );
+            bound_output(
+                &mut process_result.stderr,
+                self.config.stderr_max,
+                &mut process_result.stderr_truncated,
+            );
+            result.truncated = process_result.stdout_truncated || process_result.stderr_truncated;
+            result.data = Some(serde_json::to_value(process_result).map_err(|_| {
+                failure("serialization_error", "command result could not be encoded")
+            })?);
             super::write::save_result(self.store.as_ref(), call, context, &result).await?;
             Ok(result)
         })
@@ -792,11 +799,12 @@ impl Tool for ExecTool {
 mod tests {
     use super::*;
     #[test]
-    fn json_redaction_handles_escaped_sensitive_values() {
+    fn json_redaction_handles_escaped_sensitive_values() -> Result<(), BoundaryError> {
         let secret = "quote\"and\\slash".to_owned();
         let mut value = serde_json::json!({"argv":["program", format!("prefix-{secret}-suffix")]});
-        redact_json(&mut value, std::slice::from_ref(&secret));
+        crate::redaction::redact(&mut value, std::slice::from_ref(&secret))?;
         assert_eq!(value["argv"][1], "prefix-[REDACTED]-suffix");
         assert!(!value.to_string().contains("and\\\\slash"));
+        Ok(())
     }
 }

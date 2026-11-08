@@ -3,6 +3,7 @@
 
 use crate::{
     boundary::Cancellation,
+    config::Environment,
     contract::{BoundaryError, ErrorInfo},
 };
 use bytes::Buf;
@@ -91,6 +92,16 @@ impl HttpTransport {
     /// HTTPS uses certificate verification; HTTP requires a literal loopback or
     /// localhost unless explicitly enabled. Redirects are never followed.
     pub fn new(config: HttpConfig) -> Result<Self, BoundaryError> {
+        Self::new_with_environment(config, &Environment::capture())
+    }
+
+    /// Build using an explicit trusted environment snapshot for extra header
+    /// references. Missing, empty or non-UTF-8 references are rejected without
+    /// reading the current process environment or disclosing their values.
+    pub fn new_with_environment(
+        config: HttpConfig,
+        environment: &Environment,
+    ) -> Result<Self, BoundaryError> {
         if config.connect_timeout.is_zero()
             || config.idle_timeout.is_zero()
             || config.total_timeout.is_zero()
@@ -160,13 +171,17 @@ impl HttpTransport {
                     "reserved or duplicate HTTP header",
                 ));
             }
-            let value = std::env::var(&env_name).map_err(|_| {
-                failure(
-                    "invalid_config",
-                    "HTTP header environment reference is unavailable",
-                )
-            })?;
-            headers.insert(name, header(&value)?);
+            let value = environment
+                .get_os(&env_name)
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    failure(
+                        "invalid_config",
+                        "HTTP header environment reference is unavailable",
+                    )
+                })?;
+            headers.insert(name, header(value)?);
         }
         let client = Client::builder()
             .redirect(Policy::none())
