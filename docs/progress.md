@@ -17,6 +17,7 @@
 - R2-03已修复path_glob静态前缀的符号链接失配。规则与目标均使用真实目录基准，覆盖未来目录、特殊字面目录及bypass下deny，权限9项、审批32项和core全目标Clippy通过，日志为 `target/r2-03-{before,after,clippy}.log`。
 - R2-06已复现并修复上下文子集误拒和后台失效误杀。已提供来源按路径／哈希核对，背景守卫只读前台选择，失效后台调用保存配对的结构化失败。两项旧实现反例失败，43项runtime测试及core Clippy通过，日志为 `target/r2-06-*.log`。
 - R2-18审批预写部分已修复。预写前和提交后统一核对取消、版本、拒绝及去重状态，提交期间过期可保留实际审计请求，但返回失效且无法发许可。两项旧实现反例失败，61项权限／审批／审核／Todo测试与core全目标Clippy通过，日志为 `target/r2-18-{before,after,clippy}.log`。模式事件发射另行核实。
+- R2-13／19的Anthropic部分已修复空文本回放、空缓存system块和用量解析，缓存创建／读取计入总输入，非法或溢出计数拒绝，strict=true按官方能力保留。13项协议及2项thinking_effort测试、core Clippy通过，日志为 `target/r02-fix/anthropic-compat-{tests,clippy}.log`。
 - 权限环境匹配、路径规则、CLI清理、TUI输入与渲染、上下文及协议／存储相关问题继续分组整改，最终验收使用全部修复合入后的程序。
 
 ## 当前状态

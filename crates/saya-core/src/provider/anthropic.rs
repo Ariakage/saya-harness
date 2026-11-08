@@ -87,19 +87,37 @@ impl AnthropicModel {
             && request.purpose == crate::contract::ModelPurpose::Execution
             && request.dynamic_instructions.is_some()
         {
-            json!([{"type":"text","text":request.instructions,"cache_control":{"type":"ephemeral"}},{"type":"text","text":request.dynamic_instructions}])
+            let mut blocks = Vec::new();
+            if !request.instructions.is_empty() {
+                blocks.push(json!({"type":"text","text":request.instructions,"cache_control":{"type":"ephemeral"}}));
+            }
+            if let Some(dynamic) = &request.dynamic_instructions
+                && !dynamic.is_empty()
+            {
+                blocks.push(json!({"type":"text","text":dynamic}));
+            }
+            json!(blocks)
         } else {
             json!(request.combined_instructions())
         };
-        let mut body = json!({"model":self.settings.model,"system":system,"messages":messages,"max_tokens":output,"stream":self.settings.stream});
+        let mut body = json!({"model":self.settings.model,"messages":messages,"max_tokens":output,"stream":self.settings.stream});
         let map = body
             .as_object_mut()
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;
+        if !request.combined_instructions().is_empty() {
+            map.insert("system".into(), system);
+        }
         if let Some(effort) = self.settings.thinking_effort {
             map.insert("output_config".into(), json!({"effort":effort}));
         }
         if !request.tools.is_empty() {
-            let tools:Vec<_>=request.tools.iter().map(|tool|json!({"name":tool.name,"description":tool.description,"input_schema":tool.input_schema,"strict":self.settings.strict_tools})).collect();
+            let tools: Vec<_> = request.tools.iter().map(|tool| {
+                let mut definition = json!({"name":tool.name,"description":tool.description,"input_schema":tool.input_schema});
+                if self.settings.strict_tools {
+                    definition["strict"] = json!(true);
+                }
+                definition
+            }).collect();
             map.insert("tools".into(), Value::Array(tools));
         }
         self.settings.check_context(&body, output)?;
@@ -126,7 +144,7 @@ impl Model for AnthropicModel {
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
             let body = self.request_body(request)?;
-            let mut warmup = if body["system"].is_array() {
+            let mut warmup = if body["system"][0].get("cache_control").is_some() {
                 if let Some(slot) = self.warmup_slot(&body) {
                     let guard = tokio::select! { biased; () = cancel.cancelled() => return Err(failure("cancelled", "request cancelled")), guard = slot.lock_owned() => guard };
                     if guard.is_some_and(|at| at.elapsed() < Duration::from_secs(240)) {
@@ -293,6 +311,9 @@ fn parse_blocks(blocks: &[Value], stop: &str) -> Result<Vec<HistoryItem>, Bounda
             ));
         }
         let item = semantic(block)?;
+        if matches!(&item, Some(HistoryItem::AssistantText(text)) if text.is_empty()) {
+            continue;
+        }
         if let Some(HistoryItem::ToolCall(call)) = &item
             && !ids.insert(call.call_id.clone())
         {
@@ -325,8 +346,8 @@ fn usage(value: Option<&Value>) -> Result<Option<Usage>, BoundaryError> {
         return Ok(None);
     };
     let obj = object(value)?;
-    let input = obj.get("input_tokens").and_then(Value::as_u64);
-    let output = obj.get("output_tokens").and_then(Value::as_u64);
+    let input = token_count(obj, "input_tokens")?;
+    let output = token_count(obj, "output_tokens")?;
     if input.is_none() || output.is_none() {
         return Err(failure(
             "invalid_model_response",
@@ -334,10 +355,41 @@ fn usage(value: Option<&Value>) -> Result<Option<Usage>, BoundaryError> {
         ));
     }
     Ok(Some(Usage {
-        input_tokens: input,
+        input_tokens: total_input_tokens(
+            input,
+            token_count(obj, "cache_creation_input_tokens")?,
+            token_count(obj, "cache_read_input_tokens")?,
+        )?,
         output_tokens: output,
         estimated: false,
     }))
+}
+fn token_count(
+    obj: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<u64>, BoundaryError> {
+    obj.get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| failure("invalid_model_response", "invalid provider token count"))
+        })
+        .transpose()
+}
+fn total_input_tokens(
+    input: Option<u64>,
+    created: Option<u64>,
+    read: Option<u64>,
+) -> Result<Option<u64>, BoundaryError> {
+    input
+        .map(|input| {
+            input
+                .checked_add(created.unwrap_or(0))
+                .and_then(|input| input.checked_add(read.unwrap_or(0)))
+                .ok_or_else(|| failure("invalid_model_response", "provider token count overflow"))
+        })
+        .transpose()
 }
 fn parse_message(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), BoundaryError> {
     let obj = object(value)?;
@@ -448,6 +500,8 @@ fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
                 }
                 let item = semantic(value)
                     .map_err(|_| failure("invalid_history", "invalid provider content block"))?;
+                let empty_text =
+                    matches!(&item, Some(HistoryItem::AssistantText(text)) if text.is_empty());
                 match item {
                     Some(HistoryItem::ToolCall(call)) => {
                         if !pending.insert(call.call_id.clone())
@@ -472,7 +526,9 @@ fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
                     None => {}
                     _ => return Err(failure("invalid_history", "unsupported provider content")),
                 }
-                append_message(&mut messages, "assistant", value.clone());
+                if !empty_text {
+                    append_message(&mut messages, "assistant", value.clone());
+                }
             }
             HistoryItem::ProviderItem { .. } => {
                 return Err(failure("invalid_history", "incompatible provider history"));
@@ -500,6 +556,8 @@ struct StreamState {
     blocks: BTreeMap<usize, Block>,
     stop_reason: Option<String>,
     input_tokens: Option<u64>,
+    cache_creation_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
     output_tokens: Option<u64>,
     bytes: usize,
 }
@@ -549,8 +607,7 @@ impl StreamState {
                     return Err(failure("invalid_model_response", "invalid message start"));
                 }
                 if let Some(u) = message.get("usage") {
-                    self.input_tokens = u.get("input_tokens").and_then(Value::as_u64);
-                    self.output_tokens = u.get("output_tokens").and_then(Value::as_u64);
+                    self.update_usage(u, true)?;
                 }
                 self.started = true;
                 Ok(None)
@@ -713,10 +770,7 @@ impl StreamState {
                     }
                 }
                 if let Some(u) = obj.get("usage") {
-                    self.output_tokens = u
-                        .get("output_tokens")
-                        .and_then(Value::as_u64)
-                        .or(self.output_tokens);
+                    self.update_usage(u, false)?;
                 }
                 Ok(None)
             }
@@ -743,6 +797,29 @@ impl StreamState {
             )),
         }
     }
+    fn update_usage(&mut self, value: &Value, initial: bool) -> Result<(), BoundaryError> {
+        let obj = object(value)?;
+        let input = token_count(obj, "input_tokens")?;
+        let output = token_count(obj, "output_tokens")?;
+        if output.is_none() || (initial && input.is_none()) {
+            return Err(failure(
+                "invalid_model_response",
+                "provider usage is incomplete",
+            ));
+        }
+        self.input_tokens = input.or(self.input_tokens);
+        self.output_tokens = output;
+        self.cache_creation_tokens =
+            token_count(obj, "cache_creation_input_tokens")?.or(self.cache_creation_tokens);
+        self.cache_read_tokens =
+            token_count(obj, "cache_read_input_tokens")?.or(self.cache_read_tokens);
+        total_input_tokens(
+            self.input_tokens,
+            self.cache_creation_tokens,
+            self.cache_read_tokens,
+        )?;
+        Ok(())
+    }
     fn finish(self) -> Result<(Vec<HistoryItem>, Option<Usage>), BoundaryError> {
         if !self.stopped {
             return Err(failure(
@@ -764,7 +841,11 @@ impl StreamState {
         }
         let usage = match (self.input_tokens, self.output_tokens) {
             (Some(i), Some(o)) => Some(Usage {
-                input_tokens: Some(i),
+                input_tokens: total_input_tokens(
+                    Some(i),
+                    self.cache_creation_tokens,
+                    self.cache_read_tokens,
+                )?,
                 output_tokens: Some(o),
                 estimated: false,
             }),

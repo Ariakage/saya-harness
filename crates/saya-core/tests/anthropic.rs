@@ -234,6 +234,145 @@ async fn explicit_cache_breakpoint_precedes_dynamic_context_and_is_opt_in()
 }
 
 #[tokio::test]
+async fn cached_system_omits_empty_blocks_and_keeps_strict_tools_explicit()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (instructions, dynamic) in [
+        ("", ""),
+        ("static", ""),
+        ("", "dynamic"),
+        ("static", "dynamic"),
+    ] {
+        let response = json!({"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}).to_string();
+        let (url, requests) = fixture::server(vec![("application/json", response)])?;
+        let model = AnthropicModel::new(
+            transport(url)?,
+            settings(false),
+            AnthropicVersion::V20230601,
+        )
+        .with_prompt_cache(true);
+        let mut req = request();
+        req.instructions = instructions.into();
+        req.dynamic_instructions = Some(dynamic.into());
+        req.tools.push(ToolDefinition {
+            name: "read_file".into(),
+            description: "read".into(),
+            input_schema: json!({"type":"object"}),
+        });
+        collect(&model, &req).await?;
+        let body = requests.recv_timeout(Duration::from_secs(1))?;
+        if instructions.is_empty() && dynamic.is_empty() {
+            assert!(body.get("system").is_none());
+        } else {
+            let blocks = body["system"].as_array().ok_or("missing system blocks")?;
+            assert!(
+                blocks
+                    .iter()
+                    .all(|block| block["text"].as_str().is_some_and(|text| !text.is_empty()))
+            );
+            let text = blocks
+                .iter()
+                .map(|block| block["text"].as_str().unwrap())
+                .collect::<String>();
+            assert_eq!(text, format!("{instructions}{dynamic}"));
+        }
+        assert!(body["tools"][0].get("strict").is_none());
+    }
+    for version in [AnthropicVersion::V20230601, AnthropicVersion::V20261021] {
+        let response = json!({"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}).to_string();
+        let (url, requests) = fixture::server(vec![("application/json", response)])?;
+        let mut settings = settings(false);
+        settings.strict_tools = true;
+        let model = AnthropicModel::new(transport(url)?, settings, version);
+        let mut req = request();
+        req.tools.push(ToolDefinition {
+            name: "read_file".into(),
+            description: "read".into(),
+            input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+        });
+        collect(&model, &req).await?;
+        assert_eq!(
+            requests.recv_timeout(Duration::from_secs(1))?["tools"][0]["strict"],
+            true
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cache_usage_totals_match_complete_and_cumulative_stream_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let full = json!({
+        "role":"assistant", "stop_reason":"end_turn",
+        "content":[{"type":"text","text":"ok"}],
+        "usage":{"input_tokens":9,"output_tokens":4,"cache_creation_input_tokens":2,"cache_read_input_tokens":3}
+    });
+    let mut first = start();
+    first["message"]["usage"]["cache_creation_input_tokens"] = json!(10);
+    first["message"]["usage"]["cache_read_input_tokens"] = json!(20);
+    let mut events = vec![
+        first,
+        block_start(0, json!({"type":"text","text":"ok"})),
+        block_stop(0),
+    ];
+    let mut end = stop("end_turn");
+    end[0]["usage"] = json!({"input_tokens":13,"output_tokens":4,"cache_creation_input_tokens":15,"cache_read_input_tokens":25});
+    events.extend(end);
+    for (stream, response, expected) in [(false, full.to_string(), 14), (true, sse(&events), 53)] {
+        let content_type = if stream {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        let (url, _) = fixture::server(vec![(content_type, response)])?;
+        let model = AnthropicModel::new(
+            transport(url)?,
+            settings(stream),
+            AnthropicVersion::default(),
+        );
+        let (_, usage, _) = collect(&model, &request()).await?;
+        let usage = usage.ok_or("missing usage")?;
+        assert_eq!(usage.input_tokens, Some(expected));
+        assert_eq!(usage.output_tokens, Some(4));
+        assert!(!usage.estimated);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_stream_usage_is_rejected_instead_of_becoming_unknown()
+-> Result<(), Box<dyn std::error::Error>> {
+    for usage in [
+        json!({"input_tokens":"12","output_tokens":0}),
+        json!({"input_tokens":12,"output_tokens":-1}),
+        json!({"input_tokens":12,"output_tokens":0,"cache_read_input_tokens":"many"}),
+        json!({"input_tokens":u64::MAX,"output_tokens":0,"cache_creation_input_tokens":1}),
+    ] {
+        for initial in [true, false] {
+            let mut events = vec![
+                start(),
+                block_start(0, json!({"type":"text","text":"ok"})),
+                block_stop(0),
+            ];
+            let mut end = stop("end_turn");
+            if initial {
+                events[0]["message"]["usage"] = usage.clone();
+            } else {
+                end[0]["usage"] = usage.clone();
+            }
+            events.extend(end);
+            let (url, _) = fixture::server(vec![("text/event-stream", sse(&events))])?;
+            let model =
+                AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default());
+            assert!(
+                collect(&model, &request()).await.is_err(),
+                "invalid usage accepted: {usage}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_cold_prefix_waits_for_first_stream_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut events = vec![
@@ -386,6 +525,8 @@ async fn preserves_signed_thinking_and_groups_tool_results_in_order()
             json!({"type":"tool_use","id":"call-b","name":"list_dir","input":{"path":"."}}),
         ),
         block_stop(3),
+        block_start(4, json!({"type":"text","text":""})),
+        block_stop(4),
     ];
     events.extend(stop("tool_use"));
     let mut second = vec![
@@ -419,6 +560,14 @@ async fn preserves_signed_thinking_and_groups_tool_results_in_order()
         })
         .collect();
     assert_eq!(ids, ["call-a", "call-b"]);
+    assert!(!items.iter().any(|item| matches!(item,
+        HistoryItem::ProviderItem { value, .. } if value["type"] == "text" && value["text"] == ""
+    )));
+    req.history.push(HistoryItem::ProviderItem {
+        protocol: ModelProtocol::AnthropicMessages,
+        value: json!({"type":"text","text":""}),
+    });
+    req.history.push(HistoryItem::AssistantText(String::new()));
     req.history.extend(items);
     for (i, id) in ids.iter().enumerate() {
         req.history.push(HistoryItem::ToolResult {
@@ -454,7 +603,7 @@ async fn preserves_signed_thinking_and_groups_tool_results_in_order()
 }
 #[tokio::test]
 async fn complete_json_maps_multiple_tools_and_usage() -> Result<(), Box<dyn std::error::Error>> {
-    let response = json!({"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"checking"},{"type":"tool_use","id":"one","name":"read_file","input":{"path":"a"}},{"type":"tool_use","id":"two","name":"list_dir","input":{"path":"."}}],"usage":{"input_tokens":9,"output_tokens":4}});
+    let response = json!({"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":""},{"type":"text","text":"checking"},{"type":"tool_use","id":"one","name":"read_file","input":{"path":"a"}},{"type":"tool_use","id":"two","name":"list_dir","input":{"path":"."}}],"usage":{"input_tokens":9,"output_tokens":4}});
     let (url, _) = fixture::server(vec![("application/json", response.to_string())])?;
     let model = AnthropicModel::new(
         transport(url)?,
@@ -463,6 +612,11 @@ async fn complete_json_maps_multiple_tools_and_usage() -> Result<(), Box<dyn std
     );
     let (items, usage, _) = collect(&model, &request()).await?;
     assert_eq!(usage.ok_or("missing usage")?.output_tokens, Some(4));
+    assert!(
+        !items
+            .iter()
+            .any(|item| matches!(item, HistoryItem::AssistantText(text) if text.is_empty()))
+    );
     assert_eq!(
         items
             .iter()
