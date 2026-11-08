@@ -44,13 +44,19 @@ impl ModeController {
         })))
     }
     /// Queue a user request during a call, or apply it immediately while idle.
+    /// Requesting the current mode withdraws a pending change without blocking
+    /// new shared calls; withdrawing a change invalidates older approvals.
     /// Returns an error if the state lock is poisoned. Model suggestions must
     /// not invoke this method without an explicit user request.
     pub fn request(&self, target: WorkMode) -> Result<(), BoundaryError> {
         let mut s = self.0.lock().map_err(|_| poisoned())?;
-        if s.active != 0 {
+        if s.current == target {
+            if s.pending.take().is_some() {
+                s.revision += 1;
+            }
+        } else if s.active != 0 {
             s.pending = Some(target);
-        } else if s.current != target {
+        } else {
             s.current = target;
             s.revision += 1;
         }
@@ -131,5 +137,43 @@ impl ModeController {
     pub(crate) fn shared_approval_is_current(&self, revision: u64) -> Result<bool, BoundaryError> {
         let s = self.0.lock().map_err(|_| poisoned())?;
         Ok(!s.exclusive && s.pending.is_none() && s.revision == revision)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_mode_request_does_not_block_concurrent_calls() {
+        let modes = ModeController::new(WorkMode::Work);
+        assert!(modes.begin_shared(0).unwrap());
+        modes.request(WorkMode::Work).unwrap();
+        let snapshot = modes.snapshot().unwrap();
+        assert!(snapshot.pending.is_none());
+        assert_eq!(snapshot.revision, 0);
+        assert!(modes.begin_shared(snapshot.revision).unwrap());
+        modes.finish().unwrap();
+        modes.finish().unwrap();
+        assert_eq!(modes.snapshot().unwrap().current, WorkMode::Work);
+    }
+
+    #[test]
+    fn returning_to_current_mode_clears_pending_and_invalidates_old_approvals() {
+        let modes = ModeController::new(WorkMode::Work);
+        assert!(modes.begin_shared(0).unwrap());
+        modes.request(WorkMode::Code).unwrap();
+        assert_eq!(modes.snapshot().unwrap().pending, Some(WorkMode::Code));
+        modes.request(WorkMode::Work).unwrap();
+        let snapshot = modes.snapshot().unwrap();
+        assert!(snapshot.pending.is_none());
+        assert_eq!(snapshot.current, WorkMode::Work);
+        assert_eq!(snapshot.revision, 1);
+        assert!(!modes.shared_approval_is_current(0).unwrap());
+        assert!(modes.begin_shared(snapshot.revision).unwrap());
+        modes.finish().unwrap();
+        modes.finish().unwrap();
+        assert_eq!(modes.snapshot().unwrap().current, WorkMode::Work);
+        assert!(modes.approval_is_current(snapshot.revision).unwrap());
     }
 }
