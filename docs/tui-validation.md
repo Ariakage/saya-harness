@@ -1,6 +1,23 @@
 # N1 TUI 验证记录
 
-**更新于2026-11-09。0.2.0-rc.2预发行和标签已公开并完成四平台原生验收，历史候选与本机程序按各节源码及环境保留独立记录。**
+**更新于2026-11-09。0.2.0正式发行及标签已公开并完成四平台原生验收，各预发行与本机程序按源码及环境保留独立记录。**
+
+## 0.2.0 正式发行与验收
+
+2026-11-09，项目负责人授权的0.2.0已正式发布并设为Latest。标签 `v0.2.0` 固定到 `f579d1f1f8ec48f96e0544967bf4ffd6bbc2cbb0`。四个原生目标均通过682项Rust测试、九项发行脚本测试和22组PTY，完成格式、严格Clippy、优化构建、工具往返、文本会话、恢复及审查回归。[正式发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42524461863)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42524462140)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42525979782)
+
+| 目标 | 实际原生验收环境 | 安装包SHA-256 |
+| --- | --- | --- |
+| linux-x86_64 | Ubuntu22.04／glibc2.35／x86_64 | `746e1a5675ed19b8d3364bae83b8cee0f96eec11e9bde75ef18539457587caad` |
+| linux-aarch64 | Ubuntu22.04／glibc2.35／aarch64 | `1a5fc9f2b46925354096f69d42e009c89e59ac1001c98ed20f4d45a8b83c88ca` |
+| macos-x86_64 | macOS15.7.9／Intel | `f37ed4277ead62a7915f53fd248023ccba406800dc7f58b8cde4e41e7b448022` |
+| macos-aarch64 | macOS15.8.2／ARM | `c92a391264be9b4505d9f0dce5dba1fd6e399f24bac409fb5e0d8958b8db6742` |
+
+四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产均完成匿名公开下载，逐字节及SHA-256与验收对象一致。包内源码声明、README／LICENSE及程序哈希，以及验收脚本摘要经过独立核对。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[正式版结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/release-evidence.json)
+
+正式macOS ARM二进制通过24例合成凭据探针及deepseek-flash三协议×四模式的12项真实任务。41次模型请求全部成功，35次工具调用中34次成功。Chat CODE的invalid_patch发生于事件序号15，事件序号21的补丁成功，最终任务与静态产物校验通过，失败错误码、调用ID和顺序均保留。三项PLAN工作区零修改，命令执行为0。生成源码仅静态检查，服务内部effort及网络分块未独立观察。[真实模型记录](live-model-validation.md)
+
+本机 `.saya/local/saya-trial` 已切换到匿名下载的正式ARM程序，配置、空闲TUI、命令面板和退出恢复检查通过，模型运行数为0。原预发行和历史程序保留独立记录。完整日志、包、公开下载与验收材料位于 `target/release-0.2.0/`。
 
 ## 0.2.0-rc.2 发行与验收
 
