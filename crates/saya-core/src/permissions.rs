@@ -276,6 +276,75 @@ fn normalize_target(workspace: &Path, path: &Path) -> Result<PathBuf, BoundaryEr
     }
 }
 
+fn normalize_glob(pattern: &str) -> Result<String, BoundaryError> {
+    let mut literal = String::new();
+    let mut component_start = 0;
+    let mut suffix = "";
+    let mut characters = pattern.char_indices();
+    while let Some((offset, character)) = characters.next() {
+        let escaped = character == '\\';
+        let (offset, character) = if escaped {
+            characters
+                .next()
+                .ok_or_else(|| failure("invalid_config", "unfinished glob escape"))?
+        } else {
+            (offset, character)
+        };
+        if !escaped && matches!(character, '*' | '?' | '[' | '{') {
+            literal.truncate(literal.rfind('/').map_or(0, |index| index + 1));
+            suffix = &pattern[component_start..];
+            break;
+        }
+        literal.push(character);
+        if character == '/' {
+            component_start = offset + 1;
+        }
+    }
+    if Path::new(pattern)
+        .components()
+        .chain(Path::new(&literal).components())
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err(failure(
+            "invalid_config",
+            "path_glob must not contain parent components",
+        ));
+    }
+    let mut prefix = PathBuf::from(literal);
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        match std::fs::canonicalize(&prefix) {
+            Ok(path) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if std::fs::symlink_metadata(&prefix).is_ok() {
+                    return Err(failure(
+                        "invalid_config",
+                        "path_glob has a dangling symlink prefix",
+                    ));
+                }
+                let name = prefix
+                    .file_name()
+                    .ok_or_else(|| failure("invalid_config", "invalid glob prefix"))?;
+                missing.push(name.to_owned());
+                prefix.pop();
+            }
+            Err(error) => return Err(failure("invalid_config", error.to_string())),
+        }
+    };
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    let resolved = resolved
+        .to_str()
+        .ok_or_else(|| failure("invalid_config", "glob prefix must be UTF-8"))?;
+    let escaped = globset::escape(resolved).replace('\\', "\\\\");
+    Ok(if suffix.is_empty() {
+        escaped
+    } else {
+        format!("{}/{}", escaped.trim_end_matches('/'), suffix)
+    })
+}
+
 /// Immutable compiled rule set. Roots and rule paths are resolved before use.
 pub struct Policy {
     workspace: PathBuf,
@@ -340,7 +409,7 @@ impl Policy {
             }
             let path = match &rule.path_glob {
                 Some(pattern) if Path::new(pattern).is_absolute() => Some(
-                    GlobBuilder::new(pattern)
+                    GlobBuilder::new(&normalize_glob(pattern)?)
                         .literal_separator(true)
                         .build()
                         .map_err(|e| failure("invalid_config", e.to_string()))?

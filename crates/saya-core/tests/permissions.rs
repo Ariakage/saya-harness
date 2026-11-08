@@ -226,6 +226,90 @@ fn path_roots_precede_allow_and_bypass_still_obeys_deny() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn rule_globs_resolve_symlinked_static_prefixes_and_future_directories()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let links = support::temp_workspace()?;
+    let alias = links.path().join("workspace-alias");
+    std::os::unix::fs::symlink(root.path(), &alias)?;
+    let pattern = alias.join("future/*.txt");
+    let quoted = serde_json::to_string(pattern.to_str().ok_or("glob UTF-8")?)?;
+    for effect in ["deny", "ask"] {
+        let config = PermissionConfig::from_toml(&format!(
+            "[[rules]]\neffect='{effect}'\ntool='read_file'\npath_glob={quoted}\n"
+        ))?;
+        let policy = Policy::new(&alias, config)?;
+        std::fs::create_dir_all(root.path().join("future"))?;
+        std::fs::write(root.path().join("future/private.txt"), "private")?;
+        let operation = Operation::file(&alias, "read_file", Path::new("future/private.txt"))?;
+        assert_eq!(
+            policy
+                .evaluate(WorkMode::Work, PermissionMode::Auto, &operation)
+                .decision,
+            if effect == "deny" {
+                Decision::Deny
+            } else {
+                Decision::Ask
+            }
+        );
+        if effect == "deny" {
+            assert_eq!(
+                policy
+                    .evaluate(WorkMode::Work, PermissionMode::Bypass, &operation)
+                    .decision,
+                Decision::Deny
+            );
+        }
+        std::fs::remove_dir_all(root.path().join("future"))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn canonical_glob_prefixes_keep_literal_metacharacters_and_reject_parent_components()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let links = support::temp_workspace()?;
+    for (index, directory) in ["literal[dir]", "literal\\dir"].into_iter().enumerate() {
+        let real = root.path().join(directory);
+        std::fs::create_dir(&real)?;
+        std::fs::write(real.join("secret.txt"), "private")?;
+        let alias = links.path().join(format!("alias-{index}"));
+        std::os::unix::fs::symlink(&real, &alias)?;
+        let quoted = serde_json::to_string(alias.join("**").to_str().ok_or("glob UTF-8")?)?;
+        let policy = Policy::new(
+            &alias,
+            PermissionConfig::from_toml(&format!(
+                "[[rules]]\neffect='deny'\npath_glob={quoted}\n"
+            ))?,
+        )?;
+        let operation = Operation::file(&alias, "read_file", Path::new("secret.txt"))?;
+        assert_eq!(
+            policy
+                .evaluate(WorkMode::Work, PermissionMode::Bypass, &operation)
+                .decision,
+            Decision::Deny
+        );
+    }
+    let quoted = serde_json::to_string(
+        root.path()
+            .join("*/../secret.txt")
+            .to_str()
+            .ok_or("glob UTF-8")?,
+    )?;
+    assert!(
+        Policy::new(
+            root.path(),
+            PermissionConfig::from_toml(&format!(
+                "[[rules]]\neffect='deny'\npath_glob={quoted}\n"
+            ))?
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn executable_and_argv_prefix_must_all_match_and_review_still_asks()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = support::temp_workspace()?;
