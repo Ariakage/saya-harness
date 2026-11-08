@@ -1,4 +1,5 @@
 //! A bounded presentation subset of Markdown, independent of runtime messages.
+use crate::editor::{MAX_VISUAL_LINE_BYTES, display_grapheme};
 use crate::theme::{
     AMBER, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, HEADING, INLINE_CODE, MUTED,
 };
@@ -267,6 +268,7 @@ fn append_span(spans: &mut Vec<Span<'static>>, text: &str, style: Style) {
 /// Wrap a sanitized line without splitting graphemes, including across spans.
 /// The first source byte determines a grapheme's style. Retain at most `limit`
 /// tail rows while counting every row, with a minimum effective width of one.
+/// Oversized clusters become an ellipsis, and byte-limited rows show continuation.
 pub(crate) fn append_wrapped_line(
     line: Line<'static>,
     width: usize,
@@ -285,6 +287,7 @@ pub(crate) fn append_wrapped_line(
     let mut style = line.style;
     let mut current = Vec::new();
     let mut column: usize = 0;
+    let mut bytes: usize = 0;
     for (offset, grapheme) in text.grapheme_indices(true) {
         while offset >= source_end {
             let Some(source) = sources.next() else { break };
@@ -294,15 +297,25 @@ pub(crate) fn append_wrapped_line(
         if grapheme == "\n" {
             push_line(std::mem::take(&mut current), &line, lines, count, limit);
             column = 0;
+            bytes = 0;
             continue;
         }
+        let grapheme = display_grapheme(grapheme);
         let cells = UnicodeWidthStr::width(grapheme);
+        let rendered = if cells > width { "�" } else { grapheme };
+        if bytes.saturating_add(rendered.len()) > MAX_VISUAL_LINE_BYTES {
+            push_line(std::mem::take(&mut current), &line, lines, count, limit);
+            append_span(&mut current, "…", style);
+            column = 1;
+            bytes = "…".len();
+        }
         if column > 0 && column.saturating_add(cells) > width {
             push_line(std::mem::take(&mut current), &line, lines, count, limit);
             column = 0;
+            bytes = 0;
         }
-        let rendered = if cells > width { "�" } else { grapheme };
         append_span(&mut current, rendered, style);
+        bytes += rendered.len();
         column = column.saturating_add(if cells > width { 1 } else { cells });
     }
     push_line(current, &line, lines, count, limit);
@@ -616,9 +629,52 @@ mod tests {
         );
         let mut lines = VecDeque::new();
         let mut count = 0;
-        append_wrapped_line(source, usize::MAX, &mut lines, &mut count, 1);
-        assert_eq!(count, 1);
-        assert_eq!(content(&lines[0]).len(), 10_000);
-        assert!(lines[0].spans.len() <= MAX_SPANS);
+        append_wrapped_line(source, usize::MAX, &mut lines, &mut count, 3);
+        assert_eq!(count, 3);
+        assert!(
+            lines
+                .iter()
+                .all(|line| content(line).len() <= MAX_VISUAL_LINE_BYTES)
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(content)
+                .collect::<String>()
+                .replace('…', ""),
+            "x".repeat(10_000)
+        );
+        assert!(lines.iter().all(|line| line.spans.len() <= MAX_SPANS));
+    }
+
+    #[test]
+    fn oversized_clusters_and_zero_width_runs_have_bounded_styled_rows() {
+        let cluster = format!("a{}", "\u{301}".repeat(100_000));
+        let line = Line::from(vec![
+            Span::styled("a", Style::default().fg(AMBER)),
+            Span::styled(cluster[1..].to_owned(), Style::default().fg(HEADING)),
+            Span::raw(" tail"),
+        ])
+        .style(Style::default().bg(CODE_BACKGROUND));
+        let mut lines = VecDeque::new();
+        let mut count = 0;
+        append_wrapped_line(line, 80, &mut lines, &mut count, 3);
+        assert_eq!(content(&lines[0]), "… tail");
+        assert_eq!(lines[0].spans[0].style.fg, Some(AMBER));
+        assert_eq!(lines[0].style.bg, Some(CODE_BACKGROUND));
+
+        let text = format!("a{}tail", "\u{200b}".repeat(100_000));
+        lines.clear();
+        count = 0;
+        append_wrapped_line(Line::raw(text), 80, &mut lines, &mut count, 3);
+        assert!(count > 3);
+        assert_eq!(lines.len(), 3);
+        assert!(
+            lines
+                .iter()
+                .all(|line| content(line).len() <= MAX_VISUAL_LINE_BYTES)
+        );
+        assert!(content(lines.back().unwrap()).ends_with("tail"));
+        assert!(lines.iter().any(|line| content(line).starts_with('…')));
     }
 }

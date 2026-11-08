@@ -45,6 +45,42 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 }
 
 #[tokio::test]
+async fn help_and_profiles_remain_visible_over_a_pending_approval() {
+    for (command, title) in [("/help", "Help"), ("/profiles", "Configured profiles · UI")] {
+        let (_root, mut app) = fixture();
+        let (request, mut receiver) = approval(&app, "pending-details");
+        app.request(request);
+        app.state.editor.set_text("y");
+        app.key(toggle()).await.unwrap();
+        app.state.command_palette = Some(
+            COMMANDS
+                .iter()
+                .position(|suggestion| suggestion.text == command)
+                .unwrap(),
+        );
+        app.key(press(KeyCode::Enter)).await.unwrap();
+        assert_eq!(app.state.details.as_ref().unwrap().title, title);
+        assert_eq!(app.state.editor.text(), "y");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        app.key(press(KeyCode::Enter)).await.unwrap();
+        assert_eq!(
+            app.state.details.as_ref().unwrap().title,
+            "Approval required"
+        );
+        assert_eq!(app.state.editor.text(), "y");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        app.key(press(KeyCode::Enter)).await.unwrap();
+        assert_eq!(receiver.await.unwrap().unwrap(), Some(true));
+    }
+}
+
+#[tokio::test]
 async fn toggling_the_modal_preserves_details_draft_and_scroll_and_captures_other_keys() {
     let (_root, mut app) = fixture();
     app.state.editor.set_text("草稿 🌸");

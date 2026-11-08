@@ -668,3 +668,138 @@ async fn failed_prompt_handoff_preserves_a_newer_draft_and_the_unsent_prompt() {
     assert!(app.active.is_none());
     assert!(app.prepared.as_ref().unwrap().session.history.is_empty());
 }
+
+#[tokio::test]
+async fn recoverable_handoff_failure_keeps_the_ui_and_clears_deferred_mode() {
+    let (_root, mut app) = fixture();
+    create(&mut app).await;
+    app.queued_prompt = Some("earlier task".into());
+    app.state.editor.set_text("newer draft");
+    app.deferred_mode = Some(WorkMode::Plan);
+    app.state.pending_mode = Some("PLAN".into());
+    app.config.profiles.clear();
+    let error = app
+        .finish_ui(Ok(UiResult::Details(view::Details {
+            title: "fixture".into(),
+            lines: vec![],
+        })))
+        .await
+        .unwrap_err();
+    app.report_error(error).unwrap();
+    assert_eq!(app.state.editor.text(), "newer draft");
+    assert!(transcript(&app).contains("earlier task"));
+    assert!(app.deferred_mode.is_none());
+    assert!(app.state.pending_mode.is_none());
+    assert!(app.ui_job.is_none() && app.active.is_none());
+    assert!(app.exit_after_run.is_none());
+
+    for code in ["storage_busy", "storage_corrupt", "storage_sensitive_data"] {
+        let error = BoundaryError(
+            ErrorInfo {
+                code: code.into(),
+                message: "durable boundary failed".into(),
+            },
+            None,
+            None,
+        );
+        assert!(app.report_error(Box::new(error)).is_err());
+    }
+}
+
+#[tokio::test]
+async fn cancelling_ui_work_preserves_current_and_queued_drafts() {
+    for draft in ["", "newer draft 🌸"] {
+        let (_root, mut app) = fixture();
+        app.start("original first task".into()).await.unwrap();
+        app.state.editor.set_text(draft);
+        app.cancel();
+        assert!(app.queued_prompt.is_none());
+        assert_eq!(
+            app.state.editor.text(),
+            if draft.is_empty() {
+                "original first task"
+            } else {
+                draft
+            }
+        );
+        if !draft.is_empty() {
+            assert!(transcript(&app).contains("original first task"));
+        }
+        let result = outcome(&mut app).await;
+        app.finish_ui(result).await.unwrap();
+        assert!(app.active.is_none());
+    }
+    let (_root, mut app) = fixture();
+    let (sender, _) = controlled_job(&mut app);
+    app.state.editor.set_text("draft during query");
+    app.cancel();
+    assert_eq!(app.state.editor.text(), "draft during query");
+    sender
+        .send(UiResult::Details(view::Details {
+            title: "stale".into(),
+            lines: vec![],
+        }))
+        .unwrap_or_else(|_| panic!("UI receiver closed"));
+    complete(&mut app).await;
+    assert_eq!(app.state.editor.text(), "draft during query");
+}
+
+#[tokio::test]
+async fn explicit_tui_resume_uses_saved_metadata_after_startup_overrides_and_profile_selection() {
+    let (root, mut app) = fixture();
+    let mut other = app.config.profiles["fixture"].clone();
+    other.model = "other model".into();
+    app.config.profiles.insert("other".into(), other);
+    let workspace = root.path().join("saved-workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let workspace = std::fs::canonicalize(workspace).unwrap();
+    let mut saved = app.config.clone();
+    saved.cwd = workspace.clone();
+    saved.mode = WorkMode::Plan;
+    let prepared = session::create(&saved, saya_app::new_session(&saved).unwrap())
+        .await
+        .unwrap();
+    let id = prepared.session.id;
+    drop(prepared);
+    app.options.cwd_explicit = true;
+    app.options.profile_explicit = true;
+    app.options.mode_override = Some(WorkMode::Code);
+    app.config.mode = WorkMode::Code;
+    app.state.status = "NeedsInput".into();
+    app.service("/profile", "other").await.unwrap();
+    assert_eq!(app.state.status, "Ready");
+    app.command("/mode plan").await.unwrap();
+    app.service("/resume", &id.0.to_string()).await.unwrap();
+    complete(&mut app).await;
+    let prepared = app.prepared.as_ref().unwrap();
+    assert_eq!(prepared.session.id, id);
+    assert_eq!(prepared.session.workspace, workspace);
+    assert_eq!(prepared.session.work_mode, WorkMode::Plan);
+    assert_eq!(prepared.session.profile, "fixture");
+    let stored = prepared.store.load_session(id).await.unwrap().unwrap();
+    assert_eq!(stored.workspace, workspace);
+    assert_eq!(stored.work_mode, WorkMode::Plan);
+    assert_eq!(stored.profile, "fixture");
+    assert!(app.active.is_none());
+}
+
+#[tokio::test]
+async fn titles_redact_after_whitespace_and_terminal_character_normalization() {
+    let (_root, mut app) = fixture();
+    create(&mut app).await;
+    for (secret, text) in [
+        ("fixture-secret", "fixture-\u{200e}secret"),
+        ("fixture-secret", "fixture-\u{206f}secret"),
+        ("fixture-secret", "fixture-\u{1b}secret"),
+        ("fixture secret", "fixture \n\t secret"),
+    ] {
+        app.secrets = vec![secret.into()];
+        app.prepared.as_mut().unwrap().session.history = vec![HistoryItem::UserText(text.into())];
+        app.refresh_header();
+        assert!(!app.state.session_title.contains(secret));
+        let title = app.safe_title(&format!("Saya | {}", app.state.session_title));
+        assert!(!title.contains(secret));
+        assert_eq!(title, crate::terminal::safe_title(&title));
+        assert!(title.contains("[REDACTED]"));
+    }
+}

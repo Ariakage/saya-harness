@@ -126,6 +126,24 @@ impl App {
         self.state
             .push_message(Role::System, "Saya", self.safe(text));
     }
+    fn report_error(&mut self, error: Box<dyn std::error::Error>) -> Result<()> {
+        if error
+            .downcast_ref::<BoundaryError>()
+            .is_some_and(|error| error.0.code.starts_with("storage_") || error.2.is_some())
+        {
+            return Err(error);
+        }
+        self.notice(&error.to_string());
+        Ok(())
+    }
+    fn safe_title(&self, text: &str) -> String {
+        let title = self.safe(&crate::terminal::safe_title(text));
+        if saya_core::redaction::contains_secret(&title, &self.secrets) {
+            "Sensitive details withheld".into()
+        } else {
+            title
+        }
+    }
     fn refresh_header(&mut self) {
         self.state.workspace = self.safe(&self.config.cwd.to_string_lossy());
         self.state.profile = self.safe(self.config.profile.as_deref().unwrap_or("No profile"));
@@ -159,15 +177,7 @@ impl App {
                     _ => None,
                 })
             })
-            .map(|text| {
-                self.safe(text)
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .chars()
-                    .take(80)
-                    .collect::<String>()
-            })
+            .map(|text| self.safe_title(text).chars().take(80).collect::<String>())
             .filter(|text| !text.is_empty())
             .unwrap_or_else(|| "New session".into());
         self.state.mode = format!("{:?}", self.config.mode).to_uppercase();
@@ -321,7 +331,10 @@ impl App {
             job.cancel.cancel();
         }
         self.deferred_mode = None;
-        self.queued_prompt = None;
+        let restored_prompt = self.queued_prompt.is_some();
+        if let Some(prompt) = self.queued_prompt.take() {
+            self.restore_unsent_prompt(prompt);
+        }
         if self.active.is_none() {
             self.state.pending_mode = None;
         }
@@ -330,7 +343,7 @@ impl App {
         if let Some(active) = &self.active {
             active.cancel.cancel();
             self.state.status = "Cancelling".into();
-        } else {
+        } else if self.ui_job.is_none() && !restored_prompt {
             self.state.editor.take();
         }
     }
@@ -403,7 +416,7 @@ impl App {
                     Err(error) => {
                         self.state.status = "Failed".into();
                         self.notice(&error.to_string());
-                        if error.0.code == "storage_error" || error.2.is_some() {
+                        if error.0.code.starts_with("storage_") || error.2.is_some() {
                             failure = Some(Box::new(error) as Box<dyn std::error::Error>);
                         }
                     }
@@ -561,11 +574,7 @@ impl App {
                         self.show_pending();
                         return Ok(false);
                     }
-                    let result = self.command(command).await;
-                    if self.pending.is_some() {
-                        self.show_pending();
-                    }
-                    return result;
+                    return self.command(command).await;
                 }
                 _ => {}
             }
@@ -740,21 +749,14 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             Action::Input(Some(Ok(TerminalEvent::Key(key)))) => match app.key(key).await {
                 Ok(true) => return Ok(0),
                 Ok(false) => {}
-                Err(error) => {
-                    if error.downcast_ref::<BoundaryError>().is_some_and(|error| {
-                        error.0.code.starts_with("storage_") || error.2.is_some()
-                    }) {
-                        return Err(error);
-                    }
-                    app.notice(&error.to_string());
-                }
+                Err(error) => app.report_error(error)?,
             },
             Action::Input(Some(Ok(TerminalEvent::Mouse(event)))) => {
                 app.mouse(event);
             }
             Action::Input(Some(Ok(TerminalEvent::Paste(text)))) => {
                 if app.state.command_palette.is_none() {
-                    app.state.editor.insert(&text);
+                    app.state.editor.insert_paste(&text);
                 }
             }
             Action::Input(Some(Ok(_))) | Action::Tick => {}
@@ -776,7 +778,9 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 }
             }
             Action::UiJob(result) => {
-                app.finish_ui(result).await?;
+                if let Err(error) = app.finish_ui(result).await {
+                    app.report_error(error)?;
+                }
             }
             Action::Request(Some(request)) => app.request(request),
             Action::Request(None) => {
@@ -795,8 +799,8 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             }
         }
         app.refresh_completion();
-        if redraw && dirty {
-            terminal.set_title(&format!("Saya | {}", app.state.session_title))?;
+        if redraw && dirty && app.exit_after_run.is_none() {
+            terminal.set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))?;
             terminal.draw(|frame| view::draw(frame, &mut app.state))?;
             dirty = false;
         }

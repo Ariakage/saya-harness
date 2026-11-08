@@ -3,9 +3,30 @@ use super::control_tests::{approval, attach_active_call, fixture, stop_active_ca
 use super::*;
 use saya_app::thinking::ThinkingSnapshot;
 use saya_core::{
-    contract::{ModelProtocol, ToolCall, ToolResult},
+    contract::{ErrorInfo, ModelProtocol, ToolCall, ToolResult},
     tools::todo::TodoStatus,
 };
+
+#[tokio::test]
+async fn every_storage_failure_is_fatal_after_owned_run_cleanup() {
+    for code in ["storage_busy", "storage_corrupt", "storage_sensitive_data"] {
+        let (_root, mut app) = fixture();
+        attach_active_call(&mut app).await;
+        app.cancel();
+        let (_, session) = (&mut app.active.as_mut().unwrap().join).await.unwrap();
+        let error = BoundaryError(
+            ErrorInfo {
+                code: code.into(),
+                message: "storage boundary failed".into(),
+            },
+            None,
+            None,
+        );
+        assert!(app.finish(Ok((Err(error), session))).await.is_err());
+        assert!(app.active.is_none());
+        assert_eq!(app.state.status, "Failed");
+    }
+}
 use serde_json::json;
 use tokio::sync::oneshot;
 

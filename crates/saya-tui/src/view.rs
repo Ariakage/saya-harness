@@ -1,7 +1,7 @@
 //! Pure, bounded TUI state and rendering. Runtime effects belong to the controller.
 use crate::{
     commands::{COMMANDS, Completion},
-    editor::{Editor, prefix_boundary, safe_text},
+    editor::{Editor, MAX_VISUAL_LINE_BYTES, display_grapheme, prefix_boundary, safe_text},
     rich_text::{append_wrapped_line, markdown_lines},
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
@@ -1146,7 +1146,11 @@ fn token_label(value: u64) -> String {
 }
 
 fn safe_line(text: &str) -> String {
-    safe_text(text).replace('\n', "\\n")
+    safe_text(text)
+        .replace('\n', "\\n")
+        .graphemes(true)
+        .map(display_grapheme)
+        .collect()
 }
 
 fn role_style(role: Role) -> Style {
@@ -1435,7 +1439,12 @@ fn draw_details(
                 truncated = true;
                 break 'sources;
             }
-            let prefix = crop_display(line, 0, usize::from(inner.width) * rows_left);
+            let prefix = crop_display_with_budget(
+                line,
+                0,
+                usize::from(inner.width) * rows_left,
+                MAX_TRANSCRIPT_BYTES,
+            );
             let line_truncated = prefix.len() < line.len();
             append_wrapped(
                 &prefix,
@@ -1811,15 +1820,38 @@ fn draw_completion(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
 }
 
 fn crop_display(text: &str, skip: usize, width: usize) -> String {
+    crop_display_with_budget(text, skip, width, MAX_VISUAL_LINE_BYTES)
+}
+
+fn crop_display_with_budget(text: &str, skip: usize, width: usize, byte_limit: usize) -> String {
     let mut result = String::new();
     let mut column = 0;
     let mut retained = 0;
     for grapheme in text.graphemes(true) {
+        let grapheme = display_grapheme(grapheme);
         let cells = UnicodeWidthStr::width(grapheme);
         let end = column + cells;
         if end > skip {
             let visible = cells.min(end - skip);
             if retained + visible > width {
+                break;
+            }
+            if result.len().saturating_add(grapheme.len()) > byte_limit {
+                let mut end = 0;
+                let mut cells = 0;
+                for (index, grapheme) in result.grapheme_indices(true) {
+                    cells += UnicodeWidthStr::width(grapheme);
+                    if index + grapheme.len() > byte_limit.saturating_sub("…".len())
+                        || cells > width.saturating_sub(1)
+                    {
+                        break;
+                    }
+                    end = index + grapheme.len();
+                }
+                result.truncate(end);
+                if width > 0 && byte_limit >= "…".len() {
+                    result.push('…');
+                }
                 break;
             }
             if column < skip {
@@ -1952,6 +1984,46 @@ mod tests {
         for (width, height) in [(0, 0), (1, 1), (19, 5), (20, 6), (30, 10), (120, 30)] {
             render(&mut state, width, height);
         }
+    }
+
+    #[test]
+    fn rendered_cells_bound_combining_clusters_in_transcript_details_and_editor() {
+        let source = format!("a{} tail", "\u{301}".repeat(100_000));
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", source.clone());
+        state.editor.set_text(&source);
+        for details in [false, true] {
+            if details {
+                state.set_details(Details {
+                    title: "Parameters".into(),
+                    lines: vec![source.clone()],
+                });
+            }
+            for (width, height) in [(20, 6), (80, 24), (120, 40)] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                let cells = &terminal.backend().buffer().content;
+                assert!(
+                    cells
+                        .iter()
+                        .all(|cell| cell.symbol().len() <= crate::editor::MAX_GRAPHEME_BYTES)
+                );
+                assert!(cells.iter().any(|cell| cell.symbol() == "…"));
+                for row in cells.chunks(usize::from(width)) {
+                    assert!(
+                        row.iter().map(|cell| cell.symbol().len()).sum::<usize>()
+                            <= MAX_VISUAL_LINE_BYTES
+                    );
+                }
+            }
+        }
+        assert_eq!(state.messages[0].text, source);
+        assert!(state.editor.text().starts_with('a'));
+        let zeros = format!("x{}tail", "\u{200b}".repeat(100_000));
+        let cropped = crop_display(&zeros, 0, 80);
+        assert!(cropped.len() <= MAX_VISUAL_LINE_BYTES);
+        assert!(cropped.ends_with('…'));
+        assert_eq!(crop_display(&source, 0, 80), "… tail");
     }
 
     #[test]

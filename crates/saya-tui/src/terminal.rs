@@ -118,7 +118,7 @@ fn write_restore(fd: i32, title_saved: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn safe_title(text: &str) -> String {
+pub(crate) fn safe_title(text: &str) -> String {
     let mut title = String::with_capacity(MAX_TITLE_BYTES);
     // Bound normalization even for a long input consisting entirely of controls.
     for character in text.chars().take(4096) {

@@ -4,6 +4,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub const MAX_INPUT_BYTES: usize = 65_536;
+pub(crate) const MAX_GRAPHEME_BYTES: usize = 128;
+pub(crate) const MAX_VISUAL_LINE_BYTES: usize = 4096;
 
 #[derive(Debug, Default)]
 pub struct Editor {
@@ -41,6 +43,15 @@ impl Editor {
         let complete = end == text.len();
         self.truncated |= !complete;
         complete
+    }
+
+    /// Normalize terminal paste line endings before bounded insertion.
+    pub fn insert_paste(&mut self, text: &str) -> bool {
+        if text.contains('\r') {
+            self.insert(&text.replace("\r\n", "\n").replace('\r', "\n"))
+        } else {
+            self.insert(text)
+        }
     }
 
     pub fn take(&mut self) -> String {
@@ -211,7 +222,19 @@ pub fn safe_text(text: &str) -> String {
 }
 
 fn display_width(text: &str) -> usize {
-    UnicodeWidthStr::width(safe_text(text).as_str())
+    safe_text(text)
+        .graphemes(true)
+        .map(display_grapheme)
+        .map(UnicodeWidthStr::width)
+        .sum()
+}
+
+pub(crate) fn display_grapheme(grapheme: &str) -> &str {
+    if grapheme.len() > MAX_GRAPHEME_BYTES {
+        "…"
+    } else {
+        grapheme
+    }
 }
 
 fn boundary_at_column(text: &str, desired: usize) -> usize {
@@ -280,5 +303,35 @@ mod tests {
             safe_text("a\x1b[2J\u{9b}x\u{202e}\t\n"),
             "a\\u{1b}[2J\\u{9b}x\\u{202e}    \n"
         );
+    }
+
+    #[test]
+    fn terminal_paste_normalizes_crlf_and_cr_before_editing() {
+        let mut editor = Editor::default();
+        assert!(editor.insert_paste("first\r\n二🌸\rthird\n"));
+        assert_eq!(editor.text(), "first\n二🌸\nthird\n");
+        editor.move_up();
+        editor.home();
+        editor.end();
+        assert_eq!(editor.cursor_position(), (2, 5));
+        assert!(!editor.text().contains('\r'));
+        editor.set_text("prefix");
+        assert!(!editor.insert_paste(&"\r\n".repeat(MAX_INPUT_BYTES)));
+        assert!(editor.text().len() <= MAX_INPUT_BYTES);
+        assert!(!editor.text().contains('\r'));
+        assert!(editor.truncated);
+    }
+
+    #[test]
+    fn cursor_columns_follow_replacement_of_oversized_graphemes() {
+        let mut editor = Editor::default();
+        let cluster = format!("👩{}", "\u{200d}👩".repeat(100));
+        editor.set_text(format!("{cluster}x"));
+        assert_eq!(editor.text(), format!("{cluster}x"));
+        assert_eq!(editor.cursor_position(), (0, 2));
+        editor.move_left();
+        assert_eq!(editor.cursor_position(), (0, 1));
+        editor.home();
+        assert_eq!(editor.cursor_position(), (0, 0));
     }
 }

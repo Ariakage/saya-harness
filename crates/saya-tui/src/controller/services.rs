@@ -64,7 +64,7 @@ pub(super) async fn next_job(
     }
 }
 impl App {
-    fn restore_unsent_prompt(&mut self, prompt: String) {
+    pub(super) fn restore_unsent_prompt(&mut self, prompt: String) {
         if self.state.editor.text().is_empty() || self.state.editor.text() == prompt {
             self.state.editor.set_text(prompt);
         } else {
@@ -127,12 +127,12 @@ impl App {
                     return Err("Unknown configured profile; use /profiles".into());
                 }
                 self.config.profile = Some(argument.into());
-                self.options.profile_explicit = true;
                 self.prepared = None;
                 self.state.clear_messages();
                 self.state.details = None;
                 self.state.usage.clear();
                 self.reset_context();
+                self.state.status = "Ready".into();
                 self.refresh_header();
                 self.notice("Profile selected. New session is waiting for your message.");
             }
@@ -171,9 +171,9 @@ impl App {
                 let id = argument.to_owned();
                 let options = session::ResumeOptions {
                     accept_config_change: name == "/resume-accept",
-                    cwd_explicit: self.options.cwd_explicit,
-                    profile_explicit: self.options.profile_explicit,
-                    mode_override: self.options.mode_override,
+                    cwd_explicit: false,
+                    profile_explicit: false,
+                    mode_override: None,
                 };
                 let cancel = Arc::new(RunCancellation::new());
                 let checking = cancel.clone();
@@ -389,6 +389,10 @@ impl App {
             .as_ref()
             .is_some_and(|job| job.cancel.is_cancelled());
         self.ui_job = None;
+        let deferred_mode = self.deferred_mode.take();
+        if deferred_mode.is_some() {
+            self.state.pending_mode = None;
+        }
         match result {
             Ok(UiResult::Details(_)) if cancelled => self.notice("UI query cancelled"),
             Ok(UiResult::Session { .. }) if cancelled => {
@@ -432,13 +436,14 @@ impl App {
             if self.prepared.is_some() && !cancelled && self.active.is_none() {
                 if let Err(error) = self.start(prompt.clone()).await {
                     self.restore_unsent_prompt(prompt);
+                    self.state.pending_mode = None;
                     return Err(error);
                 }
             } else {
                 self.restore_unsent_prompt(prompt);
             }
         }
-        if let Some(mode) = self.deferred_mode.take() {
+        if let Some(mode) = deferred_mode {
             self.command(&format!("/mode {mode:?}")).await?;
         }
         Ok(())
