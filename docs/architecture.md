@@ -18,7 +18,7 @@
 
 0.1.0 Cargo workspace 包含 saya-core 与 saya-cli，二进制为 saya。CLI 负责终端、命令参数、运行组装与输出呈现，core 提供复用运行时。Rust 1.99.1／edition 2024、依赖职责与平台基线见 B-02。
 
-DEV-038 已建立 saya-app，负责模型组装、会话创建／恢复和锁生命周期，CLI 使用同一服务。模型装饰通过调用者提供的适配器接入。DEV-039 的有界事件及人工输入桥由 saya-app 提供，CLI 负责 stdout 与终端呈现，取消句柄与 RuntimeHandle 连接运行控制。TUI 拟采用 saya-tui library，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
+DEV-038 已建立 saya-app，负责模型组装、会话创建／恢复和锁生命周期，CLI 使用同一服务。模型装饰通过调用者提供的适配器接入。DEV-039 的有界事件及人工输入桥由 saya-app 提供，CLI 负责 stdout 与终端呈现，取消句柄与 RuntimeHandle 连接运行控制。saya-tui library 已接入默认终端入口，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
 
 执行层拟通过 ExecutionBackend 连接独立 SeatbeltBackend 及 Linux Bubblewrap／Seccomp／socat 组合，预留容器／VM 的实现路径，实际能力分级见[原生隔离设计](sandbox.md)。BrowserProvider、ContextBuilder／OutputStore 与插件规范分别见[Browser](browser.md)、[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。
 
@@ -38,7 +38,7 @@ auto 的 TOML 规则按 deny＞ask＞allow 判断，原生工作区读写默认 
 
 三类模型协议分别实现文本流、工具与错误适配，不共用某一家请求 DTO 驱动核心。core 使用统一内部消息并保留必要协议状态、调用标识与不透明内容；映射及版本按 B-05、B-06 分别验证。不启用 provider 服务端工具、provider 侧后台任务或自动协议回退；本地后台任务由 Saya 管理。
 
-八个工具及结果按 B-14 实现。参数完整并校验后，检查工作模式、允许路径、显式规则及所需核查／确认，在实际派发前重查。bypass 跳过路径范围检查但不跳过 PLAN。文件修改使用版本冲突检查与单文件替换，命令使用 argv，不提供操作系统沙箱。
+本地工具与澄清按 B-14 实现，开发线另按 D-046 提供 Todo 会话元数据工具。参数完整并校验后，检查工作模式、允许路径、显式规则及所需核查／确认，在实际派发前重查。bypass 跳过路径范围检查但不跳过 PLAN。文件修改使用版本冲突检查与单文件替换，命令使用 argv，不提供操作系统沙箱。
 
 run 默认不交互，显式预授权精确匹配本次运行；无法询问且缺少许可返回 needs_confirmation／3，缺少澄清返回 needs_input／4。确认与澄清由界面承接，许可由 core 协调；stdout 的 JSON／JSONL 与 stderr 诊断、控制终端提示分离。
 
