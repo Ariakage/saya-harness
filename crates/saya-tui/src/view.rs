@@ -6,7 +6,7 @@ use crate::{
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
         INPUT_BACKGROUND, INPUT_BORDER, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
-        STRONG_FOREGROUND,
+        STRONG_FOREGROUND, mode_color,
     },
     tool_summary::summarize,
 };
@@ -1003,11 +1003,18 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
 }
 
 fn draw_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
-    let mode = if let Some(pending) = &state.pending_mode {
-        format!("{}→{}", safe_line(&state.mode), safe_line(pending))
-    } else {
-        safe_line(&state.mode)
-    };
+    let mut mode = Line::from(Span::styled(
+        safe_line(&state.mode),
+        Style::default().fg(mode_color(&state.mode)),
+    ));
+    if let Some(pending) = &state.pending_mode {
+        mode.spans
+            .push(Span::styled("→", Style::default().fg(MUTED)));
+        mode.spans.push(Span::styled(
+            safe_line(pending),
+            Style::default().fg(mode_color(pending)),
+        ));
+    }
     let minimum_left = UnicodeWidthStr::width(state.mode.as_str());
     let full_meter = context_meter(state, false);
     let meter = if full_meter.width() + minimum_left < usize::from(area.width) {
@@ -1024,13 +1031,14 @@ fn draw_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let show_effort = area.width >= 32 && mode.width() + effort.width() + 2 < left_width;
     let model_width = left_width
         .saturating_sub(mode.width() + 1 + if show_effort { effort.width() + 1 } else { 0 });
-    let mut left = Line::from(vec![
-        Span::styled(mode, Style::default().fg(BLUE)),
-        Span::raw(format!(
+    let mut left = mode;
+    left.spans.push(Span::styled(
+        format!(
             " {}",
             crop_display(&safe_line(&state.model), 0, model_width)
-        )),
-    ]);
+        ),
+        Style::default().fg(FOREGROUND),
+    ));
     if show_effort {
         left.spans.push(Span::styled(
             format!(" {effort}"),
@@ -1441,9 +1449,10 @@ fn draw_details(
 }
 
 fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let accent = mode_color(&state.mode);
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(BLUE).bg(BLUE))
+        .border_style(Style::default().fg(accent).bg(accent))
         .style(Style::default().fg(FOREGROUND).bg(INPUT_BACKGROUND));
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1701,6 +1710,7 @@ mod tests {
     use ratatui::{
         Terminal,
         backend::{Backend, TestBackend},
+        style::Color,
     };
 
     fn render(state: &mut State, width: u16, height: u16) -> String {
@@ -3115,5 +3125,100 @@ mod tests {
                 .text()
                 .is_char_boundary(state.editor.text().len())
         );
+    }
+
+    #[test]
+    fn active_mode_colors_link_the_entire_input_stripe_and_footer_at_all_sizes() {
+        for (mode, color) in [
+            ("WORK", Color::Rgb(88, 166, 255)),
+            ("CODE", Color::Rgb(125, 203, 155)),
+            ("PLAN", Color::Rgb(187, 154, 247)),
+            ("BUILD", Color::Rgb(246, 173, 85)),
+            ("FUTURE", MUTED),
+        ] {
+            for (width, height, input_top, input_height) in [
+                (80, 24, 19, 4),
+                (60, 18, 13, 4),
+                (20, 6, 3, 2),
+                (120, 40, 35, 4),
+                (160, 45, 40, 4),
+            ] {
+                let mut state = State {
+                    mode: mode.into(),
+                    model: "fixture-model".into(),
+                    ..State::default()
+                };
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                let buffer = terminal.backend().buffer();
+                for row in input_top..input_top + input_height {
+                    assert_eq!(buffer[(1, row)].fg, color, "{mode}, {width}x{height}");
+                    assert_eq!(buffer[(1, row)].bg, color, "{mode}, {width}x{height}");
+                }
+                for column in 1..=mode.len() as u16 {
+                    assert_eq!(
+                        buffer[(column, height - 1)].fg,
+                        color,
+                        "{mode}, {width}x{height}"
+                    );
+                }
+                let model_column = mode.len() as u16 + 2;
+                if buffer[(model_column, height - 1)].symbol() == "f" {
+                    assert_eq!(buffer[(model_column, height - 1)].fg, FOREGROUND);
+                }
+                assert_eq!(state.mode, mode);
+                assert!(state.editor.text().is_empty());
+                if width == 20 {
+                    state.set_details(Details {
+                        title: "Approval required".into(),
+                        lines: vec!["Review this operation".into()],
+                    });
+                    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                    let buffer = terminal.backend().buffer();
+                    assert_eq!(buffer[(1, 4)].fg, color);
+                    assert_eq!(buffer[(1, 4)].bg, color);
+                    assert_eq!(buffer[(1, 5)].fg, color);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pending_mode_has_its_own_label_color_until_the_active_accent_changes_at_the_boundary() {
+        for (current, next) in [
+            ("WORK", "CODE"),
+            ("CODE", "PLAN"),
+            ("PLAN", "BUILD"),
+            ("BUILD", "WORK"),
+        ] {
+            let mut state = State {
+                mode: current.into(),
+                pending_mode: Some(next.into()),
+                ..State::default()
+            };
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            assert!(row_text(buffer, 23).contains(&format!("{current}→{next}")));
+            assert_eq!(buffer[(1, 19)].bg, mode_color(current));
+            assert_eq!(buffer[(1, 23)].fg, mode_color(current));
+            let arrow = 1 + current.len() as u16;
+            assert_eq!(buffer[(arrow, 23)].fg, MUTED);
+            for column in arrow + 1..arrow + 1 + next.len() as u16 {
+                assert_eq!(buffer[(column, 23)].fg, mode_color(next));
+            }
+            let mut tiny = Terminal::new(TestBackend::new(20, 6)).unwrap();
+            tiny.draw(|frame| draw(frame, &mut state)).unwrap();
+            assert_eq!(tiny.backend().buffer()[(1, 3)].bg, mode_color(current));
+            assert_eq!(tiny.backend().buffer()[(1, 5)].fg, mode_color(current));
+
+            state.mode = next.into();
+            state.pending_mode = None;
+            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(1, 19)].bg, mode_color(next));
+            assert_eq!(buffer[(1, 23)].fg, mode_color(next));
+            assert!(!row_text(buffer, 23).contains('→'));
+        }
     }
 }

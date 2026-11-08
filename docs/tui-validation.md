@@ -83,3 +83,15 @@ macOS27.2 ARM／Rust1.99.1通过部署目标15.0的完整格式、workspace全�
 - 正常入口PTY快照前缀为 `target/tui-beautify-idle-composer-80x24`、`target/tui-beautify-thinking-tasks-160x40`、`target/tui-beautify-expanded-tool-110x36` 和 `target/tui-beautify-tool-summaries-160x45`，均保存cells JSON供复核。
 
 证据范围为上述本机和本地协议替身，平台候选记录按各自源码和产物维护。
+
+## 四模式主题色验收
+
+2026-11-08，本机macOS27.2 ARM／Rust1.99.1，macOS部署目标15.0。完整格式、workspace全目标Clippy、579项Rust测试和优化构建通过，独立128项TUI lib复核通过。四色映射、未知模式、常规／侧栏／极小窗口、详情单行输入、pending目标与实际生效及底栏模型前景均有组件回归。
+
+同一程序完成19组正常入口PTY，验证12种模式权限启动、空Tab四色循环、当前与待切换文字各自配色、输入条保持当前模式色直到调用边界后同步更新，以及审批／任务语义色。5项发行工具测试、工具smoke、文本会话与5项审查回归通过。
+
+- 完整检查为 `target/tui-mode-colors-check.log`，PTY报告为 `target/tui-mode-colors-release-matrix.json`。
+- 程序SHA-256为 `d89d5ca61db05da5d564fff28b51957b9090aa4052e9138365d1c09316cb289a`，实际Mach-O部署目标15.0。
+- 本轮5份单元格快照为 `target/tui-mode-colors-{work,code,plan,build,pending-work-code}-110x32-cells.json`，四色局部预览为 `target/tui-mode-colors-composers.png`。
+
+本节采用本机和本地受控协议服务，预览由实际PTY单元格投影生成，平台候选记录按其对应源码和程序维护。

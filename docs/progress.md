@@ -108,6 +108,14 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 
 检查日志为 `target/tui-beautify-check-final.log`，PTY报告为 `target/tui-beautify-release-matrix.json`。程序SHA-256为 `aef46edff56e04056f79cf0f2a58636e5ddf349f9fead6a82ce6d1b54865dade`，Mach-O最低部署版本为15.0。`target/tui-beautify-refined-160x40.png`、`target/tui-beautify-refined-110x36.png` 和 `target/tui-beautify-composer.png` 为生产组件合成状态预览，含颜色与字重投影。本轮正常入口PTY另保存4组单元格快照，实际模型服务使用本地受控夹具。
 
+#### 四模式主题色联动
+
+2026-11-08，按D-047为WORK／CODE／PLAN／BUILD分配晴蓝 `#58A6FF`、薄荷绿 `#7DCB9B`、薰衣草紫 `#BB9AF7` 与暖杏橙 `#F6AD55`。输入框实心色条和底栏实际模式共用 `mode_color`，待切换文字分别使用当前／目标色，箭头为Muted，色条按实际模式生效更新。模型名称使用显式正文前景提升可读性，未知模式回退Muted。
+
+部署目标15.0的完整格式、workspace全目标Clippy、579项Rust测试与优化构建通过，独立复核通过128项TUI lib测试。新增回归覆盖四模式与未知值、5种尺寸、极小详情单行输入、待切换与实际生效、模型字段前景。最新程序的19组正常入口PTY全部通过，包含12种启动组合、Tab四色循环、运行中pending及边界后的同步着色。5项发行工具测试、工具smoke、文本journey、5项审查回归与私有配置离线校验通过。
+
+环境为本机macOS27.2 ARM／Rust1.99.1，日志为 `target/tui-mode-colors-check.log`，PTY报告为 `target/tui-mode-colors-release-matrix.json`，程序SHA-256为 `d89d5ca61db05da5d564fff28b51957b9090aa4052e9138365d1c09316cb289a`，Mach-O最低部署版本15.0。四模式与pending单元格快照保存为 `target/tui-mode-colors-*-110x32-cells.json`，局部合成图 `target/tui-mode-colors-composers.png` 根据本轮受控PTY数据渲染。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

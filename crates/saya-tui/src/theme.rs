@@ -18,3 +18,14 @@ pub(crate) const CODE_BACKGROUND: Color = Color::Rgb(23, 23, 27);
 pub(crate) const CODE_FOREGROUND: Color = Color::Rgb(196, 196, 204);
 pub(crate) const GREEN: Color = Color::Rgb(125, 203, 155);
 pub(crate) const RED: Color = Color::Rgb(248, 113, 113);
+
+/// Accent shared by the active mode label and the message input stripe.
+pub(crate) fn mode_color(mode: &str) -> Color {
+    match mode {
+        "WORK" => BLUE,
+        "CODE" => GREEN,
+        "PLAN" => HEADING,
+        "BUILD" => AMBER,
+        _ => MUTED,
+    }
+}

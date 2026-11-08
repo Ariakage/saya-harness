@@ -25,6 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 EDITOR_PLACEHOLDER = 'Describe a task…'
+MODE_COLORS = {'WORK': (88, 166, 255), 'CODE': (125, 203, 155),
+               'PLAN': (187, 154, 247), 'BUILD': (246, 173, 85)}
 
 
 class Screen:
@@ -687,6 +689,28 @@ def invoke(binary, root, config, extra=()):
                     root / 'workspace', environment(root))
 
 
+def assert_mode_colors(terminal, mode, pending=None):
+    terminal.settle()
+    screen = terminal.screen
+    color = MODE_COLORS[mode]
+    footer_row = screen.rows - 1
+    if terminal.mode() != mode or screen.row_style(footer_row, mode, 1, screen.main_width() - 1) != (color, (9, 9, 11)):
+        raise RuntimeError('footer did not use the actual ' + mode + ' mode color')
+    input_row = screen.message_row()
+    if input_row is None and screen.rows == 6 and screen.status_row() == 3:
+        input_row = 4
+    if input_row is None:
+        raise RuntimeError('mode color assertion could not locate the actual composer')
+    for row in range(input_row, screen.rows - 1):
+        if screen.colors[row][1] != (color, color):
+            raise RuntimeError('composer stripe did not retain the actual ' + mode + ' mode color')
+    if pending is not None:
+        if screen.row_style(footer_row, '→', 1, screen.main_width() - 1) != ((129, 129, 139), (9, 9, 11)):
+            raise RuntimeError('pending-mode arrow did not retain its secondary color')
+        if screen.row_style(footer_row, pending, 1, screen.main_width() - 1) != (MODE_COLORS[pending], (9, 9, 11)):
+            raise RuntimeError('pending target mode did not use its own color')
+
+
 def stream_journey(binary, protocol):
     markdown = '\n'.join(['## Heading', '**strong** and *emphasis* and `inline`', '- item', '> quote',
                           'https://example.test', '<b>literal html</b>', '```rust',
@@ -947,6 +971,7 @@ def empty_tab_mode_journey(binary):
                         raise RuntimeError('idle Tab initialized persistent session storage')
                     if list(workspace.iterdir()) != [workspace / 'fact.txt']:
                         raise RuntimeError('idle Tab changed workspace files')
+                    assert_mode_colors(terminal, expected_mode)
 
                 def clear_draft():
                     terminal.send(b'\x03')
@@ -992,6 +1017,7 @@ def empty_tab_mode_journey(binary):
                     terminal.wait(lambda: terminal.mode() == mode and terminal.editor_text() == '',
                                   'idle empty Tab mode ' + mode)
                     no_dispatch(mode)
+                    save_interactive_screen(terminal, mode.lower() + '-110x32')
 
                 terminal.send(b'\x10')
                 terminal.wait(lambda: 'Commands' in terminal.screen.details_text(), 'Tab fixture command palette')
@@ -1028,16 +1054,22 @@ def empty_tab_mode_journey(binary):
                               'active Tab pending mode in the main footer')
                 if terminal.mode() != 'WORK' or len(fixture.requests) != 1:
                     raise RuntimeError('active empty Tab interrupted the current model call')
+                assert_mode_colors(terminal, 'WORK', pending='CODE')
+                save_interactive_screen(terminal, 'pending-work-code-110x32')
                 terminal.until('TabActiveDone')
                 wait_idle(terminal, root)
                 if terminal.mode() != 'CODE' or session_data(binary, root, config)[0]['work_mode'].lower() != 'code':
                     raise RuntimeError('active Tab did not apply and persist its mode at the next call boundary')
+                assert_mode_colors(terminal, 'CODE')
 
                 terminal.line('/permissions manual')
                 terminal.wait(lambda: terminal.permissions() == 'Manual Approval', 'Tab fixture manual permissions')
                 terminal.line('Request the manual Tab mode fixture')
                 terminal.wait(lambda: manual_call[0] in terminal.screen.details_text() and
                               terminal.screen.status() == 'Awaiting approval', 'manual approval before draft Tab')
+                assert_mode_colors(terminal, 'CODE')
+                if terminal.screen.colors[terminal.screen.status_row()][1] != ((246, 173, 85), (9, 9, 11)):
+                    raise RuntimeError('mode color replaced the independent approval status color')
                 terminal.send('/mo')
                 terminal.wait(lambda: bool(terminal.screen.popup_text()), 'manual draft Tab suggestions')
                 terminal.send(b'\t')
@@ -1055,6 +1087,7 @@ def empty_tab_mode_journey(binary):
                     raise RuntimeError('empty approval Tab did not complete the explicit mode transition')
                 if session_data(binary, root, config)[0]['work_mode'].lower() != 'plan':
                     raise RuntimeError('empty approval Tab mode was not persisted')
+                assert_mode_colors(terminal, 'PLAN')
                 terminal.finish()
             finally:
                 terminal.close()
@@ -1121,8 +1154,9 @@ def reference_layout_and_title_journey(binary):
                     for index in range(input_row, rows - 1):
                         if screen.cells[index][1] != '│':
                             raise RuntimeError('reference input did not retain its left border')
-                        if screen.colors[index][1] != ((88, 166, 255), (88, 166, 255)):
-                            raise RuntimeError('reference input stripe was not solid blue for the full composer height')
+                        color = MODE_COLORS[terminal.mode()]
+                        if screen.colors[index][1] != (color, color):
+                            raise RuntimeError('reference input stripe did not use the actual mode color for its full height')
                     if screen.colors[input_row][3][1] != (32, 32, 36):
                         raise RuntimeError('reference Message region did not use its gray background')
                     if expected_message_row is not None:
@@ -1393,6 +1427,7 @@ def mode_permission_matrix(binary):
                         terminal.title()
                         label = {'auto': 'auto', 'manual': 'Manual Approval', 'bypass': 'bypass permissions'}[permission]
                         terminal.wait(lambda: terminal.permissions() == label, 'configured permission label before model input')
+                        assert_mode_colors(terminal, mode.upper())
                         terminal.settle()
                         foreground = (129, 129, 139) if permission == 'auto' else (187, 166, 133)
                         if terminal.screen.row_style(terminal.screen.status_row(), label, 1,
@@ -1519,7 +1554,7 @@ def manual_tools_and_clarification(binary):
 
 
 def save_interactive_screen(terminal, name):
-    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-beautify-' + name + '-cells.json')
+    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-mode-colors-' + name + '-cells.json')
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps({'columns': terminal.screen.columns, 'rows': terminal.screen.rows,
                                'cells': terminal.screen.cells, 'colors': terminal.screen.colors},
@@ -1732,6 +1767,9 @@ def todos_manual_plan_and_restore_journey(binary):
                 terminal.wait(lambda: 'Tasks · 2/2' in terminal.screen.sidebar_row_text(20), 'completed canonical task count')
                 if any(not terminal.screen.sidebar_row_text(row).startswith('✓ ') for row in (21, 22)):
                     raise RuntimeError('completed task icons were not rendered from successful results')
+                for row in (21, 22):
+                    if terminal.screen.row_style(row, '✓', terminal.screen.main_width()) != ((125, 203, 155), (20, 20, 22)):
+                        raise RuntimeError('PLAN mode color replaced the independent completed-task color')
                 if len(fixture.requests) != 5 or (root / 'workspace' / 'must-not-exist.txt').exists():
                     raise RuntimeError('PLAN task tracking changed the workspace or required an unexpected request')
                 if any('TODO_THOUGHT_' in terminal.screen.main_row_text(row) for row in range(2, terminal.screen.status_row())):
