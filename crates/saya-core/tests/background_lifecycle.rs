@@ -75,7 +75,7 @@ impl Store for PauseStore {
         Box::pin(async move {
             if changes.iter().any(|change| match change {
                 StoreChange::ToolIntent { .. } => !self.on_finish,
-                StoreChange::ToolFinished { .. } => self.on_finish,
+                StoreChange::ToolFinished { result, .. } => self.on_finish && result.ok,
                 _ => false,
             }) && self.pause.swap(false, Ordering::AcqRel)
             {
@@ -300,7 +300,7 @@ async fn timeout_after_file_commit_retains_observed_success_and_waits_for_result
     let (dispatcher, context, modes) = dispatcher(root.path(), store.clone()).await;
     let jobs = BackgroundJobs::new(dispatcher.clone(), 1, 2)
         .unwrap()
-        .with_tool_timeout(Duration::from_millis(20))
+        .with_tool_timeout(Duration::from_secs(60))
         .unwrap();
     let call = ToolCall {
         call_id: "committed-before-timeout".into(), name: "write_file".into(),
@@ -308,11 +308,16 @@ async fn timeout_after_file_commit_retains_observed_success_and_waits_for_result
     };
     let permit = permit(&dispatcher, &call, &context).await;
     let id = jobs.start(call, context, permit).unwrap();
-    store.entered.notified().await;
+    tokio::time::timeout(Duration::from_secs(5), store.entered.notified())
+        .await
+        .expect("successful write did not reach the result-save barrier");
     assert_eq!(
         std::fs::read_to_string(root.path().join("written.txt")).unwrap(),
         "actual data"
     );
+    // Pause only after real filesystem work completes, then cross the deadline explicitly.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
     tokio::time::timeout(Duration::from_secs(2), async {
         while !jobs.events().unwrap().iter().any(|event| {
             matches!(

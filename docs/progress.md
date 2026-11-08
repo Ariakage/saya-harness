@@ -21,6 +21,12 @@
 
 本机 `.saya/local/saya-trial` 已切换到匿名下载的正式ARM程序，配置、空闲TUI、命令面板和退出恢复检查通过，模型运行数为0。原预发行和历史程序保留独立记录。完整日志、包、公开下载与验收材料位于 `target/release-0.2.0/`。
 
+### 发行收尾的测试竞态修复
+
+收尾文档提交 `7bd8156` 的CI在macOS ARM和Intel触发同一后台生命周期测试竞态。20ms超时可能先于文件提交发生，测试存储对取消结果发出通知后，测试误将该通知视为写入成功并读取文件，报出 `NotFound`。失败记录和实际发行源码的原生验收记录分别保留。[原始失败CI](https://github.com/Ariakage/saya-harness/actions/runs/42528160893)
+
+本次修改限定成功结果保存屏障，在5秒真实等待保护内确认文件已提交，再暂停Tokio时钟并显式跨过60秒工具期限。测试保留结果保存前任务仍运行、PLAN延迟生效、清理完成后保留已观察成功结果及文件内容的断言。四项后台生命周期测试以四路并发重复200轮，共800次通过，日志为 `target/release-0.2.0/background-lifecycle-{fix.log,stress.json}`。本机执行 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、全目标严格Clippy、682项Rust测试及release构建通过，日志为 `target/release-0.2.0/final-ci-repair-check.log`，两名Agent完成独立只读复核。修改范围为测试与本进度记录，四平台CI按本次修复提交验证。
+
 ## 0.2.0-rc.2 发行与验收
 
 2026-11-09，项目负责人授权的0.2.0-rc.2已发布为GitHub预发行。标签 `v0.2.0-rc.2` 固定到 `daee043821529e270b876a77d5c6e8f47bed1c33`。四个原生目标均通过682项Rust测试、九项发行脚本测试及22组PTY，完成工具、文本会话、恢复与审查回归，源码／脚本／包／二进制摘要交叉核对通过。[预发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0-rc.2)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42518737234)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42518738474)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42520065596)
