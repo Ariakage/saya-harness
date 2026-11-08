@@ -368,6 +368,29 @@ impl ApprovalManager {
                 .modes
                 .shared_approval_is_current(binding.mode_revision)?)
     }
+
+    fn existing_authorization(
+        &self,
+        binding: &Binding,
+        call_id: &str,
+        interactive: bool,
+    ) -> Result<Option<Authorization>, BoundaryError> {
+        let state = self.state.lock().map_err(|_| locked())?;
+        if state.rejected.contains(&rejection_key(binding)) {
+            return Ok(Some(Authorization::Denied("previously_denied")));
+        }
+        Ok(state
+            .pending
+            .values()
+            .find(|pending| pending.call_id == call_id && &pending.binding == binding)
+            .map(|pending| {
+                if interactive {
+                    Authorization::Pending(pending.request.clone())
+                } else {
+                    Authorization::NeedsConfirmation(pending.request.clone())
+                }
+            }))
+    }
     /// Decide rules, perform isolated model review only when required, and create
     /// an exact one-use permit or a stored confirmation request. No tool runs.
     pub async fn authorize(
@@ -389,22 +412,10 @@ impl ApprovalManager {
             return Err(failure("cancelled", "authorization cancelled"));
         }
         let binding = self.bind(&input)?;
+        if let Some(existing) =
+            self.existing_authorization(&binding, &input.call.call_id, input.interactive)?
         {
-            let state = self.state.lock().map_err(|_| locked())?;
-            if state.rejected.contains(&rejection_key(&binding)) {
-                return Ok(Authorization::Denied("previously_denied"));
-            }
-            if let Some(existing) = state
-                .pending
-                .values()
-                .find(|pending| pending.call_id == input.call.call_id && pending.binding == binding)
-            {
-                return Ok(if input.interactive {
-                    Authorization::Pending(existing.request.clone())
-                } else {
-                    Authorization::NeedsConfirmation(existing.request.clone())
-                });
-            }
+            return Ok(existing);
         }
         let raw: Value = serde_json::from_str(&input.call.arguments)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
@@ -528,27 +539,34 @@ impl ApprovalManager {
                 .map_or_else(|| binding.cwd.clone(), |(_, cwd)| cwd),
             work_mode: binding.mode,
         };
-        self.store
-            .commit(&[StoreChange::ApprovalRequested(request.clone())])
-            .await?;
+        if cancel.is_cancelled() {
+            return Err(failure("cancelled", "authorization cancelled"));
+        }
         if !self.current(&binding)? {
             return Ok(Authorization::Stale);
         }
-        let mut state = self.state.lock().map_err(|_| locked())?;
-        if state.rejected.contains(&rejection_key(&binding)) {
-            return Ok(Authorization::Denied("previously_denied"));
-        }
-        if let Some(existing) = state
-            .pending
-            .values()
-            .find(|pending| pending.call_id == input.call.call_id && pending.binding == binding)
+        if let Some(existing) =
+            self.existing_authorization(&binding, &input.call.call_id, input.interactive)?
         {
-            return Ok(if input.interactive {
-                Authorization::Pending(existing.request.clone())
-            } else {
-                Authorization::NeedsConfirmation(existing.request.clone())
-            });
+            return Ok(existing);
         }
+        self.store
+            .commit(&[StoreChange::ApprovalRequested(request.clone())])
+            .await?;
+        // A request can expire while its audit record is committing. Keep the
+        // record, but never publish that request as a current confirmation.
+        if cancel.is_cancelled() {
+            return Err(failure("cancelled", "authorization cancelled"));
+        }
+        if !self.current(&binding)? {
+            return Ok(Authorization::Stale);
+        }
+        if let Some(existing) =
+            self.existing_authorization(&binding, &input.call.call_id, input.interactive)?
+        {
+            return Ok(existing);
+        }
+        let mut state = self.state.lock().map_err(|_| locked())?;
         state.pending.insert(
             request.approval_id.clone(),
             Pending {

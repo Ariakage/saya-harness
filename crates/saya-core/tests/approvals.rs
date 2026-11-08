@@ -67,6 +67,50 @@ struct RecordingStore {
     inner: MemoryStore,
     requests: Mutex<Vec<ApprovalRequest>>,
 }
+
+type ApprovalRaceHook = Box<dyn FnOnce() + Send>;
+
+#[derive(Default)]
+struct ApprovalRaceStore {
+    inner: RecordingStore,
+    after_review: Mutex<Option<ApprovalRaceHook>>,
+    after_request: Mutex<Option<ApprovalRaceHook>>,
+}
+
+impl Store for ApprovalRaceStore {
+    fn load_session(&self, id: SessionId) -> ModelOperation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> ModelOperation<'a, ()> {
+        Box::pin(async move {
+            self.inner.commit(changes).await?;
+            let reviewed = changes.iter().any(|change| {
+                matches!(
+                    change,
+                    StoreChange::Activity {
+                        payload: saya_core::contract::EventPayload::PermissionReviewed { .. },
+                        ..
+                    }
+                )
+            });
+            let requested = changes
+                .iter()
+                .any(|change| matches!(change, StoreChange::ApprovalRequested(_)));
+            let hook = if reviewed {
+                self.after_review.lock().unwrap().take()
+            } else if requested {
+                self.after_request.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some(hook) = hook {
+                hook();
+            }
+            Ok(())
+        })
+    }
+}
 impl Store for RecordingStore {
     fn load_session(&self, id: SessionId) -> ModelOperation<'_, Option<Session>> {
         self.inner.load_session(id)
@@ -1221,6 +1265,133 @@ async fn persisted_confirmation_redacts_known_secrets_and_does_not_store_grants(
     assert!(serialized.contains("[REDACTED]"));
     assert_eq!(store.requests.lock().map_err(|_| "lock")?.len(), 1);
     assert!(!temp.path().join("out.txt").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejection_during_review_does_not_persist_another_approval_request()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
+    let store = Arc::new(ApprovalRaceStore::default());
+    store
+        .commit(&[
+            StoreChange::Session(session),
+            StoreChange::RunStarted(run.clone()),
+        ])
+        .await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let manager = Arc::new(manager(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store.clone(),
+        &run,
+        Preauthorizations::default(),
+        Arc::new(Signal::default()),
+    )?);
+    let operation = Operation::file(temp.path(), "write_file", Path::new("out.txt"))?;
+    let first = write_call("first", "same content");
+    let request = match manager
+        .authorize(
+            input(&operation, &first, &context, true),
+            &deny_model(),
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await?
+    {
+        Authorization::Pending(request) => request,
+        _ => return Err("expected first approval".into()),
+    };
+    let resolving = manager.clone();
+    *store.after_review.lock().unwrap() = Some(Box::new(move || {
+        assert!(matches!(
+            resolving.resolve(&request.approval_id, false).unwrap(),
+            Authorization::Denied("user_denied")
+        ));
+    }));
+    let second = write_call("second", "same content");
+    assert!(matches!(
+        manager
+            .authorize(
+                input(&operation, &second, &context, true),
+                &deny_model(),
+                &SharedBudget::default(),
+                &config()
+            )
+            .await?,
+        Authorization::Denied("previously_denied")
+    ));
+    assert_eq!(
+        store.inner.requests.lock().unwrap().len(),
+        1,
+        "a known rejection was persisted as a new waiting approval"
+    );
+    assert!(!temp.path().join("out.txt").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn approval_expiring_during_commit_remains_audit_only()
+-> Result<(), Box<dyn std::error::Error>> {
+    for cancelled in [false, true] {
+        let temp = support::temp_workspace()?;
+        let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
+        let store = Arc::new(ApprovalRaceStore::default());
+        store
+            .commit(&[
+                StoreChange::Session(session),
+                StoreChange::RunStarted(run.clone()),
+            ])
+            .await?;
+        let modes = ModeController::new(WorkMode::Work);
+        let signal = Arc::new(Signal::default());
+        let manager = manager(
+            policy(temp.path(), "")?,
+            modes.clone(),
+            PermissionRevision::new(modes.clone(), run.permissions),
+            store.clone(),
+            &run,
+            Preauthorizations::default(),
+            signal.clone(),
+        )?;
+        *store.after_request.lock().unwrap() = Some(Box::new(move || {
+            if cancelled {
+                signal.0.store(true, Ordering::Release);
+            } else {
+                modes.request(WorkMode::Code).unwrap();
+            }
+        }));
+        let operation = Operation::file(temp.path(), "write_file", Path::new("out.txt"))?;
+        let call = write_call("raced", "hello");
+        let result = manager
+            .authorize(
+                input(&operation, &call, &context, true),
+                &deny_model(),
+                &SharedBudget::default(),
+                &config(),
+            )
+            .await;
+        if cancelled {
+            assert!(matches!(result, Err(error) if error.0.code == "cancelled"));
+        } else {
+            assert!(matches!(result, Ok(Authorization::Stale)));
+        }
+        let request = store.inner.requests.lock().unwrap()[0].clone();
+        assert_eq!(store.inner.requests.lock().unwrap().len(), 1);
+        if cancelled {
+            assert!(
+                matches!(manager.resolve(&request.approval_id, true), Err(error) if error.0.code == "cancelled")
+            );
+        } else {
+            assert!(matches!(
+                manager.resolve(&request.approval_id, true)?,
+                Authorization::Stale
+            ));
+        }
+        assert!(!temp.path().join("out.txt").exists());
+    }
     Ok(())
 }
 
