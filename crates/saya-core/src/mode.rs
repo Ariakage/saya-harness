@@ -1,7 +1,17 @@
 //! Coordination of user-requested work mode changes. This state machine does
 //! not itself persist changes, dispatch tools, or enforce permissions.
-use crate::contract::{BoundaryError, ErrorInfo, WorkMode};
-use std::sync::{Arc, Mutex};
+use crate::contract::{BoundaryError, ErrorInfo, EventPayload, WorkMode};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
+
+const MAX_MODE_EVENTS: usize = 256;
+#[derive(Clone)]
+pub(crate) struct ModeEvent {
+    pub sequence: u64,
+    pub payload: EventPayload,
+}
 
 #[derive(Clone)]
 pub struct ModeController(Arc<Mutex<State>>);
@@ -11,6 +21,9 @@ struct State {
     active: usize,
     exclusive: bool,
     revision: u64,
+    events: VecDeque<ModeEvent>,
+    event_sequence: u64,
+    record_events: bool,
 }
 #[derive(Clone, Copy)]
 pub struct ModeSnapshot {
@@ -35,21 +48,59 @@ impl ModeController {
     }
     /// Create a controller with the selected initial mode and no pending request.
     pub fn new(initial: WorkMode) -> Self {
+        Self::create(initial, false)
+    }
+    pub(crate) fn recording(initial: WorkMode) -> Self {
+        Self::create(initial, true)
+    }
+    fn create(initial: WorkMode, record_events: bool) -> Self {
         Self(Arc::new(Mutex::new(State {
             current: initial,
             pending: None,
             active: 0,
             exclusive: false,
             revision: 0,
+            events: VecDeque::new(),
+            event_sequence: 0,
+            record_events,
         })))
     }
     /// Queue a user request during a call, or apply it immediately while idle.
     /// Requesting the current mode withdraws a pending change without blocking
     /// new shared calls; withdrawing a change invalidates older approvals.
-    /// Returns an error if the state lock is poisoned. Model suggestions must
-    /// not invoke this method without an explicit user request.
+    /// Returns an error if the state lock is poisoned or the bounded event
+    /// journal is full. Rejected requests preserve the current state. Model
+    /// suggestions must not invoke this method without an explicit user request.
     pub fn request(&self, target: WorkMode) -> Result<(), BoundaryError> {
+        self.request_after(target, || {})
+    }
+    pub(crate) fn request_after(
+        &self,
+        target: WorkMode,
+        before: impl FnOnce(),
+    ) -> Result<(), BoundaryError> {
         let mut s = self.0.lock().map_err(|_| poisoned())?;
+        let immediate = s.active == 0 && s.current != target;
+        let pending = s.active != 0 && s.current != target;
+        // A queued request reserves its eventual Changed entry. Finishing an
+        // existing invocation can therefore always apply the pending mode.
+        let needed = 1 + usize::from(immediate) + usize::from(pending);
+        if s.record_events
+            && (s.events.len() + needed > MAX_MODE_EVENTS
+                || s.event_sequence.checked_add(needed as u64).is_none())
+        {
+            return Err(BoundaryError(
+                ErrorInfo {
+                    code: "mode_event_limit".into(),
+                    message: "mode event journal is full".into(),
+                },
+                None,
+                None,
+            ));
+        }
+        before();
+        let from = s.current;
+        s.record(EventPayload::ModeChangeRequested { from, to: target });
         if s.current == target {
             if s.pending.take().is_some() {
                 s.revision += 1;
@@ -59,6 +110,7 @@ impl ModeController {
         } else {
             s.current = target;
             s.revision += 1;
+            s.record(EventPayload::ModeChanged { from, to: target });
         }
         Ok(())
     }
@@ -71,6 +123,28 @@ impl ModeController {
             pending: s.pending,
             revision: s.revision,
         })
+    }
+    pub(crate) fn event_snapshot(&self) -> Result<(ModeSnapshot, Vec<ModeEvent>), BoundaryError> {
+        let s = self.0.lock().map_err(|_| poisoned())?;
+        Ok((
+            ModeSnapshot {
+                current: s.current,
+                pending: s.pending,
+                revision: s.revision,
+            },
+            s.events.iter().cloned().collect(),
+        ))
+    }
+    pub(crate) fn acknowledge_events(&self, through: u64) -> Result<(), BoundaryError> {
+        let mut s = self.0.lock().map_err(|_| poisoned())?;
+        while s
+            .events
+            .front()
+            .is_some_and(|event| event.sequence <= through)
+        {
+            s.events.pop_front();
+        }
+        Ok(())
     }
     /// Atomically begin a call if the snapshot is still current. Returns false
     /// if another call or request raced, or an error if the lock is poisoned.
@@ -113,8 +187,10 @@ impl ModeController {
         if let Some(mode) = s.pending.take()
             && s.current != mode
         {
+            let from = s.current;
             s.current = mode;
             s.revision += 1;
+            s.record(EventPayload::ModeChanged { from, to: mode });
         }
         Ok(())
     }
@@ -137,6 +213,18 @@ impl ModeController {
     pub(crate) fn shared_approval_is_current(&self, revision: u64) -> Result<bool, BoundaryError> {
         let s = self.0.lock().map_err(|_| poisoned())?;
         Ok(!s.exclusive && s.pending.is_none() && s.revision == revision)
+    }
+}
+impl State {
+    fn record(&mut self, payload: EventPayload) {
+        if !self.record_events {
+            return;
+        }
+        self.event_sequence += 1;
+        self.events.push_back(ModeEvent {
+            sequence: self.event_sequence,
+            payload,
+        });
     }
 }
 
@@ -175,5 +263,106 @@ mod tests {
         modes.finish().unwrap();
         assert_eq!(modes.snapshot().unwrap().current, WorkMode::Work);
         assert!(modes.approval_is_current(snapshot.revision).unwrap());
+    }
+
+    #[test]
+    fn journal_records_requests_and_only_actual_changes_in_order() {
+        let modes = ModeController::recording(WorkMode::Work);
+        modes.request(WorkMode::Code).unwrap();
+        assert!(modes.begin_shared(1).unwrap());
+        modes.request(WorkMode::Plan).unwrap();
+        modes.request(WorkMode::Build).unwrap();
+        modes.request(WorkMode::Code).unwrap();
+        modes.finish().unwrap();
+        let (_, events) = modes.event_snapshot().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.payload.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                EventPayload::ModeChangeRequested {
+                    from: WorkMode::Work,
+                    to: WorkMode::Code
+                },
+                EventPayload::ModeChanged {
+                    from: WorkMode::Work,
+                    to: WorkMode::Code
+                },
+                EventPayload::ModeChangeRequested {
+                    from: WorkMode::Code,
+                    to: WorkMode::Plan
+                },
+                EventPayload::ModeChangeRequested {
+                    from: WorkMode::Code,
+                    to: WorkMode::Build
+                },
+                EventPayload::ModeChangeRequested {
+                    from: WorkMode::Code,
+                    to: WorkMode::Code
+                },
+            ]
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+    }
+
+    #[test]
+    fn full_journal_rejects_requests_and_keeps_the_pending_finish_slot() {
+        let modes = ModeController::recording(WorkMode::Work);
+        assert!(modes.begin_shared(0).unwrap());
+        for index in 0..MAX_MODE_EVENTS - 1 {
+            modes
+                .request(if index % 2 == 0 {
+                    WorkMode::Plan
+                } else {
+                    WorkMode::Code
+                })
+                .unwrap();
+        }
+        let before = modes.snapshot().unwrap();
+        let mut called = false;
+        assert_eq!(
+            modes
+                .request_after(WorkMode::Build, || called = true)
+                .unwrap_err()
+                .0
+                .code,
+            "mode_event_limit"
+        );
+        assert!(!called);
+        let after = modes.snapshot().unwrap();
+        assert_eq!(
+            (after.current, after.pending, after.revision),
+            (before.current, before.pending, before.revision)
+        );
+        modes.finish().unwrap();
+        let (snapshot, events) = modes.event_snapshot().unwrap();
+        assert_eq!(events.len(), MAX_MODE_EVENTS);
+        assert_eq!(snapshot.current, before.pending.unwrap());
+        assert!(matches!(
+            events.last().unwrap().payload,
+            EventPayload::ModeChanged { .. }
+        ));
+        let acknowledged = events[127].sequence;
+        modes.acknowledge_events(acknowledged).unwrap();
+        modes.request(WorkMode::Build).unwrap();
+        let (_, remaining) = modes.event_snapshot().unwrap();
+        assert_eq!(remaining.first().unwrap().sequence, acknowledged + 1);
+        assert!(remaining.last().unwrap().sequence > events.last().unwrap().sequence);
+    }
+
+    #[test]
+    fn public_state_machine_remains_usable_without_a_journal_consumer() {
+        let modes = ModeController::new(WorkMode::Work);
+        for _ in 0..512 {
+            modes.request(WorkMode::Code).unwrap();
+            modes.request(WorkMode::Work).unwrap();
+        }
+        assert_eq!(modes.snapshot().unwrap().current, WorkMode::Work);
+        assert!(modes.event_snapshot().unwrap().1.is_empty());
     }
 }

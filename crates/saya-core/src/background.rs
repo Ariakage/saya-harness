@@ -12,6 +12,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tokio::sync::{Notify, watch};
 use tracing::{Instrument, instrument::WithSubscriber};
@@ -103,6 +104,7 @@ pub enum BackgroundCancelReason {
     Plan,
     Shutdown,
     Failure,
+    Timeout,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackgroundOutcome {
@@ -181,6 +183,12 @@ struct Shared {
     state: Mutex<State>,
     changed: Notify,
 }
+struct ModeLease(crate::mode::ModeController);
+impl Drop for ModeLease {
+    fn drop(&mut self) {
+        let _ = self.0.finish();
+    }
+}
 /// Owns background calls for one dispatcher/run. Limits count all retained jobs
 /// and concurrent running jobs. The caller must call `shutdown` before run end.
 pub struct BackgroundJobs {
@@ -188,6 +196,7 @@ pub struct BackgroundJobs {
     shared: Arc<Shared>,
     max_running: usize,
     max_jobs: usize,
+    tool_timeout: Duration,
 }
 impl BackgroundJobs {
     pub fn with_defaults(dispatcher: Arc<ToolDispatcher>) -> Result<Self, BoundaryError> {
@@ -221,7 +230,20 @@ impl BackgroundJobs {
             }),
             max_running,
             max_jobs,
+            tool_timeout: Duration::from_secs(120),
         })
+    }
+    /// Set the non-exec deadline for this supervisor. Zero is rejected.
+    /// Reaching the deadline cancels the tool and waits for its cleanup.
+    pub fn with_tool_timeout(mut self, timeout: Duration) -> Result<Self, BoundaryError> {
+        if timeout.is_zero() {
+            return Err(failure(
+                "invalid_config",
+                "background tool timeout must be positive",
+            ));
+        }
+        self.tool_timeout = timeout;
+        Ok(self)
     }
     /// Authorize an explicitly requested background operation. Its internal
     /// call ID is distinct from the model-facing launch call ID.
@@ -349,6 +371,14 @@ impl BackgroundJobs {
         if mode.pending.is_some() || mode.current != context.run.work_mode {
             return Err(failure("stale_approval", "work mode changed"));
         }
+        let modes = self.dispatcher.mode_controller();
+        if !modes.begin_shared(mode.revision)? {
+            return Err(failure(
+                "stale_approval",
+                "work mode changed before scheduling",
+            ));
+        }
+        let lease = ModeLease(modes);
         let mutating = matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec");
         state.jobs.insert(
             id.clone(),
@@ -367,18 +397,58 @@ impl BackgroundJobs {
         );
         let shared = self.shared.clone();
         let dispatcher = self.dispatcher.clone();
+        let worker_state = shared.clone();
+        let worker_id = id.clone();
+        let tool_timeout = self.tool_timeout;
         let job_id = id.clone();
         let span = tracing::info_span!(target: "saya::background", "background", session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str(), job_id = job_id.as_str());
         let worker_span = span.clone();
         let task = runtime.spawn(
             async move {
+                let _lease = lease;
                 let signal = Combined {
                     root: dispatcher.root_cancellation(),
                     job: cancel,
                 };
-                dispatcher
-                    .execute_with_cancel(&call, &context, permit, &signal, true)
-                    .await
+                let operation =
+                    dispatcher.execute_with_cancel(&call, &context, permit, &signal, true);
+                tokio::pin!(operation);
+                tokio::select! {
+                    biased;
+                    result = &mut operation => return result,
+                    () = tokio::time::sleep(tool_timeout), if call.name != "exec" => {}
+                }
+                if signal.is_cancelled() {
+                    return operation.await;
+                }
+                let cancellation = match worker_state.state.lock() {
+                    Ok(mut state) => {
+                        if signal.is_cancelled() {
+                            Ok(false)
+                        } else {
+                            state.request_cancellation(&worker_id, BackgroundCancelReason::Timeout);
+                            Ok(true)
+                        }
+                    }
+                    Err(_) => {
+                        signal.job.cancel();
+                        Err(failure("background_error", "job lock poisoned"))
+                    }
+                };
+                // Keep polling the same future. In particular, a write which
+                // crossed its commit point must finish and report what happened.
+                let observed = operation.await;
+                if !cancellation? {
+                    return observed;
+                }
+                match observed {
+                    Err(error) if error.0.code != "cancelled" => Err(error),
+                    observed => {
+                        let mut error = failure("tool_timeout", "background tool timed out");
+                        error.2 = observed.ok().map(Box::new);
+                        Err(error)
+                    }
+                }
             }
             .instrument(worker_span)
             .with_current_subscriber(),
@@ -393,7 +463,7 @@ impl BackgroundJobs {
                 });
                 if let Ok(mut state) = shared.state.lock() {
                     if let Err(error) = &outcome
-                        && error.0.code != "cancelled"
+                        && !matches!(error.0.code.as_str(), "cancelled" | "tool_timeout")
                     {
                         state.closed = true;
                         state.fatal = Some(error.clone());
@@ -536,19 +606,19 @@ impl BackgroundJobs {
         if state.closed {
             return Err(failure("invalid_run", "run is stopping or has ended"));
         }
-        self.dispatcher.mode_controller().request(mode)?;
-        if mode == WorkMode::Plan {
-            let ids: Vec<_> = state
-                .jobs
-                .iter()
-                .filter(|(_, job)| job.mutating)
-                .map(|(id, _)| id.clone())
-                .collect();
-            for id in ids {
-                state.request_cancellation(&id, BackgroundCancelReason::Plan);
+        self.dispatcher.mode_controller().request_after(mode, || {
+            if mode == WorkMode::Plan {
+                let ids: Vec<_> = state
+                    .jobs
+                    .iter()
+                    .filter(|(_, job)| job.mutating)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for id in ids {
+                    state.request_cancellation(&id, BackgroundCancelReason::Plan);
+                }
             }
-        }
-        Ok(())
+        })
     }
     /// Prevent new work, cancel all unfinished jobs and await their cleanup.
     pub async fn shutdown(&self) -> Result<(), BoundaryError> {

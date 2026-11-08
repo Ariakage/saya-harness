@@ -350,7 +350,7 @@ impl AgentRuntime {
             inner: setup.model,
             metrics: metrics.clone(),
         });
-        let modes = ModeController::new(setup.run.work_mode);
+        let modes = ModeController::recording(setup.run.work_mode);
         let mut review = setup.review;
         review
             .known_secrets
@@ -381,11 +381,14 @@ impl AgentRuntime {
         } else {
             dispatcher
         });
-        let jobs = Arc::new(BackgroundJobs::new(
-            dispatcher.clone(),
-            limits.background_running,
-            limits.background_jobs,
-        )?);
+        let jobs = Arc::new(
+            BackgroundJobs::new(
+                dispatcher.clone(),
+                limits.background_running,
+                limits.background_jobs,
+            )?
+            .with_tool_timeout(limits.tool_timeout)?,
+        );
         let background = Arc::new(BackgroundTools::new(
             jobs.clone(),
             model.clone(),
@@ -502,15 +505,29 @@ impl AgentRuntime {
         session: &mut Session,
     ) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
         loop {
-            let snap = self.modes.snapshot()?;
+            let (snap, events) = self.modes.event_snapshot()?;
+            let mut changes = Vec::new();
             if session.work_mode != snap.current {
                 let mut update = session.clone();
                 update.work_mode = snap.current;
-                self.store.commit(&[StoreChange::Session(update)]).await?;
+                changes.push(StoreChange::Session(update));
+            }
+            changes.extend(events.iter().map(|event| StoreChange::Activity {
+                run_id: self.run.id,
+                payload: event.payload.clone(),
+            }));
+            if !changes.is_empty() {
+                self.store.commit(&changes).await?;
+                if let Some(event) = events.last() {
+                    self.modes.acknowledge_events(event.sequence)?;
+                }
                 session.work_mode = snap.current;
             }
-            let now = self.modes.snapshot()?;
-            if now.revision == snap.revision && now.pending == snap.pending {
+            let (now, pending_events) = self.modes.event_snapshot()?;
+            if now.revision == snap.revision
+                && now.pending == snap.pending
+                && pending_events.is_empty()
+            {
                 return Ok(now);
             }
         }
@@ -1513,5 +1530,211 @@ impl AgentRuntime {
         tracing::info!(target: "saya::runtime", event = "run.finished", status = ?result.status,
             error_code = result.error.as_ref().map(|error| error.code.as_str()).unwrap_or(""));
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod mode_event_tests {
+    use super::*;
+    use crate::{
+        contract::{ModelProtocol, PermissionMode, RunId, SessionId},
+        memory::MemoryStore,
+        permissions::PermissionConfig,
+        tools::read::ReadLimits,
+    };
+
+    struct Never;
+    impl Cancellation for Never {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+        fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(std::future::pending())
+        }
+    }
+    struct EndModel;
+    struct EndStream(bool);
+    impl Model for EndModel {
+        fn start<'a>(
+            &'a self,
+            _: &'a ModelRequest,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn crate::boundary::ModelStream>> {
+            Box::pin(async {
+                Ok(Box::new(EndStream(false)) as Box<dyn crate::boundary::ModelStream>)
+            })
+        }
+    }
+    impl crate::boundary::ModelStream for EndStream {
+        fn next<'a>(&'a mut self, _: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
+            Box::pin(async move {
+                if std::mem::replace(&mut self.0, true) {
+                    return Ok(None);
+                }
+                Ok(Some(ModelUpdate::Finished {
+                    items: vec![HistoryItem::AssistantText("done".into())],
+                    usage: None,
+                }))
+            })
+        }
+    }
+    struct ModeStore {
+        inner: MemoryStore,
+        fail: AtomicBool,
+        concurrent: Mutex<Option<ModeController>>,
+        batches: Mutex<Vec<Vec<StoreChange>>>,
+    }
+    impl Store for ModeStore {
+        fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+            self.inner.load_session(id)
+        }
+        fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+            Box::pin(async move {
+                let mode_activity = changes.iter().any(|change| {
+                    matches!(
+                        change,
+                        StoreChange::Activity {
+                            payload: EventPayload::ModeChangeRequested { .. }
+                                | EventPayload::ModeChanged { .. },
+                            ..
+                        }
+                    )
+                });
+                if mode_activity && self.fail.swap(false, Ordering::AcqRel) {
+                    return Err(error(
+                        "storage_error",
+                        "controlled mode transaction failure",
+                    ));
+                }
+                self.inner.commit(changes).await?;
+                self.batches.lock().unwrap().push(changes.to_vec());
+                if mode_activity && let Some(modes) = self.concurrent.lock().unwrap().take() {
+                    modes.request(WorkMode::Code)?;
+                }
+                Ok(())
+            })
+        }
+    }
+    fn fixture(root: &std::path::Path, store: Arc<ModeStore>) -> (AgentRuntime, Session) {
+        let session = Session {
+            id: SessionId::new(),
+            workspace: root.into(),
+            work_mode: WorkMode::Work,
+            profile: "fixture".into(),
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fixture".into(),
+            history: vec![HistoryItem::UserText("fixture".into())],
+        };
+        let run = Run {
+            id: RunId::new(),
+            session_id: session.id,
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Auto,
+        };
+        let runtime = AgentRuntime::new(RuntimeSetup {
+            run,
+            model: Arc::new(EndModel),
+            store,
+            policy: Arc::new(Policy::new(root, PermissionConfig::default()).unwrap()),
+            files: Arc::new(ReadTools::new(root, &[], false, ReadLimits::default()).unwrap()),
+            cancellation: Arc::new(Never),
+            review: ReviewConfig::new("fixture".into()),
+            exec: ExecConfig::default(),
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: vec![],
+            summary: "fixture".into(),
+            confirmation: None,
+            limits: RuntimeLimits::default(),
+        })
+        .unwrap();
+        (runtime, session)
+    }
+    fn store(fail: bool) -> Arc<ModeStore> {
+        Arc::new(ModeStore {
+            inner: MemoryStore::default(),
+            fail: AtomicBool::new(fail),
+            concurrent: Mutex::new(None),
+            batches: Mutex::new(vec![]),
+        })
+    }
+    #[tokio::test]
+    async fn mode_transaction_acknowledges_only_its_snapshot_during_concurrent_request() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(false);
+        let (mut runtime, mut session) = fixture(root.path(), store.clone());
+        runtime.request_mode(WorkMode::Plan).unwrap();
+        *store.concurrent.lock().unwrap() = Some(runtime.modes.clone());
+        assert_eq!(
+            runtime.run(&mut session).await.unwrap().status,
+            RunStatus::Completed
+        );
+        assert_eq!(session.work_mode, WorkMode::Code);
+        let batches = store.batches.lock().unwrap();
+        let activities = batches
+            .iter()
+            .flat_map(|batch| batch.iter())
+            .filter_map(|change| {
+                if let StoreChange::Activity { payload, .. } = change {
+                    Some(payload.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            activities,
+            vec![
+                EventPayload::ModeChangeRequested {
+                    from: WorkMode::Work,
+                    to: WorkMode::Plan
+                },
+                EventPayload::ModeChanged {
+                    from: WorkMode::Work,
+                    to: WorkMode::Plan
+                },
+                EventPayload::ModeChangeRequested {
+                    from: WorkMode::Plan,
+                    to: WorkMode::Code
+                },
+                EventPayload::ModeChanged {
+                    from: WorkMode::Plan,
+                    to: WorkMode::Code
+                },
+            ]
+        );
+        for batch in batches.iter().filter(|batch| {
+            batch
+                .iter()
+                .any(|change| matches!(change, StoreChange::Activity { .. }))
+        }) {
+            assert!(matches!(batch.first(), Some(StoreChange::Session(_))));
+        }
+        assert!(runtime.modes.event_snapshot().unwrap().1.is_empty());
+    }
+    #[tokio::test]
+    async fn failed_mode_transaction_retains_journal_and_session_until_successful_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(true);
+        let (mut runtime, mut session) = fixture(root.path(), store.clone());
+        runtime.request_mode(WorkMode::Plan).unwrap();
+        assert_eq!(
+            runtime.run(&mut session).await.unwrap_err().0.code,
+            "storage_error"
+        );
+        assert_eq!(session.work_mode, WorkMode::Work);
+        assert_eq!(runtime.modes.event_snapshot().unwrap().1.len(), 2);
+        runtime.sync_mode(&mut session).await.unwrap();
+        assert_eq!(session.work_mode, WorkMode::Plan);
+        assert!(runtime.modes.event_snapshot().unwrap().1.is_empty());
+        assert_eq!(
+            store
+                .inner
+                .load_session(session.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .work_mode,
+            WorkMode::Plan
+        );
     }
 }
