@@ -609,3 +609,62 @@ async fn session_initialization_lock_does_not_block_the_ui_executor() {
     assert!(app.prepared.is_none());
     assert!(app.active.is_none());
 }
+
+#[tokio::test]
+async fn failed_initialization_preserves_a_newer_draft_and_the_unsent_prompt() {
+    for draft in ["", "newer draft 🌸"] {
+        let (root, mut app) = fixture();
+        let secret = "fixture-private-token";
+        app.secrets.push(secret.into());
+        app.config.data_dir = root.path().join("not-a-directory");
+        std::fs::write(&app.config.data_dir, "block database initialization").unwrap();
+        app.start(format!("earlier task {secret}")).await.unwrap();
+        assert!(app.queued_prompt.is_some());
+        app.state.editor.set_text(draft);
+        let result = outcome(&mut app).await;
+        assert!(result.is_err());
+        app.finish_ui(result).await.unwrap();
+        if draft.is_empty() {
+            assert_eq!(app.state.editor.text(), format!("earlier task {secret}"));
+        } else {
+            assert_eq!(app.state.editor.text(), draft);
+            let unsent = app
+                .state
+                .messages
+                .iter()
+                .find(|message| message.label == "Unsent draft")
+                .unwrap();
+            assert!(unsent.text.contains("earlier task"));
+            assert!(!unsent.text.contains(secret));
+            assert!(transcript(&app).contains("Your current draft is preserved"));
+        }
+        assert!(app.active.is_none() && app.prepared.is_none());
+        assert!(app.queued_prompt.is_none());
+    }
+}
+
+#[tokio::test]
+async fn failed_prompt_handoff_preserves_a_newer_draft_and_the_unsent_prompt() {
+    let (_root, mut app) = fixture();
+    create(&mut app).await;
+    app.queued_prompt = Some("earlier task".into());
+    app.state.editor.set_text("newer draft");
+    app.config.profiles.clear();
+    assert!(
+        app.finish_ui(Ok(UiResult::Details(view::Details {
+            title: "fixture".into(),
+            lines: vec![],
+        })))
+        .await
+        .is_err()
+    );
+    assert_eq!(app.state.editor.text(), "newer draft");
+    assert!(
+        app.state
+            .messages
+            .iter()
+            .any(|message| { message.label == "Unsent draft" && message.text == "earlier task" })
+    );
+    assert!(app.active.is_none());
+    assert!(app.prepared.as_ref().unwrap().session.history.is_empty());
+}

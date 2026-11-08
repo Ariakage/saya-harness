@@ -64,6 +64,17 @@ pub(super) async fn next_job(
     }
 }
 impl App {
+    fn restore_unsent_prompt(&mut self, prompt: String) {
+        if self.state.editor.text().is_empty() || self.state.editor.text() == prompt {
+            self.state.editor.set_text(prompt);
+        } else {
+            self.state
+                .push_message(Role::System, "Unsent draft", self.safe(&prompt));
+            self.notice(
+                "The earlier unsent prompt is retained above. Your current draft is preserved.",
+            );
+        }
+    }
     fn require_idle(&self) -> Result<()> {
         if self.active.is_some() {
             return Err("Cancel the current run before changing sessions".into());
@@ -420,11 +431,11 @@ impl App {
         if let Some(prompt) = self.queued_prompt.take() {
             if self.prepared.is_some() && !cancelled && self.active.is_none() {
                 if let Err(error) = self.start(prompt.clone()).await {
-                    self.state.editor.set_text(prompt);
+                    self.restore_unsent_prompt(prompt);
                     return Err(error);
                 }
             } else {
-                self.state.editor.set_text(prompt);
+                self.restore_unsent_prompt(prompt);
             }
         }
         if let Some(mode) = self.deferred_mode.take() {

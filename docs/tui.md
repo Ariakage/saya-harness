@@ -103,6 +103,10 @@ PLAN、BUILD、CODE、WORK 的选择来自用户操作。UI 同时展示当前�
 
 ## 技术与终端恢复
 
+运行循环因终端错误提前退出时，仍会取消并等待运行任务，再通过运行句柄等待后台清理。运行任务 panic 或异常退出也走该清理路径，清理后再释放会话和终端。
+
+异步会话初始化或排队任务交接失败时，原待发送内容恢复到空编辑器。编辑器已有新草稿时，保留新草稿，并将原内容作为经过脱敏的 Unsent draft 消息展示，用户可显式重新发送。
+
 DEV-047 已锁定 Ratatui0.30.2、Crossterm0.29.0 和已有 Tokio，输入／状态更新与绘制分离。Ratatui启用Crossterm与layout-cache，Crossterm启用bracketed paste和use-dev-tty。独立输入线程使用50ms level poll，向容量64的队列发送键盘与窗口事件，异步主循环消费队列。该路径修复真实PTY缩放后首次Ctrl+D可能遗失的问题，退出前停止输入线程并恢复文件描述符。依赖与特性在Cargo.lock和crate配置中固定。[Ratatui 应用模式](https://ratatui.rs/concepts/application-patterns/)、[Crossterm 0.29 features](https://docs.rs/crate/crossterm/0.29.0/features)
 
 终端 guard 管理 raw mode、alternate screen 和光标。正常返回、可恢复错误、panic unwind 及受处理信号走统一恢复路径，panic hook 链保留原诊断。强制终止场景记录尽力清理边界和终端恢复方法。初始化与恢复设计参考 [Ratatui panic hooks](https://ratatui.rs/recipes/apps/panic-hooks/)。

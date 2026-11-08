@@ -334,6 +334,22 @@ impl App {
             self.state.editor.take();
         }
     }
+    async fn shutdown(&mut self) -> Result<()> {
+        let cleanup = if let Some(mut active) = self.active.take() {
+            active.cancel.cancel();
+            active.events.close();
+            active.requests.close();
+            let _ = (&mut active.join).await;
+            active.handle.shutdown_background().await
+        } else {
+            Ok(())
+        };
+        if let Some(mut job) = self.ui_job.take() {
+            job.cancel.cancel();
+            let _ = (&mut job.join).await;
+        }
+        cleanup.map_err(Into::into)
+    }
     async fn finish(
         &mut self,
         result: std::result::Result<RunOutcome, tokio::task::JoinError>,
@@ -667,17 +683,8 @@ pub async fn run(config: Config, options: Options) -> Result<u8> {
     let mut app = App::new(config, options)?;
     let mut terminal = TerminalGuard::enter()?;
     let outcome = run_loop(&mut app, &mut terminal).await;
-    if let Some(mut active) = app.active.take() {
-        active.cancel.cancel();
-        active.events.close();
-        active.requests.close();
-        let _ = (&mut active.join).await;
-    }
-    if let Some(mut job) = app.ui_job.take() {
-        job.cancel.cancel();
-        let _ = (&mut job.join).await;
-    }
-    outcome
+    let cleanup = app.shutdown().await;
+    outcome.and_then(|code| cleanup.map(|()| code))
 }
 async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
     let mut input = TerminalInput::new()?;

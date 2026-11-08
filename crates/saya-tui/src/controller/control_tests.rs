@@ -485,12 +485,18 @@ impl Model for HoldingModel {
     }
 }
 pub(super) async fn attach_active_call(app: &mut App) {
+    let started = Arc::new(Notify::new());
+    attach_model(app, Arc::new(HoldingModel(started.clone()))).await;
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+}
+async fn attach_model(app: &mut App, model: Arc<dyn Model>) {
     let mut prepared = session::create(&app.config, saya_app::new_session(&app.config).unwrap())
         .await
         .unwrap();
     session::append(&mut prepared, "task".into()).await.unwrap();
     let cancel = Arc::new(RunCancellation::new());
-    let started = Arc::new(Notify::new());
     let files =
         Arc::new(ReadTools::new(&app.config.cwd, &[], false, ReadLimits::default()).unwrap());
     let mut runtime = AgentRuntime::new(RuntimeSetup {
@@ -498,9 +504,9 @@ pub(super) async fn attach_active_call(app: &mut App) {
             id: RunId::new(),
             session_id: prepared.session.id,
             work_mode: WorkMode::Work,
-            permissions: PermissionMode::Auto,
+            permissions: app.config.permissions_mode,
         },
-        model: Arc::new(HoldingModel(started.clone())),
+        model,
         store: prepared.store.clone(),
         policy: Arc::new(Policy::new(&app.config.cwd, PermissionConfig::default()).unwrap()),
         files,
@@ -540,9 +546,6 @@ pub(super) async fn attach_active_call(app: &mut App) {
         requests_open: false,
     });
     app.prepared = Some(prepared);
-    tokio::time::timeout(Duration::from_secs(5), started.notified())
-        .await
-        .unwrap();
 }
 pub(super) async fn stop_active_call(app: &mut App) {
     app.cancel();
@@ -996,4 +999,112 @@ async fn modified_editing_shortcuts_do_not_grant_approval() {
         .await
         .unwrap();
     assert_eq!(receiver.await.unwrap().unwrap(), Some(true));
+}
+
+struct BackgroundThenPanic {
+    marker: std::path::PathBuf,
+    requests: std::sync::atomic::AtomicUsize,
+}
+struct BackgroundLaunch(Option<Vec<HistoryItem>>);
+impl ModelStream for BackgroundLaunch {
+    fn next<'a>(
+        &'a mut self,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Option<saya_core::boundary::ModelUpdate>> {
+        Box::pin(async move {
+            Ok(self
+                .0
+                .take()
+                .map(|items| saya_core::boundary::ModelUpdate::Finished { items, usage: None }))
+        })
+    }
+}
+impl Model for BackgroundThenPanic {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            if self
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                return Ok(Box::new(BackgroundLaunch(Some(vec![HistoryItem::ToolCall(
+                    saya_core::contract::ToolCall {
+                        call_id: "launch-before-panic".into(),
+                        name: "background_start".into(),
+                        arguments: serde_json::json!({
+                            "tool": "exec",
+                            "arguments": {"argv": [
+                                "/bin/sh", "-c",
+                                "printf '%s\\n' \"$$\" > \"$1\"; exec /bin/sleep 30",
+                                "sh", self.marker
+                            ]}
+                        })
+                        .to_string(),
+                    },
+                )]))) as Box<dyn ModelStream>);
+            }
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !self.marker.exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            panic!("fixture runtime panic with an active background process");
+        })
+    }
+}
+
+#[tokio::test]
+async fn terminal_error_teardown_awaits_background_cleanup_after_runtime_panic() {
+    let (root, mut app) = fixture();
+    let marker = root.path().join("background.pid");
+    app.config.permissions_mode = PermissionMode::Bypass;
+    attach_model(
+        &mut app,
+        Arc::new(BackgroundThenPanic {
+            marker: marker.clone(),
+            requests: std::sync::atomic::AtomicUsize::new(0),
+        }),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !app.active.as_ref().unwrap().join.is_finished() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid: i32 = std::fs::read_to_string(&marker)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal zero only probes the owned fixture process.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    let handle = app.active.as_ref().unwrap().handle.clone();
+    // A terminal failure exits run_loop before its normal Finished branch.
+    tokio::time::timeout(Duration::from_secs(5), app.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(app.active.is_none());
+    // SAFETY: cleanup must have reaped the previously owned fixture process.
+    let process_state = unsafe { libc::kill(pid, 0) };
+    let process_error = std::io::Error::last_os_error().raw_os_error();
+    let settled = handle.background_events().unwrap().iter().any(|event| {
+        matches!(
+            event.kind,
+            saya_core::background::BackgroundEventKind::Finished { .. }
+        )
+    });
+    // Keep the fixture contained when testing the pre-fix teardown.
+    handle.shutdown_background().await.unwrap();
+    assert_eq!(process_state, -1);
+    assert_eq!(process_error, Some(libc::ESRCH));
+    assert!(settled);
 }
