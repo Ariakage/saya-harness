@@ -124,3 +124,7 @@ saya --output jsonl logs tail --session SESSION_ID
 ```
 
 show支持text／json／jsonl，tail支持text／jsonl并以Ctrl-C退出。查询支持run、时间范围、offset和limit，具体字段与轮转边界见[日志说明](observability.md)。
+
+### 凭据检测边界
+
+已知凭据按原文及逐字符JSON／Unicode混合转义检测。无法安全清除的残留正文整体扣留。重复键或超范围数字构成的无凭据JSON文本保持原文，含凭据且无法无损处理时失败关闭。无反斜杠纯文本不占用转义解码预算。

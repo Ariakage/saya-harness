@@ -100,16 +100,64 @@ fn contains_raw(text: &str, secrets: &[String]) -> bool {
         .any(|candidate| text.contains(&candidate))
 }
 
+// Match each credential character as either literal text or JSON escapes.
+// Encoded backslashes may themselves use backslashes or Unicode escapes.
+fn encoded_matcher(secrets: &[String]) -> Result<regex::RegexSet, regex::Error> {
+    let slash = r"\\(?:\\|u005[cC])*";
+    let patterns = secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+        .map(|secret| {
+            let mut pattern = String::new();
+            for character in secret.chars() {
+                if character == '\\' {
+                    pattern.push_str(slash);
+                    continue;
+                }
+                let mut alternatives = vec![regex::escape(&character.to_string())];
+                let short = match character {
+                    '"' => Some('"'),
+                    '/' => Some('/'),
+                    '\n' => Some('n'),
+                    '\r' => Some('r'),
+                    '\t' => Some('t'),
+                    '\u{8}' => Some('b'),
+                    '\u{c}' => Some('f'),
+                    _ => None,
+                };
+                if let Some(short) = short {
+                    alternatives.push(format!("{slash}{}", regex::escape(&short.to_string())));
+                }
+                let mut units = [0u16; 2];
+                let unicode = character
+                    .encode_utf16(&mut units)
+                    .iter()
+                    .map(|unit| format!("{slash}u(?i:{unit:04x})"))
+                    .collect::<String>();
+                alternatives.push(unicode);
+                pattern.push_str(&format!("(?:{})", alternatives.join("|")));
+            }
+            pattern
+        });
+    regex::RegexSetBuilder::new(patterns)
+        .size_limit(MAX_ESCAPE_SCAN_BYTES)
+        .build()
+}
+
 // Decode a detection-only view, including JSON escapes embedded in prose.
 // A JSON escape occupies two bytes, six bytes, or a twelve-byte surrogate pair.
-fn decode_text_escapes(text: &str) -> Option<String> {
+fn decode_text_escapes(text: &str, unicode_only: bool) -> Option<String> {
     let mut decoded = String::with_capacity(text.len());
     let mut remaining = text;
     let mut changed = false;
     while let Some(offset) = remaining.find('\\') {
         decoded.push_str(&remaining[..offset]);
         remaining = &remaining[offset..];
-        let escape = [2, 6, 12].into_iter().find_map(|length| {
+        let lengths: &[usize] = if unicode_only { &[6, 12] } else { &[2, 6, 12] };
+        let escape = lengths.iter().copied().find_map(|length| {
+            if unicode_only && !remaining.starts_with("\\u") {
+                return None;
+            }
             let fragment = remaining.get(..length)?;
             let value = serde_json::from_str::<String>(&format!("\"{fragment}\"")).ok()?;
             Some((length, value))
@@ -136,26 +184,50 @@ pub fn contains_secret(text: &str, secrets: &[String]) -> bool {
     if contains_raw(text, secrets) {
         return true;
     }
-    let mut value = Value::String(text.to_owned());
-    if redact_inner(&mut value, secrets, 0).unwrap_or(true) {
+    if !text.contains('\\') {
+        return false;
+    }
+    let Ok(matcher) = encoded_matcher(secrets) else {
+        return true;
+    };
+    if matcher.is_match(text) {
         return true;
     }
-    let mut current = text.to_owned();
     let mut remaining_scan = MAX_ESCAPE_SCAN_BYTES;
+    inspect_escape_view(text, secrets, &matcher, &mut remaining_scan, true)
+        || inspect_escape_view(text, secrets, &matcher, &mut remaining_scan, false)
+}
+
+fn inspect_escape_view(
+    text: &str,
+    secrets: &[String],
+    matcher: &regex::RegexSet,
+    remaining_scan: &mut usize,
+    unicode_only: bool,
+) -> bool {
+    if !text.contains('\\') {
+        return false;
+    }
+    let mut current = text.to_owned();
     for _ in 0..MAX_REDACTION_DEPTH {
+        if !current.contains('\\') {
+            return false;
+        }
         let Some(remaining) = remaining_scan.checked_sub(current.len()) else {
             return true;
         };
-        remaining_scan = remaining;
-        let Some(decoded) = decode_text_escapes(&current) else {
+        *remaining_scan = remaining;
+        let Some(decoded) = decode_text_escapes(&current, unicode_only) else {
             return false;
         };
-        if contains_raw(&decoded, secrets) {
+        if contains_raw(&decoded, secrets) || matcher.is_match(&decoded) {
             return true;
         }
         current = decoded;
     }
-    current.len() > remaining_scan || decode_text_escapes(&current).is_some()
+    current.contains('\\')
+        && (current.len() > *remaining_scan
+            || decode_text_escapes(&current, unicode_only).is_some())
 }
 const MAX_REDACTION_DEPTH: usize = 256;
 const MAX_ESCAPE_SCAN_BYTES: usize = 64 * 1024 * 1024;
@@ -208,8 +280,11 @@ fn redact_string(
     // IgnoredAny validates complete JSON without rounding or limiting numbers.
     // Plain text with a JSON-looking prefix must retain its ordinary semantics.
     let nested = if serde_json::from_str::<de::IgnoredAny>(text).is_ok() {
-        let CheckedValue(value) = serde_json::from_str(text).map_err(|_| failure())?;
-        Some(value)
+        match serde_json::from_str(text) {
+            Ok(CheckedValue(value)) => Some(value),
+            Err(_) if contains_secret(text, secrets) => return Err(failure()),
+            Err(_) => None,
+        }
     } else {
         None
     };
@@ -225,16 +300,21 @@ fn redact_string(
         changed = true;
     }
     let max_bytes = text.len();
+    let replacement = if contains_raw("[REDACTED]", secrets) {
+        ""
+    } else {
+        "[REDACTED]"
+    };
     for candidate in secrets
         .iter()
         .flat_map(|secret| variants(secret, max_bytes))
     {
         if text.contains(&candidate) {
-            *text = text.replace(&candidate, "[REDACTED]");
+            *text = text.replace(&candidate, replacement);
             changed = true;
         }
     }
-    if contains_raw(text, secrets) {
+    if contains_secret(text, secrets) {
         return Err(failure());
     }
     Ok(changed)
@@ -310,6 +390,45 @@ mod tests {
                 truncated: false,
             };
             assert!(tool_result(&result, &known).is_err());
+        }
+    }
+
+    #[test]
+    fn partial_unicode_encoding_keeps_literal_backslash_credentials_detectable() {
+        let known = [r"key\tail1".to_owned()];
+        for text in [r"Note: key\tail\u0031", r"Note: key\tail\u005cu0031"] {
+            assert!(contains_secret(text, &known));
+            assert!(redact(&mut Value::String(text.into()), &known).is_err());
+        }
+        for (secret, text) in [
+            ("key\\tail\"end", r#"Note: key\tail\"end"#),
+            ("key\\tail\nend", r"Note: key\tail\nend"),
+            ("key\\tail\"end", r#"Note: key\tail\\\"end"#),
+        ] {
+            let known = [secret.to_owned()];
+            assert!(contains_secret(text, &known), "{text:?}");
+            assert!(redact(&mut Value::String(text.into()), &known).is_err());
+        }
+    }
+
+    #[test]
+    fn harmless_opaque_json_and_unescaped_large_text_are_preserved() {
+        let known = ["fixture-secret".to_owned()];
+        for text in [r#"{"value":1,"value":2}"#, r#"{"value":1e400}"#] {
+            let mut value = Value::String(text.into());
+            redact(&mut value, &known).unwrap();
+            assert_eq!(value, Value::String(text.into()));
+            assert!(!contains_secret(text, &known));
+        }
+        assert!(!contains_secret(
+            &"x".repeat(MAX_ESCAPE_SCAN_BYTES + 1),
+            &known
+        ));
+        for secret in ["REDACTED", "[REDACTED]"] {
+            let known = [secret.to_owned()];
+            let mut value = Value::String(format!("before {secret} after"));
+            redact(&mut value, &known).unwrap();
+            assert!(!contains_secret(value.as_str().unwrap(), &known));
         }
     }
 
