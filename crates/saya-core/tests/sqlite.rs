@@ -28,6 +28,35 @@ fn fixture(root: &Path) -> (Session, Run) {
     };
     (s, run)
 }
+
+#[tokio::test]
+async fn newly_created_data_and_lock_directories_are_private()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir()?;
+    let directory = root.path().join("private").join("data");
+    let store = SqliteStore::open(&directory, vec![])?;
+    let (session, _) = fixture(&directory);
+    store.create_session(&session, "fixture").await?;
+    let _lock = store.lock_session(session.id)?;
+    let lock_only = root.path().join("lock-only");
+    let lock_store = SqliteStore::open(&lock_only, vec![])?;
+    let _other_lock = lock_store.lock_session(SessionId::new())?;
+    for path in [
+        root.path().join("private"),
+        directory.clone(),
+        directory.join("locks"),
+        lock_only.join("locks"),
+    ] {
+        assert_eq!(fs::metadata(path)?.permissions().mode() & 0o777, 0o700);
+    }
+    let existing = root.path().join("existing");
+    fs::create_dir(&existing)?;
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o750))?;
+    let _store = SqliteStore::open(&existing, vec![])?;
+    assert_eq!(fs::metadata(existing)?.permissions().mode() & 0o777, 0o750);
+    Ok(())
+}
 fn result(session: &Session, run: &Run) -> RunResult {
     RunResult {
         schema_version: SCHEMA_VERSION,

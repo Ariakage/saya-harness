@@ -39,6 +39,8 @@
 
 - R2-07／20正常入口已补充PTY回归。首条任务校验失败保留草稿且可准确重试一次。真实HUP并关闭终端时，绘制失败进入所属任务收尾，保留信号退出码130，验证进程终止、cancelled落库及会话锁释放。169项TUI测试、严格Clippy及四项脚本helper测试通过，新增两个PTY场景通过，日志为 `target/r2-{new-pty,pty-tui-tests,pty-tui-clippy,pty-helper-tests}.log`。
 
+- R2-19导出与目录权限已修复。身份字段拒绝截断，失败脱敏调用仅在持久记录与历史记录身份两侧唯一时补run关联，旧历史歧义保持null。新建data／locks目录使用0700，已有目录权限保留。38项初验及补充独立复核50项export／SQLite／logging测试、core严格Clippy通过，日志为 `target/r02-fix/export-directory-{tests,clippy}.log` 与 `target/r2-19-{export-storage-review,logging-independent-review,export-fallback-clippy}.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

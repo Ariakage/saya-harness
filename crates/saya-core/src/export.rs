@@ -120,11 +120,30 @@ fn history(snapshot: &SessionSnapshot, include: bool) -> Result<Vec<Value>, Boun
     let mut result = Vec::new();
     let mut associations = std::collections::HashMap::new();
     let mut persisted = std::collections::HashMap::new();
+    let mut identities = std::collections::HashMap::new();
+    let mut unique_history_identities = std::collections::HashMap::new();
+    for item in &snapshot.session.history {
+        if let HistoryItem::ToolCall(call) = item {
+            unique_history_identities
+                .entry((call.call_id.as_str(), call.name.as_str()))
+                .and_modify(|unique| *unique = false)
+                .or_insert(true);
+        }
+    }
     for call in &snapshot.tool_calls {
         persisted
             .entry(call["call"].to_string())
             .and_modify(|run| *run = Value::Null)
             .or_insert_with(|| call["run_id"].clone());
+        if let (Some(id), Some(name)) = (
+            call["call"]["call_id"].as_str(),
+            call["call"]["name"].as_str(),
+        ) {
+            identities
+                .entry((id, name))
+                .and_modify(|stored| *stored = None)
+                .or_insert(Some(call));
+        }
     }
     for (ordinal, item) in snapshot.session.history.iter().enumerate() {
         let value = match item {
@@ -140,10 +159,32 @@ fn history(snapshot: &SessionSnapshot, include: bool) -> Result<Vec<Value>, Boun
             HistoryItem::ToolCall(call) => {
                 let raw = serde_json::to_value(call)
                     .map_err(|_| error("export_error", "cannot encode tool call"))?;
-                let run = persisted
-                    .get(&raw.to_string())
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let run = match persisted.get(&raw.to_string()) {
+                    Some(run) => run.clone(),
+                    None => match identities
+                        .get(&(call.call_id.as_str(), call.name.as_str()))
+                        .copied()
+                        .flatten()
+                    {
+                        Some(stored)
+                            if unique_history_identities
+                                .get(&(call.call_id.as_str(), call.name.as_str()))
+                                == Some(&true)
+                                && stored["state"] == "failed"
+                                && stored["call_id"].as_str() == Some(call.call_id.as_str())
+                                && stored["result"]["ok"] == false
+                                && stored["call"]["arguments"].as_str()
+                                    == Some(r#"{"redacted":true}"#) =>
+                        {
+                            stored["run_id"]
+                                .as_str()
+                                .filter(|run| !run.is_empty())
+                                .map(Value::from)
+                                .unwrap_or(Value::Null)
+                        }
+                        _ => Value::Null,
+                    },
+                };
                 associations.insert(call.call_id.clone(), run.clone());
                 json!({"ordinal":ordinal,"kind":"tool_call","run_id":run,"call_id":call.call_id,"call":selected_call(&raw,include)})
             }
@@ -172,7 +213,16 @@ fn truncate(
         Value::String(text) if text.len() > max => {
             if matches!(
                 path.rsplit('/').next(),
-                Some("id" | "run_id" | "call_id" | "job_id" | "parent_call_id")
+                Some(
+                    "id" | "session_id"
+                        | "run_id"
+                        | "call_id"
+                        | "job_id"
+                        | "parent_call_id"
+                        | "approval_id"
+                        | "request_id"
+                        | "input_id"
+                )
             ) {
                 return Err(error(
                     "export_limit",

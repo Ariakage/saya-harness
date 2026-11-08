@@ -16,7 +16,10 @@ use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{DirBuilderExt, OpenOptionsExt},
+    },
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -99,7 +102,10 @@ fn write_guard(root: &Path, guard: &SessionGuard, secrets: &[String]) -> Result<
         return Err(error("storage_error", "invalid session guard data"));
     }
     let directory = root.join("locks");
-    std::fs::create_dir_all(&directory)
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)
         .map_err(|_| error("storage_error", "cannot create session guard directory"))?;
     if !std::fs::symlink_metadata(&directory)
         .map_err(|_| error("storage_error", "cannot inspect session guard directory"))?
@@ -1255,7 +1261,10 @@ impl SqliteStore {
             .parent()
             .ok_or_else(|| error("storage_error", "invalid data directory"))?;
         let directory = root.join("locks");
-        std::fs::create_dir_all(&directory)
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
             .map_err(|_| error("storage_error", "cannot create lock directory"))?;
         let meta = std::fs::symlink_metadata(&directory)
             .map_err(|_| error("storage_error", "cannot inspect lock directory"))?;
@@ -1459,7 +1468,10 @@ impl SqliteStore {
     /// refuses symlink database files and incompatible/corrupt databases.
     /// This does not acquire a session lock or enable workspace side effects.
     pub fn open(data_dir: &Path, secrets: Vec<String>) -> Result<Self, BoundaryError> {
-        std::fs::create_dir_all(data_dir)
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(data_dir)
             .map_err(|_| error("storage_error", "cannot create data directory"))?;
         let root = std::fs::canonicalize(data_dir)
             .map_err(|_| error("storage_error", "cannot resolve data directory"))?;

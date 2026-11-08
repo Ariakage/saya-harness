@@ -197,6 +197,140 @@ fn ambiguous_legacy_history_links_are_explicit_and_limits_fail()
 }
 
 #[test]
+fn redacted_failed_calls_link_only_when_their_compound_identity_is_unique()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut snapshot = fixture();
+    snapshot.tool_calls.truncate(1);
+    snapshot.tool_calls[0]["state"] = json!("failed");
+    snapshot.tool_calls[0]["call"]["arguments"] = json!(r#"{"redacted":true}"#);
+    let export = SessionExport::from_snapshot(&snapshot, ExportOptions::default(), &[])?;
+    assert_eq!(export.history[2]["run_id"], "run-1");
+    assert_eq!(export.history[3]["run_id"], "run-1");
+    assert!(
+        !export
+            .omitted_fields
+            .iter()
+            .any(|field| field == "unavailable_history_run_association")
+    );
+    let mut duplicate = snapshot.tool_calls[0].clone();
+    duplicate["run_id"] = json!("run-2");
+    for other in [duplicate.clone(), {
+        duplicate["call"]["arguments"] = json!("{}");
+        duplicate
+    }] {
+        let mut ambiguous = snapshot.clone();
+        ambiguous.tool_calls.push(other);
+        let export = SessionExport::from_snapshot(&ambiguous, ExportOptions::default(), &[])?;
+        assert!(export.history[2]["run_id"].is_null());
+        assert!(export.history[3]["run_id"].is_null());
+        assert!(
+            export
+                .omitted_fields
+                .iter()
+                .any(|field| field == "unavailable_history_run_association")
+        );
+    }
+    for (field, value) in [
+        ("state", json!("unknown")),
+        ("run_id", serde_json::Value::Null),
+        ("run_id", json!("")),
+        ("call_id", json!("different-call")),
+        ("result", json!({"ok":true})),
+        (
+            "call",
+            json!({"call_id":"same-call","name":"read_file","arguments":"{}"}),
+        ),
+        (
+            "call",
+            json!({"call_id":"same-call","name":"read_file","arguments":r#"{"redacted":true,"other":1}"#}),
+        ),
+    ] {
+        let mut unrelated = snapshot.clone();
+        unrelated.tool_calls[0][field] = value;
+        let export = SessionExport::from_snapshot(&unrelated, ExportOptions::default(), &[])?;
+        assert!(
+            export.history[2]["run_id"].is_null(),
+            "matched malformed {field}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn all_correlation_identity_fields_refuse_truncation() -> Result<(), Box<dyn std::error::Error>> {
+    for field in ["session_id", "approval_id", "request_id", "input_id"] {
+        let mut snapshot = fixture();
+        snapshot.events[0][field] = json!("x".repeat(129));
+        let error = SessionExport::from_snapshot(
+            &snapshot,
+            ExportOptions {
+                scope: ExportScope::Full,
+                max_field_bytes: 128,
+                ..ExportOptions::default()
+            },
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(error.0.code, "export_limit", "truncated {field}");
+    }
+    Ok(())
+}
+
+#[test]
+fn redacted_fallback_does_not_guess_between_repeated_legacy_history_identities()
+-> Result<(), Box<dyn std::error::Error>> {
+    for redacted in [false, true] {
+        let mut snapshot = fixture();
+        snapshot.tool_calls.truncate(1);
+        snapshot.tool_calls[0]["state"] = json!("failed");
+        if redacted {
+            snapshot.tool_calls[0]["call"]["arguments"] = json!(r#"{"redacted":true}"#);
+        }
+        snapshot
+            .session
+            .history
+            .push(HistoryItem::UserText("next run".into()));
+        snapshot
+            .session
+            .history
+            .push(HistoryItem::ToolCall(ToolCall {
+                call_id: "same-call".into(),
+                name: "read_file".into(),
+                arguments: r#"{"path":"different-file"}"#.into(),
+            }));
+        snapshot.session.history.push(HistoryItem::ToolResult {
+            call_id: "same-call".into(),
+            result: ToolResult {
+                ok: false,
+                data: None,
+                error: Some(saya_core::contract::ErrorInfo {
+                    code: "not_executed".into(),
+                    message: "run ended before dispatch".into(),
+                }),
+                truncated: false,
+            },
+        });
+        let export = SessionExport::from_snapshot(&snapshot, ExportOptions::default(), &[])?;
+        let first_run = if redacted {
+            serde_json::Value::Null
+        } else {
+            json!("run-1")
+        };
+        assert_eq!(export.history[2]["run_id"], first_run);
+        assert_eq!(export.history[3]["run_id"], first_run);
+        assert!(export.history[5]["run_id"].is_null());
+        assert!(export.history[6]["run_id"].is_null());
+        assert!(
+            export
+                .omitted_fields
+                .iter()
+                .any(|field| field == "unavailable_history_run_association")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn markdown_fences_html_controls_and_long_unicode_use_the_same_projection()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut snapshot = fixture();
