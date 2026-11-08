@@ -199,7 +199,8 @@ impl Operation {
             }
             Target::Input | Target::BackgroundControl | Target::Metadata => {}
         }
-        Ok(serde_json::Value::Object(map.clone()))
+        args.sort_all_objects();
+        Ok(args)
     }
 
     /// Return the normalized command identity when this is an exec operation.

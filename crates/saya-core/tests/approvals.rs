@@ -382,6 +382,74 @@ async fn changed_operation_mode_permission_and_cancellation_invalidate_grant()
 }
 
 #[tokio::test]
+async fn reordered_arguments_reuse_pending_approval_and_remember_denial()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Manual);
+    let store = store_for(&session, &run).await?;
+    let modes = ModeController::new(WorkMode::Work);
+    let manager = manager(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        &run,
+        Preauthorizations::default(),
+        Arc::new(Signal::default()),
+    )?;
+    let first = ToolCall {
+        call_id: "ordered".into(),
+        name: "write_file".into(),
+        arguments: r#"{"path":"out.txt","content":"hello","expected_version":null}"#.into(),
+    };
+    let mut reordered = first.clone();
+    reordered.arguments = r#"{"expected_version":null,"content":"hello","path":"out.txt"}"#.into();
+    let operation = Operation::file(temp.path(), "write_file", Path::new("out.txt"))?;
+    let request = match manager
+        .authorize(
+            input(&operation, &first, &context, true),
+            &deny_model(),
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await?
+    {
+        Authorization::Pending(request) => request,
+        _ => return Err("expected initial pending approval".into()),
+    };
+    let repeated = match manager
+        .authorize(
+            input(&operation, &reordered, &context, true),
+            &deny_model(),
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await?
+    {
+        Authorization::Pending(request) => request,
+        _ => return Err("expected equivalent pending approval".into()),
+    };
+    assert_eq!(request.approval_id, repeated.approval_id);
+    assert!(matches!(
+        manager.resolve(&request.approval_id, false)?,
+        Authorization::Denied("user_denied")
+    ));
+    reordered.call_id = "reordered-after-denial".into();
+    assert!(matches!(
+        manager
+            .authorize(
+                input(&operation, &reordered, &context, true),
+                &deny_model(),
+                &SharedBudget::default(),
+                &config()
+            )
+            .await?,
+        Authorization::Denied("previously_denied")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn denial_is_remembered_across_mode_change_and_cancelled_pending_cannot_approve()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;

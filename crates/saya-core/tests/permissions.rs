@@ -19,6 +19,24 @@ fn exec(root: &Path) -> Result<Operation, Box<dyn std::error::Error>> {
     })?)
 }
 #[test]
+fn normalized_arguments_sort_objects_recursively_independent_of_json_features()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let operation = Operation::file(root.path(), "write_file", Path::new("out.txt"))?;
+    let first = serde_json::from_str(
+        r#"{"path":"out.txt","content":"hello","metadata":{"z":1,"a":[{"y":2,"b":3}]}}"#,
+    )?;
+    let second = serde_json::from_str(
+        r#"{"metadata":{"a":[{"b":3,"y":2}],"z":1},"content":"hello","path":"out.txt"}"#,
+    )?;
+    assert_eq!(
+        operation.normalized_arguments(first)?.to_string(),
+        operation.normalized_arguments(second)?.to_string()
+    );
+    Ok(())
+}
+
+#[test]
 fn exec_environment_overrides_retain_hard_restrictions_and_rule_precedence()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = support::temp_workspace()?;

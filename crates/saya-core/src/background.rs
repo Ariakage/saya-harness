@@ -680,7 +680,7 @@ pub struct BackgroundTools {
     pending: Mutex<HashMap<String, PendingBackground>>,
 }
 enum PendingBackground {
-    Job(PendingJob),
+    Job(Box<PendingJob>),
     Control {
         call: ToolCall,
         context: ToolContext,
@@ -715,7 +715,7 @@ impl BackgroundTools {
             .remove(approval_id);
         match pending {
             Some(PendingBackground::Job(pending)) => {
-                Ok(match self.jobs.resolve(pending, approve)? {
+                Ok(match self.jobs.resolve(*pending, approve)? {
                     JobSubmission::Started { job_id } => {
                         tool_result(serde_json::json!({"status":"started","job_id":job_id}))
                     }
@@ -916,7 +916,7 @@ impl crate::boundary::Tool for BackgroundTool {
                                 .map_err(|_| failure("background_error", "approval lock poisoned"))?
                                 .insert(
                                     request.approval_id.clone(),
-                                    PendingBackground::Job(pending),
+                                    PendingBackground::Job(Box::new(pending)),
                                 );
                             ToolResult {
                                 ok: false,

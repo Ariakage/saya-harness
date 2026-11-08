@@ -4,6 +4,16 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 完整 Markdown、数学、图表与 debug 预览
+
+2026-11-09，本阶段进行中。项目负责人补充完整Markdown语法、Unicode数学、Mermaid及source／render显示要求，并指定仅debug构建提供 `saya tui-preview`。本轮继续构建本地测试版，四平台同步验证安排在N2阶段。
+
+### JSON参数规范化兼容
+
+Mermaid依赖在构建图中启用JSON对象插入顺序保留。两项回归先复现了等价参数重排造成审批去重／拒绝记忆失配，以及嵌套对象规范化不稳定。`Operation::normalized_arguments`现显式递归排序，审批绑定、拒绝记忆和许可检查复用同一规范化入口。后台待审批枚举的大分支使用Box存储，通过新构建图下的严格Clippy。
+
+显式启用 `serde_json/preserve_order` 后，35项审批、10项权限及四项后台生命周期测试通过，core全目标严格Clippy通过。修复前后证据为 `target/markdown-full/json-{order-before,recursive-before,order-after}.log`、`core-background-compat.log` 和 `core-compat-clippy.log`。最终Markdown与界面验收随本阶段继续记录。
+
 ## 0.2.0 后续开发中的 Markdown 显示
 
 2026-11-09，本阶段完成本机开发与验证。按项目负责人要求，本轮构建与验收本地测试版，四平台同步测试安排在后续N2阶段。
