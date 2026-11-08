@@ -518,6 +518,54 @@ fn personal_context_containing_configured_credential_is_rejected() {
 }
 
 #[test]
+fn encoded_credentials_in_personal_files_are_rejected_before_network_requests() {
+    let secret = "fixture\"secret\\tail";
+    let canonical = json!({"value": secret}).to_string();
+    let unicode = format!(
+        r#"{{"value":"{}"}}"#,
+        secret
+            .chars()
+            .map(|c| format!("\\u{:04x}", c as u32))
+            .collect::<String>()
+    );
+    for flag in ["--memory-file", "--preferences-file"] {
+        for contents in [&canonical, &unicode] {
+            let temp = TempDir::new().unwrap();
+            let file = temp.path().join("personal.txt");
+            fs::write(&file, contents).unwrap();
+            let (url, requests) = fixture::server(vec![(
+                "application/json",
+                response(json!({"role":"assistant","content":"unexpected"}), "stop"),
+            )])
+            .unwrap();
+            let cfg = config(temp.path(), &url, "auto");
+            let source = fs::read_to_string(&cfg).unwrap().replace(
+                "auth = \"none\"",
+                "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
+            );
+            fs::write(&cfg, source).unwrap();
+            let result = command(temp.path())
+                .env("TEST_KEY", secret)
+                .arg("--config")
+                .arg(cfg)
+                .arg(flag)
+                .arg(file)
+                .args(["run", "hello"])
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(2));
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("contains a configured secret")
+            );
+            assert!(
+                requests.try_recv().is_err(),
+                "personal credential reached the execution model"
+            );
+        }
+    }
+}
+
+#[test]
 fn config_init_never_overwrites_and_check_accepts_empty_template() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("config.toml");
@@ -852,6 +900,86 @@ fn streamed_text_is_displayed_without_duplicate_final_answer() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "hello world\n");
+}
+
+#[test]
+fn text_output_neutralizes_controls_without_changing_machine_output_or_history() {
+    let pieces = [
+        "你好\n\t🌸",
+        "\u{1b}",
+        "]52;c;Y2xpcGJvYXJk\u{7}",
+        "\u{9b}2J\r\u{202e}spoof\u{2069}",
+    ];
+    let text = pieces.concat();
+    for stream in [false, true] {
+        for output_mode in ["text", "json", "jsonl"] {
+            let temp = TempDir::new().unwrap();
+            let reply = if stream {
+                let mut chunks = pieces.iter().map(|piece| {
+                    json!({"choices":[{"index":0,"delta":{"content":piece},"finish_reason":null}]})
+                }).collect::<Vec<_>>();
+                chunks.push(json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}));
+                ("text/event-stream", fixture::sse(&chunks))
+            } else {
+                (
+                    "application/json",
+                    response(json!({"role":"assistant","content":text}), "stop"),
+                )
+            };
+            let (url, _) = fixture::server(vec![reply]).unwrap();
+            let cfg = config(temp.path(), &url, "auto");
+            if stream {
+                let source = fs::read_to_string(&cfg)
+                    .unwrap()
+                    .replace("stream = false", "stream = true");
+                fs::write(&cfg, source).unwrap();
+            }
+            let output = command(temp.path())
+                .arg("--config")
+                .arg(&cfg)
+                .args(["--output", output_mode, "run", "controls"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if output_mode == "text" {
+                let expected = "你好\n\t🌸�]52;c;Y2xpcGJvYXJk��2J��spoof�\n";
+                assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+            } else if output_mode == "json" {
+                let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(value["text"], text);
+            } else {
+                let events = String::from_utf8(output.stdout).unwrap();
+                let final_event: serde_json::Value =
+                    serde_json::from_str(events.lines().last().unwrap()).unwrap();
+                assert_eq!(final_event["data"]["text"], text);
+            }
+            let list = command(temp.path())
+                .arg("--config")
+                .arg(&cfg)
+                .args(["--output", "json", "session", "list"])
+                .output()
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+            let id = value["data"][0]["id"].as_str().unwrap();
+            let show = command(temp.path())
+                .arg("--config")
+                .arg(&cfg)
+                .args(["--output", "json", "session", "show", id])
+                .output()
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+            assert!(
+                value
+                    .to_string()
+                    .contains(&serde_json::to_string(&text).unwrap()),
+                "{value}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -67,6 +67,8 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 
 ## 权限与后台任务
 
+文本 CLI 的流式与完整回答统一替换终端控制字符和双向文本控制符，保留换行、Tab 和正常 Unicode。JSON／JSONL 与已保存历史保留原始文本，由 JSON 编码转义控制字符。
+
 默认工作模式为 WORK，默认权限为 `auto`。PLAN 保持只读，禁止文件写入和通用命令。`auto` 先执行规则判断，必要时进行独立模型审核，不能安全判断时请求人工确认；`manual` 对每次工具调用要求人工批准，包括读取、搜索和后台状态查询。`bypass` 跳过人工确认及路径限制，但 PLAN 和显式 deny 仍然生效。**当前没有操作系统沙箱**；命令启动路径的检查不等于对子进程文件系统或网络的隔离。
 
 非交互任务无法取得必要确认时返回 `needs_confirmation`（退出码 3）；需要用户澄清时返回 `needs_input`（退出码 4）。对确切命令可使用一次运行内的[预授权示例](../examples/approval.example.json)：
@@ -81,7 +83,7 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 
 ## 项目上下文、持久化与用量
 
-Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工作区同名项优先；加载范围及信任边界见[项目上下文](project-context.md)。`--preferences-file PATH`、`--memory-file PATH` 可显式提供本次调用的 UTF-8 偏好和记忆文本，各限 64 KiB；内容会发送给模型，不会自动发现或作为持久记忆维护。
+Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工作区同名项优先；加载范围及信任边界见[项目上下文](project-context.md)。`--preferences-file PATH`、`--memory-file PATH` 可显式提供本次调用的 UTF-8 偏好和记忆文本，各限 64 KiB；内容会发送给模型，不会自动发现或作为持久记忆维护。文件含当前配置的已知凭据时，在模型请求前拒绝，检测包括嵌套 JSON 转义与 Unicode 转义，并沿用共享检测的失败关闭边界。
 
 会话数据库默认在 `$XDG_DATA_HOME/saya/sessions.sqlite3`，未设置时在 `~/.local/share/saya/sessions.sqlite3`；`--data-dir` 可选择数据目录。警告和错误日志默认在 `$XDG_STATE_HOME/saya/saya.log` 或 `~/.local/state/saya/saya.log`，按 10 MiB 轮转并保留 5 个备份。PLAN 要求数据、状态及缓存目录不落在工作区内；相关 XDG 变量须为绝对路径。[存储说明](storage.md)介绍锁、WAL、迁移备份与故障恢复。
 

@@ -257,7 +257,9 @@ impl Drop for PollGuard {
 fn safe_terminal_text(s: &str) -> String {
     s.chars()
         .map(|c| {
-            if c.is_control() && c != '\n' && c != '\t' {
+            if (c.is_control() && c != '\n' && c != '\t')
+                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
                 '\u{fffd}'
             } else {
                 c
@@ -420,7 +422,7 @@ impl ModelStream for PrintStream {
         Box::pin(async move {
             let item = self.0.next(cancel).await?;
             if let Some(ModelUpdate::TextDelta(s)) = &item {
-                print!("{s}");
+                print!("{}", safe_terminal_text(s));
                 io::stdout()
                     .flush()
                     .map_err(|_| cli_error("output_error", "cannot write text output"))?;
@@ -494,10 +496,7 @@ fn personal_context(
             return Err("personal context file exceeds 64 KiB".into());
         }
         let content = String::from_utf8(bytes).map_err(|_| "personal context must be UTF-8")?;
-        if secrets
-            .iter()
-            .any(|secret| !secret.is_empty() && content.contains(secret))
-        {
+        if contains_encoded_secret(&content, secrets) {
             return Err("personal context contains a configured secret".into());
         }
         Ok(Some(content))
