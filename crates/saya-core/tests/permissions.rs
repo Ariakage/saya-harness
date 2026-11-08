@@ -19,6 +19,45 @@ fn exec(root: &Path) -> Result<Operation, Box<dyn std::error::Error>> {
     })?)
 }
 #[test]
+fn exec_environment_overrides_retain_hard_restrictions_and_rule_precedence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let operation = exec(root.path())?;
+    let arguments =
+        serde_json::json!({"env":{"SAYA_APPROVAL_TEST":{"source":"literal","value":"different"}}});
+    for effect in ["allow", "ask", "deny"] {
+        let rules = format!("[[rules]]\neffect='{effect}'\ntool='exec'\n");
+        let policy = Policy::new(root.path(), PermissionConfig::from_toml(&rules)?)?;
+        for permissions in [
+            PermissionMode::Auto,
+            PermissionMode::Manual,
+            PermissionMode::Bypass,
+        ] {
+            assert_eq!(
+                policy
+                    .evaluate_with_arguments(WorkMode::Plan, permissions, &operation, &arguments)
+                    .decision,
+                Decision::Deny
+            );
+            let expected = match (effect, permissions) {
+                ("deny", _) => Decision::Deny,
+                (_, PermissionMode::Bypass) => Decision::Allow,
+                ("ask", _) | (_, PermissionMode::Manual) => Decision::Ask,
+                _ => Decision::ModelReview,
+            };
+            assert_eq!(
+                policy
+                    .evaluate_with_arguments(WorkMode::Work, permissions, &operation, &arguments)
+                    .decision,
+                expected,
+                "{effect}: {permissions:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn all_modes_and_permissions_enforce_plan_and_defaults() -> Result<(), Box<dyn std::error::Error>> {
     let root = support::temp_workspace()?;
     std::fs::write(root.path().join("a.txt"), "text")?;

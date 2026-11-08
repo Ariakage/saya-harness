@@ -46,6 +46,12 @@ fn decision(decision: Decision, reason: &'static str) -> PolicyDecision {
     PolicyDecision { decision, reason }
 }
 
+pub(crate) fn has_exec_environment_override(arguments: &serde_json::Value) -> bool {
+    arguments
+        .get("env")
+        .is_some_and(|env| env.as_object().is_none_or(|values| !values.is_empty()))
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Effect {
@@ -421,6 +427,26 @@ impl Policy {
         }
         decision(Decision::ModelReview, "unmatched_exec")
     }
+
+    /// Evaluate the complete requested operation. Schema-v1 static allow rules
+    /// do not authorize model-supplied environment overrides. Hard restrictions,
+    /// explicit ask, manual confirmation and bypass retain their precedence.
+    pub fn evaluate_with_arguments(
+        &self,
+        mode: WorkMode,
+        permissions: PermissionMode,
+        op: &Operation,
+        arguments: &serde_json::Value,
+    ) -> PolicyDecision {
+        let result = self.evaluate(mode, permissions, op);
+        if op.tool == "exec"
+            && result.reason == "explicit_allow"
+            && has_exec_environment_override(arguments)
+        {
+            return decision(Decision::ModelReview, "exec_environment_override");
+        }
+        result
+    }
 }
 impl Rule {
     fn matches(&self, op: &Operation) -> bool {
@@ -518,7 +544,7 @@ impl ExecGate for PolicyGate {
     fn authorize(
         &self,
         plan: &ExecPlan,
-        _: &ToolCall,
+        call: &ToolCall,
         context: &ToolContext,
     ) -> Result<bool, BoundaryError> {
         if std::fs::canonicalize(&context.workspace)
@@ -531,9 +557,16 @@ impl ExecGate for PolicyGate {
             ));
         }
         let operation = Operation::exec(plan)?;
+        let arguments = serde_json::from_str(&call.arguments)
+            .map_err(|e| failure("invalid_args", e.to_string()))?;
         Ok(self
             .policy
-            .evaluate(context.run.work_mode, context.run.permissions, &operation)
+            .evaluate_with_arguments(
+                context.run.work_mode,
+                context.run.permissions,
+                &operation,
+                &arguments,
+            )
             .decision
             == Decision::Allow)
     }

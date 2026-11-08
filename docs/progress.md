@@ -10,6 +10,7 @@
 
 - R2-01已复现并修复共享检测／脱敏不对称。残留编码凭据使脱敏失败关闭，五项redaction测试及SQLite提交前拒绝回归通过，日志为 `target/r2-01-before.log` 和 `target/r2-01-after.log`。
 - R2-15的同模式请求已修复。撤回异构待切换请求会清空pending并更新revision，原模式可继续开始共享调用。两项新增回归的失败／通过证据为 `target/r2-15-mode-before.log` 与 `target/r2-15-mode-after.log`，core全目标Clippy通过。其余后台模式及超时问题继续核实。
+- R2-02已复现并修复环境覆盖沿用argv／cwd授权的问题。非空env由完整参数策略核查，版本1预授权保持未消费，静态auto allow进入模型核查。权限7项、审批32项和审核8项测试及core全目标Clippy通过，日志为 `target/r2-02-{before,after,clippy}.log`。
 - 权限环境匹配、路径规则、CLI清理、TUI输入与渲染、上下文及协议／存储相关问题继续分组整改，最终验收使用全部修复合入后的程序。
 
 ## 当前状态

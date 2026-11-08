@@ -7,7 +7,7 @@ use crate::{
         ReviewSource, RunId, ToolCall, WorkMode,
     },
     mode::ModeController,
-    permissions::{Decision, Operation, Policy},
+    permissions::{Decision, Operation, Policy, has_exec_environment_override},
     review::{ReviewConfig, ReviewDecisionSource, ReviewInput, SharedBudget, review_operation},
     tools::{
         exec::{ExecGate, ExecPlan, resolve_executable},
@@ -408,6 +408,7 @@ impl ApprovalManager {
         }
         let raw: Value = serde_json::from_str(&input.call.arguments)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
+        let environment_override = has_exec_environment_override(&raw);
         let mut review_config = config.clone();
         review_config
             .known_secrets
@@ -471,6 +472,7 @@ impl ApprovalManager {
             }
         }
         if let Some((argv, cwd)) = input.operation.command_identity()
+            && !environment_override
             && binding.mode_revision == self.initial_mode_revision
             && binding.permission_revision == self.initial_permission_revision
             && binding.permissions == self.initial_permissions

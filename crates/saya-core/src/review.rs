@@ -250,7 +250,12 @@ pub async fn review_operation(
             "review output token limit must be positive",
         ));
     }
-    let initial = policy.evaluate(input.mode, input.permissions, input.operation);
+    let initial = policy.evaluate_with_arguments(
+        input.mode,
+        input.permissions,
+        input.operation,
+        &input.arguments,
+    );
     if initial.decision != Decision::ModelReview {
         return Ok(ReviewOutcome {
             decision: initial.decision,

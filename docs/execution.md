@@ -76,6 +76,8 @@
 
 预授权使用 run 的 `--approval-file PATH`，版本 1 JSON 中列出 commands 的完整 argv 与 cwd，精确匹配并绑定本次运行初始模式和权限设置；切换后失效。不解除 PLAN、显式 deny 或路径边界。
 
+版本1预授权只匹配未覆盖命令环境的请求。模型提供非空 `env` 时，由当前权限流程核查或人工确认，原argv／cwd预授权保持可用。auto下的静态allow规则同样将环境覆盖交给独立核查，显式deny和ask继续优先生效。
+
 输出为流式交互、JSON 最终结果与 JSONL 事件，schema_version 为 1。精确字段、事件 data 和退出码已在 B-17 确定：
 
 | 输出方式 | 约定 |

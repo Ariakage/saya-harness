@@ -14,7 +14,7 @@ use saya_core::{
     },
     memory::MemoryStore,
     mode::ModeController,
-    permissions::{Operation, PermissionConfig, Policy},
+    permissions::{Operation, PermissionConfig, Policy, PolicyGate},
     review::{ReviewConfig, SharedBudget},
     tools::{
         exec::{ExecConfig, ExecGate, ExecPlan, ExecTool},
@@ -504,6 +504,160 @@ async fn preauthorization_matches_exact_command_once_and_drives_real_adapter()
             .await?,
         Authorization::NeedsConfirmation(_)
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn preauthorization_does_not_cover_model_environment_overrides()
+-> Result<(), Box<dyn std::error::Error>> {
+    for permissions in [PermissionMode::Manual, PermissionMode::Auto] {
+        let temp = support::temp_workspace()?;
+        let (session, run, context) = fixture(temp.path(), permissions);
+        let store = store_for(&session, &run).await?;
+        let files = Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?);
+        let planner = ExecTool::new(
+            files,
+            store.clone(),
+            Arc::new(DummyGate),
+            ExecConfig::default(),
+        );
+        let mut overridden = command_call("overridden", "hello");
+        let mut arguments: serde_json::Value = serde_json::from_str(&overridden.arguments)?;
+        arguments["env"] =
+            serde_json::json!({"SAYA_APPROVAL_TEST":{"source":"literal","value":"different"}});
+        overridden.arguments = arguments.to_string();
+        let operation = Operation::exec(&planner.plan(&overridden, &context)?)?;
+        let modes = ModeController::new(WorkMode::Work);
+        let manager = manager(
+            policy(temp.path(), "")?,
+            modes.clone(),
+            PermissionRevision::new(modes, permissions),
+            store,
+            &run,
+            Preauthorizations::from_json(&command_input(temp.path(), "hello"), temp.path())?,
+            Arc::new(Signal::default()),
+        )?;
+        let model = deny_model();
+        assert!(
+            matches!(
+                manager
+                    .authorize(
+                        input(&operation, &overridden, &context, false),
+                        &model,
+                        &SharedBudget::default(),
+                        &config()
+                    )
+                    .await?,
+                Authorization::NeedsConfirmation(_)
+            ),
+            "argv/cwd preauthorization covered an unapproved environment override"
+        );
+        let clean = command_call("clean", "hello");
+        let clean_operation = Operation::exec(&planner.plan(&clean, &context)?)?;
+        assert!(
+            matches!(
+                manager
+                    .authorize(
+                        input(&clean_operation, &clean, &context, false),
+                        &model,
+                        &SharedBudget::default(),
+                        &config()
+                    )
+                    .await?,
+                Authorization::Permit(_)
+            ),
+            "environment mismatch consumed the clean command preauthorization"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn static_exec_allow_does_not_cover_model_environment_overrides()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Auto);
+    let store = store_for(&session, &run).await?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let planner = ExecTool::new(
+        files,
+        store.clone(),
+        Arc::new(DummyGate),
+        ExecConfig::default(),
+    );
+    let executable = std::fs::canonicalize("/bin/echo")?;
+    let policy = policy(
+        temp.path(),
+        &format!(
+            "[[rules]]\neffect='allow'\ntool='exec'\nexecutable='{}'\nargs_prefix=['hello']\n",
+            executable.display()
+        ),
+    )?;
+    let mut overridden = command_call("overridden", "hello");
+    let mut arguments: serde_json::Value = serde_json::from_str(&overridden.arguments)?;
+    arguments["env"] =
+        serde_json::json!({"SAYA_APPROVAL_TEST":{"source":"literal","value":"different"}});
+    overridden.arguments = arguments.to_string();
+    let plan = planner.plan(&overridden, &context)?;
+    let gate = PolicyGate::new(policy.clone());
+    assert!(
+        !ExecGate::authorize(&gate, &plan, &overridden, &context)?,
+        "static allow granted an unreviewed environment override"
+    );
+    let operation = Operation::exec(&plan)?;
+    let modes = ModeController::new(WorkMode::Work);
+    let manager = manager(
+        policy,
+        modes.clone(),
+        PermissionRevision::new(modes, run.permissions),
+        store,
+        &run,
+        Preauthorizations::default(),
+        Arc::new(Signal::default()),
+    )?;
+    let model = deny_model();
+    assert!(matches!(
+        manager
+            .authorize(
+                input(&operation, &overridden, &context, false),
+                &model,
+                &SharedBudget::default(),
+                &config()
+            )
+            .await?,
+        Authorization::NeedsConfirmation(_)
+    ));
+    assert!(model.0.load(Ordering::Acquire) > 0);
+    let calls = model.0.load(Ordering::Acquire);
+    let mut clean = command_call("clean", "hello");
+    let mut arguments: serde_json::Value = serde_json::from_str(&clean.arguments)?;
+    arguments["env"] = serde_json::json!({});
+    clean.arguments = arguments.to_string();
+    let plan = planner.plan(&clean, &context)?;
+    assert!(ExecGate::authorize(&gate, &plan, &clean, &context)?);
+    let operation = Operation::exec(&plan)?;
+    assert!(matches!(
+        manager
+            .authorize(
+                input(&operation, &clean, &context, false),
+                &model,
+                &SharedBudget::default(),
+                &config()
+            )
+            .await?,
+        Authorization::Permit(_)
+    ));
+    assert_eq!(model.0.load(Ordering::Acquire), calls);
     Ok(())
 }
 
