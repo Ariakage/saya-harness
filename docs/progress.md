@@ -18,6 +18,7 @@
 - R2-06已复现并修复上下文子集误拒和后台失效误杀。已提供来源按路径／哈希核对，背景守卫只读前台选择，失效后台调用保存配对的结构化失败。两项旧实现反例失败，43项runtime测试及core Clippy通过，日志为 `target/r2-06-*.log`。
 - R2-18审批预写部分已修复。预写前和提交后统一核对取消、版本、拒绝及去重状态，提交期间过期可保留实际审计请求，但返回失效且无法发许可。两项旧实现反例失败，61项权限／审批／审核／Todo测试与core全目标Clippy通过，日志为 `target/r2-18-{before,after,clippy}.log`。模式事件发射另行核实。
 - R2-13／19的Anthropic部分已修复空文本回放、空缓存system块和用量解析，缓存创建／读取计入总输入，非法或溢出计数拒绝，strict=true按官方能力保留。13项协议及2项thinking_effort测试、core Clippy通过，日志为 `target/r02-fix/anthropic-compat-{tests,clippy}.log`。
+- R2-13的Responses部分已补充queued、增量身份及完成事件校验、最终明文反向覆盖、空summary加opaque兼容，保留完成事件独立提供完整输出的合法路径。12项协议测试和core Clippy通过，日志为 `target/r02-fix/responses-compat-{tests,clippy}.log`。报告中的reasoning_part事件名缺少官方定义依据，按现有标准事件集合处理。
 - 权限环境匹配、路径规则、CLI清理、TUI输入与渲染、上下文及协议／存储相关问题继续分组整改，最终验收使用全部修复合入后的程序。
 
 ## 当前状态

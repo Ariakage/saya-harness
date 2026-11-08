@@ -617,6 +617,138 @@ async fn completed_event_followed_by_eof_is_a_valid_stream_end()
 }
 
 #[tokio::test]
+async fn queued_streams_accept_empty_plaintext_with_opaque_reasoning_and_completed_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let reasoning = json!({"type":"reasoning","id":"rs_opaque","summary":[],"encrypted_content":"opaque-fixture"});
+    let body = fixture::sse(&[
+        event(
+            "response.queued",
+            json!({"response":{"status":"queued","output":[]}}),
+        ),
+        event(
+            "response.reasoning_summary_text.delta",
+            json!({"output_index":0,"summary_index":0,"item_id":"rs_opaque","delta":"public thought"}),
+        ),
+        event(
+            "response.reasoning_summary_text.done",
+            json!({"output_index":0,"summary_index":0,"item_id":"rs_opaque","text":"public thought"}),
+        ),
+        event(
+            "response.output_text.delta",
+            json!({"output_index":1,"content_index":0,"item_id":"msg_1","delta":"ok"}),
+        ),
+        event(
+            "response.output_text.done",
+            json!({"output_index":1,"content_index":0,"item_id":"msg_1","text":"ok"}),
+        ),
+        done(vec![reasoning.clone(), message("ok")]),
+    ]);
+    let (url, _) = fixture::server(vec![("text/event-stream", body)])?;
+    let model = ResponsesModel::new(
+        transport(url)?,
+        settings(true),
+        ResponsesCompatibility::default(),
+    );
+    let (items, _, text) = collect(&model, &request()).await?;
+    assert_eq!(text, "ok");
+    assert!(matches!(&items[0], HistoryItem::ProviderItem {value,..} if value == &reasoning));
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_identity_and_reverse_plaintext_coverage_reject_unobserved_final_parts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let text = event(
+        "response.output_text.delta",
+        json!({"output_index":0,"content_index":0,"item_id":"msg_1","delta":"ok"}),
+    );
+    let complete = event(
+        "response.output_text.done",
+        json!({"output_index":0,"content_index":0,"item_id":"msg_1","text":"ok"}),
+    );
+    let mut extra_part = message("ok");
+    extra_part["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"output_text","text":"hidden","annotations":[]}));
+    let mut extra_message = message("hidden");
+    extra_message["id"] = json!("msg_extra");
+    let mut wrong_identity = text.clone();
+    wrong_identity["item_id"] = json!("msg_wrong");
+    let mut wrong_done = complete.clone();
+    wrong_done["text"] = json!("different");
+    let reasoning = json!({"type":"reasoning","id":"rs_extra","summary":[{"type":"summary_text","text":"hidden"}],"encrypted_content":"opaque-fixture"});
+    let summary = event(
+        "response.reasoning_summary_text.delta",
+        json!({"output_index":1,"summary_index":0,"item_id":"rs_extra","delta":"hidden"}),
+    );
+    let mut extra_summary = reasoning.clone();
+    extra_summary["summary"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"summary_text","text":"another hidden part"}));
+    for events in [
+        vec![wrong_identity, done(vec![message("ok")])],
+        vec![text.clone(), done(vec![extra_part])],
+        vec![text.clone(), done(vec![message("ok"), extra_message])],
+        vec![text.clone(), done(vec![message("ok"), reasoning])],
+        vec![
+            text.clone(),
+            summary,
+            done(vec![message("ok"), extra_summary]),
+        ],
+        vec![text.clone(), wrong_done, done(vec![message("ok")])],
+        vec![complete.clone(), text, done(vec![message("ok")])],
+        vec![complete.clone(), complete, done(vec![message("ok")])],
+    ] {
+        let (url, _) = fixture::server(vec![("text/event-stream", fixture::sse(&events))])?;
+        let model = ResponsesModel::new(
+            transport(url)?,
+            settings(true),
+            ResponsesCompatibility::default(),
+        );
+        assert!(
+            collect(&model, &request()).await.is_err(),
+            "inconsistent stream accepted: {events:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn completed_text_and_item_events_are_valid_without_text_deltas()
+-> Result<(), Box<dyn std::error::Error>> {
+    for first in [
+        event(
+            "response.output_text.done",
+            json!({"output_index":0,"content_index":0,"item_id":"msg_1","text":"ok"}),
+        ),
+        event(
+            "response.output_item.done",
+            json!({"output_index":0,"item":message("ok")}),
+        ),
+    ] {
+        let (url, _) = fixture::server(vec![(
+            "text/event-stream",
+            fixture::sse(&[first, done(vec![message("ok")])]),
+        )])?;
+        let model = ResponsesModel::new(
+            transport(url)?,
+            settings(true),
+            ResponsesCompatibility::default(),
+        );
+        let (items, _, text) = collect(&model, &request()).await?;
+        assert!(text.is_empty());
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, HistoryItem::AssistantText(text) if text == "ok"))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn multiple_function_calls_preserve_order_and_each_call_id()
 -> Result<(), Box<dyn std::error::Error>> {
     let first_call = call_item("first", "read_file", "{\"path\":\"a\"}");

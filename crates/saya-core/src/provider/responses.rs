@@ -412,6 +412,7 @@ fn parse_output_item_for_replay(item: &Value) -> Result<Option<HistoryItem>, Bou
 struct StreamState {
     item_done: BTreeMap<usize, Value>,
     text: BTreeMap<(usize, usize), String>,
+    text_done: BTreeMap<(usize, usize), String>,
     arguments: BTreeMap<usize, String>,
     argument_done: BTreeMap<usize, String>,
     item_ids: BTreeMap<usize, String>,
@@ -459,12 +460,39 @@ impl StreamState {
                     index(value, "output_index")?,
                     index(value, "content_index")?,
                 );
+                self.check_item_id(key.0, obj)?;
+                if self.text_done.contains_key(&key) {
+                    return Err(failure(
+                        "invalid_model_response",
+                        "text delta after completion",
+                    ));
+                }
                 let delta = obj
                     .get("delta")
                     .and_then(Value::as_str)
                     .ok_or_else(|| failure("invalid_model_response", "invalid text delta"))?;
                 self.text.entry(key).or_default().push_str(delta);
                 Ok(Some(delta.into()))
+            }
+            "response.output_text.done" => {
+                let key = (
+                    index(value, "output_index")?,
+                    index(value, "content_index")?,
+                );
+                self.check_item_id(key.0, obj)?;
+                let text = obj
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| failure("invalid_model_response", "completed text missing"))?;
+                if self.text.get(&key).is_some_and(|delta| delta != text)
+                    || self.text_done.insert(key, text.into()).is_some()
+                {
+                    return Err(failure(
+                        "invalid_model_response",
+                        "completed text differs from deltas or is duplicated",
+                    ));
+                }
+                Ok(None)
             }
             "response.function_call_arguments.delta" => {
                 let key = index(value, "output_index")?;
@@ -563,7 +591,7 @@ impl StreamState {
                         ));
                     }
                 }
-                for ((idx, part), text) in &self.text {
+                for ((idx, part), text) in self.text.iter().chain(&self.text_done) {
                     if output
                         .get(*idx)
                         .and_then(|v| v.get("content"))
@@ -591,7 +619,9 @@ impl StreamState {
                             )
                         })?;
                     // Compatible services can omit plaintext and retain only opaque reasoning.
-                    if let Some(parts) = item.get(*field) {
+                    if let Some(parts) = item.get(*field)
+                        && !parts.as_array().is_some_and(Vec::is_empty)
+                    {
                         let expected_kind = if *field == "summary" {
                             "summary_text"
                         } else {
@@ -621,6 +651,7 @@ impl StreamState {
                         ));
                     }
                 }
+                self.check_final_parts(output)?;
                 self.completed = Some(parse_response(response)?);
                 Ok(None)
             }
@@ -683,11 +714,11 @@ impl StreamState {
                 Ok(None)
             }
             "response.created"
+            | "response.queued"
             | "response.in_progress"
             | "response.output_item.added"
             | "response.content_part.added"
             | "response.content_part.done"
-            | "response.output_text.done"
             | "response.reasoning_summary_part.added"
             | "response.reasoning_summary_part.done" => Ok(None),
             _ => Err(failure(
@@ -695,6 +726,59 @@ impl StreamState {
                 "unsupported provider stream event",
             )),
         }
+    }
+    fn check_final_parts(&self, output: &[Value]) -> Result<(), BoundaryError> {
+        if self.text.is_empty()
+            && self.text_done.is_empty()
+            && self.reasoning.is_empty()
+            && self.reasoning_done.is_empty()
+            && self.arguments.is_empty()
+            && self.argument_done.is_empty()
+            && self.item_done.is_empty()
+        {
+            // Some compatible endpoints provide the entire output at completion.
+            return Ok(());
+        }
+        for (index, item) in output.iter().enumerate() {
+            if self.item_done.contains_key(&index) {
+                continue;
+            }
+            for field in ["content", "summary"] {
+                let Some(parts) = item.get(field).and_then(Value::as_array) else {
+                    continue;
+                };
+                for (part_index, part) in parts.iter().enumerate() {
+                    let Some(text) = part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                    else {
+                        continue;
+                    };
+                    let received = match (item["type"].as_str(), part["type"].as_str(), field) {
+                        (Some("message"), Some("output_text"), "content") => {
+                            let key = (index, part_index);
+                            self.text.get(&key).or_else(|| self.text_done.get(&key))
+                        }
+                        (Some("reasoning"), Some("summary_text"), "summary")
+                        | (Some("reasoning"), Some("reasoning_text"), "content") => {
+                            let key = (index, field, part_index);
+                            self.reasoning
+                                .get(&key)
+                                .or_else(|| self.reasoning_done.get(&key))
+                        }
+                        _ => continue,
+                    };
+                    if received.is_none_or(|received| received != text) {
+                        return Err(failure(
+                            "invalid_model_response",
+                            "final output contains unobserved text",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
     fn check_item_id(
         &mut self,
