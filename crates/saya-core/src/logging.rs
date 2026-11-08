@@ -293,7 +293,20 @@ fn open_root(root: &Path) -> io::Result<Dir> {
     {
         return Err(io::ErrorKind::InvalidInput.into());
     }
-    Dir::open_ambient_dir(root, ambient_authority())
+    let dir = Dir::open_ambient_dir(root, ambient_authority())?;
+    verify_opened_root(&dir, &metadata)?;
+    Ok(dir)
+}
+fn verify_opened_root(dir: &Dir, expected: &fs::Metadata) -> io::Result<()> {
+    let opened = dir.dir_metadata()?;
+    if opened.dev() != expected.dev()
+        || opened.ino() != expected.ino()
+        || opened.uid() != unsafe { libc::geteuid() }
+        || opened.mode() & 0o022 != 0
+    {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(())
 }
 fn validate_existing(dir: &Dir, name: &str) -> io::Result<()> {
     match dir.symlink_metadata(name) {
@@ -383,6 +396,20 @@ fn timestamp() -> Result<String, BoundaryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn opened_log_directory_matches_the_checked_identity_and_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let metadata = fs::symlink_metadata(root.path()).unwrap();
+        let original = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let replaced = Dir::open_ambient_dir(other.path(), ambient_authority()).unwrap();
+        verify_opened_root(&original, &metadata).unwrap();
+        assert!(verify_opened_root(&replaced, &metadata).is_err());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(verify_opened_root(&original, &metadata).is_err());
+        assert!(open_root(root.path()).is_err());
+    }
     #[test]
     fn levels_filter_before_io_and_accept_all_five_severities() {
         let dir = tempfile::tempdir().unwrap();

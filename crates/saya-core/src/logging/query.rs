@@ -1,10 +1,7 @@
 //! Bounded read-only queries over current and rotated local diagnostics.
 use super::{BACKUPS, LogEntry, LogLevel, MAX_BYTES, MAX_RECORD_BYTES, failure};
 use crate::{boundary::Cancellation, contract::BoundaryError};
-use cap_std::{
-    ambient_authority,
-    fs::{Dir, MetadataExt as _},
-};
+use cap_std::{ambient_authority, fs::Dir};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -121,14 +118,7 @@ impl LogReader {
             return Err(failure());
         }
         let dir = Dir::open_ambient_dir(&self.root, ambient_authority()).map_err(|_| failure())?;
-        let opened = dir.dir_metadata().map_err(|_| failure())?;
-        if opened.dev() != metadata.dev()
-            || opened.ino() != metadata.ino()
-            || opened.mode() & 0o022 != 0
-            || opened.uid() != unsafe { libc::geteuid() }
-        {
-            return Err(failure());
-        }
+        super::verify_opened_root(&dir, &metadata).map_err(|_| failure())?;
         let mut matched = 0;
         let mut files = Vec::new();
         for number in (0..=BACKUPS).rev() {
@@ -188,7 +178,9 @@ impl LogReader {
                     continue;
                 }
                 if !complete {
-                    page.malformed_lines += 1;
+                    if cursor.is_none() {
+                        page.malformed_lines += 1;
+                    }
                     break;
                 }
                 let entry = if oversized {
@@ -501,7 +493,11 @@ mod tests {
         let page = reader.follow(&query, &mut cursor, None).unwrap();
         assert_eq!(page.records.len(), 1);
         assert_eq!(page.records[0].event, "second");
-        assert_eq!(page.malformed_lines, 2);
+        assert_eq!(page.malformed_lines, 1);
+        let pending = reader.follow(&query, &mut cursor, None).unwrap();
+        assert!(pending.records.is_empty());
+        assert_eq!(pending.malformed_lines, 0);
+        assert_eq!(reader.page(&query, None).unwrap().malformed_lines, 2);
         file.write_all(
             b"\"2026-11-08T00:00:00Z\",\"level\":\"warn\",\"event\":\"third\",\"data\":{}}\n",
         )
@@ -509,6 +505,7 @@ mod tests {
         let page = reader.follow(&query, &mut cursor, None).unwrap();
         assert_eq!(page.records.len(), 1);
         assert_eq!(page.records[0].event, "third");
+        assert_eq!(page.malformed_lines, 0);
     }
     #[test]
     fn rapid_file_replacement_keeps_generations_and_oversized_rows_bounded() {

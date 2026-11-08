@@ -31,6 +31,8 @@
 
 - R2-17及R2-20脚本部分已修复。Git忽略私有测试目录，macOS候选验收强制核对源码提交，PTY快照只写显式调试目录并扩大外层期限，live脚本支持可选二进制／平台和旧token字段。九项Python测试与两个工作流actionlint通过，日志为 `target/r2-script-tests.log` 与 `target/r2-workflow-actionlint.log`。
 
+- R2-16日志收尾及R2-19跟随查询已修复。析构先关闭生产者再有界等待优先队列排空，日志读写共用打开后的目录身份校验，follow保留末尾半行且不计为损坏。18项logging测试及core Clippy通过，日志为 `target/r02-fix/logging-boundaries-{tests,clippy}.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

@@ -141,13 +141,8 @@ impl Diagnostics {
 }
 impl Drop for Diagnostics {
     fn drop(&mut self) {
-        let deadline = Instant::now() + EXIT_WAIT;
-        let _ = self.flush(EXIT_WAIT);
         self.queue.state.closed.store(true, Ordering::Release);
-        if self
-            .done
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .is_ok()
+        if self.done.recv_timeout(EXIT_WAIT).is_ok()
             && let Some(worker) = self.worker.take()
         {
             let _ = worker.join();
@@ -439,5 +434,52 @@ mod tests {
             .record(DiagnosticRecord::new(LogLevel::Error, "failure"));
         assert!(diagnostics.flush(Duration::from_secs(2)).is_err());
         assert!(std::fs::read(target.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn drop_closes_producers_before_waiting_for_full_queues_to_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = JsonLog::new(dir.path(), vec![]).with_level(LogLevel::Trace);
+        log.record("warn", "initial", serde_json::json!({}))
+            .unwrap();
+        let lock = std::fs::File::open(dir.path().join("saya-log.lock")).unwrap();
+        // SAFETY: the temporary lock descriptor stays alive through the unlock.
+        assert_eq!(
+            unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock), libc::LOCK_EX) },
+            0
+        );
+        let diagnostics = Diagnostics::with_capacity(log, 1, 1).unwrap();
+        for _ in 0..100 {
+            diagnostics
+                .queue
+                .record(DiagnosticRecord::new(LogLevel::Debug, "normal"));
+        }
+        diagnostics
+            .queue
+            .record(DiagnosticRecord::new(LogLevel::Error, "priority-at-exit"));
+        let state = diagnostics.queue.state.clone();
+        let unlock = std::thread::spawn(move || {
+            let deadline = Instant::now() + EXIT_WAIT + Duration::from_secs(1);
+            while !state.closed.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(state.closed.load(Ordering::Acquire));
+            // SAFETY: this thread owns the live lock descriptor.
+            assert_eq!(
+                unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock), libc::LOCK_UN) },
+                0
+            );
+        });
+        let started = Instant::now();
+        drop(diagnostics);
+        let elapsed = started.elapsed();
+        unlock.join().unwrap();
+        assert!(
+            elapsed < EXIT_WAIT - Duration::from_millis(500),
+            "exit drain took {elapsed:?}"
+        );
+        let text = std::fs::read_to_string(dir.path().join("saya.log")).unwrap();
+        assert!(text.contains("priority-at-exit"));
+        assert!(text.contains("diagnostics.dropped"));
     }
 }
