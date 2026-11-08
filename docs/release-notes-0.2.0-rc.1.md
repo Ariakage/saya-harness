@@ -74,9 +74,15 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 
 ### RC1 之后的开发线审查
 
-2026-11-09，开发线完成文本 CLI 终端控制序列、个人文件编码凭据外发、Todo 脱敏后失效仍成功、Responses 推理流冲突、TUI 异常后台清理和异步失败覆盖草稿六项问题的首轮修复及交叉复核。首轮源码为 `727832b`，历史 RC1 的 `a6c172d` 四平台验收保留原有归属。各轮程序的实际验证见[本轮审查](review-2026-11-09.md)。共享凭据检测的失败关闭可能拒绝部分无秘密歧义 JSON。仅流式明文、最终仅 opaque 的推理响应，恢复后无法重建明文。
+2026-11-09，开发线完成文本 CLI 终端控制序列、个人文件编码凭据外发、Todo 脱敏后失效仍成功、Responses 推理流冲突、TUI 异常后台清理和异步失败覆盖草稿六项问题的首轮修复及交叉复核。首轮源码为 `727832b`，历史 RC1 的 `a6c172d` 四平台验收保留原有归属。各轮程序的实际验证见[本轮审查](review-2026-11-09.md)。首轮共享凭据检测可能拒绝部分无秘密歧义JSON，该边界已在下述第二轮整改修复。仅流式明文、最终仅 opaque 的推理响应，恢复后无法重建明文。
 
 后续R-02补修覆盖Markdown和普通正文中的Unicode、混合及嵌套JSON转义凭据，通过检测的个人文本保持原文。检测视图受256层与累计64 MiB扫描限制，超限失败关闭。最终程序通过600项Rust测试、20组本机PTY及原六例零模型请求回归，源码和程序关联见审查记录。
+
+### 第二轮整改与本机验收
+
+第二轮修复覆盖环境覆盖授权、路径规则、后台生命周期、上下文来源、WAL、模型协议、导出、日志及TUI草稿／恢复边界。无凭据歧义JSON保持原文，凭据在工具保存前统一净化。CLI按请求补齐完成事件正文，合法交错顺序不一致时可能换行重显完整回答。既定补丁大小和Markdown转义契约保持，逐项处置见[第二轮报告](review-2026-11-09_02.md)。
+
+源码 `6d0c609` 的同一本机macOS27.2 ARM程序通过682项Rust测试、九项发行脚本测试、22组PTY、24例安全探针及三输出completed-only检查。当前源码的四平台CI、原生最低环境及真实模型复验仍待执行。
 
 ## English
 
@@ -150,6 +156,12 @@ Builds use Rust 1.99.1 and edition 2024. Candidate source `a6c172d` passed four-
 
 ### Development-line review after RC1
 
-On 2026-11-09, the development line completed initial repairs for six confirmed issues involving CLI terminal controls, encoded credentials in personal files, invalid Todo snapshots after redaction, conflicting Responses reasoning streams, background cleanup during TUI errors, and newer drafts overwritten after asynchronous failures. Cross-review by agents who did not implement the respective fixes passed. The initial repairs are recorded at `727832b`. The historical four-platform RC1 evidence remains associated with `a6c172d`. Validation for each program is recorded in the [review report](review-2026-11-09.md). Shared credential detection fails closed and may reject some non-secret ambiguous JSON. Reasoning returned as stream-only plaintext with an opaque final item cannot be reconstructed as plaintext after restore.
+On 2026-11-09, the development line completed initial repairs for six confirmed issues involving CLI terminal controls, encoded credentials in personal files, invalid Todo snapshots after redaction, conflicting Responses reasoning streams, background cleanup during TUI errors, and newer drafts overwritten after asynchronous failures. Cross-review by agents who did not implement the respective fixes passed. The initial repairs are recorded at `727832b`. The historical four-platform RC1 evidence remains associated with `a6c172d`. Validation for each program is recorded in the [review report](review-2026-11-09.md). That first repair could reject some non-secret ambiguous JSON. The second-round repairs below preserve those documents. Reasoning returned as stream-only plaintext with an opaque final item cannot be reconstructed as plaintext after restore.
 
 The subsequent R-02 repair covers Unicode, mixed, and nested JSON escapes inside Markdown and prose. Personal text that passes inspection is sent verbatim. Detection views are bounded to 256 decoding layers and 64 MiB of cumulative scanning, with exhausted budgets failing closed. The final program passed 600 Rust tests, 20 local PTY groups, and all six original credential probes with zero model requests. Source and binary provenance is recorded in the review report.
+
+### Second-round repairs and local acceptance
+
+The second round repairs environment-override authorization, path rules, background lifecycle, context sources, WAL recovery, model protocols, exports, logging, and TUI drafts and restoration. Non-secret ambiguous JSON retains its original text, and tool data is sanitized before persistence. CLI completion events fill missing visible text per request. Valid interleaved output with a different final order may reprint the complete answer on a new line. Existing patch-size and Markdown escaping contracts remain in effect. Individual dispositions are recorded in the [second-round report](review-2026-11-09_02.md).
+
+The same local macOS 27.2 ARM program from source `6d0c609` passed 682 Rust tests, nine release-script tests, 22 PTY groups, 24 security probes, and completed-only checks in three output formats. Four-platform CI, native minimum-environment acceptance, and live-model verification remain pending for this source.

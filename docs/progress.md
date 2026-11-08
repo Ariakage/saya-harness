@@ -1,12 +1,12 @@
 # 开发进度
 
-**记录于 2026-11-09。P0 至 P7 已完成，v0.1.0 已发布，N0／N1 的 0.2.0-rc.1 候选已完成四平台原生验收。当前开发线已完成风险审查、R-02补修及独立复核，600项Rust测试与20组本机PTY通过，正式发布另行安排。**
+**记录于2026-11-09。P0至P7已完成，v0.1.0已发布，N0／N1历史RC1已完成四平台原生验收。当前开发线已完成第二轮审查整改和独立复核，682项Rust测试、22组本机PTY与24例安全探针通过。当前源码的跨平台及真实模型复验待执行，正式发布另行安排。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
 ## 第二轮审查整改
 
-以 `c93fcca` 为整改起点，逐项核实[第二轮报告](review-2026-11-09_02.md)。报告中的发现与建议按既定契约和实际复现判定，当前整改进行中，各阶段完成适用检查后独立提交。
+以 `c93fcca` 为整改起点，逐项核实[第二轮报告](review-2026-11-09_02.md)。报告中的发现与建议按既定契约和实际复现判定，确认问题已修复，各阶段完成适用检查后独立提交。契约保留项与最终证据见报告第7节。
 
 - R2-01已复现并修复共享检测／脱敏不对称。残留编码凭据使脱敏失败关闭，五项redaction测试及SQLite提交前拒绝回归通过，日志为 `target/r2-01-before.log` 和 `target/r2-01-after.log`。
 - R2-15的同模式请求已修复。撤回异构待切换请求会清空pending并更新revision，原模式可继续开始共享调用。两项新增回归的失败／通过证据为 `target/r2-15-mode-before.log` 与 `target/r2-15-mode-after.log`，core全目标Clippy通过。其余后台模式及超时问题继续核实。
@@ -42,6 +42,14 @@
 - R2-19导出与目录权限已修复。身份字段拒绝截断，失败脱敏调用仅在持久记录与历史记录身份两侧唯一时补run关联，旧历史歧义保持null。新建data／locks目录使用0700，已有目录权限保留。38项初验及补充独立复核50项export／SQLite／logging测试、core严格Clippy通过，日志为 `target/r02-fix/export-directory-{tests,clippy}.log` 与 `target/r2-19-{export-storage-review,logging-independent-review,export-fallback-clippy}.log`。
 
 - R2-13相邻CLI完成输出已修复。逐次模型请求记录已显示前缀，合法完成事件补齐缺失正文，常规delta不重复。完成顺序与增量交错不一致时换行展示完整已校验回答。十项text_stream／lifecycle正常入口测试及CLI严格Clippy通过，包含断管后真实后台清理，日志为 `target/completed-text-{before,final-tests,clippy}.log`。
+
+### 最终同产物验收
+
+修复源码为 `6d0c609fc9f02a71d74ea2b1afc79fad397ac51e`，本机macOS27.2 ARM／Rust1.99.1执行 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、workspace全目标严格Clippy、682项Rust测试和release构建通过。同一二进制完成九项发行脚本测试、smoke、文本journey、既有审查回归与22组正常入口PTY。24例安全探针通过，其中16例个人上下文阻断为0HTTP，其他受控工具流程共11次执行请求。completed-only的三种输出另经同产物各一次请求验证，明文完整且thinking／opaque标记不外泄。
+
+二进制SHA-256为 `31391a832815471d3d2ab5dfbb7ab45dfefcf13d05ab97d26ced8057661ec1a0`，155份源码／脚本／构建文件与该提交逐字核对。219个文件及本轮提交差异的实际配置凭据扫描零命中。独立编码矩阵2456例零漏检，70份Markdown、706条相对链接、25条锚点及16份提示词来源校验通过。最终日志、哈希、源码清单和探针报告位于 `target/review-r2-final/`。
+
+本机试用程序更新到 `target/local-trial/6d0c609-macos-arm64/`，稳定启动脚本为 `.saya/local/saya-trial`。配置检查、空闲TUI、Ctrl+P、Esc、Ctrl+D和终端恢复通过，模型运行数为0。实际Mach-O声明最低15.0。当前源码的四平台CI、原生macOS15／Linux及真实模型测试继续待验，历史证据保留原提交归属。
 
 ## 当前状态
 
