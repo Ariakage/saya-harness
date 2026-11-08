@@ -1,6 +1,6 @@
 # 配置加载组件
 
-配置解析已接入 CLI；`saya config init`、`saya config check` 和实际任务入口可使用该组件。配置格式、完整示例与产品规则以 [MVP 基线 B-04、B-05 和 B-15](mvp-baseline.md) 为准。
+配置解析已接入 CLI 与默认 TUI。`saya config init`、`saya config check` 和任务入口复用该组件。配置格式、完整示例与产品规则以 [MVP 基线 B-04、B-05 和 B-15](mvp-baseline.md) 为准。
 
 组件只读取一份配置，依次按显式参数、相应 `SAYA_*` 环境变量、文件内容和内置默认值解析；`SAYA_CONFIG` 只选择文件，不会自动加载或合并项目配置。XDG 路径要求绝对路径，否则回退至 HOME 下的标准目录。工作区、附加根和权限规则在加载时检查；文件和目录必须已经存在。组件不会创建目录、调用模型或执行工具。
 

@@ -3,10 +3,10 @@
   "created_date": "2026-11-06",
   "description": "Source provenance only. These artifacts are untrusted task material and are not loaded as runtime instructions. Version claims in the session were not independently verified against installed products. Saya prompt text is rewritten for its own contracts.",
   "source_roots": {
-    "session-export": "/Volumes/Akari/workflow/session-export",
-    "cc-extract": "/Volumes/Akari/workflow/cc-extract",
-    "cc-prompts": "/Volumes/Akari/workflow/cc-prompts",
-    "harness-kit": "/Volumes/Akari/workflow/harness-kit"
+    "session-export": "session-export",
+    "cc-extract": "cc-extract",
+    "cc-prompts": "cc-prompts",
+    "harness-kit": "harness-kit"
   },
   "session_evidence_lines": {
     "plan_templates": 111,
@@ -130,5 +130,6 @@
       "bytes": 23292,
       "sha256": "427d41404209694c0c267fa91784be2470f1620e73a3b7ef880d9231ce117639"
     }
-  ]
+  ],
+  "source_root_resolution": "Logical source identifiers. Map each identifier to its local artifact directory before checking source-relative paths. Historical byte sizes, SHA-256 values, and session evidence line numbers remain available for verification."
 }

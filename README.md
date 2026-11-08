@@ -1,10 +1,10 @@
 # Saya Harness
 
-使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，首阶段提供 CLI，后续扩展 TUI 和 GUI。
+使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用运行时，GUI 按后续计划推进。
 
 **0.1.0 已发布。** 提供 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64 CLI 安装包。中英双语说明、校验和及四平台最低环境验收证据见 [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。
 
-当前开发线为 **0.2.0-rc.1 候选**，已实现 N0 共享基础及 N1 默认 TUI，包括 `saya-app`、诊断与追踪、日志查询、JSON／Markdown 会话导出及终端对话界面。直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。本轮用于验收和试用，正式发布安排在后续代码 review 与其他测试之后。候选范围见[双语说明](docs/release-notes-0.2.0-rc.1.md)，实际证据见[开发进度](docs/progress.md)。
+当前开发线为 **0.2.0-rc.1 之后的开发增量**，已实现 N0 共享基础及 N1 默认 TUI，包括 `saya-app`、诊断与追踪、日志查询、JSON／Markdown 会话导出及终端对话界面。直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。开发线正在进行审查整改与补充验收，正式发布另行安排。RC1 与后续增量分别见[双语说明](docs/release-notes-0.2.0-rc.1.md)，实际证据见[开发进度](docs/progress.md)。
 
 ## 已确认方向
 
@@ -51,9 +51,13 @@
 | [架构设计](docs/architecture.md) | Agent 循环、模块边界与实现约束 |
 | [开发指南](docs/development.md) | 开发流程与验证方式 |
 | [CLI 使用指南](docs/usage.md) | 构建、配置、使用示例与故障处理 |
-| [CLI 开发预览](docs/cli-preview.md) | 单次运行、交互、会话和当前限制 |
+| [配置组件](docs/configuration.md) | 配置来源、模型 profile、凭据引用和兼容选项 |
+| [模型协议](docs/model-protocols.md) | 三协议适配、流式边界和验证范围 |
+| [CLI 入口与实现记录](docs/cli-preview.md) | 单次运行、文本会话与默认 TUI 入口 |
 | [MVP 验收证据](docs/acceptance.md) | AC-01 至 AC-24 的测试与发行验收映射 |
 | [0.1.0 双语版本说明](docs/release-notes-0.1.0.md) | 功能、安装、兼容性与已知限制 |
+| [0.2.0-rc.1 与开发线双语说明](docs/release-notes-0.2.0-rc.1.md) | 候选与后续交互增量、迁移和限制 |
+| [发行验证](docs/release-validation.md) | 历史产物、源码关联、最低环境与下载复核 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规范](docs/saya-plugin.md) | manifest v1 草案、结构 schema、权限与生命周期 |
@@ -64,6 +68,8 @@
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
+| [TUI 布局](docs/tui-design.md) | 参考布局、侧栏、输入区与预览 |
+| [TUI 验证](docs/tui-validation.md) | 候选及后续源码的真实终端验收 |
 | [日志与追踪](docs/observability.md) | 五级诊断、关联 span、日志查询与安全边界 |
 | [Session 导出](docs/session-export.md) | 一致性快照、Markdown／JSON 与文件保存 |
 | [Goal 设计](docs/goal.md) | 目标、步骤、证据、手动与有限自动推进 |

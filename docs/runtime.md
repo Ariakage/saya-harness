@@ -1,6 +1,6 @@
 # 可复用 Agent 运行时
 
-**状态：核心运行时、三协议、CLI、SQLite 恢复与完整事件输出已实现并经本机受控测试；最终候选的最低平台验证仍待完成。**
+**核心运行时、三协议、CLI、SQLite 恢复及事件输出已实现，0.1.0 已发布。当前开发线通过 saya-app 供 CLI 与默认 TUI 复用，各版本的平台与运行验证见[开发进度](progress.md)。**
 
 `crates/saya-core/src/runtime.rs` 提供与终端无关的单次运行协调器 `AgentRuntime`。调用方提供 `RuntimeSetup`：会话对应的 `Run`、`Model`、`Store`、权限 `Policy`、已配置的 `ReadTools`、取消信号、核查与命令配置、单次预授权、用户任务摘要、可选人工确认回调以及运行预算。运行前获取 `RuntimeHandle`，可在运行期间请求模式切换或查看／取消本运行后台任务；运行结束后的旧句柄不可启动新任务。每次新运行或恢复均构造新的协调器，不复活历史授权。
 
@@ -14,7 +14,7 @@
 
 `RuntimeHandle::background_events` 可读取本次运行内的后台生命周期快照：任务接受调度、取消请求及最终结果按单调序号排列。接受调度不表示工具副作用已开始；完成事件在执行调用返回后记录，结果保存失败会体现为失败，不能视为已持久化。该快照是内存中的控制信息，不等同于 P6 的持久化 schema-v1／JSONL 事件流。
 
-接口刻意不绑定 CLI、TUI、GUI 或某个模型供应商。`Store` 的具体实现必须满足原子写入契约；仓库的 `MemoryStore` 不持久化，仅用于受控测试。按照 MVP 路线，普通 CLI 在 SQLite 和恢复边界就绪前不开放真实工作区副作用。用户取消通过 `Cancellation` 显式传入；单纯丢弃 future 不保证清理。
+接口由 CLI、TUI 等调用方复用。`Store` 的具体实现必须满足原子写入契约，仓库的 `MemoryStore` 用于受控测试。普通 CLI 已接入 SQLite、会话锁与中断恢复，并按权限规则执行真实工作区工具。用户取消通过 `Cancellation` 显式传入，调用方负责取消后等待运行和后台任务收尾。
 
 前端在运行任务panic或被中止、JoinHandle已被消费时，可调用 `RuntimeHandle::shutdown_background().await` 停止新后台启动、请求取消并等待原有任务清理。该接口复用BackgroundJobs的关闭流程并返回清理错误，原有预算、取消和进程清理限额继续适用。TUI异常收尾先移除活动句柄、关闭通道并完成此清理，再返回错误和释放终端。
 

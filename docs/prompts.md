@@ -85,14 +85,14 @@ DSH 的具体实现信息在这里仅来自 session 第 842 行等记录，本�
 | in-history 追加高优先级 system 更新与 provider 缓存管理 | 不重写历史；静态指令与动态系统段分开，Anthropic 可选显式缓存断点，其他兼容协议保持自动缓存前缀 |
 | sandbox × approval 的两个旋钮 | 不替换 Saya 权限契约；保留四工作模式与三权限模式正交，并明确本地命令没有 OS 沙箱 |
 | risk／decision 分类器协议 | 改为 Saya 已有的 allow／ask／deny 与 reason，不宣称共享相同 classifier |
-| 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | D-033 后纳入用户级／工作区约定指令与 Skill 元数据发现，DEV-021 待接线；不引入 scratchpad 或自动记忆 |
+| 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | D-033 的用户级／工作区约定指令与 Skill 元数据发现已由 DEV-021 接入，当前支持显式偏好／记忆文件。全局记忆维护按后续设计推进 |
 | 移植草案的计划文件、exit_plan、固定中文输出与来源工具占位符 | 移除或按 Saya 重写；所有 runtime prompt 为英文，沟通语言跟随用户而不固定中文 |
 | 将所有缺乏授权结果统称 denied 或建议改规则重试 | 区分拒绝、模式禁止、许可失效、需要确认、存储故障和未知结果，不指示 Agent 降权规避 |
 | 来源 session 外层的人设、无条件服从／放行、工具和环境指令 | 完全不进入 Saya prompt |
 
 ## 来源追踪
 
-[来源清单](prompt-sources.json)保存用户提供的 session 和实际使用的源文件路径、字节数及 SHA-256。源目录在构建和运行时均不读取；不导入原始二进制、完整日志、来源系统人设或凭据。Saya 运行时文案以自身契约重写，没有把提取包整段复制进项目。
+[来源清单](prompt-sources.json)保存用户提供的 session 与源文件的来源标识、来源内相对路径、字节数及 SHA-256。核查者可在本机将来源标识映射到原始材料目录，按相对路径和摘要复核。清单保留历史提取证据，Saya 运行时文案按自身契约重写。
 
 主要材料是提取的 classifier、PLAN、auto、谨慎执行和输出效率片段，以及 `harness-kit` 的核心、会话与拒绝恢复草案。session 第 111／157 行等保留了提取内容，第 655 行是提取结论，第 755 行是移植草案说明，第 842 行是 DSH 比较；这些记录的版本与完整性声明不能仅凭本次文档处理升格为独立验证事实。
 
@@ -110,7 +110,7 @@ cargo run -p saya-core --example prompt_preview -- --review
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 
-三协议适配已有 core 级受控验证，CLI 有持久会话与受权限控制的工具开发预览；用户级／项目指令与 Skill 发现的验证范围见[开发进度](progress.md)。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果均不能由字符串测试证明。
+三协议适配、持久会话、受权限控制的工具以及用户级／项目指令与 Skill 发现已接入 CLI 和共享应用层。当前默认 TUI 使用同一运行时，实际验证范围见[开发进度](progress.md)。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果需要对应评测证据。
 
 ## 会话任务清单提示
 

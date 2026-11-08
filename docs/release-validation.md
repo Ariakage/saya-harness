@@ -85,14 +85,14 @@ cee5ffb625a46f029cc0ab96a844aa1ee85a4c6b888034d18e1a5cb42d0bdd4a  saya-0.1.0-mac
 
 [GitHub Actions 42373322880](https://github.com/Ariakage/saya-harness/actions/runs/42373322880) 已再次通过只读查询核实，源码为 `47452e6173397d7b7b7eacd035116489bb2a3a70`，Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 四个 job 均成功。该 CI 运行中的二进制来源为该提交，原工作流执行离线工具往返与交互演练，未上传产物。当前候选来源为 `854be1b`，其 macOS 15 实测证据仍待补齐。
 
-macOS 15 机器上使用 Python 3 运行下列命令，替换包路径并选择尚不存在的输出文件。脚本检查实际系统版本、包／二进制哈希、架构和部署目标，并对解包二进制执行上述三项演练。
+本节保留 `854be1b` 当时的环境缺口与归档摘要。下列示例使用当前验证器接口，适用于与验收脚本源码匹配、包含默认 TUI 的候选产物。`--source-commit` 填入预期的完整构建提交，`--sha256` 填入该归档的预期摘要，输出文件须尚不存在。脚本核对原生 macOS 15、源码声明、架构、部署目标及包／二进制哈希，并运行四项演练。
 
 ```sh
-python3 scripts/release/verify_macos15.py /path/to/saya-0.1.0-macos-aarch64.tar.gz --sha256 cee5ffb625a46f029cc0ab96a844aa1ee85a4c6b888034d18e1a5cb42d0bdd4a --output macos15-854be1b-aarch64.json
-python3 scripts/release/verify_macos15.py /path/to/saya-0.1.0-macos-x86_64.tar.gz --sha256 8f42fcece37890d353a3367d1a031c415e97b2162fbe6bb97eb2215c09de2d48 --output macos15-854be1b-x86_64.json
+python3 scripts/release/verify_macos15.py /path/to/saya-VERSION-macos-aarch64.tar.gz --sha256 EXPECTED_ARCHIVE_SHA256 --source-commit FULL_BUILD_COMMIT --output macos15-aarch64.json
+python3 scripts/release/verify_macos15.py /path/to/saya-VERSION-macos-x86_64.tar.gz --sha256 EXPECTED_ARCHIVE_SHA256 --source-commit FULL_BUILD_COMMIT --output macos15-x86_64.json
 ```
 
-ARM 主机使用 Rosetta 验证 Intel 包时记录模拟情况。验证脚本的模拟单元测试只证明检查逻辑。完成实际最低环境验证后，再复核 B-01 至 B-24、AC-01 至 AC-24 和最终版本说明，判断 DEV-031／DEV-032 及 P7 能否结束。
+原生最低环境验证使用架构匹配的 macOS 15 主机。Rosetta 演练单独记录为模拟证据，验证器单元测试记录为逻辑检查。0.1.0 的最终 P7 结论与产物证据见本文件对应的后续发行记录。
 
 ## 历史候选 macOS 部署目标 15.0
 

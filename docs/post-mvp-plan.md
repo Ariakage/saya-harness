@@ -1,19 +1,19 @@
 # 0.1.0 之后的开发计划
 
-**初版制订于 2026-11-07，更新于 2026-11-08。本文包含六个阶段及 DEV-038 至 DEV-089 共 52 项开发任务，实际进度见[开发进度](progress.md)。版本分组与具体接口作为规划维护。**
+**初版制订于 2026-11-07，更新于 2026-11-09。本文包含六个阶段及 DEV-038 至 DEV-089 共 52 项开发任务，实际进度见[开发进度](progress.md)。版本分组与具体接口作为规划维护。**
 
-需求来源为项目负责人本轮引用的[《Harness功能设计》对话](chatgpt-conversation://6aef3957-d280-83ee-9098-278ae10191f8)。本轮提取需求并核对本地源码，具体建议按设计草案记录。0.1.0 的发行证据见[发行验证](release-validation.md)，原 P0 至 P7 和 DEV-001 至 DEV-037 定义保存在[MVP 实施任务](implementation-plan.md)。
+需求来源为项目负责人引用的《Harness功能设计》对话，历史来源标识为 `6aef3957-d280-83ee-9098-278ae10191f8`。需求已提取到本仓库的设计草案，核对时以文档、源码与决策记录为依据。0.1.0 的发行证据见[发行验证](release-validation.md)，原 P0 至 P7 和 DEV-001 至 DEV-037 定义保存在[MVP 实施任务](implementation-plan.md)。
 
 ## 需求与现有基础
 
-| 用户需求 | 已有基础 | 后续交付 | 文档 |
+| 用户需求 | 已有基础 | 交付范围与状态 | 文档 |
 | --- | --- | --- | --- |
-| 加入日志系统 | `JsonLog` 已有 warn／error、脱敏、轮转及跨进程写锁，CLI 记录异常结果 | 五级诊断日志、关联 span、筛选与跟随查询 | [日志与追踪](observability.md)，F-12 |
-| Session 导出为 Markdown 或 JSON | SQLite 已保存历史、事件、调用、用量和后台结果，CLI 有 list／show | 一致性快照、独立导出格式、显式文件保存 | [会话导出](session-export.md)，新增 F-19 |
+| 加入日志系统 | 五级诊断、关联 span、脱敏、轮转、筛选与跟随查询已接入 CLI | N0 已实现，各轮故障验证见进度 | [日志与追踪](observability.md)，F-12 |
+| Session 导出为 Markdown 或 JSON | SQLite 一致性快照、两种导出格式及显式文件保存已接入 CLI 和 TUI | N0 已实现，各轮导出边界验证见进度 | [会话导出](session-export.md)，F-19 |
 | 未来加入 `/goal` | 运行预算、会话恢复、四模式、运行内后台工具 | 目标、步骤、验收证据，随后增加受限自动续跑 | [Goal 编排](goal.md)，新增 F-20 |
-| 直接输入 `saya` 进入 TUI | 当前无子命令进入文本 chat，顶层子命令已是 `Option<Command>` | 默认 TUI、流式对话、人工审批、会话与工具管理 | [TUI 设计](tui.md)，F-14 |
+| 直接输入 `saya` 进入 TUI | 默认 TUI、流式对话、人工审批、会话与工具管理已接入共享应用层 | N1 已实现，后续交互与验收按源码跟踪 | [TUI 设计](tui.md)，F-14 |
 
-0.1.0 workspace 实际包含 `saya-core`、`saya-cli`。`main.rs` 的 `build_runtime`、模型包装和 `session.rs` 的会话准备是共享应用层的主要提取入口。`events.rs` 已有流事件、序号与脱敏路径，应在迁移时复用。`tracing` 和 TUI 依赖将在对应实现任务中引入并通过 Cargo.lock 固定。
+0.1.0 workspace 包含 `saya-core`、`saya-cli`。当前开发线已增加 `saya-app` 与 `saya-tui`，模型组装、会话准备、事件和人工交互桥由共享应用层提供，CLI 与 TUI 使用同一服务。`tracing`、Ratatui 和 Crossterm 已接入并由 Cargo.lock 固定。
 
 本轮补充[Browser](browser.md)、[原生 Sandbox／AST](sandbox.md)、[上下文与长输出](context-management.md)及[saya-plugin v1 规范](saya-plugin.md)。Linux 使用项目负责人指定的 Bubblewrap + Seccomp + socat，macOS 以独立 SeatbeltBackend 承接 sandbox-exec，并通过统一后端接口预留容器／VM 实现。
 

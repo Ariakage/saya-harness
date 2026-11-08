@@ -1,6 +1,6 @@
 # 架构设计
 
-**0.1.0 已发布，当前开发线完成 N0 共享基础。本文同时记录已交付架构与后续扩展边界，状态及验收见[开发进度](progress.md)。**
+**0.1.0 已发布，当前开发线已实现 N0 共享基础与 N1 默认 TUI。本文记录已交付架构与后续扩展边界，各源码版本的验收范围见[开发进度](progress.md)。**
 
 约束为 Rust、CLI → TUI → GUI、Saya 自己驱动 Agent 循环，同时支持编程与通用任务。CLI 包含交互和单次运行、四种工作模式、三种权限模式、三类模型协议、本地工具、流式／结构化输出和会话恢复，默认 WORK 与 auto。精确契约以[完整基线](mvp-baseline.md)为准，范围见[需求规格](requirements.md)，行为见[执行契约](execution.md)。
 
@@ -94,9 +94,9 @@ flowchart TD
 
 ## 工程与验证边界
 
-所有产品与接口阻塞项已由[完整基线](mvp-baseline.md) B-01 至 B-24 收敛；具体内部 Rust 类型和模块文件名由开发者在保持行为的前提下处理。Tokio、clap、reqwest＋rustls、serde／toml、thiserror、tracing 与 rusqlite 的职责按 B-02 实现。
+产品与接口基线由[完整基线](mvp-baseline.md) B-01 至 B-24 定义。当前直接依赖包含 Tokio、clap、reqwest＋rustls、serde／toml、tracing 与 rusqlite，补丁解析使用 diffy，边界错误使用显式 Rust 类型。具体版本与直接依赖以各 crate 的 Cargo.toml 和 Cargo.lock 为准。
 
-core／app／CLI crate 和锁文件已建立，普通构建提供可复用运行时、七项本地工具、权限调度、后台任务和三协议适配。模型协议、profile 核查、恢复和事件输出通过受控验证，指定模型完成三协议小规模联调。正式源码的四原生平台分别通过 342 项 Rust 测试和解包演练，公开发行包完成下载复核。具体环境与证据见[发行验证](release-validation.md)和[开发进度](progress.md)。
+saya-core、saya-app、saya-tui、saya-cli 四个 crate 和锁文件已建立。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI。saya-tui 通过 saya-app 组装服务，并直接使用 saya-core 的配置、契约、脱敏与任务清单类型。0.1.0 与 RC1 的四平台证据，以及 RC1 后各轮本机验证，分别按源码版本记录在[发行验证](release-validation.md)、[TUI 验证](tui-validation.md)和[开发进度](progress.md)。
 
 ## 提示词装配
 

@@ -14,7 +14,7 @@
 
 凭据从环境变量传入，仅在子进程内使用；结果只记录检查状态和计数，不记录密钥、模型回复或随机标记。该结果是单个服务、模型和时间点的小规模联调，不代表其他供应商、协议可选功能、模型对复杂任务的质量或提示注入防护。Anthropic 另一 API 版本和受控四类任务仍以离线测试为证据，未在此轮用真实模型覆盖。
 
-可由操作者显式设置 `SAYA_LIVE_API_KEY`，然后使用 [live_protocol_smoke.py](../scripts/live_protocol_smoke.py) 的 `--help` 查看参数，按自己的服务填入模型、三个 API 根地址和上下文窗口后运行。脚本会发出真实请求，可能产生费用；不会启动模型服务，也不会自动从仓库读取凭据。目标 URL 必须由操作者确认，因为凭据会发送到选定服务。
+操作者显式设置 `SAYA_LIVE_API_KEY`，通过 [live_protocol_smoke.py](../scripts/live_protocol_smoke.py) 的 `--binary PATH` 选择程序，按 `--help` 填入模型、三个 API 根地址和上下文窗口。Chat Completions 默认使用 `max_completion_tokens`，服务需要 `max_tokens` 时显式添加 `--legacy-max-tokens`。脚本会向选定服务发出真实请求，可能产生费用，凭据从环境变量传入。
 
 ## 四模式真实任务补充抽样：2026-11-07
 
@@ -29,7 +29,7 @@
 
 初次实验中，PLAN 因测试配置将输出上限设为 2048 token 而返回 `output_limit`；改用默认 8192 并要求简短计划后通过。BUILD 初次遇到不存在的父目录：文件工具不会自动创建目录，测试又显式拒绝 `exec`，因此模型请求人工帮助并返回 `needs_input`；在预创建 `src/` 后通过。CODE 初次使用测试容器的不可执行临时挂载而误报验证失败，改为允许临时目录执行后独立编译运行通过；模型曾先生成不匹配路径的补丁，随后使用版本校验写入修复。WORK 初次即通过。之后四项使用修正后的条件完整重跑通过。
 
-[四模式联调脚本](../scripts/live_modes_smoke.py)需在仓库根目录运行，并按脚本说明显式提供凭据环境变量、可信 Chat Completions API 根地址、模型和带 Rust 编译器的 Docker 镜像；它会产生真实 API 请求与可能的费用。它不会输出凭据或模型回复，使用临时工作区，执行结束清理。不同模型可能需要不同的协议兼容配置；该脚本是本次 DeepSeek 兼容场景的抽样，不是通用兼容性测试。
+[四模式联调脚本](../scripts/live_modes_smoke.py)通过 `--binary PATH` 选择待测程序，省略时使用当前目录下的 `target/release/saya`。操作者显式提供凭据环境变量、可信 Chat Completions API 根地址、模型和带 Rust 编译器的 Docker 镜像。Docker 默认按所连接引擎选择平台，也可通过 `--sandbox-platform` 或 `SAYA_LIVE_SANDBOX_PLATFORM` 覆盖。Chat 参数默认使用 `max_completion_tokens`，复测上述旧参数兼容场景时添加 `--legacy-max-tokens`。脚本使用临时工作区，结束时清理，输出检查状态与计数。上述历史结果仍归属于当时记录的模型、程序和日期。
 
 ## 审查修复后复测
 
