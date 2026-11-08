@@ -121,7 +121,25 @@ fn fixture(scene: &str) -> State {
             .collect();
             state.skills_count = Some(3);
         }
-        "polish" | "markdown" => {
+        "markdown" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.session_title = "Markdown tables and links".into();
+            state.permissions = "auto".into();
+            state.thinking_effort = Some("high".into());
+            state.push_message(
+                Role::User,
+                "You",
+                "请用表格总结当前显示能力，并附上参考链接。",
+            );
+            state.push_message(
+                Role::Assistant,
+                "configured-model",
+                "## Markdown 显示\n\n支持 **加粗**、__strong__、*强调* 和 `inline code`。\n\n| 能力 | 状态 | 说明 |\n| :--- | :---: | ---: |\n| 表格 | **Ready** | 中英文自动换行 |\n| Unicode | `é` | 组合字符与中文路径 |\n| 链接 | [Guide](https://example.test/docs) | 目标地址可见 |\n\n参考 [Saya Harness](https://github.com/Ariakage/saya-harness)。\n\n> 窄窗口按可用宽度排列单元格。",
+            );
+            state.editor.set_text("继续检查窄窗口中的表格显示。");
+        }
+        "polish" => {
             state.clear_messages();
             state.editor.clear();
             state.session_title = "完善任务取消与恢复说明".into();

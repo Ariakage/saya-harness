@@ -845,6 +845,88 @@ def stream_journey(binary, protocol):
 
 
 
+def markdown_table_links_journey(binary):
+    pieces = [
+        '## MD_START\n\n**ASTERISK_BOLD** and __UNDERSCORE_BOLD__\n\n| Name | State | Details |\n| :--- |',
+        ' :---: | ---: |\n| CJK | **Ready** | 中文 |\n| Link | [Guide](https://e.test) | docs |\n',
+        ''.join(f'| row{row} | ok | value{row} |\n' for row in range(8)) + '\nMD_END',
+    ]
+    response = ''.join(pieces)
+    fixture = Fixture('openai-chat-completions', [
+        {'text': response, 'pieces': pieces, 'stream_delay': 0.02}])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-markdown-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.resize(80, 48)
+                terminal.title()
+                terminal.line('Show the controlled Markdown table')
+                terminal.until('MD_END')
+                result = wait_idle(terminal, root)
+                terminal.settle()
+                if result.get('text') != response:
+                    raise RuntimeError('Markdown table presentation changed the saved response source')
+                visible = terminal.screen.body_text()
+                for text in ('MD_START', 'ASTERISK_BOLD', 'UNDERSCORE_BOLD', '中文',
+                             'Guide (https://e.test)', 'row7', 'value7'):
+                    if text not in visible:
+                        raise RuntimeError('Markdown table content was missing at 80 columns: ' + text)
+                if not all(marker in visible for marker in ('┌', '├', '└', '│')):
+                    raise RuntimeError('Markdown table was not rendered with cell borders')
+                if any(marker in visible for marker in ('**ASTERISK_BOLD**', '__UNDERSCORE_BOLD__',
+                                                        '[Guide](', ':---')):
+                    raise RuntimeError('completed Markdown delimiters remained in the formatted table')
+                for text, color in [('ASTERISK_BOLD', (246, 173, 85)),
+                                    ('UNDERSCORE_BOLD', (246, 173, 85)),
+                                    ('Guide', (88, 166, 255))]:
+                    style = terminal.screen.body_style(text)
+                    if style is None or style[0] != color:
+                        raise RuntimeError('Markdown emphasis or link color was missing: ' + text)
+
+                terminal.resize(40, 48)
+                terminal.title()
+                terminal.wait(lambda: 'MD_END' in terminal.screen.body_text() and
+                              'row7' in terminal.screen.body_text(), 'reflowed 40-column Markdown table')
+                terminal.settle()
+                if ':---' in terminal.screen.body_text():
+                    raise RuntimeError('table separator became literal after a narrower resize')
+
+                terminal.resize(20, 48)
+                terminal.title()
+                terminal.wait(lambda: 'MD_END' in terminal.screen.body_text(), 'narrow Markdown table end')
+                terminal.settle()
+                bottom = terminal.screen.body_text()
+                for _ in range(40):
+                    if 'MD_START' in terminal.screen.body_text():
+                        break
+                    terminal.wheel(5, 8, down=False)
+                    terminal.settle()
+                if 'MD_START' not in terminal.screen.body_text() or terminal.screen.body_text() == bottom:
+                    raise RuntimeError('mouse scrolling did not reach the beginning of the narrow table')
+                for _ in range(40):
+                    if 'MD_END' in terminal.screen.body_text():
+                        break
+                    terminal.wheel(5, 8)
+                    terminal.settle()
+                if 'MD_END' not in terminal.screen.body_text():
+                    raise RuntimeError('mouse scrolling did not return to the end of the narrow table')
+
+                terminal.resize(140, 48)
+                terminal.title()
+                terminal.wait(lambda: 'Guide (https://e.test)' in terminal.screen.body_text() and
+                              'MD_END' in terminal.screen.body_text(), 'wide Markdown table after sidebar reflow')
+                terminal.finish()
+                if len(fixture.requests) != 1 or fixture.requests[0].get('stream') is not True:
+                    raise RuntimeError('Markdown resize or scrolling replayed a model request')
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def command_completion_journey(binary):
     call = ('completion-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
     def denied(request):
@@ -2617,6 +2699,8 @@ def main():
     passed('empty-tab-mode-cycle-pending-and-approval')
     reference_layout_and_title_journey(binary)
     passed('reference-layout-input-meter-and-window-title')
+    markdown_table_links_journey(binary)
+    passed('markdown-table-links-stream-resize-scroll-and-source')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
     thinking_tools_and_mouse_journey(binary)

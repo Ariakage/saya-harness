@@ -2,7 +2,7 @@
 use crate::{
     commands::{COMMANDS, Completion},
     editor::{Editor, MAX_VISUAL_LINE_BYTES, display_grapheme, prefix_boundary, safe_text},
-    rich_text::{append_wrapped_line, markdown_lines},
+    rich_text::{append_wrapped_line, markdown_lines_with_width},
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
         INPUT_BACKGROUND, INPUT_BORDER, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
@@ -1311,7 +1311,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         }
         let text = safe_text(&message.text);
         if message.role == Role::Assistant {
-            for line in markdown_lines(&text) {
+            for line in markdown_lines_with_width(&text, width) {
                 append_wrapped_line(line, width, &mut lines, &mut line_count, MAX_RENDER_LINES);
             }
         } else {
@@ -2734,6 +2734,155 @@ mod tests {
         assert!(row_text(buffer, 8).contains("\\u{1b}[2J"));
         assert_eq!(state.messages[0].text, source);
         assert!(state.last_line_count < MAX_RENDER_LINES);
+    }
+
+    #[test]
+    fn markdown_table_reflows_unicode_and_link_styles_across_viewport_widths() {
+        let source = "| Kind | Result |\n| :--- | ---: |\n| CJK | **加粗** |\n| Strong | __bold__ |\n| Unicode | `é` |\n| Link | [Guide](https://e.test) |";
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", source);
+        for width in [80, 20, 40, 80] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 80)).unwrap();
+            terminal
+                .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let visible = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            for token in ["CJK", "Strong", "Unicode", "Link", "加", "粗", "é"] {
+                assert!(visible.contains(token), "{token} at width {width}");
+            }
+            let bold = buffer
+                .content
+                .iter()
+                .filter(|cell| cell.modifier.contains(Modifier::BOLD))
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(bold.contains("bold"), "width {width}");
+            let link = buffer
+                .content
+                .iter()
+                .filter(|cell| cell.fg == BLUE && cell.modifier.contains(Modifier::UNDERLINED))
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(link.contains("Guide"), "width {width}");
+            assert!(link.contains("https://e.test"), "width {width}");
+            assert!(!visible.contains("**"));
+            assert!(!visible.contains("__bold__"));
+            assert!(!visible.contains(":---"));
+            if width >= 40 {
+                for row in 0..buffer.area.height {
+                    assert_eq!(buffer[(0, row)].symbol(), " ");
+                    assert_eq!(buffer[(width - 1, row)].symbol(), " ");
+                }
+            }
+            assert_eq!(state.messages[0].text, source);
+        }
+    }
+
+    #[test]
+    fn streaming_markdown_completes_tables_and_links_without_rewriting_history() {
+        let mut state = State::default();
+        let mut source = "| Name | Value |\n| --- |".to_owned();
+        let id = state.push_message(Role::Assistant, "Saya", &source);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        assert!(row_text(terminal.backend().buffer(), 1).contains("| Name | Value |"));
+        let delta = " --- |\n| row | **ok** |\n\n[Guide](https://e.test";
+        source.push_str(delta);
+        assert!(state.append_message(id, delta));
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let visible = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(visible.contains('┌'));
+        assert!(visible.contains("row"));
+        assert!(!visible.contains("**ok**"));
+        assert!(visible.contains("[Guide](https://e.test"));
+        assert_eq!(state.messages[0].text, source);
+        source.push(')');
+        assert!(state.append_message(id, ")"));
+        state.finish_message(id);
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let visible = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(visible.contains("Guide (https://e.test)"));
+        assert!(!visible.contains("[Guide]("));
+        assert_eq!(state.messages[0].text, source);
+        assert!(!state.messages[0].streaming);
+    }
+
+    #[test]
+    fn markdown_table_rows_remain_reachable_through_transcript_scrolling() {
+        let mut source = "| Name | Value |\n| --- | --- |\n".to_owned();
+        for row in 0..40 {
+            source.push_str(&format!("| r{row:02} | v{row:02} |\n"));
+        }
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", &source);
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let bottom = (0..6)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<String>();
+        assert!(bottom.contains("r39"));
+        assert!(bottom.contains("v39"));
+        assert!(state.last_line_count > 40);
+        state.scroll_up(usize::MAX);
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let top = (0..6)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<String>();
+        assert!(top.contains("Name"));
+        assert!(top.contains("r00"));
+        assert!(!top.contains("r39"));
+        state.scroll_down(usize::MAX);
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let bottom_again = (0..6)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<String>();
+        assert_eq!(bottom_again, bottom);
+        assert_eq!(state.messages[0].text, source);
+    }
+
+    #[test]
+    fn markdown_links_and_emphasis_are_presentation_for_assistant_messages() {
+        let source = "**bold** [Guide](https://e.test)";
+        let mut state = State::default();
+        for role in [Role::Assistant, Role::User, Role::Tool] {
+            state.push_message(role, "", source);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 1).contains("bold Guide (https://e.test)"));
+        assert!(row_text(buffer, 4).contains(source));
+        assert!(row_text(buffer, 7).contains(source));
+        assert!(state.messages.iter().all(|message| message.text == source));
     }
 
     #[test]

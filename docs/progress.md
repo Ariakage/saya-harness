@@ -4,6 +4,16 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 0.2.0 后续开发中的 Markdown 显示
+
+2026-11-09，本阶段完成本机开发与验证。按项目负责人要求，本轮构建与验收本地测试版，四平台同步测试安排在后续N2阶段。
+
+TUI在现有富文本显示基础上增加宽度自适应管道表格、`__加粗__`和HTTP(S)链接显示。表格采用Unicode宽度、列对齐、自动换行与窄屏逐字段布局，链接同时展示标签及目标地址。流式内容按当前完整程度重排，原始消息由会话保存。实现位于 `crates/saya-tui/src/rich_text.rs`、`rich_text/table.rs` 与 `view.rs`，行为与显示预算见[TUI设计](tui.md#assistant-markdown-显示)。
+
+本机macOS ARM执行 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、workspace全目标严格Clippy、701项Rust测试及release构建通过，新增19项回归覆盖表格、链接、Unicode、流式补全、滚动及显示预算。九项Python发行脚本测试、工具smoke、文本会话、既有审查回归及23组正常入口PTY通过。新增PTY场景使用loopback模型夹具，验证80／40／20／140列重排、链接和加粗样式、鼠标滚动、持久化原文及终端恢复。独立复核的5000组Unicode／控制字符输入、2048组结构化链接及六项定向回归通过，源码哈希在探针前后相同。
+
+20／40／80／140列离线预览、完整检查、PTY报告和本地二进制摘要位于 `target/markdown-local/`，独立探针位于 `target/markdown-review/`。`.saya/local/saya-trial` 已指向本次macOS ARM测试程序，配置、空闲启动、Ctrl+P、Esc、Ctrl+D及终端恢复检查通过，启动检查的模型运行数为0。二进制声明部署目标15.0，本轮实际验证环境为本机。正式版与历史试用程序分别保留独立产物记录。
+
 ## 0.2.0 正式发行与验收
 
 2026-11-09，项目负责人授权的0.2.0已正式发布并设为Latest。标签 `v0.2.0` 固定到 `f579d1f1f8ec48f96e0544967bf4ffd6bbc2cbb0`。四个原生目标均通过682项Rust测试、九项发行脚本测试和22组PTY，完成格式、严格Clippy、优化构建、工具往返、文本会话、恢复及审查回归。[正式发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42524461863)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42524462140)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42525979782)
