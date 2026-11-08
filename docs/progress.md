@@ -4,6 +4,10 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 0.2.0 正式发行准备
+
+2026-11-09，项目负责人授权发布0.2.0。workspace四个crate由RC2更新为正式版本，运行时代码和依赖版本沿用RC2。正式版将针对固定源码重新构建并验收四平台安装包，核对公开下载内容，提供正式标签、中英双语说明与结构化发行证据。本机已通过格式、workspace全目标严格Clippy、682项Rust测试、九项发行脚本测试和优化构建，程序版本为0.2.0。日志在 `target/release-0.2.0/`，实际完成状态按正式包记录。
+
 ## 0.2.0-rc.2 发行与验收
 
 2026-11-09，项目负责人授权的0.2.0-rc.2已发布为GitHub预发行。标签 `v0.2.0-rc.2` 固定到 `daee043821529e270b876a77d5c6e8f47bed1c33`。四个原生目标均通过682项Rust测试、九项发行脚本测试及22组PTY，完成工具、文本会话、恢复与审查回归，源码／脚本／包／二进制摘要交叉核对通过。[预发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0-rc.2)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42518737234)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42518738474)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42520065596)

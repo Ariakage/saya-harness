@@ -2,9 +2,9 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用运行时，GUI 按后续计划推进。
 
-**0.1.0 已发布。** 提供 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64 CLI 安装包。中英双语说明、校验和及四平台最低环境验收证据见 [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。
+**Saya Harness 0.2.0** 提供 CLI 和默认 TUI，支持 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64。包含 N0 共享基础、N1 终端界面、交互完善及两轮审查整改。直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[中英双语说明](docs/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
 
-当前候选为 **0.2.0-rc.2**，包括 N0 共享基础、N1 默认 TUI、后续交互功能及两轮审查整改。CLI 与 TUI 复用运行时，直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。本次源码与四平台安装包的验收证据随候选发布提供。[RC2 中英双语说明](docs/release-notes-0.2.0-rc.2.md)、[开发进度](docs/progress.md)
+0.1.0 与 0.2.0-rc.2 的历史发行及验收保留各自源码和产物归属。
 
 ## 已确认方向
 

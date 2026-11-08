@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "saya-app"
-version = "0.2.0-rc.2"
+version = "0.2.0"
 dependencies = [
  "cap-std",
  "libc",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "saya-cli"
-version = "0.2.0-rc.2"
+version = "0.2.0"
 dependencies = [
  "clap",
  "libc",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "saya-core"
-version = "0.2.0-rc.2"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "cap-std",
@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "saya-tui"
-version = "0.2.0-rc.2"
+version = "0.2.0"
 dependencies = [
  "crossterm",
  "libc",
