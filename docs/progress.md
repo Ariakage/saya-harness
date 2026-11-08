@@ -41,6 +41,8 @@
 
 - R2-19导出与目录权限已修复。身份字段拒绝截断，失败脱敏调用仅在持久记录与历史记录身份两侧唯一时补run关联，旧历史歧义保持null。新建data／locks目录使用0700，已有目录权限保留。38项初验及补充独立复核50项export／SQLite／logging测试、core严格Clippy通过，日志为 `target/r02-fix/export-directory-{tests,clippy}.log` 与 `target/r2-19-{export-storage-review,logging-independent-review,export-fallback-clippy}.log`。
 
+- R2-13相邻CLI完成输出已修复。逐次模型请求记录已显示前缀，合法完成事件补齐缺失正文，常规delta不重复。完成顺序与增量交错不一致时换行展示完整已校验回答。十项text_stream／lifecycle正常入口测试及CLI严格Clippy通过，包含断管后真实后台清理，日志为 `target/completed-text-{before,final-tests,clippy}.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

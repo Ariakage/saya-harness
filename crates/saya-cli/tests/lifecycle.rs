@@ -214,9 +214,27 @@ fn chat_terminal_loss_awaits_background_process_cleanup() {
 
 #[test]
 fn broken_stream_stdout_returns_an_error_after_background_cleanup() {
+    broken_stdout_case(false);
+}
+#[test]
+fn completed_only_stdout_error_waits_for_background_cleanup() {
+    broken_stdout_case(true);
+}
+fn broken_stdout_case(completed_only: bool) {
     let root = tempfile::tempdir().unwrap();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (url, _) = fixture::server_dynamic(2, move |index, _| {
+        if completed_only {
+            let item = if index == 0 {
+                json!({"type":"function_call","id":"launch-item","call_id":"launch","status":"completed",
+                    "name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","echo $$ > tool.pid; exec sleep 30"]}}).to_string()})
+            } else {
+                let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                json!({"type":"message","id":"reply","role":"assistant","status":"completed",
+                    "content":[{"type":"output_text","text":"fixture text\n".repeat(1024)}]})
+            };
+            return ("text/event-stream", fixture::sse(&[json!({"type":"response.completed","response":{"status":"completed","output":[item]}})]));
+        }
         if index == 0 {
             let call = json!({"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","echo $$ > tool.pid; exec sleep 30"]}}).to_string()}});
             return ("text/event-stream", fixture::sse(&[
@@ -231,7 +249,12 @@ fn broken_stream_stdout_returns_an_error_after_background_cleanup() {
         ]))
     }).unwrap();
     let config = root.path().join("config.toml");
-    fs::write(&config, format!("schema_version=1\n[defaults]\nprofile='test'\npermissions='bypass'\n[profiles.test]\nprotocol='openai-chat-completions'\nbase_url='{url}'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=128000\nstream=true\n")).unwrap();
+    let protocol = if completed_only {
+        "openai-responses"
+    } else {
+        "openai-chat-completions"
+    };
+    fs::write(&config, format!("schema_version=1\n[defaults]\nprofile='test'\npermissions='bypass'\n[profiles.test]\nprotocol='{protocol}'\nbase_url='{url}'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=128000\nstream=true\n")).unwrap();
     let mut child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_saya"))
             .env_clear()

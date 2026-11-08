@@ -415,17 +415,55 @@ impl InputHandler for Terminal {
     }
 }
 struct PrintModel(Arc<dyn Model>);
-struct PrintStream(Box<dyn ModelStream>);
+struct PrintStream {
+    inner: Box<dyn ModelStream>,
+    // Provider adapters bound per-response text before delivering these updates.
+    // Keep the raw displayed prefix separately for each model request.
+    displayed: String,
+}
+impl PrintStream {
+    fn write_text(text: &str) -> Result<(), BoundaryError> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut stdout = io::stdout().lock();
+        stdout
+            .write_all(safe_terminal_text(text).as_bytes())
+            .and_then(|()| stdout.flush())
+            .map_err(|_| cli_error("output_error", "cannot write text output"))
+    }
+}
 impl ModelStream for PrintStream {
     fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
         Box::pin(async move {
-            let item = self.0.next(cancel).await?;
-            if let Some(ModelUpdate::TextDelta(s)) = &item {
-                let mut stdout = io::stdout().lock();
-                stdout
-                    .write_all(safe_terminal_text(s).as_bytes())
-                    .and_then(|()| stdout.flush())
-                    .map_err(|_| cli_error("output_error", "cannot write text output"))?;
+            let item = self.inner.next(cancel).await?;
+            match &item {
+                Some(ModelUpdate::TextDelta(text)) => {
+                    Self::write_text(text)?;
+                    self.displayed.push_str(text);
+                }
+                Some(ModelUpdate::Finished { items, .. }) => {
+                    // AssistantText is the adapter's validated visible projection.
+                    let completed: String = items
+                        .iter()
+                        .filter_map(|item| {
+                            if let HistoryItem::AssistantText(text) = item {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if let Some(suffix) = completed.strip_prefix(&self.displayed) {
+                        Self::write_text(suffix)?;
+                    } else if !completed.is_empty() {
+                        // Interleaved output items can arrive in a different order.
+                        // Preserve the stream and show the complete validated answer.
+                        Self::write_text("\n")?;
+                        Self::write_text(&completed)?;
+                    }
+                }
+                _ => {}
             }
             Ok(item)
         })
@@ -443,7 +481,10 @@ impl Model for PrintModel {
         Box::pin(async move {
             let stream = self.0.start(r, c).await?;
             if r.purpose == ModelPurpose::Execution {
-                Ok(Box::new(PrintStream(stream)) as Box<dyn ModelStream>)
+                Ok(Box::new(PrintStream {
+                    inner: stream,
+                    displayed: String::new(),
+                }) as Box<dyn ModelStream>)
             } else {
                 Ok(stream)
             }
