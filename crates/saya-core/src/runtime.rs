@@ -484,7 +484,9 @@ impl AgentRuntime {
             BackgroundToolKind::Cancel,
         ] {
             let mut definition = self.background.tool(kind).definition();
-            if self.read_only && matches!(kind, BackgroundToolKind::Start) {
+            if (self.read_only || mode == WorkMode::Plan)
+                && matches!(kind, BackgroundToolKind::Start)
+            {
                 definition.input_schema["properties"]["tool"]["enum"] =
                     serde_json::json!(["read_file", "list_dir", "find_files", "search_text"]);
             }
@@ -1211,6 +1213,12 @@ impl AgentRuntime {
                         result,
                     });
                 } else if let Some(saved) = self.store.load_session(session.id).await? {
+                    if saved.history.len() < session.history.len() {
+                        return Err(error(
+                            "storage_error",
+                            "saved session history became shorter during tool cleanup",
+                        ));
+                    }
                     session.history = saved.history;
                 }
                 Err(interrupted.unwrap_or_else(|| error("cancelled", "run interrupted")))
@@ -1458,7 +1466,13 @@ impl AgentRuntime {
                     "needs_input" => RunStatus::NeedsInput,
                     _ => RunStatus::Failed,
                 };
-                let text = session.history[initial..]
+                let recent_history = session.history.get(initial..).ok_or_else(|| {
+                    error(
+                        "storage_error",
+                        "session history became shorter during the run",
+                    )
+                })?;
+                let text = recent_history
                     .iter()
                     .rev()
                     .find_map(|item| {
@@ -1470,25 +1484,22 @@ impl AgentRuntime {
                     })
                     .or_else(|| {
                         if status == RunStatus::NeedsInput {
-                            session.history[initial..]
-                                .iter()
-                                .rev()
-                                .find_map(|item| match item {
-                                    HistoryItem::ToolResult { result, .. }
-                                        if result
-                                            .error
-                                            .as_ref()
-                                            .is_some_and(|e| e.code == "needs_input") =>
-                                    {
-                                        result
-                                            .data
-                                            .as_ref()?
-                                            .get("question")?
-                                            .as_str()
-                                            .map(str::to_owned)
-                                    }
-                                    _ => None,
-                                })
+                            recent_history.iter().rev().find_map(|item| match item {
+                                HistoryItem::ToolResult { result, .. }
+                                    if result
+                                        .error
+                                        .as_ref()
+                                        .is_some_and(|e| e.code == "needs_input") =>
+                                {
+                                    result
+                                        .data
+                                        .as_ref()?
+                                        .get("question")?
+                                        .as_str()
+                                        .map(str::to_owned)
+                                }
+                                _ => None,
+                            })
                         } else {
                             None
                         }

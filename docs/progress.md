@@ -35,6 +35,8 @@
 
 - R2-20恢复提示与终端字符边界已修复。恢复超大明文thinking显示可见扣留提示，恰好16MiB保留，opaque字段不投影。core提供共享控制字符谓词，CLI、TUI及Markdown保留各自换行／转义规则。318项app／CLI／TUI测试、七项core字符相关测试及四crate严格Clippy通过，日志为 `target/r220-{interface-tests,clippy}.log`。
 
+- R2-19运行时边界已修复。取消后的Store历史回退返回storage_error并保留本地历史，结果提取使用受检切片。PLAN后台schema仅列四项只读工具，PID转换显式检查正i32范围。58项runtime／exec测试、core全目标Clippy及三项独立复核回归通过，日志为 `target/r2-19-runtime-{before,after,clippy}.log` 和 `target/r02-fix/runtime-guard-independent.log`。
+
 ## 当前状态
 
 - 产品基线：D-027，经 D-029 补充运行内后台工具调用，D-030 确定提示词定制与语言，D-032 明确 Manual Approval，D-033 纳入用户级／工作区指令与 Skill 发现，D-034 补充动态上下文与前缀缓存，D-035 将最低支持版本调整为 macOS 15。

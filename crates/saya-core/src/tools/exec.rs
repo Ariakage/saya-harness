@@ -391,6 +391,18 @@ fn signal_group(pid: Pid, signal: Signal) -> Result<(), BoundaryError> {
         Err(e) => Err(failure("process_cleanup_error", e.to_string())),
     }
 }
+fn child_group_pid(pid: u32) -> Result<Pid, BoundaryError> {
+    let pid = i32::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| {
+            failure(
+                "spawn_error",
+                "child PID is outside the supported positive range",
+            )
+        })?;
+    Ok(Pid::from_raw(pid))
+}
 struct ProcessGroup(Option<Pid>);
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
@@ -495,7 +507,7 @@ async fn run_process(
     let pid = child
         .id()
         .ok_or_else(|| failure("spawn_error", "child PID unavailable"))?;
-    let pid = Pid::from_raw(pid as i32);
+    let pid = child_group_pid(pid)?;
     let mut group = ProcessGroup(Some(pid));
     let stdout = child
         .stdout
@@ -798,6 +810,19 @@ impl Tool for ExecTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn child_group_ids_require_a_positive_representable_pid() -> Result<(), BoundaryError> {
+        for (raw, expected) in [(1, 1), (42, 42), (i32::MAX.unsigned_abs(), i32::MAX)] {
+            assert_eq!(child_group_pid(raw)?.as_raw(), expected);
+        }
+        for raw in [0, i32::MAX.unsigned_abs() + 1, u32::MAX] {
+            assert_eq!(
+                child_group_pid(raw).expect_err("invalid child PID").0.code,
+                "spawn_error"
+            );
+        }
+        Ok(())
+    }
     #[test]
     fn json_redaction_handles_escaped_sensitive_values() -> Result<(), BoundaryError> {
         let secret = "quote\"and\\slash".to_owned();

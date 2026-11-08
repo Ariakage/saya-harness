@@ -470,6 +470,135 @@ impl Cancellation for Signal {
         })
     }
 }
+
+struct ShortHistoryOnCancelStore {
+    inner: MemoryStore,
+    signal: Arc<Signal>,
+}
+impl Store for ShortHistoryOnCancelStore {
+    fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+        Box::pin(async move {
+            let mut session = self.inner.load_session(id).await?;
+            if self.signal.is_cancelled()
+                && let Some(session) = &mut session
+            {
+                session.history.clear();
+            }
+            Ok(session)
+        })
+    }
+    fn commit<'a>(&'a self, changes: &'a [saya_core::boundary::StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            self.inner.commit(changes).await?;
+            if changes
+                .iter()
+                .any(|change| matches!(change, saya_core::boundary::StoreChange::ToolIntent { .. }))
+            {
+                self.signal.cancel();
+                tokio::task::yield_now().await;
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn shortened_history_during_cancellation_reports_storage_error_and_preserves_local_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Bypass);
+    session.history = vec![
+        HistoryItem::UserText("earlier task".into()),
+        HistoryItem::AssistantText("earlier answer".into()),
+        HistoryItem::UserText("current task".into()),
+    ];
+    let initial_history = session.history.clone();
+    let marker = temp.path().join("must-not-spawn");
+    let model = Arc::new(FakeModel::new(vec![vec![call(
+        "interrupted",
+        "exec",
+        serde_json::json!({
+            "argv": ["/usr/bin/touch", marker]
+        }),
+    )]]));
+    let signal = Arc::new(Signal::new());
+    let store = Arc::new(ShortHistoryOnCancelStore {
+        inner: MemoryStore::default(),
+        signal: signal.clone(),
+    });
+    let mut runtime = runtime(temp.path(), run, model.clone(), store.clone(), signal)?;
+    let error = runtime
+        .run(&mut session)
+        .await
+        .expect_err("regressed saved history");
+    assert_eq!(error.0.code, "storage_error");
+    assert!(session.history.starts_with(&initial_history));
+    assert!(
+        session.history.iter().any(
+            |item| matches!(item, HistoryItem::ToolCall(call) if call.call_id == "interrupted")
+        )
+    );
+    let saved = store
+        .inner
+        .load_session(session.id)
+        .await?
+        .ok_or("missing session")?;
+    assert!(saved.history.iter().any(|item| matches!(item,
+        HistoryItem::ToolResult { call_id, result } if call_id == "interrupted"
+            && result.error.as_ref().is_some_and(|error| error.code == "cancelled")
+    )));
+    assert!(!marker.exists());
+    assert_eq!(model.seen.lock().map_err(|_| "poisoned requests")?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_background_schema_excludes_mutations_in_every_permission_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    for permissions in [
+        PermissionMode::Auto,
+        PermissionMode::Manual,
+        PermissionMode::Bypass,
+    ] {
+        let temp = support::temp_workspace()?;
+        let (mut session, mut run) = fixture(temp.path(), permissions);
+        session.work_mode = WorkMode::Plan;
+        run.work_mode = WorkMode::Plan;
+        let model = Arc::new(FakeModel::new(vec![vec![HistoryItem::AssistantText(
+            "plan".into(),
+        )]]));
+        let mut runtime = runtime(
+            temp.path(),
+            run,
+            model.clone(),
+            Arc::new(MemoryStore::default()),
+            Arc::new(NoCancel),
+        )?;
+        assert_eq!(
+            runtime.run(&mut session).await?.status,
+            RunStatus::Completed
+        );
+        let requests = model.seen.lock().map_err(|_| "poisoned requests")?;
+        let tools = &requests[0].tools;
+        let start = tools
+            .iter()
+            .find(|tool| tool.name == "background_start")
+            .ok_or("missing background_start")?;
+        assert_eq!(
+            start.input_schema["properties"]["tool"]["enum"],
+            serde_json::json!(["read_file", "list_dir", "find_files", "search_text"])
+        );
+        for name in [
+            "todo_write",
+            "ask_user",
+            "background_status",
+            "background_cancel",
+        ] {
+            assert!(tools.iter().any(|tool| tool.name == name));
+        }
+    }
+    Ok(())
+}
 #[tokio::test]
 async fn cancel_before_run_does_not_claim_persistence() -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
