@@ -353,3 +353,50 @@ async fn configured_credentials_are_redacted_without_requesting_a_model()
     assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
     Ok(())
 }
+
+#[tokio::test]
+async fn relative_exports_follow_explicit_workspace_and_plan_protects_saved_workspace()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new().await?;
+    let current = tempfile::tempdir()?;
+    let target = "relative-export.md";
+    let output = fixture
+        .command()
+        .arg("--cwd")
+        .arg(current.path())
+        .args([
+            "--output",
+            "json",
+            "session",
+            "export",
+            &fixture.session.id.0.to_string(),
+            "--file",
+            target,
+        ])
+        .output()?;
+    successful(&output);
+    assert!(current.path().join(target).is_file());
+    assert!(!fixture.workspace.path().join(target).exists());
+    let blocked = fixture.workspace.path().join("plan-must-not-write.md");
+    let output = fixture
+        .command()
+        .arg("--cwd")
+        .arg(current.path())
+        .args([
+            "--mode",
+            "plan",
+            "--output",
+            "json",
+            "session",
+            "export",
+            &fixture.session.id.0.to_string(),
+            "--file",
+        ])
+        .arg(&blocked)
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    let error: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(error["error"]["code"], "plan_write_denied");
+    assert!(!blocked.exists());
+    Ok(())
+}

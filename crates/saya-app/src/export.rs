@@ -39,6 +39,29 @@ pub fn publish(
     mode: WorkMode,
     cancel: &dyn Cancellation,
 ) -> Result<Value, BoundaryError> {
+    publish_with_roots(target, bytes, &[workspace], mode, cancel)
+}
+
+/// Publish a session export, protecting both current and saved workspaces in PLAN.
+/// Relative targets are resolved by the caller before publication.
+pub fn publish_session(
+    target: &Path,
+    bytes: &[u8],
+    workspace: &Path,
+    session_workspace: &Path,
+    mode: WorkMode,
+    cancel: &dyn Cancellation,
+) -> Result<Value, BoundaryError> {
+    publish_with_roots(target, bytes, &[workspace, session_workspace], mode, cancel)
+}
+
+fn publish_with_roots(
+    target: &Path,
+    bytes: &[u8],
+    workspaces: &[&Path],
+    mode: WorkMode,
+    cancel: &dyn Cancellation,
+) -> Result<Value, BoundaryError> {
     check_cancel(cancel)?;
     let name = target
         .file_name()
@@ -58,13 +81,15 @@ pub fn publish(
         .to_str()
         .ok_or_else(|| failure("invalid_export_path", "export path must be UTF-8"))?;
     if mode == WorkMode::Plan {
-        let root = std::fs::canonicalize(workspace)
-            .map_err(|_| failure("invalid_workspace", "workspace is unavailable"))?;
-        if parent.starts_with(root) {
-            return Err(failure(
-                "plan_write_denied",
-                "PLAN export target must be outside the workspace",
-            ));
+        for workspace in workspaces {
+            let root = std::fs::canonicalize(workspace)
+                .map_err(|_| failure("invalid_workspace", "workspace is unavailable"))?;
+            if parent.starts_with(root) {
+                return Err(failure(
+                    "plan_write_denied",
+                    "PLAN export target must be outside the workspace",
+                ));
+            }
         }
     }
     use std::os::unix::fs::OpenOptionsExt as _;

@@ -59,7 +59,10 @@ fn pty() -> (fs::File, fs::File) {
         0
     );
     // SAFETY: the child must inherit its slave only, never keep the master alive.
-    assert_eq!(unsafe {libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC)}, 0);
+    assert_eq!(
+        unsafe { libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC) },
+        0
+    );
     unsafe { (fs::File::from_raw_fd(master), fs::File::from_raw_fd(slave)) }
 }
 fn prompt(master: &mut fs::File) {
@@ -207,4 +210,74 @@ fn chat_termination_and_hangup_await_background_process_cleanup() {
 #[test]
 fn chat_terminal_loss_awaits_background_process_cleanup() {
     cancellation_case(true, None);
+}
+
+#[test]
+fn broken_stream_stdout_returns_an_error_after_background_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (url, _) = fixture::server_dynamic(2, move |index, _| {
+        if index == 0 {
+            let call = json!({"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","echo $$ > tool.pid; exec sleep 30"]}}).to_string()}});
+            return ("text/event-stream", fixture::sse(&[
+                json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":call["id"],"type":"function","function":call["function"]}]},"finish_reason":null}]}),
+                json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
+            ]));
+        }
+        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        ("text/event-stream", fixture::sse(&[
+            json!({"choices":[{"index":0,"delta":{"content":"fixture text\n".repeat(1024)},"finish_reason":null}]}),
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        ]))
+    }).unwrap();
+    let config = root.path().join("config.toml");
+    fs::write(&config, format!("schema_version=1\n[defaults]\nprofile='test'\npermissions='bypass'\n[profiles.test]\nprotocol='openai-chat-completions'\nbase_url='{url}'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=128000\nstream=true\n")).unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_saya"))
+            .env_clear()
+            .env("HOME", root.path())
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(root.path())
+            .arg("--config")
+            .arg(config)
+            .args(["run", "fixture"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let marker = root.path().join("tool.pid");
+    wait_for(|| marker.exists());
+    let pid = fs::read_to_string(marker)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    let mut process = ProcessGuard(Some(pid));
+    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    drop(child.0.stdout.take());
+    release_tx.send(()).unwrap();
+    let mut status = None;
+    wait_for(|| {
+        status = child.0.try_wait().unwrap();
+        status.is_some()
+    });
+    let state = unsafe { libc::kill(pid, 0) };
+    let error = std::io::Error::last_os_error().raw_os_error();
+    assert_eq!(
+        state, -1,
+        "stream failure left its background process alive"
+    );
+    assert_eq!(error, Some(libc::ESRCH));
+    process.0 = None;
+    assert_eq!(status.unwrap().code(), Some(1));
+    let mut stderr = String::new();
+    child
+        .0
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }

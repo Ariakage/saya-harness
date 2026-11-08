@@ -3257,3 +3257,98 @@ fn warnings_are_logged_as_redacted_json_without_stdout_pollution() {
     assert_eq!(line["event"], "run.finished");
     assert_eq!(line["data"]["status"], "needs_confirmation");
 }
+
+#[test]
+fn jsonl_terminal_failure_uses_reserved_identity_and_sequence_when_database_reservation_fails() {
+    for fail in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let database = temp.path().join(".local/share/saya/sessions.sqlite3");
+        let trigger_database = database.clone();
+        let (url, _) = fixture::server_dynamic(2, move |index, _| {
+            if index > 0 {
+                return ("text/event-stream", fixture::sse(&[
+                    json!({"choices":[{"index":0,"delta":{"content":"resumed"},"finish_reason":null}]}),
+                    json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+                ]));
+            }
+            if fail {
+                let db = rusqlite::Connection::open(&trigger_database).unwrap();
+                db.execute_batch("CREATE TRIGGER reject_reservation BEFORE UPDATE OF event_seq ON sessions BEGIN SELECT RAISE(ABORT,'controlled reservation failure'); END;").unwrap();
+            }
+            let mut chunks = vec![json!({"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}); 4100];
+            chunks.push(json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}));
+            ("text/event-stream", fixture::sse(&chunks))
+        }).unwrap();
+        let cfg = config(temp.path(), &url, "auto");
+        fs::write(
+            &cfg,
+            fs::read_to_string(&cfg)
+                .unwrap()
+                .replace("stream = false", "stream = true"),
+        )
+        .unwrap();
+        let output = command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["--output", "jsonl", "run", "sequence fixture"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if fail { 1 } else { 0 }),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let events = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["type"] == "run.finished")
+                .count(),
+            1
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0]["seq"].as_u64().unwrap() < pair[1]["seq"].as_u64().unwrap())
+        );
+        let final_event = events.last().unwrap();
+        let session = events[0]["session_id"].as_str().unwrap();
+        let run = &events
+            .iter()
+            .find(|event| event["type"] == "run.started")
+            .unwrap()["run_id"];
+        assert_eq!(final_event["session_id"], session);
+        assert_eq!(&final_event["run_id"], run);
+        assert_eq!(&final_event["data"]["run_id"], run);
+        if fail {
+            assert_eq!(final_event["seq"], 4096);
+            assert_eq!(final_event["data"]["status"], "failed");
+            assert_eq!(final_event["data"]["persistence"]["saved"], false);
+            let db = rusqlite::Connection::open(database).unwrap();
+            db.execute_batch("DROP TRIGGER reject_reservation;")
+                .unwrap();
+        } else {
+            assert!(final_event["seq"].as_u64().unwrap() > 4096);
+        }
+        let resumed = command(temp.path())
+            .arg("--config")
+            .arg(&cfg)
+            .args(["--output", "jsonl", "run", "--session", session, "continue"])
+            .output()
+            .unwrap();
+        assert!(
+            resumed.status.success(),
+            "fail={fail} stderr={} stdout={}",
+            String::from_utf8_lossy(&resumed.stderr),
+            String::from_utf8_lossy(&resumed.stdout)
+        );
+        let text = String::from_utf8(resumed.stdout).unwrap();
+        let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert!(first["seq"].as_u64().unwrap() > final_event["seq"].as_u64().unwrap());
+    }
+}

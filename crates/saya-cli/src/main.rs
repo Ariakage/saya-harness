@@ -423,9 +423,10 @@ impl ModelStream for PrintStream {
         Box::pin(async move {
             let item = self.0.next(cancel).await?;
             if let Some(ModelUpdate::TextDelta(s)) = &item {
-                print!("{}", safe_terminal_text(s));
-                io::stdout()
-                    .flush()
+                let mut stdout = io::stdout().lock();
+                stdout
+                    .write_all(safe_terminal_text(s).as_bytes())
+                    .and_then(|()| stdout.flush())
                     .map_err(|_| cli_error("output_error", "cannot write text output"))?;
             }
             Ok(item)
@@ -617,12 +618,20 @@ fn report_result(
     streamed: bool,
     config: &Config,
 ) -> u8 {
-    if streamed {
-        println!();
+    let output = if streamed {
+        Some("\n".into())
     } else if result.status != RunStatus::NeedsInput
         && let Some(text) = &result.text
     {
-        println!("{}", safe_output(text, config));
+        Some(format!("{}\n", safe_output(text, config)))
+    } else {
+        None
+    };
+    if let Some(output) = output
+        && io::stdout().lock().write_all(output.as_bytes()).is_err()
+    {
+        eprintln!("saya: cannot write text output");
+        return 1;
     }
     if result.stop_reason.as_deref() == Some("completed_with_background_cleanup") {
         eprintln!("saya: unfinished background jobs were cancelled when the run ended");
@@ -825,13 +834,9 @@ async fn run(
                         error: Some(error.0.clone()),
                     }),
                 };
-                events
-                    .emit(
-                        saya_core::contract::EventPayload::RunFinished(result),
-                        Some(run_id),
-                        false,
-                    )
-                    .await?;
+                if let Err(output_error) = events.emit_failure(result).await {
+                    report_runtime_error(&output_error, config);
+                }
                 return Ok(1);
             }
             if config.output == Output::Json {

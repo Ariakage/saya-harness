@@ -60,9 +60,7 @@ async fn execute(
     let target = if args.file.is_absolute() {
         args.file.clone()
     } else {
-        std::env::current_dir()
-            .map_err(|_| cli_error("invalid_export_path", "current directory is unavailable"))?
-            .join(&args.file)
+        workspace.join(&args.file)
     };
     let format = args.format;
     tokio::task::spawn_blocking(move || {
@@ -77,8 +75,14 @@ async fn execute(
         if cancel.is_cancelled() {
             return Err(cli_error("cancelled", "export cancelled"));
         }
-        let mut receipt =
-            saya_app::export::publish(&target, &bytes, &workspace, mode, cancel.as_ref())?;
+        let mut receipt = saya_app::export::publish_session(
+            &target,
+            &bytes,
+            &workspace,
+            &snapshot.session.workspace,
+            mode,
+            cancel.as_ref(),
+        )?;
         receipt["session_id"] = serde_json::json!(id);
         receipt["format"] = match format {
             Format::Json => "json",

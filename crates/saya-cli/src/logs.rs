@@ -187,7 +187,9 @@ async fn emit(
     let serialized = String::from_utf8(stdout)?;
     let mut safe = String::with_capacity(serialized.len());
     for character in serialized.chars() {
-        if character.is_control() && character != '\n' {
+        if (character.is_control() && character != '\n')
+            || matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
             use std::fmt::Write as _;
             write!(&mut safe, "\\u{:04x}", u32::from(character))?;
         } else {

@@ -1,4 +1,7 @@
-use saya_app::{export::publish, interaction::RunCancellation};
+use saya_app::{
+    export::{publish, publish_session},
+    interaction::RunCancellation,
+};
 use saya_core::{boundary::Cancellation, contract::WorkMode};
 use std::{
     future::Future,
@@ -86,6 +89,57 @@ fn rejects_symlinks_and_plan_workspace_targets() {
     )
     .unwrap();
     assert_eq!(std::fs::read_dir(workspace).unwrap().count(), 0);
+}
+
+#[test]
+fn plan_session_export_protects_current_and_saved_workspaces_before_staging() {
+    let root = tempfile::tempdir().unwrap();
+    let current = root.path().join("current");
+    let saved = root.path().join("saved");
+    std::fs::create_dir(&current).unwrap();
+    std::fs::create_dir(&saved).unwrap();
+    let alias = root.path().join("saved-alias");
+    std::os::unix::fs::symlink(&saved, &alias).unwrap();
+    for target in [
+        current.join("file.md"),
+        saved.join("file.md"),
+        alias.join("file.md"),
+    ] {
+        assert_eq!(
+            publish_session(
+                &target,
+                b"content",
+                &current,
+                &saved,
+                WorkMode::Plan,
+                &RunCancellation::new()
+            )
+            .unwrap_err()
+            .0
+            .code,
+            "plan_write_denied"
+        );
+    }
+    assert_eq!(std::fs::read_dir(&current).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&saved).unwrap().count(), 0);
+    publish_session(
+        &root.path().join("outside.md"),
+        b"content",
+        &current,
+        &saved,
+        WorkMode::Plan,
+        &RunCancellation::new(),
+    )
+    .unwrap();
+    publish_session(
+        &saved.join("work.md"),
+        b"content",
+        &current,
+        &saved,
+        WorkMode::Work,
+        &RunCancellation::new(),
+    )
+    .unwrap();
 }
 struct DuringPublication {
     count: AtomicUsize,

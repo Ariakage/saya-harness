@@ -162,6 +162,36 @@ fn show_filters_pages_and_redacts_legacy_data_without_terminal_escapes() {
     }
 }
 #[test]
+fn log_browsing_escapes_bidi_in_all_output_formats_without_changing_json_values() {
+    let fixture = Fixture::new("http://127.0.0.1:9");
+    let original = "中文\u{061c}\u{200e}\u{200f}\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}🌸";
+    fixture
+        .log()
+        .record("warn", "bidi", json!({"detail":original}))
+        .unwrap();
+    for output in ["text", "json", "jsonl"] {
+        let result = fixture
+            .command()
+            .args(["--output", output, "logs", "show"])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let text = String::from_utf8(result.stdout).unwrap();
+        assert!(!text.chars().any(|c| matches!(c,'\u{061c}'|'\u{200e}'|'\u{200f}'|'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}')));
+        let row: Value = if output == "json" {
+            serde_json::from_str::<Value>(&text).unwrap()["data"]["records"][0].clone()
+        } else {
+            let value: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+            if output == "jsonl" {
+                value["data"].clone()
+            } else {
+                value
+            }
+        };
+        assert_eq!(row["data"]["detail"], original, "{row}");
+    }
+}
+#[test]
 fn tail_follows_rotation_and_interrupts_with_clean_jsonl() {
     let fixture = Fixture::new("http://127.0.0.1:9");
     let log = fixture.log();

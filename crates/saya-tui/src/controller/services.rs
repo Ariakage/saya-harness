@@ -341,10 +341,11 @@ impl App {
                         } else {
                             export.to_markdown()?
                         };
-                        let mut receipt = saya_app::export::publish(
+                        let mut receipt = saya_app::export::publish_session(
                             &target,
                             &bytes,
                             &workspace,
+                            &snapshot.session.workspace,
                             mode,
                             checking.as_ref(),
                         )?;

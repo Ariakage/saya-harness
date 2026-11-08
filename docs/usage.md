@@ -111,7 +111,7 @@ saya session export SESSION_ID --file ./session.md
 saya --output json session export SESSION_ID --format json --scope full --include-tools --file ./session.json
 ```
 
-当前调用显式使用 PLAN 时，目标须位于工作区外。JSON／JSONL 的确认包含文件路径、字节数、SHA256及快照水位。取消退出130，其他导出错误退出2，错误码及文件发布保证见[导出说明](session-export.md)。
+相对导出路径以本次配置的工作区cwd为基准。当前调用显式使用PLAN时，目标须同时位于本次工作区和被导出会话保存的工作区外。JSON／JSONL 的确认包含文件路径、字节数、SHA256及快照水位。取消退出130，其他导出错误退出2，错误码及文件发布保证见[导出说明](session-export.md)。
 
 ## 本地日志查询
 

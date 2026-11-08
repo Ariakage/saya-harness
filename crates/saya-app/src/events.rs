@@ -48,7 +48,7 @@ impl EventSink for ChannelSink {
     }
 }
 use saya_core::{
-    contract::{Event, EventPayload, Usage},
+    contract::{Event, EventPayload, RunResult, Usage},
     sqlite::SqliteStore,
 };
 use std::{
@@ -62,6 +62,7 @@ struct State {
     end: u64,
     names: HashMap<String, String>,
     pending_execution: Option<EventPayload>,
+    terminal_emitted: bool,
 }
 
 pub struct EventWriter {
@@ -93,6 +94,7 @@ impl EventWriter {
                 end: 0,
                 names: HashMap::new(),
                 pending_execution: None,
+                terminal_emitted: false,
             }),
         }
     }
@@ -102,7 +104,9 @@ impl EventWriter {
         payload: EventPayload,
         run: Option<RunId>,
     ) -> Result<Event, BoundaryError> {
-        if state.next > state.end {
+        // Keep the final reserved number available for a terminal failure if
+        // the next database reservation fails. Visible sequences are never reused.
+        if state.next >= state.end {
             let (start, end) = self
                 .store
                 .reserve_event_sequences(self.session, 4096)
@@ -112,6 +116,14 @@ impl EventWriter {
         }
         let seq = state.next;
         state.next += 1;
+        self.envelope(payload, run, seq)
+    }
+    fn envelope(
+        &self,
+        payload: EventPayload,
+        run: Option<RunId>,
+        seq: u64,
+    ) -> Result<Event, BoundaryError> {
         let timestamp = timestamp()?;
         let mut value = serde_json::to_value(Event {
             schema_version: SCHEMA_VERSION,
@@ -138,6 +150,13 @@ impl EventWriter {
         durable: bool,
     ) -> Result<(), BoundaryError> {
         let mut state = self.state.lock().await;
+        if state.terminal_emitted {
+            return if matches!(payload, EventPayload::RunFinished(_)) {
+                Ok(())
+            } else {
+                Err(cli_error("output_error", "event stream already finished"))
+            };
+        }
         let interrupted = self.take_interrupted()?;
         for payload in interrupted {
             let event = self.event(&mut state, payload, Some(self.run)).await?;
@@ -152,7 +171,36 @@ impl EventWriter {
                 .commit(&[StoreChange::ReservedEvent(event.clone())])
                 .await?;
         }
-        self.sink.publish(&event).await
+        self.sink.publish(&event).await?;
+        state.terminal_emitted |= matches!(event.payload, EventPayload::RunFinished(_));
+        Ok(())
+    }
+    /// Deliver one terminal failure using an already reserved sequence when
+    /// storage cannot reserve another block. The fallback is not persisted.
+    /// Sink failures stop delivery without appending another output record.
+    pub async fn emit_failure(&self, result: RunResult) -> Result<(), BoundaryError> {
+        let payload = EventPayload::RunFinished(result);
+        match self.emit(payload.clone(), Some(self.run), false).await {
+            Ok(()) => return Ok(()),
+            Err(error) if error.0.code.starts_with("storage_") => {}
+            Err(error) => return Err(error),
+        }
+        let mut state = self.state.lock().await;
+        if state.terminal_emitted {
+            return Ok(());
+        }
+        if state.next > state.end {
+            return Err(cli_error(
+                "output_error",
+                "no reserved terminal event sequence",
+            ));
+        }
+        let seq = state.next;
+        state.next += 1;
+        let event = self.envelope(payload, Some(self.run), seq)?;
+        self.sink.publish(&event).await?;
+        state.terminal_emitted = true;
+        Ok(())
     }
     async fn store_changes(&self, changes: &[StoreChange]) -> Result<(), BoundaryError> {
         let mut state = self.state.lock().await;
@@ -242,7 +290,8 @@ impl EventWriter {
         }
         self.store.commit(&all).await?;
         for event in &events {
-            self.sink.publish(event).await?
+            self.sink.publish(event).await?;
+            state.terminal_emitted |= matches!(event.payload, EventPayload::RunFinished(_));
         }
         Ok(())
     }

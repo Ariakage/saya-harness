@@ -104,3 +104,71 @@ async fn bounded_event_delivery_preserves_sequence_and_reports_disconnect() {
         "event_consumer_closed"
     );
 }
+
+#[tokio::test]
+async fn failure_terminal_is_unique_and_a_new_writer_starts_after_its_reserved_range() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(saya_core::sqlite::SqliteStore::open(root.path(), vec![]).unwrap());
+    let session = Session {
+        id: SessionId::new(),
+        workspace: root.path().into(),
+        work_mode: WorkMode::Work,
+        profile: "fixture".into(),
+        protocol: ModelProtocol::ChatCompletions,
+        model: "fixture".into(),
+        history: vec![],
+    };
+    store.create_session(&session, "fingerprint").await.unwrap();
+    let run = RunId::new();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+    let writer = EventWriter::new(
+        store.clone(),
+        session.id,
+        run,
+        vec![],
+        Arc::new(ChannelSink(sender)),
+    );
+    let result = saya_core::contract::RunResult {
+        schema_version: 1,
+        session_id: Some(session.id),
+        run_id: Some(run),
+        status: saya_core::contract::RunStatus::Failed,
+        stop_reason: Some("storage_error".into()),
+        text: None,
+        error: None,
+        usage: None,
+        artifacts: vec![],
+        persistence: None,
+    };
+    writer.emit_failure(result.clone()).await.unwrap();
+    writer.emit_failure(result).await.unwrap();
+    let terminal = receiver.recv().await.unwrap();
+    assert_eq!(terminal.session_id, session.id);
+    assert_eq!(terminal.run_id, Some(run));
+    assert!(receiver.try_recv().is_err());
+    let payload = EventPayload::SessionResumed {
+        work_mode: WorkMode::Work,
+        permissions: saya_core::contract::PermissionMode::Auto,
+        workspace: session.workspace,
+        profile: session.profile,
+    };
+    assert_eq!(
+        writer
+            .emit(payload.clone(), None, false)
+            .await
+            .unwrap_err()
+            .0
+            .code,
+        "output_error"
+    );
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let next = EventWriter::new(
+        store,
+        session.id,
+        RunId::new(),
+        vec![],
+        Arc::new(ChannelSink(sender)),
+    );
+    next.emit(payload, None, false).await.unwrap();
+    assert!(receiver.recv().await.unwrap().seq > terminal.seq);
+}
