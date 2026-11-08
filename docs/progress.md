@@ -12,6 +12,7 @@
 - R2-15的同模式请求已修复。撤回异构待切换请求会清空pending并更新revision，原模式可继续开始共享调用。两项新增回归的失败／通过证据为 `target/r2-15-mode-before.log` 与 `target/r2-15-mode-after.log`，core全目标Clippy通过。其余后台模式及超时问题继续核实。
 - R2-02已复现并修复环境覆盖沿用argv／cwd授权的问题。非空env由完整参数策略核查，版本1预授权保持未消费，静态auto allow进入模型核查。权限7项、审批32项和审核8项测试及core全目标Clippy通过，日志为 `target/r2-02-{before,after,clippy}.log`。
 - R2-07至11及R2-20的TUI部分已完成组件修复。覆盖可恢复错误、UI取消草稿、显式恢复覆盖项、单簇／视觉行字节上限、归一化后标题脱敏，以及粘贴、profile状态、详情覆盖和退出绘制。152项lib、8项input、7项终端测试与全目标Clippy通过，日志为 `target/r02-fix/tui-repairs-{tests,clippy}.log`。首条配置错误与HUP断开场景保留为最终正常入口PTY验收项。
+- R2-12已修复合法WAL回滚尾帧的误报。无效帧停止扫描并采用最后有效提交前缀，头校验失败继续报错。真实SQLite溢写／回滚／短提交夹具与无shm原生恢复结果一致，源文件保持只读，六项WAL测试及core Clippy通过，日志为 `target/r02-fix/wal-tail-{tests,clippy}.log`。
 - 权限环境匹配、路径规则、CLI清理、TUI输入与渲染、上下文及协议／存储相关问题继续分组整改，最终验收使用全部修复合入后的程序。
 
 ## 当前状态

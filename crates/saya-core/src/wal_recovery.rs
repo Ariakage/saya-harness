@@ -184,15 +184,14 @@ fn build_image(
         }
         let page_no = be(&frame[0..4]);
         if page_no == 0 {
-            return Err(fail("storage_corrupt", "invalid stranded WAL page"));
+            break;
         }
         sum = checksum(&frame[..8], big, sum);
         sum = checksum(&frame[24..], big, sum);
         if sum != (be(&frame[16..20]), be(&frame[20..24])) {
-            return Err(fail(
-                "storage_corrupt",
-                "invalid stranded WAL frame checksum",
-            ));
+            // SQLite stops recovery at an invalid frame. Reused WALs may retain
+            // rolled-back frames after the last committed, verified prefix.
+            break;
         }
         let pages = be(&frame[4..8]);
         frames.push((page_no, &frame[24..]));
@@ -368,9 +367,18 @@ mod tests {
         let mut bad = wal.clone();
         let frame = 32 + 24;
         bad[frame] ^= 1;
+        let mut base = db.clone();
+        base[18] = 1;
+        base[19] = 1;
         assert_eq!(
-            build_image(db.clone(), &bad, MAX_SNAPSHOT, &|| Ok(()))
-                .expect_err("bad checksum")
+            build_image(db.clone(), &bad, MAX_SNAPSHOT, &|| Ok(()))?,
+            base
+        );
+        let mut bad_header = wal.clone();
+        bad_header[24] ^= 1;
+        assert_eq!(
+            build_image(db.clone(), &bad_header, MAX_SNAPSHOT, &|| Ok(()))
+                .unwrap_err()
                 .0
                 .code,
             "storage_corrupt"
@@ -391,6 +399,64 @@ mod tests {
             frame[20..24].copy_from_slice(&sum.1.to_be_bytes());
         }
         assert_eq!(build_image(db, &big, MAX_SNAPSHOT, &|| Ok(()))?, image);
+        Ok(())
+    }
+
+    #[test]
+    fn rolled_back_spill_tail_matches_sqlite_recovery_without_shm()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("sessions.sqlite3");
+        let native = Connection::open(&path)?;
+        native.execute_batch(
+            "PRAGMA page_size=1024;
+             PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=0;
+             PRAGMA cache_size=1;
+             CREATE TABLE fixture(value);
+             INSERT INTO fixture VALUES('baseline');
+             BEGIN;",
+        )?;
+        for _ in 0..200 {
+            native.execute("INSERT INTO fixture VALUES(zeroblob(900))", [])?;
+        }
+        native.execute_batch("ROLLBACK; INSERT INTO fixture VALUES('kept');")?;
+        let db = std::fs::read(&path)?;
+        let wal = std::fs::read(path.with_extension("sqlite3-wal"))?;
+        let frame_size = 24 + be(&wal[8..12]) as usize;
+        let big = be(&wal[..4]) & 1 == 1;
+        let mut sum = checksum(&wal[..24], big, (0, 0));
+        assert!(wal[32..].chunks_exact(frame_size).any(|frame| {
+            if frame[8..16] != wal[16..24] {
+                return false;
+            }
+            sum = checksum(&frame[..8], big, sum);
+            sum = checksum(&frame[24..], big, sum);
+            sum != (be(&frame[16..20]), be(&frame[20..24]))
+        }));
+
+        let reference = tempfile::tempdir()?;
+        std::fs::write(reference.path().join("sessions.sqlite3"), &db)?;
+        std::fs::write(reference.path().join("sessions.sqlite3-wal"), &wal)?;
+        let recovered = Connection::open(reference.path().join("sessions.sqlite3"))?;
+        let expected: String =
+            recovered.query_row("SELECT group_concat(value, ',') FROM fixture", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(expected, "baseline,kept");
+        let image = build_image(db.clone(), &wal, MAX_SNAPSHOT, &|| Ok(()))?;
+        let mut private = Connection::open_in_memory()?;
+        private.deserialize_read_exact(MAIN_DB, image.as_slice(), image.len(), true)?;
+        let actual: String =
+            private.query_row("SELECT group_concat(value, ',') FROM fixture", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(actual, expected);
+        assert_eq!(std::fs::read(path)?, db);
+        assert_eq!(
+            std::fs::read(root.path().join("sessions.sqlite3-wal"))?,
+            wal
+        );
         Ok(())
     }
 
