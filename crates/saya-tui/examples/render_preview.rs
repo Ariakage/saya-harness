@@ -1,7 +1,6 @@
 //! Render the unified session view from a synthetic state using TestBackend.
 use ratatui::{Terminal, backend::TestBackend};
 use saya_core::tools::todo::{TodoItem, TodoStatus};
-use saya_tui::commands::COMMANDS;
 use saya_tui::view::{self, ContextEntry, Details, Role, State};
 use std::{error::Error, io::Write};
 use unicode_width::UnicodeWidthStr;
@@ -72,22 +71,7 @@ fn fixture(scene: &str) -> State {
             });
         }
         "commands" => {
-            state.set_details(Details {
-                title: "Commands".into(),
-                lines: COMMANDS
-                    .iter()
-                    .enumerate()
-                    .map(|(index, suggestion)| {
-                        format!(
-                            "{} {} · {}",
-                            if index == 0 { "›" } else { " " },
-                            suggestion.text,
-                            suggestion.description
-                        )
-                    })
-                    .chain(std::iter::once("↑/↓ select · Enter run · Esc close".into()))
-                    .collect(),
-            });
+            state.command_palette = Some(0);
         }
         "completion" => {
             state.editor.set_text("/permissions ");

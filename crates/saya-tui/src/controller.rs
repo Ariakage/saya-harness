@@ -6,6 +6,8 @@ mod controls;
 mod message_tests;
 mod messages;
 #[cfg(test)]
+mod palette_tests;
+#[cfg(test)]
 mod service_tests;
 mod services;
 use crate::{
@@ -77,7 +79,6 @@ struct App {
     state: State,
     exit_after_run: Option<u8>,
     pending: Option<Request>,
-    palette: Option<usize>,
     ui_job: Option<services::UiJob>,
     deferred_mode: Option<WorkMode>,
     queued_prompt: Option<String>,
@@ -101,7 +102,6 @@ impl App {
             state: State::default(),
             exit_after_run: None,
             pending: None,
-            palette: None,
             ui_job: None,
             deferred_mode: None,
             queued_prompt: None,
@@ -326,7 +326,7 @@ impl App {
             self.state.pending_mode = None;
         }
         self.invalidate_pending();
-        self.palette = None;
+        self.state.command_palette = None;
         if let Some(active) = &self.active {
             active.cancel.cancel();
             self.state.status = "Cancelling".into();
@@ -419,6 +419,24 @@ impl App {
         Ok(())
     }
     fn mouse(&mut self, event: MouseEvent) -> bool {
+        if self.state.command_palette.is_some() {
+            let selected = self.state.palette_index_at(event.column, event.row);
+            return match event.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(selected) = selected {
+                        self.state.command_palette = Some(selected);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                MouseEventKind::ScrollUp if selected.is_some() => self.state.palette_scroll(true),
+                MouseEventKind::ScrollDown if selected.is_some() => {
+                    self.state.palette_scroll(false)
+                }
+                _ => false,
+            };
+        }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.state.toggle_at(event.column, event.row)
@@ -438,11 +456,14 @@ impl App {
         self.state.completion.update(
             self.state.editor.text(),
             self.state.editor.cursor(),
-            self.palette.is_none(),
+            self.state.command_palette.is_none(),
         );
     }
     async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if key.kind == KeyEventKind::Release {
+        if key.kind == KeyEventKind::Release
+            || (matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+                && key.kind != KeyEventKind::Press)
+        {
             return Ok(false);
         }
         if matches!(self.pending, Some(Request::Approval(..)))
@@ -463,7 +484,7 @@ impl App {
                 }
                 KeyCode::Char('o') => {
                     if key.kind == KeyEventKind::Press
-                        && self.palette.is_none()
+                        && self.state.command_palette.is_none()
                         && !self.state.completion.visible()
                     {
                         self.state.toggle_latest();
@@ -471,17 +492,14 @@ impl App {
                     return Ok(false);
                 }
                 KeyCode::Char('p') => {
-                    self.palette = if self.palette.is_some() {
+                    if key.kind != KeyEventKind::Press {
+                        return Ok(false);
+                    }
+                    self.state.command_palette = if self.state.command_palette.is_some() {
                         None
                     } else {
                         Some(0)
                     };
-                    if self.palette.is_some() {
-                        self.show_palette();
-                    } else {
-                        self.state.details = None;
-                        self.show_pending();
-                    }
                     return Ok(false);
                 }
                 KeyCode::Char('d') if self.state.editor.text().is_empty() => {
@@ -495,57 +513,47 @@ impl App {
                 _ => {}
             }
         }
-        if let Some(selected) = self.palette {
+        if let Some(selected) = self.state.command_palette {
+            let selected = selected.min(COMMANDS.len().saturating_sub(1));
             match key.code {
-                KeyCode::Up => {
-                    self.palette = Some(selected.saturating_sub(1));
-                    self.show_palette();
+                KeyCode::Up if key.modifiers.is_empty() => {
+                    self.state.command_palette = Some(selected.saturating_sub(1));
                     return Ok(false);
                 }
-                KeyCode::Down => {
-                    self.palette = Some((selected + 1).min(COMMANDS.len() - 1));
-                    self.show_palette();
+                KeyCode::Down if key.modifiers.is_empty() => {
+                    self.state.command_palette =
+                        Some(selected.saturating_add(1).min(COMMANDS.len() - 1));
                     return Ok(false);
                 }
-                KeyCode::Esc => {
-                    self.palette = None;
-                    self.state.details = None;
-                    self.show_pending();
+                KeyCode::Esc
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.state.command_palette = None;
                     return Ok(false);
                 }
-                KeyCode::Enter => {
-                    let typed = self.state.editor.text().to_owned();
-                    let command = if typed.starts_with('/') {
-                        typed.as_str()
-                    } else {
-                        COMMANDS[selected].text
-                    };
-                    self.palette = None;
-                    if !typed.starts_with('/') && command.ends_with(' ') {
-                        if !typed.is_empty() {
+                KeyCode::Enter if key.modifiers.is_empty() => {
+                    let command = COMMANDS[selected].text;
+                    self.state.command_palette = None;
+                    if command.ends_with(' ') {
+                        if !self.state.editor.text().is_empty() {
                             self.notice(
                                 "Clear the current draft before entering command arguments.",
                             );
-                            self.state.details = None;
-                            self.show_pending();
-                            return Ok(false);
+                        } else {
+                            self.state.editor.set_text(command);
                         }
-                        self.state.editor.set_text(command);
-                        self.state.details = None;
                         self.show_pending();
                         return Ok(false);
                     }
-                    let exit = self.command(command).await?;
-                    if typed.starts_with('/') {
-                        self.state.editor.clear();
-                    }
+                    let result = self.command(command).await;
                     if self.pending.is_some() {
                         self.show_pending();
                     }
-                    return Ok(exit);
+                    return result;
                 }
                 _ => {}
             }
+            return Ok(false);
         }
         if key.code == KeyCode::Esc
             && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
@@ -556,7 +564,7 @@ impl App {
         }
         if key.code == KeyCode::Tab
             && key.modifiers.is_empty()
-            && self.palette.is_none()
+            && self.state.command_palette.is_none()
             && self.state.editor.text().is_empty()
         {
             if key.kind == KeyEventKind::Press {
@@ -590,7 +598,7 @@ impl App {
                 _ => {}
             }
         }
-        let approval_visible = self.palette.is_none()
+        let approval_visible = self.state.command_palette.is_none()
             && self.deferred_mode.is_none()
             && self
                 .state
@@ -738,7 +746,9 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 app.mouse(event);
             }
             Action::Input(Some(Ok(TerminalEvent::Paste(text)))) => {
-                app.state.editor.insert(&text);
+                if app.state.command_palette.is_none() {
+                    app.state.editor.insert(&text);
+                }
             }
             Action::Input(Some(Ok(_))) | Action::Tick => {}
             Action::Input(Some(Err(_))) | Action::Input(None) => {

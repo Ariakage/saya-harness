@@ -116,6 +116,16 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 
 环境为本机macOS27.2 ARM／Rust1.99.1，日志为 `target/tui-mode-colors-check.log`，PTY报告为 `target/tui-mode-colors-release-matrix.json`，程序SHA-256为 `d89d5ca61db05da5d564fff28b51957b9090aa4052e9138365d1c09316cb289a`，Mach-O最低部署版本15.0。四模式与pending单元格快照保存为 `target/tui-mode-colors-*-110x32-cells.json`，局部合成图 `target/tui-mode-colors-composers.png` 根据本轮受控PTY数据渲染。
 
+#### Ctrl+P 弹出命令面板
+
+2026-11-08，按D-048将Ctrl+P改为独立的居中圆角浮层，最多88列×14行。24项共用命令目录显示选中高亮、命令说明与选择计数，方向键／候选行滚轮浏览，鼠标点击选中，Enter执行高亮项。可见窗口保持行位置，缩放后跟随选择，20×6保留三项候选和关闭提示。
+
+浮层与真实详情分别保存，Esc／Ctrl+P关闭保留详情、滚动位置和草稿。模态期间编辑、粘贴及背景折叠／滚动由面板接管，带参数命令填入空草稿，既有斜杠草稿保持原文。提交与关闭要求新的Press。独立复核修复异步详情遮盖澄清请求时可能提交隐藏草稿的边界，审批与澄清统一先核对可见请求，再接受回复。
+
+本机macOS27.2 ARM／Rust1.99.1，部署目标15.0的完整格式、workspace全目标Clippy、590项Rust测试及优化构建通过，独立139项TUI lib复核通过。最终程序完成20组正常入口PTY，新增模态组覆盖选择／执行、草稿、粘贴、鼠标边界、24项滚动、普通／宽屏／极小窗口及缩放、详情恢复、人工审批隔离和Ctrl+D清理。5项发行工具测试、工具smoke、文本会话、5项审查回归与私有配置离线校验通过。
+
+完整检查为 `target/tui-command-palette-check.log`，PTY报告为 `target/tui-command-palette-release-matrix.json`，程序SHA-256为 `094562477a5e9643727213a7276861dd884acb79850f53b745ea7fa8d9d08421`，实际Mach-O最低部署版本15.0。本轮证据来自本机及本地受控协议服务，RC1四平台证据按其固定源码记录。
+
 ### N0 实施记录
 
 | 任务 | 状态 | 阶段提交 | 证据 |

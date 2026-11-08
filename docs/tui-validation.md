@@ -95,3 +95,16 @@ macOS27.2 ARM／Rust1.99.1通过部署目标15.0的完整格式、workspace全�
 - 本轮5份单元格快照为 `target/tui-mode-colors-{work,code,plan,build,pending-work-code}-110x32-cells.json`，四色局部预览为 `target/tui-mode-colors-composers.png`。
 
 本节采用本机和本地受控协议服务，预览由实际PTY单元格投影生成，平台候选记录按其对应源码和程序维护。
+
+## Ctrl+P 弹出命令面板验收
+
+2026-11-08，本机macOS27.2 ARM／Rust1.99.1，macOS部署目标15.0。完整格式、workspace全目标Clippy、590项Rust测试及优化构建通过，独立139项TUI lib复核通过。新增4项视图与7项控制器回归，覆盖居中几何、选择计数、可见窗口与命中区域、编辑光标、缩放与极小窗口、草稿／详情保留、新按键边界，以及异步详情覆盖下的审批与澄清。
+
+最终优化程序通过20组正常入口PTY。新增组验证实际圆角浮层、高亮与24项滚动、隐藏斜杠草稿、编辑／粘贴接管、带参数命令、鼠标选择与滚轮、窗口外指针边界、普通／宽屏／20×6与缩放、详情恢复、人工审批和全局退出清理。既有三协议、模式权限、任务清单、折叠、会话恢复、取消与终端还原同时通过。5项发行工具测试、工具smoke、文本会话与5项审查回归通过。
+
+- 完整检查为 `target/tui-command-palette-check.log`，独立复核为 `target/n1-command-modal-review.log`，PTY报告为 `target/tui-command-palette-release-matrix.json`。
+- 程序SHA-256为 `094562477a5e9643727213a7276861dd884acb79850f53b745ea7fa8d9d08421`，实际Mach-O部署目标15.0。
+- 生产组件合成预览为 `target/tui-command-palette-{110x32,160x40,20x6}.png`，颜色与字重来自TestBackend单元格投影。
+- 正常入口PTY快照前缀为 `target/tui-command-palette-{centered-110x32,wide-160x45,tiny-20x6,over-approval-160x45}`，分别保存 `-cells.json` 和 `.png`。命令弹层专项另复跑通过，日志为 `target/tui-command-palette-release-focused.log`。
+
+本节采用本机和本地受控协议服务，四平台候选记录按其对应源码和程序维护。

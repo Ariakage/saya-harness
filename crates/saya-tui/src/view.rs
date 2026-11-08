@@ -1,6 +1,6 @@
 //! Pure, bounded TUI state and rendering. Runtime effects belong to the controller.
 use crate::{
-    commands::Completion,
+    commands::{COMMANDS, Completion},
     editor::{Editor, prefix_boundary, safe_text},
     rich_text::{append_wrapped_line, markdown_lines},
     theme::{
@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use saya_core::tools::todo::{TodoItem, TodoStatus};
 use std::collections::{HashSet, VecDeque};
@@ -95,6 +95,8 @@ pub struct State {
     pub todos: Vec<TodoItem>,
     pub editor: Editor,
     pub completion: Completion,
+    /// Selected catalog index while the command modal is open.
+    pub command_palette: Option<usize>,
     pub messages: VecDeque<Message>,
     pub details: Option<Details>,
     /// Visual line offset from the top of the current details pane.
@@ -112,6 +114,8 @@ pub struct State {
     transcript_viewport: Option<Rect>,
     details_viewport: Option<Rect>,
     completion_viewport: Option<Rect>,
+    palette_hits: Vec<(Rect, usize)>,
+    palette_first: usize,
     fold_anchor: Option<(u64, u16)>,
 }
 
@@ -137,6 +141,7 @@ impl Default for State {
             todos: Vec::new(),
             editor: Editor::default(),
             completion: Completion::default(),
+            command_palette: None,
             messages: VecDeque::new(),
             details: None,
             details_scroll: 0,
@@ -151,6 +156,8 @@ impl Default for State {
             transcript_viewport: None,
             details_viewport: None,
             completion_viewport: None,
+            palette_hits: Vec::new(),
+            palette_first: 0,
             fold_anchor: None,
         }
     }
@@ -227,6 +234,9 @@ impl State {
         self.transcript_viewport = None;
         self.details_viewport = None;
         self.completion_viewport = None;
+        self.command_palette = None;
+        self.palette_hits.clear();
+        self.palette_first = 0;
         self.fold_anchor = None;
     }
 
@@ -269,7 +279,7 @@ impl State {
     /// Toggle a foldable message only when its actual visible header was clicked.
     /// Coordinates are terminal cells from the most recent render.
     pub fn toggle_at(&mut self, x: u16, y: u16) -> bool {
-        if contains(self.completion_viewport, x, y) {
+        if self.command_palette.is_some() || contains(self.completion_viewport, x, y) {
             return false;
         }
         let Some(hit) = self
@@ -286,6 +296,9 @@ impl State {
     /// Toggle the latest retained thinking or long tool message.
     /// This supplies a keyboard fallback for mouse interaction.
     pub fn toggle_latest(&mut self) -> bool {
+        if self.command_palette.is_some() {
+            return false;
+        }
         let Some(message) = self.messages.iter().rev().find(|message| foldable(message)) else {
             return false;
         };
@@ -319,7 +332,7 @@ impl State {
     /// Scroll the rendered transcript or details viewport by three visual rows.
     /// Editor, sidebar, popup and terminal chrome have no scroll side effects.
     pub fn scroll_at(&mut self, x: u16, y: u16, up: bool) -> bool {
-        if contains(self.completion_viewport, x, y) {
+        if self.command_palette.is_some() || contains(self.completion_viewport, x, y) {
             return false;
         }
         if contains(self.details_viewport, x, y) {
@@ -339,6 +352,31 @@ impl State {
             return true;
         }
         false
+    }
+
+    /// Select only a candidate row drawn in the latest command modal frame.
+    pub fn palette_index_at(&self, x: u16, y: u16) -> Option<usize> {
+        self.command_palette?;
+        self.palette_hits
+            .iter()
+            .find(|(area, _)| area.contains((x, y).into()))
+            .map(|(_, index)| *index)
+    }
+
+    /// Move the modal selection by one entry, clamping at the catalog ends.
+    /// Returns whether the open modal consumed the navigation event.
+    pub fn palette_scroll(&mut self, up: bool) -> bool {
+        let Some(selected) = &mut self.command_palette else {
+            return false;
+        };
+        let last = COMMANDS.len().saturating_sub(1);
+        *selected = (*selected).min(last);
+        *selected = if up {
+            selected.saturating_sub(1)
+        } else {
+            selected.saturating_add(1).min(last)
+        };
+        true
     }
 
     /// Limit direct state population as well as streamed updates.
@@ -461,6 +499,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     state.transcript_viewport = None;
     state.details_viewport = None;
     state.completion_viewport = None;
+    state.palette_hits.clear();
+    if let Some(selected) = &mut state.command_palette {
+        *selected = (*selected).min(COMMANDS.len().saturating_sub(1));
+    }
     let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().fg(FOREGROUND).bg(BACKGROUND)),
@@ -489,6 +531,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     } else {
         draw_session(frame, state, area);
     }
+    draw_command_palette(frame, state);
 }
 
 fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
@@ -545,12 +588,7 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
         } else {
             "↑↓ Tab/→ Esc"
         }
-    } else if state.editor.text().is_empty()
-        && !state
-            .details
-            .as_ref()
-            .is_some_and(|details| details.title == "Commands")
-    {
+    } else if state.editor.text().is_empty() && state.command_palette.is_none() {
         if area.width >= 70 {
             "Tab mode · Ctrl+P commands"
         } else if area.width >= 44 {
@@ -1553,10 +1591,12 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
     }
-    frame.set_cursor_position((
-        inner.x + (cursor_column - first_column) as u16,
-        inner.y + (cursor_row - first_row) as u16,
-    ));
+    if state.command_palette.is_none() {
+        frame.set_cursor_position((
+            inner.x + (cursor_column - first_column) as u16,
+            inner.y + (cursor_row - first_row) as u16,
+        ));
+    }
 }
 
 fn editor_hint(width: u16) -> Line<'static> {
@@ -1578,8 +1618,120 @@ fn editor_hint(width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
+fn draw_command_palette(frame: &mut Frame<'_>, state: &mut State) {
+    let Some(selected) = state.command_palette else {
+        state.palette_first = 0;
+        return;
+    };
+    let area = frame.area();
+    let width = area.width.saturating_sub(2).min(88);
+    let height = area.height.min(14);
+    if width < 4 || height < 4 {
+        return;
+    }
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    let compact = width < 38;
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().fg(FOREGROUND).bg(SIDEBAR_BACKGROUND))
+        .title(Line::styled(
+            " Commands ",
+            Style::default()
+                .fg(STRONG_FOREGROUND)
+                .add_modifier(Modifier::BOLD),
+        ));
+    if compact {
+        block = block.title_bottom(Line::styled(" Esc close ", Style::default().fg(MUTED)));
+    } else {
+        block = block.title(
+            Line::styled(
+                format!(" {}/{} ", selected + 1, COMMANDS.len()),
+                Style::default().fg(MUTED),
+            )
+            .right_aligned(),
+        );
+    }
+    let inner = block.inner(popup);
+    let rows = usize::from(inner.height.saturating_sub(1)).min(COMMANDS.len());
+    state.palette_first = state.palette_first.min(COMMANDS.len().saturating_sub(rows));
+    if selected < state.palette_first {
+        state.palette_first = selected;
+    } else if selected >= state.palette_first + rows {
+        state.palette_first = selected + 1 - rows;
+    }
+    let first = state.palette_first;
+    let text_width = usize::from(inner.width.saturating_sub(2));
+    let command_width = COMMANDS
+        .iter()
+        .map(|command| command.text.width())
+        .max()
+        .unwrap_or(0)
+        .min(text_width);
+    if height == area.height && area.width <= 22 {
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Block::default().style(Style::default().fg(FOREGROUND).bg(BACKGROUND)),
+            area,
+        );
+    }
+    frame.render_widget(Clear, popup);
+    frame.render_widget(block, popup);
+    for (row, command) in COMMANDS.iter().skip(first).take(rows).enumerate() {
+        let index = first + row;
+        let active = index == selected;
+        let style = if active {
+            Style::default()
+                .fg(BACKGROUND)
+                .bg(BLUE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(FOREGROUND).bg(SIDEBAR_BACKGROUND)
+        };
+        let text = crop_display(command.text, 0, command_width);
+        let mut line = Line::from(vec![
+            Span::raw(if active { "› " } else { "  " }),
+            Span::raw(text.clone()),
+        ])
+        .style(style);
+        if text_width >= command_width + 5 {
+            line.spans.push(Span::raw(
+                " ".repeat(command_width.saturating_sub(text.width()) + 2),
+            ));
+            line.spans.push(Span::styled(
+                crop_display(command.description, 0, text_width - command_width - 2),
+                Style::default().fg(if active { BACKGROUND } else { MUTED }),
+            ));
+        }
+        let area = Rect::new(inner.x, inner.y + row as u16, inner.width, 1);
+        frame.render_widget(line, area);
+        state.palette_hits.push((area, index));
+    }
+    frame.render_widget(
+        Line::styled(
+            if compact {
+                "↑↓ · Enter"
+            } else {
+                "↑↓ select · Enter run · Esc close"
+            },
+            Style::default().fg(MUTED),
+        ),
+        Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+    );
+}
+
 fn draw_completion(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
-    if !state.completion.visible() || area.height < 3 || area.width < 4 {
+    if state.command_palette.is_some()
+        || !state.completion.visible()
+        || area.height < 3
+        || area.width < 4
+    {
         return;
     }
     let items = &state.completion.items;
@@ -2556,7 +2708,11 @@ mod tests {
         });
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(row_text(terminal.backend().buffer(), 0).contains("Tab mode"));
+        state.command_palette = Some(0);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         assert!(!row_text(terminal.backend().buffer(), 0).contains("Tab mode"));
+        state.command_palette = None;
         state.details = None;
         state.editor.set_text("/per");
         state.completion.update("/per", 4, true);
@@ -3220,5 +3376,172 @@ mod tests {
             assert_eq!(buffer[(1, 23)].fg, mode_color(next));
             assert!(!row_text(buffer, 23).contains('→'));
         }
+    }
+
+    #[test]
+    fn command_modal_centers_catalog_rows_and_restores_the_real_editor_cursor() {
+        let mut state = State::default();
+        state.editor.set_text("draft界");
+        state.set_details(Details {
+            title: "Saved records".into(),
+            lines: (0..80).map(|index| format!("record {index}")).collect(),
+        });
+        state.details_scroll = 3;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), (10, 20).into());
+        state.command_palette = Some(0);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(!terminal.backend().cursor_visible());
+        let buffer = terminal.backend().buffer();
+        for (x, y, symbol) in [(1, 5, "╭"), (78, 5, "╮"), (1, 18, "╰"), (78, 18, "╯")] {
+            assert_eq!(buffer[(x, y)].symbol(), symbol);
+        }
+        assert!(row_text(buffer, 5).contains("Commands"));
+        assert!(row_text(buffer, 5).contains(&format!("1/{}", COMMANDS.len())));
+        assert!(row_text(buffer, 6).contains(COMMANDS[0].text));
+        assert!(row_text(buffer, 6).contains(COMMANDS[0].description));
+        assert_eq!(buffer[(2, 6)].symbol(), "›");
+        assert_eq!(buffer[(2, 6)].bg, BLUE);
+        assert!(buffer[(2, 6)].modifier.contains(Modifier::BOLD));
+        assert_eq!(state.palette_hits.len(), 11);
+        assert_eq!(state.palette_index_at(2, 6), Some(0));
+        for (x, y) in [(2, 5), (1, 6), (2, 17), (0, 0)] {
+            assert_eq!(state.palette_index_at(x, y), None);
+        }
+        assert_eq!(state.details.as_ref().unwrap().title, "Saved records");
+        assert_eq!(state.details_scroll, 3);
+        state.command_palette = None;
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), (10, 20).into());
+        assert_eq!(state.editor.text(), "draft界");
+        assert_eq!(state.details_scroll, 3);
+        assert!(state.palette_hits.is_empty());
+        assert!(row_text(terminal.backend().buffer(), 2).contains("Saved records"));
+    }
+
+    #[test]
+    fn command_modal_clamps_selection_and_scrolls_through_the_shared_catalog() {
+        let mut state = State {
+            command_palette: Some(usize::MAX),
+            ..State::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let last = COMMANDS.len() - 1;
+        assert_eq!(state.command_palette, Some(last));
+        assert_eq!(terminal.backend().buffer()[(36, 13)].symbol(), "╭");
+        assert_eq!(terminal.backend().buffer()[(123, 26)].symbol(), "╯");
+        assert_eq!(state.palette_hits.len(), 11);
+        for (row, (area, index)) in state.palette_hits.iter().enumerate() {
+            assert_eq!(*index, COMMANDS.len() - 11 + row);
+            assert!(
+                row_text(terminal.backend().buffer(), area.y)
+                    .contains(COMMANDS[*index].text.trim_end())
+            );
+            assert_eq!(state.palette_index_at(area.x + 3, area.y), Some(*index));
+        }
+        assert_eq!(terminal.backend().buffer()[(37, 24)].symbol(), "›");
+        assert!(state.palette_scroll(false));
+        assert_eq!(state.command_palette, Some(last));
+        assert!(state.palette_scroll(true));
+        assert_eq!(state.command_palette, Some(last - 1));
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert_eq!(state.palette_hits.last().unwrap().1, last);
+        assert_eq!(state.palette_first, COMMANDS.len() - 11);
+        assert_eq!(terminal.backend().buffer()[(37, 23)].symbol(), "›");
+        let middle = state.palette_hits[3];
+        state.command_palette = state.palette_index_at(middle.0.x + 3, middle.0.y);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert_eq!(state.palette_first, COMMANDS.len() - 11);
+        assert_eq!(
+            terminal.backend().buffer()[(middle.0.x, middle.0.y)].symbol(),
+            "›"
+        );
+        assert_eq!(
+            state.palette_index_at(middle.0.x, middle.0.y),
+            Some(middle.1)
+        );
+        state.command_palette = Some(0);
+        assert!(state.palette_scroll(true));
+        assert_eq!(state.command_palette, Some(0));
+        assert!(state.palette_scroll(false));
+        assert_eq!(state.command_palette, Some(1));
+        state.command_palette = None;
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert_eq!(state.palette_first, 0);
+        assert!(!state.palette_scroll(false));
+        assert_eq!(state.palette_index_at(37, 24), None);
+    }
+
+    #[test]
+    fn command_modal_tiny_layout_keeps_selection_close_hint_and_fresh_resize_hits() {
+        let mut state = State {
+            command_palette: Some(COMMANDS.len() - 1),
+            ..State::default()
+        };
+        state.editor.set_text("retained draft");
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 0)].symbol(), "╭");
+        assert_eq!(buffer[(18, 5)].symbol(), "╯");
+        assert!(row_text(buffer, 0).contains("Commands"));
+        assert!(row_text(buffer, 4).contains("↑↓ · Enter"));
+        assert!(row_text(buffer, 5).contains("Esc close"));
+        assert_eq!(buffer[(2, 3)].symbol(), "›");
+        assert_eq!(state.palette_index_at(3, 3), Some(COMMANDS.len() - 1));
+        assert_eq!(state.palette_hits.len(), 3);
+        for row in 0..6 {
+            assert_eq!(buffer[(0, row)].symbol(), " ");
+            assert_eq!(buffer[(19, row)].symbol(), " ");
+            assert_eq!(buffer[(0, row)].bg, BACKGROUND);
+            assert_eq!(buffer[(19, row)].bg, BACKGROUND);
+        }
+        assert!(!terminal.backend().cursor_visible());
+        terminal.backend_mut().resize(110, 32);
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert_eq!(state.palette_index_at(3, 3), None);
+        assert_eq!(terminal.backend().buffer()[(11, 9)].symbol(), "╭");
+        assert_eq!(state.palette_hits.len(), 11);
+        assert_eq!(state.editor.text(), "retained draft");
+        state.command_palette = Some(usize::MAX);
+        render(&mut state, 1, 1);
+        assert_eq!(state.command_palette, Some(COMMANDS.len() - 1));
+        assert!(state.palette_hits.is_empty());
+    }
+
+    #[test]
+    fn command_modal_blocks_backdrop_actions_and_suppresses_completion_overlay() {
+        let mut state = State::default();
+        let id = state.push_message(Role::Thinking, "provider", "thought\n".repeat(100));
+        state.set_details(Details {
+            title: "Approval required".into(),
+            lines: (0..100).map(|index| format!("argument {index}")).collect(),
+        });
+        state.details_scroll = 4;
+        state.editor.set_text("/per");
+        state.completion.update("/per", 4, true);
+        render(&mut state, 160, 45);
+        state.command_palette = Some(0);
+        let image = render(&mut state, 160, 45);
+        let scroll = state.scroll;
+        let details_scroll = state.details_scroll;
+        assert!(!image.contains("Command suggestions"));
+        assert!(state.completion.visible());
+        assert!(state.completion_viewport.is_none());
+        assert!(!state.toggle_latest());
+        assert!(!state.toggle_at(2, 2));
+        assert!(!state.scroll_at(3, 3, true));
+        assert!(!state.scroll_at(82, 3, false));
+        assert!(!state.expanded_messages.contains(&id));
+        assert_eq!(state.scroll, scroll);
+        assert_eq!(state.details_scroll, details_scroll);
+        assert_eq!(state.editor.text(), "/per");
+        assert_eq!(state.details.as_ref().unwrap().title, "Approval required");
+        state.command_palette = None;
+        assert!(render(&mut state, 160, 45).contains("Command suggestions"));
     }
 }

@@ -334,6 +334,38 @@ class Screen:
                 return '\n'.join(lines)
         return ''
 
+    def command_palette_rect(self):
+        width, height = min(self.columns - 2, 88), min(self.rows, 14)
+        if width < 4 or height < 4:
+            return None
+        left, top = (self.columns - width) // 2, (self.rows - height) // 2
+        if (self.cells[top][left] != '╭' or self.cells[top][left + width - 1] != '╮' or
+                self.cells[top + height - 1][left] != '╰' or self.cells[top + height - 1][left + width - 1] != '╯'):
+            return None
+        if self.row_style(top, 'Commands', left, left + width) != ((232, 232, 237), (20, 20, 22)):
+            return None
+        return left, top, width, height
+
+    def command_palette_rows(self):
+        rectangle = self.command_palette_rect()
+        if rectangle is None:
+            return []
+        left, top, width, height = rectangle
+        return [(left + 1, row, ''.join(self.cells[row][left + 1:left + width - 1]).rstrip())
+                for row in range(top + 1, top + height - 2)]
+
+    def command_palette_selected(self):
+        return next((item for item in self.command_palette_rows() if item[2].startswith('› ') and
+                     self.colors[item[1]][item[0]] == ((9, 9, 11), (88, 166, 255))), None)
+
+    def command_palette_text(self):
+        rectangle = self.command_palette_rect()
+        if rectangle is None:
+            return ''
+        left, top, width, height = rectangle
+        return '\n'.join(''.join(self.cells[row][left:left + width]).rstrip()
+                         for row in range(top, top + height))
+
 
 SUPERVISOR = r"""
 import os
@@ -874,9 +906,9 @@ def command_completion_journey(binary):
                 terminal.wait(lambda: editor_text() == '/mo' and 'Command suggestions' not in terminal.screen.popup_text(),
                               'Esc hid suggestions and ghost while preserving draft')
                 terminal.send(b'\x10')
-                terminal.wait(lambda: 'Commands' in terminal.screen.details_text(), 'command palette details')
+                terminal.wait(lambda: bool(terminal.screen.command_palette_rect()), 'centered command palette frame')
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: editor_text() == '/mo' and 'Commands' not in terminal.screen.details_text(),
+                terminal.wait(lambda: editor_text() == '/mo' and not terminal.screen.command_palette_rect(),
                               'existing command palette closed with draft intact')
                 clear_draft()
 
@@ -1020,11 +1052,11 @@ def empty_tab_mode_journey(binary):
                     save_interactive_screen(terminal, mode.lower() + '-110x32')
 
                 terminal.send(b'\x10')
-                terminal.wait(lambda: 'Commands' in terminal.screen.details_text(), 'Tab fixture command palette')
+                terminal.wait(lambda: bool(terminal.screen.command_palette_rect()), 'Tab fixture command palette')
                 terminal.send(b'\t')
                 no_dispatch('WORK')
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: 'Commands' not in terminal.screen.details_text(), 'Tab fixture command palette closed')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'Tab fixture command palette closed')
                 no_dispatch('WORK')
                 clear_draft()
 
@@ -1554,7 +1586,7 @@ def manual_tools_and_clarification(binary):
 
 
 def save_interactive_screen(terminal, name):
-    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-mode-colors-' + name + '-cells.json')
+    path = Path(__file__).resolve().parents[2] / 'target' / ('tui-command-palette-' + name + '-cells.json')
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps({'columns': terminal.screen.columns, 'rows': terminal.screen.rows,
                                'cells': terminal.screen.cells, 'colors': terminal.screen.colors},
@@ -1891,6 +1923,249 @@ def summary_tool_cards_journey(binary):
                     terminal.settle()
                 if len(fixture.requests) != 4:
                     raise RuntimeError('opening tool summaries replayed a model request or tool')
+                terminal.finish()
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
+def command_palette_modal_journey(binary):
+    read = ('palette-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 40})
+    manual = ('palette-manual-read', 'read_file', {'path': 'fact.txt', 'start_line': 1, 'line_count': 1})
+    def denied(request):
+        result = tool_result(request, manual[0])
+        if result.get('ok') or result.get('error', {}).get('code') != 'permission_denied':
+            raise RuntimeError('closing the command modal changed the pending approval decision')
+        return {'text': 'PALETTE_APPROVAL_DONE'}
+    fixture = Fixture('openai-chat-completions', [
+        {'call': read, 'chat_reasoning': ['PALETTE_THOUGHT_FIXTURE']},
+        expect_tool(read[0], {'text': 'PALETTE_BACKGROUND_DONE\nCommands\n› /mode plan'}),
+        {'call': manual}, denied])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-palette-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            (workspace / 'fact.txt').write_text(''.join(f'PALETTE_FILE_LINE_{index:02d} controlled data\n' for index in range(40)))
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                def selected(command):
+                    item = terminal.screen.command_palette_selected()
+                    if item is None:
+                        return False
+                    text = item[2][2:].rstrip()
+                    return text.startswith(command) or (len(text) >= 8 and command.startswith(text))
+
+                def wait_selected(command):
+                    terminal.wait(lambda: selected(command), 'command modal selection ' + command)
+                    terminal.settle()
+
+                def open_palette():
+                    terminal.send(b'\x10')
+                    wait_selected('/mode plan')
+
+                def geometry(index):
+                    terminal.settle()
+                    rectangle = terminal.screen.command_palette_rect()
+                    width, height = min(terminal.screen.columns - 2, 88), min(terminal.screen.rows, 14)
+                    expected = ((terminal.screen.columns - width) // 2, (terminal.screen.rows - height) // 2, width, height)
+                    if rectangle != expected or terminal.screen.command_palette_selected() is None:
+                        raise RuntimeError('command modal was not centered with its actual selection visible')
+                    left, top, width, height = rectangle
+                    if terminal.screen.colors[top][left] != ((48, 48, 56), (20, 20, 22)):
+                        raise RuntimeError('command modal did not use its border and surface styles')
+                    if width < 38:
+                        if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
+                            raise RuntimeError('compact command modal omitted its close instruction')
+                    elif f'{index + 1}/24' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                        raise RuntimeError('command modal did not report the actual catalog selection')
+                    navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
+                    expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
+                    if expected_hint not in navigation:
+                        raise RuntimeError('command modal omitted its width-appropriate navigation instructions')
+                    if (terminal.screen.columns, terminal.screen.rows) == (20, 6):
+                        for row in range(6):
+                            for column in (0, 19):
+                                if terminal.screen.cells[row][column] != ' ' or terminal.screen.colors[row][column][1] != (9, 9, 11):
+                                    raise RuntimeError('tiny command modal retained background text outside its frame')
+                    return rectangle
+
+                def no_initial_io(mode, draft):
+                    terminal.settle()
+                    if fixture.requests or (root / 'data').exists() or (root / 'state').exists():
+                        raise RuntimeError('command modal selection accessed a model or persistent session storage')
+                    if terminal.mode() != mode or terminal.permissions() != 'auto' or terminal.editor_text() != draft:
+                        raise RuntimeError('command modal changed an unsubmitted draft, mode or permissions')
+                    if list(workspace.iterdir()) != [workspace / 'fact.txt']:
+                        raise RuntimeError('command modal selection changed workspace files')
+
+                def clear_draft():
+                    terminal.send(b'\x03')
+                    terminal.wait(lambda: terminal.editor_text() == '', 'command modal fixture draft cleared')
+
+                terminal.title()
+                original_draft = '/permissions bypass'
+                terminal.send(original_draft)
+                terminal.wait(lambda: terminal.editor_text() == original_draft, 'background slash-command draft')
+                open_palette()
+                geometry(0)
+                if 'Read-only investigation' not in terminal.screen.command_palette_text():
+                    raise RuntimeError('normal command modal omitted its command descriptions')
+                terminal.send('yn')
+                terminal.send(b'\t')
+                terminal.send('\x1b[200~IGNORED_MODAL_PASTE\x1b[201~')
+                no_initial_io('WORK', original_draft)
+                geometry(0)
+                if not selected('/mode plan'):
+                    raise RuntimeError('ordinary modal input changed the highlighted command')
+                terminal.send(b'\r')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect() and terminal.mode() == 'PLAN',
+                              'Enter executed the highlighted mode instead of the background slash draft')
+                no_initial_io('PLAN', original_draft)
+                assert_mode_colors(terminal, 'PLAN')
+
+                open_palette()
+                terminal.send(b'\x1b[B' * 23)
+                wait_selected('/export-full markdown')
+                terminal.send(b'\r')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'scaffold modal closed with existing draft')
+                terminal.until('Clear the current draft')
+                no_initial_io('PLAN', original_draft)
+                clear_draft()
+
+                open_palette()
+                terminal.send(b'\x1b[B' * 28)
+                wait_selected('/export-full markdown')
+                geometry(23)
+                if '/mode plan' in terminal.screen.command_palette_text():
+                    raise RuntimeError('long command catalog did not scroll to keep its last selection visible')
+                profile_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/profile '))
+                terminal.click(profile_row[0] + 4, profile_row[1])
+                wait_selected('/profile ')
+                if terminal.screen.command_palette_selected()[1] != profile_row[1]:
+                    raise RuntimeError('clicking a visible command moved its highlighted row')
+                terminal.send(b'\x1b[A')
+                wait_selected('/exit')
+                if terminal.screen.command_palette_selected()[1] != profile_row[1] - 1:
+                    raise RuntimeError('Up moved the catalog viewport while its previous row was already visible')
+                terminal.send(b'\x1b[B' * 8)
+                wait_selected('/export-full markdown')
+                for columns, rows in [(160, 45), (80, 24), (60, 18), (20, 6), (110, 32)]:
+                    terminal.resize(columns, rows)
+                    wait_selected('/export-full markdown')
+                    geometry(23)
+                    if (columns, rows) == (160, 45):
+                        save_interactive_screen(terminal, 'wide-160x45')
+                    if (columns, rows) == (20, 6):
+                        save_interactive_screen(terminal, 'tiny-20x6')
+                save_interactive_screen(terminal, 'centered-110x32')
+                terminal.send(b'\r')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect() and
+                              terminal.editor_text() == '/export-full markdown', 'empty-draft scaffold insertion without export')
+                terminal.send('DRAFT_PATH')
+                terminal.wait(lambda: terminal.editor_text() == '/export-full markdown DRAFT_PATH', 'scaffold retained its parameter space')
+                no_initial_io('PLAN', '/export-full markdown DRAFT_PATH')
+                clear_draft()
+
+                open_palette()
+                code_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/mode code'))
+                terminal.click(code_row[0] + 4, code_row[1])
+                wait_selected('/mode code')
+                no_initial_io('PLAN', '')
+                terminal.wheel(code_row[0] + 4, code_row[1])
+                wait_selected('/mode work')
+                no_initial_io('PLAN', '')
+                rectangle = geometry(3)
+                terminal.click(rectangle[0] + rectangle[2] - 1, rectangle[1] + rectangle[3] - 1)
+                terminal.settle()
+                if not selected('/mode work'):
+                    raise RuntimeError('command modal border click changed the selection or closed the modal')
+                terminal.click(code_row[0] + 4, code_row[1])
+                wait_selected('/mode code')
+                terminal.send(b'\r')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect() and terminal.mode() == 'CODE',
+                              'Enter explicitly executed the mouse-selected command')
+                no_initial_io('CODE', '')
+                assert_mode_colors(terminal, 'CODE')
+
+                terminal.line('Prepare the background modal fixture')
+                terminal.until('PALETTE_BACKGROUND_DONE')
+                wait_idle(terminal, root)
+                if terminal.screen.command_palette_rect():
+                    raise RuntimeError('assistant text forged a command modal')
+                terminal.line('/tools')
+                terminal.resize(160, 45)
+                terminal.title()
+                terminal.wait(lambda: 'Tools · UI snapshot' in terminal.screen.details_text() and read[0] in terminal.screen.details_text(),
+                              'background tool details before the command modal')
+                terminal.settle()
+                details_before = terminal.screen.details_text()
+                details_left = terminal.screen.main_width() - 1 - min(48, max(32, (terminal.screen.main_width() - 2) // 3))
+                details_rows = [''.join(terminal.screen.cells[row][details_left:terminal.screen.main_width() - 1])
+                                for row in range(2, terminal.screen.status_row())]
+                folds_before = terminal.screen.fold_headers(details=True)
+                if not folds_before:
+                    raise RuntimeError('background fixture did not contain actual fold headers')
+                draft = 'keep draft 中文'
+                terminal.send(draft)
+                terminal.wait(lambda: terminal.editor_text() == draft, 'background ordinary draft')
+                open_palette()
+                rectangle = geometry(0)
+                for row, content in enumerate(details_rows, 2):
+                    if not rectangle[1] <= row < rectangle[1] + rectangle[3]:
+                        observed = ''.join(terminal.screen.cells[row][details_left:terminal.screen.main_width() - 1])
+                        if observed != content:
+                            raise RuntimeError('command modal replaced or reflowed visible background tool details')
+                header = folds_before[0]
+                if header[0] + 3 >= rectangle[0]:
+                    raise RuntimeError('background hit-test fixture did not place its fold header outside the modal')
+                terminal.click(header[0] + 3, header[1])
+                terminal.wheel(85, 3)
+                terminal.wheel(3, terminal.screen.rows - 3)
+                terminal.send(b'\x0f')
+                terminal.send('yn')
+                terminal.send('\x1b[200~IGNORED_BACKGROUND_PASTE\x1b[201~')
+                terminal.settle()
+                if not selected('/mode plan') or terminal.editor_text() != draft or len(fixture.requests) != 2:
+                    raise RuntimeError('modal input leaked into a background draft or execution')
+                terminal.send(b'\x10')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'Ctrl+P closed the modal')
+                terminal.settle()
+                if terminal.screen.details_text() != details_before or terminal.screen.fold_headers(details=True) != folds_before:
+                    raise RuntimeError('command modal mouse or keyboard input changed the background details or folds')
+                if terminal.editor_text() != draft:
+                    raise RuntimeError('closing the command modal discarded the preserved draft')
+                clear_draft()
+
+                terminal.line('/permissions manual')
+                terminal.wait(lambda: terminal.permissions() == 'Manual Approval', 'manual mode before modal approval isolation')
+                terminal.line('Request manual approval behind the modal')
+                terminal.wait(lambda: manual[0] in terminal.screen.details_text() and terminal.screen.status() == 'Awaiting approval',
+                              'pending approval behind the command modal')
+                terminal.settle()
+                approval_before = terminal.screen.details_text()
+                open_palette()
+                terminal.send('yn')
+                terminal.send(b'\t')
+                terminal.send('\x1b[200~IGNORED_APPROVAL_PASTE\x1b[201~')
+                terminal.settle()
+                if len(fixture.requests) != 3 or terminal.editor_text() != '' or terminal.screen.status() != 'Awaiting approval':
+                    raise RuntimeError('command modal approved, rejected or edited the pending tool response')
+                save_interactive_screen(terminal, 'over-approval-160x45')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: not terminal.screen.command_palette_rect() and manual[0] in terminal.screen.details_text(),
+                              'Esc restored the original pending approval')
+                terminal.settle()
+                if len(fixture.requests) != 3 or terminal.screen.details_text() != approval_before or terminal.screen.status() != 'Awaiting approval':
+                    raise RuntimeError('Esc closing a command modal changed its pending approval')
+                terminal.send('n')
+                terminal.until('PALETTE_APPROVAL_DONE')
+                wait_idle(terminal, root, count=2)
+                if len(fixture.requests) != 4 or terminal.mode() != 'CODE':
+                    raise RuntimeError('explicit approval rejection changed the mode or duplicated model requests')
+                open_palette()
                 terminal.finish()
             finally:
                 terminal.close()
@@ -2252,6 +2527,8 @@ def main():
     passed('todos-manual-plan-sidebar-and-restore')
     summary_tool_cards_journey(binary)
     passed('short-tool-summaries-failure-truncation-and-original-json')
+    command_palette_modal_journey(binary)
+    passed('centered-command-modal-navigation-mouse-and-approval-isolation')
     mode_change_invalidates_approval(binary)
     passed('mode-change-invalidates-write-approval')
     session_restore_and_export(binary)

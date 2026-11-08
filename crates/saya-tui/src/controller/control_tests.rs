@@ -125,13 +125,12 @@ async fn tab_with_a_draft_or_palette_does_not_cycle_the_work_mode() {
         assert_eq!(app.config.mode, WorkMode::Work);
     }
     app.state.editor.clear();
-    app.palette = Some(0);
-    app.show_palette();
+    app.state.command_palette = Some(0);
     app.key(key(KeyCode::Tab, KeyEventKind::Press))
         .await
         .unwrap();
     assert_eq!(app.config.mode, WorkMode::Work);
-    assert!(app.palette.is_some());
+    assert!(app.state.command_palette.is_some());
 }
 
 #[tokio::test]
@@ -291,16 +290,14 @@ async fn command_palette_fills_required_arguments_and_preserves_an_existing_mess
         .iter()
         .position(|command| command.text == "/resume ")
         .unwrap();
-    app.palette = Some(selected);
-    app.show_palette();
+    app.state.command_palette = Some(selected);
     app.key(key(KeyCode::Enter, KeyEventKind::Press))
         .await
         .unwrap();
     assert_eq!(app.state.editor.text(), "/resume ");
     assert!(app.ui_job.is_none());
     app.state.editor.set_text("草稿 🌸");
-    app.palette = Some(selected);
-    app.show_palette();
+    app.state.command_palette = Some(selected);
     app.key(key(KeyCode::Enter, KeyEventKind::Press))
         .await
         .unwrap();
@@ -310,7 +307,8 @@ async fn command_palette_fills_required_arguments_and_preserves_an_existing_mess
     app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL))
         .await
         .unwrap();
-    assert_eq!(app.state.details.as_ref().unwrap().title, "Commands");
+    assert_eq!(app.state.command_palette, Some(0));
+    assert!(app.state.details.is_none());
     assert!(!app.state.completion.visible());
     app.key(key(KeyCode::Enter, KeyEventKind::Press))
         .await

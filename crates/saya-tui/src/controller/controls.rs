@@ -85,10 +85,6 @@ impl App {
         Ok(())
     }
     pub(super) fn show_pending(&mut self) {
-        if self.palette.is_some() {
-            self.show_palette();
-            return;
-        }
         let Some(request) = &self.pending else { return };
         let (title, lines) = match request {
             Request::Approval(request, _) => (
@@ -199,26 +195,6 @@ impl App {
         }
         Ok(changed)
     }
-    pub(super) fn show_palette(&mut self) {
-        let selected = self.palette.unwrap_or(0);
-        self.state.set_details(Details {
-            title: "Commands".into(),
-            lines: COMMANDS
-                .iter()
-                .enumerate()
-                .map(|(i, command)| {
-                    format!(
-                        "{} {} · {}",
-                        if i == selected { "›" } else { " " },
-                        command.text,
-                        command.description
-                    )
-                })
-                .chain(std::iter::once("↑/↓ select · Enter run · Esc close".into()))
-                .collect(),
-        });
-        self.state.details_scroll = selected.saturating_sub(8);
-    }
     pub(super) async fn submit(&mut self) -> Result<bool> {
         let text = self.state.editor.text().to_owned();
         if text.starts_with('/') && !text.starts_with("//") {
@@ -230,15 +206,20 @@ impl App {
             self.notice("Wait for the pending mode change before answering the current request.");
             return Ok(false);
         }
-        if matches!(self.pending, Some(Request::Approval(..)))
+        let prompt_title = match &self.pending {
+            Some(Request::Approval(..)) => Some("Approval required"),
+            Some(Request::Input(..)) => Some("Question"),
+            None => None,
+        };
+        if let Some(title) = prompt_title
             && !self
                 .state
                 .details
                 .as_ref()
-                .is_some_and(|details| details.title == "Approval required")
+                .is_some_and(|details| details.title == title)
         {
             self.show_pending();
-            self.notice("Review the current approval details before deciding.");
+            self.notice("Review the current request details before replying.");
             return Ok(false);
         }
         if let Some(request) = self.pending.take() {
