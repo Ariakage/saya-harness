@@ -609,6 +609,94 @@ async fn malformed_todo_calls_return_paired_errors_and_allow_model_correction()
     Ok(())
 }
 
+#[tokio::test]
+async fn redaction_cannot_publish_an_invalid_successful_todo_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let secrets = vec![
+        "alpha-secret".into(),
+        "beta-secret".into(),
+        "x-token".into(),
+    ];
+    let collision = vec![
+        todo("alpha-secret", TodoStatus::Pending),
+        todo("beta-secret", TodoStatus::Pending),
+    ];
+    let long_content = vec![TodoItem {
+        id: "task".into(),
+        content: "x-token".repeat(70),
+        status: TodoStatus::Pending,
+    }];
+    let long_id = vec![todo(&"x-token".repeat(9), TodoStatus::Pending)];
+    for replacement in [collision, long_content, long_id] {
+        let root = tempfile::tempdir()?;
+        let data = tempfile::tempdir()?;
+        let mut session = fixture(root.path(), WorkMode::Plan);
+        let initial = vec![todo("old", TodoStatus::Pending)];
+        session.history.extend(pair("history", &initial));
+        let corrected = vec![todo("fixed", TodoStatus::Pending)];
+        let model = Arc::new(FakeModel::new(vec![
+            vec![HistoryItem::ToolCall(call("redacted", &replacement))],
+            vec![HistoryItem::ToolCall(call("corrected", &corrected))],
+            vec![HistoryItem::AssistantText("Ready".into())],
+        ]));
+        let store = Arc::new(SqliteStore::open(data.path(), secrets.clone())?);
+        let mut runtime = AgentRuntime::new(RuntimeSetup {
+            run: context(&session, PermissionMode::Auto).run,
+            model: model.clone(),
+            store: store.clone(),
+            policy: Arc::new(Policy::new(root.path(), PermissionConfig::default())?),
+            files: Arc::new(ReadTools::new(
+                root.path(),
+                &[],
+                false,
+                ReadLimits::default(),
+            )?),
+            cancellation: Arc::new(Cancel(false)),
+            review: ReviewConfig::new("fixture".into()),
+            exec: ExecConfig::default(),
+            preauthorizations: Preauthorizations::default(),
+            known_secrets: secrets.clone(),
+            summary: "Update task progress".into(),
+            confirmation: None,
+            limits: RuntimeLimits::default(),
+        })?;
+        assert_eq!(
+            runtime.run(&mut session).await?.status,
+            RunStatus::Completed
+        );
+        {
+            let requests = model.requests.lock().unwrap();
+            let rejected = requests[1]
+                .history
+                .iter()
+                .find_map(|item| match item {
+                    HistoryItem::ToolResult { call_id, result } if call_id == "redacted" => {
+                        Some(result)
+                    }
+                    _ => None,
+                })
+                .ok_or("paired rejection")?;
+            assert!(
+                !rejected.ok,
+                "invalid redacted task list must not report success"
+            );
+            assert_eq!(
+                rejected.error.as_ref().map(|error| error.code.as_str()),
+                Some("invalid_args")
+            );
+            assert_eq!(request_todos(&requests[1]), json!(initial));
+            assert_eq!(request_todos(&requests[2]), json!(corrected));
+        }
+        let saved = store
+            .load_session(session.id)
+            .await?
+            .ok_or("saved session")?;
+        assert_eq!(current_todos(&saved.history), corrected);
+        assert!(!serde_json::to_string(&saved)?.contains("x-token"));
+    }
+    Ok(())
+}
+
 struct FailResultStore(MemoryStore);
 impl Store for FailResultStore {
     fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {

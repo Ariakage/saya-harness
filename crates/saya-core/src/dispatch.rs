@@ -392,7 +392,7 @@ impl ToolDispatcher {
                         "todo update cancelled or approval is stale",
                     ))
                 };
-                let result = match &outcome {
+                let mut result = match &outcome {
                     Ok(result) => crate::redaction::tool_result(result, &self.known_secrets)?,
                     Err(error) => ToolResult {
                         ok: false,
@@ -401,6 +401,19 @@ impl ToolDispatcher {
                         truncated: false,
                     },
                 };
+                if result.ok && crate::tools::todo::result_todos(&result).is_none() {
+                    result = ToolResult {
+                        ok: false,
+                        data: None,
+                        error: Some(ErrorInfo {
+                            code: "invalid_args".into(),
+                            message:
+                                "todo list violates limits or unique IDs after credential redaction"
+                                    .into(),
+                        }),
+                        truncated: false,
+                    };
+                }
                 save_result(store.as_ref(), call, context, &result).await?;
                 outcome.map(|_| result)
             }
