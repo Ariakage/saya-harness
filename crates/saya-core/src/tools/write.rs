@@ -247,9 +247,21 @@ impl WriteTools {
         let new = patch
             .modified()
             .ok_or_else(|| err("invalid_patch", "missing modified filename"))?;
-        let old = old.strip_prefix("a/").unwrap_or(old);
-        let new = new.strip_prefix("b/").unwrap_or(new);
-        if old != new || Path::new(old) != path {
+        let normalized = |path: &Path| {
+            path.components()
+                .filter(|component| *component != Component::CurDir)
+                .collect::<PathBuf>()
+        };
+        let original_path = normalized(Path::new(old));
+        let modified_path = normalized(Path::new(new));
+        let (old, new) = match (
+            original_path.strip_prefix("a"),
+            modified_path.strip_prefix("b"),
+        ) {
+            (Ok(old), Ok(new)) => (old, new),
+            _ => (original_path.as_path(), modified_path.as_path()),
+        };
+        if old != new || old != normalized(path) {
             return Err(err(
                 "invalid_patch",
                 "patch paths must match the requested file",

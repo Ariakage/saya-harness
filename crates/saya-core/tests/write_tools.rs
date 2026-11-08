@@ -311,6 +311,132 @@ struct FailResult {
     inner: Arc<MemoryStore>,
 }
 
+#[tokio::test]
+async fn patch_labels_normalize_curdir_and_strip_only_paired_diff_prefixes()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (requested, old, new, allowed) in [
+        ("a/file.txt", "a/file.txt", "a/file.txt", true),
+        ("b/file.txt", "b/file.txt", "b/file.txt", true),
+        ("./file.txt", "a/file.txt", "b/file.txt", true),
+        ("file.txt", "./file.txt", "./file.txt", true),
+        ("./a/file.txt", "a/a/file.txt", "b/a/file.txt", true),
+        ("file.txt", "./a/file.txt", "./b/file.txt", true),
+        ("file.txt", "a/file.txt", "file.txt", false),
+        ("a/file.txt", "a/file.txt", "b/file.txt", false),
+        ("file.txt", "a/file.txt", "b/other.txt", false),
+        ("file.txt", "other/file.txt", "other/file.txt", false),
+    ] {
+        let temp = support::temp_workspace()?;
+        std::fs::create_dir_all(temp.path().join("a"))?;
+        std::fs::create_dir_all(temp.path().join("b"))?;
+        std::fs::write(temp.path().join(requested), "old\n")?;
+        let (session, run) = fixture(temp.path());
+        let files = Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?);
+        let version = files.read_file(Path::new(requested), 1, 10)?.version;
+        let tool = WriteTool::new(
+            files,
+            store_for(&session, &run).await?,
+            Arc::new(Gate {
+                count: AtomicUsize::new(0),
+                allowed_checks: usize::MAX,
+            }),
+            WriteToolKind::ApplyPatch,
+            DEFAULT_WRITE_MAX_BYTES,
+        );
+        let patch = format!("--- {old}\n+++ {new}\n@@ -1 +1 @@\n-old\n+new\n");
+        let result = tool
+            .execute(
+                &call(
+                    "apply_patch",
+                    "normalized-path",
+                    serde_json::json!({
+                        "path": requested, "patch": patch, "expected_version": version
+                    }),
+                ),
+                &ToolContext {
+                    run,
+                    workspace: temp.path().into(),
+                },
+                &NeverCancel,
+            )
+            .await?;
+        assert_eq!(
+            result.ok, allowed,
+            "requested {requested:?}, labels {old:?}/{new:?}, {:?}",
+            result.error
+        );
+        if !allowed {
+            assert_eq!(
+                result.error.as_ref().map(|error| error.code.as_str()),
+                Some("invalid_patch")
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join(requested))?,
+            if allowed { "new\n" } else { "old\n" }
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn small_patches_retain_the_configured_complete_write_limit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let original = format!("old\n{}", "x".repeat(DEFAULT_WRITE_MAX_BYTES));
+    std::fs::write(temp.path().join("file.txt"), &original)?;
+    let (session, run) = fixture(temp.path());
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let version = files.read_file(Path::new("file.txt"), 1, 1)?.version;
+    let tool = WriteTool::new(
+        files,
+        store_for(&session, &run).await?,
+        Arc::new(Gate {
+            count: AtomicUsize::new(0),
+            allowed_checks: usize::MAX,
+        }),
+        WriteToolKind::ApplyPatch,
+        DEFAULT_WRITE_MAX_BYTES,
+    );
+    let result = tool
+        .execute(
+            &call(
+                "apply_patch",
+                "bounded-result",
+                serde_json::json!({
+                    "path": "file.txt",
+                    "patch": "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                    "expected_version": version
+                }),
+            ),
+            &ToolContext {
+                run,
+                workspace: temp.path().into(),
+            },
+            &NeverCancel,
+        )
+        .await?;
+    assert_eq!(
+        result.error.as_ref().map(|error| error.code.as_str()),
+        Some("write_too_large")
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("file.txt"))?,
+        original
+    );
+    Ok(())
+}
+
 struct InspectWriteStore {
     inner: Arc<MemoryStore>,
     changes: Mutex<Vec<StoreChange>>,
