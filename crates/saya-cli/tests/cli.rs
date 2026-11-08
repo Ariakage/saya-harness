@@ -998,7 +998,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
         "你好\n\t🌸",
         "\u{1b}",
         "]52;c;Y2xpcGJvYXJk\u{7}",
-        "\u{9b}2J\r\u{202e}spoof\u{2069}",
+        "\u{9b}2J\r\u{202e}spoof\u{2069}\u{061c}\u{200e}\u{200f}",
     ];
     let text = pieces.concat();
     for stream in [false, true] {
@@ -1027,7 +1027,12 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
             let output = command(temp.path())
                 .arg("--config")
                 .arg(&cfg)
-                .args(["--output", output_mode, "run", "controls"])
+                .args([
+                    "--output",
+                    output_mode,
+                    "run",
+                    "controls\u{9d}title\u{200f}",
+                ])
                 .output()
                 .unwrap();
             assert!(
@@ -1036,7 +1041,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
                 String::from_utf8_lossy(&output.stderr)
             );
             if output_mode == "text" {
-                let expected = "你好\n\t🌸�]52;c;Y2xpcGJvYXJk��2J��spoof�\n";
+                let expected = "你好\n\t🌸�]52;c;Y2xpcGJvYXJk��2J��spoof����\n";
                 assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
             } else if output_mode == "json" {
                 let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -1068,6 +1073,19 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
                     .contains(&serde_json::to_string(&text).unwrap()),
                 "{value}"
             );
+            for args in [vec!["session", "list"], vec!["session", "show", id]] {
+                let output = command(temp.path())
+                    .arg("--config")
+                    .arg(&cfg)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success());
+                let displayed = String::from_utf8(output.stdout).unwrap();
+                assert!(displayed.chars().all(|c| {
+                    !(matches!(c, '\u{7f}'..='\u{9f}' | '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+                }), "{displayed:?}");
+            }
         }
     }
 }

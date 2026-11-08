@@ -148,22 +148,12 @@ fn response(
 
 pub async fn run(config: &Config, args: &ExportArgs) -> Result<u8, Box<dyn std::error::Error>> {
     let cancel = Arc::new(Cancel::new());
-    let signal = cancel.clone();
-    let outcome = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+    let outcome = match signals::CancellationListener::start(cancel.clone()) {
         Err(_) => Err(cli_error(
             "signal_error",
             "cannot install export cancellation handler",
         )),
-        Ok(mut interrupts) => {
-            let listener = tokio::spawn(async move {
-                if interrupts.recv().await.is_some() {
-                    signal.cancel();
-                }
-            });
-            let outcome = execute(config, args, cancel).await;
-            listener.abort();
-            outcome
-        }
+        Ok(_listener) => execute(config, args, cancel).await,
     };
     let outcome = outcome.map_err(|error| ErrorInfo {
         code: error.0.code,

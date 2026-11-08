@@ -111,6 +111,26 @@ struct Active {
     streamed: bool,
     cancelling: bool,
 }
+impl Active {
+    fn cancel(&mut self) {
+        self.cancel.cancel();
+        self.requests.close();
+    }
+    async fn shutdown(mut self) -> Result<(), BoundaryError> {
+        self.cancel();
+        let _ = (&mut self.join).await;
+        self.shutdown_joined().await
+    }
+    async fn shutdown_joined(mut self) -> Result<(), BoundaryError> {
+        self.cancel();
+        self.handle.shutdown_background().await
+    }
+}
+impl Drop for Active {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
 /// Returns true when a second interrupt must force the process to exit.
 fn interrupt_active(cancelling: &mut bool, cancel: &Cancel) -> bool {
     if *cancelling {
@@ -188,7 +208,7 @@ enum ProfileSelection {
 async fn choose_profile(
     config: &mut Config,
     console: &mut Console,
-    interrupts: &mut tokio::signal::unix::Signal,
+    interrupts: &mut signals::Signals,
 ) -> Result<ProfileSelection, Box<dyn std::error::Error>> {
     if config.profile.is_some() {
         return Ok(ProfileSelection::Selected);
@@ -290,7 +310,7 @@ pub async fn chat(
         .map(|name| config.secret(name).map(str::to_owned))
         .collect::<Result<Vec<_>, _>>()?;
     let mut console = Console::open(secrets).map_err(|_| "chat requires a controlling terminal")?;
-    let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut interrupts = signals::Signals::new()?;
     let prepared = if let Some(existing) = existing {
         config.profile = Some(existing.session.profile.clone());
         existing
@@ -314,127 +334,312 @@ pub async fn chat(
     let mut pending: Option<UiRequest> = None;
     let mut exit_after_run: Option<u8> = None;
     let mut terminal_open = true;
-    console.print("Saya chat (persistent session). Type /help for commands.\n> ")?;
-    loop {
-        enum Event {
-            Line(Option<Result<String, &'static str>>),
-            Request(Option<UiRequest>),
-            Finished(Result<(Result<RunResult, BoundaryError>, Session), tokio::task::JoinError>),
-            Interrupt(Option<()>),
-        }
-        let event = if let Some(run) = active.as_mut() {
-            tokio::select! { biased;
-                sig=interrupts.recv()=>Event::Interrupt(sig),
-                result=&mut run.join=>Event::Finished(result),
-                request=run.requests.recv(), if run.requests_open=>Event::Request(request),
-                line=console.lines.recv(), if terminal_open=>Event::Line(line),
+    let outcome = async {
+        console.print("Saya chat (persistent session). Type /help for commands.\n> ")?;
+        loop {
+            enum Event {
+                Line(Option<Result<String, &'static str>>),
+                Request(Option<UiRequest>),
+                Finished(Result<(Result<RunResult, BoundaryError>, Session), tokio::task::JoinError>),
+                Interrupt(Option<signals::Received>),
             }
-        } else {
-            tokio::select! { biased; sig=interrupts.recv()=>Event::Interrupt(sig), line=console.lines.recv()=>Event::Line(line) }
-        };
-        match event {
-            Event::Interrupt(result) => {
-                if result.is_none() {
-                    return Err("signal listener closed".into());
+            let event = if let Some(run) = active.as_mut() {
+                tokio::select! { biased;
+                    sig=interrupts.recv()=>Event::Interrupt(sig),
+                    result=&mut run.join=>Event::Finished(result),
+                    request=run.requests.recv(), if run.requests_open=>Event::Request(request),
+                    line=console.lines.recv(), if terminal_open=>Event::Line(line),
                 }
-                if let Some(run) = active.as_mut() {
-                    if interrupt_active(&mut run.cancelling, &run.cancel) {
-                        std::process::exit(130);
+            } else {
+                tokio::select! { biased; sig=interrupts.recv()=>Event::Interrupt(sig), line=console.lines.recv()=>Event::Line(line) }
+            };
+            match event {
+                Event::Interrupt(result) => {
+                    if result.is_none() {
+                        return Err("signal listener closed".into());
                     }
-                    pending = None;
-                    console.print("\nCancelling run...\n")?;
-                } else {
-                    console.print("\nInterrupted.\n")?;
-                    return Ok(130);
+                    if let Some(run) = active.as_mut() {
+                        if result == Some(signals::Received::Terminate) {
+                            exit_after_run = Some(130);
+                            run.cancelling = true;
+                            run.cancel.cancel();
+                        } else if interrupt_active(&mut run.cancelling, &run.cancel) {
+                            std::process::exit(130);
+                        }
+                        pending = None;
+                        console.print("\nCancelling run...\n")?;
+                    } else {
+                        console.print("\nInterrupted.\n")?;
+                        return Ok(130);
+                    }
                 }
-            }
-            Event::Finished(result) => {
-                let old = active.take().ok_or("missing active run")?;
-                let (outcome, finished) = match result {
-                    Ok(result) => result,
-                    Err(_) => {
-                        eprintln!("saya: run task failed");
-                        return Ok(1);
-                    }
-                };
-                pending = None;
-                match outcome {
-                    Ok(result) => {
-                        log_run_result(&config, &result);
-                        report_result(&result, &finished, old.streamed, &config);
-                    }
-                    Err(error) => {
-                        log_warning(
-                            &config,
-                            "error",
-                            "run.failed",
-                            serde_json::json!({"session_id":finished.id,"error":error.0}),
-                        );
-                        report_runtime_error(&error, &config);
-                        if error.0.code == "storage_error" || error.2.is_some() {
+                Event::Finished(result) => {
+                    let old = active.take().ok_or("missing active run")?;
+                    let (outcome, finished) = match result {
+                        Ok(result) => result,
+                        Err(_) => {
+                            old.shutdown_joined().await?;
+                            eprintln!("saya: run task failed");
                             return Ok(1);
                         }
+                    };
+                    pending = None;
+                    match outcome {
+                        Ok(result) => {
+                            log_run_result(&config, &result);
+                            report_result(&result, &finished, old.streamed, &config);
+                        }
+                        Err(error) => {
+                            log_warning(
+                                &config,
+                                "error",
+                                "run.failed",
+                                serde_json::json!({"session_id":finished.id,"error":error.0}),
+                            );
+                            report_runtime_error(&error, &config);
+                            if error.0.code == "storage_error" || error.2.is_some() {
+                                return Ok(1);
+                            }
+                        }
+                    }
+                    session = Some(finished);
+                    if let Some(code) = exit_after_run {
+                        if terminal_open {
+                            console.print("Goodbye.\n")?;
+                        }
+                        return Ok(code);
+                    }
+                    console.print("> ")?;
+                }
+                Event::Request(Some(request)) => {
+                    if terminal_open && pending.is_none() {
+                        show_prompt(&mut console, &request, &config)?;
+                        pending = Some(request);
+                    }
+                    // Concurrent requests are not expected; dropping the reply fails closed.
+                }
+                Event::Request(None) => {
+                    if let Some(run) = active.as_mut() {
+                        run.requests_open = false;
                     }
                 }
-                session = Some(finished);
-                if let Some(code) = exit_after_run {
-                    if terminal_open {
-                        console.print("Goodbye.\n")?;
+                Event::Line(None) => {
+                    if let Some(run) = active.as_mut() {
+                        terminal_open = false;
+                        run.cancelling = true;
+                        run.cancel.cancel();
+                        pending = None;
+                        exit_after_run = Some(0);
+                        continue;
                     }
-                    return Ok(code);
+                    return Ok(0);
                 }
-                console.print("> ")?;
-            }
-            Event::Request(Some(request)) => {
-                if terminal_open && pending.is_none() {
-                    show_prompt(&mut console, &request, &config)?;
-                    pending = Some(request);
+                Event::Line(Some(Err(error))) => {
+                    if let Some(run) = active.as_mut() {
+                        eprintln!("saya: {error}");
+                        terminal_open = false;
+                        run.cancelling = true;
+                        run.cancel.cancel();
+                        pending = None;
+                        exit_after_run = Some(1);
+                        continue;
+                    }
+                    return Err(error.into());
                 }
-                // Concurrent requests are not expected; dropping the reply fails closed.
-            }
-            Event::Request(None) => {
-                if let Some(run) = active.as_mut() {
-                    run.requests_open = false;
-                }
-            }
-            Event::Line(None) => {
-                if let Some(run) = active.as_mut() {
-                    terminal_open = false;
-                    run.cancelling = true;
-                    run.cancel.cancel();
-                    pending = None;
-                    exit_after_run = Some(0);
-                    continue;
-                }
-                return Ok(0);
-            }
-            Event::Line(Some(Err(error))) => {
-                if let Some(run) = active.as_mut() {
-                    eprintln!("saya: {error}");
-                    terminal_open = false;
-                    run.cancelling = true;
-                    run.cancel.cancel();
-                    pending = None;
-                    exit_after_run = Some(1);
-                    continue;
-                }
-                return Err(error.into());
-            }
-            Event::Line(Some(Ok(line))) => {
-                let escaped = line.starts_with("//");
-                let text = if escaped { line[1..].to_owned() } else { line };
-                if !escaped && text.starts_with('/') {
-                    let mut words = text.split_whitespace();
-                    let command = words.next().unwrap_or("");
-                    let arg = words.next();
-                    if words.next().is_some()
-                        || (arg.is_some()
-                            && matches!(
-                                command,
-                                "/help" | "/status" | "/cancel" | "/exit" | "/jobs"
-                            ))
-                    {
-                        console.print("Invalid command arguments.\n")?;
+                Event::Line(Some(Ok(line))) => {
+                    let escaped = line.starts_with("//");
+                    let text = if escaped { line[1..].to_owned() } else { line };
+                    if !escaped && text.starts_with('/') {
+                        let mut words = text.split_whitespace();
+                        let command = words.next().unwrap_or("");
+                        let arg = words.next();
+                        if words.next().is_some()
+                            || (arg.is_some()
+                                && matches!(
+                                    command,
+                                    "/help" | "/status" | "/cancel" | "/exit" | "/jobs"
+                                ))
+                        {
+                            console.print("Invalid command arguments.\n")?;
+                            if active.is_none() {
+                                console.print("> ")?;
+                            } else if let Some(request) = pending.as_ref() {
+                                show_prompt(&mut console, request, &config)?;
+                            }
+                            continue;
+                        }
+                        match command {
+                            "/help" => help(&mut console)?,
+                            "/exit" => {
+                                if let Some(run) = active.as_mut() {
+                                    run.cancelling = true;
+                                    run.cancel.cancel();
+                                    pending = None;
+                                    exit_after_run = Some(0);
+                                    console.print("Cancelling run...\n")?;
+                                } else {
+                                    console.print("Goodbye.\n")?;
+                                    return Ok(0);
+                                }
+                            }
+                            "/cancel" => {
+                                if let Some(run) = active.as_mut() {
+                                    run.cancelling = true;
+                                    run.cancel.cancel();
+                                    pending = None;
+                                    console.print("Cancelling run...\n")?;
+                                } else {
+                                    console.print("No active run.\n")?;
+                                }
+                            }
+                            "/jobs" => {
+                                if let Some(run) = active.as_ref() {
+                                    let mut count = 0usize;
+                                    for event in run.handle.background_events()? {
+                                        if let saya_core::background::BackgroundEventKind::Accepted {
+                                            tool,
+                                            ..
+                                        } = event.kind
+                                        {
+                                            count += 1;
+                                            let status = job_display(
+                                                run.handle.background_status(&event.job_id)?,
+                                                &config,
+                                            );
+                                            console.print(&format!(
+                                                "{} {} {}\n",
+                                                safe_terminal_text(&event.job_id),
+                                                safe_terminal_text(&tool),
+                                                status
+                                            ))?;
+                                        }
+                                    }
+                                    if count == 0 {
+                                        console.print("No background jobs.\n")?;
+                                    }
+                                } else {
+                                    console.print("No active run.\n")?;
+                                }
+                            }
+                            "/job" => {
+                                if let (Some(run), Some(id)) = (active.as_ref(), arg) {
+                                    console.print(&format!(
+                                        "{}\n",
+                                        job_display(run.handle.background_status(id)?, &config)
+                                    ))?;
+                                } else {
+                                    console.print("Usage: /job ID during an active run.\n")?;
+                                }
+                            }
+                            "/cancel-job" => {
+                                if let (Some(run), Some(id)) = (active.as_ref(), arg) {
+                                    match run.handle.background_status(id)? {
+                                        Some(saya_core::background::JobStatus::Running) => {
+                                            run.handle.cancel_background(id)?;
+                                            console.print("Background cancellation requested.\n")?;
+                                        }
+                                        Some(_) => {
+                                            console.print("Background job already finished.\n")?
+                                        }
+                                        None => console.print("Background job not found.\n")?,
+                                    }
+                                } else {
+                                    console.print("Usage: /cancel-job ID during an active run.\n")?;
+                                }
+                            }
+                            "/mode" => {
+                                if let Some(arg) = arg {
+                                    if let Some(mode) = work_mode(arg) {
+                                        if let Err(e) = session::check_roots(&config, &workspace, mode)
+                                        {
+                                            console.print(&format!(
+                                                "saya: {}\n> ",
+                                                safe_terminal_text(&e.to_string())
+                                            ))?;
+                                            continue;
+                                        }
+                                        if let Some(run) = active.as_ref() {
+                                            let before = run.handle.mode()?;
+                                            run.handle.request_mode(mode)?;
+                                            let after = run.handle.mode()?;
+                                            if after.revision != before.revision
+                                                || after.pending.is_some()
+                                            {
+                                                invalidate_approval(&mut pending);
+                                            }
+                                            console.print(&format!(
+                                                "Mode: {}{}\n",
+                                                display_mode(after.current),
+                                                after.pending.map_or(String::new(), |m| format!(
+                                                    "; pending {}",
+                                                    display_mode(m)
+                                                ))
+                                            ))?;
+                                        } else if let Some(current) = session.as_mut() {
+                                            current.work_mode = mode;
+                                            store
+                                                .commit(&[StoreChange::Session(current.clone())])
+                                                .await?;
+                                            console
+                                                .print(&format!("Mode: {}\n", display_mode(mode)))?;
+                                        }
+                                    } else {
+                                        console.print("Unknown mode.\n")?;
+                                    }
+                                } else if let Some(run) = active.as_ref() {
+                                    let snap = run.handle.mode()?;
+                                    console.print(&format!(
+                                        "Mode: {}{}\n",
+                                        display_mode(snap.current),
+                                        snap.pending.map_or(String::new(), |m| format!(
+                                            "; pending {}",
+                                            display_mode(m)
+                                        ))
+                                    ))?;
+                                } else if let Some(current) = session.as_ref() {
+                                    console.print(&format!(
+                                        "Mode: {}\n",
+                                        display_mode(current.work_mode)
+                                    ))?;
+                                }
+                            }
+                            "/permissions" => {
+                                if let Some(arg) = arg {
+                                    if active.is_some() {
+                                        console.print("Permissions can only change while idle.\n")?;
+                                    } else if let Some(value) = permission(arg) {
+                                        permissions = value;
+                                        console.print(&format!(
+                                            "Permissions: {}\n",
+                                            display_permission(value)
+                                        ))?;
+                                    } else {
+                                        console.print("Unknown permission mode.\n")?;
+                                    }
+                                } else {
+                                    console.print(&format!(
+                                        "Permissions: {}\n",
+                                        display_permission(permissions)
+                                    ))?;
+                                }
+                            }
+                            "/status" => {
+                                let (mode, pending_mode) = if let Some(run) = active.as_ref() {
+                                    let snap = run.handle.mode()?;
+                                    (snap.current, snap.pending)
+                                } else {
+                                    (session.as_ref().ok_or("session missing")?.work_mode, None)
+                                };
+                                console.print(&format!(
+                                    "Status: {}; mode: {}; pending: {}; permissions: {}\n",
+                                    if active.is_some() { "running" } else { "idle" },
+                                    display_mode(mode),
+                                    pending_mode.map_or("none", display_mode),
+                                    display_permission(permissions)
+                                ))?;
+                            }
+                            _ => console.print("Unknown command; use /help.\n")?,
+                        }
                         if active.is_none() {
                             console.print("> ")?;
                         } else if let Some(request) = pending.as_ref() {
@@ -442,250 +647,77 @@ pub async fn chat(
                         }
                         continue;
                     }
-                    match command {
-                        "/help" => help(&mut console)?,
-                        "/exit" => {
-                            if let Some(run) = active.as_mut() {
-                                run.cancelling = true;
-                                run.cancel.cancel();
-                                pending = None;
-                                exit_after_run = Some(0);
-                                console.print("Cancelling run...\n")?;
-                            } else {
-                                console.print("Goodbye.\n")?;
-                                return Ok(0);
-                            }
-                        }
-                        "/cancel" => {
-                            if let Some(run) = active.as_mut() {
-                                run.cancelling = true;
-                                run.cancel.cancel();
-                                pending = None;
-                                console.print("Cancelling run...\n")?;
-                            } else {
-                                console.print("No active run.\n")?;
-                            }
-                        }
-                        "/jobs" => {
-                            if let Some(run) = active.as_ref() {
-                                let mut count = 0usize;
-                                for event in run.handle.background_events()? {
-                                    if let saya_core::background::BackgroundEventKind::Accepted {
-                                        tool,
-                                        ..
-                                    } = event.kind
-                                    {
-                                        count += 1;
-                                        let status = job_display(
-                                            run.handle.background_status(&event.job_id)?,
-                                            &config,
-                                        );
-                                        console.print(&format!(
-                                            "{} {} {}\n",
-                                            safe_terminal_text(&event.job_id),
-                                            safe_terminal_text(&tool),
-                                            status
-                                        ))?;
-                                    }
-                                }
-                                if count == 0 {
-                                    console.print("No background jobs.\n")?;
-                                }
-                            } else {
-                                console.print("No active run.\n")?;
-                            }
-                        }
-                        "/job" => {
-                            if let (Some(run), Some(id)) = (active.as_ref(), arg) {
-                                console.print(&format!(
-                                    "{}\n",
-                                    job_display(run.handle.background_status(id)?, &config)
-                                ))?;
-                            } else {
-                                console.print("Usage: /job ID during an active run.\n")?;
-                            }
-                        }
-                        "/cancel-job" => {
-                            if let (Some(run), Some(id)) = (active.as_ref(), arg) {
-                                match run.handle.background_status(id)? {
-                                    Some(saya_core::background::JobStatus::Running) => {
-                                        run.handle.cancel_background(id)?;
-                                        console.print("Background cancellation requested.\n")?;
-                                    }
-                                    Some(_) => {
-                                        console.print("Background job already finished.\n")?
-                                    }
-                                    None => console.print("Background job not found.\n")?,
-                                }
-                            } else {
-                                console.print("Usage: /cancel-job ID during an active run.\n")?;
-                            }
-                        }
-                        "/mode" => {
-                            if let Some(arg) = arg {
-                                if let Some(mode) = work_mode(arg) {
-                                    if let Err(e) = session::check_roots(&config, &workspace, mode)
-                                    {
-                                        console.print(&format!(
-                                            "saya: {}\n> ",
-                                            safe_terminal_text(&e.to_string())
-                                        ))?;
-                                        continue;
-                                    }
-                                    if let Some(run) = active.as_ref() {
-                                        let before = run.handle.mode()?;
-                                        run.handle.request_mode(mode)?;
-                                        let after = run.handle.mode()?;
-                                        if after.revision != before.revision
-                                            || after.pending.is_some()
-                                        {
-                                            invalidate_approval(&mut pending);
-                                        }
-                                        console.print(&format!(
-                                            "Mode: {}{}\n",
-                                            display_mode(after.current),
-                                            after.pending.map_or(String::new(), |m| format!(
-                                                "; pending {}",
-                                                display_mode(m)
-                                            ))
-                                        ))?;
-                                    } else if let Some(current) = session.as_mut() {
-                                        current.work_mode = mode;
-                                        store
-                                            .commit(&[StoreChange::Session(current.clone())])
-                                            .await?;
-                                        console
-                                            .print(&format!("Mode: {}\n", display_mode(mode)))?;
-                                    }
-                                } else {
-                                    console.print("Unknown mode.\n")?;
-                                }
-                            } else if let Some(run) = active.as_ref() {
-                                let snap = run.handle.mode()?;
-                                console.print(&format!(
-                                    "Mode: {}{}\n",
-                                    display_mode(snap.current),
-                                    snap.pending.map_or(String::new(), |m| format!(
-                                        "; pending {}",
-                                        display_mode(m)
-                                    ))
-                                ))?;
-                            } else if let Some(current) = session.as_ref() {
-                                console.print(&format!(
-                                    "Mode: {}\n",
-                                    display_mode(current.work_mode)
-                                ))?;
-                            }
-                        }
-                        "/permissions" => {
-                            if let Some(arg) = arg {
-                                if active.is_some() {
-                                    console.print("Permissions can only change while idle.\n")?;
-                                } else if let Some(value) = permission(arg) {
-                                    permissions = value;
-                                    console.print(&format!(
-                                        "Permissions: {}\n",
-                                        display_permission(value)
-                                    ))?;
-                                } else {
-                                    console.print("Unknown permission mode.\n")?;
-                                }
-                            } else {
-                                console.print(&format!(
-                                    "Permissions: {}\n",
-                                    display_permission(permissions)
-                                ))?;
-                            }
-                        }
-                        "/status" => {
-                            let (mode, pending_mode) = if let Some(run) = active.as_ref() {
-                                let snap = run.handle.mode()?;
-                                (snap.current, snap.pending)
-                            } else {
-                                (session.as_ref().ok_or("session missing")?.work_mode, None)
-                            };
-                            console.print(&format!(
-                                "Status: {}; mode: {}; pending: {}; permissions: {}\n",
-                                if active.is_some() { "running" } else { "idle" },
-                                display_mode(mode),
-                                pending_mode.map_or("none", display_mode),
-                                display_permission(permissions)
-                            ))?;
-                        }
-                        _ => console.print("Unknown command; use /help.\n")?,
-                    }
-                    if active.is_none() {
-                        console.print("> ")?;
-                    } else if let Some(request) = pending.as_ref() {
-                        show_prompt(&mut console, request, &config)?;
-                    }
-                    continue;
-                }
-                if let Some(request) = pending.take() {
-                    answer_pending(request, text);
-                    continue;
-                }
-                if active.is_some() {
-                    console.print("Run in progress; use /status, /mode or /cancel.\n")?;
-                    continue;
-                }
-                if text.trim().is_empty() {
-                    console.print("> ")?;
-                    continue;
-                }
-                let mut current = session.take().ok_or("session missing")?;
-                let item = HistoryItem::UserText(text.clone());
-                store
-                    .commit(&[StoreChange::History {
-                        session_id: current.id,
-                        item: item.clone(),
-                    }])
-                    .await?;
-                current = store
-                    .load_session(current.id)
-                    .await?
-                    .ok_or("session not found")?;
-                let cancel = Arc::new(Cancel::new());
-                let (ui, requests_rx) = input_channel(16)?;
-                let launch = Launch {
-                    permissions,
-                    store: store.clone(),
-                    cancellation: cancel.clone(),
-                    confirmation: Some(ui.clone()),
-                    input: Some(ui.clone()),
-                    approvals: Preauthorizations::default(),
-                    personal_context: personal_context.clone(),
-                    anthropic_prompt_cache,
-                    events: None,
-                    run_id: None,
-                };
-                let (mut runtime, streamed) = match build_runtime(&config, &current, &text, launch)
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        console
-                            .print(&format!("saya: {}\n> ", safe_terminal_text(&e.to_string())))?;
-                        session = Some(current);
+                    if let Some(request) = pending.take() {
+                        answer_pending(request, text);
                         continue;
                     }
-                };
-                let handle = runtime.handle();
-                let join = tokio::spawn(async move {
-                    let result = runtime.run(&mut current).await;
-                    (result, current)
-                });
-                active = Some(Active {
-                    handle,
-                    cancel,
-                    join,
-                    requests: requests_rx,
-                    requests_open: true,
-                    streamed,
-                    cancelling: false,
-                });
+                    if active.is_some() {
+                        console.print("Run in progress; use /status, /mode or /cancel.\n")?;
+                        continue;
+                    }
+                    if text.trim().is_empty() {
+                        console.print("> ")?;
+                        continue;
+                    }
+                    let mut current = session.take().ok_or("session missing")?;
+                    let item = HistoryItem::UserText(text.clone());
+                    store
+                        .commit(&[StoreChange::History {
+                            session_id: current.id,
+                            item: item.clone(),
+                        }])
+                        .await?;
+                    current = store
+                        .load_session(current.id)
+                        .await?
+                        .ok_or("session not found")?;
+                    let cancel = Arc::new(Cancel::new());
+                    let (ui, requests_rx) = input_channel(16)?;
+                    let launch = Launch {
+                        permissions,
+                        store: store.clone(),
+                        cancellation: cancel.clone(),
+                        confirmation: Some(ui.clone()),
+                        input: Some(ui.clone()),
+                        approvals: Preauthorizations::default(),
+                        personal_context: personal_context.clone(),
+                        anthropic_prompt_cache,
+                        events: None,
+                        run_id: None,
+                    };
+                    let (mut runtime, streamed) = match build_runtime(&config, &current, &text, launch)
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            console
+                                .print(&format!("saya: {}\n> ", safe_terminal_text(&e.to_string())))?;
+                            session = Some(current);
+                            continue;
+                        }
+                    };
+                    let handle = runtime.handle();
+                    let join = tokio::spawn(async move {
+                        let result = runtime.run(&mut current).await;
+                        (result, current)
+                    });
+                    active = Some(Active {
+                        handle,
+                        cancel,
+                        join,
+                        requests: requests_rx,
+                        requests_open: true,
+                        streamed,
+                        cancelling: false,
+                    });
+                }
             }
         }
+    }.await;
+    pending.take();
+    if let Some(run) = active.take() {
+        run.shutdown().await?;
     }
+    outcome
 }
 
 #[cfg(test)]
@@ -698,5 +730,89 @@ mod tests {
         assert!(!interrupt_active(&mut cancelling, &cancel));
         assert!(cancel.is_cancelled());
         assert!(interrupt_active(&mut cancelling, &cancel));
+    }
+
+    #[tokio::test]
+    async fn exceptional_cleanup_awaits_the_task_before_releasing_the_session_lock() {
+        for panic in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("config.toml");
+            std::fs::write(&path, "schema_version=1\n[defaults]\nprofile='fixture'\n[profiles.fixture]\nprotocol='openai-chat-completions'\nbase_url='http://127.0.0.1:1/v1'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=128000\n").unwrap();
+            let config = config::load(
+                Overrides {
+                    config: Some(path),
+                    ..Default::default()
+                },
+                Environment::from_pairs([("HOME".into(), root.path().as_os_str().into())]),
+                root.path(),
+            )
+            .unwrap();
+            let prepared = session::create(&config, new_session(&config).unwrap())
+                .await
+                .unwrap();
+            let cancel = Arc::new(Cancel::new());
+            let (runtime, _) = build_runtime(
+                &config,
+                &prepared.session,
+                "fixture",
+                Launch {
+                    permissions: PermissionMode::Auto,
+                    store: prepared.store.clone(),
+                    cancellation: cancel.clone(),
+                    confirmation: None,
+                    input: None,
+                    approvals: Preauthorizations::default(),
+                    personal_context: PersonalContext::default(),
+                    anthropic_prompt_cache: false,
+                    events: None,
+                    run_id: None,
+                },
+            )
+            .unwrap();
+            let handle = runtime.handle();
+            let current = prepared.session.clone();
+            let data = config.data_dir.clone();
+            let task_cancel = cancel.clone();
+            let completed = Arc::new(AtomicBool::new(false));
+            let task_completed = completed.clone();
+            let join = tokio::spawn(async move {
+                if panic {
+                    panic!("controlled task failure");
+                }
+                task_cancel.cancelled().await;
+                tokio::task::yield_now().await;
+                assert_eq!(
+                    saya_core::sqlite::SqliteStore::lock_existing(&data, current.id)
+                        .err()
+                        .unwrap()
+                        .0
+                        .code,
+                    "session_busy"
+                );
+                task_completed.store(true, Ordering::Release);
+                (Err(cli_error("fixture", "controlled failure")), current)
+            });
+            let (_, requests) = mpsc::channel(1);
+            let mut active = Active {
+                handle,
+                cancel: cancel.clone(),
+                join,
+                requests,
+                requests_open: true,
+                streamed: false,
+                cancelling: false,
+            };
+            if panic {
+                assert!((&mut active.join).await.is_err());
+                active.shutdown_joined().await.unwrap();
+            } else {
+                active.shutdown().await.unwrap();
+                assert!(completed.load(Ordering::Acquire));
+            }
+            assert!(cancel.is_cancelled());
+            let id = prepared.session.id;
+            drop(prepared);
+            assert!(saya_core::sqlite::SqliteStore::lock_existing(&config.data_dir, id).is_ok());
+        }
     }
 }

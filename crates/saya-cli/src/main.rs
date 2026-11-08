@@ -2,6 +2,7 @@ mod chat;
 mod events;
 mod export;
 mod logs;
+mod signals;
 use saya_app::{new_session, session};
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
@@ -258,7 +259,7 @@ fn safe_terminal_text(s: &str) -> String {
     s.chars()
         .map(|c| {
             if (c.is_control() && c != '\n' && c != '\t')
-                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
             {
                 '\u{fffd}'
             } else {
@@ -728,16 +729,7 @@ async fn run(
         Preauthorizations::default()
     };
     let cancel = Arc::new(Cancel::new());
-    let signal = cancel.clone();
-    let mut interrupts = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    tokio::spawn(async move {
-        if interrupts.recv().await.is_some() {
-            signal.cancel();
-            if interrupts.recv().await.is_some() {
-                std::process::exit(130);
-            }
-        }
-    });
+    let _signals = signals::CancellationListener::start(cancel.clone())?;
     let confirmation = terminal
         .as_ref()
         .map(|t| t.clone() as Arc<dyn ApprovalHandler>);
@@ -908,7 +900,10 @@ async fn query_sessions(
         .collect::<Result<Vec<_>, _>>()?;
     saya_core::redaction::redact(&mut data, &secrets)?;
     match config.output {
-        Output::Text => println!("{}", serde_json::to_string_pretty(&data)?),
+        Output::Text => println!(
+            "{}",
+            safe_terminal_text(&serde_json::to_string_pretty(&data)?)
+        ),
         Output::Json => println!("{}", serde_json::json!({"schema_version":1,"data":data})),
         Output::Jsonl => return Err("session queries support text or JSON output".into()),
     }
