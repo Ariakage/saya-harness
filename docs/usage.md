@@ -83,7 +83,7 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 
 ## 项目上下文、持久化与用量
 
-Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工作区同名项优先；加载范围及信任边界见[项目上下文](project-context.md)。`--preferences-file PATH`、`--memory-file PATH` 可显式提供本次调用的 UTF-8 偏好和记忆文本，各限 64 KiB；内容会发送给模型，不会自动发现或作为持久记忆维护。文件含当前配置的已知凭据时，在模型请求前拒绝，检测包括嵌套 JSON 转义与 Unicode 转义，并沿用共享检测的失败关闭边界。
+Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工作区同名项优先；加载范围及信任边界见[项目上下文](project-context.md)。`--preferences-file PATH`、`--memory-file PATH` 可显式提供本次调用的 UTF-8 偏好和记忆文本，各限 64 KiB；内容会发送给模型，不会自动发现或作为持久记忆维护。文件含当前配置的已知凭据时，在模型请求前拒绝，检测包括完整 JSON、Markdown 围栏和普通正文中的嵌套 JSON 转义与 Unicode 转义。检测视图最多解码256层，累计扫描上限64 MiB，超限沿用失败关闭边界。通过检测的个人文本按原文发送给模型。
 
 会话数据库默认在 `$XDG_DATA_HOME/saya/sessions.sqlite3`，未设置时在 `~/.local/share/saya/sessions.sqlite3`；`--data-dir` 可选择数据目录。警告和错误日志默认在 `$XDG_STATE_HOME/saya/saya.log` 或 `~/.local/state/saya/saya.log`，按 10 MiB 轮转并保留 5 个备份。PLAN 要求数据、状态及缓存目录不落在工作区内；相关 XDG 变量须为绝对路径。[存储说明](storage.md)介绍锁、WAL、迁移备份与故障恢复。
 

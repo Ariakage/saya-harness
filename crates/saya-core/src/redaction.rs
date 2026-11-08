@@ -99,7 +99,36 @@ fn contains_raw(text: &str, secrets: &[String]) -> bool {
         .flat_map(|secret| variants(secret, text.len()))
         .any(|candidate| text.contains(&candidate))
 }
-/// Detect known values in text and nested JSON. Unsafe nesting is sensitive.
+
+// Decode a detection-only view, including JSON escapes embedded in prose.
+// A JSON escape occupies two bytes, six bytes, or a twelve-byte surrogate pair.
+fn decode_text_escapes(text: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(text.len());
+    let mut remaining = text;
+    let mut changed = false;
+    while let Some(offset) = remaining.find('\\') {
+        decoded.push_str(&remaining[..offset]);
+        remaining = &remaining[offset..];
+        let escape = [2, 6, 12].into_iter().find_map(|length| {
+            let fragment = remaining.get(..length)?;
+            let value = serde_json::from_str::<String>(&format!("\"{fragment}\"")).ok()?;
+            Some((length, value))
+        });
+        if let Some((length, value)) = escape {
+            decoded.push_str(&value);
+            remaining = &remaining[length..];
+            changed = true;
+        } else {
+            decoded.push('\\');
+            remaining = &remaining[1..];
+        }
+    }
+    decoded.push_str(remaining);
+    changed.then_some(decoded)
+}
+
+/// Detect known values in text and nested JSON, including escapes in prose.
+/// Inspection preserves supplied text and fails closed on nesting or scan limits.
 pub fn contains_secret(text: &str, secrets: &[String]) -> bool {
     if secrets.iter().all(String::is_empty) {
         return false;
@@ -108,9 +137,28 @@ pub fn contains_secret(text: &str, secrets: &[String]) -> bool {
         return true;
     }
     let mut value = Value::String(text.to_owned());
-    redact_inner(&mut value, secrets, 0).unwrap_or(true)
+    if redact_inner(&mut value, secrets, 0).unwrap_or(true) {
+        return true;
+    }
+    let mut current = text.to_owned();
+    let mut remaining_scan = MAX_ESCAPE_SCAN_BYTES;
+    for _ in 0..MAX_REDACTION_DEPTH {
+        let Some(remaining) = remaining_scan.checked_sub(current.len()) else {
+            return true;
+        };
+        remaining_scan = remaining;
+        let Some(decoded) = decode_text_escapes(&current) else {
+            return false;
+        };
+        if contains_raw(&decoded, secrets) {
+            return true;
+        }
+        current = decoded;
+    }
+    current.len() > remaining_scan || decode_text_escapes(&current).is_some()
 }
 const MAX_REDACTION_DEPTH: usize = 256;
+const MAX_ESCAPE_SCAN_BYTES: usize = 64 * 1024 * 1024;
 // Called only for validated JSON. Sorting permits object key reordering while
 // retaining every numeric literal, including its original precision.
 fn number_literals(text: &str) -> Vec<&str> {
@@ -317,5 +365,51 @@ mod tests {
         assert_eq!(precise["a"], 1);
         assert_eq!(precise["z"], 2.5);
         assert_eq!(precise["token"], "[REDACTED]");
+    }
+
+    #[test]
+    fn detects_json_escapes_embedded_in_prose_and_markdown() {
+        for (secret, payload) in [
+            (
+                "fixture\"secret\\tail",
+                r#"{"token":"fixture\u0022secret\u005ctail"}"#,
+            ),
+            ("a🌸z", r#"{"token":"a\uD83C\uDF38z"}"#),
+            ("fixture/secret\ttail\n", r#"fi\u0078ture\/secret\ttail\n"#),
+        ] {
+            let known = [secret.to_owned()];
+            let mut encoded = payload.to_owned();
+            for _ in 0..4 {
+                for wrapped in [
+                    format!("# Memory\n\n```json\n{encoded}\n```\n"),
+                    format!("Saved example: {encoded}\nEnd of note."),
+                    format!("\\q {encoded} \\uD83C tail"),
+                ] {
+                    assert!(contains_secret(&wrapped, &known));
+                }
+                encoded = serde_json::to_string(&encoded).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn escaped_prose_detection_is_bounded_and_preserves_safe_documents() {
+        let known = ["fixture-secret".to_owned()];
+        let safe = "# Memory\n```json\n{\"emoji\":\"\\uD83C\\uDF38\",\"n\":18446744073709551617}\n```\n\\q \\uD83C \\uZZZZ 路径\\notes";
+        assert!(!contains_secret(safe, &known));
+        let mut value = Value::String(safe.to_owned());
+        redact(&mut value, &known).unwrap();
+        assert_eq!(value, Value::String(safe.to_owned()));
+        let deep = format!("Note: \\{}u0061", "u005c".repeat(MAX_REDACTION_DEPTH + 1));
+        assert!(contains_secret(&deep, &known));
+        assert!(!contains_secret(&deep, &[]));
+        let at_limit = format!("Note: \\{}u0061", "u005c".repeat(MAX_REDACTION_DEPTH - 1));
+        assert!(!contains_secret(&at_limit, &known));
+        let padded = format!(
+            "Note: \\{}u0061\n{}",
+            "u005c".repeat(64),
+            "x".repeat(MAX_ESCAPE_SCAN_BYTES / 32)
+        );
+        assert!(contains_secret(&padded, &known));
     }
 }

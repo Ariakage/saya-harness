@@ -528,8 +528,25 @@ fn encoded_credentials_in_personal_files_are_rejected_before_network_requests() 
             .map(|c| format!("\\u{:04x}", c as u32))
             .collect::<String>()
     );
+    let mixed = r#"{"value":"fi\u0078ture\"se\u0063ret\\tail"}"#;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(mixed).unwrap()["value"],
+        secret
+    );
+    let markdown = format!("# PERSONAL_CONTEXT_SENTINEL\n\n```json\n{unicode}\n```\n");
+    let prose =
+        format!("PERSONAL_CONTEXT_SENTINEL before the example.\n{mixed}\nAfter the example.");
+    let nested = json!({"record": unicode}).to_string();
+    let nested_markdown =
+        format!("Notes PERSONAL_CONTEXT_SENTINEL\n\n```json\n{nested}\n```\nEnd of notes.\n");
     for flag in ["--memory-file", "--preferences-file"] {
-        for contents in [&canonical, &unicode] {
+        for (case, contents) in [
+            ("canonical JSON", canonical.as_str()),
+            ("Unicode JSON", unicode.as_str()),
+            ("Markdown Unicode JSON", markdown.as_str()),
+            ("prose mixed escapes", prose.as_str()),
+            ("Markdown nested JSON", nested_markdown.as_str()),
+        ] {
             let temp = TempDir::new().unwrap();
             let file = temp.path().join("personal.txt");
             fs::write(&file, contents).unwrap();
@@ -553,16 +570,89 @@ fn encoded_credentials_in_personal_files_are_rejected_before_network_requests() 
                 .args(["run", "hello"])
                 .output()
                 .unwrap();
-            assert_eq!(result.status.code(), Some(2));
+            assert_eq!(result.status.code(), Some(2), "{flag}: {case}");
             assert!(
-                String::from_utf8_lossy(&result.stderr).contains("contains a configured secret")
+                result.stdout.is_empty(),
+                "rejected personal context was echoed on stdout"
             );
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert!(
+                stderr.contains("contains a configured secret"),
+                "{flag}: {case}"
+            );
+            assert!(!stderr.contains(secret));
+            assert!(!stderr.contains(contents));
+            assert!(!stderr.contains("PERSONAL_CONTEXT_SENTINEL"));
             assert!(
                 requests.try_recv().is_err(),
                 "personal credential reached the execution model"
             );
         }
     }
+}
+
+#[test]
+fn nonsensitive_personal_markdown_reaches_the_model_unchanged() {
+    let temp = TempDir::new().unwrap();
+    let preferences = temp.path().join("preferences.md");
+    let memory = temp.path().join("memory.md");
+    let preferences_text = r#"# Preferences
+
+- Keep `\u0041` literal in examples.
+- Preserve Windows paths such as `C:\work\notes.md`.
+"#;
+    let memory_text = r#"# Memory
+
+普通说明和 JSON 示例保持原样。
+
+```json
+{"value":"fi\u0078ture-safe","nested":"{\"note\":\"ordinary content\"}"}
+```
+"#;
+    fs::write(&preferences, preferences_text).unwrap();
+    fs::write(&memory, memory_text).unwrap();
+    let (url, requests) = fixture::server(vec![(
+        "application/json",
+        response(json!({"role":"assistant","content":"accepted"}), "stop"),
+    )])
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto");
+    let source = fs::read_to_string(&cfg).unwrap().replace(
+        "auth = \"none\"",
+        "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
+    );
+    fs::write(&cfg, source).unwrap();
+    let result = command(temp.path())
+        .env("TEST_KEY", "fixture\"secret\\tail")
+        .arg("--config")
+        .arg(cfg)
+        .arg("--preferences-file")
+        .arg(preferences)
+        .arg("--memory-file")
+        .arg(memory)
+        .args(["run", "hello"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let personal = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .filter_map(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .find_map(|context| context.get("saya_personal_context_v1").cloned())
+        .expect("personal context in the normal model request");
+    assert_eq!(personal["preferences"], preferences_text);
+    assert_eq!(personal["memory"], memory_text);
+    assert!(
+        requests.try_recv().is_err(),
+        "personal context validation retried the model"
+    );
 }
 
 #[test]
