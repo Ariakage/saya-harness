@@ -967,3 +967,9 @@ CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提�
 固定优化程序绑定源码 `2018520`，SHA-256为 `11124d6347811eda03e27bcbe57f728e7067311c34ecc17dc8a7e56daca80b37`。三协议34条CLI、15条PTY、8项实际原生插件、19项原生隔离、完整性能v2、25项MCP／OAuth、5项历史审查及26条历史PTY均通过。CLI的105组工具意图／结果精确配对，0未完成意图；3次Manual Approval等待保留真实审批记录。
 
 新增同Session长输出→引用检索→Compact→插件Skill续接→原引用回取联合链，通过实际wire核对用户约束、原始历史、Skill注入生命周期和租约收尾。真实deepseek-flash三协议基础冒烟6项亦通过。证据位于 `target/n3/final-local-3/`，程序与源码清单前后身份一致。当前主机为macOS27.2 ARM，N3四平台验收继续按[逐项记录](n3-validation.md#dev-068-最终本机联合验收)推进。
+
+### DEV-089 记忆与旧检查点恢复的本机验收
+
+同一固定优化程序在三协议可控模型中各完成9条记忆／权限CLI旅程，并完成15条真实PTY管理与Compact旅程。真实deepseek-flash三协议另各完成实际记忆写入、Compact和恢复后的PLAN读取，共9阶段，报告为 `target/n3/final-local-3/live-memory-report.json`。验收同时要求成功工具记录、实际落盘、摘要请求与原始历史保全。
+
+真实旧优化程序生成的v1检查点通过三协议迁移到新v2程序。旧检查点由当前宿主身份检查退出请求投影，原始User约束与工具历史保留，正常新调用成功且无重放／unknown。报告位于 `target/n3/final-local-3/migration-2/report.json`，两端程序执行前后哈希一致。最初短历史夹具的拒绝及debug模型未写入案例保留原报告，最终验收各自使用独立证据。16项N3任务当前完成本机固定候选验证，四平台实际运行待执行。
