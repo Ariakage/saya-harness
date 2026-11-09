@@ -337,8 +337,30 @@ impl Terminal {
         cancel: &dyn Cancellation,
     ) -> Result<Option<String>, BoundaryError> {
         let mut tty = self.file.lock().await;
-        write!(tty, "{}", redacted_text(prompt, &self.secrets))
-            .map_err(|_| cli_error("terminal_error", "cannot write to controlling terminal"))?;
+        let prompt = redacted_text(prompt, &self.secrets);
+        let mut written = 0;
+        while written < prompt.len() {
+            if cancel.is_cancelled() {
+                return Ok(None);
+            }
+            match tty.write(&prompt.as_bytes()[written..]) {
+                Ok(0) => return Err(cli_error("terminal_error", "controlling terminal closed")),
+                Ok(count) => written += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::select! { biased;
+                        _ = cancel.cancelled() => return Ok(None),
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {}
+                    }
+                }
+                Err(_) => {
+                    return Err(cli_error(
+                        "terminal_error",
+                        "cannot write to controlling terminal",
+                    ));
+                }
+            }
+        }
         let mut input = tty
             .try_clone()
             .map_err(|_| cli_error("terminal_error", "cannot read controlling terminal"))?;
@@ -1284,6 +1306,60 @@ async fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod report_tests {
     use super::*;
+    #[tokio::test]
+    async fn approval_prompt_backpressure_remains_cancellable() {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let mut master = -1;
+        let mut slave = -1;
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        let _master = unsafe { std::fs::File::from_raw_fd(master) };
+        let mut output = unsafe { std::fs::File::from_raw_fd(slave) };
+        let flags = unsafe { libc::fcntl(output.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(output.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        loop {
+            match output.write(&[b'x'; 8192]) {
+                Ok(count) => assert!(count > 0),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => panic!("PTY fixture failed: {error}"),
+            }
+        }
+        let terminal = Terminal {
+            file: tokio::sync::Mutex::new(output),
+            secrets: Vec::new(),
+        };
+        let cancel = Arc::new(Cancel::new());
+        let signal = cancel.clone();
+        let stop = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            signal.cancel();
+        });
+        let answer = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            terminal.read_line(&"Long approval prompt ".repeat(4096), cancel.as_ref()),
+        )
+        .await
+        .expect("terminal write must yield to cancellation")
+        .expect("backpressure is not an I/O failure");
+        assert!(answer.is_none());
+        stop.await.unwrap();
+    }
+
     #[test]
     fn tui_preview_command_follows_the_build_profile_gate() {
         #[cfg(debug_assertions)]

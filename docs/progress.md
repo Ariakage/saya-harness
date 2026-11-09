@@ -24,6 +24,10 @@ DEV-075采用Tree-sitter0.27.1／Bash0.25.1，直接argv保持字面含义，显
 
 每Run受控HTTP／CONNECT broker、双栈监听器占有、DNS固定与有界解析／转发通过18项组件回归，原生组件快照完成823项Rust测试及完整门禁。macOS已收紧代理TCP与宿主进程信息边界并验证标准根symlink解析。Linux原生CI发现Tokio信号驱动的匿名stream pair被Seccomp阻止，已完成精确放行与防重定向候选，实际Linux复验继续进行。记录见[N2验收](n2-validation.md)。
 
+### 人工审批终端背压
+
+MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／WouldBlock失败。终端写入现保留offset，遇背压让出执行并响应取消。独立PTY填满夹具在旧实现返回terminal_error，修复后七项CLI bin测试与全测试目标严格Clippy通过，证据为 `target/n2/approval-backpressure-{before,after}.log`。正常MCP长审批随后在固定debug程序完成两次人工批准并通过任务。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。
