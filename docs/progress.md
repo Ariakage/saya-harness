@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## Just 开发入口
+
+2026-11-09，根目录新增 `justfile`，提供13个开发任务，包含默认任务列表、完整检查、格式、Clippy、测试、开发／优化构建、CLI运行、debug预览、离线快照、Python工具回归及显式程序smoke。`just check`复用已有 `scripts/check.sh`。构建默认使用macOS15.0部署目标和line-tables-only开发调试信息，显式环境设置优先。Agent约定与[开发指南](development.md#just-开发入口)同步采用Just入口。
+
+本机macOS27.2 ARM／Rust1.99.1／Just1.59.0执行 `RUST_TEST_THREADS=4 just check`，格式、全workspace严格Clippy、909项Rust测试及优化构建通过。`just test-tooling`的七脚本共49项Python回归通过。CLI帮助、debug预览帮助、140×60语法场景JSON快照和精确过滤测试均经实际recipe验证，显式程序smoke通过CLI、文本会话、审查回归与24组TUI旅程。所测优化程序SHA-256为 `d2b0f84585ac0e66cf8953547bd9eac8b36cbd7e21b28024c0da469a8aa9479e`，前后一致。
+
+20项入口边界检查覆盖零参数、选项、空格、引号、Unicode、空参数、shell字面字符、环境覆盖、子目录工作目录、失败码与停止顺序。smoke强制显式程序路径，四脚本接收同一原值，自定义Cargo输出配置可由调用者选择实际程序。独立复核通过，验证记录位于 `target/just-validation/`。
+
 ## N2 隔离与 MCP
 
 2026-11-09，项目负责人启动完成N2及对应验收的目标。范围为DEV-054至DEV-061及DEV-075，依赖和退出条件沿用[后续开发计划](post-mvp-plan.md#n2-隔离与-mcp)。本轮起点为 `547e5fe`，工作区当时干净。

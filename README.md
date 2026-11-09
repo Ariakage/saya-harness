@@ -38,6 +38,17 @@
 
 已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、CLI、本地会话持久化、并发与中断恢复已通过本机受控验证；四类任务与三协议已通过本机受控端到端验证，P7 验收已完成，正式发行状态见开发进度。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
 
+## 开发
+
+开发任务由根目录 [justfile](justfile) 提供。安装方式和完整命令见[开发指南](docs/development.md#just-开发入口)。
+
+```sh
+just
+just check
+just test-tooling
+just tui-preview syntax
+```
+
 ## 文档
 
 | 文档 | 内容 |

@@ -18,6 +18,45 @@
 
 提交信息遵循 [AGENTS.md](../AGENTS.md) 中的 Conventional Commits 约定。
 
+## Just 开发入口
+
+根目录 [justfile](../justfile) 统一提供常用开发任务。先安装固定Rust工具链及 `just`，Python工具回归另需Python3。本轮使用 `just 1.59.0` 验证。macOS可通过Homebrew安装，macOS／Linux也可通过Cargo安装。[Just官方安装说明](https://just.systems/man/en/packages.html)
+
+```sh
+brew install just
+# 或通过 Cargo 安装
+cargo install just --locked
+```
+
+在仓库根目录或任意子目录执行 `just` 查看任务，recipe默认在根目录运行。构建默认使用 `MACOSX_DEPLOYMENT_TARGET=15.0` 和 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`，已显式设置的同名环境变量优先。测试并发由Cargo／Rust测试框架及调用者的环境设置控制。
+
+| 命令 | 用途 |
+| --- | --- |
+| `just check` | 复用 `scripts/check.sh`，依次检查格式、严格Clippy、workspace测试及优化构建 |
+| `just fmt`／`just fmt-check` | 格式化／只检查Rust格式 |
+| `just clippy` | 全workspace、全目标严格Clippy |
+| `just test` | 全workspace测试，可追加过滤条件和测试参数 |
+| `just build`／`just release` | 开发／优化构建，可追加Cargo构建参数 |
+| `just run` | 运行开发版Saya，可追加CLI参数 |
+| `just tui-preview syntax` | 运行debug专属TUI场景预览 |
+| `just render-preview 140 60 syntax` | 输出离线场景快照，可追加 `--source` 或 `--json` |
+| `just test-tooling` | 执行CI使用的七个离线Python回归脚本 |
+| `just smoke BINARY` | 对显式指定程序执行CLI、文本会话、审查回归及完整TUI旅程 |
+
+```sh
+just test restored_flags_are_observable_before_the_child_reads_its_release -- --exact
+just run --help
+just tui-preview footnotes --source
+just render-preview 140 60 mermaid --json
+just release
+just smoke target/release/saya
+RUST_TEST_THREADS=4 just check
+```
+
+Recipe通过带引号的位置参数转发输入，可变参数使用 `"$@"`，smoke程序路径使用 `"$1"`。含空格、引号或shell元字符的参数保持原值。CLI内的工作区及文件相对路径以仓库根目录为起点。[Just位置参数](https://just.systems/man/en/positional-arguments.html)
+
+`smoke`要求显式提供要验收的程序路径。使用 `CARGO_TARGET_DIR`、`CARGO_BUILD_TARGET` 或Cargo的目标配置构建时，传入其实际产物路径。构建及工具安装可按需下载依赖；Python回归使用离线替身，smoke使用本地模型夹具、loopback和Unix PTY，文件与命令场景需要当前平台的原生隔离依赖。[原生配置](configuration.md#n2-原生隔离配置)、[Cargo构建输出](https://doc.rust-lang.org/cargo/commands/cargo-build.html#output-options)
+
 ## 文档修改的验证
 
 - 检查仓库内 Markdown 链接是否存在。
@@ -27,7 +66,7 @@
 
 ## Rust 工程建立后的检查
 
-在仓库根目录运行 `./scripts/check.sh` 可依次执行以下检查；也可在其他目录通过脚本绝对路径运行。实际结果见[开发进度](progress.md)：
+运行 `just check` 通过 `scripts/check.sh` 依次执行以下检查。脚本也支持通过绝对路径调用。实际结果见[开发进度](progress.md)。
 
 ```sh
 cargo fmt --all -- --check
@@ -74,7 +113,7 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 
 TUI的CommonMark／GFM使用pulldown-cmark与一致的Unicode脚注标签匹配，高亮使用内置Syntect语法，Mermaid使用同版本merman-core与mermansi。merman-core启用JSON对象顺序保留，并通过granit-parser约束smallvec小于1.16，实际版本由Cargo.lock记录。core规范化参数显式排序，以维持审批和拒绝记忆的稳定身份。
 
-默认开发构建可运行 `MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-cli -- tui-preview syntax`。场景、源码／渲染切换和离线单元格快照见[Markdown说明](markdown-rendering.md#debug-预览)。完整检查仍使用本文件既有workspace命令，本轮四平台同步测试按项目负责人要求安排在N2。
+默认开发构建可运行 `just tui-preview syntax`，离线单元格快照使用 `just render-preview 140 60 syntax --json`。场景与源码／渲染切换见[Markdown说明](markdown-rendering.md#debug-预览)。完整Rust检查使用 `just check`，各源码的四平台同步测试范围见[开发进度](progress.md)。
 
 ## N2 原生性能证据
 
