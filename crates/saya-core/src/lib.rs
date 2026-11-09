@@ -17,6 +17,7 @@ pub mod credentials;
 pub mod dispatch;
 pub mod execution;
 pub mod export;
+pub mod global_memory;
 pub mod input;
 pub mod logging;
 

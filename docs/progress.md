@@ -14,6 +14,8 @@ DEV-078实现manifest／lock的离线结构、语义、SemVer、feature／能力
 
 本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、986项Rust测试与优化构建通过。新增17项OutputStore、19项ContextBuilder、5项运行时边界、1项三协议wire计数及1项MCP长输出回归。计数测试核对真实HTTP请求体，并确认计数期间没有请求。发布故障回归核对副作用只发生一次。日志见 `target/n3/dev076-062-workspace.log`。独立复核后继续修复结果投影状态保留与单用户长任务切点，DEV-062保持验收中，自动／手动Compact和全局记忆正常入口继续开发。
 
+DEV-084／087的GlobalMemoryStore独立组件新增可读Markdown、事实粒度来源、当前workspace过滤、纯提案、幂等提交、排他锁、WAL恢复、私有ledger及索引历史。33项定向测试通过，包含源元数据和旧updated_at在forget后经旧索引／rollback抑制的回归。独立复核确认修复，入口／投影／界面由后续任务接线。[组件格式与保证](memory.md#dev-084087-存储组件)
+
 项目负责人提供四份压缩／续接／系统组装参考，以及三份记忆参考，要求提示词使用纯英文。已形成英文Compact与Continuation草案并记录四份压缩来源的SHA和取舍，当前运行时仍加载已有11份英文提示词，草案接入由DEV-063完成。[提示词来源与接入契约](prompt/drafts/n3/README.md)
 
 三份记忆来源进一步形成英文Memory Context与Consolidation草案，记录默认注入、渐进检索、来源／作用域／版本、更正、撤回及明确遗忘。参考中的多版本模板和二进制残留按来源身份保留，草案采用Saya专用变更与核查契约，由DEV-084至DEV-089接入。[记忆来源与验收矩阵](prompt/drafts/n3/memory-sources.md)
@@ -162,7 +164,7 @@ YAML、14个Shell片段、内嵌Python、失败／取消依赖场景和12项验�
 
 `72e79a0` 的macOS15 ARM完整源码门禁及18项原生／25项MCP／24项TUI通过，Intel三个程序验收套件通过，源码结构夹具遇截止时间。Linux实际运行暴露长TMPDIR的Unix地址上限和guest PID宿主查询问题。本轮修复采用宿主目录FD短地址与FIFO现场存活／ACK／EOF见证，并收紧可写controller及Host聚合资源配置。CI调试镜像使用行表，结构夹具仅对唯一解析超时作有界重试。四平台仍等待新源码重新验收。
 
-最新本机macOS27.2 ARM完成905项Rust测试、完整门禁及30项Python离线回归，并在固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 上通过18项原生、25项MCP及24项TUI。源码检查与程序证据在 `target/n2/ci-profile-workspace.log`、`target/n2/validated-local/`，修复范围与原始远端失败见[N2验收记录](n2-validation.md#linux-长路径与资源控制修复)。Linux委派与四平台最终完成状态继续保留待验收。
+最新本机macOS27.2 ARM完成905项Rust测试、完整门禁及33项Python离线回归，并在固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 上通过18项原生、25项MCP及24项TUI。源码检查与程序证据在 `target/n2/ci-profile-workspace.log`、`target/n2/validated-local/`，修复范围与原始远端失败见[N2验收记录](n2-validation.md#linux-长路径与资源控制修复)。Linux委派与四平台最终完成状态继续保留待验收。
 
 ### 终端预算与完整性能补证
 

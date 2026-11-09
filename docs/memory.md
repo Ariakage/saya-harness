@@ -1,6 +1,6 @@
 # 全局记忆与模型编辑
 
-**2026-11-08。F-07 的后续设计草案，DEV-084 至 DEV-089 均待开发。**
+**更新于2026-11-10。DEV-084／087的独立存储组件已完成定向验证，正常工具、投影和界面仍按N3逐项接入。**
 
 项目负责人要求后续提供可由模型维护的全局记忆，参考可直接阅读和编辑的全局 `MEMORY.md` 组织方式。Saya 的候选入口为 `~/.saya/MEMORY.md`，较长的主题资料可放入 `~/.saya/memory/`。路径、格式版本、限额和自动注入默认值在对应DEV中验收收敛。
 
@@ -8,7 +8,7 @@
 
 ## 当前基础
 
-当前 `--memory-file` 和 `--preferences-file` 显式读取UTF-8文本并注入本次运行，项目指令／Skill发现、会话持久化和上下文分项估算已有独立实现。模型可编辑的全局记忆、检索、遗忘与回滚属于本草案的开发范围。现有记忆文件参数的行为继续按[使用指南](usage.md)维护。
+当前 `--memory-file` 和 `--preferences-file` 显式读取UTF-8文本并注入本次运行。新增 `global_memory::GlobalMemoryStore` 提供真实磁盘索引、事实／来源／作用域、提案、提交、历史与恢复。正常模型工具、自动注入和CLI／TUI入口由DEV-085／086／088继续接入。显式文件参数的行为见[使用指南](usage.md)。原有 `memory::MemoryStore` 继续作为会话存储测试替身。
 
 ## 目标
 
@@ -55,3 +55,21 @@ CLI／TUI提供列表、搜索、查看、修改建议、批准、禁用、导�
 | DEV-089 | 跨会话／工作区、注入、凭据、故障、恢复与Compact联合验证 |
 
 实现需要覆盖用户外部编辑、并发冲突、重复请求、进程中断、符号链接、超限输入、未知来源、作用域错误、已遗忘内容再次检索以及三种权限模式。实际状态由[开发进度](progress.md)维护。
+
+## DEV-084／087 存储组件
+
+`GlobalMemoryStore::open`接受宿主显式根目录、由真实工作区路径和设备／inode派生的WorkspaceIdentity、MemoryLimits及动态SecretRegistry。打开缺失根、snapshot和只读查询均不创建目录。读取重建当前有界索引，外部文件变化参与revision，无法解析时保留原文件并返回静态错误。
+
+索引使用版本1的Markdown格式，含 `saya-memory`、`saya-entry`、`saya-fact` JSON元数据注释和明确结束标记。正文可直接阅读和编辑。entry、fact及source具有稳定ID，事实记录kind、来源版本、alias及derived_from。global与当前workspace分别过滤，来源reference作为证据身份处理。主题路径限制在 `memory/` 的规范相对Markdown路径内，通过目录句柄与NOFOLLOW读取。
+
+默认索引512KiB，单主题64KiB、主题合计1MiB，最多256条entry、1024条fact／source和64个主题，单事实16KiB。历史默认保留32个索引版本。宿主可缩小限额，较高值受组件硬上限验证。所有实际秘密值在正文、元数据、提案和主题读取边界检查，错误不回显原文。
+
+`propose`是纯变更计算，绑定expected_revision、operation_id、change_digest和Store身份。专用工具可另绑定规范化host_request_digest，该摘要进入receipt与WAL，后续更新或forget后，相同旧请求只返回原操作记录与当前revision。`commit_cancellable`持排他锁，在写任何历史／stage前再次核对实际旧索引、最新凭据、版本和根身份。WAL意图、临时索引、原子替换及独立ledger共同维护提交状态，未知结果由recover观察并完成相同操作，重试按原operation身份收敛。锁等待有200ms上限，取消前置检查保持零创建。
+
+明确forget对目标、alias、词法重复与派生事实记录墓碑，来源撤回保留独立支持的事实。当前ledger持续过滤原始旧索引回放及历史rollback。受影响的entry旧标题、旧updated_at、主题链接，以及source的description、reference和observed_at在活动投影中抑制，缺失状态用withheld标记。stable IDs及来源revision继续支持引用与审计。宿主新建ID采用组件的UUID生成器。
+
+历史保存索引版本，主题原件及原始证据沿各自生命周期保留。rollback恢复索引时继续应用当前遗忘约束，主题内容变更采用实际当前摘要，历史接口会显示覆盖范围。CLI／工具结果需要说明这些实际保留范围。
+
+33项组件回归覆盖缺失根、外部编辑、scope、路径／链接、凭据、遗忘元数据、WAL各阶段故障、并发、取消、幂等、历史及回滚。独立源码复核发现的来源及时间元数据泄漏已修复并补真实提交、旧索引回放和rollback回归。正常运行入口与跨平台联合验收继续见[N3验收记录](n3-validation.md)。
+
+该组件定向33项测试及全workspace全目标严格Clippy通过，日志为 `target/n3/memory-component.log` 与 `target/n3/n3-components-clippy.log`。
