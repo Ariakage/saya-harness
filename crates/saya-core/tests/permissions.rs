@@ -37,6 +37,60 @@ fn normalized_arguments_sort_objects_recursively_independent_of_json_features()
 }
 
 #[test]
+fn command_facts_are_review_data_while_approvals_bind_stable_analyzer_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let plan = ExecPlan {
+        argv: vec![
+            std::fs::canonicalize("/bin/sh")?
+                .to_string_lossy()
+                .into_owned(),
+            "-c".into(),
+            "printf '%s' \"$(cat input)\" > output".into(),
+        ],
+        cwd: root.path().into(),
+        timeout: Duration::from_secs(10),
+        environment_digest: "1a".repeat(32),
+    };
+    let operation = Operation::exec(&plan)?;
+    let args =
+        serde_json::json!({"argv":plan.argv,"__saya_command_facts":{"effects_unknown":false}});
+    let binding = operation.normalized_arguments(serde_json::json!({"argv":plan.argv}))?;
+    assert_eq!(
+        binding["__saya_command_analysis"]["analyzer_version"],
+        saya_core::command_analysis::ANALYZER_VERSION
+    );
+    assert!(binding.get("__saya_command_facts").is_none());
+    assert_eq!(
+        binding,
+        Operation::exec(&plan)?.normalized_arguments(serde_json::json!({"argv":plan.argv}))?
+    );
+    let reviewed = operation.review_arguments(args)?;
+    assert_eq!(reviewed["__saya_command_facts"]["schema_version"], 1);
+    assert_eq!(reviewed["__saya_command_facts"]["effects_unknown"], true);
+    assert!(
+        !reviewed["__saya_command_facts"]["redirections"]
+            .as_array()
+            .ok_or("redirections")?
+            .is_empty()
+    );
+    assert!(reviewed["__saya_command_facts"]["input_digest"].is_string());
+    let influenced = Operation::exec_with_environment_keys(&plan, &["BASH_ENV".into()])?;
+    let reviewed = influenced.review_arguments(serde_json::json!({"argv":plan.argv}))?;
+    assert!(
+        reviewed["__saya_command_facts"]["unknown_effects"]
+            .as_array()
+            .ok_or("effects")?
+            .contains(&serde_json::json!("environment_influence"))
+    );
+    assert_eq!(
+        binding,
+        influenced.normalized_arguments(serde_json::json!({"argv":plan.argv}))?
+    );
+    Ok(())
+}
+
+#[test]
 fn exec_environment_overrides_retain_hard_restrictions_and_rule_precedence()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = support::temp_workspace()?;

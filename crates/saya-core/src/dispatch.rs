@@ -354,7 +354,8 @@ impl ToolDispatcher {
                 Arc::new(PolicyGate::new(self.policy.clone())),
                 self.exec_config.clone(),
             );
-            Operation::exec(&planner.plan(call, context)?)?
+            let (plan, keys) = planner.plan_with_environment_keys(call, context)?;
+            Operation::exec_with_environment_keys(&plan, &keys)?
         } else if call.name == "ask_user" {
             crate::input::InputRequest::parse(call)?;
             Operation::ask_user()

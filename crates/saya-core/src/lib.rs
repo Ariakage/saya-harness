@@ -9,6 +9,7 @@
 pub mod approvals;
 pub mod background;
 pub mod boundary;
+pub mod command_analysis;
 pub mod config;
 pub mod contract;
 pub mod dispatch;

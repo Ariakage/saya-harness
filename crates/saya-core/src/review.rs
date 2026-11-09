@@ -263,7 +263,7 @@ pub async fn review_operation(
             source: ReviewDecisionSource::Rule,
         });
     }
-    let normalized = input.operation.normalized_arguments(input.arguments)?;
+    let normalized = input.operation.review_arguments(input.arguments)?;
     // If an operation contains a known secret, do not ask the model to approve
     // an incomplete redacted view; fall back to a human decision.
     let encoded = serde_json::to_string(&normalized)

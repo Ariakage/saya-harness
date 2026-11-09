@@ -176,6 +176,15 @@ impl ExecTool {
     /// Resolve command identity without spawning or authorizing it. This lets
     /// the policy and one-shot approval bind the exact command and environment.
     pub fn plan(&self, call: &ToolCall, context: &ToolContext) -> Result<ExecPlan, BoundaryError> {
+        self.plan_with_environment_keys(call, context)
+            .map(|(plan, _)| plan)
+    }
+    /// Prepare the command and its actual filtered environment names together.
+    pub fn plan_with_environment_keys(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<(ExecPlan, Vec<String>), BoundaryError> {
         if call.name != "exec" {
             return Err(failure("invalid_args", "tool name does not match adapter"));
         }
@@ -196,7 +205,12 @@ impl ExecTool {
         }
         let args: ExecArgs = serde_json::from_str(&call.arguments)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
-        Ok(self.prepare(&args, context)?.0)
+        let (plan, _, environment) = self.prepare(&args, context)?;
+        let keys = environment
+            .keys()
+            .map(|key| key.to_string_lossy().into_owned())
+            .collect();
+        Ok((plan, keys))
     }
     fn prepare(
         &self,

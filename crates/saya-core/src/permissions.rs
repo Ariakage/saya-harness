@@ -102,6 +102,7 @@ enum Target {
         executable: PathBuf,
         args: Vec<String>,
         environment_digest: String,
+        analysis: Arc<crate::command_analysis::CommandAnalysis>,
     },
     Input,
     BackgroundControl,
@@ -147,6 +148,14 @@ impl Operation {
     }
     /// Construct a command operation from a previously resolved plan.
     pub fn exec(plan: &ExecPlan) -> Result<Self, BoundaryError> {
+        Self::exec_with_environment_keys(plan, &[])
+    }
+    /// Include host-selected environment names in review facts. Actual values
+    /// remain bound by the prepared digest and are never supplied to analysis.
+    pub fn exec_with_environment_keys(
+        plan: &ExecPlan,
+        environment_keys: &[String],
+    ) -> Result<Self, BoundaryError> {
         let cwd =
             std::fs::canonicalize(&plan.cwd).map_err(|e| failure("invalid_path", e.to_string()))?;
         let executable = plan
@@ -161,6 +170,21 @@ impl Operation {
                 "command must have absolute executable and directory cwd",
             ));
         }
+        let executable = exe
+            .to_str()
+            .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?;
+        let argv: Vec<String> = std::iter::once(executable.to_owned())
+            .chain(plan.argv[1..].iter().cloned())
+            .collect();
+        let analysis = crate::command_analysis::analyze(
+            crate::command_analysis::CommandInput {
+                argv: &argv,
+                cwd: &cwd,
+                environment_digest: &plan.environment_digest,
+                environment_keys,
+            },
+            crate::command_analysis::AnalysisLimits::default(),
+        );
         Ok(Self {
             tool: "exec".into(),
             target: Target::Exec {
@@ -168,6 +192,7 @@ impl Operation {
                 executable: exe,
                 args: plan.argv[1..].to_vec(),
                 environment_digest: plan.environment_digest.clone(),
+                analysis: Arc::new(analysis),
             },
         })
     }
@@ -198,6 +223,7 @@ impl Operation {
                 executable,
                 args,
                 environment_digest,
+                analysis,
             } => {
                 let executable = executable
                     .to_str()
@@ -219,6 +245,16 @@ impl Operation {
                     serde_json::to_value(argv)
                         .map_err(|e| failure("invalid_args", e.to_string()))?,
                 );
+                // Binding excludes time-dependent parse progress. The complete
+                // argv/cwd/environment identity is already included above.
+                map.insert(
+                    "__saya_command_analysis".into(),
+                    serde_json::json!({
+                        "schema_version": analysis.schema_version,
+                        "analyzer_version": analysis.analyzer_version,
+                        "limits": analysis.limits,
+                    }),
+                );
             }
             Target::External(descriptor) => {
                 if map.contains_key("__saya_operation") {
@@ -234,6 +270,26 @@ impl Operation {
             Target::Input | Target::BackgroundControl | Target::Metadata => {}
         }
         args.sort_all_objects();
+        Ok(args)
+    }
+
+    /// Add bounded static facts to the independent review's untrusted data.
+    /// Parse completeness and risk facts never grant execution permission.
+    pub fn review_arguments(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, BoundaryError> {
+        let mut args = self.normalized_arguments(args)?;
+        if let Target::Exec { analysis, .. } = &self.target {
+            args.as_object_mut()
+                .ok_or_else(|| failure("invalid_args", "tool arguments must be an object"))?
+                .insert(
+                    "__saya_command_facts".into(),
+                    serde_json::to_value(analysis.as_ref()).map_err(|_| {
+                        failure("invalid_args", "command analysis cannot be encoded")
+                    })?,
+                );
+        }
         Ok(args)
     }
 

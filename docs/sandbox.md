@@ -93,7 +93,7 @@ NetworkBroker 对规范化 origin、解析后的目标 IP、重定向、DNS 变�
 
 ## AST／CST 分析
 
-普通 exec 首先分析直接 argv、可执行程序、cwd 和环境引用。`sh -c`／`bash -c` 等显式入口再解析脚本文本，首轮候选为 Tree-sitter Bash，将 CST 转换为风险事实。[Tree-sitter 基础解析](https://tree-sitter.github.io/tree-sitter/using-parsers/2-basic-parsing.html)
+DEV-075使用固定Tree-sitter Bash处理直接argv、可执行程序、cwd和环境引用。`sh -c`／`bash -c`等显式入口解析脚本文本，将CST转换为风险事实，具体边界及预算见[命令分析](command-analysis.md)。[Tree-sitter基础解析](https://tree-sitter.github.io/tree-sitter/using-parsers/2-basic-parsing.html)
 
 | 结构 | 提取信息 |
 | --- | --- |

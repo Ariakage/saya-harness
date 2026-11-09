@@ -8,9 +8,11 @@
 
 2026-11-09，项目负责人启动完成N2及对应验收的目标。范围为DEV-054至DEV-061及DEV-075，依赖和退出条件沿用[后续开发计划](post-mvp-plan.md#n2-隔离与-mcp)。本轮起点为 `547e5fe`，工作区当时干净。
 
-DEV-054已完成工具注册、可信操作描述和统一外部适配器派发。DEV-075及原生后端、MCP和凭据组件继续整合，N2整体验收尚待完成。负责人已确认N2默认启用原生隔离，按平台选择Seatbelt／Bubblewrap，必需约束无法满足时明确失败，见D-050。后端选择与权限模式分别处理。阶段门禁、原生约束和四平台证据按[N2验收记录](n2-validation.md)逐项维护。
+DEV-054已完成工具注册、可信操作描述和统一外部适配器派发。DEV-075已完成有界CST事实与实际审核／批准接线，原生后端、MCP和凭据组件继续整合，N2整体验收尚待完成。负责人已确认N2默认启用原生隔离，按平台选择Seatbelt／Bubblewrap，必需约束无法满足时明确失败，见D-050。后端选择与权限模式分别处理。阶段门禁、原生约束和四平台证据按[N2验收记录](n2-validation.md)逐项维护。
 
 DEV-054的隔离源码快照在本机macOS27.2 ARM／Rust1.99.1执行完整 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、workspace全目标严格Clippy、752项Rust测试及优化构建通过。六项新回归包含48组分类／模式／权限组合、离线与有界schema、身份指纹、元数据凭据拒绝、一次性派发、持久化期间目录替换及执行租约、未知副作用和认证／输入请求终止。独立复核确认的目录竞态、嵌套schema资源重定向和目录凭据边界均补入回归。证据为 `target/n2/dev054-workspace.log` 和 `target/n2/dev054-tests.log`，实现约定见[工具注册](tool-registry.md)。CLI中的MCP连接与真实后端接线由后续DEV阶段完成。
+
+DEV-075采用Tree-sitter0.27.1／Bash0.25.1，直接argv保持字面含义，显式shell通过真实CST提取结构。一次prepare取得实际过滤环境名称，事实进入独立核查数据，批准绑定稳定版本／限额及原有完整执行身份。时间相关解析状态留在事实层。结构分析19项定向测试、5008组随机／预算探针通过，最终隔离源码快照完成格式、workspace严格Clippy、773项Rust测试及优化构建。新增实际审核凭据重构屏障回归通过，模型请求数为0。源码、预算与边界见[命令分析](command-analysis.md)，证据为 `target/dev075-probe/probe.json`、`target/n2/dev075-{workspace,credential-facts}.log`。
 
 ### 生命周期测试夹具竞态
 
