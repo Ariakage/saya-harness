@@ -1,3 +1,5 @@
+#[path = "runtime_plugins.rs"]
+mod plugins;
 use super::{AgentRuntime, RuntimeHandle, error};
 use crate::{
     approvals::{Authorization, AuthorizationInput},
@@ -40,6 +42,7 @@ struct Settings {
     environment: Environment,
     authorizer: Option<Arc<dyn McpHttpAuthorizer>>,
     registry: Option<Arc<SecretRegistry>>,
+    plugins: Option<plugins::PluginConfiguration>,
 }
 struct LocalProcess {
     process: ManagedProcess,
@@ -58,12 +61,16 @@ struct State {
     closed: bool,
     environment: Option<Arc<PreparedEnvironment>>,
     broker: Option<BrokerHandle>,
+    network_budget: Option<Arc<crate::network::RunNetworkBudget>>,
     broker_directory: Option<std::path::PathBuf>,
     servers: BTreeMap<String, Server>,
     pending_locals: BTreeMap<String, LocalProcess>,
     status_store: Option<(Arc<dyn Store>, RunId)>,
     statuses: BTreeMap<String, McpServerStatus>,
     emitted_status: Vec<McpServerStatus>,
+    plugin_preparation: Option<plugins::PluginPreparation>,
+    plugins: Option<Arc<plugins::PluginRun>>,
+    plugin_broker_directory: Option<std::path::PathBuf>,
 }
 
 pub(super) struct RuntimeServices {
@@ -73,6 +80,7 @@ pub(super) struct RuntimeServices {
     local_configured: AtomicBool,
     active: Arc<AtomicUsize>,
     startup_calls: AtomicUsize,
+    used_tools: AtomicUsize,
     fatal: Mutex<Option<BoundaryError>>,
     executor: Mutex<Option<tokio::runtime::Handle>>,
     transition_running: Mutex<bool>,
@@ -86,6 +94,7 @@ impl Default for RuntimeServices {
             local_configured: AtomicBool::new(false),
             active: Arc::new(AtomicUsize::new(0)),
             startup_calls: AtomicUsize::new(0),
+            used_tools: AtomicUsize::new(0),
             fatal: Mutex::new(None),
             executor: Mutex::new(None),
             transition_running: Mutex::new(false),
@@ -144,6 +153,9 @@ impl Tool for ManagedTool {
         Box::pin(async move {
             self.active.fetch_add(1, Ordering::AcqRel);
             let _active = ActiveCall(self.active.clone());
+            if let Some(services) = self.services.upgrade() {
+                services.check_plugin_entry(self.inner.server_id()).await?;
+            }
             let outcome = self.inner.execute(call, context, cancel).await;
             if let Err(failure) = &outcome
                 && let Some(services) = self.services.upgrade()
@@ -225,9 +237,10 @@ impl RuntimeServices {
             ));
         }
         self.local_configured.store(
-            mcp.servers.values().any(|server| {
-                server.enabled && matches!(server.transport, McpTransportSettings::Stdio(_))
-            }),
+            self.local_configured.load(Ordering::Acquire)
+                || mcp.servers.values().any(|server| {
+                    server.enabled && matches!(server.transport, McpTransportSettings::Stdio(_))
+                }),
             Ordering::Release,
         );
         let mut settings = self
@@ -239,6 +252,16 @@ impl RuntimeServices {
         settings.authorizer = authorizer;
         settings.registry = Some(registry);
         Ok(())
+    }
+    /// Reserve one host or model-dispatched tool attempt from the same Run
+    /// counter. A failed CAS never starts an additional operation.
+    pub(super) fn reserve_tool(&self, limit: usize) -> Result<(), BoundaryError> {
+        self.used_tools
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < limit).then_some(used + 1)
+            })
+            .map(|_| ())
+            .map_err(|_| error("limit_reached", "Run tool budget is exhausted"))
     }
     pub(super) fn startup_calls(&self) -> usize {
         self.startup_calls.load(Ordering::Acquire)
@@ -310,27 +333,9 @@ impl RuntimeServices {
         let modes = handle.modes.clone();
         let dispatcher = handle.dispatcher.clone();
         executor.spawn(async move {
-            let cleanup = async {
-                loop {
-                    let mode = modes.snapshot()?;
-                    if mode.pending != Some(WorkMode::Plan) {
-                        return Ok(());
-                    }
-                    if modes.active_invocations()? == 1
-                        && services.active.load(Ordering::Acquire) == 0
-                    {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-                let mut state = services.state.lock().await;
-                services.stop_servers(&mut state, &dispatcher, true).await?;
-                if let Some(environment) = &state.environment {
-                    environment.wait_for_process_cleanup().await?;
-                }
-                Ok::<(), BoundaryError>(())
-            }
-            .await;
+            let cleanup = services
+                .cleanup_for_plan(&modes, &dispatcher, Duration::from_secs(10))
+                .await;
             match cleanup {
                 Ok(()) => {
                     if let Err(failure) = modes.finish() {
@@ -346,6 +351,91 @@ impl RuntimeServices {
             }
         });
         Ok(())
+    }
+
+    async fn cleanup_for_plan(
+        &self,
+        modes: &crate::mode::ModeController,
+        dispatcher: &ToolDispatcher,
+        orphan_timeout: Duration,
+    ) -> Result<(), BoundaryError> {
+        let mut orphan_started = None;
+        let mut hooks_stopped = false;
+        loop {
+            let mode = modes.snapshot()?;
+            if mode.pending != Some(WorkMode::Plan) {
+                return Ok(());
+            }
+            // Existing foreground/model/human-input invocations retain their
+            // original lifetime. Cleanup deadlines start at the idle barrier.
+            if modes.active_invocations()? == 1 {
+                if !hooks_stopped {
+                    let plugins = tokio::time::timeout(Duration::from_secs(130), async {
+                        self.state.lock().await.plugins.clone()
+                    })
+                    .await
+                    .map_err(|_| {
+                        error(
+                            "outcome_unknown",
+                            "Service initialization did not yield the mode cleanup boundary",
+                        )
+                    })?;
+                    if let Some(plugins) = plugins {
+                        tokio::time::timeout(
+                            crate::hooks::HookLimits::default().cleanup_timeout,
+                            plugins.processes.stop_all(),
+                        )
+                        .await
+                        .map_err(|_| {
+                            error("outcome_unknown", "Hook cleanup timed out before PLAN")
+                        })??;
+                    }
+                    hooks_stopped = true;
+                }
+                if self.active.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                let started = orphan_started.get_or_insert_with(tokio::time::Instant::now);
+                if started.elapsed() >= orphan_timeout {
+                    return Err(error(
+                        "outcome_unknown",
+                        "Unowned service activity prevents a confirmed PLAN transition",
+                    ));
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let mut state = tokio::time::timeout(Duration::from_secs(130), self.state.lock())
+            .await
+            .map_err(|_| {
+                error(
+                    "outcome_unknown",
+                    "Service cleanup ownership is unavailable",
+                )
+            })?;
+        let entries = state
+            .servers
+            .len()
+            .saturating_add(state.pending_locals.len());
+        let seconds = u64::try_from(entries)
+            .ok()
+            .and_then(|entries| entries.checked_mul(12))
+            .and_then(|seconds| seconds.checked_add(20))
+            .ok_or_else(|| error("outcome_unknown", "Service cleanup budget is invalid"))?;
+        tokio::time::timeout(Duration::from_secs(seconds), async {
+            self.stop_servers(&mut state, dispatcher, true).await?;
+            if let Some(environment) = &state.environment {
+                environment.wait_for_process_cleanup().await?;
+            }
+            Ok::<(), BoundaryError>(())
+        })
+        .await
+        .map_err(|_| {
+            error(
+                "outcome_unknown",
+                "Service cleanup could not finish before PLAN",
+            )
+        })?
     }
 
     pub(super) async fn initialize(
@@ -372,6 +462,30 @@ impl RuntimeServices {
             return Err(error("invalid_run", "Run services have already closed"));
         }
         state.status_store = Some((runtime.store.clone(), runtime.run.id));
+        if let Some(plugins) = &settings.plugins {
+            use std::os::unix::fs::DirBuilderExt;
+            let (base, _) = settings.execution.as_ref().ok_or_else(|| {
+                error(
+                    "sandbox_required",
+                    "Plugin runtime requires host execution policy",
+                )
+            })?;
+            plugins.pool.validate_location(
+                &session.workspace,
+                &base.protected_paths,
+                &base.write_roots,
+            )?;
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&plugins.broker_root)
+                .map_err(|_| {
+                    error(
+                        "sandbox_unavailable",
+                        "Private plugin broker root could not be created",
+                    )
+                })?;
+            state.plugin_broker_directory = Some(plugins.broker_root.clone());
+        }
         state.statuses = settings
             .mcp
             .servers
@@ -395,6 +509,18 @@ impl RuntimeServices {
             .collect();
         self.emit_status(&mut state).await?;
         if let Some((mut policy, broker)) = settings.execution.clone() {
+            if let Some(plugins) = &settings.plugins {
+                for path in [
+                    plugins.store.protected_path(),
+                    plugins.journal.protected_path(),
+                    plugins.pool.path(),
+                    plugins.broker_root.as_path(),
+                ] {
+                    if !policy.protected_paths.contains(&path.to_path_buf()) {
+                        policy.protected_paths.push(path.to_path_buf());
+                    }
+                }
+            }
             if policy.workspace.canonicalize().ok() != session.workspace.canonicalize().ok() {
                 return Err(error(
                     "invalid_workspace",
@@ -450,10 +576,13 @@ impl RuntimeServices {
                     broker.unix_socket = Some(directory.join("proxy.sock"));
                     state.broker_directory = Some(directory);
                 }
+                let shared = crate::network::RunNetworkBudget::new(&broker.limits)
+                    .map_err(|_| error("sandbox_unavailable", "Run network budget is invalid"))?;
+                state.network_budget = Some(shared.clone());
                 let broker = runtime
                     .bounded(
                         async {
-                            NetworkBroker::start(broker, runtime.cancel.clone())
+                            NetworkBroker::start_scoped(broker, runtime.cancel.clone(), shared)
                                 .await
                                 .map_err(|_| {
                                     error(
@@ -480,7 +609,38 @@ impl RuntimeServices {
             state.environment = Some(environment);
             runtime.check()?;
         }
-        for (id, server) in &settings.mcp.servers {
+        self.initialize_plugins(runtime, session, &settings, &mut state)
+            .await?;
+        let mut registered = settings.mcp.clone();
+        if let Some(plugins) = state.plugins.clone() {
+            for (id, server) in &plugins.servers {
+                if registered
+                    .servers
+                    .insert(id.clone(), server.settings.clone())
+                    .is_some()
+                {
+                    return Err(error(
+                        "plugin_identity",
+                        "Plugin and configured MCP identities collide",
+                    ));
+                }
+                state.statuses.insert(
+                    id.clone(),
+                    McpServerStatus {
+                        server: id.clone(),
+                        transport: if server.process.is_some() {
+                            McpTransport::Stdio
+                        } else {
+                            McpTransport::Http
+                        },
+                        state: McpServerState::Configured,
+                        tools: 0,
+                    },
+                );
+            }
+        }
+        self.emit_status(&mut state).await?;
+        for (id, server) in &registered.servers {
             if !server.enabled {
                 continue;
             }
@@ -498,7 +658,7 @@ impl RuntimeServices {
                 continue;
             }
             if matches!(server.transport, McpTransportSettings::Http(_))
-                && snapshot.current == WorkMode::Plan
+                && (snapshot.current == WorkMode::Plan || snapshot.pending == Some(WorkMode::Plan))
                 && server.read_only_tools.is_empty()
             {
                 if let Some(status) = state.statuses.get_mut(id) {
@@ -511,6 +671,19 @@ impl RuntimeServices {
                 status.state = McpServerState::Connecting;
             }
             self.emit_status(&mut state).await?;
+            let mut entry_settings = settings.clone();
+            if let Some(descriptor) = state
+                .plugins
+                .as_ref()
+                .and_then(|plugins| plugins.server(id))
+            {
+                state
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| error("plugin_state", "Plugin runtime is unavailable"))?
+                    .check(id)?;
+                entry_settings.environment = descriptor.environment().clone();
+            }
             let outcome = async {
                 match &server.transport {
                     McpTransportSettings::Stdio(_) => {
@@ -520,7 +693,7 @@ impl RuntimeServices {
                                 "MCP stdio startup requires a prepared execution environment",
                             ));
                         }
-                        self.start_local(runtime, session, id, server, &settings, &mut state)
+                        self.start_local(runtime, session, id, server, &entry_settings, &mut state)
                             .await?;
                     }
                     McpTransportSettings::Http(http) => {
@@ -531,16 +704,24 @@ impl RuntimeServices {
                             error("sensitive_data", "MCP credential registry is unavailable")
                         })?;
                         for (name, reference) in &http.headers_env {
-                            let value = env_reference(&settings.environment, reference)?;
+                            let value = env_reference(&entry_settings.environment, reference)?;
                             registry.register(std::slice::from_ref(&value))?;
                             config.headers.insert(name.clone(), value);
                         }
                         if let Some(reference) = &http.bearer_env {
-                            let value = env_reference(&settings.environment, reference)?;
+                            let value = env_reference(&entry_settings.environment, reference)?;
                             registry.register(std::slice::from_ref(&value))?;
                             config.bearer_token = Some(value);
                         }
-                        let mut client = McpHttpClient::new(&limits)?;
+                        let mut client = if let Some(plugins) = state
+                            .plugins
+                            .as_ref()
+                            .filter(|plugins| plugins.server(id).is_some())
+                        {
+                            plugins.http_client(id, &limits).await?
+                        } else {
+                            McpHttpClient::new(&limits)?
+                        };
                         if http.credential_ref.is_some() {
                             let authorizer = settings.authorizer.as_ref().ok_or_else(|| {
                                 error("needs_auth", "MCP credential resolver is unavailable")
@@ -571,6 +752,11 @@ impl RuntimeServices {
                                 )
                                 .await?,
                         );
+                        if let Some(plugins) = &state.plugins
+                            && plugins.server(id).is_some()
+                        {
+                            plugins.record(id, crate::plugin_runtime::StopEvidence::Unknown)?;
+                        }
                         state.servers.insert(
                             id.clone(),
                             Server {
@@ -634,6 +820,7 @@ impl RuntimeServices {
         if startup_cancel.is_cancelled() {
             return Err(startup_cancelled(runtime));
         }
+        self.reserve_tool(runtime.limits.tool_calls)?;
         self.startup_calls
             .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < runtime.limits.tool_calls).then_some(count + 1)
@@ -657,10 +844,30 @@ impl RuntimeServices {
                 .to_string(),
         };
         let context = runtime.context(session, runtime.modes.snapshot()?.current);
-        let launch = runtime
-            .dispatcher
-            .prepare_mcp_launch(&call, &context, &references)?;
-        register_launch_secrets(settings, local, &launch.environment)?;
+        let plugin = state
+            .plugins
+            .as_ref()
+            .filter(|plugins| plugins.server(id).is_some())
+            .cloned();
+        let native = match &plugin {
+            Some(plugins) => Some(plugins.environment(id).await?),
+            None => None,
+        };
+        let launch = match (&plugin, &native) {
+            (Some(plugins), Some(native)) => plugins.scoped_plan(
+                id,
+                &context,
+                &call,
+                native,
+                runtime.dispatcher.effective_exec_config()?,
+            )?,
+            _ => runtime
+                .dispatcher
+                .prepare_mcp_launch(&call, &context, &references)?,
+        };
+        if plugin.is_none() {
+            register_launch_secrets(settings, local, &launch.environment)?;
+        }
         let summary = format!("Start configured MCP server {id}");
         let authorize = runtime.dispatcher.authorize_mcp_launch(
             AuthorizationInput {
@@ -719,7 +926,7 @@ impl RuntimeServices {
                 ));
             }
         };
-        if !ExecGate::authorize(permit.as_ref(), &launch.plan, &call, &context)? {
+        if !permit.authorize_managed(&call, &context, &launch.operation)? {
             return Err(error(
                 "stale_approval",
                 "MCP startup approval changed before intent",
@@ -735,11 +942,22 @@ impl RuntimeServices {
             }])
             .await?;
         let outcome = async {
-            let launch = runtime
-                .dispatcher
-                .prepare_mcp_launch(&call, &context, &references)?;
-            register_launch_secrets(settings, local, &launch.environment)?;
-            if !ExecGate::authorize(permit.as_ref(), &launch.plan, &call, &context)? {
+            let launch = match (&plugin, &native) {
+                (Some(plugins), Some(native)) => plugins.scoped_plan(
+                    id,
+                    &context,
+                    &call,
+                    native,
+                    runtime.dispatcher.effective_exec_config()?,
+                )?,
+                _ => runtime
+                    .dispatcher
+                    .prepare_mcp_launch(&call, &context, &references)?,
+            };
+            if plugin.is_none() {
+                register_launch_secrets(settings, local, &launch.environment)?;
+            }
+            if !permit.authorize_managed(&call, &context, &launch.operation)? {
                 return Err(error(
                     "stale_approval",
                     "MCP startup approval changed before spawn",
@@ -753,6 +971,9 @@ impl RuntimeServices {
                 &launch.config,
                 true,
             )?;
+            if let Some(plugins) = &plugin {
+                plugins.record(id, crate::plugin_runtime::StopEvidence::Unknown)?;
+            }
             // Keep the child discoverable by abort cleanup throughout the handshake.
             state.pending_locals.insert(
                 id.into(),
@@ -871,6 +1092,10 @@ impl RuntimeServices {
             .lock()
             .map_err(|_| error("runtime_services", "Service settings lock failed"))?
             .clone();
+        let active_plugins = self.state.lock().await.plugins.clone();
+        if let Some(plugins) = active_plugins {
+            self.reconcile_plugins(runtime, &plugins).await?;
+        }
         let mut state = runtime
             .bounded(
                 async { Ok(self.state.lock().await) },
@@ -880,6 +1105,18 @@ impl RuntimeServices {
             .await?;
         let ids = state.servers.keys().cloned().collect::<Vec<_>>();
         for id in ids {
+            let configured = settings
+                .mcp
+                .servers
+                .get(&id)
+                .or_else(|| {
+                    state
+                        .plugins
+                        .as_ref()
+                        .and_then(|plugins| plugins.server(&id))
+                        .map(|server| &server.settings)
+                })
+                .cloned();
             let outcome = async {
                 let server = state.servers.get_mut(&id).ok_or_else(|| {
                     error("runtime_services", "MCP server ownership is unavailable")
@@ -894,10 +1131,9 @@ impl RuntimeServices {
                         "Configured MCP server exited unexpectedly",
                     ));
                 }
-                let configured =
-                    settings.mcp.servers.get(&id).ok_or_else(|| {
-                        error("mcp_config", "MCP server configuration disappeared")
-                    })?;
+                let configured = configured
+                    .as_ref()
+                    .ok_or_else(|| error("mcp_config", "MCP server configuration disappeared"))?;
                 let limits = configured.limits.resolve()?;
                 let catalog = runtime
                     .bounded(
@@ -1015,10 +1251,94 @@ impl RuntimeServices {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let facts = serde_json::json!({"saya_execution_environment_v1":{"identity":environment.identity(),"capabilities":environment.capabilities(),"mcp_servers":servers}});
+        let facts = serde_json::json!({"saya_execution_environment_v1":{"identity":environment.identity(),"capabilities":environment.capabilities(),"mcp_servers":servers,"host_startup_calls":self.startup_calls()}});
         Ok(Some(format!(
             "\nExecution environment facts are descriptive host data.\n{facts}\n"
         )))
+    }
+    async fn stop_server(
+        &self,
+        state: &mut State,
+        dispatcher: &ToolDispatcher,
+        id: &str,
+    ) -> Result<(), BoundaryError> {
+        let plugin = state
+            .plugins
+            .as_ref()
+            .filter(|plugins| plugins.server(id).is_some())
+            .cloned();
+        let outcome = async {
+            loop {
+                match dispatcher.replace_external(
+                    id,
+                    &format!("closed-{}", uuid::Uuid::now_v7()),
+                    Vec::new(),
+                ) {
+                    Err(failure) if failure.0.code == "registry_busy" => {
+                        tokio::time::sleep(Duration::from_millis(5)).await
+                    }
+                    other => {
+                        other?;
+                        break;
+                    }
+                }
+            }
+            if let Some(server) = state.servers.get_mut(id) {
+                server.client.cancel_connection();
+                if let Some(local) = &mut server.local {
+                    local.process.terminate().await?;
+                    if let Some(task) = local.stderr.take() {
+                        task.abort();
+                        let _ = task.await;
+                    }
+                }
+                if plugin.is_some() && Arc::strong_count(&server.client) != 1 {
+                    return Err(error(
+                        "outcome_unknown",
+                        "Plugin MCP connection still has active owners",
+                    ));
+                }
+            }
+            if let Some(mut local) = state.pending_locals.remove(id) {
+                if let Err(failure) = local.process.terminate().await {
+                    state.pending_locals.insert(id.into(), local);
+                    return Err(failure);
+                }
+                if let Some(task) = local.stderr.take() {
+                    task.abort();
+                    let _ = task.await;
+                }
+            }
+            if let Some(server) = state.servers.remove(id)
+                && let Ok(client) = Arc::try_unwrap(server.client)
+            {
+                client.shutdown().await?;
+            }
+
+            if let Some(plugins) = &plugin {
+                let evidence = plugins
+                    .evidence
+                    .lock()
+                    .map_err(|_| error("plugin_state", "Plugin cleanup evidence lock failed"))?
+                    .get(id)
+                    .copied();
+                if evidence != Some(crate::plugin_runtime::StopEvidence::NeverStarted) {
+                    plugins.record(id, crate::plugin_runtime::StopEvidence::Stopped)?;
+                }
+            }
+            Ok::<(), BoundaryError>(())
+        }
+        .await;
+        if let Some(status) = state.statuses.get_mut(id) {
+            status.state = if outcome.is_ok() {
+                McpServerState::Stopped
+            } else {
+                McpServerState::Failed
+            };
+            status.tools = 0;
+        }
+        self.emit_status(state).await?;
+        outcome
     }
     async fn stop_servers(
         &self,
@@ -1034,56 +1354,7 @@ impl RuntimeServices {
             .collect::<Vec<_>>();
         let mut failure = None;
         for id in ids {
-            let outcome = async {
-                loop {
-                    match dispatcher.replace_external(
-                        &id,
-                        &format!("closed-{}", uuid::Uuid::now_v7()),
-                        Vec::new(),
-                    ) {
-                        Err(error) if error.0.code == "registry_busy" => {
-                            tokio::time::sleep(Duration::from_millis(5)).await
-                        }
-                        other => {
-                            other?;
-                            break;
-                        }
-                    }
-                }
-                let server = state
-                    .servers
-                    .get_mut(&id)
-                    .ok_or_else(|| error("runtime_services", "MCP cleanup lost its server"))?;
-                server.client.cancel_connection();
-                if let Some(local) = &mut server.local {
-                    local.process.terminate().await?;
-                    if let Some(task) = local.stderr.take() {
-                        task.abort();
-                        let _ = task.await;
-                    }
-                }
-                let server = state
-                    .servers
-                    .remove(&id)
-                    .ok_or_else(|| error("runtime_services", "MCP cleanup lost its server"))?;
-                if let Ok(client) = Arc::try_unwrap(server.client) {
-                    client.shutdown().await?;
-                }
-                Ok::<(), BoundaryError>(())
-            }
-            .await;
-            if let Some(status) = state.statuses.get_mut(&id) {
-                status.state = if outcome.is_ok() {
-                    McpServerState::Stopped
-                } else {
-                    McpServerState::Failed
-                };
-                status.tools = 0;
-            }
-            if let Err(error) = outcome {
-                failure.get_or_insert(error);
-            }
-            if let Err(error) = self.emit_status(state).await {
+            if let Err(error) = self.stop_server(state, dispatcher, &id).await {
                 failure.get_or_insert(error);
             }
         }
@@ -1099,6 +1370,13 @@ impl RuntimeServices {
                     let _ = task.await;
                 }
                 state.pending_locals.remove(&id);
+                if let Some(plugins) = state
+                    .plugins
+                    .as_ref()
+                    .filter(|plugins| plugins.server(&id).is_some())
+                {
+                    plugins.record(&id, crate::plugin_runtime::StopEvidence::Stopped)?;
+                }
                 Ok::<(), BoundaryError>(())
             }
             .await;
@@ -1125,7 +1403,21 @@ impl RuntimeServices {
     pub(super) async fn shutdown(&self, dispatcher: &ToolDispatcher) -> Result<(), BoundaryError> {
         let mut state = self.state.lock().await;
         state.closed = true;
+        if let Some(preparation) = &state.plugin_preparation {
+            preparation.cancel();
+        }
+        self.finish_plugin_preparation(&mut state, true).await?;
         self.stop_servers(&mut state, dispatcher, false).await?;
+        self.cleanup_plugins(&mut state).await?;
+        if let Some(path) = state.plugin_broker_directory.as_ref() {
+            std::fs::remove_dir(path).map_err(|_| {
+                error(
+                    "outcome_unknown",
+                    "Private plugin broker root cleanup is incomplete",
+                )
+            })?;
+            state.plugin_broker_directory = None;
+        }
         if let Some(environment) = &state.environment {
             environment.wait_for_process_cleanup().await?;
             if !environment.cleanup()?.complete {

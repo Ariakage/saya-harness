@@ -301,6 +301,22 @@ pub fn valid_external_name(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
 }
+/// Resolve the exact alias used by MCP registration without publishing a tool.
+pub fn mcp_model_name(server: &str, remote: &str) -> Result<String, BoundaryError> {
+    if !valid_server_id(server)
+        || remote.is_empty()
+        || remote.len() > 128
+        || !remote
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+    {
+        return Err(failure(
+            "invalid_tool",
+            "invalid external server or tool identity",
+        ));
+    }
+    Ok(external_name(server, remote))
+}
 pub fn builtin_effect(name: &str) -> Option<ToolEffect> {
     Some(match name {
         "read_file" | "list_dir" | "find_files" | "search_text" => ToolEffect::FileRead,
@@ -457,4 +473,56 @@ fn validate_schema(schema: &Value) -> Result<(), BoundaryError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod model_name_tests {
+    use super::*;
+    struct Adapter(String);
+    impl Tool for Adapter {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.0.clone(),
+                description: "An offline alias fixture".into(),
+                input_schema: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            }
+        }
+        fn execute<'a>(
+            &'a self,
+            _: &'a ToolCall,
+            _: &'a crate::boundary::ToolContext,
+            _: &'a dyn crate::boundary::Cancellation,
+        ) -> crate::boundary::Operation<'a, crate::contract::ToolResult> {
+            Box::pin(async { Err(failure("not_executed", "Alias fixture must not execute")) })
+        }
+    }
+    #[test]
+    fn public_model_name_matches_actual_registry_registration_and_rejects_bad_identity() {
+        for (server, remote) in [
+            ("sp_01234567890123456789012345678", "files.read"),
+            ("other", "-tool_name"),
+            ("third", "long_remote_tool_name_for_hashing"),
+        ] {
+            let expected = mcp_model_name(server, remote).unwrap();
+            let actual = ToolRegistry::default()
+                .register_external(
+                    server,
+                    "fixture-v1",
+                    Arc::new(Adapter(remote.into())),
+                    ExternalAccess::Unclassified,
+                )
+                .unwrap();
+            assert_eq!(expected, actual);
+            assert!(valid_external_name(&actual));
+        }
+        for (server, remote) in [
+            ("invalid/server", "read"),
+            ("valid", "bad/tool"),
+            ("valid", ""),
+            ("valid", "中文"),
+        ] {
+            assert!(mcp_model_name(server, remote).is_err());
+        }
+        assert!(mcp_model_name("valid", &"x".repeat(129)).is_err());
+    }
 }

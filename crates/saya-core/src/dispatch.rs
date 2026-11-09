@@ -39,6 +39,19 @@ struct ObservedStore {
     finished: AtomicBool,
 }
 impl Store for ObservedStore {
+    fn memory_exposures(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        self.inner.memory_exposures(id)
+    }
+    fn context_checkpoint(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        self.inner.context_checkpoint(id)
+    }
+
     fn output_references(
         &self,
         id: SessionId,
@@ -88,6 +101,19 @@ struct BackgroundStore {
     call_id: String,
 }
 impl Store for BackgroundStore {
+    fn memory_exposures(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        self.inner.memory_exposures(id)
+    }
+    fn context_checkpoint(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        self.inner.context_checkpoint(id)
+    }
+
     fn output_references(
         &self,
         id: SessionId,
@@ -123,12 +149,15 @@ pub struct ToolDispatcher {
     read_only: bool,
     context_guard: OnceLock<Arc<ContextGuard>>,
     output_store: OnceLock<Arc<crate::output_store::OutputStore>>,
+    output_access_guard: OnceLock<Arc<OutputAccessGuard>>,
     known_secrets: Vec<String>,
     registry: RwLock<ToolRegistry>,
     external_active: Arc<AtomicUsize>,
     execution: RwLock<Option<Arc<crate::execution::PreparedEnvironment>>>,
     secret_registry: OnceLock<Arc<crate::credentials::SecretRegistry>>,
 }
+pub(crate) type OutputAccessGuard =
+    dyn Fn(ToolCall, ToolContext) -> StoreOperation<'static, Option<ToolResult>> + Send + Sync;
 type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
 struct TodoLease<'a>(&'a OneShotPermit);
 struct ExternalLease<'a>(&'a OneShotPermit);
@@ -168,6 +197,45 @@ pub(crate) struct McpLaunch {
     pub operation: Operation,
 }
 impl ToolDispatcher {
+    pub(crate) fn set_output_access_guard(
+        &self,
+        guard: Arc<OutputAccessGuard>,
+    ) -> Result<(), BoundaryError> {
+        self.output_access_guard
+            .set(guard)
+            .map_err(|_| failure("invalid_config", "Output access guard is already installed"))
+    }
+    async fn guard_output_access(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<Option<ToolResult>, BoundaryError> {
+        match self.output_access_guard.get() {
+            Some(guard) => guard(call.clone(), context.clone()).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) fn permission_fingerprint(&self) -> String {
+        self.policy.fingerprint()
+    }
+    pub(crate) fn protect_host_paths(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+    ) -> Result<(), BoundaryError> {
+        self.policy.protect_host_paths(paths.clone())?;
+        self.files
+            .protect_paths(paths)
+            .map_err(|_| failure("permission_error", "Cannot protect managed store paths"))
+    }
+    pub(crate) fn managed_context_decision(
+        &self,
+        mode: crate::contract::WorkMode,
+        permissions: crate::contract::PermissionMode,
+        operation: &Operation,
+    ) -> crate::permissions::PolicyDecision {
+        self.policy.evaluate(mode, permissions, operation)
+    }
     /// Prepare only the explicit host-configured startup references. This does
     /// not broaden the normal model-facing exec environment policy.
     pub(crate) fn prepare_mcp_launch(
@@ -214,6 +282,17 @@ impl ToolDispatcher {
                 "invalid server startup operation",
             ));
         }
+        let mut config = review.config.clone();
+        config.known_secrets.extend(self.current_secrets()?);
+        self.manager
+            .authorize(input, review.model, review.budget, &config)
+            .await
+    }
+    pub(crate) async fn authorize_managed(
+        &self,
+        input: AuthorizationInput<'_>,
+        review: DispatchReview<'_>,
+    ) -> Result<Authorization, BoundaryError> {
         let mut config = review.config.clone();
         config.known_secrets.extend(self.current_secrets()?);
         self.manager
@@ -431,6 +510,7 @@ impl ToolDispatcher {
             read_only: false,
             context_guard: OnceLock::new(),
             output_store: OnceLock::new(),
+            output_access_guard: OnceLock::new(),
             known_secrets: known_secrets.clone(),
             registry: RwLock::new(ToolRegistry::with_known_secrets(known_secrets)),
             external_active: Arc::new(AtomicUsize::new(0)),
@@ -711,16 +791,29 @@ impl ToolDispatcher {
                 } else {
                     crate::tools::output::OutputToolKind::Search
                 };
-                let outcome = if permit.authorize_output(call, context)? {
-                    crate::tools::output::OutputTool::new(output_store.clone(), kind)
-                        .execute(call, context, cancel)
-                        .await
+                let mut outcome = if permit.authorize_output(call, context)? {
+                    match self.guard_output_access(call, context).await {
+                        Ok(Some(projection)) => Ok(projection),
+                        Ok(None) => {
+                            crate::tools::output::OutputTool::new(output_store.clone(), kind)
+                                .execute(call, context, cancel)
+                                .await
+                        }
+                        Err(error) => Err(error),
+                    }
                 } else {
                     Err(failure(
                         "stale_approval",
                         "Output query authorization changed",
                     ))
                 };
+                // The memory ledger may change during an approved retrieval.
+                // Check again before persisting or exposing the observed body.
+                match self.guard_output_access(call, context).await {
+                    Ok(Some(projection)) => outcome = Ok(projection),
+                    Ok(None) => {}
+                    Err(error) => outcome = Err(error),
+                }
                 let result = match &outcome {
                     Ok(result) => crate::redaction::tool_result(result, &self.current_secrets()?)?,
                     Err(error) => ToolResult {
@@ -1049,6 +1142,20 @@ impl ToolDispatcher {
         } else {
             self.files.root_paths()
         };
+        let files = self.files.clone();
+        let snapshot_tool = call.name.clone();
+        let snapshot_target = target.clone();
+        let protected_paths = tokio::task::spawn_blocking(move || {
+            files.worker_protection_snapshot(&snapshot_tool, &snapshot_target)
+        })
+        .await
+        .map_err(|_| {
+            failure(
+                "host_protection_unavailable",
+                "Private protection snapshot worker failed",
+            )
+        })?
+        .map_err(|error| failure(error.code, error.message));
         let mut recorded = call.clone();
         let mut normalized = operation.normalized_arguments(arguments)?;
         crate::redaction::redact(&mut normalized, &self.current_secrets()?)?;
@@ -1062,21 +1169,27 @@ impl ToolDispatcher {
             .await?;
         let outcome =
             if !cancel.is_cancelled() && permit.authorize_file(call, context, &operation)? {
-                crate::tools::isolated::execute_isolated_file(
-                    environment,
-                    crate::execution::FileWorkerRequest {
-                        schema_version: 1,
-                        call: call.clone(),
-                        context: context.clone(),
-                        approved_target: target,
-                        read_roots,
-                        read_limits: self.files.limits.clone(),
-                        write_max_bytes: self.write_max_bytes,
-                    },
-                    cancel,
-                    self.exec_config.default_timeout,
-                )
-                .await
+                match protected_paths {
+                    Ok(protected_paths) => {
+                        crate::tools::isolated::execute_isolated_file(
+                            environment,
+                            crate::execution::FileWorkerRequest {
+                                schema_version: 1,
+                                call: call.clone(),
+                                context: context.clone(),
+                                approved_target: target,
+                                read_roots,
+                                read_limits: self.files.limits.clone(),
+                                write_max_bytes: self.write_max_bytes,
+                                protected_paths,
+                            },
+                            cancel,
+                            self.exec_config.default_timeout,
+                        )
+                        .await
+                    }
+                    Err(failure) => Err(failure),
+                }
             } else {
                 Err(failure(
                     "stale_approval",

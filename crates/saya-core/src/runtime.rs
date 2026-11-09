@@ -1,11 +1,17 @@
 //! Reusable, UI-independent run loop. Network providers and durable storage are
 //! supplied by callers. Memory-backed side effects are suitable only for tests.
+#[path = "runtime_checkpoint.rs"]
+mod checkpoint;
 #[path = "runtime_context.rs"]
 mod context;
+#[path = "runtime_memory.rs"]
+mod managed_memory;
 #[path = "runtime_secrets.rs"]
 mod secrets;
 #[path = "runtime_services.rs"]
 mod services;
+#[path = "runtime_skills.rs"]
+mod skills;
 use crate::{
     approvals::{ApprovalSetup, Authorization, PermissionRevision, Preauthorizations},
     background::{BackgroundJobs, BackgroundToolKind, BackgroundTools},
@@ -97,6 +103,19 @@ struct RuntimeStore {
     secrets: secrets::SecretSource,
 }
 impl Store for RuntimeStore {
+    fn memory_exposures(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> Operation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        self.inner.memory_exposures(id)
+    }
+    fn context_checkpoint(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> Operation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        self.inner.context_checkpoint(id)
+    }
+
     fn output_references(
         &self,
         id: crate::contract::SessionId,
@@ -236,7 +255,10 @@ pub struct AgentRuntime {
     input: Option<Arc<dyn InputHandler>>,
     project_context: Option<Arc<Mutex<ProjectState>>>,
     personal_context: PersonalContext,
-    context_state: Option<context::ContextState>,
+    context_state: Option<Arc<context::ContextState>>,
+    managed_memory: Option<Arc<managed_memory::MemoryState>>,
+    skill_state: Option<Arc<skills::SkillState>>,
+    checkpoints: Option<Arc<checkpoint::CheckpointState>>,
     limits: RuntimeLimits,
     read_only: bool,
     used: bool,
@@ -311,8 +333,26 @@ pub struct RuntimeHandle {
     modes: ModeController,
     dispatcher: Arc<ToolDispatcher>,
     services: Arc<services::RuntimeServices>,
+    context_state: Option<Arc<context::ContextState>>,
+    skill_state: Option<std::sync::Weak<skills::SkillState>>,
 }
 impl RuntimeHandle {
+    /// A queued request may outlive the final execution response. Interfaces
+    /// can honor it with a separate compact run after successful completion.
+    pub fn compaction_pending(&self) -> bool {
+        self.context_state
+            .as_ref()
+            .is_some_and(|state| state.requested.load(Ordering::Acquire))
+    }
+    pub fn request_compaction(&self) -> Result<(), BoundaryError> {
+        let state = self
+            .context_state
+            .as_ref()
+            .ok_or_else(|| error("context_config", "Context budgeting is unavailable"))?;
+        state.requested.store(true, Ordering::Release);
+        Ok(())
+    }
+
     pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
         self.services.request_mode(self, mode)
     }
@@ -332,8 +372,16 @@ impl RuntimeHandle {
     /// cleanup. This remains available after the owning run future fails or is
     /// aborted. Repeated calls are safe; completed job status stays readable.
     pub async fn shutdown_background(&self) -> Result<(), BoundaryError> {
-        self.jobs.shutdown().await?;
-        self.services.shutdown(self.dispatcher.as_ref()).await
+        let background = self.jobs.shutdown().await;
+        let skills = self
+            .skill_state
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .map_or(Ok(()), |state| state.clear_plugin_leases());
+        let services = self.services.shutdown(self.dispatcher.as_ref()).await;
+        background?;
+        skills?;
+        services
     }
     /// Snapshot background lifecycle transitions in the order observed by this run.
     pub fn background_events(
@@ -473,6 +521,9 @@ impl AgentRuntime {
             project_context: None,
             personal_context: PersonalContext::default(),
             context_state: None,
+            managed_memory: None,
+            skill_state: None,
+            checkpoints: None,
             limits,
             read_only,
             used: false,
@@ -487,6 +538,8 @@ impl AgentRuntime {
             modes: self.modes.clone(),
             dispatcher: self.dispatcher.clone(),
             services: self.services.clone(),
+            context_state: self.context_state.clone(),
+            skill_state: self.skill_state.as_ref().map(Arc::downgrade),
         }
     }
     /// Apply explicitly configured rates to the two request categories.
@@ -525,8 +578,24 @@ impl AgentRuntime {
         mut self,
         budget: crate::context_builder::ContextBudget,
     ) -> Result<Self, BoundaryError> {
+        let config = crate::compaction::CompactionConfig {
+            summary_output_tokens: 4096
+                .min(u32::try_from(budget.output_reserve).unwrap_or(u32::MAX)),
+            ..Default::default()
+        };
+        self = self.with_context_settings(budget, true, config)?;
+        Ok(self)
+    }
+    pub fn with_context_settings(
+        mut self,
+        budget: crate::context_builder::ContextBudget,
+        automatic: bool,
+        config: crate::compaction::CompactionConfig,
+    ) -> Result<Self, BoundaryError> {
         budget.input_capacity()?;
-        self.context_state = Some(context::ContextState::new(budget));
+        self.context_state = Some(Arc::new(context::ContextState::new(
+            budget, automatic, config,
+        )?));
         Ok(self)
     }
     /// Attach private output storage before this single-use run starts.
@@ -538,12 +607,29 @@ impl AgentRuntime {
             .set_output_store(Arc::new(store.for_run(self.run.id)))?;
         Ok(self)
     }
+    /// Exclude host control stores from every generic local file adapter.
+    /// Process isolation uses the separately configured native policy.
+    pub fn with_private_paths(self, paths: Vec<PathBuf>) -> Result<Self, BoundaryError> {
+        self.dispatcher.protect_host_paths(paths)?;
+        Ok(self)
+    }
     pub fn with_execution_settings(
         self,
         policy: crate::execution::SandboxPolicy,
         broker: Option<crate::network::BrokerPolicy>,
     ) -> Result<Self, BoundaryError> {
         self.services.configure_execution(policy, broker)?;
+        Ok(self)
+    }
+    pub fn with_plugins(
+        self,
+        store: crate::plugin_store::PluginStore,
+        pool: Arc<crate::plugin_runtime::ViewPool>,
+        bindings: crate::plugin_runtime::PluginHostBindings,
+        journal: Arc<crate::hook_store::HookStore>,
+    ) -> Result<Self, BoundaryError> {
+        self.services
+            .configure_plugins(store, pool, bindings, journal)?;
         Ok(self)
     }
     pub fn with_mcp_settings(
@@ -593,6 +679,15 @@ impl AgentRuntime {
     }
     fn definitions(&self, mode: WorkMode) -> Result<Vec<ToolDefinition>, BoundaryError> {
         let mut tools = self.dispatcher.definitions(mode)?;
+        if let Some(memory) = &self.managed_memory {
+            tools.extend(memory.definitions(mode, self.read_only)?);
+        }
+        if let Some(skills) = &self.skill_state {
+            tools.extend(skills.definitions());
+        }
+        if let Some(checkpoints) = &self.checkpoints {
+            tools.extend(checkpoints.definitions(mode, self.read_only));
+        }
         if (self.read_only || mode == WorkMode::Plan)
             && let Some(definition) = tools
                 .iter_mut()
@@ -668,10 +763,10 @@ impl AgentRuntime {
         tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), () = sleep(self.budget.remaining()?) => Err(error("limit_reached", "active time budget exceeded")), () = sleep(timeout) => Err(error(code, "operation timed out")), result = operation => result }
     }
     async fn model_turn(&self, session: &mut Session) -> Result<Vec<HistoryItem>, BoundaryError> {
-        for attempt in 0..=2u32 {
+        let mut attempt = 0u32;
+        loop {
             self.check()?;
             self.services.refresh(self).await?;
-            self.budget.consume()?;
             let snap = loop {
                 let snap = self.sync_mode(session).await?;
                 self.check()?;
@@ -680,12 +775,36 @@ impl AgentRuntime {
                 }
                 sleep(Duration::from_millis(10)).await;
             };
-            let environment_facts = self.services.facts(snap.current).await?;
+            let environment_facts = match self.services.facts(snap.current).await {
+                Ok(facts) => facts,
+                Err(error) => {
+                    self.modes.finish()?;
+                    return Err(error);
+                }
+            };
+            let memory_frame = match self.memory_frame(session).await {
+                Ok(frame) => frame,
+                Err(error) => {
+                    self.modes.finish()?;
+                    return Err(error);
+                }
+            };
+            let skill_frame = match self.skill_frame(session).await {
+                Ok(frame) => frame,
+                Err(error) => {
+                    self.modes.finish()?;
+                    return Err(error);
+                }
+            };
             let request = (|| {
                 let tools = self.definitions(snap.current)?;
-                let instructions =
+                let mut instructions =
                     crate::prompt::execution(snap.current, self.run.permissions, &tools)?
                         .instructions;
+                if self.managed_memory.is_some() {
+                    instructions.push_str("\n\n");
+                    instructions.push_str(crate::global_memory::MEMORY_CONTEXT_INSTRUCTIONS);
+                }
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
                 let mut dynamic_instructions = crate::prompt::system_context(
@@ -719,6 +838,12 @@ impl AgentRuntime {
                 {
                     history.push(HistoryItem::UserText(serde_json::json!({"saya_personal_context_v1": {"preferences": self.personal_context.preferences, "memory": self.personal_context.memory}}).to_string()));
                 }
+                if let Some(text) = memory_frame.as_ref().and_then(|frame| frame.text.as_ref()) {
+                    history.push(HistoryItem::UserText(text.clone()));
+                }
+                if let Some(skills) = &skill_frame {
+                    history.push(HistoryItem::UserText(skills.context_data().to_string()));
+                }
                 history.extend(session.history.iter().cloned());
                 let request = ModelRequest {
                     request_id,
@@ -739,13 +864,37 @@ impl AgentRuntime {
                     return Err(e);
                 }
             };
-            let request = match self.context_request(session, request).await {
+            let request = match self
+                .context_request(
+                    session,
+                    request,
+                    memory_frame.as_ref(),
+                    skill_frame.as_ref(),
+                )
+                .await
+            {
                 Ok(request) => request,
                 Err(error) => {
                     self.modes.finish()?;
                     return Err(error);
                 }
             };
+            if self
+                .context_state
+                .as_ref()
+                .is_some_and(|state| state.rebuild.swap(false, Ordering::AcqRel))
+            {
+                self.modes.finish()?;
+                continue;
+            }
+            if self
+                .context_state
+                .as_ref()
+                .is_some_and(|state| state.manual_only.load(Ordering::Acquire))
+            {
+                self.modes.finish()?;
+                return Ok(Vec::new());
+            }
             if let Err(error) = secrets::model_request(&request, &self.secret_source) {
                 self.modes.finish()?;
                 return Err(error);
@@ -762,10 +911,32 @@ impl AgentRuntime {
                 self.modes.finish()?;
                 return Err(e);
             }
+            if let Err(error) = self.bind_memory_request(&request.request_id, memory_frame.as_ref())
+            {
+                self.modes.finish()?;
+                return Err(error);
+            }
+            if let (Some(state), Some(frame)) = (&self.skill_state, &skill_frame) {
+                let current = match state.context_version() {
+                    Ok(current) => current,
+                    Err(error) => {
+                        self.modes.finish()?;
+                        return Err(error);
+                    }
+                };
+                if current != frame.version_sha256 {
+                    self.modes.finish()?;
+                    return Err(error(
+                        "skill_context_changed",
+                        "Active Skill context changed before model dispatch",
+                    ));
+                }
+            }
             let start = Instant::now();
             let mut partial = String::new();
             let mut received = false;
             let response: Result<Vec<HistoryItem>, BoundaryError> = async {
+                self.budget.consume()?;
                 let mut stream = self
                     .bounded(
                         self.model.start(&request, self.cancel.as_ref()),
@@ -823,12 +994,16 @@ impl AgentRuntime {
                             partial,
                             &self.secret_source,
                         )?);
-                        self.store
-                            .commit(&[StoreChange::History {
-                                session_id: session.id,
-                                item: item.clone(),
-                            }])
-                            .await?;
+                        let mut changes = vec![StoreChange::History {
+                            session_id: session.id,
+                            item: item.clone(),
+                        }];
+                        if let Some(record) =
+                            self.memory_response_change(session, std::slice::from_ref(&item))?
+                        {
+                            changes.push(record);
+                        }
+                        self.store.commit(&changes).await?;
                         session.history.push(item);
                     }
                     if !received
@@ -862,13 +1037,13 @@ impl AgentRuntime {
                             "retry_timeout",
                         )
                         .await?;
+                        attempt += 1;
                     } else {
                         return Err(err);
                     }
                 }
             }
         }
-        Err(error("model_error", "retry attempts exhausted"))
     }
     async fn confirm(&self, request: &ApprovalRequest) -> Result<Option<bool>, BoundaryError> {
         let Some(handler) = &self.confirmation else {
@@ -930,6 +1105,9 @@ impl AgentRuntime {
         result: ToolResult,
     ) -> Result<ToolResult, BoundaryError> {
         if !matches!(kind, BackgroundToolKind::Start) {
+            let result = self
+                .project_background_memory(session, call, result)
+                .await?;
             return self.save_local(session, call, result).await;
         }
         let item = HistoryItem::ToolResult {
@@ -1056,6 +1234,67 @@ impl AgentRuntime {
             sleep(Duration::from_millis(10)).await;
         };
         let context = self.context(session, snap.current);
+        let mut arguments: serde_json::Value = serde_json::from_str(&call.arguments)
+            .unwrap_or_else(|_| serde_json::json!({"invalid_arguments":true}));
+        if call.name.starts_with("memory_") {
+            arguments = serde_json::json!({"host_managed_data":true,"arguments_sha256":crate::memory_context::digest(call.arguments.as_bytes())});
+        }
+        let hooks = self
+            .services
+            .fire_hooks(
+                self,
+                session,
+                crate::hooks::HookEvent::ToolBeforeDispatch,
+                format!(
+                    "tool.before_dispatch:{}",
+                    crate::memory_context::digest(call.call_id.as_bytes())
+                ),
+                Some(call.call_id.clone()),
+                serde_json::json!({"tool":call.name,"arguments":arguments}),
+            )
+            .await?;
+        if hooks.cleanup_pending {
+            return Err(error(
+                "outcome_unknown",
+                "A pre-dispatch hook requires cleanup reconciliation",
+            ));
+        }
+        if hooks.blocked {
+            return self
+                .save_local(
+                    session,
+                    call,
+                    failed(
+                        "hook_denied",
+                        "A configured check hook blocked this operation",
+                    ),
+                )
+                .await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "memory_read" | "memory_search" | "memory_evidence" | "memory_update" | "memory_forget"
+        ) {
+            return self.execute_memory(session, call, &context, progress).await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "skill_catalog" | "skill_activate" | "skill_deactivate" | "skill_read_resource"
+        ) {
+            return self.execute_skill(session, call, &context, progress).await;
+        }
+        if matches!(
+            call.name.as_str(),
+            "checkpoint_create"
+                | "checkpoint_list"
+                | "checkpoint_diff"
+                | "checkpoint_accept"
+                | "checkpoint_restore"
+        ) {
+            return self
+                .execute_checkpoint(session, call, &context, progress)
+                .await;
+        }
         let control = match call.name.as_str() {
             "background_start" => Some(BackgroundToolKind::Start),
             "background_status" => Some(BackgroundToolKind::Status),
@@ -1407,13 +1646,45 @@ impl AgentRuntime {
         start.push(StoreChange::RunStarted(self.run.clone()));
         self.store.commit(&start).await?;
         self.started.store(true, Ordering::Release);
-        self.services.initialize(self, session).await?;
-        let mut calls_used = self.services.startup_calls();
+        if !self
+            .context_state
+            .as_ref()
+            .is_some_and(|state| state.manual_only.load(Ordering::Acquire))
+        {
+            self.services.initialize(self, session).await?;
+            let hooks = self
+                .services
+                .fire_hooks(
+                    self,
+                    session,
+                    crate::hooks::HookEvent::RunStarted,
+                    format!("run.started:{}", self.run.id.0),
+                    None,
+                    serde_json::json!({"history_items":session.history.len()}),
+                )
+                .await?;
+            if hooks.cleanup_pending || hooks.blocked {
+                return Err(error(
+                    "outcome_unknown",
+                    "A run-started hook did not complete safely",
+                ));
+            }
+        }
         let mut previous: Option<(String, serde_json::Value, u8)> = None;
         loop {
             self.check()?;
             let items = self.model_turn(session).await?;
             self.check()?;
+            if let Some(state) = &self.context_state
+                && state.manual_only.load(Ordering::Acquire)
+            {
+                return Ok(if state.published.load(Ordering::Acquire) {
+                    "Context checkpoint published"
+                } else {
+                    "No closed history needs compaction"
+                }
+                .into());
+            }
             let mut seen_ids: std::collections::HashSet<&str> = session
                 .history
                 .iter()
@@ -1446,7 +1717,7 @@ impl AgentRuntime {
                     _ => {}
                 }
             }
-            let changes: Vec<_> = items
+            let mut changes: Vec<_> = items
                 .iter()
                 .cloned()
                 .map(|item| StoreChange::History {
@@ -1454,6 +1725,9 @@ impl AgentRuntime {
                     item,
                 })
                 .collect();
+            if let Some(record) = self.memory_response_change(session, &items)? {
+                changes.push(record);
+            }
             self.store.commit(&changes).await?;
             session.history.extend(items.iter().cloned());
             let calls: Vec<_> = items
@@ -1484,13 +1758,12 @@ impl AgentRuntime {
                         .await?;
                     return Err(err);
                 }
-                calls_used += 1;
-                self.metrics.tool_call();
-                if calls_used > self.limits.tool_calls {
+                if let Err(failure) = self.services.reserve_tool(self.limits.tool_calls) {
                     self.close_calls(session, &calls[index..], CallProgress::NotDispatched)
                         .await?;
-                    return Err(error("limit_reached", "tool call budget exceeded"));
+                    return Err(failure);
                 }
+                self.metrics.tool_call();
                 let mut progress = CallProgress::NotDispatched;
                 let result = match self.execute(session, call, &mut progress).await {
                     Ok(result) => result,
@@ -1501,6 +1774,24 @@ impl AgentRuntime {
                         return Err(err);
                     }
                 };
+                let finished = self.services.fire_hooks(self,session,crate::hooks::HookEvent::ToolFinished,
+                    format!("tool.finished:{}",crate::memory_context::digest(call.call_id.as_bytes())),Some(call.call_id.clone()),
+                    serde_json::json!({"tool":call.name,"ok":result.ok,"truncated":result.truncated,"error_code":result.error.as_ref().map(|error|error.code.as_str())})).await;
+                if let Err(failure) = &finished {
+                    if failure.0.code != "storage_error" && failure.2.is_none() {
+                        self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
+                            .await?;
+                    }
+                    return Err(failure.clone());
+                }
+                if finished?.cleanup_pending {
+                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
+                        .await?;
+                    return Err(error(
+                        "outcome_unknown",
+                        "A tool-finished hook requires cleanup reconciliation",
+                    ));
+                }
                 if result
                     .error
                     .as_ref()
@@ -1559,6 +1850,16 @@ impl AgentRuntime {
             }
         }
     }
+    /// Run only a tool-free compaction operation against the saved history.
+    pub async fn compact(&mut self, session: &mut Session) -> Result<RunResult, BoundaryError> {
+        let state = self
+            .context_state
+            .as_ref()
+            .ok_or_else(|| error("context_config", "Context budgeting is unavailable"))?;
+        state.manual_only.store(true, Ordering::Release);
+        state.requested.store(true, Ordering::Release);
+        self.run(session).await
+    }
     /// Run once, then cancel and await all background work. Execution returns
     /// typed status; storage failures return errors retaining observed results.
     #[tracing::instrument(target = "saya::runtime", name = "run", skip_all, fields(session_id = %session.id.0, run_id = %self.run.id.0))]
@@ -1572,11 +1873,40 @@ impl AgentRuntime {
         self.used = true;
         let initial = session.history.len();
         self.dispatcher.recover_outputs(session.id).await?;
-        let outcome = self.run_inner(session).await;
-        let unfinished = self.jobs.running_count()?;
+        let mut outcome = self.run_inner(session).await;
+        if self.started.load(Ordering::Acquire)
+            && !self
+                .context_state
+                .as_ref()
+                .is_some_and(|state| state.manual_only.load(Ordering::Acquire))
+            && !outcome
+                .as_ref()
+                .err()
+                .is_some_and(|failure| failure.0.code == "storage_error" || failure.2.is_some())
+        {
+            let finished=self.services.fire_hooks(self,session,crate::hooks::HookEvent::RunFinished,
+                format!("run.finished:{}",self.run.id.0),None,serde_json::json!({"completed":outcome.is_ok(),"stop_code":outcome.as_ref().err().map(|failure|failure.0.code.as_str())})).await;
+            match finished {
+                Err(failure) => outcome = Err(failure),
+                Ok(hooks) if hooks.cleanup_pending => {
+                    outcome = Err(error(
+                        "outcome_unknown",
+                        "A run-finished hook requires cleanup reconciliation",
+                    ))
+                }
+                _ => {}
+            }
+        }
+        let unfinished = self.jobs.running_count();
         let cleanup = self.jobs.shutdown().await;
-        cleanup?;
+        let skill_cleanup = self
+            .skill_state
+            .as_ref()
+            .map_or(Ok(()), |state| state.clear_plugin_leases());
         let service_cleanup = self.services.shutdown(self.dispatcher.as_ref()).await;
+        cleanup?;
+        skill_cleanup?;
+        let unfinished = unfinished?;
         if let Some(error) = self.jobs.fatal_failure()? {
             return Err(error);
         }

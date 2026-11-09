@@ -20,6 +20,8 @@ use std::{
 
 mod sandbox;
 pub use sandbox::{SandboxNetworkSettings, SandboxSettings};
+mod plugins;
+pub use plugins::PluginSettings;
 
 fn invalid(message: &'static str) -> BoundaryError {
     BoundaryError(
@@ -365,6 +367,82 @@ impl Default for OutputCaptureSettings {
         }
     }
 }
+/// Context policy is selected at launch and never restored as historical authority.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ContextSettings {
+    pub auto_compact: bool,
+    pub trigger_percent: u16,
+    pub target_percent: u16,
+    pub extra_safety_tokens: u64,
+    pub summary_max_output_tokens: u32,
+    pub max_compaction_calls: usize,
+    pub compaction_timeout_seconds: u64,
+}
+impl Default for ContextSettings {
+    fn default() -> Self {
+        Self {
+            auto_compact: true,
+            trigger_percent: 80,
+            target_percent: 55,
+            extra_safety_tokens: 0,
+            summary_max_output_tokens: 4096,
+            max_compaction_calls: 32,
+            compaction_timeout_seconds: 600,
+        }
+    }
+}
+impl ContextSettings {
+    fn validate(&self) -> Result<(), BoundaryError> {
+        if self.target_percent == 0
+            || self.target_percent >= self.trigger_percent
+            || self.trigger_percent > 100
+            || self.summary_max_output_tokens == 0
+            || self.summary_max_output_tokens > 16384
+            || self.max_compaction_calls == 0
+            || self.max_compaction_calls > 64
+            || self.compaction_timeout_seconds == 0
+            || self.compaction_timeout_seconds > 3600
+        {
+            return Err(invalid(
+                "Context thresholds or compaction limits are invalid",
+            ));
+        }
+        Ok(())
+    }
+    pub fn budget(&self, profile: &Profile) -> crate::context_builder::ContextBudget {
+        crate::context_builder::ContextBudget {
+            window_tokens: profile.context_window_tokens,
+            output_reserve: u64::from(profile.max_output_tokens),
+            safety_margin: profile
+                .context_window_tokens
+                .div_ceil(10)
+                .saturating_add(1)
+                .saturating_add(self.extra_safety_tokens),
+            trigger_per_mille: self.trigger_percent * 10,
+            target_per_mille: self.target_percent * 10,
+        }
+    }
+}
+/// Managed global memory is independent from explicitly supplied context files.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemorySettings {
+    pub read: bool,
+    pub inject: bool,
+    pub write: bool,
+    pub root: Option<PathBuf>,
+}
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            read: true,
+            inject: true,
+            write: true,
+            root: None,
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Document {
@@ -387,6 +465,12 @@ struct Document {
     mcp: McpSettings,
     #[serde(default)]
     output_capture: OutputCaptureSettings,
+    #[serde(default)]
+    context: ContextSettings,
+    #[serde(default)]
+    memory: MemorySettings,
+    #[serde(default)]
+    plugins: PluginSettings,
 }
 /// Effective settings; no model is implicitly selected. Secret values stay in Environment.
 #[derive(Clone)]
@@ -408,9 +492,26 @@ pub struct Config {
     pub sandbox: SandboxSettings,
     pub mcp: McpSettings,
     pub output_capture: OutputCaptureSettings,
+    pub context: ContextSettings,
+    pub memory: MemorySettings,
+    pub plugins: PluginSettings,
     env: Environment,
 }
 impl Config {
+    pub fn memory_root(&self) -> Result<PathBuf, BoundaryError> {
+        let root = match &self.memory.root {
+            Some(root) => root.clone(),
+            None => self
+                .env
+                .path("HOME")
+                .ok_or_else(|| invalid("HOME is required for the default memory root"))?
+                .join(".saya"),
+        };
+        if !root.is_absolute() {
+            return Err(invalid("Memory root must be absolute"));
+        }
+        Ok(root)
+    }
     /// Captured launch environment used by process and transport adapters.
     pub fn environment(&self) -> &Environment {
         &self.env
@@ -438,6 +539,22 @@ impl Config {
                         .chain(settings.headers_env.values())
                         .cloned(),
                 ),
+            }
+        }
+        if self.plugins.enabled {
+            for slot in self.plugins.bindings.slots.values() {
+                use crate::plugin_runtime::CredentialSlotBinding;
+                let reference = match slot {
+                    CredentialSlotBinding::Environment { reference, .. }
+                    | CredentialSlotBinding::HttpBearer { reference, .. }
+                    | CredentialSlotBinding::HttpHeader { reference, .. } => Some(reference),
+                    CredentialSlotBinding::HttpCredential { .. } => None,
+                };
+                if let Some(reference) = reference
+                    && self.env.value(reference).ok().flatten().is_some()
+                {
+                    names.insert(reference.clone());
+                }
             }
         }
         names
@@ -606,6 +723,8 @@ pub fn load(
     doc.sandbox.validate()?;
     validate_mcp(&doc.mcp, &env)?;
     doc.output_capture.limits.validate()?;
+    doc.context.validate()?;
+    doc.plugins.validate()?;
     if doc.review.max_output_tokens == 0 {
         return Err(invalid("review output limit must be positive"));
     }
@@ -695,6 +814,9 @@ pub fn load(
         sandbox: doc.sandbox,
         mcp: doc.mcp,
         output_capture: doc.output_capture,
+        context: doc.context,
+        memory: doc.memory,
+        plugins: doc.plugins,
         env,
     })
 }

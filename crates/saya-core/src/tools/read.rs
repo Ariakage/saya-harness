@@ -13,8 +13,16 @@ use std::{
     collections::HashMap,
     io::{self, Read},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
+
+mod protection;
+pub use protection::{ProtectedFileVersion, ProtectedPathSnapshot};
+#[cfg(test)]
+mod tests;
 
 /// Read and search output and processing limits. Callers configure these; model
 /// tool arguments must not increase them.
@@ -80,6 +88,7 @@ pub struct ReadTools {
     roots: Vec<Root>,
     pub(crate) limits: ReadLimits,
     pub(crate) bypass: bool,
+    protected: Arc<RwLock<protection::ProtectedPaths>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,7 +156,90 @@ impl ReadTools {
             roots,
             limits,
             bypass,
+            protected: Arc::new(RwLock::new(protection::ProtectedPaths::default())),
         })
+    }
+
+    /// Add host-owned private files or subtrees. These exclusions apply to
+    /// ordinary file tools under every permission mode, including bypass.
+    /// Missing future paths are supported. Metadata scans are finite and a
+    /// failed protection update preserves the previous set.
+    pub fn protect_paths(&self, paths: Vec<PathBuf>) -> Result<(), ReadError> {
+        self.protected
+            .write()
+            .map_err(|_| err("path_denied", "Private path protection is unavailable"))?
+            .extend(paths)
+    }
+
+    /// Capture host private identities before entering an OS-restricted worker.
+    /// Safe hardlinks are limited to this operation's target and scan budget.
+    pub fn worker_protection_snapshot(
+        &self,
+        tool: &str,
+        target: &Path,
+    ) -> Result<ProtectedPathSnapshot, ReadError> {
+        if !matches!(
+            tool,
+            "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
+        ) {
+            return Err(err("invalid_args", "Unknown file worker operation"));
+        }
+        self.check_private_path(target)?;
+        let anchor = if target.starts_with(&self.workspace) {
+            &self.workspace
+        } else {
+            self.roots
+                .iter()
+                .find(|root| target.starts_with(&root.path))
+                .map(|root| &root.path)
+                .ok_or_else(|| err("path_denied", "Worker target is outside its host roots"))?
+        };
+        self.protected
+            .write()
+            .map_err(|_| err("path_denied", "Private path protection is unavailable"))?
+            .snapshot(tool, target, anchor)
+    }
+    /// Install already captured evidence. This never scans the protected roots
+    /// that the child's native filesystem policy may intentionally hide.
+    pub fn install_protection_snapshot(
+        &self,
+        snapshot: ProtectedPathSnapshot,
+    ) -> Result<(), ReadError> {
+        self.protected
+            .write()
+            .map_err(|_| err("path_denied", "Private path protection is unavailable"))?
+            .install(snapshot)
+    }
+    fn protection_truncated(&self) -> Result<bool, ReadError> {
+        self.protected
+            .read()
+            .map(|guard| guard.truncated())
+            .map_err(|_| err("path_denied", "Private path protection is unavailable"))
+    }
+
+    pub(crate) fn check_private_path(&self, path: &Path) -> Result<(), ReadError> {
+        protection::check(&self.protected, path)
+    }
+
+    pub(crate) fn check_open_file(
+        &self,
+        target: &Path,
+        metadata: &cap_std::fs::Metadata,
+    ) -> Result<(), ReadError> {
+        use cap_std::fs::MetadataExt as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let (current, _, _) = self.resolve(target)?;
+        let named = std::fs::metadata(&current).map_err(io_err)?;
+        if (named.dev(), named.ino()) != (metadata.dev(), metadata.ino()) {
+            return Err(err(
+                "path_denied",
+                "Opened file identity changed during private path checks",
+            ));
+        }
+        if metadata.is_file() {
+            protection::check_identity(&self.protected, ProtectedFileVersion::from_cap(metadata))?;
+        }
+        Ok(())
     }
 
     pub(crate) fn resolve(&self, path: &Path) -> Result<(PathBuf, &Root, PathBuf), ReadError> {
@@ -156,7 +248,9 @@ impl ReadTools {
         } else {
             self.workspace.join(path)
         };
+        self.check_private_path(&input)?;
         let target = std::fs::canonicalize(input).map_err(io_err)?;
+        self.check_private_path(&target)?;
         for root in &self.roots {
             if let Ok(relative) = target.strip_prefix(&root.path) {
                 let rel = if relative.as_os_str().is_empty() {
@@ -176,13 +270,15 @@ impl ReadTools {
         cancel: Option<&AtomicBool>,
     ) -> Result<Vec<u8>, ReadError> {
         check_cancel(cancel)?;
-        let (_, root, relative) = self.resolve(path)?;
+        let (target, root, relative) = self.resolve(path)?;
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
         let file = root.dir.open_with(relative, &options).map_err(io_err)?;
-        if !file.metadata().map_err(io_err)?.is_file() {
+        let metadata = file.metadata().map_err(io_err)?;
+        self.check_open_file(&target, &metadata)?;
+        if !metadata.is_file() {
             return Err(err("invalid_file", "target is not a regular file"));
         }
         let mut data = Vec::new();
@@ -196,6 +292,7 @@ impl ReadTools {
             }
             data.extend_from_slice(&buffer[..count]);
         }
+        self.check_open_file(&target, &reader.get_ref().metadata().map_err(io_err)?)?;
         if data.len() > self.limits.file_bytes {
             return Err(err("file_too_large", "file exceeds processing limit"));
         }
@@ -278,15 +375,20 @@ impl ReadTools {
         cancel: Option<&AtomicBool>,
     ) -> Result<Page<DirItem>, ReadError> {
         check_cancel(cancel)?;
-        let (_, root, rel) = self.resolve(path)?;
+        let (target, root, rel) = self.resolve(path)?;
+        let directory = root.dir.open_dir(rel).map_err(io_err)?;
+        self.check_open_file(&target, &directory.dir_metadata().map_err(io_err)?)?;
         let mut entries = std::collections::BTreeMap::new();
-        for entry in root.dir.read_dir(rel).map_err(io_err)? {
+        for entry in directory.entries().map_err(io_err)? {
             check_cancel(cancel)?;
             let entry = entry.map_err(io_err)?;
             let name = entry
                 .file_name()
                 .into_string()
                 .map_err(|_| err("invalid_path", "non-UTF-8 filename"))?;
+            if self.check_private_path(&target.join(&name)).is_err() {
+                continue;
+            }
             let kind = entry.file_type().map_err(io_err)?;
             let kind = if kind.is_dir() {
                 "directory"
@@ -308,11 +410,13 @@ impl ReadTools {
                 entries.pop_last();
             }
         }
-        bounded_page(
+        let mut page = bounded_page(
             entries.into_values().collect(),
             self.limits.list_entries,
             self.limits.list_bytes,
-        )
+        )?;
+        page.truncated |= self.protection_truncated()?;
+        Ok(page)
     }
 
     fn walker(&self, path: &Path, include_ignored: bool) -> Result<ignore::Walk, ReadError> {
@@ -331,9 +435,11 @@ impl ReadTools {
             .git_exclude(false)
             .parents(false)
             .sort_by_file_name(|a, b| a.cmp(b));
-        if !include_ignored {
-            builder.filter_entry(|entry| !excluded(entry));
-        }
+        let protected = self.protected.clone();
+        builder.filter_entry(move |entry| {
+            (include_ignored || !excluded(entry))
+                && protection::check(&protected, entry.path()).is_ok()
+        });
         Ok(builder.build())
     }
 
@@ -469,7 +575,7 @@ impl ReadTools {
         }
         Ok(Page {
             items,
-            truncated: false,
+            truncated: self.protection_truncated()?,
         })
     }
 
@@ -515,7 +621,15 @@ impl ReadTools {
             }
             let bytes = match self.read_bytes(entry.path(), cancel) {
                 Ok(bytes) => bytes,
-                Err(e) if matches!(e.code, "file_too_large" | "invalid_file" | "path_denied") => {
+                Err(e)
+                    if matches!(
+                        e.code,
+                        "file_too_large"
+                            | "invalid_file"
+                            | "path_denied"
+                            | "host_protection_unavailable"
+                    ) =>
+                {
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -560,7 +674,7 @@ impl ReadTools {
         }
         Ok(Page {
             items: hits,
-            truncated: false,
+            truncated: self.protection_truncated()?,
         })
     }
 }

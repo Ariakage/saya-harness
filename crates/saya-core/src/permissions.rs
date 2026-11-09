@@ -97,12 +97,20 @@ pub struct Operation {
 #[derive(Debug, Clone)]
 enum Target {
     File(PathBuf),
+    Managed {
+        paths: Vec<PathBuf>,
+        binding: String,
+        read_only: bool,
+        independent_review: bool,
+        review: serde_json::Value,
+    },
     Exec {
         cwd: PathBuf,
         executable: PathBuf,
         args: Vec<String>,
         environment_digest: String,
         analysis: Arc<crate::command_analysis::CommandAnalysis>,
+        host_scope: Option<serde_json::Value>,
     },
     Input,
     BackgroundControl,
@@ -110,6 +118,49 @@ enum Target {
     External(crate::registry::OperationDescriptor),
 }
 impl Operation {
+    /// Native adapters supply resolved catalog/store targets. This capability
+    /// never expands the roots available to generic file tools.
+    pub(crate) fn managed(
+        tool: &str,
+        paths: Vec<PathBuf>,
+        binding: String,
+        read_only: bool,
+        review: serde_json::Value,
+    ) -> Result<Self, BoundaryError> {
+        if !matches!(
+            tool,
+            "memory_read"
+                | "memory_search"
+                | "memory_evidence"
+                | "memory_update"
+                | "memory_forget"
+                | "skill_catalog"
+                | "skill_activate"
+                | "skill_deactivate"
+                | "skill_read_resource"
+                | "checkpoint_create"
+                | "checkpoint_list"
+                | "checkpoint_diff"
+                | "checkpoint_accept"
+                | "checkpoint_restore"
+        ) || paths.len() > 1024
+            || paths.iter().any(|path| !path.is_absolute())
+            || binding.is_empty()
+            || binding.len() > 128
+        {
+            return Err(failure("invalid_args", "Invalid host-managed operation"));
+        }
+        Ok(Self {
+            tool: tool.into(),
+            target: Target::Managed {
+                paths,
+                binding,
+                read_only,
+                review,
+                independent_review: matches!(tool, "memory_update" | "memory_forget"),
+            },
+        })
+    }
     pub(crate) fn file_target(&self) -> Option<&Path> {
         match &self.target {
             Target::File(path) => Some(path),
@@ -199,8 +250,68 @@ impl Operation {
                 args: plan.argv[1..].to_vec(),
                 environment_digest: plan.environment_digest.clone(),
                 analysis: Arc::new(analysis),
+                host_scope: None,
             },
         })
+    }
+    /// Bind a native, host-verified plugin launch to its capability provenance.
+    pub(crate) fn plugin_exec(
+        plan: &ExecPlan,
+        keys: &[String],
+        binding: serde_json::Value,
+    ) -> Result<Self, BoundaryError> {
+        if !binding.is_object()
+            || serde_json::to_vec(&binding)
+                .map_err(|_| failure("invalid_args", "Plugin execution scope cannot be encoded"))?
+                .len()
+                > 128 * 1024
+        {
+            return Err(failure("invalid_args", "Plugin execution scope is invalid"));
+        }
+        let mut operation = Self::exec_with_environment_keys(plan, keys)?;
+        if let Target::Exec { host_scope, .. } = &mut operation.target {
+            *host_scope = Some(binding);
+        }
+        Ok(operation)
+    }
+    pub(crate) fn bind_plugin_input(
+        &mut self,
+        payload_sha256: &str,
+        data: serde_json::Value,
+    ) -> Result<(), BoundaryError> {
+        if payload_sha256.len() != 64
+            || !payload_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(failure("invalid_args", "Plugin input digest is invalid"));
+        }
+        let Target::Exec {
+            host_scope: Some(scope),
+            ..
+        } = &mut self.target
+        else {
+            return Err(failure(
+                "invalid_args",
+                "Plugin input has no host execution scope",
+            ));
+        };
+        let scope = scope
+            .as_object_mut()
+            .ok_or_else(|| failure("invalid_args", "Plugin execution scope is invalid"))?;
+        scope.insert(
+            "input".into(),
+            serde_json::json!({"sha256":payload_sha256,"data":data}),
+        );
+        if serde_json::to_vec(scope)
+            .map_err(|_| failure("invalid_args", "Plugin input scope cannot be encoded"))?
+            .len()
+            > 128 * 1024
+        {
+            return Err(failure(
+                "invalid_args",
+                "Plugin input scope exceeds its limit",
+            ));
+        }
+        Ok(())
     }
     /// Tool name associated with this normalized operation.
     pub fn tool_name(&self) -> &str {
@@ -230,7 +341,14 @@ impl Operation {
                 args,
                 environment_digest,
                 analysis,
+                host_scope,
             } => {
+                if let Some(scope) = host_scope {
+                    if map.contains_key("__saya_plugin_scope") {
+                        return Err(failure("invalid_args", "Reserved plugin execution scope"));
+                    }
+                    map.insert("__saya_plugin_scope".into(), scope.clone());
+                }
                 let executable = executable
                     .to_str()
                     .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?;
@@ -261,6 +379,24 @@ impl Operation {
                         "limits": analysis.limits,
                     }),
                 );
+            }
+            Target::Managed {
+                paths,
+                binding,
+                read_only,
+                review,
+                ..
+            } => {
+                if map.contains_key("__saya_managed") {
+                    return Err(failure("invalid_args", "Reserved managed operation field"));
+                }
+                let visible_paths = if self.tool.starts_with("memory_") {
+                    use sha2::{Digest, Sha256};
+                    serde_json::json!({"count":paths.len(),"path_digests":paths.iter().map(|path|Sha256::digest(path.as_os_str().as_encoded_bytes()).iter().map(|byte|format!("{byte:02x}")).collect::<String>()).collect::<Vec<_>>()})
+                } else {
+                    serde_json::json!(paths)
+                };
+                map.insert("__saya_managed".into(), serde_json::json!({"paths":visible_paths,"binding":binding,"read_only":read_only,"review":review}));
             }
             Target::External(descriptor) => {
                 if map.contains_key("__saya_operation") {
@@ -457,6 +593,7 @@ pub struct Policy {
     workspace: PathBuf,
     roots: Vec<PathBuf>,
     rules: Vec<Rule>,
+    host_protected: std::sync::RwLock<Vec<PathBuf>>,
 }
 impl Policy {
     /// Compile explicit rules. The workspace and each additional root must exist.
@@ -496,6 +633,20 @@ impl Policy {
                         | "todo_write"
                         | "output_read"
                         | "output_search"
+                        | "memory_read"
+                        | "memory_search"
+                        | "memory_evidence"
+                        | "memory_update"
+                        | "memory_forget"
+                        | "skill_catalog"
+                        | "skill_activate"
+                        | "skill_deactivate"
+                        | "skill_read_resource"
+                        | "checkpoint_create"
+                        | "checkpoint_list"
+                        | "checkpoint_diff"
+                        | "checkpoint_accept"
+                        | "checkpoint_restore"
                 ) && !crate::registry::valid_external_name(tool)
                 {
                     return Err(failure("invalid_config", "unknown rule tool"));
@@ -534,10 +685,41 @@ impl Policy {
             workspace,
             roots,
             rules,
+            host_protected: std::sync::RwLock::new(Vec::new()),
         })
     }
     pub fn workspace(&self) -> &Path {
         &self.workspace
+    }
+    pub(crate) fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"saya-policy-v1\0");
+        hash.update(self.workspace.as_os_str().as_encoded_bytes());
+        for root in &self.roots {
+            hash.update(root.as_os_str().as_encoded_bytes());
+            hash.update([0]);
+        }
+        for rule in &self.rules {
+            hash.update(format!("{:?}", rule.config).as_bytes());
+            hash.update([0]);
+        }
+        hash.finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+    pub(crate) fn protect_host_paths(&self, paths: Vec<PathBuf>) -> Result<(), BoundaryError> {
+        let mut protected = self
+            .host_protected
+            .write()
+            .map_err(|_| failure("permission_error", "Protected resource lock failed"))?;
+        for path in paths {
+            protected.push(crate::execution::normalize_path(&path)?);
+        }
+        protected.sort();
+        protected.dedup();
+        Ok(())
     }
     /// Evaluate hard mode and root restrictions first, then deny > ask > allow.
     /// No model call, confirmation, mutation, or external I/O is performed here.
@@ -547,11 +729,24 @@ impl Policy {
         permissions: PermissionMode,
         op: &Operation,
     ) -> PolicyDecision {
+        if let Target::File(path) = &op.target {
+            match self.host_protected.read() {
+                Ok(protected) if !protected.iter().any(|root| path.starts_with(root)) => {}
+                _ => return decision(Decision::Deny, "host_managed_resource"),
+            }
+        }
         let read = matches!(
             op.tool.as_str(),
             "read_file" | "list_dir" | "find_files" | "search_text"
         ) || matches!(&op.target, Target::External(descriptor)
-            if descriptor.effect == crate::registry::ToolEffect::ExternalReadOnly);
+            if descriptor.effect == crate::registry::ToolEffect::ExternalReadOnly)
+            || matches!(
+                op.target,
+                Target::Managed {
+                    read_only: true,
+                    ..
+                }
+            );
         let input = op.tool == "ask_user";
         let control = matches!(op.target, Target::BackgroundControl);
         let metadata = matches!(op.target, Target::Metadata);
@@ -561,11 +756,20 @@ impl Policy {
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input | Target::BackgroundControl | Target::Metadata | Target::External(_) => {
-                None
-            }
+            Target::Managed { .. }
+            | Target::Input
+            | Target::BackgroundControl
+            | Target::Metadata
+            | Target::External(_) => None,
         };
         if permissions != PermissionMode::Bypass
+            && !matches!(
+                op.target,
+                Target::Exec {
+                    host_scope: Some(_),
+                    ..
+                }
+            )
             && path.is_some_and(|path| !self.roots.iter().any(|root| path.starts_with(root)))
         {
             return decision(Decision::Deny, "outside_roots");
@@ -590,6 +794,15 @@ impl Policy {
         }
         if permissions == PermissionMode::Manual {
             return decision(Decision::Ask, "manual_approval");
+        }
+        if matches!(
+            op.target,
+            Target::Managed {
+                independent_review: true,
+                ..
+            }
+        ) {
+            return decision(Decision::ModelReview, "managed_memory_mutation");
         }
         if allow
             || read
@@ -643,13 +856,24 @@ impl Rule {
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input | Target::BackgroundControl | Target::Metadata | Target::External(_) => {
-                None
-            }
+            Target::Managed { .. }
+            | Target::Input
+            | Target::BackgroundControl
+            | Target::Metadata
+            | Target::External(_) => None,
         };
-        if let Some(pattern) = &self.path
-            && !path.is_some_and(|path| pattern.is_match(path))
-        {
+        let path_matches = self.path.as_ref().is_none_or(|pattern| {
+            if let Target::Managed { paths, .. } = &op.target {
+                if self.config.effect == Effect::Allow {
+                    !paths.is_empty() && paths.iter().all(|path| pattern.is_match(path))
+                } else {
+                    paths.iter().any(|path| pattern.is_match(path))
+                }
+            } else {
+                path.is_some_and(|path| pattern.is_match(path))
+            }
+        });
+        if !path_matches {
             return false;
         }
         if self.config.executable.is_some() || self.config.args_prefix.is_some() {

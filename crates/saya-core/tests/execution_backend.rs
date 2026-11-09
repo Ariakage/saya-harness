@@ -693,6 +693,7 @@ fn file_request(
         read_roots: Vec::new(),
         read_limits: ReadLimits::default(),
         write_max_bytes: 1024 * 1024,
+        protected_paths: Default::default(),
     }
 }
 #[tokio::test]

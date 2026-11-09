@@ -146,6 +146,14 @@ struct Job {
     cancel: JobCancel,
     mutating: bool,
     status: JobStatus,
+    origin: BackgroundJobOrigin,
+}
+/// Immutable host provenance. It is never decoded from a model/tool response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BackgroundJobOrigin {
+    pub(crate) session_id: crate::contract::SessionId,
+    pub(crate) run_id: crate::contract::RunId,
+    pub(crate) call_id: String,
 }
 struct State {
     closed: bool,
@@ -386,6 +394,11 @@ impl BackgroundJobs {
                 cancel: cancel.clone(),
                 mutating,
                 status: JobStatus::Running,
+                origin: BackgroundJobOrigin {
+                    session_id: context.run.session_id,
+                    run_id: context.run.id,
+                    call_id: call.call_id.clone(),
+                },
             },
         );
         state.event(
@@ -528,6 +541,15 @@ impl BackgroundJobs {
             .map_err(|_| failure("background_error", "job lock poisoned"))?;
         Ok(state.jobs.get(id).map(|job| job.status.clone()))
     }
+    /// Read source identity without exposing a job's arguments or fact body.
+    pub(crate) fn origin(&self, id: &str) -> Result<Option<BackgroundJobOrigin>, BoundaryError> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        Ok(state.jobs.get(id).map(|job| job.origin.clone()))
+    }
     /// Return a consistent snapshot of run-local transitions in observed order.
     pub fn events(&self) -> Result<Vec<BackgroundEvent>, BoundaryError> {
         Ok(self
@@ -634,6 +656,25 @@ impl BackgroundJobs {
                 state.request_cancellation(&id, BackgroundCancelReason::Shutdown);
             }
         }
+        self.drain().await
+    }
+    /// Quiesce work that may still hold obsolete context before projecting a
+    /// new memory view. Later user-authorized jobs may start in this run.
+    pub(crate) async fn cancel_and_drain(&self) -> Result<(), BoundaryError> {
+        {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .map_err(|_| failure("background_error", "job lock poisoned"))?;
+            let ids: Vec<_> = state.jobs.keys().cloned().collect();
+            for id in ids {
+                state.request_cancellation(&id, BackgroundCancelReason::User);
+            }
+        }
+        self.drain().await
+    }
+    async fn drain(&self) -> Result<(), BoundaryError> {
         loop {
             let notified = self.shared.changed.notified();
             tokio::pin!(notified);

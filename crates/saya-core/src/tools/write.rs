@@ -25,6 +25,97 @@ pub struct WriteResult {
     pub created: bool,
 }
 
+#[cfg(test)]
+mod private_path_tests {
+    use super::*;
+    use crate::tools::read::ReadLimits;
+    use std::fs;
+
+    #[test]
+    fn writes_and_patches_reject_existing_and_future_managed_paths_in_bypass() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join(".saya/memory")).unwrap();
+        let path = root.join(".saya/MEMORY.md");
+        fs::write(&path, "old\n").unwrap();
+        let files =
+            Arc::new(ReadTools::new(temp.path(), &[], true, ReadLimits::default()).unwrap());
+        files
+            .protect_paths(vec![path.clone(), root.join(".saya/memory")])
+            .unwrap();
+        let writes = WriteTools::new(files, DEFAULT_WRITE_MAX_BYTES);
+        let version = WriteTools::version(b"old\n");
+        assert_eq!(
+            writes
+                .write_file(&path, "new", Some(&version), &path, None)
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        assert_eq!(
+            writes
+                .apply_patch(
+                    &path,
+                    "--- a/.saya/MEMORY.md\n+++ b/.saya/MEMORY.md\n@@ -1 +1 @@\n-old\n+new\n",
+                    &version,
+                    &path,
+                    None
+                )
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        let topic = root.join(".saya/memory/new.md");
+        assert_eq!(
+            writes
+                .write_file(&topic, "new", None, &topic, None)
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        assert!(!topic.exists());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old\n");
+        let agents = root.join(".saya/AGENTS.md");
+        assert!(
+            writes
+                .write_file(&agents, "project instructions", None, &agents, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn missing_index_creation_and_late_protection_are_rechecked_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::create_dir(root.join(".saya")).unwrap();
+        let files =
+            Arc::new(ReadTools::new(temp.path(), &[], false, ReadLimits::default()).unwrap());
+        let index = root.join(".saya/MEMORY.md");
+        files.protect_paths(vec![index.clone()]).unwrap();
+        let writes = WriteTools::new(files.clone(), DEFAULT_WRITE_MAX_BYTES);
+        assert_eq!(
+            writes
+                .write_file(&index, "new", None, &index, None)
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        let target = root.join("public.txt");
+        fs::write(&target, "original").unwrap();
+        let version = WriteTools::version(b"original");
+        assert!(writes.destination(&target, Some(&version)).is_ok());
+        files.protect_paths(vec![target.clone()]).unwrap();
+        assert_eq!(
+            writes
+                .write_file(&target, "changed", Some(&version), &target, None)
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        assert_eq!(fs::read_to_string(target).unwrap(), "original");
+    }
+}
+
 /// Write primitives use the same allowed roots as the read tools. They do not
 /// authorize operations or record execution intents; the dispatcher must do so.
 struct WriteTools {
@@ -69,6 +160,7 @@ impl WriteTools {
             let parent = self.files.resolve(parent)?.0;
             parent.join(name)
         };
+        self.files.check_private_path(&target)?;
         let parent = target
             .parent()
             .ok_or_else(|| err("invalid_path", "target must have a parent"))?;
@@ -78,6 +170,8 @@ impl WriteTools {
             .to_owned();
         let (_, root, rel) = self.files.resolve(parent)?;
         let dir = root.dir.open_dir(rel).map_err(io_err)?;
+        self.files
+            .check_open_file(parent, &dir.dir_metadata().map_err(io_err)?)?;
         Ok((target, dir, PathBuf::from(name)))
     }
 
@@ -107,13 +201,15 @@ impl WriteTools {
         dir: &Dir,
         name: &Path,
         expected: &str,
+        target: &Path,
     ) -> Result<cap_std::fs::Permissions, ReadError> {
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
         let file = dir.open_with(name, &options).map_err(io_err)?;
         let metadata = file.metadata().map_err(io_err)?;
+        self.files.check_open_file(target, &metadata)?;
         if !metadata.is_file() {
             return Err(err("invalid_file", "target is not a regular file"));
         }
@@ -160,7 +256,7 @@ impl WriteTools {
             return Err(err("conflict", "target changed after authorization"));
         }
         let old_permissions = if let Some(expected) = expected_version {
-            Some(self.check_in_directory(&dir, &name, expected)?)
+            Some(self.check_in_directory(&dir, &name, expected, &target)?)
         } else {
             None
         };
@@ -175,8 +271,9 @@ impl WriteTools {
             }
             temp.sync_all().map_err(io_err)?;
             check_cancel(cancel)?;
+            self.files.check_private_path(&target)?;
             if let Some(expected) = expected_version {
-                self.check_in_directory(&dir, &name, expected)?;
+                self.check_in_directory(&dir, &name, expected, &target)?;
                 check_cancel(cancel)?;
                 dir.rename(&temp_name, &dir, &name).map_err(io_err)?;
             } else {

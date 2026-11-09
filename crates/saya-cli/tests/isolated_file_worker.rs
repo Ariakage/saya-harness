@@ -38,6 +38,7 @@ fn request(
         read_roots: Vec::new(),
         read_limits: ReadLimits::default(),
         write_max_bytes: 4096,
+        protected_paths: Default::default(),
     }
 }
 
@@ -160,6 +161,173 @@ fn private_cli_worker_rejects_malformed_multiple_or_unsupported_requests() {
     assert_eq!(output.status.code(), Some(64));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn private_cli_worker_receives_host_private_inode_snapshot_and_preserves_normal_hardlinks() {
+    use saya_core::tools::read::ReadTools;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let private = workspace.join("private-memory");
+    fs::create_dir(&private).unwrap();
+    let memory = private.join("MEMORY.md");
+    fs::write(&memory, "SYNTHETIC-PRIVATE-MEMORY").unwrap();
+    fs::hard_link(&memory, workspace.join("private-alias.txt")).unwrap();
+    fs::write(workspace.join("public.txt"), "public needle").unwrap();
+    fs::hard_link(
+        workspace.join("public.txt"),
+        workspace.join("normal-link.txt"),
+    )
+    .unwrap();
+    let host = ReadTools::new(&workspace, &[], false, ReadLimits::default()).unwrap();
+    host.protect_paths(vec![private.clone()]).unwrap();
+    let snapshot = host
+        .worker_protection_snapshot("search_text", &workspace)
+        .unwrap();
+    for name in ["read_file", "write_file", "apply_patch"] {
+        let args = match name {
+            "read_file" => json!({"path":"private-alias.txt","start_line":1,"line_count":10}),
+            "write_file" => {
+                json!({"path":"private-alias.txt","content":"blocked","expected_version":"0".repeat(64)})
+            }
+            _ => {
+                json!({"path":"private-alias.txt","patch":"--- a/private-alias.txt\n+++ b/private-alias.txt\n@@ -1 +1 @@\n-SYNTHETIC-PRIVATE-MEMORY\n+blocked\n","expected_version":"invalid"})
+            }
+        };
+        let mut input = request(&workspace, name, args, &workspace.join("private-alias.txt"));
+        input.protected_paths = snapshot.clone();
+        let response = call_worker(&input);
+        assert!(!response.result.ok);
+        assert_eq!(response.result.error.unwrap().code, "path_denied");
+    }
+    for (name, args) in [
+        ("list_dir", json!({"path":"."})),
+        (
+            "find_files",
+            json!({"path":".","glob":"*.txt","include_ignored":true}),
+        ),
+        (
+            "search_text",
+            json!({"path":".","pattern":"SYNTHETIC-PRIVATE-MEMORY","include_ignored":true}),
+        ),
+    ] {
+        let mut input = request(&workspace, name, args, &workspace);
+        input.protected_paths = snapshot.clone();
+        let response = call_worker(&input);
+        assert!(response.result.ok, "{name}: {:?}", response.result);
+        let data = response.result.data.unwrap();
+        assert!(!data.to_string().contains("private-alias.txt"));
+        assert!(!data.to_string().contains("SYNTHETIC-PRIVATE-MEMORY"));
+    }
+    fs::rename(&private, workspace.join("moved-private-memory")).unwrap();
+    let mut input = request(
+        &workspace,
+        "read_file",
+        json!({"path":"normal-link.txt","start_line":1,"line_count":10}),
+        &workspace.join("normal-link.txt"),
+    );
+    input.protected_paths = snapshot;
+    let response = call_worker(&input);
+    assert!(response.result.ok);
+    assert_eq!(response.result.data.unwrap()["content"], "public needle");
+    assert_eq!(
+        fs::read_to_string(workspace.join("moved-private-memory/MEMORY.md")).unwrap(),
+        "SYNTHETIC-PRIVATE-MEMORY"
+    );
+    let mut legacy = serde_json::to_value(request(
+        &workspace,
+        "read_file",
+        json!({"path":"public.txt","start_line":1,"line_count":10}),
+        &workspace.join("public.txt"),
+    ))
+    .unwrap();
+    legacy.as_object_mut().unwrap().remove("protected_paths");
+    let output = run_worker(
+        &workspace,
+        &serde_json::to_vec(&legacy).unwrap(),
+        &["__saya-file-worker"],
+    );
+    let response: FileWorkerResponse = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(response.result.ok);
+}
+
+#[tokio::test]
+async fn native_file_worker_uses_snapshot_without_accessing_os_hidden_private_root() {
+    use saya_core::tools::{isolated::execute_isolated_file, read::ReadTools};
+    use std::time::Duration;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let private = workspace.join("private-memory");
+    fs::create_dir(&private).unwrap();
+    fs::write(private.join("MEMORY.md"), "SYNTHETIC-NATIVE-PRIVATE").unwrap();
+    fs::hard_link(
+        private.join("MEMORY.md"),
+        workspace.join("private-alias.txt"),
+    )
+    .unwrap();
+    fs::write(workspace.join("plain.txt"), "public needle").unwrap();
+    fs::hard_link(
+        workspace.join("plain.txt"),
+        workspace.join("normal-link.txt"),
+    )
+    .unwrap();
+    let host = ReadTools::new(&workspace, &[], false, ReadLimits::default()).unwrap();
+    host.protect_paths(vec![private.clone()]).unwrap();
+    let snapshot = host
+        .worker_protection_snapshot("search_text", &workspace)
+        .unwrap();
+    let environment = native_environment(&workspace, vec![private.clone()]);
+    for (name, args, target) in [
+        (
+            "read_file",
+            json!({"path":"normal-link.txt","start_line":1,"line_count":10}),
+            workspace.join("normal-link.txt"),
+        ),
+        ("list_dir", json!({"path":"."}), workspace.clone()),
+        (
+            "find_files",
+            json!({"path":".","glob":"*.txt","include_ignored":true}),
+            workspace.clone(),
+        ),
+        (
+            "search_text",
+            json!({"path":".","pattern":"needle","include_ignored":true}),
+            workspace.clone(),
+        ),
+    ] {
+        let mut input = request(&workspace, name, args, &target);
+        input.protected_paths = snapshot.clone();
+        let result = execute_isolated_file(&environment, input, &Never, Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert!(result.ok, "{name}: {result:?}");
+        let data = result.data.unwrap();
+        assert!(!data.to_string().contains("private-alias.txt"));
+        assert!(!data.to_string().contains("SYNTHETIC-NATIVE-PRIVATE"));
+        assert!(
+            data.to_string().contains("plain.txt") || data.to_string().contains("public needle")
+        );
+    }
+    let mut input = request(
+        &workspace,
+        "read_file",
+        json!({"path":"private-alias.txt","start_line":1,"line_count":10}),
+        &workspace.join("private-alias.txt"),
+    );
+    input.protected_paths = snapshot;
+    assert_eq!(
+        execute_isolated_file(&environment, input, &Never, Duration::from_secs(10))
+            .await
+            .unwrap_err()
+            .0
+            .code,
+        "path_denied"
+    );
+    assert_eq!(
+        fs::read_to_string(private.join("MEMORY.md")).unwrap(),
+        "SYNTHETIC-NATIVE-PRIVATE"
+    );
+    assert!(environment.cleanup().unwrap().complete);
 }
 
 struct Never;

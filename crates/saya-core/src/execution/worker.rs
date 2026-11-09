@@ -6,7 +6,7 @@ use crate::{
     contract::{BoundaryError, ErrorInfo, ModelProtocol, Session, ToolCall, ToolResult},
     memory::MemoryStore,
     tools::{
-        read::{ReadGate, ReadLimits, ReadTool, ReadToolKind, ReadTools},
+        read::{ProtectedPathSnapshot, ReadGate, ReadLimits, ReadTool, ReadToolKind, ReadTools},
         write::{WriteGate, WriteTool, WriteToolKind},
     },
 };
@@ -30,6 +30,8 @@ pub struct FileWorkerRequest {
     pub read_roots: Vec<PathBuf>,
     pub read_limits: ReadLimits,
     pub write_max_bytes: usize,
+    #[serde(default)]
+    pub protected_paths: ProtectedPathSnapshot,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +75,9 @@ pub async fn execute_file_worker(request: FileWorkerRequest) -> Result<ToolResul
         context: request.context.clone(),
         target: request.approved_target.clone(),
     });
+    files
+        .install_protection_snapshot(request.protected_paths.clone())
+        .map_err(|error| failure(error.code, error.message))?;
     let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
     store
         .commit(&[
@@ -118,6 +123,10 @@ pub async fn execute_file_worker(request: FileWorkerRequest) -> Result<ToolResul
         .await
 }
 fn validate_request(request: &FileWorkerRequest) -> Result<(), BoundaryError> {
+    request
+        .protected_paths
+        .validate()
+        .map_err(|error| failure(error.code, error.message))?;
     if request.schema_version != 1 {
         return Err(failure(
             "unsupported_worker_schema",

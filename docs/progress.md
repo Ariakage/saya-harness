@@ -931,3 +931,11 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 ## N3 DEV-067 Hook 组件阶段
 
 2026-11-10，完成四事件Hook执行接口与独立SQLite日志，分别12项执行及12项日志组件回归通过，暂存源码独立产物目录的格式与严格Clippy通过，日志为 `target/n3/dev067-stage-validation.log`。覆盖意图先行、当前宿主权限回调、check否决、幂等事件、预算、超时计时、真实退出恢复Unknown和清理未知。正常Run及原生执行接入按[N3记录](n3-validation.md)继续。
+
+## N3 共享运行时集成门禁
+
+2026-11-10，自动／手动Compact、宿主记忆、Skill、检查点、插件与Hooks已接入共享Core运行循环。托管工具沿同一模式、人工审批和持久化边界，模型、启动与Hook共用工具预算，各broker共用Run网络预算。通用文件工具及隔离worker保留宿主私有路径和inode快照，失效记忆组、旧输出引用与后台正文沿来源证明退出模型投影。
+
+独立复核确认并修复摘要发前Memory／Skill版本竞态及初始插件准备任务被中止后的资源owner缺口。每次摘要发送前重新核对已捕获来源，初始worker由Run持有，清理先取消并join再接管，未知继续保留pin。Core正常入口覆盖18组协议／权限／PLAN记忆调用、16组读取／注入／写入设置，以及SQLite恢复、审批中遗忘与输出回取边界。
+
+当前源码在本机macOS27.2 ARM通过1301项Rust测试、格式、workspace全目标严格Clippy与优化构建，日志为 `target/n3/integration-workspace-gate-3.log`。7项既有真实原生插件／Hook用例已通过，新加入的第8项初始准备abort用例与最终固定候选继续验收。CLI／TUI及四平台最终结果继续按[N3验收](n3-validation.md)维护，当前状态不代表macOS15或Linux已完成本轮验收。

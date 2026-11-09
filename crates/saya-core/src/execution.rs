@@ -805,7 +805,7 @@ fn normalize_roots(paths: &[PathBuf]) -> Result<Vec<PathBuf>, BoundaryError> {
     result.dedup();
     Ok(result)
 }
-fn normalize_path(path: &Path) -> Result<PathBuf, BoundaryError> {
+pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, BoundaryError> {
     if !path.is_absolute()
         || path.as_os_str().as_bytes().contains(&0)
         || path

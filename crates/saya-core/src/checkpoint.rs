@@ -375,6 +375,10 @@ impl CheckpointStore {
     pub fn limits(&self) -> CheckpointLimits {
         self.inner.limits
     }
+    #[cfg(test)]
+    pub(crate) fn fail_next_journal_for_test(&self) {
+        self.inner.disk.fail_journal.store(true, Ordering::SeqCst);
+    }
     /// Only the trusted host chooses this root, session, and protected paths.
     pub fn bind_workspace(
         &self,

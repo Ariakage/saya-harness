@@ -693,3 +693,79 @@ fn mcp_references_fail_closed_without_disclosing_values() {
         assert!(!error.to_string().contains("SYNTHETIC-TOKEN"));
     }
 }
+
+#[test]
+fn n3_defaults_and_explicit_memory_switches_remain_host_selected_and_readonly() {
+    let temp = TempDir::new().unwrap();
+    let config_path = write(temp.path(), "config.toml", fixture());
+    let overrides = Overrides {
+        config: Some(config_path.clone()),
+        ..Default::default()
+    };
+    let config = config::load(
+        Overrides {
+            config: Some(config_path.clone()),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert!(config.context.auto_compact);
+    let budget = config.context.budget(&config.profiles["chat"]);
+    assert_eq!(budget.window_tokens, 100000);
+    assert_eq!(budget.output_reserve, 8192);
+    assert_eq!(budget.safety_margin, 10001);
+    assert_eq!(budget.trigger_per_mille, 800);
+    assert_eq!(budget.target_per_mille, 550);
+    assert!(config.memory.read && config.memory.inject && config.memory.write);
+    assert_eq!(config.memory_root().unwrap(), temp.path().join(".saya"));
+    assert!(!temp.path().join(".saya").exists());
+    let explicit = temp.path().join("private-memory");
+    fs::write(&config_path,format!("{}\n[memory]\nread=false\ninject=true\nwrite=true\nroot={}\n[context]\nextra_safety_tokens=123\n",fixture(),toml::Value::String(explicit.to_string_lossy().into_owned()))).unwrap();
+    let config = config::load(overrides, test_env(temp.path()), temp.path()).unwrap();
+    assert!(!config.memory.read);
+    assert!(config.memory.inject && config.memory.write);
+    assert_eq!(config.memory_root().unwrap(), explicit);
+    assert_eq!(
+        config
+            .context
+            .budget(&config.profiles["chat"])
+            .safety_margin,
+        10124
+    );
+    assert!(!explicit.exists());
+}
+
+#[test]
+fn n3_context_limits_and_unknown_settings_fail_closed_without_echoing_source() {
+    let temp = TempDir::new().unwrap();
+    for table in [
+        "[context]\ntarget_percent=80\ntrigger_percent=80",
+        "[context]\ntrigger_percent=101",
+        "[context]\nsummary_max_output_tokens=0",
+        "[context]\nmax_compaction_calls=65",
+        "[context]\ncompaction_timeout_seconds=0",
+        "[memory]\nsecret='SYNTHETIC-PRIVATE-VALUE'",
+        "[plugins]\nsecret='SYNTHETIC-PRIVATE-VALUE'",
+    ] {
+        let path = write(
+            temp.path(),
+            "config.toml",
+            &format!("{}\n{table}\n", fixture()),
+        );
+        let error = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        )
+        .err()
+        .expect("invalid N3 setting accepted");
+        assert_eq!(error.0.code, "invalid_config");
+        assert!(!error.to_string().contains("SYNTHETIC-PRIVATE-VALUE"));
+        assert!(!temp.path().join(".saya").exists());
+    }
+}

@@ -502,9 +502,17 @@ impl ApprovalManager {
         match review.decision {
             Decision::Deny => return Ok(Authorization::Denied("policy_denied")),
             Decision::Allow => {
-                return Ok(Authorization::Permit(
-                    self.permit(binding, input.call.call_id.clone()),
-                ));
+                return Ok(Authorization::Permit(self.permit(
+                    binding,
+                    input.call.call_id.clone(),
+                    match review.source {
+                        ReviewDecisionSource::Model => PermitSource::IndependentModelReview,
+                        _ if input.context.run.permissions == PermissionMode::Bypass => {
+                            PermitSource::Bypass
+                        }
+                        _ => PermitSource::Rule,
+                    },
+                )));
             }
             Decision::Ask => {}
             Decision::ModelReview => {
@@ -545,9 +553,11 @@ impl ApprovalManager {
                         },
                     }])
                     .await?;
-                return Ok(Authorization::Permit(
-                    self.permit(binding, input.call.call_id.clone()),
-                ));
+                return Ok(Authorization::Permit(self.permit(
+                    binding,
+                    input.call.call_id.clone(),
+                    PermitSource::Preauthorization,
+                )));
             }
         }
         let mut arguments: Value = serde_json::from_str(&binding.normalized_args)
@@ -643,14 +653,22 @@ impl ApprovalManager {
                 return Ok(Authorization::Denied("user_denied"));
             }
         }
-        Ok(Authorization::Permit(
-            self.permit(pending.binding, pending.call_id),
-        ))
+        Ok(Authorization::Permit(self.permit(
+            pending.binding,
+            pending.call_id,
+            PermitSource::User,
+        )))
     }
-    fn permit(&self, binding: Binding, call_id: String) -> Arc<OneShotPermit> {
+    fn permit(
+        &self,
+        binding: Binding,
+        call_id: String,
+        source: PermitSource,
+    ) -> Arc<OneShotPermit> {
         Arc::new(OneShotPermit {
             binding,
             call_id,
+            source,
             policy: self.policy.clone(),
             modes: self.modes.clone(),
             permissions: self.permissions.clone(),
@@ -679,7 +697,16 @@ fn rejection_key(binding: &Binding) -> RejectionKey {
 /// A single-operation, non-serializable grant. Tool adapters call it twice:
 /// before intent persistence and immediately before dispatch. It becomes spent
 /// on the second successful check; another call cannot reuse it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermitSource {
+    Rule,
+    IndependentModelReview,
+    User,
+    Preauthorization,
+    Bypass,
+}
 pub struct OneShotPermit {
+    source: PermitSource,
     binding: Binding,
     call_id: String,
     policy: Arc<Policy>,
@@ -691,6 +718,20 @@ pub struct OneShotPermit {
     lease_active: AtomicBool,
 }
 impl OneShotPermit {
+    pub fn source(&self) -> PermitSource {
+        self.source
+    }
+    pub(crate) fn authorize_managed(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        operation: &Operation,
+    ) -> Result<bool, BoundaryError> {
+        self.check(call, context, operation)
+    }
+    pub(crate) fn finish_managed(&self) -> Result<(), BoundaryError> {
+        self.end()
+    }
     pub(crate) fn authorize_file(
         &self,
         call: &ToolCall,

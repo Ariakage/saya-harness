@@ -482,6 +482,26 @@ impl PluginStore {
             .map(|record| summary(&index, record))
             .collect())
     }
+    /// Read effective launch candidates without acquiring leases or reconciling
+    /// historic instances. Workspace disables override user-level enablement.
+    pub fn enabled_for(&self, workspace: &Path) -> Result<Vec<EnableRecord>, BoundaryError> {
+        let scope = PluginScope::workspace(workspace)?;
+        let _lock = self.inner.disk.lock_index()?;
+        let index = self.inner.read_index()?;
+        let ids: BTreeSet<_> = index
+            .packages
+            .iter()
+            .map(|package| package.manifest.plugin.id.as_str())
+            .collect();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| {
+                effective_enablement(&index, id, &scope)
+                    .filter(|record| record.enabled)
+                    .cloned()
+            })
+            .collect())
+    }
 
     pub fn inspect(&self, digest: &str) -> Result<PluginInspection, BoundaryError> {
         let _lock = self.inner.disk.lock_index()?;

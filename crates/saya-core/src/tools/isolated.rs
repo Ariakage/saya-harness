@@ -103,6 +103,10 @@ pub async fn execute_isolated_file(
 }
 
 fn validate_request(request: &FileWorkerRequest) -> Result<(), BoundaryError> {
+    request
+        .protected_paths
+        .validate()
+        .map_err(|error| failure(error.code, &error.message))?;
     if request.schema_version != 1 {
         return Err(failure(
             "unsupported_worker_schema",
@@ -179,6 +183,20 @@ fn validate_request(request: &FileWorkerRequest) -> Result<(), BoundaryError> {
             "File worker target differs from its approval",
         ));
     }
+    let files = crate::tools::read::ReadTools::new(
+        &request.context.workspace,
+        &request.read_roots,
+        false,
+        request.read_limits.clone(),
+    )
+    .map_err(|error| failure(error.code, &error.message))?;
+    files
+        .install_protection_snapshot(request.protected_paths.clone())
+        .map_err(|error| failure(error.code, &error.message))?;
+    files
+        .check_private_path(&request.approved_target)
+        .map_err(|error| failure(error.code, &error.message))?;
+
     Ok(())
 }
 
@@ -339,6 +357,7 @@ mod tests {
             read_roots: Vec::new(),
             read_limits: ReadLimits::default(),
             write_max_bytes: 1024,
+            protected_paths: Default::default(),
         }
     }
 

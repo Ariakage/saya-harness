@@ -58,12 +58,40 @@ impl std::fmt::Debug for McpHttpClient {
 
 impl McpHttpClient {
     pub fn new(limits: &McpLimits) -> Result<Self, BoundaryError> {
+        Self::build(limits, None)
+    }
+    /// Host-owned plugin transport. Every request, SSE stream and session
+    /// deletion traverses the same origin-scoped broker. System proxy and
+    /// NO_PROXY settings cannot create a direct connection fallback.
+    pub(crate) fn new_scoped_proxy(
+        limits: &McpLimits,
+        endpoint: std::net::SocketAddr,
+    ) -> Result<Self, BoundaryError> {
+        if !endpoint.ip().is_loopback() || endpoint.port() == 0 {
+            return Err(error(
+                "mcp_transport",
+                "Scoped MCP proxy endpoint is invalid",
+            ));
+        }
+        Self::build(limits, Some(endpoint))
+    }
+    fn build(
+        limits: &McpLimits,
+        endpoint: Option<std::net::SocketAddr>,
+    ) -> Result<Self, BoundaryError> {
         limits.validate()?;
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .redirect(reqwest_mcp::redirect::Policy::none())
             .retry(reqwest_mcp::retry::never())
             .no_proxy()
-            .connect_timeout(limits.connect_timeout)
+            .connect_timeout(limits.connect_timeout);
+        if let Some(endpoint) = endpoint {
+            let proxy = reqwest_mcp::Proxy::all(format!("http://{endpoint}/"))
+                .map_err(|_| error("mcp_transport", "Scoped MCP proxy setup failed"))?
+                .no_proxy(None);
+            builder = builder.proxy(proxy);
+        }
+        let client = builder
             .build()
             .map_err(|_| error("mcp_transport", "MCP HTTP client setup failed"))?;
         Ok(Self {
@@ -532,3 +560,7 @@ fn sse(
     );
     SseStream::from_bytes_stream(stream).boxed()
 }
+
+#[cfg(test)]
+#[path = "http/scoped_tests.rs"]
+mod scoped_tests;
