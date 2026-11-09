@@ -40,6 +40,7 @@ pub mod redaction;
 pub mod registry;
 pub mod review;
 pub mod runtime;
+pub mod skills;
 pub mod sqlite;
 pub mod text;
 pub mod tools;
