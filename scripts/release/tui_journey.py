@@ -1336,7 +1336,7 @@ def reference_layout_and_title_journey(binary):
             skill.mkdir(parents=True)
             (skill / 'SKILL.md').write_text('---\nname: example\ndescription: Offline reference UI acceptance fixture.\n---\nRead fact.txt when requested.\n')
             config = configuration(root, fixture)
-            config.write_text(config.read_text() + 'thinking_effort = "max"\n')
+            config.write_text(config.read_text() + 'thinking_effort = "max"\n[plugins]\nenabled = true\n')
             terminal = invoke(binary, root, config)
             try:
                 def title():
@@ -1420,8 +1420,8 @@ def reference_layout_and_title_journey(binary):
                             raise RuntimeError('sidebar did not use its reference gray background')
                         if screen.sidebar_row_text(16) != 'MCP  No servers':
                             raise RuntimeError('sidebar did not report the empty MCP configuration')
-                        if 'Not implemented' not in screen.sidebar_row_text(17) or 'Plugins' not in screen.sidebar_row_text(17):
-                            raise RuntimeError('sidebar presented plugins as implemented')
+                        if screen.sidebar_row_text(17) != 'Plugins  Enabled in config':
+                            raise RuntimeError('sidebar did not report the configured plugin enablement')
                         if 'Skills' not in screen.sidebar_row_text(18):
                             raise RuntimeError('sidebar omitted its actual skill discovery state')
                         for row, label in [(2, 'Context'), (15, 'Extensions'), (20, 'Tasks')]:
@@ -2169,7 +2169,7 @@ def command_palette_modal_journey(binary):
                     if width < 38:
                         if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
                             raise RuntimeError('compact command modal omitted its close instruction')
-                    elif f'{index + 1}/28' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                    elif f'{index + 1}/30' not in ''.join(terminal.screen.cells[top][left:left + width]):
                         raise RuntimeError('command modal did not report the actual catalog selection')
                     navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
                     expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
@@ -2217,7 +2217,7 @@ def command_palette_modal_journey(binary):
                 assert_mode_colors(terminal, 'PLAN')
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 27)
+                terminal.send(b'\x1b[B' * 29)
                 wait_selected('/export-full markdown')
                 terminal.send(b'\r')
                 terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'scaffold modal closed with existing draft')
@@ -2226,9 +2226,9 @@ def command_palette_modal_journey(binary):
                 clear_draft()
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 28)
+                terminal.send(b'\x1b[B' * 30)
                 wait_selected('/export-full markdown')
-                geometry(27)
+                geometry(29)
                 if '/mode plan' in terminal.screen.command_palette_text():
                     raise RuntimeError('long command catalog did not scroll to keep its last selection visible')
                 scaffold_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/cancel-job '))
@@ -2245,7 +2245,7 @@ def command_palette_modal_journey(binary):
                 for columns, rows in [(160, 45), (80, 24), (60, 18), (20, 6), (110, 32)]:
                     terminal.resize(columns, rows)
                     wait_selected('/export-full markdown')
-                    geometry(27)
+                    geometry(29)
                     if (columns, rows) == (160, 45):
                         save_interactive_screen(terminal, 'wide-160x45')
                     if (columns, rows) == (20, 6):

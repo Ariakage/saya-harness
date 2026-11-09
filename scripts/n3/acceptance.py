@@ -395,6 +395,17 @@ def checkpoint_journey(candidate, git=False):
         require(controls == after, "checkpoint operations changed Git control files")
 
 
+def long_output_steps():
+    def output_reference(dialog):
+        return next(output["output_ref"] for output in data(dialog, "exec")["output_refs"] if output["scope"]["stream"] == "stdout")
+
+    return [
+        ("exec", "exec", {"argv": ["/usr/bin/awk", 'BEGIN {for(i=0;i<12000;i++) printf "row-%05d payload payload payload\\n",i; print "N3_OUTPUT_NEEDLE_TAIL"}']}),
+        ("search", "output_search", lambda dialog: {"output_ref": output_reference(dialog), "pattern": "N3_OUTPUT_NEEDLE_TAIL", "max_bytes": 1024, "context_lines": 1}),
+        ("read", "output_read", lambda dialog: {"output_ref": output_reference(dialog), "cursor": data(dialog, "search")["matches"][0]["cursor"], "max_bytes": 1024}),
+    ]
+
+
 def skill_output_journey(candidate):
     workspace = candidate.root / "skill-output"
     skill = workspace / ".saya" / "skills" / "n3-guide"
@@ -406,18 +417,12 @@ def skill_output_journey(candidate):
         entry = next(entry for entry in data(dialog, "catalog")["entries"] if entry["name"].endswith("n3-guide"))
         return {"name": entry["name"], "source_sha256": entry["source_sha256"]}
 
-    def output_reference(dialog):
-        return next(output["output_ref"] for output in data(dialog, "exec")["output_refs"] if output["scope"]["stream"] == "stdout")
-
     dialogue = Dialogue("skill-output", [
         ("catalog", "skill_catalog", {}),
         ("activate", "skill_activate", selection),
         ("resource", "skill_read_resource", lambda dialog: {**selection(dialog), "resource": "notes.txt", "expected_resource_sha256": sha256(skill / "notes.txt")}),
         ("deactivate", "skill_deactivate", selection),
-        ("exec", "exec", {"argv": ["/usr/bin/awk", 'BEGIN {for(i=0;i<12000;i++) printf "row-%05d payload payload payload\\n",i; print "N3_OUTPUT_NEEDLE_TAIL"}']}),
-        ("search", "output_search", lambda dialog: {"output_ref": output_reference(dialog), "pattern": "N3_OUTPUT_NEEDLE_TAIL", "max_bytes": 1024, "context_lines": 1}),
-        ("read", "output_read", lambda dialog: {"output_ref": output_reference(dialog), "cursor": data(dialog, "search")["matches"][0]["cursor"], "max_bytes": 1024}),
-    ])
+    ] + long_output_steps())
     candidate.run("Skill catalog/activate/resource/deactivate and retained long-output retrieval", workspace, dialogue,
                   "Use n3-guide, inspect its notes, deactivate it, run the controlled output fixture and retrieve its retained tail.", permissions="bypass")
     require("N3_SKILL_RESOURCE_CONTENT" in json.dumps(data(dialogue, "resource")), "active Skill resource was not read")
@@ -460,6 +465,45 @@ path="skills/guide"
                 "CLI plugin installation did not seal an initially disabled full digest")
         candidate.invoke(workspace, ["plugin", "enable", plugin_id, "--digest", digest, "--scope", "workspace"], expected_status=None)
 
+        constraint = "N3_ORIGINAL_USER_CONSTRAINT_preserve_retained_tail_and_use_plugin_notes"
+        output_dialogue = Dialogue("cli-plugin-long-output", long_output_steps())
+        output_run = candidate.run("joint Session captures and retrieves bounded long output before Compact", workspace,
+            output_dialogue, "Original user constraint " + constraint + ". Produce the controlled long output and retrieve its retained tail.",
+            permissions="bypass")
+        session_id = output_run["session_id"]
+        metadata = next(output for output in data(output_dialogue, "exec")["output_refs"]
+                        if output["scope"]["stream"] == "stdout")
+        output_ref = metadata["output_ref"]
+        require(metadata["scope"]["session_id"] == session_id and metadata["capture_limit_bytes"] == 65536
+                and metadata["artifact_complete"] is False and metadata["gaps"],
+                "joint Session long output lost its exact scope, effective capture limit or gaps")
+        require("N3_OUTPUT_NEEDLE_TAIL" in json.dumps(data(output_dialogue, "read")),
+                "joint Session could not retrieve its retained output before Compact")
+        before = candidate.history(session_id)
+        users_before = [item["data"] for item in before if item.get("kind") == "user_text"]
+        require(len(users_before) == 1 and constraint in users_before[0],
+                "joint Session did not persist its exact original user constraint")
+        counts = dict(candidate.provider.counts)
+        compact_stage = {"name": "joint Session Compact preserves original user and long-output tool history",
+                         "status": "failed", "session_id": session_id, "output_ref": output_ref}
+        candidate.journeys.append(compact_stage)
+        candidate.provider.dialogue = None
+        try:
+            compacted = candidate.invoke(workspace, ["compact", session_id], permissions="bypass")
+            require(compacted["session_id"] == session_id and compacted["run_id"] != output_run["run_id"],
+                    "joint Compact did not create a distinct Run in the original Session")
+            require(candidate.provider.counts["compaction"] > counts["compaction"],
+                    "joint Compact made no actual structured-summary request")
+            require(candidate.provider.counts["execution"] == counts["execution"],
+                    "joint Compact invoked the execution model")
+            require(candidate.history(session_id) == before, "joint Compact modified original user or tool history")
+            compact_stage.update({"status": "passed", "run_id": compacted["run_id"]})
+        finally:
+            compact_stage["requests"] = {key: candidate.provider.counts[key] - counts[key] for key in counts}
+        health = candidate.invoke(workspace, ["plugin", "inspect", plugin_id, "--digest", digest], expected_status=None)["data"]["package"]["lease_health"]
+        require(health["running"] == health["stop_requested"] == health["unknown"] == 0,
+                "joint output or Compact Run left an active or uncertain plugin lease")
+
         def selection(dialogue):
             matches = [entry for entry in data(dialogue, "catalog")["entries"] if entry["name"] == qualified]
             require(len(matches) == 1, "enabled CLI package did not assemble a unique qualified Skill")
@@ -471,16 +515,31 @@ path="skills/guide"
             ("resource", "skill_read_resource", lambda dialog: {**selection(dialog), "resource": "notes.txt", "expected_resource_sha256": sha256(skill / "notes.txt")}),
             ("deactivate", "skill_deactivate", selection),
             ("catalog-after", "skill_catalog", {}),
+            ("search-after", "output_search", {"output_ref": output_ref, "pattern": "N3_OUTPUT_NEEDLE_TAIL", "max_bytes": 1024, "context_lines": 1}),
+            ("read-after", "output_read", lambda dialog: {"output_ref": output_ref,
+                "cursor": data(dialog, "search-after")["matches"][0]["cursor"], "max_bytes": 1024}),
         ])
         start = len(candidate.provider.requests)
-        candidate.run("normal CLI install/enable assembles a leased plugin Skill", workspace, dialogue,
-                      "Discover the installed qualified Skill, activate it, read its notes and deactivate it.", permissions="bypass")
+        prompt = "Continue the original task after Compact. Discover the installed qualified Skill, activate it, read its notes, deactivate it and retrieve the original retained output tail."
+        continued = candidate.run("joint Session continues leased plugin Skill and original output_ref after Compact", workspace,
+                                  dialogue, prompt, session=session_id, permissions="bypass")
+        require(continued["session_id"] == session_id, "plugin Skill continuation silently changed Session")
         requests = candidate.provider.requests[start:]
-        require(len(requests) == 6, "plugin Skill journey made an unexpected model request")
+        require(len(requests) == 8, "plugin Skill continuation made an unexpected model request")
         injected = [body_marker in json.dumps(request) for request in requests]
-        require(injected == [False, False, True, True, False, False],
+        require(injected == [False, False, True, True, False, False, False, False],
                 "plugin Skill body injection differs from its exact active lifetime")
+        require(all(constraint in json.dumps(request) for request in requests),
+                "Compact continuation provider wire lost the original user constraint")
         require("N3_PLUGIN_RESOURCE_CONTENT" in json.dumps(data(dialogue, "resource")), "CLI App plugin resource dispatch missed the sealed resource")
+        require("N3_OUTPUT_NEEDLE_TAIL" in json.dumps(data(dialogue, "read-after")),
+                "post-Compact plugin Session could not retrieve the original retained output_ref")
+        after = candidate.history(session_id)
+        require(after[:len(before)] == before, "plugin continuation modified original long-output history")
+        require([item["data"] for item in after if item.get("kind") == "user_text"] == users_before + [prompt],
+                "joint continuation changed or duplicated original user messages")
+        candidate.journeys[-1].update({"output_ref": output_ref, "original_history_items": len(before),
+                                      "preserved_user_constraints_on_wire": len(requests)})
         candidate.invoke(workspace, ["plugin", "disable", plugin_id, "--scope", "workspace"], expected_status=None)
         disabled = Dialogue("cli-plugin-disabled", [("catalog", "skill_catalog", {})])
         start = len(candidate.provider.requests)
