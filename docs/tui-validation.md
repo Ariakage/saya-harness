@@ -2,6 +2,20 @@
 
 **更新于2026-11-09。0.2.0正式发行及标签已公开并完成四平台原生验收，各预发行与本机程序按源码及环境保留独立记录。**
 
+## 2026-11-09 输入与运行反馈
+
+在 `c2bf78c` 基线上完成输入色条、右侧留白、忙碌动画及任务结束统计。实际环境为本机macOS27.2 ARM／Rust1.99.1，部署目标15.0。完整 `RUST_TEST_THREADS=4 just check` 通过格式、workspace全目标严格Clippy、924项Rust测试与优化构建，50项Python工具回归通过。
+
+所测优化程序固定为 `target/tui-status-polish/saya`，SHA-256为 `59416ecc766dec2762ba75c853e5a18e2d0875cad4217f8601cbe5ed8533dab9`。完整门禁及各项日志保留在 `target/tui-status-polish/`，其中 `check.log`、`tooling-final.log` 分别记录Rust和Python检查。
+
+新增受控PTY场景覆盖四模式实际请求期间的多帧动画、精确／未知用量、完成后动画清除、历史摘要配色，以及下一次模型请求不包含界面统计。统计速率使用事件发布端的Execution请求区间，总量取最终RunResult，详细口径见[TUI设计](tui-design.md#运行反馈与结束统计)。
+
+同一固定程序完成25／25组正常入口旅程，最终报告为 `tui-report.json`，完整日志为 `journey-final.log`，程序前后SHA一致。三协议、四模式与三权限、Markdown、折叠、人工审批、后台取消、会话恢复、流式长输出、慢终端、信号和终端还原均通过。会话切换夹具修正了局部重绘中旧通知提前满足谓词的问题，等待真实Ready与完整画面后保留原distinct会话数及不重放检查，定向三次复验见 `session-restore-review.json`。
+
+debug版本的真实预览通过动态帧、working至completed切换、完成统计、零模型请求与终端恢复。160×45的working／completed和80×24的completed单元格快照使用本机Sarasa Fixed CL字体绘制并检查。新色条为U+1FBCF，字形依赖字体支持，观察器同时在Python3.9.6验证单列宽度与中文双列，离线回归模拟旧Unicode数据库。
+
+本轮记录属于当前本机开发程序，既有发行和N2四平台证据按各自源码保留。
+
 ## 0.2.0 正式发行与验收
 
 2026-11-09，项目负责人授权的0.2.0已正式发布并设为Latest。标签 `v0.2.0` 固定到 `f579d1f1f8ec48f96e0544967bf4ffd6bbc2cbb0`。四个原生目标均通过682项Rust测试、九项发行脚本测试和22组PTY，完成格式、严格Clippy、优化构建、工具往返、文本会话、恢复及审查回归。[正式发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42524461863)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42524462140)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42525979782)

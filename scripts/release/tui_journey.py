@@ -27,6 +27,7 @@ from process_witness import ProcessLease
 
 
 EDITOR_PLACEHOLDER = 'Describe a task…'
+INPUT_STRIPE = '\U0001fbcf'
 MODE_COLORS = {'WORK': (88, 166, 255), 'CODE': (125, 203, 155),
                'PLAN': (187, 154, 247), 'BUILD': (246, 173, 85)}
 
@@ -91,12 +92,17 @@ class Screen:
                 self.x = max(0, self.x - 1)
             elif char == '\t':
                 self.x = min(self.columns - 1, (self.x // 8 + 1) * 8)
-            elif ord(char) >= 32 and not unicodedata.category(char).startswith('C'):
+            elif ord(char) >= 32 and (char == INPUT_STRIPE or
+                                     not unicodedata.category(char).startswith('C')):
                 if unicodedata.combining(char):
                     if self.x:
                         self.cells[self.y][self.x - 1] += char
                 else:
-                    width = 2 if unicodedata.east_asian_width(char) in 'WF' else 1
+                    # Older Python Unicode tables treat this Unicode 17 glyph as
+                    # unassigned and fullwidth; its terminal width is one cell.
+                    width = 1
+                    if char != INPUT_STRIPE and unicodedata.east_asian_width(char) in 'WF':
+                        width = 2
                     if self.x >= self.columns:
                         self.x = 0
                         self.y = min(self.y + 1, self.rows - 1)
@@ -256,7 +262,7 @@ class Screen:
         if self.main_width() - 2 < 48:
             label = {'Manual Approval': 'manual', 'bypass permissions': 'bypass'}.get(permission, permission)
         row = self.main_row_text(status_row).strip(' │')
-        status = row[:-len(label)].strip().lstrip('✓● ').strip()
+        status = row[:-len(label)].strip().lstrip('✓● ').rstrip(' █')
         return {'Approval': 'Awaiting approval', 'Input': 'Awaiting input',
                 'Cancel': 'Cancelling', 'Done': 'Completed'}.get(status, status)
 
@@ -740,8 +746,10 @@ def assert_mode_colors(terminal, mode, pending=None):
     if input_row is None:
         raise RuntimeError('mode color assertion could not locate the actual composer')
     for row in range(input_row, screen.rows - 1):
-        if screen.colors[row][1] != (color, color):
+        if screen.cells[row][1] != INPUT_STRIPE or screen.colors[row][1] != (color, (32, 32, 36)):
             raise RuntimeError('composer stripe did not retain the actual ' + mode + ' mode color')
+        if screen.colors[row][screen.main_width() - 2][1] != (9, 9, 11):
+            raise RuntimeError('composer omitted its dark right margin')
     if pending is not None:
         if screen.row_style(footer_row, '→', 1, screen.main_width() - 1) != ((129, 129, 139), (9, 9, 11)):
             raise RuntimeError('pending-mode arrow did not retain its secondary color')
@@ -1359,15 +1367,17 @@ def reference_layout_and_title_journey(binary):
                         raise RuntimeError('reference header omitted the package version')
                     input_row = expected_message_row if expected_message_row is not None else 4
                     for index in range(input_row, rows - 1):
-                        if screen.cells[index][1] != '│':
-                            raise RuntimeError('reference input did not retain its left border')
+                        if screen.cells[index][1] != INPUT_STRIPE:
+                            raise RuntimeError('reference input did not use its one-third mode stripe')
                         color = MODE_COLORS[terminal.mode()]
-                        if screen.colors[index][1] != (color, color):
+                        if screen.colors[index][1] != (color, (32, 32, 36)):
                             raise RuntimeError('reference input stripe did not use the actual mode color for its full height')
+                        if screen.colors[index][screen.main_width() - 2][1] != (9, 9, 11):
+                            raise RuntimeError('reference input omitted its dark right margin')
                     if screen.colors[input_row][3][1] != (32, 32, 36):
                         raise RuntimeError('reference Message region did not use its gray background')
                     if expected_message_row is not None:
-                        inner_width = screen.main_width() - 4
+                        inner_width = screen.main_width() - 5
                         hint = ('Enter send · Alt+Enter newline · Ctrl+O fold' if inner_width >= 64 else
                                 'Enter send · Ctrl+O fold' if inner_width >= 38 else None)
                         message = screen.main_row_text(input_row)
@@ -2426,10 +2436,15 @@ def session_restore_and_export(binary):
                 terminal.until('Sessions · UI')
                 terminal.until(identifier[:8])
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: 'Sessions · UI' not in terminal.screen.text, 'session list closed')
+                terminal.wait(lambda: 'Sessions · UI' not in terminal.screen.text and
+                              'SESSION_FIRST' in terminal.screen.body_text(), 'session list closed')
+                terminal.settle()
                 terminal.line('/new')
                 terminal.wait(lambda: 'New session ready.' in terminal.screen.text and
+                              terminal.screen.status() == 'Ready' and
+                              'Create the first session' not in terminal.screen.body_text() and
                               'SESSION_FIRST' not in terminal.screen.text, 'new empty session')
+                terminal.settle()
                 if len(session_data(binary, root, config)) != 2:
                     raise RuntimeError('new session did not create a distinct saved session')
                 terminal.line('/resume ' + identifier)
@@ -2729,6 +2744,124 @@ def signal_restore(binary):
             fixture.close()
 
 
+def run_feedback_journey(binary):
+    modes = ['WORK', 'CODE', 'PLAN', 'BUILD']
+    gates = [threading.Event() for _ in modes]
+
+    def gated_reply(mode, gate):
+        def reply(_request):
+            if not gate.wait(10):
+                raise RuntimeError('animation observer did not release the model fixture for ' + mode)
+            return {'text': 'RUN_FEEDBACK_DONE_' + mode,
+                    'chat_usage': {'prompt_tokens': 1000, 'completion_tokens': 200}}
+        return reply
+
+    fixture = Fixture('openai-chat-completions',
+                      [gated_reply(mode, gate) for mode, gate in zip(modes, gates)] +
+                      [{'text': 'RUN_FEEDBACK_UNKNOWN_USAGE'}])
+    observed = {}
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-feedback-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.resize(160, 45)
+                terminal.title()
+                previous_mode = None
+                for index, mode in enumerate(modes):
+                    terminal.line('/mode ' + mode.lower())
+                    terminal.wait(lambda: terminal.mode() == mode and terminal.editor_text() == '',
+                                  'feedback mode selection ' + mode)
+                    if previous_mode is not None:
+                        style = terminal.screen.body_style(previous_mode + ' · fixture ·')
+                        if style != (MODE_COLORS[previous_mode], (9, 9, 11)):
+                            raise RuntimeError('completed summary changed color after switching modes')
+                    terminal.line('Run feedback check ' + mode)
+                    terminal.wait(lambda: len(fixture.requests) == index + 1 and
+                                  terminal.screen.status() == 'Thinking', 'blocked model request ' + mode)
+                    held_since = time.monotonic()
+                    phases = set()
+
+                    def animation_advanced():
+                        if terminal.screen.status() != 'Thinking':
+                            return False
+                        row = terminal.screen.status_row()
+                        width = terminal.screen.main_width()
+                        blocks = [column for column in range(1, width - 1)
+                                  if terminal.screen.cells[row][column] == '█']
+                        if len(blocks) > 6:
+                            raise RuntimeError('activity animation exceeded its six-cell width')
+                        for column in blocks:
+                            if terminal.screen.colors[row][column] != (MODE_COLORS[mode], (9, 9, 11)):
+                                raise RuntimeError('activity animation did not use the actual mode color')
+                        if blocks:
+                            phases.add(terminal.screen.main_row_text(row))
+                        return len(phases) >= 3
+
+                    terminal.wait(animation_advanced, 'three activity phases without model deltas', timeout=5)
+                    held_seconds = time.monotonic() - held_since
+                    observed[mode] = sorted(phases)
+                    save_interactive_screen(terminal, 'run-feedback-working-' + mode.lower())
+                    gates[index].set()
+                    result = wait_idle(terminal, root, count=index + 1)
+                    terminal.settle()
+                    if result.get('usage') != {'input_tokens': 1000, 'output_tokens': 200, 'estimated': False}:
+                        raise RuntimeError('feedback fixture did not preserve its actual provider usage')
+
+                    def latest_summary():
+                        prefix = mode + ' · fixture ·'
+                        return next((line.strip() for line in reversed(terminal.screen.body_text().splitlines())
+                                     if line.strip().startswith(prefix)), None)
+
+                    terminal.wait(lambda: latest_summary() is not None, 'completed run statistics ' + mode)
+                    summary = latest_summary()
+                    duration = re.fullmatch(r'(?:(\d+)h )?(?:(\d+)m )?(\d+(?:\.\d+)?)s',
+                                            summary.split(' · ')[2])
+                    if duration is None:
+                        raise RuntimeError('run summary omitted its elapsed duration: ' + summary)
+                    seconds = (int(duration.group(1) or 0) * 3600 +
+                               int(duration.group(2) or 0) * 60 + float(duration.group(3)))
+                    rounding = 1.0 if duration.group(1) or duration.group(2) else 0.1
+                    if seconds + rounding < held_seconds:
+                        raise RuntimeError('run duration excluded the controlled provider wait')
+                    measured = re.search(r' · ([0-9.]+) tok/s · ([^ ]+) tokens$', summary)
+                    if measured is None or measured.group(2) not in {'1200', '1,200', '1.2k'}:
+                        raise RuntimeError('run summary omitted its measured rate or total tokens: ' + summary)
+                    rate = float(measured.group(1))
+                    if rate <= 0 or rate > 200 / held_seconds * 1.05 + 0.1:
+                        raise RuntimeError('summary model rate excluded the controlled provider wait')
+                    if terminal.screen.body_style(mode + ' · fixture ·') != (MODE_COLORS[mode], (9, 9, 11)):
+                        raise RuntimeError('summary mode label did not retain its mode color')
+                    if '█' in terminal.screen.main_row_text(terminal.screen.status_row()):
+                        raise RuntimeError('activity animation continued after run completion: ' +
+                                           repr(terminal.screen.main_row_text(terminal.screen.status_row())))
+                    assert_mode_colors(terminal, mode)
+                    save_interactive_screen(terminal, 'run-feedback-' + mode.lower())
+                    previous_mode = mode
+
+                terminal.line('Run feedback with missing provider usage')
+                wait_idle(terminal, root, count=5)
+                terminal.wait(lambda: '— tok/s · — tokens' in terminal.screen.body_text(),
+                              'unknown rate and tokens remain unknown')
+                if len(fixture.requests) != 5 or 'tok/s' in json.dumps(fixture.requests, ensure_ascii=False):
+                    raise RuntimeError('interface statistics entered model history or generated extra requests')
+                snapshot = terminal.screen.text
+                terminal.send(b'\x04')
+                terminal.wait(lambda: terminal.process.poll() is not None, 'feedback TUI exit')
+                if terminal.process.returncode != 0:
+                    raise RuntimeError('feedback TUI exited unsuccessfully')
+                terminal.verify_restoration()
+                return {'activity_frames': observed, 'completed_screen': snapshot}
+            finally:
+                for gate in gates:
+                    gate.set()
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def invalid_routes(binary):
     with tempfile.TemporaryDirectory(prefix='saya-tui-routing-') as directory:
         root = Path(directory)
@@ -2769,6 +2902,8 @@ def main():
     for protocol in ['openai-chat-completions', 'openai-responses', 'anthropic-messages']:
         screens[protocol] = stream_journey(binary, protocol)
         passed(protocol + '-stream-resize-terminal-restore')
+    screens['run_feedback'] = run_feedback_journey(binary)
+    passed('mode-activity-animation-run-summary-and-unknown-usage')
     mode_permission_matrix(binary)
     passed('four-modes-three-permissions')
     command_completion_journey(binary)

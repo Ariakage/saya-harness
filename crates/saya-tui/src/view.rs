@@ -5,7 +5,7 @@ use crate::{
     rich_text::append_wrapped_line,
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
-        INPUT_BACKGROUND, INPUT_BORDER, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
+        INPUT_BACKGROUND, INPUT_BORDER, INPUT_STRIPE, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
         STRONG_FOREGROUND, mode_color,
     },
     tool_summary::summarize,
@@ -68,6 +68,7 @@ pub enum Role {
     Tool,
     Thinking,
     System,
+    RunSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +131,8 @@ pub struct State {
     pub mode: String,
     pub permissions: String,
     pub status: String,
+    pub activity_active: bool,
+    pub activity_frame: u64,
     pub pending_mode: Option<String>,
     pub usage: String,
     pub context_window_tokens: Option<u64>,
@@ -183,6 +186,8 @@ impl Default for State {
             mode: "WORK".into(),
             permissions: "auto".into(),
             status: "Ready".into(),
+            activity_active: false,
+            activity_frame: 0,
             pending_mode: None,
             usage: String::new(),
             context_window_tokens: None,
@@ -225,6 +230,14 @@ impl Default for State {
 }
 
 impl State {
+    pub fn activity_visible(&self) -> bool {
+        self.activity_active
+            && matches!(
+                self.status.as_str(),
+                "Ready" | "Running" | "Thinking" | "Responding" | "Reviewing" | "Cancelling"
+            )
+    }
+
     /// Add visible content and return a stable ID, retained across viewport eviction.
     /// Model/provider secrets must already have been removed by the controller.
     pub fn push_message(
@@ -1290,26 +1303,48 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
         "Running" | "Reviewing" | "Thinking" | "Responding" => BLUE,
         _ => MUTED,
     };
-    draw_split_line(
-        frame,
-        Line::from(vec![
-            Span::styled(
-                if ready { "✓ " } else { "● " },
-                Style::default().fg(status_color),
-            ),
-            Span::styled(safe_line(status), Style::default().fg(MUTED)),
-        ]),
-        Line::styled(
-            safe_line(permissions),
-            Style::default().fg(if state.permissions == "auto" {
-                MUTED
-            } else {
-                SOFT_AMBER
-            }),
+    let mut label = Line::from(vec![
+        Span::styled(
+            if ready { "✓ " } else { "● " },
+            Style::default().fg(status_color),
         ),
-        area,
-        6,
+        Span::styled(safe_line(status), Style::default().fg(MUTED)),
+    ]);
+    let permissions = Line::styled(
+        safe_line(permissions),
+        Style::default().fg(if state.permissions == "auto" {
+            MUTED
+        } else {
+            SOFT_AMBER
+        }),
     );
+    let permission_width = permissions
+        .width()
+        .min(usize::from(area.width).saturating_sub(7));
+    let available = usize::from(area.width)
+        .saturating_sub(permission_width + usize::from(permission_width > 0));
+    if state.activity_visible() && label.width() + 7 <= available {
+        let phase = (state.activity_frame % 12) as usize;
+        let (start, end) = if phase < 6 {
+            (0, phase + 1)
+        } else {
+            (phase - 5, 6)
+        };
+        let blocks = (0..6)
+            .map(|index| {
+                if (start..end).contains(&index) {
+                    '█'
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>();
+        label.spans.push(Span::styled(
+            format!(" {blocks}"),
+            Style::default().fg(mode_color(&state.mode)),
+        ));
+    }
+    draw_split_line(frame, label, permissions, area, 6);
 }
 
 fn draw_footer(frame: &mut Frame<'_>, state: &State, area: Rect) {
@@ -1431,7 +1466,7 @@ fn role_style(role: Role) -> Style {
         Role::Assistant => FOREGROUND,
         Role::Tool => AMBER,
         Role::Thinking => MUTED,
-        Role::System => MUTED,
+        Role::System | Role::RunSummary => MUTED,
     })
 }
 
@@ -1466,12 +1501,39 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         );
     }
     for message in &state.messages {
+        if message.role == Role::RunSummary {
+            let mut summary = Line::from(vec![
+                Span::styled(
+                    safe_line(&message.label),
+                    Style::default().fg(mode_color(&message.label)),
+                ),
+                Span::styled(
+                    format!(" · {}", safe_line(&message.text)),
+                    Style::default().fg(MUTED),
+                ),
+            ]);
+            if message.truncated {
+                summary
+                    .spans
+                    .push(Span::styled(" · truncated", Style::default().fg(MUTED)));
+            }
+            append_wrapped_line(
+                summary,
+                width,
+                &mut lines,
+                &mut line_count,
+                MAX_RENDER_LINES,
+            );
+            append_wrapped("", width, Style::default(), &mut lines, &mut line_count);
+            continue;
+        }
         let role_label = match message.role {
             Role::User => "You",
             Role::Assistant => "Saya",
             Role::Tool => "Tool",
             Role::Thinking => "Thinking",
             Role::System => "System",
+            Role::RunSummary => "",
         };
         let can_fold = foldable(message);
         let expanded = state.expanded_messages.contains(&message.id);
@@ -1838,12 +1900,30 @@ fn draw_details(
 
 fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let accent = mode_color(&state.mode);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BACKGROUND)),
+        area,
+    );
+    // Keep the existing left padding and reserve a dark cell before the frame.
+    let area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(accent).bg(accent))
         .style(Style::default().fg(FOREGROUND).bg(INPUT_BACKGROUND));
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(
+                INPUT_STRIPE,
+                Style::default().fg(accent).bg(INPUT_BACKGROUND)
+            );
+            usize::from(area.height)
+        ]),
+        Rect::new(area.x, area.y, 1, area.height),
+    );
     if inner.height > 0 {
         inner.x += 1;
         inner.width = inner.width.saturating_sub(1);
@@ -2579,12 +2659,13 @@ mod tests {
             .draw(|frame| draw_editor(frame, &state, frame.area()))
             .unwrap();
         let cursor = terminal.backend_mut().get_cursor_position().unwrap();
-        assert_eq!((cursor.x, cursor.y), (5, 1));
+        assert_eq!((cursor.x, cursor.y), (4, 1));
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(2, 1)].symbol(), " ");
-        assert_eq!(buffer[(3, 1)].symbol(), "界");
-        assert_eq!(buffer[(5, 1)].symbol(), "a");
-        assert_eq!(buffer[(5, 1)].fg, MUTED);
+        assert_eq!(buffer[(2, 1)].symbol(), "界");
+        assert_eq!(buffer[(3, 1)].symbol(), " ");
+        assert_eq!(buffer[(4, 1)].symbol(), "a");
+        assert_eq!(buffer[(4, 1)].fg, MUTED);
+        assert_eq!(buffer[(5, 1)].bg, BACKGROUND);
         assert_eq!(state.editor.text(), "/界界界");
         state.editor.move_left();
         terminal
@@ -2654,9 +2735,9 @@ mod tests {
                 .collect::<String>();
             assert!(status.ends_with("auto│"));
             assert_eq!(buffer[(3, title_row)].symbol(), "M");
-            assert_eq!(buffer[(1, title_row)].symbol(), "│");
+            assert_eq!(buffer[(1, title_row)].symbol(), INPUT_STRIPE);
             assert_eq!(buffer[(1, title_row)].fg, BLUE);
-            assert_eq!(buffer[(1, title_row)].bg, BLUE);
+            assert_eq!(buffer[(1, title_row)].bg, INPUT_BACKGROUND);
             assert_eq!(buffer[(2, title_row)].bg, INPUT_BACKGROUND);
             assert_eq!(buffer[(3, input_row)].symbol(), "h");
             assert_eq!(buffer[(3, input_row)].bg, INPUT_BACKGROUND);
@@ -3420,6 +3501,202 @@ mod tests {
     }
 
     #[test]
+    fn activity_phases_use_the_active_mode_and_yield_to_status_and_permissions() {
+        for mode in ["WORK", "CODE", "PLAN", "BUILD"] {
+            let mut state = State {
+                mode: mode.into(),
+                status: "Running".into(),
+                activity_active: true,
+                ..State::default()
+            };
+            for (phase, expected) in [
+                (0, "█     "),
+                (3, "████  "),
+                (5, "██████"),
+                (6, " █████"),
+                (10, "     █"),
+                (11, "      "),
+                (12, "█     "),
+            ] {
+                state.activity_frame = phase;
+                let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+                terminal
+                    .draw(|frame| draw_status(frame, &state, frame.area()))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let animation = (10..16)
+                    .map(|column| buffer[(column, 0)].symbol())
+                    .collect::<String>();
+                assert_eq!(animation, expected, "{mode}, phase {phase}");
+                for column in 10..16 {
+                    assert_eq!(buffer[(column, 0)].fg, mode_color(mode));
+                }
+                assert!(row_text(buffer, 0).ends_with("auto"));
+            }
+            for (permissions, expected) in [
+                ("auto", "auto"),
+                ("Manual Approval", "manual"),
+                ("bypass permissions", "bypass"),
+            ] {
+                state.permissions = permissions.into();
+                state.status = "Responding".into();
+                state.activity_frame = 5;
+                let mut terminal = Terminal::new(TestBackend::new(20, 1)).unwrap();
+                terminal
+                    .draw(|frame| draw_status(frame, &state, frame.area()))
+                    .unwrap();
+                let line = row_text(terminal.backend().buffer(), 0);
+                assert!(line.starts_with("● Responding"), "{line}");
+                assert!(line.ends_with(expected), "{line}");
+                assert!(!line.contains('█'), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn activity_stops_during_human_waits_and_terminal_states() {
+        let mut state = State {
+            activity_active: true,
+            activity_frame: 4,
+            ..State::default()
+        };
+        for status in [
+            "Ready",
+            "Running",
+            "Thinking",
+            "Responding",
+            "Reviewing",
+            "Cancelling",
+        ] {
+            state.status = status.into();
+            assert!(state.activity_visible(), "{status}");
+        }
+        for status in [
+            "Awaiting approval",
+            "Awaiting input",
+            "NeedsConfirmation",
+            "NeedsInput",
+            "NeedsAuth",
+            "Completed",
+            "Failed",
+            "Cancelled",
+            "LimitReached",
+            "Preview",
+            "Unknown",
+        ] {
+            state.status = status.into();
+            assert!(!state.activity_visible(), "{status}");
+            let mut terminal = Terminal::new(TestBackend::new(60, 1)).unwrap();
+            terminal
+                .draw(|frame| draw_status(frame, &state, frame.area()))
+                .unwrap();
+            assert!(!row_text(terminal.backend().buffer(), 0).contains('█'));
+            assert_eq!(state.activity_frame, 4);
+        }
+        state.status = "Running".into();
+        state.activity_active = false;
+        assert!(!state.activity_visible());
+        assert!(!State::default().activity_visible());
+    }
+
+    #[test]
+    fn run_summary_wraps_plain_metadata_and_colors_only_its_mode() {
+        let metadata = "fixture-model · 1m 19s · 143.5 tok/s · 12.3k tokens";
+        for mode in ["WORK", "CODE", "PLAN", "BUILD"] {
+            for width in [20, 40, 80] {
+                let mut state = State::default();
+                let id = state.push_message(Role::RunSummary, mode, metadata);
+                let mut terminal = Terminal::new(TestBackend::new(width, 10)).unwrap();
+                terminal
+                    .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let start = u16::from(width >= 40);
+                assert!(
+                    row_text(buffer, 0)
+                        .trim_start()
+                        .starts_with(&format!("{mode} · "))
+                );
+                for column in start..start + mode.len() as u16 {
+                    assert_eq!(buffer[(column, 0)].fg, mode_color(mode));
+                }
+                let actual = buffer
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect::<String>();
+                let expected = format!("{mode} · {metadata}")
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect::<String>();
+                assert_eq!(actual, expected);
+                for row in 0..10 {
+                    for column in 0..width {
+                        if row == 0 && (start..start + mode.len() as u16).contains(&column) {
+                            continue;
+                        }
+                        let cell = &buffer[(column, row)];
+                        if cell.symbol() != " " {
+                            assert_eq!(cell.fg, MUTED);
+                            assert!(!cell.modifier.contains(Modifier::BOLD));
+                        }
+                    }
+                }
+                assert!(state.message_hits.is_empty());
+                assert!(!state.toggle_message(id, 0));
+                assert_eq!(state.messages[0].text, metadata);
+            }
+        }
+    }
+
+    #[test]
+    fn run_summary_keeps_markdown_literal_and_escapes_control_metadata() {
+        let mut state = State::default();
+        let source = "**model** [ref](https://example.test) `code` [^1] 界\x1b[2J\u{85}\u{202e}";
+        state.push_message(Role::RunSummary, "CODE", source);
+        let mut terminal = Terminal::new(TestBackend::new(120, 6)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let line = row_text(terminal.backend().buffer(), 0);
+        assert!(line.contains("**model** [ref](https://example.test) `code` [^1] 界"));
+        assert!(line.contains("\\u{1b}[2J"));
+        assert!(line.contains("\\u{85}"));
+        assert!(line.contains("\\u{202e}"));
+        assert!(!line.contains("System"));
+        assert!(!line.contains("Saya"));
+        assert!(state.footnote_hits.is_empty());
+        assert!(state.message_hits.is_empty());
+        assert_eq!(state.messages[0].text, source);
+    }
+
+    #[test]
+    fn run_summary_reports_metadata_truncation_at_the_retained_tail() {
+        let mut state = State::default();
+        state.push_message(Role::RunSummary, "CODE", "x".repeat(MAX_MESSAGE_BYTES + 1));
+        assert!(state.messages[0].truncated);
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let tail = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(tail.ends_with("·truncated"));
+        assert!(state.messages[0].text.len() <= MAX_MESSAGE_BYTES);
+    }
+
+    #[test]
     fn empty_draft_mode_hint_yields_to_palette_and_completion() {
         let mut state = State::default();
         for (width, hint) in [
@@ -3827,9 +4104,11 @@ mod tests {
         state.editor.set_text("draft");
         for (width, hint) in [
             (80, "Enter send · Alt+Enter newline · Ctrl+O fold"),
-            (68, "Enter send · Alt+Enter newline · Ctrl+O fold"),
+            (69, "Enter send · Alt+Enter newline · Ctrl+O fold"),
+            (68, "Enter send · Ctrl+O fold"),
             (67, "Enter send · Ctrl+O fold"),
-            (42, "Enter send · Ctrl+O fold"),
+            (43, "Enter send · Ctrl+O fold"),
+            (42, ""),
             (41, ""),
             (20, ""),
         ] {
@@ -3839,7 +4118,7 @@ mod tests {
             let title = row_text(buffer, 19);
             assert_eq!(buffer[(3, 19)].symbol(), "M");
             assert_eq!(buffer[(3, 20)].symbol(), "d");
-            assert_eq!(buffer[(1, 19)].bg, BLUE);
+            assert_eq!(buffer[(1, 19)].bg, INPUT_BACKGROUND);
             assert_eq!(buffer[(2, 19)].bg, INPUT_BACKGROUND);
             if hint.is_empty() {
                 assert!(!title.contains("Enter send"));
@@ -3996,7 +4275,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let cursor = terminal.backend_mut().get_cursor_position().unwrap();
-        assert!(cursor.x >= 3 && cursor.x < 79);
+        assert!(cursor.x >= 3 && cursor.x < 78);
         assert_eq!(cursor.y, 20);
         let buffer = terminal.backend().buffer();
         assert!(row_text(buffer, 19).contains("Message · paste truncated at 64 KiB"));
@@ -4013,7 +4292,8 @@ mod tests {
     }
 
     #[test]
-    fn active_mode_colors_link_the_entire_input_stripe_and_footer_at_all_sizes() {
+    fn active_mode_colors_link_the_third_cell_stripe_and_footer_at_all_sizes() {
+        assert_eq!(UnicodeWidthStr::width(INPUT_STRIPE), 1);
         for (mode, color) in [
             ("WORK", Color::Rgb(88, 166, 255)),
             ("CODE", Color::Rgb(125, 203, 155)),
@@ -4036,9 +4316,22 @@ mod tests {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 terminal.draw(|frame| draw(frame, &mut state)).unwrap();
                 let buffer = terminal.backend().buffer();
+                let main_width = if width >= 120 {
+                    width - (width / 4).clamp(28, 40)
+                } else {
+                    width
+                };
                 for row in input_top..input_top + input_height {
                     assert_eq!(buffer[(1, row)].fg, color, "{mode}, {width}x{height}");
-                    assert_eq!(buffer[(1, row)].bg, color, "{mode}, {width}x{height}");
+                    assert_eq!(
+                        buffer[(1, row)].bg,
+                        INPUT_BACKGROUND,
+                        "{mode}, {width}x{height}"
+                    );
+                    assert_eq!(buffer[(1, row)].symbol(), INPUT_STRIPE);
+                    assert_eq!(buffer[(main_width - 2, row)].symbol(), " ");
+                    assert_eq!(buffer[(main_width - 2, row)].bg, BACKGROUND);
+                    assert_eq!(buffer[(main_width - 3, row)].bg, INPUT_BACKGROUND);
                 }
                 for column in 1..=mode.len() as u16 {
                     assert_eq!(
@@ -4061,9 +4354,52 @@ mod tests {
                     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
                     let buffer = terminal.backend().buffer();
                     assert_eq!(buffer[(1, 4)].fg, color);
-                    assert_eq!(buffer[(1, 4)].bg, color);
+                    assert_eq!(buffer[(1, 4)].bg, INPUT_BACKGROUND);
+                    assert_eq!(buffer[(1, 4)].symbol(), INPUT_STRIPE);
                     assert_eq!(buffer[(1, 5)].fg, color);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn composer_right_margin_keeps_short_and_scrolled_unicode_cursors_inside_the_surface() {
+        for (width, height) in [(20, 6), (60, 18), (80, 24), (120, 40), (160, 45)] {
+            let main_width = if width >= 120 {
+                width - (width / 4).clamp(28, 40)
+            } else {
+                width
+            };
+            let gap = main_width - 2;
+            let mut state = State::default();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            for with_details in [false, true] {
+                if with_details {
+                    state.set_details(Details {
+                        title: "Approval required".into(),
+                        lines: vec!["Read the proposed operation".into()],
+                    });
+                }
+                for (draft, expected) in [("", 3), ("hello", 8), ("界", 5), ("/per", 7)] {
+                    state.editor.set_text(draft);
+                    state.completion.update(draft, state.editor.cursor(), true);
+                    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                    let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+                    assert_eq!(cursor.x, expected, "{width}×{height}, {draft:?}");
+                    assert!(cursor.x < gap);
+                    assert_eq!(terminal.backend().buffer()[(gap, cursor.y)].bg, BACKGROUND);
+                    if draft == "/per" {
+                        assert_eq!(terminal.backend().buffer()[(7, cursor.y)].symbol(), "m");
+                    }
+                }
+                let draft = "界e\u{301}👩‍💻".repeat(40);
+                state.editor.set_text(&draft);
+                state.completion.update(&draft, state.editor.cursor(), true);
+                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+                assert_eq!(cursor.x, gap - 1, "{width}×{height}");
+                assert_eq!(terminal.backend().buffer()[(gap, cursor.y)].bg, BACKGROUND);
+                assert_eq!(state.editor.text(), draft);
             }
         }
     }
@@ -4085,7 +4421,8 @@ mod tests {
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
             let buffer = terminal.backend().buffer();
             assert!(row_text(buffer, 23).contains(&format!("{current}→{next}")));
-            assert_eq!(buffer[(1, 19)].bg, mode_color(current));
+            assert_eq!(buffer[(1, 19)].fg, mode_color(current));
+            assert_eq!(buffer[(1, 19)].bg, INPUT_BACKGROUND);
             assert_eq!(buffer[(1, 23)].fg, mode_color(current));
             let arrow = 1 + current.len() as u16;
             assert_eq!(buffer[(arrow, 23)].fg, MUTED);
@@ -4094,14 +4431,16 @@ mod tests {
             }
             let mut tiny = Terminal::new(TestBackend::new(20, 6)).unwrap();
             tiny.draw(|frame| draw(frame, &mut state)).unwrap();
-            assert_eq!(tiny.backend().buffer()[(1, 3)].bg, mode_color(current));
+            assert_eq!(tiny.backend().buffer()[(1, 3)].fg, mode_color(current));
+            assert_eq!(tiny.backend().buffer()[(1, 3)].bg, INPUT_BACKGROUND);
             assert_eq!(tiny.backend().buffer()[(1, 5)].fg, mode_color(current));
 
             state.mode = next.into();
             state.pending_mode = None;
             terminal.draw(|frame| draw(frame, &mut state)).unwrap();
             let buffer = terminal.backend().buffer();
-            assert_eq!(buffer[(1, 19)].bg, mode_color(next));
+            assert_eq!(buffer[(1, 19)].fg, mode_color(next));
+            assert_eq!(buffer[(1, 19)].bg, INPUT_BACKGROUND);
             assert_eq!(buffer[(1, 23)].fg, mode_color(next));
             assert!(!row_text(buffer, 23).contains('→'));
         }

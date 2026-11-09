@@ -82,7 +82,9 @@ CommonMark输入最多256KiB、65,536事件、64层结构，保留最近10,000�
 在真实终端中运行以下命令。
 
 ```sh
-MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-cli -- tui-preview syntax
+just tui-preview syntax
+just tui-preview working
+just tui-preview completed
 ./target/debug/saya tui-preview math
 ./target/debug/saya tui-preview mermaid
 ./target/debug/saya tui-preview footnotes --source

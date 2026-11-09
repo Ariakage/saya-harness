@@ -10,6 +10,7 @@ mod palette_tests;
 #[cfg(test)]
 mod service_tests;
 mod services;
+mod turn_summary;
 use crate::{
     commands::COMMANDS,
     input::TerminalInput,
@@ -22,7 +23,7 @@ use crossterm::event::{
 };
 use saya_app::{
     context::{ContextModel, ContextSnapshot, ContextSources},
-    events::{ChannelSink, EventModel, EventStore, EventWriter},
+    events::{EventModel, EventStore, EventWriter},
     interaction::{Request, RunCancellation, input_channel},
     session::{self, Prepared},
     thinking::{ThinkingLog, ThinkingModel},
@@ -38,7 +39,10 @@ use saya_core::{
     runtime::{PersonalContext, RuntimeHandle},
 };
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    time::Instant,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type RunOutcome = (std::result::Result<RunResult, BoundaryError>, Session);
@@ -64,6 +68,7 @@ struct Active {
     handle: RuntimeHandle,
     requests: mpsc::Receiver<Request>,
     requests_open: bool,
+    summary: turn_summary::TurnSummary,
 }
 impl Drop for Active {
     fn drop(&mut self) {
@@ -304,12 +309,13 @@ impl App {
             personal: self.options.personal_context.preferences.is_some()
                 || self.options.personal_context.memory.is_some(),
         };
+        let mut summary = turn_summary::TurnSummary::new(self.state.model.clone());
         let writer = EventWriter::new(
             prepared.store.clone(),
             prepared.session.id,
             run_id,
             self.secrets.clone(),
-            Arc::new(ChannelSink(sender)),
+            Arc::new(summary.sink(sender)),
         );
         let writer = Arc::new(if dynamic_credentials {
             writer.with_secret_registry(self.secret_registry.clone())?
@@ -363,6 +369,7 @@ impl App {
         self.reset_context();
         self.state.push_message(Role::User, "You", display);
         let handle = runtime.handle();
+        summary.start(Instant::now());
         let join = tokio::spawn(async move {
             let result = runtime.run(&mut current).await;
             (result, current)
@@ -381,10 +388,35 @@ impl App {
             handle,
             requests,
             requests_open: true,
+            summary,
         });
         self.state.status = "Running".into();
+        self.refresh_activity(Instant::now());
         self.state.scroll_to_bottom();
         Ok(())
+    }
+
+    fn refresh_activity(&mut self, now: Instant) -> bool {
+        let was_active = self.state.activity_active;
+        let previous_frame = self.state.activity_frame;
+        self.state.activity_active = self.active.is_some();
+        if self.state.activity_visible() {
+            self.state.activity_frame = self.active.as_ref().map_or(0, |active| {
+                u64::try_from(active.summary.elapsed_at(now).as_millis() / 120).unwrap_or(u64::MAX)
+            });
+        } else if !self.state.activity_active {
+            self.state.activity_frame = 0;
+        }
+        was_active != self.state.activity_active
+            || (self.state.activity_visible() && previous_frame != self.state.activity_frame)
+    }
+
+    fn append_run_summary(&mut self, summary: &turn_summary::TurnSummary, usage: Option<&Usage>) {
+        self.state.push_message(
+            Role::RunSummary,
+            self.state.mode.clone(),
+            self.safe(&summary.text(usage)),
+        );
     }
     fn cancel(&mut self) {
         if let Some(job) = &self.ui_job {
@@ -449,6 +481,7 @@ impl App {
             self.record_context_snapshot(snapshot);
         }
         let mut failure = None;
+        let mut summary_usage = None;
         match result {
             Ok((outcome, session)) => {
                 self.config.mode = session.work_mode;
@@ -458,6 +491,7 @@ impl App {
                 }
                 match outcome {
                     Ok(result) => {
+                        summary_usage = result.usage.clone();
                         if let Some(text) = result.text.filter(|text| !text.is_empty()) {
                             let id = self.assistant_message();
                             self.state.replace_message(id, self.safe(&text));
@@ -491,17 +525,25 @@ impl App {
                 self.close_run_messages(&active);
                 self.state.status = "Failed".into();
                 self.notice("Run task failed. Inspect stored tool records before retrying.");
+                if let Ok(mode) = active.handle.mode() {
+                    self.config.mode = mode.current;
+                }
                 self.refresh_header();
+                self.refresh_activity(Instant::now());
                 if let Err(error) = cleanup {
                     self.notice(&format!("Background cleanup failed — {error}"));
+                    self.append_run_summary(&active.summary, None);
                     return Err(Box::new(error));
                 }
+                self.append_run_summary(&active.summary, None);
                 return Err("run task failed".into());
             }
         }
         let active = self.active.take().ok_or("run is unavailable")?;
         self.close_run_messages(&active);
         self.refresh_header();
+        self.refresh_activity(Instant::now());
+        self.append_run_summary(&active.summary, summary_usage.as_ref());
         if let Some(error) = failure {
             return Err(error);
         }
@@ -860,6 +902,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             }
         }
         app.refresh_completion();
+        dirty |= app.refresh_activity(Instant::now());
         if redraw && dirty && app.exit_after_run.is_none() {
             let rendered = terminal
                 .set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))

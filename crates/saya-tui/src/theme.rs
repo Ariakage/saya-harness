@@ -5,6 +5,8 @@ pub(crate) const BACKGROUND: Color = Color::Rgb(9, 9, 11);
 pub(crate) const SIDEBAR_BACKGROUND: Color = Color::Rgb(20, 20, 22);
 pub(crate) const INPUT_BACKGROUND: Color = Color::Rgb(32, 32, 36);
 pub(crate) const INPUT_BORDER: Color = Color::Rgb(42, 42, 48);
+/// A single cell whose foreground covers its left third.
+pub(crate) const INPUT_STRIPE: &str = "\u{1fbcf}";
 pub(crate) const BORDER: Color = Color::Rgb(48, 48, 56);
 pub(crate) const FOREGROUND: Color = Color::Rgb(212, 212, 216);
 pub(crate) const STRONG_FOREGROUND: Color = Color::Rgb(232, 232, 237);

@@ -35,6 +35,19 @@ def generated_profile(command):
 
 
 class ScriptHelpersTest(unittest.TestCase):
+    def test_input_stripe_has_one_cell_with_older_unicode_tables(self):
+        stripe = tui_journey.INPUT_STRIPE
+        category = tui_journey.unicodedata.category
+        east_asian_width = tui_journey.unicodedata.east_asian_width
+        with mock.patch.object(tui_journey.unicodedata, 'category',
+                               side_effect=lambda char: 'Cn' if char == stripe else category(char)), \
+             mock.patch.object(tui_journey.unicodedata, 'east_asian_width',
+                               side_effect=lambda char: 'F' if char == stripe else east_asian_width(char)):
+            screen = tui_journey.Screen(10, 2)
+            screen.feed((stripe + 'A界B').encode())
+        self.assertEqual(screen.cells[0][:5], [stripe, 'A', '界', '', 'B'])
+        self.assertEqual(screen.x, 5)
+
     def test_process_lease_requires_live_readiness_before_release(self):
         with tempfile.TemporaryDirectory() as temporary:
             with ProcessLease(Path(temporary) / 'writer.fifo') as lease:

@@ -580,6 +580,7 @@ async fn attach_model(app: &mut App, model: Arc<dyn Model>) {
         handle,
         requests,
         requests_open: false,
+        summary: turn_summary::TurnSummary::new("fixture".into()),
     });
     app.prepared = Some(prepared);
 }
@@ -793,6 +794,138 @@ async fn final_event_drain_keeps_latest_request_usage_separate_from_run_totals()
     assert_eq!(app.state.context_input_tokens, Some(512));
     assert!(!app.state.context_estimated);
     assert!(app.state.usage.contains("9000"));
+    let summary = app.state.messages.back().unwrap();
+    assert_eq!(summary.role, Role::RunSummary);
+    assert!(summary.text.ends_with("11k tokens"));
+    assert!(summary.text.contains("— tok/s"));
+}
+
+#[tokio::test]
+async fn run_summaries_close_every_terminal_status_once_with_actual_mode_and_totals() {
+    use saya_core::contract::RunStatus;
+    for status in [
+        RunStatus::Completed,
+        RunStatus::Failed,
+        RunStatus::Cancelled,
+        RunStatus::NeedsConfirmation,
+        RunStatus::NeedsInput,
+        RunStatus::LimitReached,
+    ] {
+        let (_root, mut app) = fixture();
+        attach_active_call(&mut app).await;
+        app.state.pending_mode = Some("PLAN".into());
+        app.cancel();
+        let (result, mut session) = (&mut app.active.as_mut().unwrap().join).await.unwrap();
+        let mut result = result.unwrap();
+        result.status = status;
+        result.text = Some("retained final response".into());
+        result.usage = Some(Usage {
+            input_tokens: Some(500),
+            output_tokens: Some(100),
+            estimated: false,
+        });
+        session.work_mode = WorkMode::Code;
+        let repeated = (Ok(result.clone()), session.clone());
+        let history = session.history.clone();
+        app.finish(Ok((Ok(result), session))).await.unwrap();
+        let summary = app.state.messages.back().unwrap();
+        assert_eq!(summary.role, Role::RunSummary);
+        assert_eq!(summary.label, "CODE");
+        assert!(summary.text.starts_with("fixture · "));
+        assert!(summary.text.ends_with("— tok/s · 600 tokens"));
+        assert!(!app.state.activity_active);
+        assert_eq!(app.prepared.as_ref().unwrap().session.history, history);
+        assert!(app.finish(Ok(repeated)).await.is_err());
+        assert_eq!(
+            app.state
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::RunSummary)
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn run_summary_model_metadata_uses_refreshed_credential_redaction() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.active.as_mut().unwrap().summary =
+        turn_summary::TurnSummary::new("fixture-synthetic-late-token-model".into());
+    app.secret_registry
+        .register(&["synthetic-late-token".into()])
+        .unwrap();
+    stop_active_call(&mut app).await;
+    let summary = app.state.messages.back().unwrap();
+    assert_eq!(summary.role, Role::RunSummary);
+    assert!(summary.text.contains("[REDACTED]"));
+    assert!(!summary.text.contains("synthetic-late-token"));
+}
+
+#[tokio::test]
+async fn summary_usage_and_model_timing_do_not_leak_between_turns() {
+    let (_root, mut app) = fixture();
+    for usage in [
+        Some(Usage {
+            input_tokens: Some(500),
+            output_tokens: Some(100),
+            estimated: false,
+        }),
+        None,
+    ] {
+        attach_active_call(&mut app).await;
+        app.cancel();
+        let (result, session) = (&mut app.active.as_mut().unwrap().join).await.unwrap();
+        let mut result = result.unwrap();
+        result.usage = usage;
+        app.finish(Ok((Ok(result), session))).await.unwrap();
+    }
+    let summaries = app
+        .state
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::RunSummary)
+        .collect::<Vec<_>>();
+    assert_eq!(summaries.len(), 2);
+    assert!(summaries[0].text.ends_with("— tok/s · 600 tokens"));
+    assert!(summaries[1].text.ends_with("— tok/s · — tokens"));
+}
+
+#[tokio::test]
+async fn activity_ticks_only_change_visible_frames_and_each_run_starts_at_zero() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    let now = Instant::now();
+    app.active.as_mut().unwrap().summary.start(now);
+    app.state.status = "Running".into();
+    assert!(app.refresh_activity(now));
+    assert_eq!(app.state.activity_frame, 0);
+    assert!(!app.refresh_activity(now + Duration::from_millis(119)));
+    assert!(app.refresh_activity(now + Duration::from_millis(120)));
+    assert_eq!(app.state.activity_frame, 1);
+    for status in ["Awaiting approval", "Awaiting input"] {
+        app.state.status = status.into();
+        assert!(!app.refresh_activity(now + Duration::from_millis(500)));
+        assert_eq!(app.state.activity_frame, 1);
+    }
+    app.state.status = "Thinking".into();
+    assert!(app.refresh_activity(now + Duration::from_millis(600)));
+    assert_eq!(app.state.activity_frame, 5);
+    app.cancel();
+    assert!(app.refresh_activity(now + Duration::from_millis(720)));
+    assert_eq!(app.state.activity_frame, 6);
+    stop_active_call(&mut app).await;
+    assert!(!app.state.activity_active);
+    assert_eq!(app.state.activity_frame, 0);
+    assert!(!app.refresh_activity(now + Duration::from_secs(99)));
+    attach_active_call(&mut app).await;
+    let next = Instant::now();
+    app.active.as_mut().unwrap().summary.start(next);
+    app.state.status = "Running".into();
+    assert!(app.refresh_activity(next));
+    assert_eq!(app.state.activity_frame, 0);
+    stop_active_call(&mut app).await;
 }
 
 #[tokio::test]

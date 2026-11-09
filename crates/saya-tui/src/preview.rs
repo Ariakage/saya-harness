@@ -6,7 +6,7 @@ use crate::{
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use saya_core::tools::todo::{TodoItem, TodoStatus};
-use std::io;
+use std::{io, time::Duration};
 use tokio::signal::unix::{SignalKind, signal};
 
 pub const SCENES: &[&str] = &[
@@ -16,6 +16,8 @@ pub const SCENES: &[&str] = &[
     "commands",
     "completion",
     "idle",
+    "working",
+    "completed",
     "compact",
     "effort",
     "sidebar",
@@ -56,6 +58,8 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
+    let mut activity = tokio::time::interval(Duration::from_millis(120));
+    activity.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut exit = 0;
     loop {
         terminal.set_title(&format!("Saya | TUI preview · {}", SCENES[index]))?;
@@ -66,6 +70,10 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
             _ = terminate.recv() => { exit = 130; break; },
             _ = hangup.recv() => { exit = 130; break; },
             event = input.next() => match event { Some(event) => event?, None => break },
+            _ = activity.tick(), if state.activity_visible() => {
+                state.activity_frame = state.activity_frame.wrapping_add(1);
+                continue;
+            },
         };
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
@@ -136,12 +144,14 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
 fn scene_state(index: usize, display: MarkdownDisplay) -> State {
     let mut state = fixture(SCENES[index]);
     state.set_markdown_display(display);
-    state.status = format!(
-        "Preview {}/{} · {} · ←/→ scenes · s/r source/render · q exit",
-        index + 1,
-        SCENES.len(),
-        SCENES[index]
-    );
+    if !matches!(SCENES[index], "working" | "completed") {
+        state.status = format!(
+            "Preview {}/{} · {} · ←/→ scenes · s/r source/render · q exit",
+            index + 1,
+            SCENES.len(),
+            SCENES[index]
+        );
+    }
     state
 }
 
@@ -241,6 +251,42 @@ pub fn fixture(scene: &str) -> State {
             state.status = "Ready".into();
             state.usage.clear();
             state.context_input_tokens = None;
+        }
+        "working" | "completed" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.permissions = "auto".into();
+            state.session_title = "Run activity · synthetic preview".into();
+            state.push_message(
+                Role::User,
+                "You",
+                "Refine the input frame and run feedback.",
+            );
+            if scene == "working" {
+                state.status = "Thinking".into();
+                state.activity_active = true;
+                state.activity_frame = 3;
+                state.push_message(
+                    Role::Thinking,
+                    "configured-model",
+                    "Checking the layout, input cursor, and narrow terminal dimensions.",
+                );
+                if let Some(message) = state.messages.back_mut() {
+                    message.streaming = true;
+                }
+            } else {
+                state.status = "Completed".into();
+                state.push_message(
+                    Role::Assistant,
+                    "configured-model",
+                    "The input frame now has a fine mode accent and a dark right margin.\n\nThe statistics below are synthetic preview data.",
+                );
+                state.push_message(
+                    Role::RunSummary,
+                    "CODE",
+                    "configured-model · 1m 19s · 143.5 tok/s · 12.3k tokens",
+                );
+            }
         }
         "compact" => {
             state
@@ -733,4 +779,39 @@ this is not a valid Mermaid diagram
         ),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn working_and_completed_scenes_preserve_live_status_and_fixed_snapshot_phase() {
+        for scene in ["working", "completed"] {
+            let index = SCENES
+                .iter()
+                .position(|candidate| *candidate == scene)
+                .unwrap();
+            let state = scene_state(index, MarkdownDisplay::Render);
+            assert!(state.session_title.contains("synthetic preview"));
+            if scene == "working" {
+                assert_eq!(state.status, "Thinking");
+                assert!(state.activity_visible());
+                assert_eq!(state.activity_frame, 3);
+                assert!(
+                    state
+                        .messages
+                        .iter()
+                        .any(|message| { message.role == Role::Thinking && message.streaming })
+                );
+            } else {
+                assert_eq!(state.status, "Completed");
+                assert!(!state.activity_visible());
+                let summary = state.messages.back().unwrap();
+                assert_eq!(summary.role, Role::RunSummary);
+                assert_eq!(summary.label, "CODE");
+                assert!(summary.text.contains("1m 19s · 143.5 tok/s · 12.3k tokens"));
+            }
+        }
+    }
 }
