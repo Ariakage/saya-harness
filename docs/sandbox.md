@@ -29,6 +29,8 @@ Rust子进程启动使用已连接的匿名AF_UNIX SOCK_SEQPACKET通道，异步
 
 部分旧内核的shutdown及peer-close处理曾改变连接状态，匿名pair可能因此重新connect／listen。当前候选同时采用明确的正式版本范围和私有监听器行为探测，检测到重定向能力、未知行为或无法确认时返回 `sandbox_capability_unavailable`。范围为5.15分支≥5.15.86、6.1分支≥6.1.2，或正式6.2及以后版本。版本条件用于约束已知竞态修复身份，有限行为探测用于核对可观测语义。[peer-close修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)、[shutdown回补](https://github.com/gregkh/linux/commit/80d709875d920f7ca959040457b7393df706fe44)
 
+peer-close分支先确认完整 `POLLHUP`，再执行发送及重定向验证。并行fork可能短暂继承CLOEXEC peer，所有关闭分支共享一秒绝对截止，超时或未知状态返回失败。描述符无效、迟到HUP和中断均按同一截止处理，探测记录实际发送返回值与errno用于诊断。[探针验收记录](n2-validation.md#匿名通道关闭引用的探测同步)
+
 5.4／5.10本轮未纳入内核确认矩阵。厂商 `5.15.0-xxx` 无法仅凭版本串确认对应上游回补，RC和未知版本按必需能力无法确认处理。能力探测结果、Rust fork路径与原生防重定向回归需由实际Linux程序验证，见[N2记录](n2-validation.md)。
 
 ## 控制链

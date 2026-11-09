@@ -227,6 +227,16 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 诊断捕获失败时保留原TUI异常，成功运行中的捕获失败仍使验收失败，终端与服务清理均经finally执行。永久脚本回归覆盖退出尾部、raw／屏幕边界、阶段和进程状态。异常优先级另外以实际夹具函数的三项对照验证，记录为 `target/n2/research/tui-independent-review/lifecycle-error-probes-after.json`。
 
+## 匿名通道关闭引用的探测同步
+
+`e7bbc7e` 的四平台源码CI全部通过，N2的Linux x86源码门禁在长路径匿名pair用例返回“dead-peer send did not report a known closed state”。该端正常原生19项、MCP25项、TUI24项及完整性能v2均通过，失败门禁独立保留。[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42602868114)、[该轮N2](https://github.com/Ariakage/saya-harness/actions/runs/42602868260)
+
+同源码STREAM控制证明，真实fork中的子进程在exec前可暂时持有CLOEXEC peer，父进程关闭后发送仍可合法成功，exec关闭后原严格检查通过。探测现为所有peer-close分支共享一秒绝对截止，确认Linux完整POLLHUP后才执行发送和重定向验证。无效描述符、迟到事件、未知状态和超时失败关闭，中断按同一截止重试。固定内核门槛与完整行为负对照继续共同约束能力。
+
+新增Linux模块回归包含STREAM／SEQPACKET的真实fork／exec窗口、保留peer超时、过期截止及无继承正控制。两Linux目标严格Clippy、格式与独立复核通过，本机同源码STREAM控制通过，实际Linux HUP路径待新runner执行。原CI失败的唯一原因仍无法从旧错误信息确认，新的错误包含安全的返回值及errno。证据位于 `target/n2/research/pair-peer-close/`。
+
+本机4线程完整门禁907项Rust测试、workspace严格Clippy、格式及优化构建通过，日志为 `target/n2/peer-close-workspace.log`。Mac优化程序与已完整本机验收的 `d2b0f84585ac0e66cf8953547bd9eac8b36cbd7e21b28024c0da469a8aa9479e` 逐字节一致。最终四平台仍按新固定源码验收。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

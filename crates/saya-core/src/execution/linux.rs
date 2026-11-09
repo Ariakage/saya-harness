@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 pub(super) struct LinuxBackend {
@@ -462,6 +463,7 @@ fn verify_connected_pair_boundaries(scratch: &Path) -> io::Result<()> {
         "/proc/self/fd/{}",
         directory_descriptor.as_raw_fd()
     ));
+    let peer_close_deadline = Instant::now() + Duration::from_secs(1);
     for kind in [libc::SOCK_STREAM, libc::SOCK_SEQPACKET] {
         let listener = probe_socket(kind)?;
         let path = address_root.join(format!("{kind}.sock"));
@@ -530,6 +532,7 @@ fn verify_connected_pair_boundaries(scratch: &Path) -> io::Result<()> {
                 }
                 _ => {
                     drop(right);
+                    wait_probe_peer_closed(left.as_raw_fd(), peer_close_deadline)?;
                     exercise_dead_peer(left.as_raw_fd(), transition)?;
                 }
             }
@@ -622,6 +625,52 @@ fn reject_probe_retarget(status: libc::c_int) -> io::Result<()> {
     ))
 }
 
+fn wait_probe_peer_closed(descriptor: libc::c_int, deadline: Instant) -> io::Result<()> {
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "kernel probe peer references did not close before the probe deadline",
+                )
+            })?;
+        let mut poll = libc::pollfd {
+            fd: descriptor,
+            events: 0,
+            revents: 0,
+        };
+        let milliseconds = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        // SAFETY: the probe owns this socket, and poll receives one complete descriptor.
+        let status = unsafe { libc::poll(&mut poll, 1, milliseconds) };
+        if status < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if status == 0 {
+            continue;
+        }
+        if poll.revents & libc::POLLNVAL != 0 {
+            return Err(io::Error::other(
+                "kernel probe peer-close descriptor is invalid",
+            ));
+        }
+        if Instant::now() >= deadline {
+            continue;
+        }
+        if poll.revents & libc::POLLHUP != 0 {
+            return Ok(());
+        }
+        return Err(io::Error::other(format!(
+            "kernel probe peer-close reported unexpected poll flags {}",
+            poll.revents
+        )));
+    }
+}
+
 fn exercise_dead_peer(descriptor: libc::c_int, transition: PairTransition) -> io::Result<()> {
     if matches!(transition, PairTransition::PeerClosed) {
         return Ok(());
@@ -662,15 +711,18 @@ fn exercise_dead_peer(descriptor: libc::c_int, transition: PairTransition) -> io
                 _ => return Err(io::Error::other("unknown dead-peer probe transition")),
             }
         };
+        let errno = (status == -1)
+            .then(|| io::Error::last_os_error().raw_os_error())
+            .flatten();
         if status != -1
             || !matches!(
-                io::Error::last_os_error().raw_os_error(),
+                errno,
                 Some(libc::EPIPE | libc::ECONNRESET | libc::ECONNREFUSED | libc::ENOTCONN)
             )
         {
-            return Err(io::Error::other(
-                "dead-peer send did not report a known closed state",
-            ));
+            return Err(io::Error::other(format!(
+                "dead-peer send did not report a known closed state (status={status}, errno={errno:?})"
+            )));
         }
     }
     Ok(())
@@ -1283,6 +1335,152 @@ mod tests {
             0
         );
     }
+
+    fn kernel_probe_pair(kind: libc::c_int) -> [OwnedFd; 2] {
+        let mut pair = [-1; 2];
+        // SAFETY: socketpair initializes both descriptor slots on success.
+        check_probe_status(unsafe {
+            libc::socketpair(
+                libc::AF_UNIX,
+                kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                0,
+                pair.as_mut_ptr(),
+            )
+        })
+        .expect("probe socket pair");
+        // SAFETY: each successful socketpair descriptor has exactly one owner.
+        pair.map(|descriptor| unsafe { OwnedFd::from_raw_fd(descriptor) })
+    }
+
+    struct ProbeFork(libc::pid_t);
+    impl Drop for ProbeFork {
+        fn drop(&mut self) {
+            if self.0 > 0 {
+                // SAFETY: this owned child remains unreaped, so its PID cannot be reused.
+                unsafe {
+                    libc::kill(self.0, libc::SIGKILL);
+                    while libc::waitpid(self.0, std::ptr::null_mut(), 0) < 0
+                        && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                    {
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peer_close_probe_waits_for_inherited_cloexec_references_and_keeps_strict_sends() {
+        for kind in [libc::SOCK_STREAM, libc::SOCK_SEQPACKET] {
+            let [left, right] = kernel_probe_pair(kind);
+            let [release_reader, release_writer] = kernel_probe_pair(libc::SOCK_STREAM);
+            // SAFETY: the child performs no allocation or locking after fork.
+            // Its bounded poll, descriptor operations and exec use only async-signal-safe syscalls.
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0, "fork failed: {}", io::Error::last_os_error());
+            if pid == 0 {
+                unsafe {
+                    libc::close(left.as_raw_fd());
+                    libc::close(release_writer.as_raw_fd());
+                    let mut poll = libc::pollfd {
+                        fd: release_reader.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    if libc::poll(&mut poll, 1, 3000) != 1 {
+                        libc::_exit(120);
+                    }
+                    let mut byte = 0u8;
+                    if libc::read(
+                        release_reader.as_raw_fd(),
+                        std::ptr::from_mut(&mut byte).cast(),
+                        1,
+                    ) != 1
+                    {
+                        libc::_exit(121);
+                    }
+                    let arguments = [c"/usr/bin/true".as_ptr(), std::ptr::null()];
+                    libc::execv(arguments[0], arguments.as_ptr());
+                    libc::_exit(122);
+                }
+            }
+            let mut child = ProbeFork(pid);
+            drop(release_reader);
+            drop(right);
+            let held_deadline = Instant::now() + Duration::from_millis(20);
+            assert_eq!(
+                wait_probe_peer_closed(left.as_raw_fd(), held_deadline)
+                    .expect_err("inherited peer must still be open")
+                    .kind(),
+                io::ErrorKind::TimedOut
+            );
+            let transitions = [
+                PairTransition::PeerClosedSend,
+                PairTransition::PeerClosedSendTo,
+                PairTransition::PeerClosedSendMsg,
+            ];
+            for transition in transitions {
+                let error = exercise_dead_peer(left.as_raw_fd(), transition)
+                    .expect_err("a live inherited peer must not pass dead-peer send checks");
+                assert!(error.to_string().contains("errno=None"), "{error}");
+            }
+            let byte = 1u8;
+            // SAFETY: this owned control socket receives one synthetic byte.
+            assert_eq!(
+                unsafe {
+                    libc::send(
+                        release_writer.as_raw_fd(),
+                        std::ptr::from_ref(&byte).cast(),
+                        1,
+                        libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
+                    )
+                },
+                1
+            );
+            wait_probe_peer_closed(left.as_raw_fd(), Instant::now() + Duration::from_secs(1))
+                .expect("exec must close the inherited CLOEXEC peer");
+            for transition in transitions {
+                exercise_dead_peer(left.as_raw_fd(), transition)
+                    .expect("confirmed peer closure must preserve all strict send checks");
+            }
+            let mut status = 0;
+            let waited = loop {
+                // SAFETY: this is the unreaped child owned by the local guard.
+                let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+                if waited >= 0 || io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    break waited;
+                }
+            };
+            assert_eq!(waited, pid);
+            child.0 = 0;
+            assert_eq!(status, 0, "controlled child failed to exec true");
+            assert_eq!(
+                wait_probe_peer_closed(left.as_raw_fd(), held_deadline)
+                    .expect_err("an expired shared deadline must remain expired")
+                    .kind(),
+                io::ErrorKind::TimedOut
+            );
+        }
+    }
+
+    #[test]
+    fn peer_close_probe_accepts_closed_peers_without_inheritance() {
+        for kind in [libc::SOCK_STREAM, libc::SOCK_SEQPACKET] {
+            let [left, right] = kernel_probe_pair(kind);
+            drop(right);
+            wait_probe_peer_closed(left.as_raw_fd(), Instant::now() + Duration::from_secs(1))
+                .expect("closed peer must produce a hangup");
+            for transition in [
+                PairTransition::PeerClosed,
+                PairTransition::PeerClosedSend,
+                PairTransition::PeerClosedSendTo,
+                PairTransition::PeerClosedSendMsg,
+            ] {
+                exercise_dead_peer(left.as_raw_fd(), transition)
+                    .expect("all closed-peer transitions must keep their strict result checks");
+            }
+        }
+    }
+
     #[test]
     fn protection_masks_cover_canonical_system_aliases_and_parent_denies() {
         let mut policy = SandboxPolicy::workspace("/workspace".into());
