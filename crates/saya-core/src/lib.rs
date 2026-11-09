@@ -9,6 +9,7 @@
 pub mod approvals;
 pub mod background;
 pub mod boundary;
+pub mod checkpoint;
 pub mod command_analysis;
 pub mod config;
 pub mod context_builder;
