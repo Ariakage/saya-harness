@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -712,6 +713,16 @@ def network_case(case, family):
         return {'backend': case.native(), 'host_control_connected': True, 'payload': output.strip()}
 
 
+def require_udp_isolation(output, received):
+    require(not received, 'Host received a native UDP bypass packet')
+    result = output.strip()
+    denied = re.fullmatch(r'DENIED errno=[1-9][0-9]*', result) is not None
+    # A send into Linux's private network namespace can succeed locally. The
+    # host listener is the boundary witness, with a separate host positive control.
+    require(denied or (platform.system() == 'Linux' and result == 'SENT'),
+            'Unexpected native UDP result. ' + repr(result))
+
+
 def dns_case(case):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
         server.bind(('127.0.0.1', 0))
@@ -723,13 +734,13 @@ def dns_case(case):
         outcome = case.run([case.command('dns_udp', port)])
         complete(outcome)
         output = stdout(case.results()['n2-1'])
-        require('DENIED' in output, 'Native raw DNS transport was usable')
         try:
             unexpected = server.recv(512)
         except socket.timeout:
             unexpected = b''
-        require(not unexpected, 'Host received a native raw DNS bypass packet')
-        return {'backend': case.native(), 'raw_udp_dns_transport_blocked': True, 'host_positive_control': True}
+        require_udp_isolation(output, unexpected)
+        return {'backend': case.native(), 'raw_udp_dns_transport_blocked': True,
+                'host_positive_control': True, 'host_packets_received': 0, 'payload_result': output.strip()}
 
 
 @contextmanager
@@ -789,6 +800,12 @@ def proxy_udp_case(case):
             require(port > 0, 'Native payload did not receive the controlled proxy endpoint')
             ipv4.bind(('127.0.0.1', port))
             ipv6.bind(('::1', port))
+            for action, host_listener in [('dns_udp', ipv4), ('dns_udp6', ipv6)]:
+                control = subprocess.run([str(case.probe), action, str(port)],
+                                         capture_output=True, timeout=5, check=True)
+                require(control.stdout.strip() == b'SENT', 'Host proxy-port UDP control failed')
+                require(b'N2_RAW_DNS_TRANSPORT_PROBE' in host_listener.recv(512),
+                        'Host proxy-port UDP listener did not receive its positive control')
             return {'argv': [str(case.probe), 'dns_udp', str(port)]}
 
         outcome = case.run([case.command('proxy_port'), ('exec', bind_and_send),
@@ -803,13 +820,14 @@ def proxy_udp_case(case):
                 packet = b''
             if packet:
                 received.append(family)
-        require(not received, 'Host UDP services received native packets through proxy exception. '
-                + json.dumps(received))
+        payload_results = []
         for index in (2, 3):
-            require('DENIED' in stdout(case.results()[f'n2-{index}']),
-                    'Proxy exception also allowed UDP to an unrelated host service on the broker port')
+            output = stdout(case.results()[f'n2-{index}'])
+            require_udp_isolation(output, received)
+            payload_results.append(output.strip())
         return {'backend': case.native(), 'ipv4_udp_same_proxy_port_denied': True,
-                'ipv6_udp_same_proxy_port_denied': True}
+                'ipv6_udp_same_proxy_port_denied': True, 'host_packets_received': 0,
+                'host_positive_controls': ['ipv4', 'ipv6'], 'payload_results': payload_results}
 
 
 def process_metadata_case(case):

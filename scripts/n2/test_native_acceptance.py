@@ -46,6 +46,32 @@ class FakeCase:
 
 
 class AcceptanceOracles(unittest.TestCase):
+    def test_linux_private_udp_send_requires_no_host_delivery(self):
+        with patch.object(acceptance.platform, 'system', return_value='Linux'):
+            acceptance.require_udp_isolation('SENT\n', b'')
+            acceptance.require_udp_isolation('DENIED errno=1\n', b'')
+            with self.assertRaisesRegex(AssertionError, 'Host received'):
+                acceptance.require_udp_isolation('SENT\n', b'N2_RAW_DNS_TRANSPORT_PROBE')
+            with self.assertRaisesRegex(AssertionError, 'Host received'):
+                acceptance.require_udp_isolation('DENIED errno=1\n', ['ipv6'])
+
+    def test_seatbelt_udp_requires_syscall_denial_and_no_host_delivery(self):
+        with patch.object(acceptance.platform, 'system', return_value='Darwin'):
+            acceptance.require_udp_isolation('DENIED errno=1\n', b'')
+            with self.assertRaisesRegex(AssertionError, 'Unexpected native UDP'):
+                acceptance.require_udp_isolation('SENT\n', b'')
+            with self.assertRaisesRegex(AssertionError, 'Host received'):
+                acceptance.require_udp_isolation('DENIED errno=1\n', b'packet')
+
+    def test_udp_oracle_rejects_unknown_or_partial_probe_output(self):
+        for system in ['Linux', 'Darwin']:
+            for output in ['', 'NO_PROXY', 'DENIED', 'DENIED errno=', 'DENIED errno=0',
+                           'DENIED errno=١', 'DENIED errno=01', 'SENT\nextra']:
+                with self.subTest(system=system, output=output), \
+                        patch.object(acceptance.platform, 'system', return_value=system), \
+                        self.assertRaisesRegex(AssertionError, 'Unexpected native UDP'):
+                    acceptance.require_udp_isolation(output, b'')
+
     def test_plan_requires_both_denied_results(self):
         denied = {'ok': False, 'error': {'code': 'mode_denied'}}
         with tempfile.TemporaryDirectory() as directory:

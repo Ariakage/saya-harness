@@ -161,6 +161,12 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 `1a932cc` 的两Linux架构已通过25项MCP、24项TUI及委派资源正负对照。源码门禁继续到Rust生命周期夹具，五项旧断言同样把guest PID交给宿主查询。该夹具改为FIFO现场READY／writer及CLI退出后的立即EOF，shell和sleep后代共同持有writer，保留真实CLI信号与原退出码。新增未启动、历史READY与继承writer回归，本机三轮共18项测试、定向严格Clippy及格式检查通过，日志为 `target/n2/research/lifecycle-namespace-*.log`。Linux重新执行仍待新源码runner确认。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42579723866)
 
+## UDP 传输边界判据
+
+`1a932cc` 的Linux原生套件15／19项通过，其raw UDP探针调用单向 `sendto`，在私有network namespace内返回 `SENT`。原判据错误地要求系统调用必须失败，修订后核对完整的 `SENT` 或正整数errno输出，同时必须确认宿主监听器收到零个payload数据包。macOS继续要求Seatbelt拒绝系统调用。代理端口的IPv4／IPv6监听器均先执行实际宿主发送／接收正控制并排空，再检查payload发送后的零收包。
+
+11项验收oracle回归覆盖Linux私有发送、宿主实际收包的失败反例、macOS拒绝及无效输出。本机既有固定程序通过18项原生场景，记录为 `target/n2/udp-oracle-local/native-evidence.json`。该探针验证指定host listener的传输隔离，外部DNS解析仍列于未测范围。Linux代理启动失败另行修复并重新执行完整套件。
+
 ## CI 调试镜像与结构夹具
 
 源码CI和N2工作流设置 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`，保留行表并记录实际debug／优化镜像大小。结构夹具仅在唯一未完成原因为 `DeadlineExceeded` 时最多重试两次，每次沿用生产50ms限制，显式预算测试继续使用独立入口。19项结构测试及最终全目标严格Clippy通过，生产解析预算和运行预算保持现有值。最终完成仍要求新固定源码的全部四平台源码门禁和程序验收成功。

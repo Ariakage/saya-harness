@@ -69,6 +69,8 @@ payload HTTP_PROXY / HTTPS_PROXY
 
 network namespace 隔离外部连接，socat 将该环境的 loopback HTTP 代理入口转接到本 Run 的专用 Unix socket。宿主 socket 位于工作区与可写根之外的私有目录，控制通道与模型／文件 RPC 分开。直连 TCP／UDP、DNS、IPv6、Unix socket 和代理端口旁路属于原生验收范围。
 
+Linux私有network namespace内的单向UDP发送可以返回成功。验收要求已通过宿主正控制的监听器收到零个payload数据包，代理端口分别验证IPv4和IPv6。macOS的UDP探针另外要求Seatbelt拒绝系统调用。外部DNS解析的未测范围按[N2验收记录](n2-validation.md#udp-传输边界判据)维护。
+
 NetworkBroker 实现 HTTP absolute-form 与 CONNECT。每次新上游连接核对精确 origin、重新解析全部目标地址并固定所连接的 socket 地址，默认拒绝私有／本地／元数据地址。HTTP 请求采用有界 framing，校验 Host 与目标一致性，剔除代理专用认证头，并限制连接数、字节量和时间。客户端跟随重定向后产生的新代理请求继续接受相同核查。[网络实现](../crates/saya-core/src/network.rs)
 
 HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路径保持不透明。双栈 loopback listener 占有同一代理端口，进程与桥接收尾先于代理释放。本地开发服务需额外配置单一 origin 例外，并核对 loopback 解析结果。
