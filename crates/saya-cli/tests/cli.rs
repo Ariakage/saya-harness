@@ -10,10 +10,10 @@ use std::{
 };
 use tempfile::TempDir;
 
-fn command(root: &Path) -> Command {
+fn command(root: &Path, home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_saya"));
     cmd.env_clear()
-        .env("HOME", root)
+        .env("HOME", home)
         .env("PATH", "/usr/bin:/bin")
         .current_dir(root);
     cmd
@@ -53,6 +53,7 @@ fn read_call() -> String {
 #[test]
 fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, requests) = fixture::server(vec![
         (
             "application/json",
@@ -65,7 +66,7 @@ fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
     ])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let first = command(temp.path())
+    let first = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "first question"])
@@ -76,7 +77,7 @@ fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
         "{}",
         String::from_utf8_lossy(&first.stderr)
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -90,7 +91,7 @@ fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
     assert_eq!(list["data"][0]["title"], "first question");
-    let show = command(temp.path())
+    let show = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "show", id])
@@ -102,7 +103,7 @@ fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
         String::from_utf8_lossy(&show.stderr)
     );
     assert!(String::from_utf8_lossy(&show.stdout).contains("first reply"));
-    let second = command(temp.path())
+    let second = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "second question"])
@@ -127,6 +128,7 @@ fn saved_session_can_be_listed_shown_and_used_for_a_new_task() {
 fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
     for permissions in ["auto", "manual", "bypass"] {
         let workspace = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         let external = TempDir::new().unwrap();
         let (url, requests) = fixture::server(vec![
             (
@@ -148,7 +150,7 @@ fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
         ])
         .unwrap();
         let cfg = config(workspace.path(), &url, permissions);
-        let mut first = command(workspace.path());
+        let mut first = command(workspace.path(), home.path());
         first
             .arg("--config")
             .arg(&cfg)
@@ -164,7 +166,7 @@ fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
         );
         let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
         let id = first["session_id"].as_str().unwrap();
-        let mut resumed = command(workspace.path());
+        let mut resumed = command(workspace.path(), home.path());
         resumed.arg("--config").arg(&cfg).args([
             "--mode",
             "plan",
@@ -193,7 +195,7 @@ fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
         let context: serde_json::Value =
             serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
         assert_eq!(context["saya_runtime_context_v1"]["work_mode"], "plan");
-        let mut show = command(workspace.path());
+        let mut show = command(workspace.path(), home.path());
         show.arg("--config")
             .arg(&cfg)
             .args(["--output", "json", "session", "show", id])
@@ -208,6 +210,7 @@ fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
 #[test]
 fn configured_write_limit_reaches_the_real_dispatcher() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, requests) = fixture::server(vec![
         (
             "application/json",
@@ -232,7 +235,7 @@ fn configured_write_limit_reaches_the_real_dispatcher() {
         ),
     )
     .unwrap();
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "write"])
@@ -252,6 +255,7 @@ fn configured_write_limit_reaches_the_real_dispatcher() {
 #[test]
 fn resume_requires_explicit_acceptance_for_profile_changes() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![
         (
             "application/json",
@@ -265,7 +269,7 @@ fn resume_requires_explicit_acceptance_for_profile_changes() {
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
     assert!(
-        command(temp.path())
+        command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["run", "start"])
@@ -274,7 +278,7 @@ fn resume_requires_explicit_acceptance_for_profile_changes() {
             .status
             .success()
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -288,7 +292,7 @@ fn resume_requires_explicit_acceptance_for_profile_changes() {
         old.replace("stream = false", "stream = false\nmax_output_tokens = 1024"),
     )
     .unwrap();
-    let rejected = command(temp.path())
+    let rejected = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "continue"])
@@ -296,7 +300,7 @@ fn resume_requires_explicit_acceptance_for_profile_changes() {
         .unwrap();
     assert_eq!(rejected.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("--accept-config-change"));
-    let accepted = command(temp.path())
+    let accepted = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "--accept-config-change", "continue"])
@@ -313,7 +317,7 @@ fn resume_requires_explicit_acceptance_for_profile_changes() {
         current.replace("model = \"fake\"", "model = \"different\""),
     )
     .unwrap();
-    let incompatible = command(temp.path())
+    let incompatible = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "--accept-config-change", "continue"])
@@ -332,6 +336,7 @@ fn resuming_plan_checks_workspace_before_creating_sqlite_side_files() {
     };
     for saved_mode in [WorkMode::Plan, WorkMode::Work] {
         let temp = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();
         let data = root.join(".local/share/saya");
         let id = SessionId::new();
@@ -361,7 +366,8 @@ fn resuming_plan_checks_workspace_before_creating_sqlite_side_files() {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
-        let result = command(temp.path())
+        let result = command(temp.path(), home.path())
+            .env("XDG_DATA_HOME", root.join(".local/share"))
             .arg("--config")
             .arg(cfg)
             .args([
@@ -391,13 +397,14 @@ fn resuming_plan_checks_workspace_before_creating_sqlite_side_files() {
 fn new_plan_rejects_each_overlapping_storage_root_without_workspace_changes() {
     for selected in ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
         let workspace = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         let external = TempDir::new().unwrap();
         let cfg = config(workspace.path(), "http://127.0.0.1:1/v1", "auto");
         let before: std::collections::BTreeSet<_> = fs::read_dir(workspace.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
-        let mut cmd = command(workspace.path());
+        let mut cmd = command(workspace.path(), home.path());
         cmd.arg("--config")
             .arg(&cfg)
             .args(["--mode", "plan", "run", "inspect"]);
@@ -426,6 +433,7 @@ fn new_plan_rejects_each_overlapping_storage_root_without_workspace_changes() {
 #[test]
 fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("AGENTS.md"), "PROJECT_CONVENTION").unwrap();
     let preferences = temp.path().join("prefs.txt");
     let memory = temp.path().join("memory.txt");
@@ -437,7 +445,7 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     )])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .arg("--preferences-file")
@@ -489,10 +497,11 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
 #[test]
 fn oversized_personal_context_is_rejected_before_model_call() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let memory = temp.path().join("memory.txt");
     fs::write(&memory, vec![b'x'; 65_537]).unwrap();
     let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .arg("--memory-file")
@@ -507,6 +516,7 @@ fn oversized_personal_context_is_rejected_before_model_call() {
 #[test]
 fn personal_context_containing_configured_credential_is_rejected() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let memory = temp.path().join("memory.txt");
     fs::write(&memory, "fake-test-key-in-memory").unwrap();
     let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
@@ -515,7 +525,7 @@ fn personal_context_containing_configured_credential_is_rejected() {
         "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
     );
     fs::write(&cfg, content).unwrap();
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .env("TEST_KEY", "fake-test-key-in-memory")
         .arg("--config")
         .arg(cfg)
@@ -561,6 +571,7 @@ fn encoded_credentials_in_personal_files_are_rejected_before_network_requests() 
             ("Markdown nested JSON", nested_markdown.as_str()),
         ] {
             let temp = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
             let file = temp.path().join("personal.txt");
             fs::write(&file, contents).unwrap();
             let (url, requests) = fixture::server(vec![(
@@ -574,7 +585,7 @@ fn encoded_credentials_in_personal_files_are_rejected_before_network_requests() 
                 "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
             );
             fs::write(&cfg, source).unwrap();
-            let result = command(temp.path())
+            let result = command(temp.path(), home.path())
                 .env("TEST_KEY", secret)
                 .arg("--config")
                 .arg(cfg)
@@ -607,6 +618,7 @@ fn encoded_credentials_in_personal_files_are_rejected_before_network_requests() 
 #[test]
 fn nonsensitive_personal_markdown_reaches_the_model_unchanged() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let preferences = temp.path().join("preferences.md");
     let memory = temp.path().join("memory.md");
     let preferences_text = r#"# Preferences
@@ -635,7 +647,7 @@ fn nonsensitive_personal_markdown_reaches_the_model_unchanged() {
         "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
     );
     fs::write(&cfg, source).unwrap();
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .env("TEST_KEY", "fixture\"secret\\tail")
         .arg("--config")
         .arg(cfg)
@@ -671,9 +683,10 @@ fn nonsensitive_personal_markdown_reaches_the_model_unchanged() {
 #[test]
 fn config_init_never_overwrites_and_check_accepts_empty_template() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let path = temp.path().join("config.toml");
     let run = || {
-        command(temp.path())
+        command(temp.path(), home.path())
             .args(["--config", path.to_str().unwrap(), "config", "init"])
             .output()
             .unwrap()
@@ -683,7 +696,7 @@ fn config_init_never_overwrites_and_check_accepts_empty_template() {
     assert!(!run().status.success());
     assert_eq!(fs::read(&path).unwrap(), before);
     assert!(
-        command(temp.path())
+        command(temp.path(), home.path())
             .args(["--config", path.to_str().unwrap(), "config", "check"])
             .output()
             .unwrap()
@@ -695,11 +708,12 @@ fn config_init_never_overwrites_and_check_accepts_empty_template() {
 #[test]
 fn concurrent_processes_can_initialize_the_same_database() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
     let mut children = Vec::new();
     for _ in 0..6 {
         children.push(
-            command(temp.path())
+            command(temp.path(), home.path())
                 .arg("--config")
                 .arg(&cfg)
                 .args(["session", "list"])
@@ -721,13 +735,14 @@ fn concurrent_processes_can_initialize_the_same_database() {
 #[test]
 fn prompt_sources_are_explicit_mutually_exclusive_and_nonempty() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
     for args in [
         vec!["run"],
         vec!["run", " "],
         vec!["run", "hello", "--stdin"],
     ] {
-        let result = command(temp.path())
+        let result = command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(args)
@@ -736,7 +751,7 @@ fn prompt_sources_are_explicit_mutually_exclusive_and_nonempty() {
             .unwrap();
         assert_eq!(result.status.code(), Some(2));
     }
-    let mut child = command(temp.path())
+    let mut child = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--stdin"])
@@ -751,6 +766,7 @@ fn prompt_sources_are_explicit_mutually_exclusive_and_nonempty() {
 #[test]
 fn local_model_can_read_workspace_and_receives_authorized_work_tools() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "fixture data").unwrap();
     let (url, requests) = fixture::server(vec![
         ("application/json", read_call()),
@@ -761,7 +777,7 @@ fn local_model_can_read_workspace_and_receives_authorized_work_tools() {
     ])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let mut child = command(temp.path())
+    let mut child = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "--stdin"])
@@ -799,10 +815,11 @@ fn local_model_can_read_workspace_and_receives_authorized_work_tools() {
 #[test]
 fn manual_noninteractive_read_needs_confirmation() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "data").unwrap();
     let (url, _) = fixture::server(vec![("application/json", read_call())]).unwrap();
     let cfg = config(temp.path(), &url, "manual");
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "read"])
@@ -822,7 +839,10 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
             unix::process::CommandExt,
         },
     };
+    const PTY_TIMEOUT_MS: libc::c_int = 15_000;
+    const PTY_TIMEOUT: Duration = Duration::from_millis(PTY_TIMEOUT_MS as u64);
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "data").unwrap();
     let ask_args = json!({"question":"Which option?","options":["one","two"]}).to_string();
     let ask = response(
@@ -858,7 +878,7 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
     let mut master = unsafe { fs::File::from_raw_fd(master) };
     let slave = unsafe { fs::File::from_raw_fd(slave) };
     let slave_fd = slave.as_raw_fd();
-    let mut cmd = command(temp.path());
+    let mut cmd = command(temp.path(), home.path());
     cmd.arg("--config")
         .arg(cfg)
         .args(["run", "--stdin", "--interactive"])
@@ -886,7 +906,7 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
             revents: 0,
         };
         // SAFETY: poll points to one valid pollfd and has a bounded timeout.
-        if unsafe { libc::poll(&mut poll, 1, 5000) } <= 0 {
+        if unsafe { libc::poll(&mut poll, 1, PTY_TIMEOUT_MS) } <= 0 {
             let _ = child.kill();
             panic!("approval prompt did not arrive");
         }
@@ -904,9 +924,9 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
         }
     }
     master.write_all(b"y\n").unwrap();
-    let first = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let first = requests.recv_timeout(PTY_TIMEOUT).unwrap();
     assert!(first.to_string().contains("read it"));
-    if requests.recv_timeout(Duration::from_secs(5)).is_err() {
+    if requests.recv_timeout(PTY_TIMEOUT).is_err() {
         let _ = child.kill();
         drop(master);
         panic!("approved operation did not reach the next model request");
@@ -920,7 +940,7 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
                 revents: 0,
             };
             // SAFETY: the descriptor is owned by master and the timeout is finite.
-            if unsafe { libc::poll(&mut poll, 1, 5000) } <= 0 {
+            if unsafe { libc::poll(&mut poll, 1, PTY_TIMEOUT_MS) } <= 0 {
                 return Err(std::io::ErrorKind::TimedOut.into());
             }
             let mut buf = [0u8; 1024];
@@ -944,12 +964,10 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
     });
     assert!(question.contains("Which option?"));
     master.write_all(b"two\n").unwrap();
-    let third = requests
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap_or_else(|e| {
-            let _ = child.kill();
-            panic!("answer not returned to model: {e}")
-        });
+    let third = requests.recv_timeout(PTY_TIMEOUT).unwrap_or_else(|e| {
+        let _ = child.kill();
+        panic!("answer not returned to model: {e}")
+    });
     assert!(third.to_string().contains("two"));
     let mut stdout = child.stdout.take().unwrap();
     let mut poll = libc::pollfd {
@@ -958,7 +976,7 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
         revents: 0,
     };
     // SAFETY: poll observes one valid child stdout descriptor with a timeout.
-    if unsafe { libc::poll(&mut poll, 1, 5000) } <= 0 {
+    if unsafe { libc::poll(&mut poll, 1, PTY_TIMEOUT_MS) } <= 0 {
         let _ = child.kill();
         drop(master);
         panic!("approved answer did not arrive");
@@ -980,6 +998,7 @@ fn interactive_approval_uses_controlling_tty_separate_from_prompt_stdin() {
 #[test]
 fn streamed_text_is_displayed_without_duplicate_final_answer() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let body = fixture::sse(&[
         json!({"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":null}]}),
         json!({"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":null}]}),
@@ -991,7 +1010,7 @@ fn streamed_text_is_displayed_without_duplicate_final_answer() {
         .unwrap()
         .replace("stream = false", "stream = true");
     fs::write(&cfg, source).unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "greet"])
@@ -1017,6 +1036,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
     for stream in [false, true] {
         for output_mode in ["text", "json", "jsonl"] {
             let temp = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
             let reply = if stream {
                 let mut chunks = pieces.iter().map(|piece| {
                     json!({"choices":[{"index":0,"delta":{"content":piece},"finish_reason":null}]})
@@ -1037,7 +1057,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
                     .replace("stream = false", "stream = true");
                 fs::write(&cfg, source).unwrap();
             }
-            let output = command(temp.path())
+            let output = command(temp.path(), home.path())
                 .arg("--config")
                 .arg(&cfg)
                 .args([
@@ -1065,7 +1085,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
                     serde_json::from_str(events.lines().last().unwrap()).unwrap();
                 assert_eq!(final_event["data"]["text"], text);
             }
-            let list = command(temp.path())
+            let list = command(temp.path(), home.path())
                 .arg("--config")
                 .arg(&cfg)
                 .args(["--output", "json", "session", "list"])
@@ -1073,7 +1093,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
                 .unwrap();
             let value: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
             let id = value["data"][0]["id"].as_str().unwrap();
-            let show = command(temp.path())
+            let show = command(temp.path(), home.path())
                 .arg("--config")
                 .arg(&cfg)
                 .args(["--output", "json", "session", "show", id])
@@ -1087,7 +1107,7 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
                 "{value}"
             );
             for args in [vec!["session", "list"], vec!["session", "show", id]] {
-                let output = command(temp.path())
+                let output = command(temp.path(), home.path())
                     .arg("--config")
                     .arg(&cfg)
                     .args(args)
@@ -1106,12 +1126,13 @@ fn text_output_neutralizes_controls_without_changing_machine_output_or_history()
 #[test]
 fn noninteractive_clarification_exits_with_the_question() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let args = json!({"question":"Which option?","options":["one","two"]}).to_string();
     let message = json!({"role":"assistant","content":null,"tool_calls":[{"id":"ask","type":"function","function":{"name":"ask_user","arguments":args}}]});
     let (url, _) =
         fixture::server(vec![("application/json", response(message, "tool_calls"))]).unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "choose"])
@@ -1148,7 +1169,7 @@ fn cli_supplies_global_and_workspace_context_without_granting_permissions() {
     fs::write(workspace.join("input.txt"), "data").unwrap();
     let (url, requests) = fixture::server(vec![("application/json", read_call())]).unwrap();
     let cfg = config(&workspace, &url, "manual");
-    let output = command(&workspace)
+    let output = command(&workspace, &home)
         .env("HOME", &home)
         .arg("--config")
         .arg(cfg)
@@ -1182,6 +1203,7 @@ fn all_protocols_receive_project_context_as_history_data() {
         ),
     ] {
         let temp = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         fs::write(temp.path().join("AGENTS.md"), "CONTEXT_TEST_MARKER").unwrap();
         let (url, requests) =
             fixture::server(vec![("application/json", body.to_string())]).unwrap();
@@ -1190,7 +1212,7 @@ fn all_protocols_receive_project_context_as_history_data() {
             .unwrap()
             .replace("openai-chat-completions", protocol);
         fs::write(&cfg, source).unwrap();
-        let output = command(temp.path())
+        let output = command(temp.path(), home.path())
             .arg("--config")
             .arg(cfg)
             .args(["run", "hello"])
@@ -1218,6 +1240,7 @@ fn all_protocols_receive_project_context_as_history_data() {
 #[test]
 fn prompt_file_is_submitted_and_invalid_approval_file_fails_before_network() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, requests) = fixture::server(vec![(
         "application/json",
         response(json!({"role":"assistant","content":"done"}), "stop"),
@@ -1228,7 +1251,7 @@ fn prompt_file_is_submitted_and_invalid_approval_file_fails_before_network() {
     fs::write(&prompt, "FILE_PROMPT\n").unwrap();
     let invalid = temp.path().join("approval.json");
     fs::write(&invalid, "{}\n").unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--prompt-file"])
@@ -1242,7 +1265,7 @@ fn prompt_file_is_submitted_and_invalid_approval_file_fails_before_network() {
         requests.try_recv().is_err(),
         "invalid preauthorization must fail before network"
     );
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--prompt-file"])
@@ -1265,8 +1288,9 @@ fn prompt_file_is_submitted_and_invalid_approval_file_fails_before_network() {
 fn chat_without_controlling_terminal_is_a_configuration_error() {
     use std::os::unix::process::CommandExt;
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
-    let mut cmd = command(temp.path());
+    let mut cmd = command(temp.path(), home.path());
     cmd.arg("--config")
         .arg(cfg)
         .arg("chat")
@@ -1290,10 +1314,11 @@ fn chat_without_controlling_terminal_is_a_configuration_error() {
 fn interactive_run_without_controlling_tty_falls_back_to_confirmation_required() {
     use std::os::unix::process::CommandExt;
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "data").unwrap();
     let (url, _) = fixture::server(vec![("application/json", read_call())]).unwrap();
     let cfg = config(temp.path(), &url, "manual");
-    let mut cmd = command(temp.path());
+    let mut cmd = command(temp.path(), home.path());
     cmd.arg("--config")
         .arg(cfg)
         .args(["run", "--interactive", "read"])
@@ -1316,6 +1341,7 @@ fn interactive_run_without_controlling_tty_falls_back_to_confirmation_required()
 #[test]
 fn valid_exact_command_preauthorization_file_is_accepted() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![(
         "application/json",
         response(json!({"role":"assistant","content":"done"}), "stop"),
@@ -1329,7 +1355,7 @@ fn valid_exact_command_preauthorization_file_is_accepted() {
             .to_string(),
     )
     .unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "--approval-file"])
@@ -1348,6 +1374,7 @@ fn valid_exact_command_preauthorization_file_is_accepted() {
 fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
     use std::net::TcpListener;
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
@@ -1361,7 +1388,7 @@ fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
         }
     });
     let cfg = config(temp.path(), &format!("http://{address}/v1"), "auto");
-    let mut child = command(temp.path())
+    let mut child = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "wait"])
@@ -1421,6 +1448,7 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
         sync::mpsc,
     };
     let temp = TempDir::new()?;
+    let home = TempDir::new()?;
     let (url, _) = fixture::server(vec![
         (
             "application/json",
@@ -1437,7 +1465,7 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
     ])?;
     let cfg = config(temp.path(), &url, "auto");
     for prompt in ["first", "second"] {
-        let output = command(temp.path())
+        let output = command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["run", prompt])
@@ -1448,7 +1476,7 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let listing = command(temp.path())
+    let listing = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -1467,7 +1495,7 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
     let other = get_id("second")?;
     let mut child = Command::new(std::env::current_exe()?)
         .args(["--exact", "cli_session_lock_child", "--nocapture"])
-        .env("SAYA_TEST_LOCK_DIR", temp.path().join(".local/share/saya"))
+        .env("SAYA_TEST_LOCK_DIR", home.path().join(".local/share/saya"))
         .env("SAYA_TEST_LOCK_ID", &held)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1482,7 +1510,7 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
         }
     });
     receive.recv_timeout(Duration::from_secs(5))?;
-    let busy = command(temp.path())
+    let busy = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", &held, "retry"])
@@ -1493,7 +1521,7 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
         "{}",
         String::from_utf8_lossy(&busy.stderr)
     );
-    let available = command(temp.path())
+    let available = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", &other, "continue"])
@@ -1576,6 +1604,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
         sync::mpsc,
     };
     let temp = TempDir::new()?;
+    let home = TempDir::new()?;
     let (url, requests) = fixture::server(vec![
         (
             "application/json",
@@ -1587,7 +1616,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
         ),
     ])?;
     let cfg = config(temp.path(), &url, "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "initial"])
@@ -1597,7 +1626,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let listing = command(temp.path())
+    let listing = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -1607,7 +1636,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
     let target = temp.path().join("must-not-exist");
     let mut child = Command::new(std::env::current_exe()?)
         .args(["--exact", "cli_crash_child", "--nocapture"])
-        .env("SAYA_TEST_CRASH_DIR", temp.path().join(".local/share/saya"))
+        .env("SAYA_TEST_CRASH_DIR", home.path().join(".local/share/saya"))
         .env("SAYA_TEST_CRASH_ID", id)
         .env("SAYA_TEST_CRASH_TARGET", &target)
         .stdin(Stdio::piped())
@@ -1626,7 +1655,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
     child.kill()?;
     child.wait()?;
     if legacy {
-        let data = temp.path().join(".local/share/saya");
+        let data = home.path().join(".local/share/saya");
         fs::remove_file(data.join("locks").join(format!("{id}.guard")))?;
         let files = [
             "sessions.sqlite3",
@@ -1639,7 +1668,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
         let after = files.map(|name| fs::read(data.join(name)).unwrap());
         assert_eq!(before, after);
     }
-    let resumed = command(temp.path())
+    let resumed = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "continue"])
@@ -1662,6 +1691,7 @@ fn exercise_crash_recovery(legacy: bool) -> Result<(), Box<dyn std::error::Error
 fn observed_tool_result_is_reported_when_persistence_fails()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = TempDir::new()?;
+    let home = TempDir::new()?;
     fs::write(temp.path().join("input.txt"), "observed fixture data")?;
     let (url, _) = fixture::server(vec![
         (
@@ -1672,7 +1702,7 @@ fn observed_tool_result_is_reported_when_persistence_fails()
     ])?;
     let cfg = config(temp.path(), &url, "auto");
     assert!(
-        command(temp.path())
+        command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["run", "first"])
@@ -1680,16 +1710,16 @@ fn observed_tool_result_is_reported_when_persistence_fails()
             .status
             .success()
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
         .output()?;
     let list: serde_json::Value = serde_json::from_slice(&list.stdout)?;
     let id = list["data"][0]["id"].as_str().ok_or("missing id")?;
-    let db = rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3"))?;
+    let db = rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3"))?;
     db.execute_batch("CREATE TRIGGER reject_tool_result BEFORE UPDATE OF result ON tool_calls BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "read"])
@@ -1708,6 +1738,7 @@ fn observed_tool_result_is_reported_when_persistence_fails()
 fn observed_result_redacts_configured_secret_when_save_is_rejected()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = TempDir::new()?;
+    let home = TempDir::new()?;
     let secret = "fake-credential-for-test";
     fs::write(
         temp.path().join("input.txt"),
@@ -1726,14 +1757,14 @@ fn observed_result_redacts_configured_secret_when_save_is_rejected()
         "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
     );
     fs::write(&cfg, contents)?;
-    let first = command(temp.path())
+    let first = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(&cfg)
         .args(["run", "start"])
         .output()?;
     assert!(first.status.success());
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(&cfg)
@@ -1741,9 +1772,9 @@ fn observed_result_redacts_configured_secret_when_save_is_rejected()
         .output()?;
     let list: serde_json::Value = serde_json::from_slice(&list.stdout)?;
     let id = list["data"][0]["id"].as_str().ok_or("missing session")?;
-    let db = rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3"))?;
+    let db = rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3"))?;
     db.execute_batch("CREATE TRIGGER reject_result BEFORE UPDATE OF result ON tool_calls BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(cfg)
@@ -1784,6 +1815,7 @@ fn authorized_writes_and_commands_execute_and_are_persisted() {
         ),
     ] {
         let temp = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         let (url, _) = fixture::server(vec![
             (
                 "application/json",
@@ -1796,7 +1828,7 @@ fn authorized_writes_and_commands_execute_and_are_persisted() {
         ])
         .unwrap();
         let cfg = config(temp.path(), &url, permission);
-        let output = command(temp.path())
+        let output = command(temp.path(), home.path())
             .arg("--config")
             .arg(cfg)
             .args(["run", "perform task"])
@@ -1811,7 +1843,7 @@ fn authorized_writes_and_commands_execute_and_are_persisted() {
             temp.path().join(target).exists(),
             "{name} did not create target"
         );
-        let db = rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3"))
+        let db = rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3"))
             .unwrap();
         let (state, result): (String, Option<String>) = db
             .query_row(
@@ -1828,6 +1860,7 @@ fn authorized_writes_and_commands_execute_and_are_persisted() {
 #[test]
 fn manual_noninteractive_write_does_not_execute_without_approval() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![(
         "application/json",
         tool_response(
@@ -1838,7 +1871,7 @@ fn manual_noninteractive_write_does_not_execute_without_approval() {
     )])
     .unwrap();
     let cfg = config(temp.path(), &url, "manual");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "write"])
@@ -1870,6 +1903,7 @@ fn plan_never_executes_provider_requested_writes_or_commands() {
             ),
         ] {
             let temp = TempDir::new().unwrap();
+            let home = TempDir::new().unwrap();
             let storage = TempDir::new().unwrap();
             let (url, requests) = fixture::server(vec![
                 (
@@ -1883,7 +1917,7 @@ fn plan_never_executes_provider_requested_writes_or_commands() {
             ])
             .unwrap();
             let cfg = config(temp.path(), &url, permission);
-            let output = command(temp.path())
+            let output = command(temp.path(), home.path())
                 .env("XDG_DATA_HOME", storage.path().join("data"))
                 .env("XDG_STATE_HOME", storage.path().join("state"))
                 .env("XDG_CACHE_HOME", storage.path().join("cache"))
@@ -1912,6 +1946,7 @@ fn plan_never_executes_provider_requested_writes_or_commands() {
 fn crashed_background_command_is_reported_unknown_and_never_replayed() {
     use std::time::Instant;
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (url, requests) = fixture::server_dynamic(3, move |index, _| {
@@ -1926,7 +1961,7 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
         }
     }).unwrap();
     let cfg = config(temp.path(), &url, "bypass");
-    let mut child = command(temp.path())
+    let mut child = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "start background"])
@@ -1943,7 +1978,7 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -1954,7 +1989,7 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
     child.kill().unwrap();
     child.wait().unwrap();
     release_tx.send(()).unwrap();
-    let resumed = command(temp.path())
+    let resumed = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "continue"])
@@ -1975,7 +2010,7 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
     assert!(third.contains("unknown"), "{third}");
     std::thread::sleep(Duration::from_millis(3300));
     assert_eq!(fs::read_to_string(temp.path().join("marker")).unwrap(), "x");
-    let show = command(temp.path())
+    let show = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "show", id])
@@ -1991,19 +2026,20 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
 #[test]
 fn background_launch_intent_failure_prevents_command_execution() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![
         ("application/json", response(json!({"role":"assistant","content":"first"}), "stop")),
         ("application/json", tool_response("launch", "background_start", json!({"tool":"exec","arguments":{"argv":["/usr/bin/touch","must-not-exist"],"cwd":null,"timeout_seconds":null}}))),
     ]).unwrap();
     let cfg = config(temp.path(), &url, "bypass");
-    let first = command(temp.path())
+    let first = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "start"])
         .output()
         .unwrap();
     assert!(first.status.success());
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -2012,9 +2048,9 @@ fn background_launch_intent_failure_prevents_command_execution() {
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
     let db =
-        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+        rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
     db.execute_batch("CREATE TRIGGER reject_launch BEFORE INSERT ON tool_calls WHEN json_extract(NEW.call,'$.name')='background_start' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "launch"])
@@ -2032,6 +2068,7 @@ fn background_launch_intent_failure_prevents_command_execution() {
 #[test]
 fn failed_write_result_is_reported_and_recovery_never_replays_it() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, requests) = fixture::server(vec![
         (
             "application/json",
@@ -2053,7 +2090,7 @@ fn failed_write_result_is_reported_and_recovery_never_replays_it() {
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
     assert!(
-        command(temp.path())
+        command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["run", "start"])
@@ -2062,7 +2099,7 @@ fn failed_write_result_is_reported_and_recovery_never_replays_it() {
             .status
             .success()
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -2071,9 +2108,9 @@ fn failed_write_result_is_reported_and_recovery_never_replays_it() {
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
     let db =
-        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+        rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
     db.execute_batch("CREATE TRIGGER reject_write_result BEFORE UPDATE OF result ON tool_calls WHEN NEW.call_id='write-once' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
-    let failed = command(temp.path())
+    let failed = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "write"])
@@ -2087,7 +2124,7 @@ fn failed_write_result_is_reported_and_recovery_never_replays_it() {
     );
     db.execute_batch("DROP TRIGGER reject_write_result")
         .unwrap();
-    let recovered = command(temp.path())
+    let recovered = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "continue"])
@@ -2114,6 +2151,7 @@ fn failed_write_result_is_reported_and_recovery_never_replays_it() {
 #[test]
 fn exact_command_preauthorization_executes_only_in_that_run() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let args =
         json!({"argv":["/usr/bin/touch","approved-marker"],"cwd":null,"timeout_seconds":null});
     let (url, _) = fixture::server(vec![
@@ -2134,7 +2172,7 @@ fn exact_command_preauthorization_executes_only_in_that_run() {
     let cfg = config(temp.path(), &url, "manual");
     let approval = temp.path().join("approved.json");
     fs::write(&approval, json!({"schema_version":1,"commands":[{"argv":["/usr/bin/touch","approved-marker"],"cwd":temp.path()}]}).to_string()).unwrap();
-    let first = command(temp.path())
+    let first = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--approval-file"])
@@ -2149,7 +2187,7 @@ fn exact_command_preauthorization_executes_only_in_that_run() {
     );
     assert!(temp.path().join("approved-marker").exists());
     fs::remove_file(temp.path().join("approved-marker")).unwrap();
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -2157,7 +2195,7 @@ fn exact_command_preauthorization_executes_only_in_that_run() {
         .unwrap();
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
-    let second = command(temp.path())
+    let second = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "again"])
@@ -2176,6 +2214,7 @@ fn exact_command_preauthorization_executes_only_in_that_run() {
 #[test]
 fn project_instruction_sources_are_recorded_per_request_without_contents() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let source = temp.path().join("AGENTS.md");
     fs::write(&source, "PRIVATE_INSTRUCTION_FIRST").unwrap();
     let (url, requests) = fixture::server(vec![
@@ -2190,7 +2229,7 @@ fn project_instruction_sources_are_recorded_per_request_without_contents() {
     ])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let first = command(temp.path())
+    let first = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "first"])
@@ -2201,7 +2240,7 @@ fn project_instruction_sources_are_recorded_per_request_without_contents() {
         "{}",
         String::from_utf8_lossy(&first.stderr)
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -2210,7 +2249,7 @@ fn project_instruction_sources_are_recorded_per_request_without_contents() {
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
     fs::write(&source, "PRIVATE_INSTRUCTION_SECOND").unwrap();
-    let second = command(temp.path())
+    let second = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "second"])
@@ -2231,7 +2270,7 @@ fn project_instruction_sources_are_recorded_per_request_without_contents() {
         .to_string();
     assert!(first_request.contains("PRIVATE_INSTRUCTION_FIRST"));
     assert!(second_request.contains("PRIVATE_INSTRUCTION_SECOND"));
-    let show = command(temp.path())
+    let show = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "show", id])
@@ -2258,6 +2297,7 @@ fn project_instruction_sources_are_recorded_per_request_without_contents() {
 #[test]
 fn instruction_source_record_failure_stops_before_model_request() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, requests) = fixture::server(vec![(
         "application/json",
         response(json!({"role":"assistant","content":"first"}), "stop"),
@@ -2265,7 +2305,7 @@ fn instruction_source_record_failure_stops_before_model_request() {
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
     assert!(
-        command(temp.path())
+        command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["run", "start"])
@@ -2274,7 +2314,7 @@ fn instruction_source_record_failure_stops_before_model_request() {
             .status
             .success()
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -2283,9 +2323,9 @@ fn instruction_source_record_failure_stops_before_model_request() {
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
     let db =
-        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+        rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
     db.execute_batch("CREATE TRIGGER reject_context BEFORE INSERT ON change_log WHEN NEW.kind='project_context' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
-    let failed = command(temp.path())
+    let failed = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "--session", id, "continue"])
@@ -2304,6 +2344,7 @@ fn instruction_source_record_failure_stops_before_model_request() {
 #[test]
 fn json_run_emits_one_complete_result_without_text_stream_pollution() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![(
         "application/json",
         response(
@@ -2313,7 +2354,7 @@ fn json_run_emits_one_complete_result_without_text_stream_pollution() {
     )])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["--output", "json", "run", "hello"])
@@ -2339,10 +2380,11 @@ fn json_run_emits_one_complete_result_without_text_stream_pollution() {
 #[test]
 fn json_noninteractive_confirmation_and_config_error_have_machine_results() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![("application/json", read_call())]).unwrap();
     fs::write(temp.path().join("input.txt"), "data").unwrap();
     let cfg = config(temp.path(), &url, "manual");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "run", "read"])
@@ -2352,7 +2394,7 @@ fn json_noninteractive_confirmation_and_config_error_have_machine_results() {
     assert_eq!(output.status.code(), Some(3));
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["status"], "needs_confirmation");
-    let failed = command(temp.path())
+    let failed = command(temp.path(), home.path())
         .args([
             "--output",
             "json",
@@ -2373,6 +2415,7 @@ fn json_noninteractive_confirmation_and_config_error_have_machine_results() {
 #[test]
 fn jsonl_run_emits_ordered_events_and_one_durable_final_result() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "test data").unwrap();
     let (url, _) = fixture::server(vec![
         ("application/json", read_call()),
@@ -2383,7 +2426,7 @@ fn jsonl_run_emits_ordered_events_and_one_durable_final_result() {
     ])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["--output", "jsonl", "run", "read"])
@@ -2429,7 +2472,7 @@ fn jsonl_run_emits_ordered_events_and_one_durable_final_result() {
             && event["timestamp"].as_str().unwrap().ends_with('Z'))
     );
     let db =
-        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+        rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
     let count: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM events WHERE json_extract(event,'$.type')='run.finished'",
@@ -2452,6 +2495,7 @@ fn jsonl_reports_noninteractive_approval_and_clarification() {
         ("auto", "ask_user", "needs_input", "input.requested"),
     ] {
         let temp = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         fs::write(temp.path().join("input.txt"), "data").unwrap();
         let body = if tool == "read_file" {
             read_call()
@@ -2464,7 +2508,7 @@ fn jsonl_reports_noninteractive_approval_and_clarification() {
         };
         let (url, _) = fixture::server(vec![("application/json", body)]).unwrap();
         let cfg = config(temp.path(), &url, permissions);
-        let output = command(temp.path())
+        let output = command(temp.path(), home.path())
             .arg("--config")
             .arg(cfg)
             .args(["--output", "jsonl", "run", "task"])
@@ -2506,7 +2550,8 @@ fn jsonl_reports_noninteractive_approval_and_clarification() {
 #[test]
 fn jsonl_config_error_returns_one_terminal_event() {
     let temp = TempDir::new().unwrap();
-    let output = command(temp.path())
+    let home = TempDir::new().unwrap();
+    let output = command(temp.path(), home.path())
         .args([
             "--output",
             "jsonl",
@@ -2533,6 +2578,7 @@ fn jsonl_config_error_returns_one_terminal_event() {
 fn machine_modes_preserve_streamed_text_and_jsonl_sequence_across_runs() {
     for output_mode in ["json", "jsonl"] {
         let temp = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
         let stream = || {
             fixture::sse(&[
                 json!({"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":null}]}),
@@ -2550,7 +2596,7 @@ fn machine_modes_preserve_streamed_text_and_jsonl_sequence_across_runs() {
             .unwrap()
             .replace("stream = false", "stream = true");
         fs::write(&cfg, source).unwrap();
-        let first = command(temp.path())
+        let first = command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["--output", output_mode, "run", "first"])
@@ -2581,7 +2627,7 @@ fn machine_modes_preserve_streamed_text_and_jsonl_sequence_across_runs() {
             .as_str()
             .unwrap();
         let last_seq = events.last().unwrap()["seq"].as_u64().unwrap();
-        let resumed = command(temp.path())
+        let resumed = command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["--output", "jsonl", "run", "--session", session, "second"])
@@ -2606,6 +2652,7 @@ fn machine_modes_preserve_streamed_text_and_jsonl_sequence_across_runs() {
 fn jsonl_interrupted_model_has_matching_finish_and_cancelled_result() {
     use std::net::TcpListener;
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
@@ -2619,7 +2666,7 @@ fn jsonl_interrupted_model_has_matching_finish_and_cancelled_result() {
         }
     });
     let cfg = config(temp.path(), &format!("http://{address}/v1"), "auto");
-    let child = command(temp.path())
+    let child = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["--output", "jsonl", "run", "wait"])
@@ -2671,6 +2718,7 @@ fn jsonl_interrupted_model_has_matching_finish_and_cancelled_result() {
 #[test]
 fn configured_json_output_covers_prompt_errors_and_noninteractive_questions() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![(
         "application/json",
         tool_response(
@@ -2686,7 +2734,7 @@ fn configured_json_output_covers_prompt_errors_and_noninteractive_questions() {
         "profile = \"test\"\noutput = \"json\"",
     );
     fs::write(&cfg, contents).unwrap();
-    let empty = command(temp.path())
+    let empty = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", " "])
@@ -2695,7 +2743,7 @@ fn configured_json_output_covers_prompt_errors_and_noninteractive_questions() {
     assert_eq!(empty.status.code(), Some(2));
     let result: serde_json::Value = serde_json::from_slice(&empty.stdout).unwrap();
     assert_eq!(result["status"], "failed");
-    let question = command(temp.path())
+    let question = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["run", "choose"])
@@ -2714,7 +2762,10 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
         fd::{AsRawFd, FromRawFd},
         unix::process::CommandExt,
     };
+    const PTY_TIMEOUT_MS: libc::c_int = 15_000;
+    const SETTLE_TIMEOUT: Duration = Duration::from_millis(PTY_TIMEOUT_MS as u64);
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     fs::write(temp.path().join("input.txt"), "data").unwrap();
     let (url, _) = fixture::server(vec![
         ("application/json", read_call()),
@@ -2756,7 +2807,7 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
     let mut master = unsafe { fs::File::from_raw_fd(master) };
     let slave = unsafe { fs::File::from_raw_fd(slave) };
     let fd = slave.as_raw_fd();
-    let mut cmd = command(temp.path());
+    let mut cmd = command(temp.path(), home.path());
     cmd.arg("--config")
         .arg(cfg)
         .args(["--output", "jsonl", "run", "--interactive", "read"])
@@ -2805,7 +2856,7 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
             revents: 0,
         };
         // SAFETY: one owned PTY descriptor and bounded timeout.
-        assert!(unsafe { libc::poll(&mut poll, 1, 5000) } > 0);
+        assert!(unsafe { libc::poll(&mut poll, 1, PTY_TIMEOUT_MS) } > 0);
         let mut buf = [0u8; 1024];
         let n = master.read(&mut buf).unwrap();
         assert!(n > 0);
@@ -2821,7 +2872,7 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
                 revents: 0,
             };
             // SAFETY: poll receives a live owned descriptor and a finite timeout.
-            assert!(unsafe { libc::poll(&mut poll, 1, 5000) } > 0);
+            assert!(unsafe { libc::poll(&mut poll, 1, PTY_TIMEOUT_MS) } > 0);
             let mut buf = [0u8; 1024];
             let n = master.read(&mut buf).unwrap();
             assert!(n > 0);
@@ -2832,13 +2883,13 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
     master.write_all(b"y\n").unwrap();
     await_tty(&mut master, "Answer:");
     master.write_all(b"two\n").unwrap();
-    if finished_rx.recv_timeout(Duration::from_secs(8)).is_err() {
+    if finished_rx.recv_timeout(SETTLE_TIMEOUT).is_err() {
         drop(master);
         let _ = child.kill();
         panic!("interactive JSONL final event did not arrive");
     }
     drop(master);
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -2881,6 +2932,7 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
 #[test]
 fn jsonl_never_emits_a_known_secret_split_across_stream_chunks() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let secret = "fixture-secret-12345";
     let body = fixture::sse(&[
         json!({"choices":[{"index":0,"delta":{"content":"fixture-secret-"},"finish_reason":null}]}),
@@ -2897,7 +2949,7 @@ fn jsonl_never_emits_a_known_secret_split_across_stream_chunks() {
             "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
         );
     fs::write(&cfg, contents).unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(cfg)
@@ -2926,6 +2978,7 @@ fn jsonl_never_emits_a_known_secret_split_across_stream_chunks() {
 #[test]
 fn jsonl_reports_result_persistence_failure_once_without_replaying_write() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let (url, _) = fixture::server(vec![
         (
             "application/json",
@@ -2943,7 +2996,7 @@ fn jsonl_reports_result_persistence_failure_once_without_replaying_write() {
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
     assert!(
-        command(temp.path())
+        command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["run", "start"])
@@ -2952,7 +3005,7 @@ fn jsonl_reports_result_persistence_failure_once_without_replaying_write() {
             .status
             .success()
     );
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "list"])
@@ -2961,9 +3014,9 @@ fn jsonl_reports_result_persistence_failure_once_without_replaying_write() {
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
     let db =
-        rusqlite::Connection::open(temp.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
+        rusqlite::Connection::open(home.path().join(".local/share/saya/sessions.sqlite3")).unwrap();
     db.execute_batch("CREATE TRIGGER reject_result BEFORE UPDATE OF result ON tool_calls WHEN NEW.call_id='write-once' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
-    let result = command(temp.path())
+    let result = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "jsonl", "run", "--session", id, "write"])
@@ -2996,8 +3049,9 @@ fn jsonl_reports_result_persistence_failure_once_without_replaying_write() {
 #[test]
 fn json_session_query_failure_uses_query_envelope_without_run_event() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["--output", "json", "session", "show", "invalid-id"])
@@ -3015,6 +3069,7 @@ fn json_session_query_failure_uses_query_envelope_without_run_event() {
 #[test]
 fn run_reports_known_usage_metrics_and_verified_file_artifact() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let with_usage = |message: serde_json::Value, finish: &str, input: u64, output: u64| {
         json!({"choices":[{"index":0,"finish_reason":finish,"message":message}],"usage":{"prompt_tokens":input,"completion_tokens":output}}).to_string()
     };
@@ -3033,7 +3088,7 @@ fn run_reports_known_usage_metrics_and_verified_file_artifact() {
     let mut config_text = fs::read_to_string(&cfg).unwrap();
     config_text.push_str("\n[profiles.test.pricing]\ncurrency = \"USD\"\ninput_microunits_per_million = 1000000\noutput_microunits_per_million = 2000000\n");
     fs::write(&cfg, config_text).unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "run", "write"])
@@ -3059,7 +3114,7 @@ fn run_reports_known_usage_metrics_and_verified_file_artifact() {
             .unwrap()
     );
     let id = result["session_id"].as_str().unwrap();
-    let show = command(temp.path())
+    let show = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "show", id])
@@ -3082,6 +3137,7 @@ fn run_reports_known_usage_metrics_and_verified_file_artifact() {
 #[test]
 fn run_keeps_partial_provider_usage_unknown_and_separates_review() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let args =
         json!({"argv":["/usr/bin/touch","command-artifact"],"cwd":null,"timeout_seconds":null})
             .to_string();
@@ -3096,7 +3152,7 @@ fn run_keeps_partial_provider_usage_unknown_and_separates_review() {
     ])
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "run", "command"])
@@ -3115,7 +3171,7 @@ fn run_keeps_partial_provider_usage_unknown_and_separates_review() {
     assert!(result["artifacts"].as_array().unwrap().is_empty());
     assert!(temp.path().join("command-artifact").exists());
     let id = result["session_id"].as_str().unwrap();
-    let show = command(temp.path())
+    let show = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
         .args(["--output", "json", "session", "show", id])
@@ -3132,6 +3188,7 @@ fn run_keeps_partial_provider_usage_unknown_and_separates_review() {
 #[test]
 fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let secret = "fake-runtime-secret-123";
     fs::write(
         temp.path().join("input.txt"),
@@ -3160,7 +3217,7 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
         "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
     );
     fs::write(&cfg, contents).unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(&cfg)
@@ -3188,7 +3245,7 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
     assert!(!first.contains(secret));
     assert!(!second.contains(secret));
     assert!(second.contains("[REDACTED]"));
-    let list = command(temp.path())
+    let list = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(&cfg)
@@ -3197,7 +3254,7 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
         .unwrap();
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
-    let show = command(temp.path())
+    let show = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(&cfg)
@@ -3207,7 +3264,7 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
     let show = String::from_utf8(show.stdout).unwrap();
     assert!(!show.contains(secret));
     assert!(show.contains("[REDACTED]"));
-    for entry in fs::read_dir(temp.path().join(".local/share/saya")).unwrap() {
+    for entry in fs::read_dir(home.path().join(".local/share/saya")).unwrap() {
         let path = entry.unwrap().path();
         if path.is_file() {
             let bytes = fs::read(path).unwrap();
@@ -3223,6 +3280,7 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
 #[test]
 fn completed_background_write_is_included_in_artifacts() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let marker = temp.path().join("background-artifact.txt");
     let mut job_id = None;
     let mut deadline = None;
@@ -3280,7 +3338,7 @@ fn completed_background_write_is_included_in_artifacts() {
     })
     .unwrap();
     let cfg = config(temp.path(), &url, "auto");
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .arg("--config")
         .arg(cfg)
         .args(["--output", "json", "run", "start"])
@@ -3306,6 +3364,7 @@ fn completed_background_write_is_included_in_artifacts() {
 #[test]
 fn warnings_are_logged_as_redacted_json_without_stdout_pollution() {
     let temp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let secret = "fake-logging-secret";
     fs::write(temp.path().join("input.txt"), "data").unwrap();
     let (url, _) = fixture::server(vec![("application/json", read_call())]).unwrap();
@@ -3315,7 +3374,7 @@ fn warnings_are_logged_as_redacted_json_without_stdout_pollution() {
         "auth = \"bearer\"\napi_key_env = \"TEST_KEY\"",
     );
     fs::write(&cfg, config).unwrap();
-    let output = command(temp.path())
+    let output = command(temp.path(), home.path())
         .env("TEST_KEY", secret)
         .arg("--config")
         .arg(cfg)
@@ -3326,7 +3385,7 @@ fn warnings_are_logged_as_redacted_json_without_stdout_pollution() {
     assert_eq!(output.status.code(), Some(3));
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["status"], "needs_confirmation");
-    let path = temp.path().join(".local/state/saya/saya.log");
+    let path = home.path().join(".local/state/saya/saya.log");
     let contents = fs::read_to_string(path).unwrap();
     assert!(!contents.contains(secret));
     let line: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
@@ -3339,7 +3398,8 @@ fn warnings_are_logged_as_redacted_json_without_stdout_pollution() {
 fn jsonl_terminal_failure_uses_reserved_identity_and_sequence_when_database_reservation_fails() {
     for fail in [false, true] {
         let temp = TempDir::new().unwrap();
-        let database = temp.path().join(".local/share/saya/sessions.sqlite3");
+        let home = TempDir::new().unwrap();
+        let database = home.path().join(".local/share/saya/sessions.sqlite3");
         let trigger_database = database.clone();
         let (url, _) = fixture::server_dynamic(2, move |index, _| {
             if index > 0 {
@@ -3364,7 +3424,7 @@ fn jsonl_terminal_failure_uses_reserved_identity_and_sequence_when_database_rese
                 .replace("stream = false", "stream = true"),
         )
         .unwrap();
-        let output = command(temp.path())
+        let output = command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["--output", "jsonl", "run", "sequence fixture"])
@@ -3412,7 +3472,7 @@ fn jsonl_terminal_failure_uses_reserved_identity_and_sequence_when_database_rese
         } else {
             assert!(final_event["seq"].as_u64().unwrap() > 4096);
         }
-        let resumed = command(temp.path())
+        let resumed = command(temp.path(), home.path())
             .arg("--config")
             .arg(&cfg)
             .args(["--output", "jsonl", "run", "--session", session, "continue"])

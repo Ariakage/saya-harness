@@ -1000,17 +1000,22 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             let rendered = terminal
                 .set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))
                 .and_then(|()| terminal.draw(|frame| view::draw(frame, &mut app.state)));
-            if let Err(error) = rendered {
-                if app.active.is_some() || app.ui_job.is_some() {
-                    // A disconnected terminal can fail before its pending HUP
-                    // is consumed. Keep servicing signals and owned cleanup.
-                    app.exit_after_run.get_or_insert(1);
-                    app.cancel();
-                } else {
-                    return Err(error.into());
+            match rendered {
+                Ok(()) => dirty = false,
+                // Output backpressure is transient; retry this dirty frame on
+                // the next loop instead of terminating the TUI.
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => {
+                    if app.active.is_some() || app.ui_job.is_some() {
+                        // A disconnected terminal can fail before its pending HUP
+                        // is consumed. Keep servicing signals and owned cleanup.
+                        app.exit_after_run.get_or_insert(1);
+                        app.cancel();
+                    } else {
+                        return Err(error.into());
+                    }
                 }
             }
-            dirty = false;
         }
         if app.active.is_none()
             && app.ui_job.is_none()

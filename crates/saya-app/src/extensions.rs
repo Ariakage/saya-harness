@@ -82,7 +82,7 @@ pub(super) fn attach(
     runtime: AgentRuntime,
     config: &Config,
     session: &Session,
-    sandbox: &SandboxPolicy,
+    sandbox: &mut SandboxPolicy,
     store: PluginStore,
     secrets: Arc<SecretRegistry>,
 ) -> Result<AgentRuntime, BoundaryError> {
@@ -91,6 +91,11 @@ pub(super) fn attach(
         ViewLimits::default(),
     )?);
     let journal = hook_journal(&config.state_dir, session, secrets)?;
+    if sandbox.backend != saya_core::execution::BackendKind::Host
+        && !sandbox.protected_paths.contains(&config.state_dir)
+    {
+        sandbox.protected_paths.push(config.state_dir.clone());
+    }
     runtime.with_plugins(store, pool, config.plugins.bindings.clone(), journal)
 }
 

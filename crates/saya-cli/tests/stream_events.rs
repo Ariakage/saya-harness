@@ -84,6 +84,7 @@ fn three_protocol_streams_reach_shared_jsonl_events_with_complete_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     for (protocol, body) in streams() {
         let root = tempfile::tempdir()?;
+        let home = tempfile::tempdir()?;
         let (url, requests) = fixture::server(vec![("text/event-stream", body)])?;
         let config = root.path().join("config.toml");
         fs::write(
@@ -104,7 +105,7 @@ stream = true
         )?;
         let output = Command::new(env!("CARGO_BIN_EXE_saya"))
             .env_clear()
-            .env("HOME", root.path())
+            .env("HOME", home.path())
             .env("PATH", "/usr/bin:/bin")
             .current_dir(root.path())
             .arg("--config")

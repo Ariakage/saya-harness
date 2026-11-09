@@ -64,7 +64,10 @@ struct Fixture {
 }
 impl Fixture {
     fn new(mode: WorkMode, permissions: PermissionMode) -> Self {
-        Self::with_hooks(
+        Self::new_with_timeout(mode, permissions, 250)
+    }
+    fn new_with_timeout(mode: WorkMode, permissions: PermissionMode, timeout_ms: u64) -> Self {
+        Self::with_hooks_timeout(
             mode,
             permissions,
             &[
@@ -74,12 +77,21 @@ impl Fixture {
                 ("after", "tool.finished", "observer"),
                 ("check", "tool.before_dispatch", "check"),
             ],
+            timeout_ms,
         )
     }
     fn with_hooks(
         mode: WorkMode,
         permissions: PermissionMode,
         entries: &[(&str, &str, &str)],
+    ) -> Self {
+        Self::with_hooks_timeout(mode, permissions, entries, 250)
+    }
+    fn with_hooks_timeout(
+        mode: WorkMode,
+        permissions: PermissionMode,
+        entries: &[(&str, &str, &str)],
+        timeout_ms: u64,
     ) -> Self {
         let root = PrivateRoot(tempfile::tempdir().unwrap());
         let source = tempfile::tempdir().unwrap();
@@ -97,7 +109,7 @@ requested = ["process.exec", "hook.observe", "hook.check"]
 "#
         .to_string();
         for (id, event, kind) in entries {
-            manifest.push_str(&format!("\n[[hooks]]\nid = {id:?}\nevent = {event:?}\nkind = {kind:?}\nprogram = \"python3\"\nargs = [\"@plugin/hooks/hook.py\"]\ntimeout_ms = 5\n"));
+            manifest.push_str(&format!("\n[[hooks]]\nid = {id:?}\nevent = {event:?}\nkind = {kind:?}\nprogram = \"python3\"\nargs = [\"@plugin/hooks/hook.py\"]\ntimeout_ms = {timeout_ms}\n"));
         }
         std::fs::create_dir(source.path().join("hooks")).unwrap();
         std::fs::write(source.path().join("hooks/hook.py"), "print('{}')\n").unwrap();
@@ -714,7 +726,7 @@ async fn current_plan_policy_and_each_manual_operation_reach_the_mandatory_host(
 
 #[tokio::test(start_paused = true)]
 async fn execution_timeout_starts_after_begin_and_waits_for_real_cleanup() {
-    let fixture = Fixture::new(WorkMode::Work, PermissionMode::Auto);
+    let fixture = Fixture::new_with_timeout(WorkMode::Work, PermissionMode::Auto, 5);
     let (engine, _, _) = ordinary(
         &fixture,
         Behavior {

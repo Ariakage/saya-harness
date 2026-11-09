@@ -269,6 +269,7 @@ fn completed_only_stdout_error_waits_for_background_cleanup() {
 }
 fn broken_stdout_case(completed_only: bool) {
     let root = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
     let mut lease = ProcessLease::new(&root.path().join("tool.lease"));
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (url, _) = fixture::server_dynamic(2, move |index, _| {
@@ -306,7 +307,7 @@ fn broken_stdout_case(completed_only: bool) {
     let mut child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_saya"))
             .env_clear()
-            .env("HOME", root.path())
+            .env("HOME", home.path())
             .env("PATH", "/usr/bin:/bin")
             .current_dir(root.path())
             .arg("--config")

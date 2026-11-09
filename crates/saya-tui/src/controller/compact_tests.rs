@@ -46,17 +46,28 @@ async fn finish(app: &mut App) {
     .unwrap();
     app.finish(result).await.unwrap();
 }
-async fn signal(receiver: &blocking::Receiver<()>) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+async fn signal(app: &mut App, receiver: &blocking::Receiver<()>) {
+    let entered = async {
         loop {
-            if receiver.try_recv().is_ok() {
-                break;
+            match receiver.try_recv() {
+                Ok(()) => break,
+                Err(blocking::TryRecvError::Empty) => {}
+                Err(blocking::TryRecvError::Disconnected) => {
+                    panic!("Controlled model fixture closed before receiving the request");
+                }
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-    })
-    .await
-    .unwrap();
+    };
+    tokio::select! {
+        result = &mut app.active.as_mut().unwrap().join => {
+            let outcome = result.map(|(outcome, _)| outcome);
+            panic!("Run ended before the controlled model request became active: {outcome:?}");
+        }
+        result = tokio::time::timeout(Duration::from_secs(10), entered) => {
+            result.expect("Controlled model request did not become active within ten seconds");
+        }
+    }
 }
 
 #[tokio::test]
@@ -162,7 +173,15 @@ async fn idle_compact_leaves_configured_mcp_processes_unstarted() {
 #[tokio::test]
 async fn queued_compaction_at_the_last_execution_call_runs_after_completion_without_a_second_user_turn()
  {
-    let (_root, mut app) = super::control_tests::fixture();
+    let (root, mut app) = super::control_tests::fixture();
+    assert!(app.config.memory.read && app.config.memory.inject && app.config.memory.write);
+    let memory_root = app.config.memory_root().unwrap();
+    assert_eq!(memory_root, root.path().join(".saya"));
+    assert_eq!(
+        app.config.cwd.parent().unwrap().canonicalize().unwrap(),
+        root.path().canonicalize().unwrap()
+    );
+    assert!(!memory_root.exists());
     let (entered, ready) = blocking::channel();
     let (release, released) = blocking::channel();
     let (url, requests) = http::server_dynamic(2, move |index, request| {
@@ -179,7 +198,7 @@ async fn queued_compaction_at_the_last_execution_call_runs_after_completion_with
     prepared(&mut app).await;
     let before = app.prepared.as_ref().unwrap().session.history.len();
     app.start("New current task".into()).await.unwrap();
-    signal(&ready).await;
+    signal(&mut app, &ready).await;
     app.command("/compact").await.unwrap();
     assert!(app.active.as_ref().unwrap().handle.compaction_pending());
     release.send(()).unwrap();
@@ -193,7 +212,13 @@ async fn queued_compaction_at_the_last_execution_call_runs_after_completion_with
     assert_eq!(raw.len(), before + 2);
     finish(&mut app).await;
     assert_eq!(app.prepared.as_ref().unwrap().session.history, raw);
-    assert_eq!(requests.try_iter().count(), 2);
+    let requests = requests.try_iter().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 2);
+    let tools = requests[0]["tools"].as_array().unwrap();
+    for name in ["memory_read", "memory_update", "memory_forget"] {
+        assert!(tools.iter().any(|tool| tool["function"]["name"] == name));
+    }
+    assert!(!memory_root.exists());
     assert_eq!(
         app.state
             .messages
@@ -220,7 +245,7 @@ async fn failed_or_cancelled_compaction_keeps_history_lock_and_idle_controls_ava
         prepared(&mut app).await;
         let raw = app.prepared.as_ref().unwrap().session.history.clone();
         app.command("/compact").await.unwrap();
-        signal(&ready).await;
+        signal(&mut app, &ready).await;
         if cancel {
             app.cancel();
         }

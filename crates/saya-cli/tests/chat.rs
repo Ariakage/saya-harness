@@ -57,7 +57,7 @@ impl Pty {
         let fd = slave.as_raw_fd();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_saya"));
         cmd.env_clear()
-            .env("HOME", root)
+            .env("HOME", storage.path())
             .env("XDG_DATA_HOME", storage.path().join("data"))
             .env("XDG_STATE_HOME", storage.path().join("state"))
             .env("XDG_CACHE_HOME", storage.path().join("cache"))
@@ -286,7 +286,7 @@ fn resume_waits_for_input_and_uses_original_mode_with_new_permissions() {
     let _ = requests.recv_timeout(Duration::from_secs(2)).unwrap();
     let listed = Command::new(env!("CARGO_BIN_EXE_saya"))
         .env_clear()
-        .env("HOME", temp.path())
+        .env("HOME", storage.path())
         .env("XDG_DATA_HOME", storage.path().join("data"))
         .env("XDG_STATE_HOME", storage.path().join("state"))
         .env("XDG_CACHE_HOME", storage.path().join("cache"))

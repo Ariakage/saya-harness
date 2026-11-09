@@ -13,11 +13,11 @@ fn example(name: &str) -> PathBuf {
         .join("../../examples")
         .join(name)
 }
-fn command(root: &Path) -> Command {
+fn command(root: &Path, home: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_saya"));
     command
         .env_clear()
-        .env("HOME", root)
+        .env("HOME", home)
         .env("PATH", "/usr/bin:/bin")
         .current_dir(root)
         .stdin(Stdio::null());
@@ -26,7 +26,8 @@ fn command(root: &Path) -> Command {
 #[test]
 fn example_config_checks_and_init_does_not_overwrite() {
     let root = TempDir::new().unwrap();
-    let check = command(root.path())
+    let home = TempDir::new().unwrap();
+    let check = command(root.path(), home.path())
         .arg("--config")
         .arg(example("config.example.toml"))
         .args(["config", "check"])
@@ -38,7 +39,7 @@ fn example_config_checks_and_init_does_not_overwrite() {
         String::from_utf8_lossy(&check.stderr)
     );
     let destination = root.path().join("new-config.toml");
-    let init = command(root.path())
+    let init = command(root.path(), home.path())
         .arg("--config")
         .arg(&destination)
         .args(["config", "init"])
@@ -46,7 +47,7 @@ fn example_config_checks_and_init_does_not_overwrite() {
         .unwrap();
     assert!(init.status.success());
     let original = fs::read(&destination).unwrap();
-    let again = command(root.path())
+    let again = command(root.path(), home.path())
         .arg("--config")
         .arg(&destination)
         .args(["config", "init"])
@@ -58,6 +59,7 @@ fn example_config_checks_and_init_does_not_overwrite() {
 #[test]
 fn example_approval_authorizes_only_the_documented_exact_command() {
     let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     let arguments =
         json!({"argv":["/bin/echo","hello"],"cwd":null,"timeout_seconds":null}).to_string();
     let first=json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"echo","type":"function","function":{"name":"exec","arguments":arguments}}]}}]}).to_string();
@@ -69,7 +71,7 @@ fn example_approval_authorizes_only_the_documented_exact_command() {
     .unwrap();
     let config = root.path().join("config.toml");
     fs::write(&config,format!("schema_version = 1\n[defaults]\nprofile = \"test\"\npermissions = \"manual\"\n[profiles.test]\nprotocol = \"openai-chat-completions\"\nbase_url = \"{url}\"\nmodel = \"fixture\"\nauth = \"none\"\ncontext_window_tokens = 128000\nstream = false\n")).unwrap();
-    let output = command(root.path())
+    let output = command(root.path(), home.path())
         .arg("--config")
         .arg(config)
         .args(["--output", "json", "run", "--approval-file"])

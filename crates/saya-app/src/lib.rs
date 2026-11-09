@@ -362,11 +362,18 @@ pub fn build_runtime(
     if sandbox.backend != saya_core::execution::BackendKind::Host {
         sandbox
             .protected_paths
-            .extend(private_paths.iter().cloned());
+            .push(checkpoints.protected_path().to_owned());
     }
     runtime = runtime.with_checkpoints(checkpoints, private_paths, sandbox.write_roots.clone())?;
     if let Some(store) = plugin_store {
-        runtime = extensions::attach(runtime, config, session, &sandbox, store, registry.clone())?;
+        runtime = extensions::attach(
+            runtime,
+            config,
+            session,
+            &mut sandbox,
+            store,
+            registry.clone(),
+        )?;
     }
     runtime = runtime.with_execution_settings(sandbox, broker)?;
     if dynamic_credentials {

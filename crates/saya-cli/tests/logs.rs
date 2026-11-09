@@ -14,11 +14,13 @@ use tempfile::TempDir;
 
 struct Fixture {
     root: TempDir,
+    home: TempDir,
     config: PathBuf,
 }
 impl Fixture {
     fn new(url: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
         let config = root.path().join("config.toml");
         fs::write(
             &config,
@@ -38,20 +40,20 @@ stream = false
             ),
         )
         .unwrap();
-        Self { root, config }
+        Self { root, home, config }
     }
     fn state(&self) -> PathBuf {
-        self.root.path().join("state/saya")
+        self.home.path().join("state/saya")
     }
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_saya"));
         command
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("HOME", self.root.path())
-            .env("XDG_STATE_HOME", self.root.path().join("state"))
-            .env("XDG_DATA_HOME", self.root.path().join("data"))
-            .env("XDG_CACHE_HOME", self.root.path().join("cache"))
+            .env("HOME", self.home.path())
+            .env("XDG_STATE_HOME", self.home.path().join("state"))
+            .env("XDG_DATA_HOME", self.home.path().join("data"))
+            .env("XDG_CACHE_HOME", self.home.path().join("cache"))
             .env("LOG_TEST_KEY", "fixture-log-secret")
             .current_dir(self.root.path())
             .arg("--config")
