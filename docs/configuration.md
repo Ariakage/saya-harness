@@ -10,6 +10,30 @@ profile 可选 `strict_tools`、`stream`、`allow_remote_http`、`headers_env`�
 
 `limits.write_max_bytes` 限制原生写入／补丁的输入和输出字节数，默认 1 MiB。CLI 将该值传到运行共享的调度器，前台和后台使用相同上限；零值会使配置校验失败。
 
+## 模型输出 token 目标
+
+N3开发线按D-053为Execution、Review和Compaction统一选择输出目标desired，优先级如下。
+
+1. 本次请求或用途的显式max_output_tokens。独立核查使用 `review.max_output_tokens`，摘要使用 `context.summary_max_output_tokens`。
+2. 实际所选profile的显式 `max_output_tokens`。
+3. 该profile的 `limit.output`声明值。
+4. 未声明时采用32000 tokens。
+
+模型声明值当前由用户在显式配置中提供，可使用 `[profiles.NAME.limit]`下的output，或在已有profile内加入以下可选字段。数值由所用模型及服务能力确定。
+
+```toml
+limit = { output = 64000 }
+# max_output_tokens = 48000
+```
+
+省略profile的max_output_tokens时，上例目标为64000。启用注释中的覆盖后，目标为48000。声明值承担默认选择，显式覆盖也可高于声明值，服务端对实际模型参数的校验继续生效。当前配置加载使用这些显式元数据，自动模型目录发现作为后续接入。
+
+核查与摘要的用途覆盖默认均省略，分别继承实际所选核查profile和执行profile。已显式配置的1024／4096等值继续生效。覆盖字段及limit.output要求正整数，省略与显式值分别处理。新增声明值进入profile身份指纹。未配置max_output_tokens且无limit.output的旧配置现在采用32000；已保存会话的指纹发生变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。
+
+每次派发以完整wire输入计数 `I_wire`、模型窗口 `C`及安全余量 `R`拟合实际输出上限，满足 `1 <= O <= min(desired, C - R - I_wire)`。最终请求体按实际O重新计数和验证，输入内容、协议封装及输出字段均进入校验。序列化数字宽度变化时可保留少量额外保守余量。输出值映射为Chat的max_completion_tokens或兼容max_tokens、Responses的max_output_tokens、Messages的max_tokens。计数保持estimated标记，服务端实际token与reasoning开销以响应为准。
+
+JSON正文、协议消息、工具结果与Run请求／时间的原有限额继续执行。Compact的64KiB结构化正文上限，以及独立核查64KiB正文与512字符原因上限分别约束实际内容。输出token目标变化保留这些边界及来源验证。[上下文预算与水位](context-management.md#完整请求预算)、[D-053](decisions.md)
+
 ## Thinking effort
 
 当前开发线允许每个 profile 显式设置 `thinking_effort`，取值为 `low`、`medium`、`high`、`xhigh`、`max`。省略时，请求沿用服务端默认值，TUI 显示未知。可在自己的 profile 中添加一行。
@@ -152,7 +176,7 @@ max_search_matches = 200
 
 宿主引用在工具结果事务内登记，然后发布对象。恢复核对已封存对象及宿主登记。查询按当前权限和Session归属执行。Manual Approval覆盖读取和搜索，PLAN允许只读查询，显式deny优先。Run发布的对象持有租约，历史引用作为可回收记录保留，对象被回收后返回output_unavailable。读取宿主引用登记设4096条记录的有界保护，超过时返回明确错误。
 
-共享运行入口以所选profile构建ContextBudget。窗口为 `C`，输出预留 `O = profile.max_output_tokens`，安全余量为 `R = ceil(C / 10) + 1 + extra_safety_tokens`，输入容量为 `B = C - O - R`。余量与供应商请求保护保持一致，所有缓存前缀、工具schema、动态数据、消息封装和opaque状态都参与计数。必留内容超限时返回 `context_limit`，原始Session历史保持可恢复。
+共享运行入口以所选profile构建ContextBudget。窗口为 `C`，安全余量为 `R = ceil(C / 10) + 1 + extra_safety_tokens`，稳定输入基准为 `B = C - R - 1`，为每次请求保留至少1 token输出空间。80%／55%水位均按B计算，实际输出再按完整输入的剩余空间收缩。所有缓存前缀、工具schema、动态数据、消息封装和opaque状态都参与计数，最终保护保留严格90%余量。必留内容超限时返回 `context_limit`，原始Session历史保持可恢复。
 
 ```toml
 [context]
@@ -160,12 +184,13 @@ auto_compact = true
 trigger_percent = 80
 target_percent = 55
 extra_safety_tokens = 0
-summary_max_output_tokens = 4096
+# 可选用途覆盖，省略时继承执行profile的输出目标。
+# summary_max_output_tokens = 32000
 max_compaction_calls = 32
 compaction_timeout_seconds = 600
 ```
 
-默认在下一次Execution模型请求前达到80%输入容量时触发Compact，成功投影必须降至55%容量以内。target要求大于0且小于trigger，trigger最多100%。摘要输出上限为配置值与profile最大输出的较小值，配置上限16384。单次压缩最多32次实际模型调用，可配置1至64；操作超时默认600秒，可配置1至3600秒，同时受当前Run剩余活跃时间约束。
+默认在下一次Execution模型请求前达到80%稳定输入基准时触发Compact，成功投影必须降至55%以内。target要求大于0且小于trigger，trigger最多100%。摘要输出继承所选执行profile目标，显式summary_max_output_tokens优先，再依据每次摘要／合并请求的剩余空间收缩。单次压缩最多32次实际模型调用，可配置1至64。操作超时默认600秒，可配置1至3600秒，同时受当前Run剩余活跃时间约束。
 
 摘要使用执行profile和空工具集合。实际摘要请求、传输重试与运行活跃时间共用Run预算，默认最多16个完整组分块、4轮合并和每次请求2次允许的传输重试。失败不会切换为无限摘要循环。`auto_compact = false`保留手动入口及完整请求预算检查。
 

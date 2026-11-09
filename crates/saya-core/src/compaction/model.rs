@@ -93,12 +93,13 @@ impl Runner<'_, '_> {
                 ));
             }
             request.request_id = uuid::Uuid::now_v7().to_string();
-            if !planning::fits(&request, self.input, self.config, self.counter)? {
-                return Err(error(
-                    "context_limit",
-                    "Summary request no longer fits its input capacity",
-                ));
-            }
+            request = planning::fitted_request(&request, self.input, self.config, self.counter)?
+                .ok_or_else(|| {
+                    error(
+                        "context_limit",
+                        "Summary request no longer fits its input capacity",
+                    )
+                })?;
             let fingerprint =
                 context_builder::request_fingerprint(&request, self.input.context.identity)?;
             // Exactly one shared request is consumed for every actual start.

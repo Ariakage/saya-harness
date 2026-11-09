@@ -636,6 +636,15 @@ pub(super) fn fits(
     config: &CompactionConfig,
     counter: Option<&dyn RequestCounter>,
 ) -> Result<bool, BoundaryError> {
+    Ok(fitted_request(request, input, config, counter)?.is_some())
+}
+
+pub(super) fn fitted_request(
+    request: &ModelRequest,
+    input: &CompactionInput<'_>,
+    config: &CompactionConfig,
+    counter: Option<&dyn RequestCounter>,
+) -> Result<Option<ModelRequest>, BoundaryError> {
     let built = context_builder::build(
         BuildInput {
             request,
@@ -651,7 +660,7 @@ pub(super) fn fits(
         },
         counter,
     )?;
-    Ok(matches!(built.decision, ContextDecision::Ready))
+    Ok(matches!(built.decision, ContextDecision::Ready).then_some(built.request))
 }
 
 pub(super) fn split(

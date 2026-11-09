@@ -70,9 +70,8 @@ impl ResponsesModel {
             }
             map.insert("tools".into(), Value::Array(tools));
         }
-        if check_budget {
-            self.settings.check_context(&body, output)?;
-        }
+        self.settings
+            .fit_output(&mut body, "max_output_tokens", output, check_budget)?;
         Ok(body)
     }
 }

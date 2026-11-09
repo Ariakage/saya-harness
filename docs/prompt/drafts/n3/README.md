@@ -45,6 +45,12 @@
 
 DEV-063使用版本1结构化schema，包含来源范围、objective、constraints、decisions、completed、remaining、uncertainties、required_ids和references。事实保留source IDs、evidence等级与状态。协调器复用实际请求计数，默认80%触发、严格55%目标，单用户长Run保留最新原文重放。记忆失效组先由宿主来源证明替换，再映射到摘要输入。原始草案继续保留学习轨迹，当前版本和提示词指纹沿运行时记录维护。
 
+### Saya来源角色与输出预算
+
+2026-11-10的真实模型探索中，Responses摘要被宿主以 `Summary evidence level differs from its source role`拒绝。该结果暴露了参考提示词的通用来源描述与Saya实际source_units角色之间的指引缺口。运行时Compact现明确列出user、assistant／assistant_partial／assistant_tool_call、tool_observation、provider_state、retired_group和prior_summary_data的对应关系。助手的完成汇报保留claim／inference，工具请求保留意图身份，observed引用实际工具观察或供应商元数据，user_request只引用原始用户，退休内容继续禁止引用。
+
+预算指引增加空数组、简短事实与紧凑JSON，先保全必需事实、每个原始用户来源和精确引用ID，允许同一必需事实同时满足用户来源覆盖，减少分类之间的重复。schema、来源角色、必需项逐字保全、引用完整性与55%投影目标保持当前运行时校验。该段记录提示词修正，真实模型复验与最终候选状态继续由N3验收记录维护。
+
 ## 验证要求
 
 - 检查英文正文、稳定前缀、来源清单与实际装配段的对应关系。

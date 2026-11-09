@@ -50,7 +50,11 @@ Run发布对象持有租约，历史引用遵循有界存储和回收策略。�
 
 ## 完整请求预算
 
-定义模型窗口 `C`、最大输出预留 `O`、安全余量 `R`及输入容量 `B = C - O - R`。默认 `O = profile.max_output_tokens`，`R = ceil(C / 10) + 1 + context.extra_safety_tokens`。所有静态／动态system段、工具schema、history、协议封装、opaque状态和缓存前缀都占用输入容量。
+定义模型窗口 `C`、安全余量 `R = ceil(C / 10) + 1 + context.extra_safety_tokens`，以及稳定输入基准 `B = C - R - 1`。所有静态／动态system段、工具schema、history、协议封装、opaque状态和缓存前缀都占用输入容量。80%触发与55%目标均按这个稳定B计算。
+
+输出目标desired依次取最具体请求／用途显式值、实际profile显式max_output_tokens、profile.limit.output声明值、32000缺省。ContextBudget保留output_reserve字段作为请求未给覆盖时的目标默认值，输入基准始终保留至少1 token空间。每次请求以完整wire计数 `I_wire`拟合输出，满足 `1 <= O <= min(desired, C - R - I_wire)`，重新序列化最终请求后复核 `I_wire + O <= C - R`。数字宽度变化后的重计允许保留少量额外保守余量。该约束继续满足模型请求严格90%安全保护，空间不足时先处理可压缩来源或返回明确限制。
+
+动态输出空间与压缩水位分别计算。输入接近窗口时降低本次O，触发基准B保持稳定，避免因可用输出减少而把每轮输入占用误算为100%。较大的声明值或覆盖值可用于小窗口模型，请求仍受实际剩余空间限制。配置格式及用途继承见[输出目标](configuration.md#模型输出-token-目标)。
 
 三协议计数复用实际发送请求体的序列化路径，证据绑定完整请求指纹、协议、模型及适配器版本。当前token值使用明确标记为estimated的字符启发式，ASCII每4字符和其他Unicode标量每1字符。缺少可用counter时使用有界字节估算，并记录方法和不确定性。计数保持本地执行，远端计数或经验证tokenizer属于后续适配接缝。
 
@@ -76,7 +80,7 @@ ContextBuilder保留最新原始UserText、未闭合调用、宿主标记的保�
 6. 以完整原历史水位／hash、前缀hash、profile／model／protocol、适配器与上下文版本做CAS，原子写入ContextView和CompactionRecord。
 7. 成功后重新构建下一次请求，应用当前模式、记忆版本与工具集合。CAS冲突和摘要错误保留原历史及此前有效检查点。
 
-默认摘要输出最多4096tokens，并受profile最大输出约束。每次Compact最多32次实际模型调用、600秒操作时间，实际调用、允许的传输重试和活跃时间共用Run剩余预算。单次摘要请求沿当前模型的连接、idle及总超时配置，最多2次允许的传输重试。人工等待沿共享活跃预算暂停规则处理。
+摘要默认继承执行profile的输出目标，context.summary_max_output_tokens显式值优先，并可高于profile目标。每个分块或合并请求独立按实际wire剩余空间收缩O，summary_budget的输入容量沿用稳定B。生成结果继续通过64KiB结构化正文、schema、来源／引用和必需事实校验，输出截断或校验失败保持原检查点。每次Compact最多32次实际模型调用、600秒操作时间，实际调用、允许的传输重试和活跃时间共用Run剩余预算。单次摘要请求沿当前模型的连接、idle及总超时配置，最多2次允许的传输重试。人工等待沿共享活跃预算暂停规则处理。
 
 取消后停止调度并收敛已开始的调用，摘要调用期间持久事务保持短生命周期。协调器校验源版本后才返回可提交检查点。摘要字段包含objective、constraints、decisions、completed、remaining、uncertainties、required_ids和references，事实携带source IDs、evidence等级及状态。
 

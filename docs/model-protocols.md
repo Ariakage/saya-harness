@@ -30,7 +30,9 @@ profile 明确选择 strict 时，无法在不改变工具语义的情况下转�
 
 ## Profile 与独立核查
 
-`provider::router::ProfileRouter` 将执行请求固定到会话选定的 profile；独立审核默认复用该 profile，也可通过 `review.profile` 指定另一个已注册的 profile，甚至使用不同协议。审核不携带可执行工具或完整任务历史，默认输出上限为 1024 tokens，和执行请求共享模型请求／活跃时间预算。审核服务不可用、输出无效或指定 profile 不可用时退回人工确认；取消与预算耗尽仍终止运行。
+`provider::router::ProfileRouter`将执行请求固定到会话选定的profile。独立审核默认复用该profile，也可通过 `review.profile`指定另一个已注册的profile，甚至使用不同协议。审核使用空工具集合和独立操作数据，共享运行的模型请求／活跃时间预算。审核服务不可用、输出无效或指定profile不可用时退回人工确认，取消与预算耗尽仍终止运行。
+
+Execution、Review和Compaction按D-053共用输出目标选择。最具体请求／用途显式值优先于profile显式max_output_tokens，其次为profile.limit.output声明值及32000缺省。审核省略review.max_output_tokens时继承所选核查profile，Compact省略用途覆盖时继承执行profile。每个适配器按最终wire输入计数和安全余量动态收缩实际输出，并在发送前重新验证。Chat发送max_completion_tokens或兼容max_tokens，Responses发送max_output_tokens，Messages发送max_tokens，counter与实际HTTP使用同一最终请求体。thinking／reasoning对输出额度的占用由实际模型协议决定，截断继续按output_limit处理。有限正文及JSON验证保持生效。[输出配置](configuration.md#模型输出-token-目标)、[完整请求预算](context-management.md#完整请求预算)
 
 每个 profile 可独立设置 `thinking_effort`。Chat、Responses、Messages 分别使用 `reasoning_effort`、`reasoning.effort` 和 `output_config.effort`，未配置时省略字段，独立审核采用其目标 profile 的值。五档取值、模型兼容和指纹恢复规则见[配置说明](configuration.md#thinking-effort)。
 

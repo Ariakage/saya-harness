@@ -62,6 +62,7 @@ fn settings(profile: &str, model: &str, stream: bool) -> ModelSettings {
         profile: profile.into(),
         model: model.into(),
         context_window_tokens: 128_000,
+        extra_safety_tokens: 0,
         max_output_tokens: 8192,
         thinking_effort: None,
         strict_tools: false,
@@ -171,9 +172,9 @@ async fn all_three_protocols_use_default_or_explicit_review_profile()
             assert!(!serialized.contains("fixture-secret"));
             assert!(body.get("tools").is_none());
             match protocol {
-                ModelProtocol::ChatCompletions => assert_eq!(body["max_completion_tokens"], 1024),
-                ModelProtocol::Responses => assert_eq!(body["max_output_tokens"], 1024),
-                ModelProtocol::AnthropicMessages => assert_eq!(body["max_tokens"], 1024),
+                ModelProtocol::ChatCompletions => assert_eq!(body["max_completion_tokens"], 8192),
+                ModelProtocol::Responses => assert_eq!(body["max_output_tokens"], 8192),
+                ModelProtocol::AnthropicMessages => assert_eq!(body["max_tokens"], 8192),
             }
             assert!(serialized.contains("REDACTED"));
         }
@@ -324,7 +325,7 @@ async fn runtime_routes_review_to_separate_protocol_and_respects_denial()
     }));
     let review = review_requests.recv_timeout(Duration::from_secs(1))?;
     assert!(review.get("tools").is_none());
-    assert_eq!(review["max_tokens"], 1024);
+    assert_eq!(review["max_tokens"], 8192);
     assert_eq!(review["messages"].as_array().map(Vec::len), Some(1));
     Ok(())
 }

@@ -31,6 +31,8 @@ pub struct ModelSettings {
     pub profile: String,
     pub model: String,
     pub context_window_tokens: u64,
+    /// Additional host-configured context reserve for every request purpose.
+    pub extra_safety_tokens: u64,
     pub max_output_tokens: u32,
     pub thinking_effort: Option<ThinkingEffort>,
     pub strict_tools: bool,
@@ -55,10 +57,7 @@ impl ModelSettings {
                 "model profile is invalid or does not match the request",
             ));
         }
-        let output = request
-            .max_output_tokens
-            .unwrap_or(self.max_output_tokens)
-            .min(self.max_output_tokens);
+        let output = request.max_output_tokens.unwrap_or(self.max_output_tokens);
         if output == 0 {
             return Err(failure(
                 "invalid_config",
@@ -68,27 +67,37 @@ impl ModelSettings {
         Ok(output)
     }
 
-    // Model-independent heuristic; it is neither provider usage nor an exact
-    // or guaranteed upper-bound tokenizer. Keep it separate from billed counts.
-    fn check_context(&self, request_body: &Value, output: u32) -> Result<(), BoundaryError> {
-        let text = request_body.to_string();
-        let mut ascii = 0u64;
-        let mut other = 0u64;
-        for c in text.chars() {
-            if c.is_ascii() {
-                ascii = ascii.saturating_add(1);
-            } else {
-                other = other.saturating_add(1);
-            }
-        }
-        let estimate = ascii
-            .div_ceil(4)
-            .saturating_add(other)
-            .saturating_add(u64::from(output));
-        if estimate.saturating_mul(10) >= self.context_window_tokens.saturating_mul(9) {
+    /// Fit the requested output ceiling after the complete wire input is known.
+    /// Counting also uses this projection, but can count an input that needs
+    /// compaction even when no output token can fit yet.
+    fn fit_output(
+        &self,
+        request_body: &mut Value,
+        output_field: &str,
+        output: u32,
+        check_budget: bool,
+    ) -> Result<(), BoundaryError> {
+        let input = wire_input_tokens(request_body)?;
+        let safety = self
+            .context_window_tokens
+            .div_ceil(10)
+            .saturating_add(1)
+            .saturating_add(self.extra_safety_tokens);
+        let usable = self.context_window_tokens.saturating_sub(safety);
+        let remaining = usable.saturating_sub(input);
+        let adjusted = u64::from(output).min(remaining).max(1) as u32;
+        let field = request_body
+            .get_mut(output_field)
+            .ok_or_else(|| failure("invalid_config", "output token field is missing"))?;
+        *field = Value::from(adjusted);
+        // Shrinking the number can only shorten its serialized representation.
+        // Validate the final body, which is also the body counted and sent.
+        if check_budget
+            && wire_input_tokens(request_body)?.saturating_add(u64::from(adjusted)) > usable
+        {
             return Err(failure(
                 "context_budget",
-                "estimated input and output reserve reach the context limit",
+                "estimated input leaves no output token within the context limit",
             ));
         }
         Ok(())
@@ -185,7 +194,30 @@ fn object(value: &Value) -> Result<&Map<String, Value>, BoundaryError> {
 }
 
 /// Version for the provider serializers used by local context accounting.
-pub const COUNTING_ADAPTER_VERSION: &str = "saya-provider-wire-v1";
+pub const COUNTING_ADAPTER_VERSION: &str = "saya-provider-wire-v2";
+
+// Model-independent heuristic, separate from provider usage and billed counts.
+// It is neither an exact tokenizer nor a guaranteed upper bound.
+fn wire_input_tokens(body: &Value) -> Result<u64, BoundaryError> {
+    let text = serde_json::to_string(body)
+        .map_err(|_| failure("context_counter", "Wire request cannot be counted"))?;
+    if text.len() > 32 * 1024 * 1024 {
+        return Err(failure(
+            "context_limit",
+            "Wire request exceeds the counting limit",
+        ));
+    }
+    let mut ascii = 0u64;
+    let mut other = 0u64;
+    for character in text.chars() {
+        if character.is_ascii() {
+            ascii += 1;
+        } else {
+            other += 1;
+        }
+    }
+    Ok(ascii.div_ceil(4).saturating_add(other))
+}
 
 fn count_wire(
     request: &crate::boundary::ModelRequest,
@@ -205,23 +237,10 @@ fn count_wire(
             "Wire counter identity differs from the selected serializer",
         ));
     }
-    let text = serde_json::to_string(body)
-        .map_err(|_| failure("context_counter", "Wire request cannot be counted"))?;
-    if text.len() > 32 * 1024 * 1024 {
-        return Err(failure(
-            "context_limit",
-            "Wire request exceeds the counting limit",
-        ));
-    }
-    let ascii = text.chars().filter(char::is_ascii).count() as u64;
-    let other = text
-        .chars()
-        .filter(|character| !character.is_ascii())
-        .count() as u64;
     Ok(crate::context_builder::CountEvidence {
         request_fingerprint: fingerprint.into(),
         identity: identity.clone(),
-        input_tokens: ascii.div_ceil(4).saturating_add(other),
+        input_tokens: wire_input_tokens(body)?,
         method: crate::context_builder::CountMethod::SerializedHeuristic {
             name: "saya-wire-characters".into(),
             version: "1".into(),

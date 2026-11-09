@@ -59,6 +59,7 @@ fn adapter(
         profile: "test".into(),
         model: "fixture".into(),
         context_window_tokens: 128_000,
+        extra_safety_tokens: 0,
         max_output_tokens: 8192,
         thinking_effort: None,
         strict_tools: false,

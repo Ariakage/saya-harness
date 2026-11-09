@@ -142,7 +142,7 @@ impl Default for SharedBudget {
 pub struct ReviewConfig {
     pub execution_profile: String,
     pub review_profile: Option<String>,
-    pub max_output_tokens: u32,
+    pub max_output_tokens: Option<u32>,
     pub connect_timeout: Duration,
     pub idle_timeout: Duration,
     pub total_timeout: Duration,
@@ -154,7 +154,7 @@ impl ReviewConfig {
         Self {
             execution_profile,
             review_profile: None,
-            max_output_tokens: 1024,
+            max_output_tokens: None,
             connect_timeout: Duration::from_secs(10),
             idle_timeout: Duration::from_secs(60),
             total_timeout: Duration::from_secs(180),
@@ -244,7 +244,7 @@ pub async fn review_operation(
     if cancel.is_cancelled() {
         return Err(failure("cancelled", "review cancelled"));
     }
-    if config.max_output_tokens == 0 {
+    if config.max_output_tokens == Some(0) {
         return Err(failure(
             "invalid_config",
             "review output token limit must be positive",
@@ -299,7 +299,7 @@ pub async fn review_operation(
             profile: profile.clone(),
             instructions: instructions.into(),
             dynamic_instructions: None,
-            max_output_tokens: Some(config.max_output_tokens),
+            max_output_tokens: config.max_output_tokens,
             history: vec![HistoryItem::UserText(data.to_string())],
             tools: vec![],
         };

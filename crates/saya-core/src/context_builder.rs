@@ -46,8 +46,8 @@ fn error(code: &str, message: &str) -> BoundaryError {
     )
 }
 
-/// Finite input capacity is `window_tokens - output_reserve - safety_margin`.
-/// Thresholds are per mille of that input capacity, not of the full window.
+/// Input admission and compaction use a stable window with one output token.
+/// `output_reserve` is the preferred output target, fitted after input counting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextBudget {
@@ -71,7 +71,7 @@ impl ContextBudget {
     pub fn input_capacity(&self) -> Result<u64, BoundaryError> {
         let capacity = self
             .window_tokens
-            .checked_sub(self.output_reserve)
+            .checked_sub(1)
             .and_then(|value| value.checked_sub(self.safety_margin))
             .filter(|value| *value > 0);
         if self.output_reserve == 0
@@ -87,7 +87,7 @@ impl ContextBudget {
         capacity.ok_or_else(|| {
             error(
                 "context_budget",
-                "Context reserves exhaust the model window",
+                "Context safety margin leaves no input and output capacity",
             )
         })
     }
@@ -281,11 +281,11 @@ pub fn build(
     if input
         .request
         .max_output_tokens
-        .is_some_and(|value| value == 0 || u64::from(value) > input.budget.output_reserve)
+        .is_some_and(|value| value == 0)
     {
         return Err(error(
             "context_budget",
-            "Request output exceeds its reserved capacity",
+            "Request output target must be positive",
         ));
     }
     counting::validate_request(input.request)?;
@@ -425,9 +425,10 @@ pub fn build(
         index += 1;
     }
     let replay = group_history(input.identity.protocol, &projected.history)?;
-    let accounting = counting::account(
-        &projected,
+    let accounting = fit_output(
+        &mut projected,
         input.identity,
+        input.budget,
         input.history_offset,
         replay.open_call_ids.is_empty().then_some(counter).flatten(),
     )?;
@@ -464,6 +465,39 @@ pub fn build(
         decision,
         applied_checkpoint: input.committed_view.map(|view| view.checkpoint_id.clone()),
     })
+}
+
+fn fit_output(
+    request: &mut ModelRequest,
+    identity: &CountingIdentity,
+    budget: ContextBudget,
+    history_offset: usize,
+    counter: Option<&dyn RequestCounter>,
+) -> Result<ContextAccounting, BoundaryError> {
+    let mut output = request
+        .max_output_tokens
+        .unwrap_or(u32::try_from(budget.output_reserve).unwrap_or(u32::MAX));
+    request.max_output_tokens = Some(output);
+    // Changing the output field also changes serialized input. Recount each
+    // smaller target and fail closed if a counter cannot reach a stable bound.
+    for _ in 0..16 {
+        let accounting = counting::account(request, identity, history_offset, counter)?;
+        let available = budget
+            .window_tokens
+            .saturating_sub(budget.safety_margin)
+            .saturating_sub(accounting.total.tokens);
+        let fitted = output
+            .min(u32::try_from(available).unwrap_or(u32::MAX))
+            .max(1);
+        if fitted == output {
+            // No output space is represented by a one-token target. The normal
+            // context decision then requests compaction or rejects the input.
+            return Ok(accounting);
+        }
+        output = fitted;
+        request.max_output_tokens = Some(output);
+    }
+    Err(error("context_counter", "Output fitting did not stabilize"))
 }
 
 fn validate_ranges(ranges: &[ItemRange], length: usize) -> Result<(), BoundaryError> {

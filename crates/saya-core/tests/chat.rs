@@ -45,6 +45,7 @@ fn settings(stream: bool) -> ModelSettings {
         profile: "test".into(),
         model: "fixture-model".into(),
         context_window_tokens: 128_000,
+        extra_safety_tokens: 0,
         max_output_tokens: 8192,
         thinking_effort: None,
         strict_tools: false,
@@ -331,7 +332,9 @@ async fn strict_schema_and_context_budget_fail_before_network()
         cfg,
         ChatCompatibility::default(),
     );
-    let err = match model.start(&request(), &Never).await {
+    let mut full = request();
+    full.history = vec![HistoryItem::UserText("x".repeat(40_000))];
+    let err = match model.start(&full, &Never).await {
         Ok(_) => return Err("context guard bypassed".into()),
         Err(e) => e,
     };

@@ -64,15 +64,12 @@ impl ChatModel {
         if let Some(effort) = self.settings.thinking_effort {
             map.insert("reasoning_effort".into(), json!(effort));
         }
-        map.insert(
-            if self.compatibility.legacy_max_tokens {
-                "max_tokens"
-            } else {
-                "max_completion_tokens"
-            }
-            .into(),
-            json!(output),
-        );
+        let output_field = if self.compatibility.legacy_max_tokens {
+            "max_tokens"
+        } else {
+            "max_completion_tokens"
+        };
+        map.insert(output_field.into(), json!(output));
         if self.settings.stream && !self.compatibility.omit_stream_usage {
             map.insert("stream_options".into(), json!({"include_usage":true}));
         }
@@ -88,9 +85,8 @@ impl ChatModel {
             }
             map.insert("tools".into(), Value::Array(tools));
         }
-        if check_budget {
-            self.settings.check_context(&body, output)?;
-        }
+        self.settings
+            .fit_output(&mut body, output_field, output, check_budget)?;
         Ok(body)
     }
 }

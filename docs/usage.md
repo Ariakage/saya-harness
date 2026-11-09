@@ -23,6 +23,8 @@ cp examples/config.example.toml "$config_path"
 
 支持 `openai-chat-completions`、`openai-responses`、`anthropic-messages`。`base_url` 是 API 根地址，程序分别追加 `/chat/completions`、`/responses`、`/messages`；应核对服务商实际接口，兼容协议不代表支持全部参数。远程明文 HTTP 默认禁用。本机样例无需鉴权；远程服务可参考样例中注释的 profile，凭据只通过 `api_key_env` 指定**环境变量名**，值由使用者在启动前安全提供，不写入配置、提交或日志。配置校验会检查所有 profile 引用的环境变量，即使该 profile 未选中。具体鉴权和可选参数见[配置](configuration.md)。
 
+输出token目标省略时继承profile.limit.output声明值，未声明时采用32000。可用profile.max_output_tokens显式覆盖，审核／摘要还可设置用途覆盖。实际请求按剩余上下文动态收缩，既有显式1024／4096等配置继续生效。已保存会话的profile指纹变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。声明元数据及完整优先级见[输出目标配置](configuration.md#模型输出-token-目标)。
+
 ## 默认 TUI 与兼容入口
 
 当前开发线中，stdin 和 stdout 均连接终端时，直接运行 `saya` 进入 TUI。全局配置、工作区、profile、工作模式和权限参数继续适用。

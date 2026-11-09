@@ -419,7 +419,7 @@ async fn same_source_concurrent_and_repeated_preparations_share_model_calls() {
 }
 
 #[tokio::test]
-async fn cached_preparation_cannot_reuse_an_older_larger_context_budget() {
+async fn cached_preparation_rechecks_input_limits_and_accepts_output_target_changes() {
     let fixture = Fixture::new(ModelProtocol::ChatCompletions);
     let coordinator = coordinator();
     let model = TestModel::new(Behavior::Valid);
@@ -436,7 +436,7 @@ async fn cached_preparation_cannot_reuse_an_older_larger_context_budget() {
                 .prepare(smaller, &model, &shared, None, &NeverCancel)
                 .await
         ),
-        "context_budget"
+        "context_limit"
     );
     let mut margin = fixture.input();
     margin.context.budget.safety_margin = 198_000;
@@ -446,17 +446,17 @@ async fn cached_preparation_cannot_reuse_an_older_larger_context_budget() {
                 .prepare(margin, &model, &shared, None, &NeverCancel)
                 .await
         ),
-        "context_budget"
+        "context_limit"
     );
     let mut reserve = fixture.input();
     reserve.context.budget.output_reserve = 199_000;
+    let prepared = coordinator
+        .prepare(reserve, &model, &shared, None, &NeverCancel)
+        .await
+        .unwrap();
     assert_eq!(
-        code(
-            coordinator
-                .prepare(reserve, &model, &shared, None, &NeverCancel)
-                .await
-        ),
-        "context_limit"
+        prepared.record.source.item_count,
+        fixture.request.history.len()
     );
 }
 
@@ -1000,6 +1000,98 @@ fn runtime_prompt_snapshots_are_english_and_identical_to_published_document_copi
         include_str!("../../../../docs/prompt/v1/compaction-continuation.md")
     );
     assert_eq!(summary_schema()["additionalProperties"], false);
+}
+
+#[test]
+fn compact_prompt_explains_actual_source_roles_and_bounded_fact_output() {
+    for role in [
+        "user",
+        "assistant",
+        "assistant_partial",
+        "assistant_tool_call",
+        "tool_observation",
+        "provider_state",
+        "retired_group",
+        "prior_summary_data",
+    ] {
+        assert!(COMPACT_INSTRUCTIONS.contains(&format!("`{role}`")));
+    }
+    for rule in [
+        "An assistant's completion report remains a claim.",
+        "An assistant tool call records an intended operation",
+        "Never cite retired source",
+        "A mandatory fact can also satisfy user-source coverage.",
+        "Empty categories use empty arrays.",
+    ] {
+        assert!(COMPACT_INSTRUCTIONS.contains(rule));
+    }
+}
+
+#[test]
+fn assistant_completion_claims_cannot_be_upgraded_to_observed_or_user_requests() {
+    let sources = BTreeMap::from([
+        ("history:0".into(), schema::SourceRole::User),
+        ("history:1".into(), schema::SourceRole::Assistant),
+        ("history:2".into(), schema::SourceRole::Tool),
+        ("history:3".into(), schema::SourceRole::Provider),
+        ("history:4".into(), schema::SourceRole::Retired),
+        ("history:5".into(), schema::SourceRole::Mechanical),
+    ]);
+    let validation = schema::Validation {
+        range: ItemRange { start: 0, end: 6 },
+        sources: &sources,
+        required: Vec::new(),
+        references: Vec::new(),
+    };
+    let mut summary = StructuredSummary {
+        schema_version: 1,
+        covered_range: validation.range,
+        objective: vec![Fact {
+            text: "Run the tests".into(),
+            source_ids: vec!["history:0".into()],
+            evidence: EvidenceLevel::UserRequest,
+            status: FactStatus::Active,
+        }],
+        constraints: Vec::new(),
+        decisions: Vec::new(),
+        completed: vec![Fact {
+            text: "The assistant reported that tests passed".into(),
+            source_ids: vec!["history:1".into()],
+            evidence: EvidenceLevel::Claim,
+            status: FactStatus::Active,
+        }],
+        remaining: Vec::new(),
+        uncertainties: Vec::new(),
+        required_ids: Vec::new(),
+        references: Vec::new(),
+    };
+    schema::validate(&summary, &validation).unwrap();
+    summary.completed[0].evidence = EvidenceLevel::Inference;
+    schema::validate(&summary, &validation).unwrap();
+    for evidence in [EvidenceLevel::Observed, EvidenceLevel::UserRequest] {
+        summary.completed[0].evidence = evidence;
+        assert_eq!(
+            schema::validate(&summary, &validation)
+                .unwrap_err()
+                .0
+                .message,
+            "Summary evidence level differs from its source role"
+        );
+    }
+    for source in ["history:2", "history:3", "history:5"] {
+        summary.completed[0].source_ids = vec![source.into()];
+        summary.completed[0].evidence = EvidenceLevel::Observed;
+        schema::validate(&summary, &validation).unwrap();
+    }
+    summary.completed[0].source_ids = vec!["history:4".into()];
+    summary.completed[0].evidence = EvidenceLevel::Claim;
+    assert_eq!(
+        schema::validate(&summary, &validation)
+            .unwrap_err()
+            .0
+            .message,
+        "Summary fact text or source references are invalid"
+    );
 }
 
 #[test]

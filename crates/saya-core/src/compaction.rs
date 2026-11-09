@@ -63,7 +63,7 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            summary_output_tokens: 4096,
+            summary_output_tokens: 32000,
             max_model_calls: 32,
             max_chunks: 16,
             max_merge_rounds: 4,
@@ -79,7 +79,6 @@ impl Default for CompactionConfig {
 impl CompactionConfig {
     fn validate(&self) -> Result<(), BoundaryError> {
         if self.summary_output_tokens == 0
-            || self.summary_output_tokens > 16_384
             || self.max_model_calls == 0
             || self.max_model_calls > 64
             || self.max_chunks == 0

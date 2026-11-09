@@ -951,3 +951,13 @@ CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提�
 最终候选的历史审查回归发现，始终启用动态凭据注册表后，模型返回的工具参数在授权前被脱敏改写，独立核查会看到不完整视图。现保留原始ToolCall供精确授权和执行，另生成脱敏副本用于Session、持久化及记忆来源哈希。标识符及opaque内容继续失败关闭，歧义JSON在持久化前拒绝。
 
 新增完成边界单元测试及真实SQLite运行回归，核对轮内新登记凭据、人工批准、原值分发、零独立审核请求，以及审批预览、数据库和后续模型请求脱敏。独立源码复核与五项历史审查诊断通过。本机 `RUST_TEST_THREADS=1 just check`通过1304项Rust测试、格式、严格Clippy与优化构建，日志为 `target/n3/integration-workspace-gate-4.log`。`just test-tooling`的75项Python回归通过，记录为 `target/n3/final-tooling-2.log`。最终固定新候选另行验收。
+
+### D-053 模型输出目标与动态上下文余量
+
+2026-11-10，按项目负责人新增要求，将输出目标解析为用途／请求显式覆盖、profile显式max_output_tokens、模型limit.output声明、32000回退。模型声明通过profile元数据接入。审核与摘要默认继承实际profile，已有显式值继续生效。每次请求使用完整wire计数及额外安全余量收缩实际输出值，输入基准固定为 `B=C-R-1`，80%／55%压缩水位与动态输出分别计算。
+
+三协议采用相同计数与发送投影，覆盖Chat兼容字段、Unicode、工具schema、显式高低覆盖、小窗口、无剩余空间和极大安全余量。摘要发送实际拟合后的请求，记录其真实指纹。计数适配版本升至v2，恢复时通过身份检查选择有效检查点，并保留原始历史重建路径。
+
+真实模型诊断定位到摘要将助手陈述升级为observed的来源分类错误，英文Compact提示词现明确角色映射及有限预算内的紧凑输出。两项回归保留真实schema的严格证据限制，文档快照同步。此前扩大提示词导致的两项固定窗口夹具失败保留于 `target/n3/integration-workspace-gate-5.log`，新预算语义及对应边界调整后完整门禁通过。
+
+当前本机完整检查通过1315项Rust测试、格式、严格Clippy与优化构建，日志为 `target/n3/integration-workspace-gate-6.log`；75项Python回归见 `target/n3/final-tooling-5.log`。独立源码复核覆盖配置继承、实际wire、额外安全余量和旧检查点回退。debug诊断程序上三协议各完成实际记忆写入、Compact及恢复后的PLAN读取；Chat首轮缺少成功memory_update记录被验收判为失败，另次重试通过，原报告保留。最终优化程序的固定候选与四平台结果继续按[N3验收](n3-validation.md)维护。

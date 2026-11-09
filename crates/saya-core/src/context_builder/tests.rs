@@ -236,7 +236,7 @@ fn thresholds_signal_compaction_without_dropping_a_single_item() {
         built.decision,
         ContextDecision::NeedsCompact {
             max_prefix_end: 2,
-            target_input_tokens: 1540,
+            target_input_tokens: 1594,
             exceeds_input_capacity: true,
         }
     ));
@@ -671,11 +671,11 @@ fn closed_groups_allow_call_id_reuse_but_never_misbind_result_ordinals() {
 }
 
 #[test]
-fn rejects_exhausted_budget_bad_thresholds_and_unreserved_output() {
+fn rejects_exhausted_budget_and_bad_thresholds_while_accepting_output_overrides() {
     let id = identity(ModelProtocol::ChatCompletions);
     let request = request(vec![user("task")]);
     for budget in [
-        ContextBudget::new(100, 100, 1),
+        ContextBudget::new(100, 100, 99),
         ContextBudget::new(100, 0, 1),
         ContextBudget {
             target_per_mille: 900,
@@ -690,7 +690,67 @@ fn rejects_exhausted_budget_bad_thresholds_and_unreserved_output() {
     }
     let mut spec = input(&request, &id);
     spec.budget.output_reserve = 99;
-    assert_eq!(code(build(spec, None)), "context_budget");
+    assert_eq!(
+        build(spec, None).unwrap().request.max_output_tokens,
+        Some(100)
+    );
+}
+
+#[test]
+fn dynamic_output_fits_small_windows_with_stable_compaction_thresholds() {
+    let id = identity(ModelProtocol::Responses);
+    let mut request = request(vec![user("Keep this exact user requirement.")]);
+    request.max_output_tokens = None;
+    let original = request.history.clone();
+    let counter = LocalCounter {
+        calls: AtomicUsize::new(0),
+        exact: true,
+    };
+    let mut spec = input(&request, &id);
+    spec.budget = ContextBudget::new(8192, 32000, 1821);
+    assert_eq!(spec.budget.input_capacity().unwrap(), 6370);
+    let mut alternate = spec.budget;
+    alternate.output_reserve = 128;
+    assert_eq!(alternate.input_capacity().unwrap(), 6370);
+    let built = build(spec, Some(&counter)).unwrap();
+    assert_eq!(built.decision, ContextDecision::Ready);
+    let output = u64::from(built.request.max_output_tokens.unwrap());
+    assert!(output > 0 && output < 32000);
+    assert!(built.accounting.total.tokens + output + 1821 <= 8192);
+    assert!(counter.calls.load(Ordering::Relaxed) >= 2);
+    assert_eq!(built.request.history, original);
+    assert_eq!(request.history, original);
+
+    request.max_output_tokens = Some(64000);
+    let mut spec = input(&request, &id);
+    spec.budget = ContextBudget::new(8192, 128, 1821);
+    let overridden = build(spec, Some(&counter)).unwrap();
+    assert_eq!(overridden.decision, ContextDecision::Ready);
+    assert!(
+        overridden.accounting.total.tokens
+            + u64::from(overridden.request.max_output_tokens.unwrap())
+            + 1821
+            <= 8192
+    );
+}
+
+#[test]
+fn input_without_remaining_output_capacity_requires_compaction_or_rejection() {
+    let id = identity(ModelProtocol::Responses);
+    let request = request(vec![user(&"required original text ".repeat(4000))]);
+    let counter = LocalCounter {
+        calls: AtomicUsize::new(0),
+        exact: true,
+    };
+    let mut spec = input(&request, &id);
+    spec.budget = ContextBudget::new(8192, 32000, 821);
+    let built = build(spec, Some(&counter)).unwrap();
+    assert!(matches!(
+        built.decision,
+        ContextDecision::ContextLimit { .. }
+    ));
+    assert_eq!(built.request.max_output_tokens, Some(1));
+    assert_eq!(built.request.history, request.history);
 }
 
 #[test]

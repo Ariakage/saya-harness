@@ -37,13 +37,15 @@
 
 关键联合任务需要在有限窗口内执行长输出、引用检索、Compact和插件操作后继续完成，核对原始用户约束、实际模式、剩余任务、调用配对、输出完整性和证据。遗忘后重新验证索引、后续Context、缓存和引用旧记忆版本的摘要视图。
 
-## 已确认参数与待收敛项
+## 当前实现参数与验收边界
 
-- 全局记忆默认启用读取和注入，auto写入／遗忘经规则与独立模型核查，见D-052。读取／注入／写入具有独立配置。
-- 既有exec默认各64KiB的有效捕获约束继续生效。新增捕获profile的16MiB对象／128MiB Run为候选最大值，显式配置及迁移随DEV-076验证。
-- 结果投影4096 tokens、分页2048、本轮工具总投影8192，以及Compact触发80%／目标55%为设计候选，按协议预算与质量夹具收敛。
-- 原始Session历史用于恢复和导出，ContextView与CompactionRecord承担请求投影。摘要、计数与重试计入当前Run预算。
-- Hook事件集合、包提取格式、文件与目录限额、记忆格式／历史保留和具体默认预算按各DEV实测固定。
+- 全局记忆的read／inject／write默认均启用。read关闭内容查询与自动事实注入，inject单独关闭自动注入，write独立控制持久变更。auto写入／遗忘经规则与独立模型核查，Manual Approval覆盖每次模型工具调用，PLAN保持只读。默认索引为 `~/.saya/MEMORY.md`，主题目录为 `~/.saya/memory/`，具体配额及历史／导出保留范围见[记忆文档](memory.md)。
+- 私有OutputStore默认开启，默认对象16MiB、每Run128MiB、整个存储1GiB、最多4096对象，预览首尾各4KiB。既有exec的stdout／stderr有效捕获默认各64KiB，扩大后仍受对象与Run额度约束。以上是当前默认配置，最终平台验证继续核对捕获、排空与恢复。
+- 有宿主登记output_refs且序列化后超过16KiB的工具结果，在请求Context投影中替换为带状态、完整性及引用的有界数据。原始工具结果仍保存在Session中。输入预算覆盖所有结果与封装，当前参数按UTF-8字节及请求计数分别约束。
+- OutputStore组件读取页默认8KiB／100行，默认页上限16KiB／200行。模型侧output_read／output_search当前另设8KiB上限，read最多200行，search默认最多50项和2行上下文、最多4行上下文，较小的宿主配置优先。分页及游标绑定当前脱敏视图，完整参数见[配置文档](configuration.md#输出捕获与上下文预算)。
+- D-053采用稳定输入基准 `B = C - R - 1`，其中 `R = ceil(C / 10) + 1 + extra_safety_tokens`，80%触发与严格55%目标均按B计算。Execution／Review／Compact输出目标依次取请求／用途显式值、profile显式值、profile.limit.output声明值、32000缺省，实际输出按完整wire输入的剩余空间收缩且至少1 token。审核／摘要省略用途覆盖时继承实际所选profile，显式值优先。单次Compact默认最多32次实际模型调用、600秒、16个分块和4轮合并，每次请求最多2次允许的传输重试。实际摘要请求、重试与活跃时间共用Run预算，本地计数保留estimated标记。正文大小、必需事实与来源校验继续生效，新增输出规则仍需冻结候选重新验收。[输出配置](configuration.md#模型输出-token-目标)
+- 原始Session历史用于恢复和导出，ContextView与CompactionRecord承担请求投影，摘要以来源水位CAS提交。CLI `saya compact SESSION_ID`和文本／TUI `/compact`提供手动入口，运行中请求排队到模型边界，空闲时独立压缩。当前模式、权限、最新用户原文与记忆／Skill版本由宿主核验。[上下文契约](context-management.md)
+- 插件管理当前接受本地目录，归档及远程来源获取仍待实现。manifest／Store／Hook已设置有限配额，当前默认值与CLI／TUI展示边界见[插件规范](saya-plugin.md)。本节参数说明当前实现，16项DEV最终完成仍按冻结候选的联合验收及四平台实际证据判定。
 
 ## 2026-11-10 本机集成门禁
 

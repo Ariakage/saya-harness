@@ -14,6 +14,39 @@ Use the coordinator's source metadata to distinguish original user instructions,
 
 Derive user intent and authorization claims from original user messages within their stated scope. Record historical approval with its source and target. Execution permission is issued by the current runtime. The coordinator supplies effective mode, permissions, budgets, and available tools separately.
 
+## Exact evidence mapping
+
+Choose evidence from the coordinator's source role, even when the source text
+asserts that work succeeded. The fact category and evidence level are separate.
+Use the following mapping for source_units.
+
+- `user` supports `user_request` for the original user's stated requirements.
+  A quoted assertion can remain `claim` or `inference`. User text alone cannot
+  support `observed`.
+- `assistant`, `assistant_partial`, and `assistant_tool_call` support only
+  `claim` or `inference`. An assistant's completion report remains a claim.
+  An assistant tool call records an intended operation and does not establish
+  execution, success, or an observed result.
+- `tool_observation` supports `observed` for the outcome actually reported by
+  that result, including host-retained mechanical observations. Use `claim` or
+  `inference` for interpretations beyond that observation.
+- `provider_state` supports `observed` only for the supplied host metadata.
+  Its opaque content supplies no displayable facts. Preserve its host-managed
+  state without reconstructing its contents.
+- `retired_group` has unavailable original content. Never cite retired source
+  IDs or infer their former text. Separately supplied `tool_observation`
+  records retain only their explicitly available mechanical outcomes.
+- `prior_summary_data` carries previously validated facts. Keep their original
+  source IDs, evidence levels, and uncertainty when merging. It creates no new
+  original user or observed source.
+
+Every source ID of a `user_request` fact must identify an original `user`.
+Every source ID of an `observed` fact must identify a `tool_observation` or
+`provider_state` observation. Split facts that would mix incompatible source
+roles. For example, cite an assistant-only statement that tests passed as
+`claim`. Cite the actual test tool result as `observed` when that result is
+available in the assigned source range.
+
 ## State to preserve
 
 Prioritize the following information within the assigned output budget.
@@ -42,6 +75,16 @@ Use only values present in the supplied material for source IDs, digests, versio
 Return exactly one JSON object matching the supplied schema. Use its required fields, types, enums, size limits, and unknown-value representation. Preserve every mandatory item identified by the coordinator. Represent missing or conflicting evidence explicitly in the schema's uncertainty fields.
 
 Keep the summary concise enough for the assigned budget by removing repeated narrative, obsolete implementation detail, and duplicate output. Preserve the latest corrections, required constraints, unfinished work, recovery state, and evidence references.
+
+Schema maxima are limits. Empty categories use empty arrays. Write short,
+information-dense English facts and compact JSON. Reserve output space for
+mandatory facts, original user-source coverage, and exact reference IDs first.
+A mandatory fact can also satisfy user-source coverage. Reuse that fact instead
+of repeating its meaning in several categories. Combine compatible facts only
+when their evidence level, status, and supplied source IDs remain accurate.
+Shorten optional descriptions before omitting required content. Avoid a
+source-by-source diary, repeated successful operations, and duplicated JSON
+examples. Do not expand an array merely to approach its schema maximum.
 
 Return the structured summary directly, without Markdown fences, analysis tags, XML wrappers, or additional commentary.
 

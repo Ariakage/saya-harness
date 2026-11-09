@@ -6,6 +6,8 @@
 
 后续需求变更按 B 编号说明影响并记录新决策。具体函数签名、内部文件拆分和依赖补丁版本属于实现细节，在保持本基线行为的前提下由开发者处理，不再逐个收集用户偏好。
 
+N3开发线按D-053更新B-04、B-06、B-10及B-15的模型输出规则。最具体请求／用途的显式max_output_tokens优先，其次profile显式值、profile.limit.output声明值、32000缺省。核查与摘要省略用途覆盖时继承实际所选profile，实际请求再按剩余上下文收缩。下文保留的8192／1024及示例显式值对应0.1基线，当前配置与稳定水位见[输出配置](configuration.md#模型输出-token-目标)和[决策记录](decisions.md)。
+
 ## 决定总览
 
 | 编号 | 主题 | 已确定行为 |
@@ -155,8 +157,8 @@ model_timeout_seconds = 180
 - 本地保存消息、工具调用／结果、关联标识、适用的项目指令来源与协议状态；不能仅保存最终可见文字。
 - 同一会话内不切换协议或模型。MVP 更换协议／模型时新建会话，旧会话仍可查看；核查 profile 不受此限制。
 - Responses 必要的加密 reasoning items、Anthropic 必要的签名／不透明状态按原顺序保存与回传，不解码、不作为普通思考文本展示。历史工具消息映射按各自协议实现，尤其保持 Anthropic 的结果紧邻调用要求；见 [Anthropic 工具结果契约](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)。
-- 每个 profile 必填模型名与 `context_window_tokens`，不猜测任意兼容模型的窗口；最大输出默认 8192，允许 profile 降低或覆盖。
-- 输入与输出预留合计达到配置窗口的 90% 时，停止新模型请求并以 `limit_reached/context_budget` 结束；本地估算与 provider 返回的确切 usage 区分。估算不能代替 provider 的最终上下文限制，超限响应明确记录。
+- 每个profile必填模型名与 `context_window_tokens`，不猜测任意兼容模型的窗口。0.1最大输出默认8192，N3开发线的声明值继承、32000缺省及显式覆盖按D-053生效。
+- 0.1在输入与输出预留合计达到配置窗口90%时停止新模型请求。N3先按剩余上下文收缩实际输出目标，并保留严格90%安全保护，空间不足时由Context流程压缩或明确结束。本地估算与provider返回的确切usage分别记录，供应商超限响应明确返回。
 - 0.1 不自动摘要、不静默裁掉历史，不启用 provider 专属自动 compaction。用户可新建会话；跨会话长期记忆不进入 MVP。
 
 ## B-07 工作模式交付
@@ -196,7 +198,7 @@ model_timeout_seconds = 180
 - 规则可产生 `allow`、`ask`、`deny`，通过工具名、规范化路径 glob、解析后的可执行文件绝对路径和 argv 前缀匹配。优先级为 deny ＞ask ＞allow；匹配多个冲突规则时按此顺序合并，不依赖文件排序。
 - 规则键固定为 `effect`、`tool`、`path_glob`、`executable`、`args_prefix`；effect 必填，其余省略表示不限制该维度，已填写条件必须全部匹配。path_glob 匹配规范化绝对路径；后两项只适用于 exec；路径根检查先于普通规则，不被 allow 覆盖。
 - 工作区内原生读写／搜索工具默认 allow；无命中规则的 exec 进入模型核查，明确 ask 直接询问，deny 直接拒绝。manual 下 allow 不免除任何工具调用的人工确认，适用的精确命令预授权可满足对应确认。
-- 核查默认复用执行 profile，但使用独立、无历史任务执行上下文、无工具的请求；可用 `review.profile` 指定其他已配置 profile。输出上限 1024 tokens，不向核查模型提供密钥。
+- 核查默认复用执行profile，但使用独立、无历史任务执行上下文、无工具的请求，可用 `review.profile`指定其他已配置profile。0.1输出上限1024 tokens。N3按D-053继承所选profile的输出目标，显式 `review.max_output_tokens`优先，并按本次核查请求剩余空间收缩。密钥保持受保护来源。
 - 输入为操作目标、工具名、完整规范化参数、工作／权限模式和必要用户目标摘要；工具参数始终作为待核查数据，不作为核查系统指令。
 - 输出固定为 `{ "decision": "allow|ask|deny", "reason": "简短原因" }`。解析失败、服务失败、不支持所需核查或无法判定一律转人工确认；不能自动扩大权限。
 - 核查不递归调用核查器；其请求和重试都计入运行的模型请求预算。不确定但无法询问时返回 `needs_confirmation`。
@@ -261,7 +263,7 @@ model_timeout_seconds = 180
 | 命令两路输出 | command_stdout_max_bytes／command_stderr_max_bytes | 各 64 KiB |
 | 文本搜索／文件查找 | search_max_results／search_return_max_bytes | 200 项或 128 KiB，先到者为准 |
 | 目录列出 | list_max_entries／list_return_max_bytes | 1000 项或 128 KiB，先到者为准 |
-| 模型输出 | profiles.*.max_output_tokens／review.max_output_tokens，不在 limits 内 | 8192／1024 tokens |
+| 模型输出 | profile声明及max_output_tokens、review用途覆盖，均独立于limits | 0.1为8192／1024 tokens，N3按D-053继承声明值、未声明32000，再按剩余上下文收缩 |
 
 上限均通过用户配置调整，不能由模型工具参数自行取消；bypass 不关闭运行预算。达到限制后保留已有结果，以 `limit_reached` 结束，不自动启动新运行续费执行。
 

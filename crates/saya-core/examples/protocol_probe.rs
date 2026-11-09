@@ -67,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         profile: "probe".into(),
         model: args[3].clone(),
         context_window_tokens: 128_000,
+        extra_safety_tokens: 0,
         max_output_tokens: 128,
         thinking_effort: None,
         strict_tools: false,

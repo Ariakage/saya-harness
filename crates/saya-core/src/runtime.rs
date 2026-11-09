@@ -573,14 +573,13 @@ impl AgentRuntime {
         })? = Some(registry);
         Ok(self)
     }
-    /// Apply a finite execution request budget with a profile-clamped reserve.
+    /// Apply a finite execution window and its resolved output target.
     pub fn with_context_budget(
         mut self,
         budget: crate::context_builder::ContextBudget,
     ) -> Result<Self, BoundaryError> {
         let config = crate::compaction::CompactionConfig {
-            summary_output_tokens: 4096
-                .min(u32::try_from(budget.output_reserve).unwrap_or(u32::MAX)),
+            summary_output_tokens: u32::try_from(budget.output_reserve).unwrap_or(u32::MAX),
             ..Default::default()
         };
         self = self.with_context_settings(budget, true, config)?;

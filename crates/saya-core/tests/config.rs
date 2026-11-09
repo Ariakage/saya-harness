@@ -70,6 +70,152 @@ fn test_env(home: &Path) -> Environment {
 }
 
 #[test]
+fn model_output_defaults_resolve_after_explicit_targets_for_all_protocols() {
+    let temp = TempDir::new().unwrap();
+    for protocol in [
+        "openai-chat-completions",
+        "openai-responses",
+        "anthropic-messages",
+    ] {
+        for (declared, explicit, expected) in [
+            (None, None, 32000),
+            (Some(64000), None, 64000),
+            (None, Some(12000), 12000),
+            (Some(64000), Some(12000), 12000),
+            (Some(4096), Some(64000), 64000),
+        ] {
+            let mut text = format!(
+                "schema_version=1\n[defaults]\nprofile='selected'\n[profiles.selected]\nprotocol='{protocol}'\nbase_url='https://example.invalid/v1'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=100000\n"
+            );
+            if let Some(tokens) = explicit {
+                text.push_str(&format!("max_output_tokens={tokens}\n"));
+            }
+            if let Some(tokens) = declared {
+                text.push_str(&format!("[profiles.selected.limit]\noutput={tokens}\n"));
+            }
+            let path = write(temp.path(), "config.toml", &text);
+            let loaded = config::load(
+                Overrides {
+                    config: Some(path),
+                    ..Default::default()
+                },
+                test_env(temp.path()),
+                temp.path(),
+            )
+            .unwrap();
+            let profile = &loaded.profiles["selected"];
+            assert_eq!(
+                profile.max_output_tokens, expected,
+                "{protocol}: declared={declared:?}, explicit={explicit:?}"
+            );
+            assert_eq!(profile.limit.as_ref().map(|limit| limit.output), declared);
+            assert_eq!(loaded.review.max_output_tokens, None);
+            assert_eq!(loaded.context.summary_max_output_tokens, None);
+            let serialized = serde_json::to_value(profile).unwrap();
+            assert_eq!(serialized["max_output_tokens"], expected);
+            assert_eq!(serialized.get("limit").is_some(), declared.is_some());
+            let round_trip: config::Profile = serde_json::from_value(serialized).unwrap();
+            assert_eq!(
+                round_trip.fingerprint().unwrap(),
+                profile.fingerprint().unwrap()
+            );
+            assert!(!temp.path().join(".saya").exists());
+        }
+    }
+}
+
+#[test]
+fn declared_output_metadata_and_effective_target_both_bind_profile_identity() {
+    let source = "protocol='openai-chat-completions'\nbase_url='https://example.invalid/v1'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=100000\nmax_output_tokens=12000\n";
+    let explicit: config::Profile = toml::from_str(source).unwrap();
+    let declared: config::Profile =
+        toml::from_str(&format!("{source}[limit]\noutput=64000\n")).unwrap();
+    let updated: config::Profile =
+        toml::from_str(&format!("{source}[limit]\noutput=96000\n")).unwrap();
+    assert_eq!(explicit.max_output_tokens, declared.max_output_tokens);
+    assert_ne!(
+        explicit.fingerprint().unwrap(),
+        declared.fingerprint().unwrap()
+    );
+    assert_ne!(
+        declared.fingerprint().unwrap(),
+        updated.fingerprint().unwrap()
+    );
+    assert!(
+        !serde_json::to_string(&explicit)
+            .unwrap()
+            .contains("\"limit\"")
+    );
+    let same_target: config::Profile = toml::from_str(&source.replace("12000", "16000")).unwrap();
+    assert_ne!(
+        explicit.fingerprint().unwrap(),
+        same_target.fingerprint().unwrap()
+    );
+}
+
+#[test]
+fn purpose_output_overrides_are_optional_nonzero_and_have_no_legacy_small_cap() {
+    let temp = TempDir::new().unwrap();
+    let path = write(
+        temp.path(),
+        "config.toml",
+        &format!(
+            "{}\n[context]\nsummary_max_output_tokens=64000\n",
+            fixture().replace(
+                "[review]\nprofile = \"responses\"",
+                "[review]\nprofile = \"responses\"\nmax_output_tokens=48000"
+            )
+        ),
+    );
+    let loaded = config::load(
+        Overrides {
+            config: Some(path),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(loaded.review.max_output_tokens, Some(48000));
+    assert_eq!(loaded.context.summary_max_output_tokens, Some(64000));
+    assert_eq!(loaded.profiles["responses"].max_output_tokens, 32000);
+}
+
+#[test]
+fn output_configuration_rejects_zero_overflow_and_unknown_metadata_without_source_echo() {
+    let temp = TempDir::new().unwrap();
+    let profile = "schema_version=1\n[profiles.selected]\nprotocol='openai-chat-completions'\nbase_url='https://example.invalid/v1'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=100000\n";
+    for extra in [
+        "max_output_tokens=0",
+        "max_output_tokens=4294967296",
+        "max_output_tokens=64000\n[profiles.selected.limit]\noutput=0",
+        "[profiles.selected.limit]\noutput=0",
+        "[profiles.selected.limit]\noutput=4294967296",
+        "[profiles.selected.limit]\noutput=32000\nunknown='SYNTHETIC-PRIVATE-VALUE'",
+        "[profiles.selected.limit]\nunknown='SYNTHETIC-PRIVATE-VALUE'",
+        "unknown='SYNTHETIC-PRIVATE-VALUE'",
+        "[review]\nmax_output_tokens=0",
+        "[review]\nmax_output_tokens=4294967296",
+        "[context]\nsummary_max_output_tokens=0",
+        "[context]\nsummary_max_output_tokens=4294967296",
+    ] {
+        let path = write(temp.path(), "config.toml", &format!("{profile}{extra}\n"));
+        let failure = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        )
+        .err()
+        .expect("invalid output settings accepted");
+        assert_eq!(failure.0.code, "invalid_config");
+        assert!(!failure.to_string().contains("SYNTHETIC-PRIVATE-VALUE"));
+    }
+}
+
+#[test]
 fn loads_selected_file_and_resolves_precedence_without_implicit_project_config() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -104,9 +250,9 @@ fn loads_selected_file_and_resolves_precedence_without_implicit_project_config()
     assert_eq!(c.output, Output::Json);
     assert_eq!(c.data_dir, home.join(".local/share/saya"));
     assert_eq!(c.profiles["chat"].protocol, Protocol::ChatCompletions);
-    assert_eq!(c.profiles["chat"].max_output_tokens, 8192);
+    assert_eq!(c.profiles["chat"].max_output_tokens, 32000);
     assert!(!c.profiles["chat"].strict_tools);
-    assert_eq!(c.review.max_output_tokens, 1024);
+    assert_eq!(c.review.max_output_tokens, None);
     assert_eq!(c.limits.max_model_requests, 10);
     assert_eq!(c.sandbox.backend, saya_core::execution::BackendKind::Auto);
     assert!(c.mcp.servers.is_empty());
@@ -377,7 +523,12 @@ fn explicit_pricing_is_validated_without_changing_provider_identity() {
 #[test]
 fn omitted_thinking_effort_preserves_the_legacy_profile_fingerprint() {
     let temp = TempDir::new().unwrap();
-    let path = write(temp.path(), "config.toml", fixture());
+    let explicit_legacy_target = fixture().replacen(
+        "context_window_tokens = 100000",
+        "context_window_tokens = 100000\nmax_output_tokens = 8192",
+        1,
+    );
+    let path = write(temp.path(), "config.toml", &explicit_legacy_target);
     let loaded = config::load(
         Overrides {
             config: Some(path),
@@ -389,7 +540,7 @@ fn omitted_thinking_effort_preserves_the_legacy_profile_fingerprint() {
     .unwrap();
     let mut profile = loaded.profiles["chat"].clone();
     assert_eq!(profile.thinking_effort, None);
-    // Pin the pre-effort serialization, including field order and old defaults.
+    // Pin the pre-effort serialization for the same explicit request target.
     let legacy = r#"{"protocol":"openai-chat-completions","base_url":"https://example.invalid/v1","model":"example","auth":"bearer","api_key_env":"EXAMPLE_KEY","context_window_tokens":100000,"max_output_tokens":8192,"allow_remote_http":false,"headers_env":{},"strict_tools":false,"stream":true,"api_version":"2026-10-21","legacy_max_tokens":false,"omit_stream_usage":false,"omit_reasoning_include":false}"#;
     assert_eq!(serde_json::to_string(&profile).unwrap(), legacy);
     let original = profile.fingerprint().unwrap();
@@ -714,7 +865,7 @@ fn n3_defaults_and_explicit_memory_switches_remain_host_selected_and_readonly() 
     assert!(config.context.auto_compact);
     let budget = config.context.budget(&config.profiles["chat"]);
     assert_eq!(budget.window_tokens, 100000);
-    assert_eq!(budget.output_reserve, 8192);
+    assert_eq!(budget.output_reserve, 32000);
     assert_eq!(budget.safety_margin, 10001);
     assert_eq!(budget.trigger_per_mille, 800);
     assert_eq!(budget.target_per_mille, 550);

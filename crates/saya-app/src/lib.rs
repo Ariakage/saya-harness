@@ -69,6 +69,7 @@ fn model(
         model: p.model.clone(),
         context_window_tokens: p.context_window_tokens,
         max_output_tokens: p.max_output_tokens,
+        extra_safety_tokens: config.context.extra_safety_tokens,
         thinking_effort: p.thinking_effort,
         strict_tools: p.strict_tools,
         stream: p.stream,
@@ -250,7 +251,7 @@ pub fn build_runtime(
         summary_output_tokens: config
             .context
             .summary_max_output_tokens
-            .min(selected.max_output_tokens),
+            .unwrap_or(selected.max_output_tokens),
         max_model_calls: config.context.max_compaction_calls,
         connect_timeout: limits.model_connect.min(Duration::from_secs(3600)),
         idle_timeout: limits.model_idle.min(Duration::from_secs(3600)),

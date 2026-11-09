@@ -173,10 +173,7 @@ impl ThinkingEffort {
     }
 }
 fn default_output_tokens() -> u32 {
-    8192
-}
-fn default_review_tokens() -> u32 {
-    1024
+    32000
 }
 fn yes() -> bool {
     true
@@ -187,7 +184,7 @@ fn default_version() -> String {
 
 /// Provider settings contain reference names, never API key values.
 #[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawProfile")]
 pub struct Profile {
     pub protocol: Protocol,
     pub base_url: String,
@@ -195,8 +192,11 @@ pub struct Profile {
     pub auth: Auth,
     pub api_key_env: Option<String>,
     pub context_window_tokens: u64,
-    #[serde(default = "default_output_tokens")]
+    /// Resolved request target. Explicit configuration overrides the declared
+    /// model default, which otherwise falls back to 32,000 tokens.
     pub max_output_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<ProfileLimits>,
     /// Passed unchanged to the selected protocol. Omitted settings retain the
     /// legacy serialized profile and leave provider defaults unspecified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,6 +220,77 @@ pub struct Profile {
     /// Optional explicit rates; excluded from the provider identity fingerprint.
     #[serde(default, skip_serializing)]
     pub pricing: Option<Pricing>,
+}
+/// Model-declared defaults. An explicit request target takes precedence.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileLimits {
+    pub output: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProfile {
+    protocol: Protocol,
+    base_url: String,
+    model: String,
+    auth: Auth,
+    api_key_env: Option<String>,
+    context_window_tokens: u64,
+    max_output_tokens: Option<u32>,
+    limit: Option<ProfileLimits>,
+    thinking_effort: Option<ThinkingEffort>,
+    #[serde(default)]
+    allow_remote_http: bool,
+    #[serde(default)]
+    headers_env: BTreeMap<String, String>,
+    #[serde(default)]
+    strict_tools: bool,
+    #[serde(default = "yes")]
+    stream: bool,
+    #[serde(default = "default_version")]
+    api_version: String,
+    #[serde(default)]
+    legacy_max_tokens: bool,
+    #[serde(default)]
+    omit_stream_usage: bool,
+    #[serde(default)]
+    omit_reasoning_include: bool,
+    pricing: Option<Pricing>,
+}
+impl TryFrom<RawProfile> for Profile {
+    type Error = &'static str;
+
+    fn try_from(raw: RawProfile) -> Result<Self, Self::Error> {
+        if raw.max_output_tokens == Some(0)
+            || raw.limit.as_ref().is_some_and(|limit| limit.output == 0)
+        {
+            return Err("profile output limits must be positive");
+        }
+        let max_output_tokens = raw
+            .max_output_tokens
+            .or_else(|| raw.limit.as_ref().map(|limit| limit.output))
+            .unwrap_or_else(default_output_tokens);
+        Ok(Self {
+            protocol: raw.protocol,
+            base_url: raw.base_url,
+            model: raw.model,
+            auth: raw.auth,
+            api_key_env: raw.api_key_env,
+            context_window_tokens: raw.context_window_tokens,
+            max_output_tokens,
+            limit: raw.limit,
+            thinking_effort: raw.thinking_effort,
+            allow_remote_http: raw.allow_remote_http,
+            headers_env: raw.headers_env,
+            strict_tools: raw.strict_tools,
+            stream: raw.stream,
+            api_version: raw.api_version,
+            legacy_max_tokens: raw.legacy_max_tokens,
+            omit_stream_usage: raw.omit_stream_usage,
+            omit_reasoning_include: raw.omit_reasoning_include,
+            pricing: raw.pricing,
+        })
+    }
 }
 /// Rates in millionths of the named currency per one million tokens.
 #[derive(Debug, Clone, Deserialize)]
@@ -247,19 +318,12 @@ struct Defaults {
     permissions: PermissionMode,
     output: Output,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Review {
     pub profile: Option<String>,
-    pub max_output_tokens: u32,
-}
-impl Default for Review {
-    fn default() -> Self {
-        Self {
-            profile: None,
-            max_output_tokens: default_review_tokens(),
-        }
-    }
+    /// Omission inherits the actually selected review profile's target.
+    pub max_output_tokens: Option<u32>,
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -375,7 +439,8 @@ pub struct ContextSettings {
     pub trigger_percent: u16,
     pub target_percent: u16,
     pub extra_safety_tokens: u64,
-    pub summary_max_output_tokens: u32,
+    /// Omission inherits the execution profile's resolved request target.
+    pub summary_max_output_tokens: Option<u32>,
     pub max_compaction_calls: usize,
     pub compaction_timeout_seconds: u64,
 }
@@ -386,7 +451,7 @@ impl Default for ContextSettings {
             trigger_percent: 80,
             target_percent: 55,
             extra_safety_tokens: 0,
-            summary_max_output_tokens: 4096,
+            summary_max_output_tokens: None,
             max_compaction_calls: 32,
             compaction_timeout_seconds: 600,
         }
@@ -397,8 +462,7 @@ impl ContextSettings {
         if self.target_percent == 0
             || self.target_percent >= self.trigger_percent
             || self.trigger_percent > 100
-            || self.summary_max_output_tokens == 0
-            || self.summary_max_output_tokens > 16384
+            || self.summary_max_output_tokens == Some(0)
             || self.max_compaction_calls == 0
             || self.max_compaction_calls > 64
             || self.compaction_timeout_seconds == 0
@@ -725,7 +789,7 @@ pub fn load(
     doc.output_capture.limits.validate()?;
     doc.context.validate()?;
     doc.plugins.validate()?;
-    if doc.review.max_output_tokens == 0 {
+    if doc.review.max_output_tokens == Some(0) {
         return Err(invalid("review output limit must be positive"));
     }
     for (name, p) in &doc.profiles {

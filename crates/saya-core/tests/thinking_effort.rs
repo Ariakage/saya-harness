@@ -88,6 +88,7 @@ fn adapter(
         profile: profile.into(),
         model: "fixture-model".into(),
         context_window_tokens: 128_000,
+        extra_safety_tokens: 0,
         max_output_tokens: 8192,
         thinking_effort: effort,
         strict_tools: false,
