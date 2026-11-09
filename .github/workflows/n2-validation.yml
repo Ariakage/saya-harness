@@ -1,0 +1,192 @@
+name: N2 native acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source commit to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify requested source
+        id: source
+        env:
+          EXPECTED_SHA: ${{ inputs.source_sha }}
+          RUNNER_LABEL: ${{ matrix.os }}
+        run: |
+          mkdir -p target/n2/acceptance
+          python3 - <<'PY' 2>&1 | tee target/n2/acceptance/source-platform.log
+          import datetime
+          import json
+          import os
+          import pathlib
+          import platform
+          import subprocess
+
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          evidence = {
+              'recorded_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'requested_source_sha': os.environ['EXPECTED_SHA'],
+              'source_sha': actual,
+              'source_matches': actual == os.environ['EXPECTED_SHA'],
+              'runner_label': os.environ['RUNNER_LABEL'],
+              'platform': {
+                  'system': platform.system(),
+                  'release': platform.release(),
+                  'version': platform.version(),
+                  'machine': platform.machine(),
+              },
+              'workflow_sha': os.environ['GITHUB_WORKFLOW_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+          }
+          encoded = json.dumps(evidence, indent=2) + '\n'
+          pathlib.Path('target/n2/acceptance/source-platform.json').write_text(encoded)
+          print(encoded, end='')
+          if not evidence['source_matches']:
+              raise SystemExit('Checked-out source differs from requested full commit')
+          PY
+      - name: Check native acceptance oracles
+        id: acceptance_oracles
+        run: python3 scripts/n2/test_native_acceptance.py -v 2>&1 | tee target/n2/acceptance/acceptance-oracles.log
+      - name: Install pinned Rust toolchain
+        id: toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy 2>&1 | tee target/n2/acceptance/toolchain.log
+      - name: Install native Linux isolation tools
+        id: linux_tools
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: ./scripts/n2/install-linux-tools.sh 2>&1 | tee target/n2/acceptance/linux-tools.log
+      - name: Check workspace and build optimized program
+        id: build
+        run: ./scripts/check.sh 2>&1 | tee target/n2/acceptance/workspace-check.log
+      - name: Verify built program matches the native runner
+        id: architecture
+        env:
+          RUNNER_LABEL: ${{ matrix.os }}
+        run: |
+          python3 - <<'PY' 2>&1 | tee target/n2/acceptance/binary-provenance.log
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import subprocess
+
+          expected_system, expected_machine = {
+              'ubuntu-22.04': ('Linux', 'x86_64'),
+              'ubuntu-22.04-arm': ('Linux', 'aarch64'),
+              'macos-15': ('Darwin', 'arm64'),
+              'macos-15-intel': ('Darwin', 'x86_64'),
+          }[os.environ['RUNNER_LABEL']]
+          binary = pathlib.Path('target/release/saya')
+          if platform.system() == 'Darwin':
+              architectures = subprocess.check_output(['lipo', '-archs', str(binary)], text=True).split()
+          else:
+              with binary.open('rb') as image:
+                  header = image.read(20)
+              if len(header) != 20 or header[:6] != b'\x7fELF\x02\x01':
+                  raise SystemExit('Expected a 64-bit little-endian ELF executable')
+              machine = int.from_bytes(header[18:20], 'little')
+              architectures = [{62: 'x86_64', 183: 'aarch64'}.get(machine, str(machine))]
+          evidence = {
+              'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'binary': str(binary),
+              'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'runner_label': os.environ['RUNNER_LABEL'],
+              'runner_system': platform.system(),
+              'runner_machine': platform.machine(),
+              'binary_architectures': architectures,
+              'verified_native': (platform.system(), platform.machine()) == (expected_system, expected_machine)
+                  and architectures == [expected_machine],
+          }
+          encoded = json.dumps(evidence, indent=2) + '\n'
+          pathlib.Path('target/n2/acceptance/binary-provenance.json').write_text(encoded)
+          print(encoded, end='')
+          if not evidence['verified_native']:
+              raise SystemExit('Built program architecture differs from the required native runner')
+          PY
+      - name: Verify macOS baseline
+        id: macos_baseline
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          {
+            sw_vers
+            test "$(sw_vers -productVersion | cut -d. -f1)" = 15
+            otool -l target/release/saya | tee target/n2/acceptance/macho.txt
+            grep -Eq '^[[:space:]]*minos[[:space:]]+15\.0([[:space:]]|$)' target/n2/acceptance/macho.txt
+          } 2>&1 | tee target/n2/acceptance/macos-baseline.log
+      - name: Native macOS isolation acceptance
+        id: macos_native
+        if: startsWith(matrix.os, 'macos-')
+        run: python3 scripts/n2/native_acceptance.py target/release/saya 2>&1 | tee target/n2/acceptance/native.log
+      - name: Native Linux isolation and delegated resource acceptance
+        id: linux_native
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          sudo systemd-run --collect --wait --pipe \
+            --unit="saya-n2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --property='Delegate=cpu memory pids' \
+            --property=RuntimeMaxSec=1800 --property=KillMode=control-group \
+            --working-directory="$PWD" \
+            /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$PWD/target/release/saya" \
+            --require-cgroup 2>&1 | tee target/n2/acceptance/native.log
+      - name: Markdown, TUI and recovery acceptance
+        id: journeys
+        run: |
+          python3 scripts/release/smoke.py target/release/saya 2>&1 | tee target/n2/acceptance/smoke.log
+          python3 scripts/release/journey.py target/release/saya 2>&1 | tee target/n2/acceptance/journey.log
+          python3 scripts/release/review_regressions.py target/release/saya 2>&1 | tee target/n2/acceptance/review-regressions.log
+          python3 scripts/release/tui_journey.py target/release/saya --report target/n2/acceptance/tui-report.json 2>&1 | tee target/n2/acceptance/tui.log
+      - name: Record N2 workflow outcomes
+        if: always()
+        env:
+          STEP_OUTCOMES: ${{ toJSON(steps) }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p target/n2/acceptance
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          evidence = {
+              'job_status_before_upload': os.environ['JOB_STATUS'],
+              'steps': {
+                  name: {'outcome': value['outcome'], 'conclusion': value['conclusion']}
+                  for name, value in json.loads(os.environ['STEP_OUTCOMES']).items()
+              },
+          }
+          pathlib.Path('target/n2/acceptance/workflow-outcomes.json').write_text(
+              json.dumps(evidence, indent=2) + '\n')
+          PY
+      - name: Preserve N2 acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: n2-${{ matrix.os }}-${{ inputs.source_sha }}
+          path: target/n2/acceptance
+          if-no-files-found: error
+          retention-days: 14

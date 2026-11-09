@@ -8,7 +8,7 @@
 | DEV-055 | prepare／execute／文件服务／cleanup的正常入口接线、真实能力等级、显式约束缺失时失败、实际后端上下文 | 本机正常入口通过，最终四平台待验收 |
 | DEV-056 | Seatbelt与Bubblewrap／Seccomp／socat、受控网络broker、可用委派资源controller | 本机原生验收通过，Linux委派controller待验收 |
 | DEV-075 | 真实shell CST、直接argv、包装器、重定向与动态行为、错误／预算、核查事实与批准版本绑定 | 本机阶段通过，773项Rust测试及CST探针见DEV-075记录 |
-| DEV-057 | 路径与链接对抗、缺失保护路径、namespace／syscall、网络旁路、资源与清理故障、性能和恢复的原生证据 | 待执行 |
+| DEV-057 | 路径与链接对抗、缺失保护路径、namespace／syscall、网络旁路、资源与清理故障、性能和恢复的原生证据 | 本机18项与性能通过，最终四平台待验收 |
 | DEV-058 | 显式stdio MCP配置、版本与生命周期、启动授权、受控进程与关闭 | 连接组件四平台CI通过，最终整体验收待完成 |
 | DEV-059 | 工具schema／结果类型／大小、统一权限与记录、取消、列表变化、三模型协议的外部工具往返 | 正常运行时与CLI／TUI已整合，最终四平台待验收 |
 | DEV-060 | 首个凭据后端、引用／撤销、最小化注入、日志／会话／机器输出的凭据边界 | 管理入口与本机边界验证通过，最终四平台待验收 |
@@ -59,6 +59,24 @@ CLI 提供 `mcp credentials import/list/revoke` 与交互 `mcp login`。导入�
 独立复核复现管理审批中的已知凭据泄露后，入口在人工提示、授权 URL 输出及浏览器导航前完成凭据检查，包含未配置的导入来源值和有界百分号／form 编码视图。修复后的真实终端保持空输出，token POST 与存储引用数均为0。三项永久回归覆盖导入、授权元数据和B-17退出码，全部10项CLI bin测试与严格Clippy通过。
 
 正常优化程序的受控 OAuth 验证覆盖PKCE／state、明确scope、一次刷新、动态脱敏、一次工具POST与撤销，完整矩阵由DEV-061记录。当前Rust源码清单与904项完整门禁和优化程序一致。本后端为文件系统私有明文存储，最终各平台使用同一源码重新构建并验证。
+
+## DEV-057 原生普通入口与性能
+
+`scripts/n2/native_acceptance.py` 使用固定的实际CLI副本、独立模型夹具和编译后的本地系统调用probe，逐项验证操作结果及实际后端能力。错误和超时保留有界诊断，证据逐阶段原子发布。PLAN要求完整的两项拒绝结果，性能样本要求实际工具成功，8项纯Python回归检查这些验收判据。
+
+最终本机脚本SHA-256为 `5f136fd04cff6a80e0c52da03955d0b521d69b2114613b48fbbb63eb350d9db9`，所测优化程序SHA-256为 `8f7810773f90b81b91d3ee7a4916ced17e15ef945b4050f96a3210c2d4f15585`。macOS27.2 ARM的18项实际原生用例全部通过，证据为 `target/n2/final-local/native-reviewed-evidence.json`。同一程序另通过工具smoke、文本会话、既有审查回归与24组正常TUI旅程。
+
+本机每variant三次样本测得原生相对Host的P50附加耗时约为冷启动37ms、文件读取18ms、短命令399ms、四任务批次455ms。样本为新进程／新Run，保留OS页缓存；RSS为内核wait4的ru_maxrss。平台、样本量及聚合内存测量边界保留于报告，Linux和macOS15重新测量。
+
+Linux委派用例要求提供专属cgroup v2子树，检查memory.max、pids.max、cpu.max内核读回、运行中实际成员和结束后自有组移除。该用例覆盖内核配置与成员，资源耗尽压力未测试。四平台工作流对源码、主机与二进制架构、程序SHA分别留证，并在所有结果下上传14天Actions artifacts。Linux包装器只在当前systemd委派服务内创建和清理子树，验收强制要求该用例。
+
+```sh
+MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/test_native_acceptance.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/native_acceptance.py target/release/saya
+```
+
+macOS本机未执行Linux委派用例。最终四平台固定源码结果在后续记录，正式发行按独立授权处理。
 
 ## 已推送基础阶段
 

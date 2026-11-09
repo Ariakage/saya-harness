@@ -1,27 +1,29 @@
 # Sandbox 与命令结构分析
 
-**更新于 2026-11-08。Linux 技术组合已由项目负责人指定为 Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend。具体 profile、接口与资源默认值仍为实现草案。**
+**更新于 2026-11-09。N2 开发线已接入 Linux Bubblewrap + Seccomp + socat、独立 macOS SeatbeltBackend 和受控网络 broker。本文说明当前实现及能力边界，最终集成的四平台验收仍在进行，证据见 [N2 验收记录](n2-validation.md)。**
 
 ## 后端边界
 
-core 使用统一 `ExecutionBackend`，后端负责平台相关的准备、执行、文件操作与清理。Seatbelt profile、Bubblewrap 参数和 Seccomp BPF 留在各自实现中。
+core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独立 Seatbelt 实现或 Linux Bubblewrap 实现。`prepare` 返回 `PreparedEnvironment`，Seatbelt profile、Bubblewrap 参数和 Seccomp BPF 留在对应后端中。[执行实现](../crates/saya-core/src/execution.rs)
 
 | 接口职责 | 输入／输出 |
 | --- | --- |
-| capabilities | 实际文件、网络、资源、清理及执行平台能力 |
-| prepare | 已批准策略、工作区映射、凭据引用、有限资源要求，返回 EnvironmentHandle |
-| execute／files | 结构化 argv 或文件操作、cwd、取消及调用归属，返回结果与输出引用 |
-| inspect／terminate／cleanup | 环境身份、拥有的资源、实际终止与清理状态 |
+| `ExecutionBackend::prepare` | 工作区、读写根、保护路径、网络和资源策略，返回准备环境或明确错误 |
+| `PreparedEnvironment::identity`／`capabilities` | 环境 ID、宿主与执行 OS、架构、策略摘要及实际能力等级 |
+| `prepare_command`／`file_worker_argv` | 受约束命令及私有文件 worker 启动参数，由共享进程监督器处理 stdio、取消和超时 |
+| `wait_for_process_cleanup`／`cleanup` | 已监督进程的结束确认、环境关闭和所属临时资源／cgroup 清理结果 |
 
-初始后端为 `SeatbeltBackend` 和 `BubblewrapBackend`，模块可放在 core 的 execution 边界。后续 `ContainerBackend`／`VmBackend` 可实现同一接口，明确 guest OS、架构、路径映射、凭据传递和资源语义。后端选择与降级依据显式配置及能力要求，必需约束缺失时返回 `sandbox_capability_unavailable`。
+默认 `backend = "auto"` 在 macOS 选择 Seatbelt，在 Linux 选择 Bubblewrap。运行开始时实际探测后端，必需约束缺失时返回 `sandbox_capability_unavailable` 等明确错误。后续容器／VM 实现可沿用该接口，并提供实际 guest OS、架构、路径映射、凭据传递和资源语义。配置语法和实际准备分别处理，见[原生隔离配置](configuration.md#n2-原生隔离配置)。
 
-模型上下文分别注入宿主环境与实际执行环境，工具使用逻辑工作区路径，由后端完成受控映射。策略快照绑定环境及调用版本，新操作按当前版本准备，旧写入任务在模式切换边界终止或结束，后续权限通过新的环境快照生效。
+`host` 是显式选择的兼容后端，文件系统、网络和 syscall 隔离能力报告为 `unsupported`，资源与进程监督按实际能力报告。底层准备会拒绝同时要求保护路径或代理隔离的 Host 策略。共享应用在启用凭据引用或已有私有凭据存储时拒绝 Host 启动，私有存储和默认保护路径见[MCP 与凭据管理](mcp.md#私有存储与执行边界)。权限模式和后端选择分别生效。
+
+模型上下文分别注入宿主信息与实际执行环境身份、能力及 MCP 连接事实。当前原生后端采用规范化宿主路径，策略快照绑定本次 Run 的环境与调用。模式和授权在调用边界复查，进入 PLAN 的清理屏障覆盖后台写入及本地服务。
 
 ## 控制链
 
-模型参数经过类型校验、OperationDescriptor、必要命令结构分析、工作模式／规则／核查／确认，再保存执行意图并交给选定后端。结果和清理状态经 Store／OutputStore 保存。
+模型参数经过类型校验、可信操作描述、必要命令结构分析、工作模式／规则／核查／确认，再保存执行意图并交给选定后端。结果和副作用状态由 Store 保存，文件 worker 与命令继续遵循当前输入、输出和时间上限。
 
-AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑定 argv、cwd、脚本身份、策略及分析器版本，执行前重查。
+AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑定规范化 argv、cwd、有效环境摘要、执行环境／策略身份及分析器版本与限额，执行前重查。
 
 ## Linux 原生实现
 
@@ -30,22 +32,22 @@ AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑�
 | Bubblewrap | user／mount／PID／IPC／network 等命名空间、文件系统视图与只读／可写挂载 |
 | Seccomp | 按架构和 profile 约束系统调用及可检查参数 |
 | socat | 将隔离环境中的代理入口转接到宿主专用 Unix socket |
-| Rust NetworkBroker | HTTP CONNECT／SOCKS 请求解析、目标和域名策略、认证引用、连接与时间额度 |
-| ProcessSupervisor | 子进程、取消、超时、桥接生命周期与实际清理 |
+| Rust NetworkBroker | HTTP absolute-form／CONNECT 解析、精确 origin、DNS 与目标地址核查、连接／字节／时间额度 |
+| 共享进程监督器 | 命令、文件 worker、MCP 与桥接进程的取消、超时及结束确认 |
 | 可用的 cgroup v2 | 已委派 controller 支持的 CPU、内存和进程数硬限额 |
 
-Bubblewrap 从最小文件系统视图构建环境，按需要绑定运行库、工具链、工作区和临时目录，PID 命名空间及其 init 管理后代进程。实际约束由具体配置决定。[Bubblewrap](https://github.com/containers/bubblewrap)
+Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/saya-core/src/execution/linux.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
 
-宿主将受控 BPF 通过文件描述符交给 Bubblewrap，payload 在过滤生效后启动。过滤器校验 x86_64／aarch64 的 syscall 架构，处理 ABI 差异，限制 namespace 逃逸、ptrace、内核／设备操作及其他高风险入口。Chromium 所需调用使用单独版本化 profile 验证。Seccomp 处理调用号及可检查参数，文件路径由文件系统策略承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
+宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 允许协议为 0 的 `AF_UNIX`／`SOCK_STREAM` 匿名已连接 socketpair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，供运行时 self-pipe 使用；命名 Unix socket 创建、datagram／seqpacket pair 受过滤器拒绝。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
 
-启动创建独立 session，关闭未声明文件描述符，覆盖 TIOCSTI 等终端相关入口。浏览器 profile 允许其施加自身更严格的 Seccomp，必要的 namespace 调用与外层限制共同验收。
+启动创建独立 session，执行前规范化未声明描述符的 close-on-exec 标志，并约束 TIOCSTI 等终端相关入口。宿主固定私有 launcher 镜像，通过有界、解除目录链接的文件描述符传入实际环境值。Browser 专用 profile 和其自身 sandbox 的组合留在后续 [Browser 阶段](browser.md)验收。
 
-首轮采用用户命名空间的非特权启动，安装的 bwrap／socat 路径、版本及文件身份记入诊断。内核、发行版 LSM 或用户命名空间限制在 prepare 中探测，明确失败原因。
+当前采用用户命名空间的非特权启动，从固定候选路径检查 bwrap／socat 的文件权限与身份，并在 prepare 中探测 namespace、Seccomp 和策略可用性。内核、发行版 LSM 或依赖约束导致的失败返回明确原因。
 
 ### 网络代理桥
 
 ```text
-payload HTTP_PROXY / SOCKS
+payload HTTP_PROXY / HTTPS_PROXY
   -> 私有 network namespace 中的 loopback 入口
   -> socat TCP-to-Unix 转接
   -> 仅该环境可见的 Unix socket
@@ -53,9 +55,11 @@ payload HTTP_PROXY / SOCKS
   -> 获准目标
 ```
 
-network namespace 的外部连接被隔离，socat 仅转发到该 Run 的代理 socket。宿主代理 socket 位于私有目录，控制通道与模型／文件 RPC 分开。直连 TCP／UDP、DNS、QUIC、IPv6、Unix socket 与代理旁路均纳入测试。
+network namespace 隔离外部连接，socat 将该环境的 loopback HTTP 代理入口转接到本 Run 的专用 Unix socket。宿主 socket 位于工作区与可写根之外的私有目录，控制通道与模型／文件 RPC 分开。直连 TCP／UDP、DNS、IPv6、Unix socket 和代理端口旁路属于原生验收范围。
 
-NetworkBroker 对规范化 origin、解析后的目标 IP、重定向、DNS 变化、内部／元数据地址、认证绑定和连接限额逐项检查。HTTPS CONNECT 的基本粒度为主机／端口，HTTP 方法和路径规则需要相应应用层处理。本地开发服务使用用户显式绑定的单一转发目标。
+NetworkBroker 实现 HTTP absolute-form 与 CONNECT。每次新上游连接核对精确 origin、重新解析全部目标地址并固定所连接的 socket 地址，默认拒绝私有／本地／元数据地址。HTTP 请求采用有界 framing，校验 Host 与目标一致性，剔除代理专用认证头，并限制连接数、字节量和时间。客户端跟随重定向后产生的新代理请求继续接受相同核查。[网络实现](../crates/saya-core/src/network.rs)
+
+HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路径保持不透明。双栈 loopback listener 占有同一代理端口，进程与桥接收尾先于代理释放。本地开发服务需额外配置单一 origin 例外，并核对 loopback 解析结果。
 
 原生隔离与 Unix socket 桥接的工程实践可参考 Anthropic 的 sandbox-runtime，其默认策略与实现细节需分别核对。[Anthropic sandbox-runtime](https://github.com/anthropics/sandbox-runtime)
 
@@ -63,9 +67,9 @@ NetworkBroker 对规范化 origin、解析后的目标 IP、重定向、DNS 变�
 
 固定使用系统 `/usr/bin/sandbox-exec`，将类型化策略编译为受控 SBPL 和路径参数。后端处理可读／可写根、保护路径、必要系统库／服务、exec／fork、信号与网络规则，子进程继承实际限制。
 
-网络策略仅允许连接本次受控代理入口，再由 NetworkBroker 检查外部目标。proxy 环境变量由宿主设置，直接外联、额外本地服务和任意 Unix socket 分别测试。Rust 应用与其他后端只依赖统一策略与能力接口。[Codex Seatbelt 实现](https://github.com/openai/codex/blob/main/codex-rs/sandboxing/src/seatbelt.rs)
+网络策略仅允许连接本次受控代理端口的 TCP，再由 NetworkBroker 检查目标。proxy 环境变量由宿主设置，同端口 UDP、直接外联、额外本地服务和 Unix socket 访问分别进入验收。profile 明确拒绝其他进程的 PID 信息读取，保留自身描述符处理所需权限，并为 `/tmp`、`/var`、`/etc` 根 symlink 提供读取规则。[Seatbelt 实现](../crates/saya-core/src/execution/seatbelt.rs)
 
-2026-11-08 在本机 macOS 27.2 读取的 `man sandbox-exec` 将该命令标记为 deprecated，系统当前提供该文件。macOS 15 ARM／Intel 的可用性、SBPL 行为和后续系统兼容性需单独实测。保留后端替换接口用于未来经验证的容器、VM 或平台方案。
+本机 macOS 27.2 的 `man sandbox-exec` 将该命令标记为 deprecated，当前独立后端使用系统提供的程序。macOS 15 ARM／Intel 与最终集成程序的证据按 [N2 验收记录](n2-validation.md)分别维护，后续系统兼容性通过后端接口继续验证。
 
 ## 文件策略与性能
 
@@ -73,9 +77,9 @@ NetworkBroker 对规范化 origin、解析后的目标 IP、重定向、DNS 变�
 
 - macOS 将规范化路径及保护规则编译进 Seatbelt profile。
 - Linux 根据允许根及更具体的只读／拒绝路径构建 mount 图，系统目录按最小可用集提供。
-- 缺失保护路径的 mask 在私有视图中处理。需要修改宿主工作区才能建立 mask、或无法表达动态拒绝规则时，返回 `unsupported_fs_policy`，明确约束原因。
-- 内置读写／搜索通过同一 ExecutionBackend 的文件服务执行。文件操作继续验证预期版本和单文件替换，通用命令在获准可写根中运行。
-- 受限文件服务、插件目录、凭据目录、应用数据及控制 socket 的范围由宿主策略生成，模型参数只选择已允许资源。
+- Linux 对既有保护路径建立私有拒绝视图，可写根下缺失的保护路径返回 `unsupported_fs_policy`。macOS 将缺失路径的拒绝规则编译进 profile，规则覆盖随后创建的目标。
+- 六种内置文件工具通过同一准备环境启动私有 worker。宿主负责意图、授权和结果记录，worker 复核目标、版本及单文件替换；实际 RPC 请求和响应上限为 32 MiB。通用命令在获准可写根中运行。
+- 宿主把启动时已存在的配置、data、state、cache 和工作区 `.saya/local` 加入原生保护集合，活动凭据引用使用的实际私有存储另行强制保护。`.saya/skills` 的正文读取继续经过文件权限与后端根策略，发现过程使用[项目上下文规则](project-context.md)。
 
 通用程序写入与外部编辑可能并发，执行记录保存实际结果。DEV-064 增加 Diff、检查点和恢复，具体文件一致性保证在该层验收。
 
@@ -84,12 +88,14 @@ NetworkBroker 对规范化 origin、解析后的目标 IP、重定向、DNS 变�
 | 能力 | Linux | macOS |
 | --- | --- | --- |
 | 文件／网络执行约束 | 命名空间、mount、Seccomp 与代理组合 | Seatbelt profile 与代理组合 |
-| 单进程 CPU／文件／FD 限额 | 可验证 rlimit | 可验证 rlimit |
-| Run 总内存／CPU／进程数硬限额 | 依赖已委派 cgroup v2 controller | 初始后端标记为未提供 |
-| 超时与超额监测 | supervisor，结合可用 cgroup | supervisor 监测与终止，标记为尽力控制 |
-| 脱离进程组的后代清理 | 私有 PID namespace／cgroup 归属验证 | 进程追踪与进程组清理，无法确认的结果保留 unknown |
+| 单进程 CPU／文件／FD 限额 | 按显式资源设置应用 rlimit | 按显式资源设置应用 rlimit |
+| Run 总内存／CPU／进程数硬限额 | 需要可写且 controller 完整的显式委派 cgroup v2 子树 | `unsupported`，要求该约束时 prepare 失败 |
+| 超时与取消 | 共享进程监督器及所属 PID namespace／cgroup | 共享进程监督器与进程组清理 |
+| 后代进程清理能力等级 | Bubblewrap 后端报告 `hard` | `best_effort`，清理依赖所属进程组，脱离进程组的后代结果需单独核对 |
 
-`RLIMIT_CPU` 按进程计 CPU 时间，`RLIMIT_NPROC` 按 UID 计数，跨进程汇总能力独立报告。资源属性带 `hard`／`best_effort`／`unsupported`，用户要求的硬限制缺失时 prepare 失败。[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+`cpu_seconds`、`file_size_bytes` 与 `open_files` 是可选的单进程设置，`RLIMIT_CPU` 按进程计 CPU 时间。聚合设置采用 `total_memory_bytes`、`total_processes` 和 `cpu_quota`，资源等级分别报告为 `hard`／`best_effort`／`unsupported`。
+
+Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独有子目录，核对 controller 文件并回读已请求的限制，加入其拥有的 payload，结束时 kill、等待空组并移除该目录。委派根与可写工具根分离，系统 controller 的委派和启用由宿主准备。用户请求的聚合硬限制缺少必要委派时 prepare 失败。[资源实现](../crates/saya-core/src/execution/cgroup.rs)、[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
 
 ## AST／CST 分析
 
@@ -108,9 +114,9 @@ DEV-075使用固定Tree-sitter Bash处理直接argv、可执行程序、cwd和�
 
 ## 取消、恢复与验收
 
-取消先关闭新调度，再终止所属工具、worker 与 socat。模式切换按当前调用边界协调，进入 PLAN 前清理后台写入。记录环境身份、PID／cgroup、调用结果及实际清理，未知副作用等待核对。
+取消先关闭新调度，再收尾所属工具、worker、MCP 与 socat。模式切换按当前调用边界协调，进入 PLAN 前清理后台写入与本地 MCP 服务。执行环境由活动进程租约保留，无法确认清理时保存 `outcome_unknown`，相关环境与代理资源继续按清理屏障管理。
 
-DEV-055／056 先建立能力探测、Seatbelt 独立实现及 Linux 组合后端，DEV-057／075 覆盖路径越界、链接竞态、缺失保护路径、动态规则、父进程信号、进程脱离、syscall profile、网络旁路、资源缺失和清理失败。
+DEV-055／056 已形成统一环境、独立原生后端与网络 broker 的开发实现。DEV-057／075 的验收范围覆盖路径越界、链接竞态、缺失保护路径、规则与授权变化、父进程信号、进程脱离、syscall profile、网络旁路、资源缺失和清理失败，实际完成状态由 [N2 验收记录](n2-validation.md)维护。
 
 性能测试记录无隔离基线与原生后端的冷／热启动、短命令 p50／p95、文件读写、搜索、并发任务、CPU／RSS 和代理延迟。实际 Seatbelt、Bubblewrap、Seccomp 和网络约束在具备相应后端的环境验收，CLI 的跨平台替身测试单独记录。
 

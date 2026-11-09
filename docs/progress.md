@@ -44,6 +44,12 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 10项 CLI bin 测试、格式及 CLI 全目标严格 Clippy 通过，日志为 `target/n2/dev060-{admin-tests,clippy}.log`。当前 Rust 源码清单与904项完整门禁及固定优化程序一致，独立复核的原始失败与修复证据保留于 `target/n2/independent-review/`。最终四平台凭据与 OAuth 证据继续按 DEV-061 验收。
 
+### DEV-057 原生验收脚本与工作流
+
+新增普通 CLI 原生对抗与性能脚本、Linux 显式委派子树包装及四平台固定源码验收工作流。脚本验证六种文件工具、PLAN、deny／bypass、保护路径、Skill、网络与代理旁路、宿主进程信息、取消、崩溃后恢复及资源能力。性能样本分别检查实际后端与工具成功，记录时间和RSS测量边界。Linux委派用例核查内核限制值、活动成员与自有组清理。
+
+固定优化程序 `8f7810773f90b81b91d3ee7a4916ced17e15ef945b4050f96a3210c2d4f15585` 在本机macOS27.2 ARM通过18项原生用例及每variant三次性能样本，最终脚本记录于 `target/n2/final-local/native-reviewed-evidence.json`。8项Python回归与工作流／Shell语法检查通过。Linux委派cgroup本机未运行，四平台工作流待执行。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。
