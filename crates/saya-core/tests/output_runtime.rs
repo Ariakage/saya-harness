@@ -160,7 +160,9 @@ fn result_data(request: &ModelRequest, id: &str) -> serde_json::Value {
         .rev()
         .find_map(|item| match item {
             HistoryItem::ToolResult { call_id, result } if call_id == id => {
-                assert!(result.ok, "{result:?}");
+                if id != "produce" {
+                    assert!(result.ok, "{result:?}");
+                }
                 result.data.clone()
             }
             _ => None,
@@ -186,7 +188,7 @@ impl Model for OutputJourney {
                     vec![call(
                         "produce",
                         "exec",
-                        json!({"argv":["/usr/bin/awk", "BEGIN {for(i=0;i<6000;i++) printf \"row-%05d payload payload payload\\n\",i; print \"needle-end\"}"]}),
+                        json!({"argv":["/usr/bin/awk", "BEGIN {for(i=0;i<6000;i++) {printf \"row-%05d payload payload payload\\n\",i; printf \"warn-%05d payload payload payload\\n\",i > \"/dev/stderr\";} print \"needle-end\"; exit 7}"]}),
                     )]
                 }
                 1 => {
@@ -200,7 +202,11 @@ impl Model for OutputJourney {
                             .as_array()
                             .is_some_and(|gaps| !gaps.is_empty())
                     );
-                    assert!(data["stdout"].as_str().unwrap().len() <= 4096);
+                    assert_eq!(data["exit_code"], 7);
+                    assert_eq!(data["timed_out"], false);
+                    assert_eq!(data["cancelled"], false);
+                    assert!(data.get("stdout").is_none());
+                    assert!(data["projection"].is_string());
                     let registered = self
                         .store
                         .output_references(
@@ -268,7 +274,10 @@ async fn command_output_commits_before_model_retrieval_and_stays_leased_for_run(
     store.create_session(&session, "fixture").await?;
     let outputs = Arc::new(OutputStore::open(
         root.path().join("outputs"),
-        OutputLimits::default(),
+        OutputLimits {
+            preview_bytes: 8192,
+            ..OutputLimits::default()
+        },
         Arc::new(SecretRegistry::default()),
     )?);
     let model = Arc::new(OutputJourney {
@@ -283,7 +292,10 @@ async fn command_output_commits_before_model_retrieval_and_stays_leased_for_run(
         store.clone(),
         Arc::new(NoCancel),
     )?
-    .with_output_store(outputs.clone())?;
+    .with_output_store(outputs.clone())?
+    .with_context_budget(saya_core::context_builder::ContextBudget::new(
+        200_000, 8192, 20_001,
+    ))?;
     let result = runtime.run(&mut session).await?;
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
     assert_eq!(*model.step.lock().unwrap(), 4);

@@ -146,3 +146,7 @@ ContextBuilder支持单用户长Run的闭合前缀，覆盖最新用户所在范
 ## DEV-063 Compact协调与持久化组件
 
 结构化Compact提供有限分块／合并、来源引用与必留项验证、共享模型／活跃预算、严格目标水位及单一并发协调。摘要与指针在同一存储事务按Session、原始水位、profile、版本及前指针CAS发布，原始历史保持完整。存储同时支持无正文的MemoryExposure来源绑定，供后续退休投影验证。19项协调器回归、三协议执行／摘要实际wire计数与Anthropic静态cache_control回归及严格全目标Clippy通过。自动／手动入口和平台联合证据继续按N3记录维护。
+
+## DEV-076 捕获派发与投影修复
+
+命令派发前在阻塞worker完成stdout／stderr捕获预留，再次检查取消后才创建子进程。管道排空完成后释放缓冲锁，再由阻塞worker完成密封，保留失败捕获的明确缺口。长结果投影保存真实exit_code、超时、取消及截断状态，模型可凭宿主引用回取正文。13项exec与5项正常OutputStore回归通过，发布故障仍保留已观察结果且不重放副作用，完整本机门禁日志为 `target/n3/integration-workspace-gate.log`。

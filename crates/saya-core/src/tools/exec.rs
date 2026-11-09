@@ -853,6 +853,40 @@ async fn run_process(
     if cancel.is_cancelled() {
         return Err(failure("cancelled", "command cancelled before spawn"));
     }
+    let stdout_max = config.stdout_max;
+    let stderr_max = config.stderr_max;
+    let (out, err) = tokio::task::spawn_blocking(move || {
+        let make_output = |stream, limit| {
+            let mut output = Output::default();
+            if let Some((store, scope)) = &capture {
+                let mut scope = scope.clone();
+                scope.stream = stream;
+                match store.begin(scope, limit) {
+                    Ok(capture) => output.capture = Some(capture),
+                    Err(error) => {
+                        output.capture_error = Some(ErrorInfo {
+                            code: error.0.code,
+                            message: "Output capture is unavailable".into(),
+                        })
+                    }
+                }
+            }
+            Arc::new(Mutex::new(output))
+        };
+        let out = make_output(crate::output_store::OutputStream::Stdout, stdout_max);
+        let err = make_output(crate::output_store::OutputStream::Stderr, stderr_max);
+        (out, err)
+    })
+    .await
+    .map_err(|_| {
+        failure(
+            "output_capture",
+            "Output reservations could not be prepared",
+        )
+    })?;
+    if cancel.is_cancelled() {
+        return Err(failure("cancelled", "command cancelled before spawn"));
+    }
     let mut process = ManagedProcess::spawn(plan, cwd, env, config, input.is_some())?;
     let stdout = process
         .take_stdout()
@@ -860,25 +894,6 @@ async fn run_process(
     let stderr = process
         .take_stderr()
         .ok_or_else(|| failure("spawn_error", "stderr pipe unavailable"))?;
-    let make_output = |stream, limit| {
-        let mut output = Output::default();
-        if let Some((store, scope)) = &capture {
-            let mut scope = scope.clone();
-            scope.stream = stream;
-            match store.begin(scope, limit) {
-                Ok(capture) => output.capture = Some(capture),
-                Err(error) => {
-                    output.capture_error = Some(ErrorInfo {
-                        code: error.0.code,
-                        message: "Output capture is unavailable".into(),
-                    })
-                }
-            }
-        }
-        Arc::new(Mutex::new(output))
-    };
-    let out = make_output(crate::output_store::OutputStream::Stdout, config.stdout_max);
-    let err = make_output(crate::output_store::OutputStream::Stderr, config.stderr_max);
     let mut out_task = tokio::spawn(drain(stdout, config.stdout_max, out.clone()));
     let mut err_task = tokio::spawn(drain(stderr, config.stderr_max, err.clone()));
     let mut input_writer = InputWriter(match input {
@@ -922,51 +937,81 @@ async fn run_process(
         }
     }
     input_writer.0 = None;
-    let mut out = out
-        .lock()
-        .map_err(|_| failure("process_io_error", "stdout lock poisoned"))?;
-    let mut err = err
-        .lock()
-        .map_err(|_| failure("process_io_error", "stderr lock poisoned"))?;
-    let stdout = if capture_wire {
-        Vec::new()
-    } else {
-        std::mem::take(&mut out.data)
+    let (process, wire, captures, mut output_errors) = {
+        let mut out = out
+            .lock()
+            .map_err(|_| failure("process_io_error", "stdout lock poisoned"))?;
+        let mut err = err
+            .lock()
+            .map_err(|_| failure("process_io_error", "stderr lock poisoned"))?;
+        let stdout = if capture_wire {
+            Vec::new()
+        } else {
+            std::mem::take(&mut out.data)
+        };
+        let wire = if capture_wire {
+            std::mem::take(&mut out.data)
+        } else {
+            Vec::new()
+        };
+        let mut captures = Vec::new();
+        let mut output_errors = Vec::new();
+        for output in [&mut *out, &mut *err] {
+            if let Some(capture) = output.capture.take() {
+                captures.push(capture);
+            }
+            if let Some(error) = output.capture_error.take() {
+                output_errors.push(error);
+            }
+        }
+        (
+            ExecResult {
+                exit_code: end.status.code(),
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&err.data).into_owned(),
+                stdout_truncated: out.truncated,
+                stderr_truncated: err.truncated,
+                timed_out: end.timed_out,
+                cancelled: end.cancelled,
+            },
+            wire,
+            captures,
+            output_errors,
+        )
     };
-    let wire = if capture_wire {
-        std::mem::take(&mut out.data)
-    } else {
-        Vec::new()
-    };
-    let mut outputs = Vec::new();
-    let mut output_errors = Vec::new();
-    for output in [&mut *out, &mut *err] {
-        if let Some(capture) = output.capture.take() {
+    let sealed = tokio::task::spawn_blocking(move || {
+        let mut outputs = Vec::new();
+        let mut errors = Vec::new();
+        for capture in captures {
             match capture.seal(crate::output_store::CaptureCompletion::Eof) {
-                Ok(sealed) => outputs.push(sealed),
-                Err(error) => output_errors.push(ErrorInfo {
+                Ok(output) => outputs.push(output),
+                Err(error) => errors.push(ErrorInfo {
                     code: error.0.code,
                     message: "Output capture could not be sealed".into(),
                 }),
             }
         }
-        if let Some(error) = output.capture_error.take() {
-            output_errors.push(error);
+        (outputs, errors)
+    })
+    .await;
+    let outputs = match sealed {
+        Ok((outputs, errors)) => {
+            output_errors.extend(errors);
+            outputs
         }
-    }
+        Err(_) => {
+            output_errors.push(ErrorInfo {
+                code: "output_capture".into(),
+                message: "Output sealing worker failed".into(),
+            });
+            Vec::new()
+        }
+    };
     Ok(WorkerCapture {
+        process,
+        stdout: wire,
         outputs,
         output_errors,
-        process: ExecResult {
-            exit_code: end.status.code(),
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&err.data).into_owned(),
-            stdout_truncated: out.truncated,
-            stderr_truncated: err.truncated,
-            timed_out: end.timed_out,
-            cancelled: end.cancelled,
-        },
-        stdout: wire,
     })
 }
 

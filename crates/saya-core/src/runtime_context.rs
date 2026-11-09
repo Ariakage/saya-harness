@@ -63,14 +63,28 @@ impl AgentRuntime {
                     .len()
                     > 16 * 1024
             {
+                let mut data = serde_json::json!({"output_refs":outputs,"projection":"Retrieve required retained evidence using output_search and output_read. Inspect completeness and gaps."});
+                if let Some(source) = result.data.as_ref().and_then(serde_json::Value::as_object) {
+                    for key in [
+                        "exit_code",
+                        "timed_out",
+                        "cancelled",
+                        "stdout_truncated",
+                        "stderr_truncated",
+                        "is_error",
+                        "output_capture_errors",
+                        "output_capture_format",
+                    ] {
+                        if let Some(value) = source.get(key) {
+                            data[key] = value.clone();
+                        }
+                    }
+                }
                 let replacement = ToolResult {
                     ok: result.ok,
                     error: result.error.clone(),
-                    truncated: result.truncated
-                        || outputs.iter().any(|output| !output.artifact_complete),
-                    data: Some(
-                        serde_json::json!({"output_refs":outputs,"projection":"Retrieve required retained evidence using output_search and output_read. Inspect completeness and gaps."}),
-                    ),
+                    truncated: true,
+                    data: Some(data),
                 };
                 projections.push(ResultProjection {
                     source_index,
