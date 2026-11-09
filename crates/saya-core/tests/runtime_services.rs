@@ -637,7 +637,10 @@ impl ApprovalHandler for SlowApproval {
         _: &'a dyn Cancellation,
     ) -> Operation<'a, Option<bool>> {
         Box::pin(async move {
-            tokio::time::sleep(self.0).await;
+            // Advance only inside the human callback; process I/O uses real time.
+            tokio::time::pause();
+            tokio::time::advance(self.0).await;
+            tokio::time::resume();
             Ok(Some(true))
         })
     }
@@ -690,6 +693,17 @@ async fn slow_stdio_handshake_and_catalogue_respect_the_active_budget() {
 }
 #[tokio::test]
 async fn human_startup_confirmation_pauses_the_active_budget() {
+    let active_time = Duration::from_secs(10);
+    let human_wait = Duration::from_secs(60);
+    // The same elapsed time must exhaust an active budget without human pausing.
+    // Restore real time before creating the runtime or starting external I/O.
+    let unpaused = saya_core::review::SharedBudget::new(1, active_time);
+    tokio::time::pause();
+    tokio::time::advance(human_wait).await;
+    tokio::time::resume();
+    assert_eq!(unpaused.remaining().unwrap(), Duration::ZERO);
+    assert_eq!(unpaused.consume().unwrap_err().0.code, "limit_reached");
+
     let root = tempfile::tempdir().unwrap();
     let mut session = session(root.path(), WorkMode::Work);
     let model = model(false);
@@ -698,17 +712,17 @@ async fn human_startup_confirmation_pauses_the_active_budget() {
         &session,
         PermissionMode::Manual,
         model.clone(),
-        Some(Arc::new(SlowApproval(Duration::from_millis(500)))),
+        Some(Arc::new(SlowApproval(human_wait))),
         false,
         ServiceOptions {
-            active_time: Duration::from_millis(250),
+            active_time,
             http: None,
         },
     );
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let result = runtime.run(&mut session).await.unwrap();
     assert_eq!(result.status, RunStatus::Completed);
-    assert!(started.elapsed() >= Duration::from_millis(500));
+    assert!(started.elapsed() >= human_wait);
     assert_eq!(model.requests.lock().unwrap().len(), 1);
 }
 struct SlowHttp {

@@ -3224,16 +3224,61 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
 fn completed_background_write_is_included_in_artifacts() {
     let temp = TempDir::new().unwrap();
     let marker = temp.path().join("background-artifact.txt");
-    let wait_for = marker.clone();
-    let (url,_)=fixture::server_dynamic(2,move |index,_| {
-        if index==0 {
-            ("application/json",tool_response("launch","background_start",json!({"tool":"write_file","arguments":{"path":"background-artifact.txt","content":"done","expected_version":null}})))
-        } else {
-            let deadline=std::time::Instant::now()+Duration::from_secs(5);
-            while !wait_for.exists() {assert!(std::time::Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));}
-            ("application/json",response(json!({"role":"assistant","content":"done"}),"stop"))
+    let mut job_id = None;
+    let mut deadline = None;
+    let (url, _) = fixture::server_dynamic(64, move |index, request| {
+        if index == 0 {
+            return (
+                "application/json",
+                tool_response(
+                    "launch",
+                    "background_start",
+                    json!({"tool":"write_file","arguments":{"path":"background-artifact.txt","content":"done","expected_version":null}}),
+                ),
+            );
         }
-    }).unwrap();
+        let message = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|message| message["role"] == "tool")
+            .unwrap();
+        let result: serde_json::Value =
+            serde_json::from_str(message["content"].as_str().unwrap()).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        if index == 1 {
+            assert_eq!(message["tool_call_id"], "launch");
+            assert_eq!(result["data"]["status"], "started", "{result}");
+            job_id = Some(result["data"]["job_id"].as_str().unwrap().to_owned());
+            deadline = Some(std::time::Instant::now() + Duration::from_secs(10));
+        } else {
+            assert_eq!(message["tool_call_id"], format!("status-{}", index - 1));
+            if result["data"]["status"] == "finished" {
+                assert_eq!(result["data"]["result"]["ok"], true, "{result}");
+                return (
+                    "application/json",
+                    response(json!({"role":"assistant","content":"done"}), "stop"),
+                );
+            }
+            assert_eq!(result["data"]["status"], "running", "{result}");
+        }
+        assert!(index < 63, "background write exceeded the model request bound");
+        assert!(
+            std::time::Instant::now() < deadline.unwrap(),
+            "background write did not finish before the polling deadline"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        (
+            "application/json",
+            tool_response(
+                &format!("status-{index}"),
+                "background_status",
+                json!({"job_id":job_id.as_ref().unwrap()}),
+            ),
+        )
+    })
+    .unwrap();
     let cfg = config(temp.path(), &url, "auto");
     let output = command(temp.path())
         .arg("--config")
@@ -3247,6 +3292,10 @@ fn completed_background_write_is_included_in_artifacts() {
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_ne!(
+        value["stop_reason"], "completed_with_background_cleanup",
+        "{value}"
+    );
     assert_eq!(value["artifacts"].as_array().unwrap().len(), 1, "{value}");
     assert_eq!(
         value["artifacts"][0]["path"],

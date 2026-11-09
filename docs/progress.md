@@ -100,6 +100,12 @@ YAML、14个Shell片段、内嵌Python、失败／取消依赖场景和12项验�
 
 最新本机macOS27.2 ARM完成905项Rust测试、完整门禁及30项Python离线回归，并在固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 上通过18项原生、25项MCP及24项TUI。源码检查与程序证据在 `target/n2/ci-profile-workspace.log`、`target/n2/validated-local/`，修复范围与原始远端失败见[N2验收记录](n2-validation.md#linux-长路径与资源控制修复)。Linux委派与四平台最终完成状态继续保留待验收。
 
+### 四平台原生基线与测试同步
+
+`a6f3d99` 的N2四平台工作流及产物独立核验全部通过。两Linux端各920项Rust／19项原生／25项MCP／24项TUI，两macOS15端各906项Rust／18项原生／25项MCP／24项TUI。独立源码CI保留Intel人工确认计时夹具的失败，后续测试以虚拟人工等待和未暂停预算负对照验证暂停契约。后台artifact夹具通过实际job完成状态同步，生命周期等待增加阶段诊断。
+
+最新本机以4个测试线程完成906项Rust及完整门禁，日志为 `target/n2/human-budget-workspace-final.log`。生产代码与已通过的原生基线一致，新测试源码继续执行四平台CI和完整原生验收，最终状态待收证。[N2记录](n2-validation.md#人工确认与后台完成的测试同步)
+
 ### Linux 代理镜像修复
 
 `1a932cc` 两台macOS15 runner的源码CI与N2均完整通过。两Linux架构通过MCP、TUI和委派资源正负对照，原生15／19项通过，剩余UDP判据与代理启动分别修复。UDP维持宿主零收包并增加代理端口双栈正控制。代理镜像在宿主按打开的FD验证root信任并固定为私有只读文件，guest核对精确device／inode，处理user namespace的UID映射。

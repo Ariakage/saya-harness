@@ -83,10 +83,13 @@ impl Drop for ChildGuard {
         let _ = self.0.wait();
     }
 }
-fn wait_for(mut condition: impl FnMut() -> bool) {
+fn wait_for(phase: &str, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(8);
     while !condition() {
-        assert!(Instant::now() < deadline, "fixture timed out");
+        assert!(
+            Instant::now() < deadline,
+            "fixture timed out while waiting for {phase}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -193,14 +196,14 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
         master.write_all(b"start fixture\n").unwrap();
     }
     let pid_file = workspace.join("tool.pid");
-    wait_for(|| pid_file.exists());
+    wait_for("background process marker", || pid_file.exists());
     let namespace_pid: u32 = fs::read_to_string(pid_file)
         .unwrap()
         .trim()
         .parse()
         .unwrap();
     assert!(namespace_pid > 0);
-    wait_for(|| lease.live());
+    wait_for("live background writer", || lease.live());
     if let Some(signal) = signal {
         // SAFETY: Child::id is the host PID of the CLI spawned by this fixture.
         assert_eq!(unsafe { libc::kill(child.0.id() as i32, signal) }, 0);
@@ -209,7 +212,7 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
     }
     let mut status = None;
     let mut transcript = Vec::new();
-    wait_for(|| {
+    wait_for("CLI termination", || {
         if let Some(master) = master.as_mut().filter(|_| signal.is_some()) {
             let mut poll = libc::pollfd {
                 fd: master.as_raw_fd(),
@@ -315,18 +318,18 @@ fn broken_stdout_case(completed_only: bool) {
             .unwrap(),
     );
     let marker = root.path().join("tool.pid");
-    wait_for(|| marker.exists());
+    wait_for("background stdout marker", || marker.exists());
     let namespace_pid = fs::read_to_string(marker)
         .unwrap()
         .trim()
         .parse::<u32>()
         .unwrap();
     assert!(namespace_pid > 0);
-    wait_for(|| lease.live());
+    wait_for("live stdout process writer", || lease.live());
     drop(child.0.stdout.take());
     release_tx.send(()).unwrap();
     let mut status = None;
-    wait_for(|| {
+    wait_for("CLI stdout failure termination", || {
         status = child.0.try_wait().unwrap();
         status.is_some()
     });
@@ -374,12 +377,12 @@ fn process_lease_requires_live_control_and_waits_for_inherited_writers() {
     );
     let mut release = parent.0.stdin.take().unwrap();
     assert!(parent.0.wait().unwrap().success());
-    wait_for(|| inherited.live());
+    wait_for("inherited writer startup", || inherited.live());
     assert!(
         inherited.live(),
         "descendant must retain its inherited writer"
     );
     release.write_all(b"release\n").unwrap();
-    wait_for(|| !inherited.live());
+    wait_for("inherited writer release", || !inherited.live());
     inherited.assert_released();
 }

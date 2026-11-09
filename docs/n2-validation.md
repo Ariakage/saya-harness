@@ -197,6 +197,16 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 最终夹具11次定向运行、完整61项CLI、定向严格Clippy、格式及独立复核通过，记录为 `target/n2/research/jsonl-tty-owned-after-*.log`。完整workspace重新通过906项测试。原偶发超时的唯一根因尚未确认，已收口的端点所有权和实际复验结果分别记录。
 
+## 人工确认与后台完成的测试同步
+
+`a6f3d9996764e9ca42163c627f989a707419a5bd` 的N2四平台工作流与artifact独立核验全部通过。Linux两端各920项Rust、19项原生、25项MCP和24项TUI，macOS15两端各906项Rust、18项原生、25项MCP和24项TUI。实际源码双清单、架构、平台基线、程序前后哈希、系统别名保护及资源正负对照均通过。报告为 `target/n2/remote-review/a6f3d999/monitoring-complete.json`。[四平台原生基线](https://github.com/Ariakage/saya-harness/actions/runs/42588642806)
+
+独立源码CI的Intel正向人工确认用例使用250ms活跃预算，包含真实Python／MCP启动时偶发达到限制。测试现仅在人工回调内虚拟推进60秒，返回前恢复实时时钟，验证10秒活跃预算下任务完成及模型请求一次。同样推进60秒的未暂停预算负对照必须耗尽。真实进程和协议I/O继续按实时时钟执行，日志为 `target/n2/research/human-budget-*.log`。[该轮源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42588641334)
+
+本机门禁还复现后台文件已可见、job结果尚未完成保存时夹具提前输出final，运行结束按契约取消任务，artifact列表为空。夹具现通过正常 `background_status` 查询实际job及唯一call ID，收到 `finished` 与成功结果后才结束模型任务，保留请求／轮询上限和原artifact断言。11次定向运行、完整61项CLI、严格Clippy及独立复核通过。生命周期8秒等待补充阶段标签，便于区分marker、writer和CLI退出。
+
+最终本机以 `RUST_TEST_THREADS=4` 执行完整workspace门禁，906项Rust测试、格式、全目标严格Clippy及优化构建通过，记录为 `target/n2/human-budget-workspace-final.log`。此前默认线程数下的CLI／生命周期等待失败保留于 `target/n2/human-budget-workspace.log`，定向生命周期6项复验通过。四平台门禁继续使用各runner默认测试并发，最终新源码验收另行记录。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)
