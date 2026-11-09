@@ -155,7 +155,17 @@ fn allow_compiler(sandbox: &Sandbox) {
 }
 fn compile_and_run() -> Vec<String> {
     #[cfg(not(target_os = "macos"))]
-    let command = "LD_LIBRARY_PATH=\"$2/lib\" \"$1\" --sysroot \"$2\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
+    let command = if cfg!(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    )) {
+        // The bundled LLD wrapper resolves itself through /proc/self/exe.
+        // This isolated fixture uses the system linker supplied by cc.
+        "LD_LIBRARY_PATH=\"$2/lib\" \"$1\" --sysroot \"$2\" -C linker-features=-lld --edition=2024 src/main.rs -o textstats && ./textstats sample.txt"
+    } else {
+        "LD_LIBRARY_PATH=\"$2/lib\" \"$1\" --sysroot \"$2\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt"
+    };
     #[cfg(target_os = "macos")]
     let command = "\"$1\" --sysroot \"$2\" -C \"linker=$3\" -C link-arg=-isysroot -C \"link-arg=$4\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
     let argv = vec![

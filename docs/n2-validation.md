@@ -125,6 +125,12 @@ Linux原生unit增加 `/usr/bin/readlink` 与 `/bin/readlink` 同对象双路径
 
 当前候选在本机完成904项Rust测试、格式、workspace全目标严格Clippy与优化构建，日志为 `target/n2/alternatives-workspace.log`。Mac程序与既有完整本机验收程序逐字节一致，Linux源码变更继续由原生runner验证。
 
+## x86 GNU默认LLD与无proc视图
+
+`340499db` 的N2 x86 BUILD已找到cc并启动链接流程，工具stderr为 `lld-wrapper: could not get the path of the current executable: no /proc/self/exe available`，原日志保留于 `340499db/ubuntu-22.04-job-129001686806.log`。同源ARM的12项编译／工具acceptance已全过，随后进入chat就绪等待的独立失败。
+
+当前候选仅为Linux x86_64 GNU夹具增加官方稳定 `-C linker-features=-lld` 选项，使用系统链接器。ARM与macOS原命令保持，本机12项acceptance、格式、定向严格Clippy及Rust1.99.1目标参数检查通过，日志为 `target/n2/research/linux-x86-system-linker-*`。真实x86链接仍待runner。[官方Rust选项](https://doc.rust-lang.org/rustc/codegen-options/index.html#linker-features)
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

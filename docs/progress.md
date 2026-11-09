@@ -78,6 +78,10 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 当前候选在本机完成904项Rust测试、格式、workspace全目标严格Clippy与优化构建，日志为 `target/n2/alternatives-workspace.log`。Mac程序与既有完整本机验收程序逐字节一致，Linux源码变更继续由原生runner验证。
 
+### x86 GNU Linux链接器夹具
+
+`340499db` 的ARM12项acceptance已全部通过，x86已能创建cc子进程，随后默认LLD wrapper因依赖 `/proc/self/exe` 退出。编译夹具仅对Linux x86_64 GNU显式设置 `-C linker-features=-lld`，保留其他目标命令与原生proc限制。本机12项acceptance、格式与定向严格Clippy通过，Rust1.99.1实际接受目标参数。真实Linux链接结果待runner。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。
