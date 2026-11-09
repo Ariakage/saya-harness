@@ -9,8 +9,15 @@ trap 'rm -rf "$build_root"' EXIT HUP INT TERM
 sudo apt-get update
 sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config libcap-dev socat
 archive="$build_root/bubblewrap.tar.xz"
-curl --fail --location --retry 3 --output "$archive" \
-  "https://github.com/containers/bubblewrap/releases/download/v$version/bubblewrap-$version.tar.xz"
+if ! curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+  --output "$archive" \
+  "https://github.com/containers/bubblewrap/releases/download/v$version/bubblewrap-$version.tar.xz"; then
+  # This official asset contains the same archive and uses the digest below.
+  curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+    --header 'Accept: application/octet-stream' \
+    --header 'X-GitHub-Api-Version: 2022-11-28' --output "$archive" \
+    'https://api.github.com/repos/containers/bubblewrap/releases/assets/640310180'
+fi
 printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check --strict -
 tar -xf "$archive" -C "$build_root"
 meson setup "$build_root/build" "$build_root/bubblewrap-$version" \

@@ -66,6 +66,10 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 新增Rust带pre_exec的真实fork子进程回归、STREAM／SEQPACKET重定向和已有FD传递边界。当前代码在本机完成904项Rust测试和完整门禁，两Linux架构交叉全目标严格Clippy及21个内核版本样本通过，证据为 `target/n2/seqpacket-workspace.log` 与 `target/n2/research/seqpacket-*.log`。Mac优化程序仍与已验证固定程序逐字节相同，Linux实际结果待新runner验证。
 
+### 原生依赖下载兜底
+
+`2b353dc2` 的Linux ARM验收及源码CI的Linux任务在Bubblewrap官方下载连续HTTP504后终止，尚未进入产品测试。安装脚本保留固定0.13.1与原SHA-256，主地址失败后使用同一官方release asset API，连接／下载时长及重试均有界。真实API下载129472字节与原摘要一致，四项离线回归覆盖成功、兜底、错误摘要与双失败，CI及N2工作流均接入检查。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

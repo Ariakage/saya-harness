@@ -109,6 +109,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/mcp_acceptance.py target/release/sa
 
 候选在本机通过完整格式、workspace全目标严格Clippy、904项Rust测试及优化构建，日志为 `target/n2/seqpacket-workspace.log`。两Linux目标在独立后端harness完成全目标严格Clippy，实际版本函数的21个样本通过。交叉检查作为类型证据，Linux native/fork/内核探测仍待真实runner。Mac优化程序SHA仍为 `8f7810773f90b81b91d3ee7a4916ced17e15ef945b4050f96a3210c2d4f15585`，与本机18原生、25MCP及24TUI已测程序逐字节一致。
 
+## 原生依赖下载故障与校验
+
+`2b353dc2` 的N2 Linux ARM在固定Bubblewrap release下载连续HTTP504后退出22，源码CI两Linux任务同样在安装阶段终止。失败日志和ARM首次产物保留于 `target/n2/remote-review/2b353dc2/`。任务尚未执行产品构建／测试的范围按工作流实际skipped状态记录。
+
+安装脚本保留0.13.1及SHA-256 `0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d`。原下载地址失败后访问官方release asset API的已锁定640310180对象，最终执行相同摘要核查。官方元数据的文件名、129472字节大小与digest已核实，真实API下载摘要一致。四项离线控制流回归验证主地址成功、API兜底覆盖部分下载、坏摘要拒绝解包与双失败，记录为 `target/n2/research/installer-fallback-tests.log`。[官方asset接口](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

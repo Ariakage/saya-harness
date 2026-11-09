@@ -31,6 +31,7 @@ jobs:
         run: ./scripts/check.sh
       - name: Check release tooling
         run: |
+          python3 scripts/n2/test_install_linux_tools.py
           python3 scripts/release/test_package.py
           python3 scripts/release/test_verify_macos15.py
           python3 scripts/release/test_verify_linux.py

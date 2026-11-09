@@ -70,7 +70,9 @@ jobs:
           PY
       - name: Check native acceptance oracles
         id: acceptance_oracles
-        run: python3 scripts/n2/test_native_acceptance.py -v 2>&1 | tee target/n2/acceptance/acceptance-oracles.log
+        run: |
+          python3 scripts/n2/test_native_acceptance.py -v 2>&1 | tee target/n2/acceptance/acceptance-oracles.log
+          python3 scripts/n2/test_install_linux_tools.py -v 2>&1 | tee target/n2/acceptance/installer-oracles.log
       - name: Install pinned Rust toolchain
         id: toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy 2>&1 | tee target/n2/acceptance/toolchain.log
