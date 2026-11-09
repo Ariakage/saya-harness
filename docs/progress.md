@@ -6,7 +6,9 @@
 
 ## N3 上下文与可执行扩展
 
-2026-11-09，项目负责人启动完成N3及验证验收的持续目标，起点为 `7064bb7`，启动时工作区干净。范围包含DEV-062至DEV-068、DEV-076至DEV-078、DEV-084至DEV-089共16项。DEV-076 OutputStore与独立DEV-078 manifest／lock验证器进入开发，其余按依赖推进。[逐项验收记录](n3-validation.md)
+2026-11-09，项目负责人启动完成N3及验证验收的持续目标，起点为 `7064bb7`，启动时工作区干净。范围包含DEV-062至DEV-068、DEV-076至DEV-078、DEV-084至DEV-089共16项。DEV-078 manifest／lock独立验证器已完成本机验收。DEV-076 OutputStore、DEV-062 Context Builder与DEV-084全局记忆按依赖开发。[逐项验收记录](n3-validation.md)
+
+DEV-078实现manifest／lock的离线结构、语义、SemVer、feature／能力、依赖、树摘要和工具别名校验。包文件采用有界NOFOLLOW读取并密封内容，Unicode NFC与完整大小写折叠用于碰撞检查。独立复核的两处缺口已修复，13项插件回归及本机完整门禁通过，共942项Rust测试，包含格式、严格Clippy和优化构建，日志为 `target/n3/dev078-workspace.log`。[规范与实现边界](saya-plugin.md#验收与实现状态)
 
 项目负责人提供四份压缩／续接／系统组装参考，以及三份记忆参考，要求提示词使用纯英文。已形成英文Compact与Continuation草案并记录四份压缩来源的SHA和取舍，当前运行时仍加载已有11份英文提示词，草案接入由DEV-063完成。[提示词来源与接入契约](prompt/drafts/n3/README.md)
 
@@ -332,7 +334,7 @@ R-02已修复并完成独立复核，本地稳定试用程序使用本次最终�
 | N0 共享基础 | DEV-038 至 DEV-046 | 完成（本机验收） | 共享应用、日志／追踪与会话导出均通过正常 CLI 入口及故障回归，见下表 |
 | N1 默认 TUI | DEV-047 至 DEV-053 | 完成（四平台候选验收） | 默认入口、对话／审批／会话／后台／导出已接入共享服务，候选与本机试用程序通过验证，设计与双语说明已交付 |
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 完成（四平台验收） | 原生隔离、受控网络、命令结构事实、MCP与凭据通过最终源码CI、原生／性能／MCP／Markdown与TUI验收，见[N2记录](n2-validation.md#最终四平台验收) |
-| N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 待开始 | 已有指令／Skill 发现与显式记忆文件注入，OutputStore、Compact、插件、检查点、Hooks及模型可编辑全局记忆待开发 |
+| N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 开发中 | DEV-078独立验证组件完成本机验收，其余按逐项验收表推进 |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 待开始 | 先做目标数据和手动步骤，后续自动阶段依赖持久调度等能力 |
 | N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
 

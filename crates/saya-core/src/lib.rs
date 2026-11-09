@@ -25,6 +25,7 @@ pub mod metrics;
 pub mod mode;
 pub mod network;
 pub mod permissions;
+pub mod plugin_manifest;
 pub mod project_context;
 pub mod prompt;
 pub mod provider;
