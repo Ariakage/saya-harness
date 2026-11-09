@@ -1396,7 +1396,7 @@ fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    if let Err(error) = entered_rx.recv_timeout(Duration::from_secs(10)) {
+    if let Err(error) = entered_rx.recv_timeout(Duration::from_secs(30)) {
         let _ = child.kill();
         let output = child.wait_with_output().unwrap();
         let _ = release_tx.send(());

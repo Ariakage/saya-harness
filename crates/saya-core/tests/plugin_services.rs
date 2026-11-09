@@ -69,6 +69,40 @@ IFS= read -r event || :
 printf '{"decision":"deny","annotations":[{"level":"warning","message":"fixture veto"}]}'
 "#;
 
+fn nested_host_pid(status: &str, guest: i32) -> Option<i32> {
+    let values = status
+        .lines()
+        .find_map(|line| line.strip_prefix("NSpid:"))?
+        .split_whitespace()
+        .map(str::parse::<i32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (values.len() > 1 && values[1..].contains(&guest)).then(|| values[0])
+}
+fn host_pid(guest: i32) -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        for entry in std::fs::read_dir("/proc").ok()? {
+            let Some(entry) = entry.ok() else { continue };
+            if entry.file_name().to_str()?.parse::<i32>().is_err() {
+                continue;
+            }
+            let status = match std::fs::read_to_string(entry.path().join("status")) {
+                Ok(status) => status,
+                Err(_) => continue,
+            };
+            if let Some(pid) = nested_host_pid(&status, guest) {
+                return Some(pid);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Some(guest)
+    }
+}
+
 struct Never;
 impl Cancellation for Never {
     fn is_cancelled(&self) -> bool {
@@ -122,6 +156,7 @@ impl Model for FixtureModel {
             for view in self.pool.inventory()? {
                 if let Ok(pid) = std::fs::read_to_string(view.identity.scratch.join("pid"))
                     && let Ok(pid) = pid.parse()
+                    && let Some(pid) = host_pid(pid)
                 {
                     self.observed_pids.lock().unwrap().push(pid);
                 }
@@ -463,6 +498,16 @@ async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
     }
     fixture.assert_clean();
 }
+
+#[test]
+fn namespace_pid_mapping_requires_a_nested_guest_pid() {
+    assert_eq!(
+        nested_host_pid("Name:\tplugin\nNSpid:\t4242\t2\n", 2),
+        Some(4242)
+    );
+    assert_eq!(nested_host_pid("Name:\thost\nNSpid:\t2\n", 2), None);
+}
+
 #[tokio::test]
 #[ignore = "requires a verified SAYA_TEST_EXECUTABLE and mandatory native backend"]
 async fn manual_approval_covers_plugin_startup_remote_call_and_each_hook() {
