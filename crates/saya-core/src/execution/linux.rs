@@ -190,11 +190,13 @@ impl LinuxBackend {
                             &destination,
                         )?;
                     } else {
+                        // Bubblewrap consumes each bind-fd descriptor. Aliases
+                        // of the same mask need independently owned fd numbers.
                         bind_descriptor(
                             &mut args,
                             &mut mount_fds,
                             "--ro-bind-fd",
-                            mask_file.clone(),
+                            Arc::new(mask_file.try_clone().map_err(super::io_error)?),
                             &destination,
                         );
                     }

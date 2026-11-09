@@ -181,6 +181,22 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 源码CI和N2工作流设置 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`，保留行表并记录实际debug／优化镜像大小。结构夹具仅在唯一未完成原因为 `DeadlineExceeded` 时最多重试两次，每次沿用生产50ms限制，显式预算测试继续使用独立入口。19项结构测试及最终全目标严格Clippy通过，生产解析预算和运行预算保持现有值。最终完成仍要求新固定源码的全部四平台源码门禁和程序验收成功。
 
+## 文件遮罩挂载的独立描述符
+
+`b1f58e2` 的两Linux源码门禁已通过生命周期夹具，核心库145项测试仅系统别名保护回归失败。Bubblewrap0.13.1在每个 `--ro-bind-fd` 操作完成后关闭该FD，旧实现将同一个文件遮罩FD用于多个目标。文件遮罩现为每个挂载独立 `try_clone`，继续固定同一私有遮罩inode，目录、保护顺序与权限要求沿已有入口执行。真实系统别名回归保持强制运行并生成独立见证。[Bubblewrap描述符消费实现](https://github.com/containers/bubblewrap/blob/v0.13.1/bubblewrap.c#L1290)
+
+源码门禁使用 `cargo test --workspace --locked --no-fail-fast` 收集其余测试目标结果，任一失败仍使完整门禁返回失败。最终Linux挂载与完整四平台结果等待修复后的固定源码执行。
+
+两Linux目标的实际模块全目标严格Clippy通过，本机真实FD消费对照复现旧实现第二次EBADF，独立复制后两次成功且inode／000权限相同，原描述符继续有效。独立复核无新增阻断，证据为 `target/n2/research/mask-fd-linux-*-clippy.log` 和 `target/n2/research/mask-fd-review/oracle.json`。最终完整本机门禁906项Rust测试、格式、严格Clippy和优化构建通过，日志为 `target/n2/mount-fds-workspace-final.log`。
+
+## JSONL 审批夹具端点收尾
+
+本机完整门禁在交互JSONL夹具中收到 `run.finished` 后等待CLI退出超时，原始记录为 `target/n2/mount-fds-workspace.log`。该夹具为PTY master设置close-on-exec，启动后释放Command持有的slave副本，并让stdout reader持续排空至EOF。终端master继续在原有边界关闭，保留8秒退出检查、全部审批／澄清事件和成功退出码断言。
+
+候选曾把master保留到子进程退出之后，在本机产生退出等待停滞，关闭master后立即释放。该变体及进程采样保存在 `target/n2/research/jsonl-tty-after-*`，最终夹具沿用原关闭顺序。该观察记录实际受控进程状态，具体内核路径尚未确认。
+
+最终夹具11次定向运行、完整61项CLI、定向严格Clippy、格式及独立复核通过，记录为 `target/n2/research/jsonl-tty-owned-after-*.log`。完整workspace重新通过906项测试。原偶发超时的唯一根因尚未确认，已收口的端点所有权和实际复验结果分别记录。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

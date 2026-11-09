@@ -32,9 +32,11 @@
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --locked --no-fail-fast
 cargo build --workspace --release --locked
 ```
+
+测试命令会继续收集其他测试目标的结果，任一失败仍使脚本以失败状态结束。CI使用 `CARGO_PROFILE_DEV_DEBUG=line-tables-only` 保留调试行表，N2验收另行记录实际debug和优化镜像大小。
 
 GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner：Ubuntu 22.04 x86_64／aarch64（`ubuntu-22.04`／`ubuntu-22.04-arm`），macOS 15 aarch64／x86_64（`macos-15`／`macos-15-intel`）；macOS 构建设置最低部署版本 15.0，并在两种 macOS runner 执行离线工具往返与交互会话 smoke。四个 runner 均执行离线 release smoke；不自动上传构建产物。runner 可用性与结果须以实际运行记录为准；运行记录未覆盖的候选仍需独立验证。
 

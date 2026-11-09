@@ -2748,6 +2748,11 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
         },
         0
     );
+    // SAFETY: this fixture owns master; child processes must not retain its peer.
+    assert_eq!(
+        unsafe { libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC) },
+        0
+    );
     let mut master = unsafe { fs::File::from_raw_fd(master) };
     let slave = unsafe { fs::File::from_raw_fd(slave) };
     let fd = slave.as_raw_fd();
@@ -2769,6 +2774,7 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
         });
     }
     let mut child = cmd.spawn().unwrap();
+    drop(cmd);
     drop(slave);
     let stdout = child.stdout.take().unwrap();
     let (finished_tx, finished_rx) = std::sync::mpsc::channel();
@@ -2787,7 +2793,6 @@ fn jsonl_interactive_approval_uses_tty_and_reports_resolution() {
             data.push_str(&line);
             if finished {
                 let _ = finished_tx.send(());
-                break;
             }
         }
         data
