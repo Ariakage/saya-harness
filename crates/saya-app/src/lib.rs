@@ -190,6 +190,7 @@ pub fn build_runtime(
     )?);
     let timeout = |seconds| Duration::from_secs(seconds);
     let exec = ExecConfig {
+        execution: None,
         environment: config.environment().clone(),
         default_timeout: timeout(lim.command_timeout_seconds),
         max_timeout: timeout(lim.max_command_timeout_seconds),

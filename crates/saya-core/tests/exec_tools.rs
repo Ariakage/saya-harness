@@ -688,3 +688,96 @@ async fn excessive_timeout_and_secret_env_reference_are_rejected()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn prepared_environment_identity_and_effective_keys_bind_the_plan()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run) = fixture(temp.path());
+    let context = ToolContext {
+        run: run.clone(),
+        workspace: temp.path().into(),
+    };
+    let mut policy = saya_core::execution::SandboxPolicy::workspace(temp.path().into());
+    policy.backend = saya_core::execution::BackendKind::Host;
+    let first_environment = saya_core::execution::prepare(&policy)?;
+    let second_environment = saya_core::execution::prepare(&policy)?;
+    let mut config = ExecConfig {
+        execution: Some(first_environment),
+        environment: Environment::from_pairs([
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("BASH_ENV".into(), "SYNTHETIC_STARTUP_FILE".into()),
+        ]),
+        ..ExecConfig::default()
+    };
+    config.inherit_extra.insert("BASH_ENV".into());
+    let request = call(
+        "identity",
+        serde_json::json!({"argv":["/bin/echo","hello"]}),
+    );
+    let first = tool(
+        temp.path(),
+        store_for(&session, &run).await?,
+        config.clone(),
+    )?;
+    let (plan, keys) = first.plan_with_environment_keys(&request, &context)?;
+    assert!(keys.contains(&"BASH_ENV".to_owned()));
+    assert_eq!(plan, first.plan(&request, &context)?);
+    config.execution = Some(second_environment);
+    let second = tool(temp.path(), store_for(&session, &run).await?, config)?;
+    assert_ne!(
+        plan.environment_digest,
+        second.plan(&request, &context)?.environment_digest
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn aborted_native_owner_keeps_cleanup_unconfirmed_until_reaped()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run) = fixture(temp.path());
+    let mut policy = saya_core::execution::SandboxPolicy::workspace(temp.path().into());
+    policy.backend = saya_core::execution::BackendKind::Host;
+    let environment = saya_core::execution::prepare(&policy)?;
+    let config = ExecConfig {
+        execution: Some(environment.clone()),
+        ..ExecConfig::default()
+    };
+    let executor = Arc::new(tool(temp.path(), store_for(&session, &run).await?, config)?);
+    let context = ToolContext {
+        run,
+        workspace: temp.path().into(),
+    };
+    let request = call(
+        "aborted",
+        serde_json::json!({"argv":["/bin/sh","-c","printf ready > ready.txt; sleep 30"]}),
+    );
+    let task =
+        tokio::spawn(async move { executor.execute(&request, &context, &NeverCancel).await });
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !temp.path().join("ready.txt").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(environment.active_processes(), 1);
+    assert_eq!(
+        environment
+            .cleanup()
+            .expect_err("active process cannot be declared clean")
+            .0
+            .code,
+        "sandbox_cleanup_unknown"
+    );
+    assert!(environment.runtime_directory().exists());
+    task.abort();
+    assert!(task.await.is_err());
+    environment.wait_for_process_cleanup().await?;
+    assert_eq!(environment.active_processes(), 0);
+    assert!(environment.cleanup()?.complete);
+    assert!(!environment.runtime_directory().exists());
+    Ok(())
+}

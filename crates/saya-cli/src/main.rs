@@ -1046,6 +1046,14 @@ async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
+    if let Some(code) =
+        saya_core::execution::internal_command(std::env::args_os().skip(1).collect()).await
+    {
+        return std::process::ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+    if saya_core::execution::pin_launcher_image().is_err() {
+        return std::process::ExitCode::from(fail("cannot prepare the Saya execution image"));
+    }
     let cli = Cli::parse();
     #[cfg(debug_assertions)]
     if let Some(Command::TuiPreview { scene, source }) = &cli.command {

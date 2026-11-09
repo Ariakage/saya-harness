@@ -14,6 +14,18 @@
 | DEV-060 | 首个凭据后端、引用／撤销、最小化注入、日志／会话／机器输出的凭据边界 | 待实现 |
 | DEV-061 | 固定SDK与协议矩阵、Streamable HTTP、OAuth与续期、断连不重放、额外输入及非交互路径 | 组件开发中 |
 
+## DEV-055 原生执行组件
+
+core已提供统一准备环境、能力等级、固定策略身份和清理接口，包含独立Seatbelt与Bubblewrap后端、Seccomp、私有launcher、文件worker和进程监督。六种文件工具复用统一审批与持久化入口，执行前保存意图并复查许可，异常退出保留未知状态及可确认的观测。文件RPC以实际请求／响应的32MiB作为传输上限，较大的处理限额允许用于小结果。
+
+本机隔离源码快照完成格式、workspace全目标严格Clippy、803项Rust测试和优化构建，日志为 `target/n2/dev055-workspace-final2.log`。包含真实CLI文件worker、原生路径与网络拒绝、环境FD、资源缺失、取消与清理回归。本机为macOS27.2 ARM，部署目标15.0。初次环境FD测试的描述符号复用竞态已通过保留inode见证修正，原失败记录继续保留。
+
+本阶段提交执行组件和显式 `ExecConfig.execution` 接线。正常CLI默认策略、运行期代理及MCP服务继续整合，DEV-055／056的完整完成状态依据最终正常入口与四平台验收更新。Linux CI通过固定SHA-256校验安装非setuid的Bubblewrap0.13.1及socat，后端缺失时明确失败。
+
+## 已推送基础阶段
+
+`21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)
+
 ## 研究证据
 
 本机macOS27.2 ARM的26项Seatbelt探针通过，原始报告在 `target/n2/research/seatbelt-probe.json`。探针涵盖指定工作区、外部文件、保护路径和符号链接、子进程继承、IPv4／IPv6／Unix socket，以及仅允许指定本地代理端口。产品接线后需要对最终程序重新验收。

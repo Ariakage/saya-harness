@@ -113,6 +113,12 @@ pub struct ToolDispatcher {
 type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
 struct TodoLease<'a>(&'a OneShotPermit);
 struct ExternalLease<'a>(&'a OneShotPermit);
+struct FileLease<'a>(&'a OneShotPermit);
+impl Drop for FileLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.finish_file();
+    }
+}
 struct RegistryLease(Arc<AtomicUsize>);
 impl Drop for RegistryLease {
     fn drop(&mut self) {
@@ -490,6 +496,15 @@ impl ToolDispatcher {
             return Ok(result);
         }
         tracing::info!(target: "saya::tools", event = "tool.dispatched");
+        if matches!(
+            call.name.as_str(),
+            "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
+        ) && let Some(environment) = self.exec_config.execution.clone()
+        {
+            return self
+                .execute_file_worker(call, context, &permit, store.as_ref(), cancel, &environment)
+                .await;
+        }
         match call.name.as_str() {
             "todo_write" => {
                 if !permit.authorize_todo(call, context)? {
@@ -694,5 +709,81 @@ impl ToolDispatcher {
                 Ok(result)
             }
         }
+    }
+    async fn execute_file_worker(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: &OneShotPermit,
+        store: &dyn Store,
+        cancel: &dyn Cancellation,
+        environment: &crate::execution::PreparedEnvironment,
+    ) -> Result<ToolResult, BoundaryError> {
+        let arguments: serde_json::Value = serde_json::from_str(&call.arguments)
+            .map_err(|_| failure("invalid_args", "file arguments must be valid JSON"))?;
+        let path = arguments
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| failure("invalid_args", "file arguments require a path"))?;
+        let operation = Operation::file(&context.workspace, &call.name, Path::new(path))?;
+        if !permit.authorize_file(call, context, &operation)? {
+            return Err(failure(
+                "stale_approval",
+                "file approval is stale or cancelled",
+            ));
+        }
+        let _lease = FileLease(permit);
+        let target = operation
+            .file_target()
+            .ok_or_else(|| failure("invalid_args", "file operation requires a target"))?
+            .to_owned();
+        let mut recorded = call.clone();
+        let mut normalized = operation.normalized_arguments(arguments)?;
+        crate::redaction::redact(&mut normalized, &self.known_secrets)?;
+        recorded.arguments = serde_json::to_string(&normalized)
+            .map_err(|_| failure("invalid_args", "file arguments cannot be encoded"))?;
+        store
+            .commit(&[StoreChange::ToolIntent {
+                run_id: context.run.id,
+                call: recorded,
+            }])
+            .await?;
+        let outcome =
+            if !cancel.is_cancelled() && permit.authorize_file(call, context, &operation)? {
+                crate::tools::isolated::execute_isolated_file(
+                    environment,
+                    crate::execution::FileWorkerRequest {
+                        schema_version: 1,
+                        call: call.clone(),
+                        context: context.clone(),
+                        approved_target: target,
+                        read_roots: self.files.root_paths(),
+                        read_limits: self.files.limits.clone(),
+                        write_max_bytes: self.write_max_bytes,
+                    },
+                    cancel,
+                    self.exec_config.default_timeout,
+                )
+                .await
+            } else {
+                Err(failure(
+                    "stale_approval",
+                    "file approval is stale or cancelled",
+                ))
+            };
+        let result = match outcome {
+            Ok(result) => result,
+            Err(error) => ToolResult {
+                ok: false,
+                data: error
+                    .2
+                    .and_then(|observed| serde_json::to_value(observed).ok()),
+                error: Some(error.0),
+                truncated: false,
+            },
+        };
+        let result = crate::tools::write::sanitize_result(&result, &self.known_secrets)?;
+        save_result(store, call, context, &result).await?;
+        Ok(result)
     }
 }

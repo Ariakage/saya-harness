@@ -18,7 +18,7 @@ use std::{
 
 /// Read and search output and processing limits. Callers configure these; model
 /// tool arguments must not increase them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReadLimits {
     pub read_return_bytes: usize,
     pub file_bytes: usize,
@@ -108,6 +108,9 @@ pub struct Page<T> {
 }
 
 impl ReadTools {
+    pub(crate) fn root_paths(&self) -> Vec<PathBuf> {
+        self.roots.iter().map(|root| root.path.clone()).collect()
+    }
     /// Open the workspace and additional roots. Missing or inaccessible roots
     /// return an error. `bypass` removes root restrictions; it does not grant
     /// permission to execute an operation or enable write access.

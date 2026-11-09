@@ -661,6 +661,21 @@ pub struct OneShotPermit {
     lease_active: AtomicBool,
 }
 impl OneShotPermit {
+    pub(crate) fn authorize_file(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        operation: &Operation,
+    ) -> Result<bool, BoundaryError> {
+        if operation.file_target().is_none() {
+            return Ok(false);
+        }
+        self.check(call, context, operation)
+    }
+    pub(crate) fn finish_file(&self) -> Result<(), BoundaryError> {
+        self.end()
+    }
+
     pub(crate) fn authorize_external(
         &self,
         call: &ToolCall,

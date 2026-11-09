@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     process::Command,
     time::{sleep, timeout},
 };
@@ -43,6 +43,9 @@ pub struct ExecConfig {
     /// Captured trusted environment used for inheritance, references and
     /// configured credential redaction. Values are omitted from Debug output.
     pub environment: Environment,
+    /// A prepared native environment. `None` is the explicit legacy host path
+    /// used by low-level callers and deterministic unit tests.
+    pub execution: Option<crate::execution::PreparedEnvironment>,
 }
 impl Default for ExecConfig {
     fn default() -> Self {
@@ -54,6 +57,7 @@ impl Default for ExecConfig {
             inherit_extra: BTreeSet::new(),
             secret_env_names: BTreeSet::new(),
             environment: Environment::capture(),
+            execution: None,
         }
     }
 }
@@ -113,6 +117,19 @@ pub struct ExecResult {
     pub stderr_truncated: bool,
     pub timed_out: bool,
     pub cancelled: bool,
+}
+/// Private file RPC capture. Raw stdout is never lossily decoded as text.
+pub(crate) struct WorkerCapture {
+    pub process: ExecResult,
+    pub stdout: Vec<u8>,
+}
+struct InputWriter(Option<tokio::task::JoinHandle<io::Result<()>>>);
+impl Drop for InputWriter {
+    fn drop(&mut self) {
+        if let Some(task) = &self.0 {
+            task.abort();
+        }
+    }
 }
 /// Command adapter; caller must supply policy and an execution-intent store.
 pub struct ExecTool {
@@ -177,14 +194,28 @@ impl ExecTool {
     /// the policy and one-shot approval bind the exact command and environment.
     pub fn plan(&self, call: &ToolCall, context: &ToolContext) -> Result<ExecPlan, BoundaryError> {
         self.plan_with_environment_keys(call, context)
-            .map(|(plan, _)| plan)
+            .map(|value| value.0)
     }
-    /// Prepare the command and its actual filtered environment names together.
+    /// Resolve once and return only the effective environment names for risk
+    /// analysis. Values remain private and are covered by the plan digest.
     pub fn plan_with_environment_keys(
         &self,
         call: &ToolCall,
         context: &ToolContext,
     ) -> Result<(ExecPlan, Vec<String>), BoundaryError> {
+        let args = self.validated_args(call, context)?;
+        let (plan, _, environment) = self.prepare(&args, context)?;
+        let keys = environment
+            .keys()
+            .filter_map(|key| key.to_str().map(str::to_owned))
+            .collect();
+        Ok((plan, keys))
+    }
+    fn validated_args(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<ExecArgs, BoundaryError> {
         if call.name != "exec" {
             return Err(failure("invalid_args", "tool name does not match adapter"));
         }
@@ -205,17 +236,20 @@ impl ExecTool {
         }
         let args: ExecArgs = serde_json::from_str(&call.arguments)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
-        let (plan, _, environment) = self.prepare(&args, context)?;
-        let keys = environment
-            .keys()
-            .map(|key| key.to_string_lossy().into_owned())
-            .collect();
-        Ok((plan, keys))
+        Ok(args)
     }
     fn prepare(
         &self,
         args: &ExecArgs,
         context: &ToolContext,
+    ) -> Result<(ExecPlan, cap_std::fs::Dir, BTreeMap<OsString, OsString>), BoundaryError> {
+        self.prepare_with_refs(args, context, &BTreeSet::new())
+    }
+    fn prepare_with_refs(
+        &self,
+        args: &ExecArgs,
+        context: &ToolContext,
+        allowed_secret_refs: &BTreeSet<String>,
     ) -> Result<(ExecPlan, cap_std::fs::Dir, BTreeMap<OsString, OsString>), BoundaryError> {
         if args.argv.is_empty()
             || args.argv[0].is_empty()
@@ -266,7 +300,11 @@ impl ExecTool {
             }
         }
         for (key, value) in &args.env {
-            if !valid_env_name(key) || self.config.secret_env_names.contains(key) {
+            let selected_reference =
+                matches!(value, EnvValue::Reference(name) if allowed_secret_refs.contains(name));
+            if !valid_env_name(key)
+                || (self.config.secret_env_names.contains(key) && !selected_reference)
+            {
                 return Err(failure(
                     "invalid_args",
                     "invalid or forbidden environment key",
@@ -276,8 +314,10 @@ impl ExecTool {
                 EnvValue::Literal(value) if !value.contains('\0') => OsString::from(value),
                 EnvValue::Reference(name)
                     if valid_env_name(name)
-                        && !self.config.secret_env_names.contains(name)
-                        && (is_base(name) || self.config.inherit_extra.contains(name)) =>
+                        && (selected_reference
+                            || (!self.config.secret_env_names.contains(name)
+                                && (is_base(name)
+                                    || self.config.inherit_extra.contains(name)))) =>
                 {
                     self.config
                         .environment
@@ -299,27 +339,16 @@ impl ExecTool {
             };
             env.insert(key.into(), value);
         }
+        if let Some(execution) = &self.config.execution {
+            execution.apply_environment(&mut env)?;
+        }
         let executable = resolve_executable(&args.argv[0], &cwd, env.get(OsStr::new("PATH")))?;
         let mut argv = args.argv.clone();
         argv[0] = executable
             .to_str()
             .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?
             .to_owned();
-        let mut digest = sha2::Sha256::new();
-        use sha2::Digest;
-        for (key, value) in &env {
-            let key = key.as_bytes();
-            let value = value.as_bytes();
-            digest.update((key.len() as u64).to_be_bytes());
-            digest.update(key);
-            digest.update((value.len() as u64).to_be_bytes());
-            digest.update(value);
-        }
-        let environment_digest: String = digest
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let environment_digest = environment_digest(&env, self.config.execution.as_ref());
         Ok((
             ExecPlan {
                 argv,
@@ -331,6 +360,35 @@ impl ExecTool {
             env,
         ))
     }
+}
+pub(crate) fn environment_digest(
+    env: &BTreeMap<OsString, OsString>,
+    execution: Option<&crate::execution::PreparedEnvironment>,
+) -> String {
+    let mut digest = sha2::Sha256::new();
+    use sha2::Digest;
+    for (key, value) in env {
+        let key = key.as_bytes();
+        let value = value.as_bytes();
+        digest.update((key.len() as u64).to_be_bytes());
+        digest.update(key);
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value);
+    }
+    if let Some(execution) = execution {
+        let identity = execution.identity();
+        digest.update(b"saya-execution-environment-v1\0");
+        digest.update((identity.id.len() as u64).to_be_bytes());
+        digest.update(identity.id.as_bytes());
+        digest.update((identity.policy_digest.len() as u64).to_be_bytes());
+        digest.update(identity.policy_digest.as_bytes());
+    }
+    let environment_digest: String = digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    environment_digest
 }
 pub(crate) fn resolve_executable(
     program: &str,
@@ -484,99 +542,271 @@ async fn confirm_group_gone(pid: Pid) -> Result<(), BoundaryError> {
     })?
 }
 
+/// A single owned process group. Stdio can move into an MCP SDK while the
+/// supervisor retains child ownership and reserves its identity until cleanup.
+pub(crate) struct ManagedProcess {
+    // Field order is intentional: kill the group before Child can be dropped/reaped.
+    group: ProcessGroup,
+    child: Option<tokio::process::Child>,
+    pid: Pid,
+    end: Option<ProcessEnd>,
+    // Namespace setup may still be in progress after spawn's exec handshake.
+    // Retain the environment until this supervised process has been reaped.
+    lease: Option<crate::execution::ProcessLease>,
+}
+#[derive(Clone)]
+pub(crate) struct ProcessEnd {
+    pub status: std::process::ExitStatus,
+    pub timed_out: bool,
+    pub cancelled: bool,
+}
+impl ManagedProcess {
+    /// Caller must validate authorization and durably record intent first.
+    pub(crate) fn spawn(
+        plan: &ExecPlan,
+        cwd: cap_std::fs::Dir,
+        env: BTreeMap<OsString, OsString>,
+        config: &ExecConfig,
+        stdin_piped: bool,
+    ) -> Result<Self, BoundaryError> {
+        let prepared = config
+            .execution
+            .as_ref()
+            .map(|execution| {
+                let argv = plan.argv.iter().map(OsString::from).collect::<Vec<_>>();
+                execution.prepare_command(&argv, &plan.cwd, &env)
+            })
+            .transpose()?;
+        let program = prepared
+            .as_ref()
+            .map(|prepared| prepared.program.as_os_str())
+            .unwrap_or_else(|| OsStr::new(&plan.argv[0]));
+        let mut command = Command::new(program);
+        command
+            .stdin(if stdin_piped {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true);
+        let cwd_file = cwd.into_std_file();
+        // SAFETY: after fork this callback only invokes async-signal-safe fchdir on
+        // an open directory fd retained in the closure; it performs no allocation.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::fchdir(cwd_file.as_raw_fd()) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        if let Some(prepared) = &prepared {
+            prepared
+                .configure(command.as_std_mut())
+                .map_err(|error| failure("sandbox_launch_failed", error.to_string()))?;
+        } else {
+            command.args(&plan.argv[1..]).env_clear().envs(env);
+        }
+        let mut lease = config
+            .execution
+            .as_ref()
+            .map(crate::execution::PreparedEnvironment::process_lease)
+            .transpose()?;
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                if let Some(lease) = &mut lease {
+                    lease.complete();
+                }
+                return Err(failure("spawn_error", error.to_string()));
+            }
+        };
+        let pid = child
+            .id()
+            .ok_or_else(|| failure("spawn_error", "child PID unavailable"))?;
+        let pid = child_group_pid(pid)?;
+        let group = ProcessGroup(Some(pid));
+        Ok(Self {
+            group,
+            child: Some(child),
+            pid,
+            end: None,
+            lease,
+        })
+    }
+    pub(crate) fn take_stdin(&mut self) -> Option<tokio::process::ChildStdin> {
+        self.child.as_mut().and_then(|child| child.stdin.take())
+    }
+    pub(crate) fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
+        self.child.as_mut().and_then(|child| child.stdout.take())
+    }
+    pub(crate) fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
+        self.child.as_mut().and_then(|child| child.stderr.take())
+    }
+    pub(crate) async fn wait(
+        &mut self,
+        cancel: &dyn Cancellation,
+        command_timeout: Duration,
+    ) -> Result<ProcessEnd, BoundaryError> {
+        if let Some(end) = &self.end {
+            return Ok(end.clone());
+        }
+        if command_timeout.is_zero()
+            || std::time::Instant::now()
+                .checked_add(command_timeout)
+                .is_none()
+        {
+            return Err(failure(
+                "invalid_config",
+                "managed process timeout is outside the supported range",
+            ));
+        }
+        let mut timed_out = false;
+        let mut cancelled = false;
+        let exited = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => { cancelled = true; false },
+            _ = sleep(command_timeout) => { timed_out = true; false },
+            result = wait_leader(self.pid) => { result?; true },
+        };
+
+        let status = self.finish(exited).await?;
+        let end = ProcessEnd {
+            status,
+            timed_out,
+            cancelled,
+        };
+        self.end = Some(end.clone());
+        Ok(end)
+    }
+    async fn finish(&mut self, exited: bool) -> Result<std::process::ExitStatus, BoundaryError> {
+        if !exited {
+            match killpg(self.pid, Signal::SIGTERM) {
+                Ok(()) | Err(Errno::ESRCH) | Err(Errno::EPERM) => {}
+                Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+            }
+            match timeout(Duration::from_secs(5), wait_leader(self.pid)).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    match killpg(self.pid, Signal::SIGKILL) {
+                        Ok(()) | Err(Errno::ESRCH) | Err(Errno::EPERM) => {}
+                        Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+                    }
+                    timeout(Duration::from_secs(5), wait_leader(self.pid))
+                        .await
+                        .map_err(|_| {
+                            failure("process_cleanup_error", "process did not exit after kill")
+                        })??;
+                }
+            }
+        }
+        // Signal while the unreaped leader still reserves this process-group ID.
+        let needs_confirmation = match killpg(self.pid, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => false,
+            Err(Errno::EPERM) => true,
+            Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+        };
+        self.group.0 = None;
+        let status = self
+            .child
+            .as_mut()
+            .ok_or_else(|| failure("process_error", "managed child is unavailable"))?
+            .wait()
+            .await
+            .map_err(|e| failure("process_error", e.to_string()))?;
+        if needs_confirmation {
+            confirm_group_gone(self.pid).await?;
+        }
+
+        if let Some(lease) = &mut self.lease {
+            lease.complete();
+        }
+        Ok(status)
+    }
+}
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        if self.end.is_some() {
+            return;
+        }
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let pid = self.pid;
+        let _ = signal_group(pid, Signal::SIGKILL);
+        self.group.0 = None;
+        let mut lease = self.lease.take();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if !matches!(
+                    timeout(Duration::from_secs(5), wait_leader(pid)).await,
+                    Ok(Ok(()))
+                ) {
+                    return;
+                }
+                let confirm = match killpg(pid, Signal::SIGKILL) {
+                    Ok(()) | Err(Errno::ESRCH) => false,
+                    Err(Errno::EPERM) => true,
+                    Err(_) => return,
+                };
+                if !matches!(
+                    timeout(Duration::from_secs(5), child.wait()).await,
+                    Ok(Ok(_))
+                ) {
+                    return;
+                }
+                if confirm && confirm_group_gone(pid).await.is_err() {
+                    return;
+                }
+                if let Some(lease) = &mut lease {
+                    lease.complete();
+                }
+            });
+        }
+        // Without a live reaper the lease remains unconfirmed. Environment
+        // cleanup cannot claim success or recycle its broker/artifact lifetime.
+    }
+}
+
 async fn run_process(
     plan: &ExecPlan,
     cwd: cap_std::fs::Dir,
     env: BTreeMap<OsString, OsString>,
     config: &ExecConfig,
     cancel: &dyn Cancellation,
-) -> Result<ExecResult, BoundaryError> {
+    input: Option<Vec<u8>>,
+    capture_wire: bool,
+) -> Result<WorkerCapture, BoundaryError> {
     if cancel.is_cancelled() {
         return Err(failure("cancelled", "command cancelled before spawn"));
     }
-    let mut command = Command::new(&plan.argv[0]);
-    command
-        .args(&plan.argv[1..])
-        .env_clear()
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .kill_on_drop(true);
-    let cwd_file = cwd.into_std_file();
-    // SAFETY: after fork this callback only invokes async-signal-safe fchdir on
-    // an open directory fd retained in the closure; it performs no allocation.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::fchdir(cwd_file.as_raw_fd()) == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| failure("spawn_error", e.to_string()))?;
-    let pid = child
-        .id()
-        .ok_or_else(|| failure("spawn_error", "child PID unavailable"))?;
-    let pid = child_group_pid(pid)?;
-    let mut group = ProcessGroup(Some(pid));
-    let stdout = child
-        .stdout
-        .take()
+    let mut process = ManagedProcess::spawn(plan, cwd, env, config, input.is_some())?;
+    let stdout = process
+        .take_stdout()
         .ok_or_else(|| failure("spawn_error", "stdout pipe unavailable"))?;
-    let stderr = child
-        .stderr
-        .take()
+    let stderr = process
+        .take_stderr()
         .ok_or_else(|| failure("spawn_error", "stderr pipe unavailable"))?;
     let out = Arc::new(Mutex::new(Output::default()));
     let err = Arc::new(Mutex::new(Output::default()));
     let mut out_task = tokio::spawn(drain(stdout, config.stdout_max, out.clone()));
     let mut err_task = tokio::spawn(drain(stderr, config.stderr_max, err.clone()));
-    let mut timed_out = false;
-    let mut cancelled = false;
-    let exited = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => { cancelled = true; false },
-        _ = sleep(plan.timeout) => { timed_out = true; false },
-        result = wait_leader(pid) => { result?; true },
-    };
-    if !exited {
-        match killpg(pid, Signal::SIGTERM) {
-            Ok(()) | Err(Errno::ESRCH) | Err(Errno::EPERM) => {}
-            Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+    let mut input_writer = InputWriter(match input {
+        Some(bytes) => {
+            let mut stdin = process
+                .take_stdin()
+                .ok_or_else(|| failure("process_io_error", "worker stdin pipe unavailable"))?;
+            Some(tokio::spawn(async move {
+                stdin.write_all(&bytes).await?;
+                stdin.shutdown().await
+            }))
         }
-        match timeout(Duration::from_secs(5), wait_leader(pid)).await {
-            Ok(result) => result?,
-            Err(_) => {
-                match killpg(pid, Signal::SIGKILL) {
-                    Ok(()) | Err(Errno::ESRCH) | Err(Errno::EPERM) => {}
-                    Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
-                }
-                timeout(Duration::from_secs(5), wait_leader(pid))
-                    .await
-                    .map_err(|_| {
-                        failure("process_cleanup_error", "process did not exit after kill")
-                    })??;
-            }
-        }
-    }
-    // Signal while the unreaped leader still reserves this process-group ID.
-    let needs_confirmation = match killpg(pid, Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => false,
-        Err(Errno::EPERM) => true,
-        Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
-    };
-    group.0 = None;
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| failure("process_error", e.to_string()))?;
-    if needs_confirmation {
-        confirm_group_gone(pid).await?;
-    }
+        None => None,
+    });
+    let end = process.wait(cancel, plan.timeout).await?;
     for task in [&mut out_task, &mut err_task] {
         match timeout(Duration::from_secs(5), &mut *task).await {
             Ok(Ok(Ok(()))) => {}
@@ -591,21 +821,106 @@ async fn run_process(
             }
         }
     }
-    let out = out
+    if let Some(task) = &mut input_writer.0 {
+        match timeout(Duration::from_secs(5), task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => return Err(failure("process_io_error", error.to_string())),
+            Ok(Err(error)) => return Err(failure("process_io_error", error.to_string())),
+            Err(_) => {
+                return Err(failure(
+                    "process_io_error",
+                    "worker input did not close after process cleanup",
+                ));
+            }
+        }
+    }
+    input_writer.0 = None;
+    let mut out = out
         .lock()
         .map_err(|_| failure("process_io_error", "stdout lock poisoned"))?;
     let err = err
         .lock()
         .map_err(|_| failure("process_io_error", "stderr lock poisoned"))?;
-    Ok(ExecResult {
-        exit_code: status.code(),
-        stdout: String::from_utf8_lossy(&out.data).into_owned(),
-        stderr: String::from_utf8_lossy(&err.data).into_owned(),
-        stdout_truncated: out.truncated,
-        stderr_truncated: err.truncated,
-        timed_out,
-        cancelled,
+    let stdout = if capture_wire {
+        Vec::new()
+    } else {
+        std::mem::take(&mut out.data)
+    };
+    let wire = if capture_wire {
+        std::mem::take(&mut out.data)
+    } else {
+        Vec::new()
+    };
+    Ok(WorkerCapture {
+        process: ExecResult {
+            exit_code: end.status.code(),
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&err.data).into_owned(),
+            stdout_truncated: out.truncated,
+            stderr_truncated: err.truncated,
+            timed_out: end.timed_out,
+            cancelled: end.cancelled,
+        },
+        stdout: wire,
     })
+}
+
+/// Execute a host-authorized single-request worker with private binary IPC.
+/// The caller owns approvals and durable intent/result records.
+pub(crate) async fn run_worker(
+    environment: &crate::execution::PreparedEnvironment,
+    argv: &[OsString],
+    cwd: &Path,
+    input: Vec<u8>,
+    cancel: &dyn Cancellation,
+    command_timeout: Duration,
+) -> Result<WorkerCapture, BoundaryError> {
+    if input.len() > crate::execution::WORKER_RPC_MAX_BYTES {
+        return Err(failure(
+            "worker_rpc_too_large",
+            "worker request exceeds 32 MiB",
+        ));
+    }
+    if command_timeout.is_zero() || command_timeout > Duration::from_secs(600) {
+        return Err(failure(
+            "invalid_config",
+            "worker timeout must be positive and at most 600 seconds",
+        ));
+    }
+    let argv = argv
+        .iter()
+        .map(|value| {
+            value.to_str().map(str::to_owned).ok_or_else(|| {
+                failure(
+                    "invalid_path",
+                    "worker executable and arguments must be UTF-8",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if argv.is_empty() {
+        return Err(failure("invalid_args", "worker requires argv"));
+    }
+    let mut env = BTreeMap::new();
+    environment.apply_environment(&mut env)?;
+    let plan = ExecPlan {
+        argv,
+        cwd: cwd.to_path_buf(),
+        timeout: command_timeout,
+        environment_digest: environment_digest(&env, Some(environment)),
+    };
+    let directory = cap_std::fs::Dir::open_ambient_dir(cwd, cap_std::ambient_authority())
+        .map_err(|error| failure("invalid_path", error.to_string()))?;
+    let config = ExecConfig {
+        default_timeout: command_timeout,
+        max_timeout: command_timeout,
+        stdout_max: crate::execution::WORKER_RPC_MAX_BYTES,
+        stderr_max: crate::execution::WORKER_RPC_MAX_BYTES,
+        execution: Some(environment.clone()),
+        environment: Environment::from_pairs([]),
+        ..ExecConfig::default()
+    };
+    run_process(&plan, directory, env, &config, cancel, Some(input), true).await
 }
 
 fn bound_output(value: &mut String, limit: usize, truncated: &mut bool) {
@@ -724,7 +1039,17 @@ impl Tool for ExecTool {
                         "command authorization no longer valid",
                     ));
                 }
-                run_process(&current, cwd, current_env, &self.config, cancel).await
+                run_process(
+                    &current,
+                    cwd,
+                    current_env,
+                    &self.config,
+                    cancel,
+                    None,
+                    false,
+                )
+                .await
+                .map(|capture| capture.process)
             }
             .await;
             let process_result = match post_intent {

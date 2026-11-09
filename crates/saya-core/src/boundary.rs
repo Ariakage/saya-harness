@@ -112,7 +112,7 @@ pub trait Tool: Send + Sync {
 }
 
 /// Execution context selected by the runtime, not by model-provided arguments.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolContext {
     pub run: Run,
     pub workspace: std::path::PathBuf,

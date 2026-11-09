@@ -110,6 +110,12 @@ enum Target {
     External(crate::registry::OperationDescriptor),
 }
 impl Operation {
+    pub(crate) fn file_target(&self) -> Option<&Path> {
+        match &self.target {
+            Target::File(path) => Some(path),
+            _ => None,
+        }
+    }
     /// Construct an external operation from a host-owned registry snapshot.
     pub fn external(
         descriptor: &crate::registry::OperationDescriptor,
