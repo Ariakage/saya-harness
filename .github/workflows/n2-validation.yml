@@ -83,8 +83,13 @@ jobs:
       - name: Check workspace and build optimized program
         id: build
         run: ./scripts/check.sh 2>&1 | tee target/n2/acceptance/workspace-check.log
+      - name: Build the fixed-source acceptance program
+        id: candidate
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' && (runner.os != 'Linux' || steps.linux_tools.outcome == 'success') }}
+        run: cargo build --workspace --release --locked 2>&1 | tee target/n2/acceptance/candidate-build.log
       - name: Verify built program matches the native runner
         id: architecture
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         env:
           RUNNER_LABEL: ${{ matrix.os }}
         run: |
@@ -129,9 +134,49 @@ jobs:
           if not evidence['verified_native']:
               raise SystemExit('Built program architecture differs from the required native runner')
           PY
+      - name: Verify Linux baseline
+        id: linux_baseline
+        if: ${{ !cancelled() && steps.architecture.outcome == 'success' && startsWith(matrix.os, 'ubuntu-') }}
+        run: |
+          python3 - <<'PY' 2>&1 | tee target/n2/acceptance/linux-baseline.log
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+
+          sys.path.insert(0, str(pathlib.Path('scripts/release').resolve()))
+          from verify_linux import command, os_release
+
+          binary = pathlib.Path('target/release/saya')
+          release = os_release()
+          libc = os.confstr('CS_GNU_LIBC_VERSION')
+          symbols = command('objdump', '-T', str(binary))
+          versions = re.findall(r'\bGLIBC_([0-9.]+)', symbols)
+          maximum = max((tuple(map(int, value.split('.'))) for value in versions), default=())
+          dependencies = command('ldd', str(binary))
+          evidence = {
+              'distribution': release,
+              'libc': libc,
+              'maximum_glibc_symbol': '.'.join(map(str, maximum)),
+              'dependencies': dependencies,
+              'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+          }
+          pathlib.Path('target/n2/acceptance/linux-baseline.json').write_text(
+              json.dumps(evidence, indent=2) + '\n')
+          print(json.dumps(evidence, indent=2))
+          provenance = json.loads(pathlib.Path('target/n2/acceptance/binary-provenance.json').read_text())
+          if evidence['binary_sha256'] != provenance['binary_sha256']:
+              raise SystemExit('Linux baseline executable differs from the native architecture witness')
+          if release.get('ID') != 'ubuntu' or release.get('VERSION_ID') != '22.04' or libc != 'glibc 2.35':
+              raise SystemExit('Expected native Ubuntu 22.04 with glibc 2.35')
+          if not maximum or maximum > (2, 35) or 'not found' in dependencies:
+              raise SystemExit('Binary exceeds the glibc baseline or has missing shared libraries')
+          PY
       - name: Verify macOS baseline
         id: macos_baseline
-        if: startsWith(matrix.os, 'macos-')
+        if: ${{ !cancelled() && steps.architecture.outcome == 'success' && startsWith(matrix.os, 'macos-') }}
         run: |
           {
             sw_vers
@@ -141,11 +186,11 @@ jobs:
           } 2>&1 | tee target/n2/acceptance/macos-baseline.log
       - name: Native macOS isolation acceptance
         id: macos_native
-        if: startsWith(matrix.os, 'macos-')
+        if: ${{ !cancelled() && steps.macos_baseline.outcome == 'success' && startsWith(matrix.os, 'macos-') }}
         run: python3 scripts/n2/native_acceptance.py target/release/saya 2>&1 | tee target/n2/acceptance/native.log
       - name: Native Linux isolation and delegated resource acceptance
         id: linux_native
-        if: startsWith(matrix.os, 'ubuntu-')
+        if: ${{ !cancelled() && steps.linux_baseline.outcome == 'success' && startsWith(matrix.os, 'ubuntu-') }}
         run: |
           sudo systemd-run --collect --wait --pipe \
             --unit="saya-n2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
@@ -157,9 +202,11 @@ jobs:
             --require-cgroup 2>&1 | tee target/n2/acceptance/native.log
       - name: MCP and OAuth acceptance
         id: mcp
+        if: ${{ !cancelled() && steps.architecture.outcome == 'success' && (runner.os != 'macOS' || steps.macos_baseline.outcome == 'success') && (runner.os != 'Linux' || steps.linux_baseline.outcome == 'success') }}
         run: python3 scripts/n2/mcp_acceptance.py target/release/saya 2>&1 | tee target/n2/acceptance/mcp.log
       - name: Markdown, TUI and recovery acceptance
         id: journeys
+        if: ${{ !cancelled() && steps.architecture.outcome == 'success' && (runner.os != 'macOS' || steps.macos_baseline.outcome == 'success') && (runner.os != 'Linux' || steps.linux_baseline.outcome == 'success') }}
         run: |
           python3 scripts/release/smoke.py target/release/saya 2>&1 | tee target/n2/acceptance/smoke.log
           python3 scripts/release/journey.py target/release/saya 2>&1 | tee target/n2/acceptance/journey.log

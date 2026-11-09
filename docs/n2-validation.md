@@ -137,6 +137,14 @@ ARM的三个chat超时分别等待首条模型请求或后台启动后的第二�
 
 本机18项chat测试及同一已编译程序的3轮54项重复通过，新增实际CLI提前退出用例验证诊断。最终完整格式、workspace严格Clippy、905项Rust测试与优化构建通过，记录为 `target/n2/readiness-workspace.log`。实际Linux性能／同步结果在新runner中验证。
 
+## 独立验收编排与Linux基线
+
+完整源码门禁与优化候选构建分别留证，候选按同一固定源码生成。架构／平台基线通过后，原生、MCP与界面检查分别记录结果。完整门禁失败使job失败，所有必需步骤成功才满足N2退出条件。`!cancelled()`与前置outcome控制阶段启动，取消后的always步骤保留证据。
+
+Linux见证记录实际Ubuntu22.04／glibc2.35、ELF最大GLIBC符号≤2.35及ldd依赖，并核对同一程序与架构见证的SHA。最终下载还需将provenance、baseline、native、MCP及保留的程序副本逐项比对。
+
+静态验证涵盖YAML、14个Shell片段、所有内嵌Python、失败／取消依赖场景，12项native／installer离线回归及独立只读复核通过。实际Actions运行结果在固定源码后记录，源CI仍执行完整workspace门禁。[条件状态函数](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)
