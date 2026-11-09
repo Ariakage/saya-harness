@@ -20,11 +20,45 @@ use std::{
 
 pub(super) struct LinuxBackend {
     bwrap: PathBuf,
-    socat: Option<PathBuf>,
+    socat: Option<BridgeProgram>,
     args: Vec<OsString>,
     filter_path: PathBuf,
     mount_fds: Vec<Arc<fs::File>>,
     helper_path: PathBuf,
+}
+struct BridgeProgram {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+impl BridgeProgram {
+    fn pin(source: &Path, scratch: &Path) -> io::Result<(Self, Arc<fs::File>)> {
+        let source = fs::File::open(source)?;
+        let metadata = source.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+            || metadata.mode() & 0o111 == 0
+        {
+            return Err(io::Error::from_raw_os_error(libc::EPERM));
+        }
+        let path = scratch.join("saya-socat");
+        super::transport::copy_pinned_image(
+            &source,
+            super::transport::fingerprint(&metadata),
+            &path,
+        )?;
+        let file = Arc::new(fs::File::open(&path)?);
+        let metadata = file.metadata()?;
+        Ok((
+            Self {
+                path,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            },
+            file,
+        ))
+    }
 }
 const SYSTEM_READ_ROOTS: [&str; 6] = [
     "/usr",
@@ -214,11 +248,18 @@ impl LinuxBackend {
                     path.as_os_str().to_owned(),
                     path.as_os_str().to_owned(),
                 ]);
-                Some(trusted_program(&[
-                    "/usr/bin/socat",
-                    "/bin/socat",
-                    "/usr/local/bin/socat",
-                ])?)
+                let source =
+                    trusted_program(&["/usr/bin/socat", "/bin/socat", "/usr/local/bin/socat"])?;
+                let (program, file) = BridgeProgram::pin(&source, scratch)
+                    .map_err(|_| unavailable("trusted socat program could not be pinned"))?;
+                bind_descriptor(
+                    &mut args,
+                    &mut mount_fds,
+                    "--ro-bind-fd",
+                    file,
+                    &program.path,
+                );
+                Some(program)
             }
         };
         let backend = Self {
@@ -294,7 +335,9 @@ impl LinuxBackend {
                 .ok_or_else(|| unavailable("socat is unavailable"))?;
             command.args.extend([
                 OsString::from("--socat"),
-                socat.clone().into_os_string(),
+                socat.path.clone().into_os_string(),
+                OsString::from("--socat-identity"),
+                format!("{}:{}", socat.device, socat.inode).into(),
                 OsString::from("--socket"),
                 socket.clone().into_os_string(),
                 OsString::from("--port"),
@@ -948,6 +991,58 @@ pub(super) fn install_payload_filter() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bridge_image_is_pinned_from_a_trusted_host_file_into_private_storage() {
+        use std::os::unix::fs::symlink;
+
+        let source =
+            trusted_program(&["/usr/bin/true", "/bin/true"]).expect("root-owned fixture program");
+        let scratch = tempfile::tempdir().expect("private bridge directory");
+        let alias = scratch.path().join("source-alias");
+        symlink(&source, &alias).expect("source alias");
+        let original = fs::read(&source).expect("trusted source image");
+        let (program, descriptor) = BridgeProgram::pin(&alias, scratch.path()).expect("pin bridge");
+        let metadata = descriptor.metadata().expect("pinned image metadata");
+        assert_eq!(program.path, scratch.path().join("saya-socat"));
+        assert_eq!(
+            (program.device, program.inode),
+            (metadata.dev(), metadata.ino())
+        );
+        assert_eq!(metadata.mode() & 0o777, 0o500);
+        assert_eq!(fs::read(&program.path).expect("private image"), original);
+        fs::remove_file(&alias).expect("replace source alias");
+        symlink("/nonexistent-replacement", &alias).expect("replacement alias");
+        assert_eq!(
+            fs::read(&program.path).expect("pinned image survives source replacement"),
+            original
+        );
+    }
+    #[test]
+    fn bridge_image_rejects_an_untrusted_opened_host_program() {
+        let scratch = tempfile::tempdir().expect("private bridge directory");
+        let source = scratch.path().join("untrusted-program");
+        fs::write(&source, b"untrusted").expect("fixture image");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o777)).expect("writable image");
+        assert_eq!(
+            BridgeProgram::pin(&source, scratch.path())
+                .err()
+                .expect("writable program must be rejected")
+                .raw_os_error(),
+            Some(libc::EPERM)
+        );
+        if unsafe { libc::geteuid() } != 0 {
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o500))
+                .expect("readonly image");
+            assert_eq!(
+                BridgeProgram::pin(&source, scratch.path())
+                    .err()
+                    .expect("non-root host owner must be rejected")
+                    .raw_os_error(),
+                Some(libc::EPERM)
+            );
+        }
+        assert!(!scratch.path().join("saya-socat").exists());
+    }
     fn evaluate(program: &[libc::sock_filter], arch: u32, syscall: u32, argument: u32) -> u32 {
         evaluate_arguments(program, arch, syscall, [argument, 0, 0])
     }

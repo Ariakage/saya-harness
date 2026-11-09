@@ -16,9 +16,10 @@ use std::{
 };
 const ENV_MAX_BYTES: usize = 8 * 1024 * 1024;
 const ENV_MAGIC: &[u8; 8] = b"SAYAENV1";
+pub(super) type ImageFingerprint = (u64, u64, u64, i64, i64, i64, i64);
 struct Image {
     file: File,
-    fingerprint: (u64, u64, u64, i64, i64, i64, i64),
+    fingerprint: ImageFingerprint,
 }
 static IMAGE: OnceLock<Result<Image, io::Error>> = OnceLock::new();
 /// Pin before running any model or tool. Replaced pathname entries cannot
@@ -63,7 +64,7 @@ fn image() -> io::Result<&'static Image> {
         )),
     }
 }
-fn fingerprint(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
+pub(super) fn fingerprint(metadata: &fs::Metadata) -> ImageFingerprint {
     (
         metadata.dev(),
         metadata.ino(),
@@ -76,9 +77,14 @@ fn fingerprint(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
 }
 pub(super) fn copy_launcher(destination: &Path) -> io::Result<()> {
     let image = image()?;
-    if fingerprint(&image.file.metadata()?) != image.fingerprint
-        || image.fingerprint.2 > 1024 * 1024 * 1024
-    {
+    copy_pinned_image(&image.file, image.fingerprint, destination)
+}
+pub(super) fn copy_pinned_image(
+    source: &File,
+    identity: ImageFingerprint,
+    destination: &Path,
+) -> io::Result<()> {
+    if fingerprint(&source.metadata()?) != identity || identity.2 > 1024 * 1024 * 1024 {
         return Err(io::Error::from_raw_os_error(libc::ESTALE));
     }
     let mut target = OpenOptions::new()
@@ -88,15 +94,15 @@ pub(super) fn copy_launcher(destination: &Path) -> io::Result<()> {
         .open(destination)?;
     let mut buffer = [0u8; 64 * 1024];
     let mut offset = 0;
-    while offset < image.fingerprint.2 {
-        let count = image.file.read_at(&mut buffer, offset)?;
+    while offset < identity.2 {
+        let count = source.read_at(&mut buffer, offset)?;
         if count == 0 {
             return Err(io::Error::from_raw_os_error(libc::EIO));
         }
         target.write_all(&buffer[..count])?;
         offset += count as u64;
     }
-    if fingerprint(&image.file.metadata()?) != image.fingerprint {
+    if fingerprint(&source.metadata()?) != identity {
         return Err(io::Error::from_raw_os_error(libc::ESTALE));
     }
     target.sync_all()?;

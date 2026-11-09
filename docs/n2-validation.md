@@ -161,6 +161,14 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 `1a932cc` 的两Linux架构已通过25项MCP、24项TUI及委派资源正负对照。源码门禁继续到Rust生命周期夹具，五项旧断言同样把guest PID交给宿主查询。该夹具改为FIFO现场READY／writer及CLI退出后的立即EOF，shell和sleep后代共同持有writer，保留真实CLI信号与原退出码。新增未启动、历史READY与继承writer回归，本机三轮共18项测试、定向严格Clippy及格式检查通过，日志为 `target/n2/research/lifecycle-namespace-*.log`。Linux重新执行仍待新源码runner确认。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42579723866)
 
+## Linux 代理桥接镜像身份
+
+`1a932cc` 的Linux HTTP／CONNECT用例均在launcher返回exit74／EPERM。桥接启动仍以guest的 `metadata.uid() == 0` 判断宿主root所有的socat，而当前user namespace仅映射runner UID。修复在宿主打开源FD并复验root所有、无group／other写权限及可执行性，复用有界复制和前后fingerprint校验，固定为私有0500镜像并通过只读FD挂载。guest核对该镜像的精确device／inode、无写权限与可执行性。PID2入口、清洁环境、payload过滤和桥接进程清理继续由既有边界执行。
+
+两Linux目标的实际模块严格Clippy通过，四项新增Linux回归覆盖host信任、镜像替换、权限和完整内部身份字段。本机同源码函数的三个metadata控制通过，独立只读复核无新增阻断，证据为 `target/n2/research/proxy-linux-*-clippy.log` 与 `target/n2/research/proxy-oracle/report.json`。该控制未执行Linux命名空间，实际代理往返与最终四平台验收等待新源码runner。
+
+最终本机macOS27.2 ARM完整格式、workspace全目标严格Clippy、906项Rust测试及优化构建通过，日志为 `target/n2/proxy-final-workspace.log`。33项Python回归及全部脚本AST检查通过，日志为 `target/n2/research/proxy-final-python.log`。本次优化程序SHA-256为 `9d90b4bf6b82a174e5930d80203e5a23b1584e63044b8a147622a888366ec019`，四平台使用新固定源码重新构建验证。
+
 ## UDP 传输边界判据
 
 `1a932cc` 的Linux原生套件15／19项通过，其raw UDP探针调用单向 `sendto`，在私有network namespace内返回 `SENT`。原判据错误地要求系统调用必须失败，修订后核对完整的 `SENT` 或正整数errno输出，同时必须确认宿主监听器收到零个payload数据包。macOS继续要求Seatbelt拒绝系统调用。代理端口的IPv4／IPv6监听器均先执行实际宿主发送／接收正控制并排空，再检查payload发送后的零收包。

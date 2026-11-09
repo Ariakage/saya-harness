@@ -100,6 +100,12 @@ YAML、14个Shell片段、内嵌Python、失败／取消依赖场景和12项验�
 
 最新本机macOS27.2 ARM完成905项Rust测试、完整门禁及30项Python离线回归，并在固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 上通过18项原生、25项MCP及24项TUI。源码检查与程序证据在 `target/n2/ci-profile-workspace.log`、`target/n2/validated-local/`，修复范围与原始远端失败见[N2验收记录](n2-validation.md#linux-长路径与资源控制修复)。Linux委派与四平台最终完成状态继续保留待验收。
 
+### Linux 代理镜像修复
+
+`1a932cc` 两台macOS15 runner的源码CI与N2均完整通过。两Linux架构通过MCP、TUI和委派资源正负对照，原生15／19项通过，剩余UDP判据与代理启动分别修复。UDP维持宿主零收包并增加代理端口双栈正控制。代理镜像在宿主按打开的FD验证root信任并固定为私有只读文件，guest核对精确device／inode，处理user namespace的UID映射。
+
+修复候选通过本机906项Rust测试、完整workspace门禁、33项Python回归、两Linux目标严格模块检查及独立复核。日志为 `target/n2/proxy-final-workspace.log`，原始四平台记录位于 `target/n2/remote-review/1a932cc7/monitoring-complete.json`。实际Linux代理与最终四平台仍待新固定源码验证。
+
 ### 生命周期测试夹具竞态
 
 N2源码 `1a932cc` 在Linux实际执行到原五项生命周期场景，旧夹具的guest PID宿主查询失败。现统一改为现场FIFO writer正控制和CLI终态后的立即EOF，保留真实CLI信号、退出码与后代清理断言，新增见证回归。本机三轮共18项测试与定向严格Clippy通过，Linux同一源码的完整门禁继续待重跑。该轮两Linux架构的25项MCP、24项TUI和委派资源正负对照已分别通过，完整N2仍有网络原生用例待修复与验收。

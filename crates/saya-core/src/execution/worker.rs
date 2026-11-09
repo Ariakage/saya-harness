@@ -311,6 +311,7 @@ mod launch {
     };
     struct Launch {
         socat: Option<PathBuf>,
+        socat_identity: Option<(u64, u64)>,
         socket: Option<PathBuf>,
         port: Option<u16>,
         env_fd: i32,
@@ -318,6 +319,7 @@ mod launch {
     }
     fn parse(args: &[OsString]) -> io::Result<Launch> {
         let mut socat = None;
+        let mut socat_identity = None;
         let mut socket = None;
         let mut port = None;
         let mut env_fd = None;
@@ -332,6 +334,16 @@ mod launch {
             let value = args.get(index + 1).ok_or_else(invalid)?;
             match args[index].to_str() {
                 Some("--socat") if socat.is_none() => socat = Some(PathBuf::from(value)),
+                Some("--socat-identity") if socat_identity.is_none() => {
+                    let (device, inode) = value
+                        .to_str()
+                        .and_then(|value| value.split_once(':'))
+                        .ok_or_else(invalid)?;
+                    socat_identity = Some((
+                        device.parse().map_err(|_| invalid())?,
+                        inode.parse().map_err(|_| invalid())?,
+                    ));
+                }
                 Some("--socket") if socket.is_none() => socket = Some(PathBuf::from(value)),
                 Some("--port") if port.is_none() => {
                     port = Some(
@@ -358,7 +370,12 @@ mod launch {
         if argv.is_empty() || !Path::new(&argv[0]).is_absolute() {
             return Err(invalid());
         }
-        let fields = [socat.is_some(), socket.is_some(), port.is_some()];
+        let fields = [
+            socat.is_some(),
+            socat_identity.is_some(),
+            socket.is_some(),
+            port.is_some(),
+        ];
         if fields.iter().any(|value| *value) && !fields.iter().all(|value| *value) {
             return Err(invalid());
         }
@@ -374,6 +391,7 @@ mod launch {
         }
         Ok(Launch {
             socat,
+            socat_identity,
             socket,
             port,
             env_fd: env_fd.ok_or_else(invalid)?,
@@ -407,7 +425,12 @@ mod launch {
         #[cfg(target_os = "linux")]
         let bridge = start_bridge(&launch)?;
         #[cfg(target_os = "macos")]
-        let _ = (&launch.socat, &launch.socket, launch.port);
+        let _ = (
+            &launch.socat,
+            launch.socat_identity,
+            &launch.socket,
+            launch.port,
+        );
         #[cfg(target_os = "linux")]
         let filter = super::super::prepare_linux_payload_filter()?;
         let mut descriptors = super::super::fds::DescriptorSanitizer::prepare()?;
@@ -435,18 +458,15 @@ mod launch {
     }
     #[cfg(target_os = "linux")]
     fn start_bridge(launch: &Launch) -> io::Result<Option<Bridge>> {
-        let (Some(socat), Some(socket), Some(port)) = (&launch.socat, &launch.socket, launch.port)
-        else {
+        let (Some(socat), Some(identity), Some(socket), Some(port)) = (
+            &launch.socat,
+            launch.socat_identity,
+            &launch.socket,
+            launch.port,
+        ) else {
             return Ok(None);
         };
-        let metadata = std::fs::metadata(socat)?;
-        if !socat.is_absolute()
-            || !metadata.is_file()
-            || metadata.uid() != 0
-            || metadata.mode() & 0o022 != 0
-        {
-            return Err(io::Error::from_raw_os_error(libc::EPERM));
-        }
+        verify_bridge_program(socat, identity)?;
         let socket = socket
             .to_str()
             .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
@@ -480,6 +500,19 @@ mod launch {
         }
     }
     #[cfg(target_os = "linux")]
+    fn verify_bridge_program(path: &Path, identity: (u64, u64)) -> io::Result<()> {
+        let metadata = std::fs::metadata(path)?;
+        if !path.is_absolute()
+            || !metadata.is_file()
+            || (metadata.dev(), metadata.ino()) != identity
+            || metadata.mode() & 0o222 != 0
+            || metadata.mode() & 0o111 == 0
+        {
+            return Err(io::Error::from_raw_os_error(libc::EPERM));
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
     struct Bridge(Child);
     #[cfg(target_os = "linux")]
     struct NamespaceChildren;
@@ -503,6 +536,86 @@ mod launch {
                 }
             }
             let _ = self.0.wait();
+        }
+    }
+    #[cfg(all(test, target_os = "linux"))]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        #[test]
+        fn bridge_launch_requires_one_complete_and_valid_identity() {
+            let arguments = [
+                "--socat",
+                "/private/saya-socat",
+                "--socat-identity",
+                "12:34",
+                "--socket",
+                "/private/broker.sock",
+                "--port",
+                "1234",
+                "--env-fd",
+                "3",
+                "--",
+                "/usr/bin/true",
+            ]
+            .map(OsString::from);
+            assert_eq!(
+                parse(&arguments).expect("complete bridge").socat_identity,
+                Some((12, 34))
+            );
+            for invalid in [
+                "",
+                "12",
+                "12:",
+                "x:34",
+                "12:34:56",
+                "18446744073709551616:34",
+            ] {
+                let mut malformed = arguments.clone();
+                malformed[3] = invalid.into();
+                assert!(parse(&malformed).is_err(), "accepted {invalid:?}");
+            }
+            let mut missing = arguments.to_vec();
+            missing.drain(2..4);
+            assert!(parse(&missing).is_err());
+            let ordinary = ["--env-fd", "3", "--", "/usr/bin/true"].map(OsString::from);
+            assert!(
+                parse(&ordinary)
+                    .expect("ordinary payload")
+                    .socat_identity
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn bridge_recheck_requires_the_pinned_readonly_image_identity() {
+            let directory = tempfile::tempdir().expect("private bridge directory");
+            let path = directory.path().join("saya-socat");
+            std::fs::write(&path, b"private image").expect("fixture image");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500))
+                .expect("readonly executable");
+            let pinned = std::fs::File::open(&path).expect("keep original inode alive");
+            let metadata = pinned.metadata().expect("image metadata");
+            let identity = (metadata.dev(), metadata.ino());
+            verify_bridge_program(&path, identity)
+                .expect("host-verified image is identified by inode");
+            assert!(
+                verify_bridge_program(&path, (identity.0, identity.1.wrapping_add(1))).is_err()
+            );
+            for mode in [0o700, 0o400] {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                    .expect("changed image mode");
+                assert!(
+                    verify_bridge_program(&path, identity).is_err(),
+                    "accepted {mode:o}"
+                );
+            }
+            std::fs::remove_file(&path).expect("replace private pathname");
+            std::fs::write(&path, b"replacement").expect("replacement image");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500))
+                .expect("replacement mode");
+            assert!(verify_bridge_program(&path, identity).is_err());
         }
     }
 }
