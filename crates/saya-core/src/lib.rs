@@ -32,6 +32,7 @@ pub mod network;
 pub mod output_store;
 pub mod permissions;
 pub mod plugin_manifest;
+pub mod plugin_runtime;
 pub mod plugin_store;
 pub mod project_context;
 pub mod prompt;
