@@ -94,6 +94,74 @@ impl Pty {
             .write_all(line.as_bytes())
             .unwrap();
     }
+    fn read_output(&mut self, wait_millis: i32) -> io::Result<bool> {
+        let mut poll = libc::pollfd {
+            fd: self.master.as_ref().unwrap().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll references the owned PTY descriptor and is time-bounded.
+        let ready = unsafe { libc::poll(&mut poll, 1, wait_millis) };
+        if ready == 0 {
+            return Ok(false);
+        }
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            return if error.kind() == io::ErrorKind::Interrupted {
+                Ok(false)
+            } else {
+                Err(error)
+            };
+        }
+        let mut data = [0u8; 4096];
+        let count = self.master.as_mut().unwrap().read(&mut data)?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "terminal closed",
+            ));
+        }
+        self.buffer.extend_from_slice(&data[..count]);
+        Ok(true)
+    }
+    fn wait_for_model_signal(&mut self, signal: &std::sync::mpsc::Receiver<()>) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = self.child.try_wait().unwrap();
+            if status.is_some() {
+                // Capture queued terminal output without waiting for writers.
+                for _ in 0..16 {
+                    if !self.read_output(0).unwrap_or(false) {
+                        break;
+                    }
+                }
+                panic!(
+                    "chat exited before model readiness; status: {status:?}; output: {}",
+                    String::from_utf8_lossy(&self.buffer)
+                );
+            }
+            match signal.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!(
+                    "model readiness signal disconnected; child status: {status:?}; output: {}",
+                    String::from_utf8_lossy(&self.buffer)
+                ),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for model readiness; child status: {status:?}; output: {}",
+                String::from_utf8_lossy(&self.buffer)
+            );
+            if let Err(error) = self.read_output(100) {
+                panic!(
+                    "terminal closed before model readiness ({error}); child status: {:?}; output: {}",
+                    self.child.try_wait().unwrap(),
+                    String::from_utf8_lossy(&self.buffer)
+                );
+            }
+        }
+    }
     fn until(&mut self, needle: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
@@ -112,23 +180,12 @@ impl Pty {
                 "timed out waiting for {needle:?}; output: {}",
                 String::from_utf8_lossy(&self.buffer)
             );
-            let mut poll = libc::pollfd {
-                fd: self.master.as_ref().unwrap().as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: poll references the owned PTY descriptor and is time-bounded.
-            if unsafe { libc::poll(&mut poll, 1, 100) } <= 0 {
-                continue;
+            if let Err(error) = self.read_output(100) {
+                panic!(
+                    "terminal closed while waiting for {needle:?} ({error}); output: {}",
+                    String::from_utf8_lossy(&self.buffer)
+                );
             }
-            let mut data = [0u8; 4096];
-            let n = self.master.as_mut().unwrap().read(&mut data).unwrap_or(0);
-            assert!(
-                n > 0,
-                "terminal closed while waiting for {needle:?}; output: {}",
-                String::from_utf8_lossy(&self.buffer)
-            );
-            self.buffer.extend_from_slice(&data[..n]);
         }
     }
     fn finish(mut self) -> std::process::ExitStatus {
@@ -153,6 +210,23 @@ impl Drop for Pty {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn model_readiness_reports_early_exit_with_terminal_output() {
+    let temp = TempDir::new().unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["--help"]);
+    let (_sender, signal) = std::sync::mpsc::channel();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pty.wait_for_model_signal(&signal);
+    }))
+    .expect_err("an exited process cannot become model-ready");
+    let message = failure.downcast_ref::<String>().unwrap();
+    assert!(message.contains("model readiness"), "{message}");
+    assert!(message.contains("status:"), "{message}");
+    assert!(message.contains("Usage:"), "{message}");
+    assert!(!message.contains("timed out"), "{message}");
 }
 
 #[test]
@@ -433,7 +507,7 @@ fn running_controls_queue_mode_and_cancel_returns_to_the_same_session() {
     let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
     pty.until("> ");
     pty.send("long task\n");
-    entered.recv_timeout(Duration::from_secs(3)).unwrap();
+    pty.wait_for_model_signal(&entered);
     pty.send("/mode code\n");
     pty.until("pending code");
     pty.send("/mode plan\n");
@@ -460,7 +534,7 @@ fn ctrl_c_cancels_an_active_run_then_exits_when_idle() {
     let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
     pty.until("> ");
     pty.send("long task\n");
-    entered.recv_timeout(Duration::from_secs(3)).unwrap();
+    pty.wait_for_model_signal(&entered);
     // SAFETY: the child PID identifies the live Saya process started by this test.
     assert_eq!(
         unsafe { libc::kill(pty.child.id() as i32, libc::SIGINT) },
@@ -625,7 +699,7 @@ fn background_job_can_be_approved_listed_and_inspected_in_chat() {
     pty.until("Approval required");
     pty.until("Allow this call? [y/N]");
     pty.send("y\n");
-    entered_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+    pty.wait_for_model_signal(&entered_rx);
     pty.send("/jobs\n");
     let listed = pty.until("read_file");
     let job = listed
@@ -673,7 +747,7 @@ fn running_background_command_can_be_cancelled_from_chat() {
     let mut pty = Pty::start(temp.path(), &cfg, &["chat"]);
     pty.until("> ");
     pty.send("start a command\n");
-    entered_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+    pty.wait_for_model_signal(&entered_rx);
     let deadline = Instant::now() + Duration::from_secs(4);
     while !temp.path().join("marker").exists() {
         assert!(Instant::now() < deadline, "command did not start");
@@ -732,7 +806,7 @@ fn switching_from_build_to_plan_during_model_call_blocks_generated_write() {
     let mut pty = Pty::start(temp.path(), &cfg, &["--mode", "build", "chat"]);
     pty.until("> ");
     pty.send("Implement a file\n");
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    pty.wait_for_model_signal(&entered_rx);
     pty.send("/mode plan\n");
     pty.until("pending plan");
     release_tx.send(()).unwrap();

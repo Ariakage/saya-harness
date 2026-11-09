@@ -82,6 +82,12 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 `340499db` 的ARM12项acceptance已全部通过，x86已能创建cc子进程，随后默认LLD wrapper因依赖 `/proc/self/exe` 退出。编译夹具仅对Linux x86_64 GNU显式设置 `-C linker-features=-lld`，保留其他目标命令与原生proc限制。本机12项acceptance、格式与定向严格Clippy通过，Rust1.99.1实际接受目标参数。真实Linux链接结果待runner。
 
+### 原生准备后的模型就绪同步
+
+`340499db` 的ARM三项chat失败发生于3／4秒的模型进入信号等待阶段，尚未到取消、模式切换或后台清理断言。PTY夹具现使用有界10秒等待并持续排空终端，子进程提前退出时报告状态与记录。单次命令取消测试也采用10秒就绪等待，并在准备失败时回收子进程与保留输出，覆盖此前本机快照的同类超时。
+
+18项chat与额外3轮54项重复通过，CLI全目标严格Clippy、独立复核与完整905项Rust门禁通过，日志为 `target/n2/research/chat-model-readiness-*` 和 `target/n2/readiness-workspace.log`。新增实际CLI提前退出诊断回归通过，Linux就绪同步仍由新runner验收。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

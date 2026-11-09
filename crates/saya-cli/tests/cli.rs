@@ -1361,7 +1361,7 @@ fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
         }
     });
     let cfg = config(temp.path(), &format!("http://{address}/v1"), "auto");
-    let child = command(temp.path())
+    let mut child = command(temp.path())
         .arg("--config")
         .arg(cfg)
         .args(["run", "wait"])
@@ -1369,7 +1369,17 @@ fn ctrl_c_cancels_single_run_with_cancelled_exit_code() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    if let Err(error) = entered_rx.recv_timeout(Duration::from_secs(10)) {
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        let _ = release_tx.send(());
+        panic!(
+            "model request did not become active ({error}), child {}: {}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     // SAFETY: this PID refers to the live subprocess owned by the test.
     assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
     let output = child.wait_with_output().unwrap();

@@ -131,6 +131,12 @@ Linux原生unit增加 `/usr/bin/readlink` 与 `/bin/readlink` 同对象双路径
 
 当前候选仅为Linux x86_64 GNU夹具增加官方稳定 `-C linker-features=-lld` 选项，使用系统链接器。ARM与macOS原命令保持，本机12项acceptance、格式、定向严格Clippy及Rust1.99.1目标参数检查通过，日志为 `target/n2/research/linux-x86-system-linker-*`。真实x86链接仍待runner。[官方Rust选项](https://doc.rust-lang.org/rustc/codegen-options/index.html#linker-features)
 
+## 模型进入信号与终端等待
+
+ARM的三个chat超时分别等待首条模型请求或后台启动后的第二条模型请求，旧夹具的3／4秒等待尚未执行取消／模式断言。新增PTY就绪等待在10秒边界内排空输出并检查子进程，失败返回状态与有界记录。单次CLI取消夹具的同类就绪等待增加明确的进程回收与输出诊断。
+
+本机18项chat测试及同一已编译程序的3轮54项重复通过，新增实际CLI提前退出用例验证诊断。最终完整格式、workspace严格Clippy、905项Rust测试与优化构建通过，记录为 `target/n2/readiness-workspace.log`。实际Linux性能／同步结果在新runner中验证。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)
