@@ -14,6 +14,14 @@ DEV-054至DEV-061及DEV-075均已完成。工具注册、可信操作描述、CS
 
 完整证据、程序SHA和测量边界见[N2最终验收](n2-validation.md#最终四平台验收)，本地索引为 `target/n2/remote-review/aaec8c5b/monitoring-complete.json`。下一阶段N3按依赖从DEV-076 OutputStore进入DEV-062 Context Builder。首个凭据后端为私有明文文件，macOS后代清理为best_effort，资源耗尽压力与外部厂商互操作保持各自未测范围。以下N2各节保留阶段历史及当时的待验范围，以本段与最终证据为当前状态。
 
+### 验收归档后的输入夹具同步
+
+归档提交 `6da36ac` 的CI在macOS ARM完整termios检查发现PENDIN采样竞态，原400ms回收断言通过。独立12项真实PTY对照确认子进程报告发布与后续canonical read之间的内核状态变化。夹具现先完成一次有界空读取并恢复原文件标志，再发布报告。完整状态比较与原时间边界继续执行，新增延迟读取屏障及ECHO错误配置负对照。受控移除新同步时回归失败，修复后10项input测试连续3轮通过，独立复核通过。[规范模式采样证据](n2-validation.md#归档ci的规范模式采样)
+
+本机4线程完整门禁通过909项Rust测试、格式、workspace严格Clippy和优化构建，日志为 `target/n2/input-snapshot-workspace.log`。优化程序仍与已验收本机镜像逐字节一致，固定N2程序证据与测试夹具后续复验分别维护。
+
+### DEV-054与DEV-075阶段历史
+
 DEV-054的隔离源码快照在本机macOS27.2 ARM／Rust1.99.1执行完整 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、workspace全目标严格Clippy、752项Rust测试及优化构建通过。六项新回归包含48组分类／模式／权限组合、离线与有界schema、身份指纹、元数据凭据拒绝、一次性派发、持久化期间目录替换及执行租约、未知副作用和认证／输入请求终止。独立复核确认的目录竞态、嵌套schema资源重定向和目录凭据边界均补入回归。证据为 `target/n2/dev054-workspace.log` 和 `target/n2/dev054-tests.log`，实现约定见[工具注册](tool-registry.md)。CLI中的MCP连接与真实后端接线由后续DEV阶段完成。
 
 DEV-075采用Tree-sitter0.27.1／Bash0.25.1，直接argv保持字面含义，显式shell通过真实CST提取结构。一次prepare取得实际过滤环境名称，事实进入独立核查数据，批准绑定稳定版本／限额及原有完整执行身份。时间相关解析状态留在事实层。结构分析19项定向测试、5008组随机／预算探针通过，最终隔离源码快照完成格式、workspace严格Clippy、773项Rust测试及优化构建。新增实际审核凭据重构屏障回归通过，模型请求数为0。源码、预算与边界见[命令分析](command-analysis.md)，证据为 `target/dev075-probe/probe.json`、`target/n2/dev075-{workspace,credential-facts}.log`。

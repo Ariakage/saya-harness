@@ -302,6 +302,16 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 本机4线程完整门禁907项Rust测试、workspace严格Clippy、格式及优化构建通过，日志为 `target/n2/peer-close-workspace.log`。Mac优化程序与已完整本机验收的 `d2b0f84585ac0e66cf8953547bd9eac8b36cbd7e21b28024c0da469a8aa9479e` 逐字节一致。最终四平台仍按新固定源码验收。
 
+## 归档CI的规范模式采样
+
+文档归档提交 `6da36ac` 的CI在macOS ARM仅有空闲输入回收夹具失败，位置为完整 `c_lflag` 比较，实际536872395、原始1483，差值为Darwin的 `PENDIN`。先执行的400ms回收断言通过。子进程先发布报告再进入canonical `read_line`，父进程读取termios与该读取清除PENDIN之间存在竞态。[该轮CI](https://github.com/Ariakage/saya-harness/actions/runs/42613791184)
+
+独立真实PTY对照连续12次复现相同数字，空的非阻塞canonical read后全部termios字段与初始值一致。官方XNU在规范模式重入时设置PENDIN，后续输入处理清除此内核状态，与上述观测相符。[XNU规范模式状态转换](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/tty.c#L1358)、[输入状态处理](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/tty.c#L2073)
+
+夹具在终端恢复后、报告发布前执行一次空非阻塞读取。每种读取结果均先恢复原文件标志，只有WouldBlock通过，EOF、实际字节及其他错误使夹具失败。完整termios比较、文件标志前后检查、400ms回收及原等待时限继续执行。新增文件屏障固定父进程在子进程 `read_line` 前观察；ECHO错误配置负对照验证空读取后仍由精确local flags断言拒绝。
+
+受控移除发布前读取时，新屏障回归复现原标志位失败。修复后的全部10项input测试连续3轮通过，独立复核通过，记录位于 `target/n2/research/input-idle-fix/`。本机4线程完整门禁通过909项Rust测试、格式、workspace严格Clippy与优化构建，日志为 `target/n2/input-snapshot-workspace.log`。程序SHA仍为 `d2b0f84585ac0e66cf8953547bd9eac8b36cbd7e21b28024c0da469a8aa9479e`，与本机完整原生／MCP／TUI验收程序逐字节相同。该改动位于测试夹具，N2原生程序和实际验收基线继续归属上方 `aaec8c5`，修复提交对应的源码CI记录四平台复验结果。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

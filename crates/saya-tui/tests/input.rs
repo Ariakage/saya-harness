@@ -82,7 +82,10 @@ fn input_child_probe() -> io::Result<()> {
                 .is_none()
         );
     } else {
-        assert!(matches!(mode.as_str(), "idle" | "panic"));
+        assert!(matches!(
+            mode.as_str(),
+            "idle" | "idle-delayed-release" | "panic"
+        ));
     }
     let started = Instant::now();
     if mode.contains("panic") {
@@ -109,17 +112,65 @@ fn input_child_probe() -> io::Result<()> {
         unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) },
         original_flags
     );
+    // Darwin marks raw-to-canonical transitions PENDIN until the next read.
+    // Complete that empty canonical read before publishing the snapshot so the
+    // parent's exact comparison cannot race the later release read_line.
+    settle_canonical_input(libc::STDIN_FILENO)?;
+    // SAFETY: stdin remains open, and the helper must restore its file flags.
+    assert_eq!(
+        unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) },
+        original_flags
+    );
     let temporary = report.with_extension("tmp");
     std::fs::write(
         &temporary,
         serde_json::to_vec(&serde_json::json!({"dropped_millis":dropped_millis}))?,
     )?;
     std::fs::rename(temporary, &report)?;
+    if mode == "idle-delayed-release" {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !report.with_extension("filled").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "parent did not inspect restored flags"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     // Darwin revokes a controlling terminal after its leader exits. Keep this
     // process alive until the parent has inspected the restored termios.
     let mut release = String::new();
     std::io::stdin().read_line(&mut release)?;
     Ok(())
+}
+
+fn settle_canonical_input(fd: libc::c_int) -> io::Result<()> {
+    // SAFETY: callers retain ownership of the live PTY descriptor throughout.
+    let original_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if original_flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: F_SETFL only changes file flags for the same live descriptor.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut byte = 0_u8;
+    // SAFETY: byte is writable for one byte, and O_NONBLOCK bounds this read.
+    let count = unsafe { libc::read(fd, std::ptr::addr_of_mut!(byte).cast(), 1) };
+    let read_error = (count < 0).then(io::Error::last_os_error);
+    // Restore flags on every read outcome before interpreting or returning it.
+    // SAFETY: the descriptor remains live and original_flags came from F_GETFL.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    match read_error {
+        Some(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+        Some(error) => Err(error),
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected an empty canonical PTY, read returned {count}"),
+        )),
+    }
 }
 
 fn attributes(file: &File) -> io::Result<libc::termios> {
@@ -266,7 +317,10 @@ impl Probe {
         assert_eq!(restored.c_iflag, self.original.c_iflag);
         assert_eq!(restored.c_oflag, self.original.c_oflag);
         assert_eq!(restored.c_cflag, self.original.c_cflag);
-        assert_eq!(restored.c_lflag, self.original.c_lflag);
+        assert_eq!(
+            restored.c_lflag, self.original.c_lflag,
+            "restored local flags"
+        );
         assert_eq!(restored.c_cc, self.original.c_cc);
         self.master.write_all(b"release\n")?;
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -324,6 +378,45 @@ fn dropping_an_idle_reader_waits_only_for_the_poll_interval() -> io::Result<()> 
     let report = root.path().join("report.json");
     let mut probe = Probe::start("idle", &report)?;
     probe.finish(&report)
+}
+
+#[test]
+fn restored_flags_are_observable_before_the_child_reads_its_release() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let report = root.path().join("report.json");
+    let mut probe = Probe::start("idle-delayed-release", &report)?;
+    probe.until_file(&report)?;
+    assert_eq!(
+        attributes(&probe.slave)?.c_lflag,
+        probe.original.c_lflag,
+        "restored local flags before the release read"
+    );
+    std::fs::write(report.with_extension("filled"), b"inspected")?;
+    probe.finish(&report)
+}
+
+#[test]
+fn canonical_input_settling_preserves_incorrect_local_flags() -> io::Result<()> {
+    let root = tempfile::tempdir()?;
+    let report = root.path().join("report.json");
+    let mut probe = Probe::start("idle-delayed-release", &report)?;
+    probe.until_file(&report)?;
+    let mut incorrect = attributes(&probe.slave)?;
+    incorrect.c_lflag ^= libc::ECHO;
+    // SAFETY: the owned slave is live and incorrect is a complete termios value.
+    if unsafe { libc::tcsetattr(probe.slave.as_raw_fd(), libc::TCSANOW, &incorrect) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    settle_canonical_input(probe.slave.as_raw_fd())?;
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe.finish(&report)))
+        .expect_err("incorrect local flags must fail the restoration comparison");
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(message.contains("restored local flags"), "{message}");
+    Ok(())
 }
 
 #[test]
