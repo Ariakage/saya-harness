@@ -60,6 +60,12 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 最终源码 `97b40f9` 的首次四平台验收在Linux两架构复现Rust编译器动态库定位失败，BUILD／CODE夹具的工具结果为exit127。工具链可读根与`--sysroot`已配置，当前修复显式在隔离内的编译命令设置工具链`lib`路径。保留原生`/proc`策略，Linux实际复验继续进行，失败日志在 `target/n2/remote-review/linux-{arm,x86}-job-*.log`。
 
+### Linux Rust fork路径与匿名通道修复
+
+候选现精确允许STREAM／SEQPACKET已连接匿名Unix pair，保留协议／flags检查及命名socket、datagram限制。Linux准备先校验可确认的正式内核范围，再以私有同型监听器核对shutdown、AF_UNSPEC及peer-close后的重连接／监听语义。有限探测与已知修复身份共同约束能力，无法确认时失败关闭。
+
+新增Rust带pre_exec的真实fork子进程回归、STREAM／SEQPACKET重定向和已有FD传递边界。当前代码在本机完成904项Rust测试和完整门禁，两Linux架构交叉全目标严格Clippy及21个内核版本样本通过，证据为 `target/n2/seqpacket-workspace.log` 与 `target/n2/research/seqpacket-*.log`。Mac优化程序仍与已验证固定程序逐字节相同，Linux实际结果待新runner验证。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

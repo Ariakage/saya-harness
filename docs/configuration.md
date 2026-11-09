@@ -53,6 +53,8 @@ output_microunits_per_million = 2000000
 
 省略 `sandbox` 时采用 `backend = "auto"`，在 macOS 使用系统 Seatbelt，在 Linux 使用 Bubblewrap 与 Seccomp。Linux 要求 Bubblewrap 0.13.1 或更新版本，代理网络还需要 socat，可执行文件需符合宿主可信路径和权限检查。macOS 固定使用系统 `/usr/bin/sandbox-exec`。依赖及必需能力缺失会使运行启动失败。`config check` 仅验证语法、数值和环境引用，原生能力在 Run 启动时探测。
 
+Linux 匿名 Unix 通道的连接状态影响网络边界。当前候选要求可确认的正式内核范围，5.15分支至少5.15.86、6.1分支至少6.1.2，或正式6.2及以后版本，并执行关闭／重连接行为探测。RC、无法解析或无法确认回补身份的版本返回 `sandbox_capability_unavailable`。5.4／5.10本轮未纳入确认范围。厂商的 `5.15.0-xxx` 版本串无法直接等同于上游5.15.86。[原生边界](sandbox.md)、[上游修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)
+
 ```toml
 [sandbox]
 backend = "auto"

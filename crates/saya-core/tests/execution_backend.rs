@@ -578,6 +578,49 @@ fn payload_seccomp_denies_unix_socketpair_datagram_retargeting() {
     assert!(command.status().expect("filtered Python fixture").success());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn payload_seccomp_allows_rust_command_spawn_with_pre_exec() {
+    use std::os::unix::process::CommandExt;
+    const CHILD: &str = "SAYA_TEST_FILTERED_RUST_SPAWN";
+    if std::env::var_os(CHILD).is_some() {
+        let mut child = Command::new("/bin/sh");
+        child.args(["-c", "printf SAYA_SYNTHETIC_RUST_CHILD"]);
+        // SAFETY: this no-op forces Rust's fork/exec path and its anonymous
+        // SOCK_SEQPACKET error channel instead of the posix_spawn fast path.
+        unsafe { child.pre_exec(|| Ok(())) };
+        let output = child.output().expect("Rust child with pre_exec");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"SAYA_SYNTHETIC_RUST_CHILD");
+        return;
+    }
+    for filtered in [false, true] {
+        let mut child = Command::new(std::env::current_exe().expect("test image"));
+        child
+            .args([
+                "--exact",
+                "payload_seccomp_allows_rust_command_spawn_with_pre_exec",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(CHILD, "1")
+            .stdin(Stdio::null());
+        if filtered {
+            let filter = execution::prepare_linux_payload_filter().expect("payload filter");
+            // SAFETY: prepared BPF storage is inherited across fork, and its
+            // installation only invokes prctl before executing the test image.
+            unsafe { child.pre_exec(move || filter.install()) };
+        }
+        let output = child.output().expect("isolated Rust spawn probe");
+        assert!(
+            output.status.success(),
+            "Rust spawn probe (filtered={filtered}) failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn file_request(
     workspace: &Path,
     name: &str,
@@ -837,20 +880,81 @@ int main(int argc, char **argv) {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn anonymous_stream_pairs_cannot_retarget_or_deliver_rights_to_host_unix_peers() {
-    use std::os::unix::{
-        net::{UnixDatagram, UnixListener},
-        process::CommandExt,
+fn anonymous_connected_pairs_cannot_retarget_or_deliver_rights_to_host_unix_peers() {
+    use std::os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{
+            ffi::OsStrExt,
+            net::{UnixDatagram, UnixListener, UnixStream},
+            process::CommandExt,
+        },
     };
     let root = tempfile::tempdir().unwrap();
     let stream_path = root.path().join("host-stream.sock");
     let datagram_path = root.path().join("host-datagram.sock");
+    let seqpacket_path = root.path().join("host-seqpacket.sock");
     let fixture_path = root.path().join("fixture.txt");
     fs::write(&fixture_path, "SYNTHETIC-PAIR-LOCAL-RIGHTS").unwrap();
     let stream = UnixListener::bind(&stream_path).unwrap();
     let datagram = UnixDatagram::bind(&datagram_path).unwrap();
     stream.set_nonblocking(true).unwrap();
     datagram.set_nonblocking(true).unwrap();
+    // Matching host socket types are live positive controls, so a denied
+    // retarget is not merely a missing listener or a protocol mismatch.
+    UnixStream::connect(&stream_path).unwrap();
+    stream.accept().unwrap();
+    UnixDatagram::unbound()
+        .unwrap()
+        .send_to(b"SYNTHETIC-CONTROL", &datagram_path)
+        .unwrap();
+    let mut control = [0u8; 64];
+    assert_eq!(datagram.recv(&mut control).unwrap(), 17);
+    fn new_seqpacket() -> OwnedFd {
+        // SAFETY: socket returns a new descriptor; ownership is transferred once.
+        let descriptor =
+            unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0) };
+        assert!(descriptor >= 0);
+        unsafe { OwnedFd::from_raw_fd(descriptor) }
+    }
+    let seqpacket = new_seqpacket();
+    // SAFETY: zero is a valid initial representation of sockaddr_un.
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as _;
+    let path = seqpacket_path.as_os_str().as_bytes();
+    assert!(path.len() < address.sun_path.len());
+    for (target, byte) in address.sun_path.iter_mut().zip(path) {
+        *target = *byte as _;
+    }
+    let length = std::mem::size_of_val(&address) as libc::socklen_t;
+    let address_ptr = std::ptr::from_ref(&address).cast::<libc::sockaddr>();
+    // SAFETY: the valid address and descriptor are owned by this fixture.
+    assert_eq!(
+        unsafe { libc::bind(seqpacket.as_raw_fd(), address_ptr, length) },
+        0
+    );
+    assert_eq!(unsafe { libc::listen(seqpacket.as_raw_fd(), 4) }, 0);
+    let client = new_seqpacket();
+    assert_eq!(
+        unsafe { libc::connect(client.as_raw_fd(), address_ptr, length) },
+        0
+    );
+    let accepted = unsafe {
+        libc::accept4(
+            seqpacket.as_raw_fd(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            libc::SOCK_CLOEXEC,
+        )
+    };
+    assert!(accepted >= 0);
+    // SAFETY: accept4 returned a fresh owned descriptor.
+    drop(unsafe { OwnedFd::from_raw_fd(accepted) });
+    drop(client);
+    // SAFETY: this modifies only the fixture listener's descriptor flags.
+    assert_eq!(
+        unsafe { libc::fcntl(seqpacket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+        0
+    );
     let program = r#"
 import array
 import ctypes
@@ -859,87 +963,133 @@ import os
 import socket
 import sys
 
-stream_path, datagram_path, fixture_path = sys.argv[1:]
-for kind in (socket.SOCK_DGRAM, socket.SOCK_SEQPACKET):
+stream_path, datagram_path, seqpacket_path, fixture_path = sys.argv[1:]
+for kind in (socket.SOCK_DGRAM, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK):
     try:
         socket.socketpair(socket.AF_UNIX, kind)
     except OSError as error:
         assert error.errno == errno.EPERM
     else:
-        raise AssertionError('non-stream pair was allowed')
-try:
-    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-except OSError as error:
-    assert error.errno == errno.EPERM
-else:
-    raise AssertionError('named Unix socket was allowed')
-
-left, right = socket.socketpair(
-    socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK
-)
-for endpoint in (left, right):
+        raise AssertionError('datagram pair was allowed')
+for kind in (socket.SOCK_STREAM, socket.SOCK_SEQPACKET, socket.SOCK_DGRAM):
     try:
-        endpoint.connect(stream_path)
+        socket.socket(socket.AF_UNIX, kind)
+    except OSError as error:
+        assert error.errno == errno.EPERM
+    else:
+        raise AssertionError('named Unix socket was allowed')
+
+for kind in (socket.SOCK_STREAM, socket.SOCK_SEQPACKET):
+    left, right = socket.socketpair(
+        socket.AF_UNIX, kind | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK
+    )
+    for endpoint in (left, right):
+        for destination in (stream_path, datagram_path, seqpacket_path):
+            try:
+                endpoint.connect(destination)
+            except OSError:
+                pass
+            else:
+                raise AssertionError('connected pair was retargeted')
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    class Address(ctypes.Structure):
+        _fields_ = [('family', ctypes.c_ushort), ('data', ctypes.c_ubyte * 14)]
+    unspecified = Address(socket.AF_UNSPEC)
+    assert libc.connect(left.fileno(), ctypes.byref(unspecified), ctypes.sizeof(unspecified)) == -1
+    try:
+        left.connect(seqpacket_path if kind == socket.SOCK_SEQPACKET else stream_path)
     except OSError:
         pass
     else:
-        raise AssertionError('connected stream was retargeted')
-
-libc = ctypes.CDLL(None, use_errno=True)
-class Address(ctypes.Structure):
-    _fields_ = [('family', ctypes.c_ushort), ('data', ctypes.c_ubyte * 14)]
-unspecified = Address(socket.AF_UNSPEC)
-assert libc.connect(left.fileno(), ctypes.byref(unspecified), ctypes.sizeof(unspecified)) == -1
-try:
-    left.connect(stream_path)
-except OSError:
-    pass
-else:
-    raise AssertionError('AF_UNSPEC permitted stream retargeting')
-left.send(b'local')
-assert right.recv(16) == b'local'
-for destination in (stream_path, datagram_path):
-    try:
-        length = left.sendto(b'addressed', destination)
-    except OSError:
-        pass
-    else:
-        assert length == 9 and right.recv(16) == b'addressed'
-
-fd = os.open(fixture_path, os.O_RDONLY)
-def receive_local_rights():
-    data, ancillary, flags, address = left.recvmsg(1, socket.CMSG_SPACE(array.array('i').itemsize))
-    assert data == b'f' and not flags and not address
-    assert len(ancillary) == 1 and ancillary[0][:2] == (socket.SOL_SOCKET, socket.SCM_RIGHTS)
-    received = array.array('i')
-    received.frombytes(ancillary[0][2])
-    assert len(received) == 1
-    try:
-        assert os.fstat(received[0]).st_ino == os.fstat(fd).st_ino
-    finally:
-        os.close(received[0])
-try:
-    rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))]
-    right.sendmsg([b'f'], rights)
-    receive_local_rights()
-    for destination in (stream_path, datagram_path):
+        raise AssertionError('AF_UNSPEC permitted pair retargeting')
+    left.send(b'local', socket.MSG_NOSIGNAL)
+    assert right.recv(16) == b'local'
+    for destination in (stream_path, datagram_path, seqpacket_path):
         try:
-            length = right.sendmsg([b'f'], rights, 0, destination)
+            length = left.sendto(b'addressed', socket.MSG_NOSIGNAL, destination)
         except OSError:
             pass
         else:
-            assert length == 1
-            receive_local_rights()
-finally:
-    os.close(fd)
-left.close()
-right.close()
+            assert length == 9 and right.recv(16) == b'addressed'
+
+    fd = os.open(fixture_path, os.O_RDONLY)
+    def receive_local_rights():
+        data, ancillary, flags, address = left.recvmsg(1, socket.CMSG_SPACE(array.array('i').itemsize))
+        assert data == b'f' and not flags and not address
+        assert len(ancillary) == 1 and ancillary[0][:2] == (socket.SOL_SOCKET, socket.SCM_RIGHTS)
+        received = array.array('i')
+        received.frombytes(ancillary[0][2])
+        assert len(received) == 1
+        try:
+            assert os.fstat(received[0]).st_ino == os.fstat(fd).st_ino
+        finally:
+            os.close(received[0])
+    try:
+        rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))]
+        right.sendmsg([b'f'], rights, socket.MSG_NOSIGNAL)
+        receive_local_rights()
+        for destination in (stream_path, datagram_path, seqpacket_path):
+            try:
+                length = right.sendmsg([b'f'], rights, socket.MSG_NOSIGNAL, destination)
+            except OSError:
+                pass
+            else:
+                assert length == 1
+                receive_local_rights()
+    finally:
+        os.close(fd)
+    left.close()
+    right.close()
+    for transition in ('shutdown_rd', 'shutdown_wr', 'shutdown_rdwr', 'peer_close',
+                       'peer_close_send', 'peer_close_sendto', 'peer_close_sendmsg'):
+        left, right = socket.socketpair(socket.AF_UNIX, kind | socket.SOCK_NONBLOCK | socket.SOCK_CLOEXEC)
+        if transition.startswith('shutdown_'):
+            left.shutdown({'shutdown_rd': socket.SHUT_RD, 'shutdown_wr': socket.SHUT_WR,
+                           'shutdown_rdwr': socket.SHUT_RDWR}[transition])
+        else:
+            right.close()
+            for _ in range(0 if transition == 'peer_close' else 3):
+                try:
+                    if transition == 'peer_close_send':
+                        left.send(b'closed', socket.MSG_NOSIGNAL)
+                    elif transition == 'peer_close_sendto':
+                        if libc.sendto(left.fileno(), b'closed', 6, socket.MSG_NOSIGNAL, None, 0) == -1:
+                            raise OSError(ctypes.get_errno(), 'dead peer sendto')
+                    elif transition == 'peer_close_sendmsg':
+                        left.sendmsg([b'closed'], [], socket.MSG_NOSIGNAL)
+                except OSError as error:
+                    assert error.errno in (errno.EPIPE, errno.ECONNRESET, errno.ECONNREFUSED, errno.ENOTCONN)
+        for destination in (stream_path, datagram_path, seqpacket_path):
+            try:
+                left.connect(destination)
+            except OSError:
+                pass
+            else:
+                raise AssertionError('pair regained a host peer after ' + transition)
+        fd = os.open(fixture_path, os.O_RDONLY)
+        try:
+            rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))]
+            for destination in (stream_path, datagram_path, seqpacket_path):
+                try:
+                    left.sendto(b'closed', socket.MSG_NOSIGNAL, destination)
+                except OSError:
+                    pass
+                try:
+                    left.sendmsg([b'f'], rights, socket.MSG_NOSIGNAL, destination)
+                except OSError:
+                    pass
+        finally:
+            os.close(fd)
+            left.close()
+            right.close()
 "#;
     let mut command = Command::new("/usr/bin/python3");
     command
         .args(["-I", "-S", "-c", program])
         .arg(&stream_path)
         .arg(&datagram_path)
+        .arg(&seqpacket_path)
         .arg(&fixture_path)
         .env_clear()
         .stdin(Stdio::null());
@@ -959,4 +1109,22 @@ right.close()
     assert!(
         matches!(datagram.recv(&mut bytes),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
     );
+    let accepted = unsafe {
+        libc::accept4(
+            seqpacket.as_raw_fd(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            libc::SOCK_CLOEXEC,
+        )
+    };
+    let error = std::io::Error::last_os_error();
+    if accepted >= 0 {
+        // SAFETY: close an unexpected accepted descriptor before failing.
+        drop(unsafe { OwnedFd::from_raw_fd(accepted) });
+    }
+    assert_eq!(
+        accepted, -1,
+        "pair reached the host sequenced-packet listener"
+    );
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
 }

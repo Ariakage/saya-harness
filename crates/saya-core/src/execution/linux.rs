@@ -2,12 +2,15 @@
 use super::{NetworkPolicy, PreparedCommand, SandboxPolicy, failure, unavailable};
 use crate::contract::BoundaryError;
 use std::{
-    ffi::OsString,
+    ffi::{CStr, OsString},
     fs,
     io::{self, Write},
     os::{
-        fd::AsRawFd,
-        unix::fs::{MetadataExt, PermissionsExt},
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{
+            ffi::OsStrExt,
+            fs::{DirBuilderExt, MetadataExt, PermissionsExt},
+        },
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -28,6 +31,10 @@ impl LinuxBackend {
     }
     pub(super) fn prepare(policy: &SandboxPolicy, scratch: &Path) -> Result<Self, BoundaryError> {
         reject_process_filesystem_roots(policy)?;
+        verify_supported_pair_kernel()?;
+        verify_connected_pair_boundaries(scratch).map_err(|_| {
+            unavailable("host kernel anonymous Unix socket-pair boundaries could not be verified")
+        })?;
         let bwrap = trusted_program(&["/usr/local/bin/bwrap", "/usr/bin/bwrap", "/bin/bwrap"])?;
         let version = Command::new(&bwrap)
             .arg("--version")
@@ -295,6 +302,268 @@ impl LinuxBackend {
         Ok(())
     }
 }
+
+fn verify_supported_pair_kernel() -> Result<(), BoundaryError> {
+    // SAFETY: uname fills the complete fixed-size utsname structure and
+    // guarantees NUL-terminated release text on success.
+    let mut identity: libc::utsname = unsafe { std::mem::zeroed() };
+    if unsafe { libc::uname(&mut identity) } != 0 {
+        return Err(unavailable(
+            "Linux kernel socket-pair fixes could not be identified",
+        ));
+    }
+    let release = unsafe { CStr::from_ptr(identity.release.as_ptr()) };
+    if !release.to_str().is_ok_and(known_fixed_pair_kernel_release) {
+        return Err(unavailable(
+            "Linux socket-pair isolation requires a known-fixed kernel release: 5.15.86+, 6.1.2+, or 6.2+; unknown vendor backports and release candidates are unsupported",
+        ));
+    }
+    Ok(())
+}
+
+fn known_fixed_pair_kernel_release(release: &str) -> bool {
+    if release.to_ascii_lowercase().contains("-rc") {
+        return false;
+    }
+    let Some(core) = release.split(['-', '+']).next() else {
+        return false;
+    };
+    let version = core
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(version) = version else {
+        return false;
+    };
+    let [major, minor, patch] = version.as_slice() else {
+        return false;
+    };
+    (*major == 5 && *minor == 15 && *patch >= 86)
+        || (*major == 6 && *minor == 1 && *patch >= 2)
+        || (*major, *minor) >= (6, 2)
+}
+
+// Older kernels allowed connected pairs to regain a connectable/listening
+// state after shutdown or a dead peer. Check behavior, including backports,
+// in addition to the version gate. Finite probes cannot establish the absence
+// of the historical dead-peer race by themselves.
+fn verify_connected_pair_boundaries(scratch: &Path) -> io::Result<()> {
+    let path = scratch.join("pair-probe");
+    fs::DirBuilder::new().mode(0o700).create(&path)?;
+    let directory = PairProbeDirectory(path);
+    for kind in [libc::SOCK_STREAM, libc::SOCK_SEQPACKET] {
+        let listener = probe_socket(kind)?;
+        let path = directory.0.join(format!("{kind}.sock"));
+        let address = probe_address(&path)?;
+        let address_ptr = std::ptr::from_ref(&address).cast::<libc::sockaddr>();
+        let length = std::mem::size_of_val(&address) as libc::socklen_t;
+        // SAFETY: every descriptor and complete address is owned by this probe.
+        check_probe_status(unsafe { libc::bind(listener.as_raw_fd(), address_ptr, length) })?;
+        check_probe_status(unsafe { libc::listen(listener.as_raw_fd(), 1) })?;
+        let control = probe_socket(kind)?;
+        check_probe_status(unsafe { libc::connect(control.as_raw_fd(), address_ptr, length) })?;
+        let accepted = unsafe {
+            libc::accept4(
+                listener.as_raw_fd(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            )
+        };
+        if accepted < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: accept4 returned a fresh descriptor, transferred exactly once.
+        drop(unsafe { OwnedFd::from_raw_fd(accepted) });
+        drop(control);
+        for transition in [
+            PairTransition::Unchanged,
+            PairTransition::Unspecified,
+            PairTransition::Shutdown(libc::SHUT_RD),
+            PairTransition::Shutdown(libc::SHUT_WR),
+            PairTransition::Shutdown(libc::SHUT_RDWR),
+            PairTransition::PeerClosed,
+            PairTransition::PeerClosedSend,
+            PairTransition::PeerClosedSendTo,
+            PairTransition::PeerClosedSendMsg,
+        ] {
+            let mut pair = [-1; 2];
+            check_probe_status(unsafe {
+                libc::socketpair(
+                    libc::AF_UNIX,
+                    kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                    0,
+                    pair.as_mut_ptr(),
+                )
+            })?;
+            // SAFETY: successful socketpair returned two independent descriptors.
+            let left = unsafe { OwnedFd::from_raw_fd(pair[0]) };
+            let right = unsafe { OwnedFd::from_raw_fd(pair[1]) };
+            match transition {
+                PairTransition::Unchanged => {}
+                PairTransition::Unspecified => {
+                    let address = libc::sockaddr {
+                        sa_family: libc::AF_UNSPEC as _,
+                        sa_data: [0; 14],
+                    };
+                    reject_probe_retarget(unsafe {
+                        libc::connect(
+                            left.as_raw_fd(),
+                            &address,
+                            std::mem::size_of_val(&address) as libc::socklen_t,
+                        )
+                    })?;
+                }
+                PairTransition::Shutdown(mode) => {
+                    check_probe_status(unsafe { libc::shutdown(left.as_raw_fd(), mode) })?;
+                }
+                _ => {
+                    drop(right);
+                    exercise_dead_peer(left.as_raw_fd(), transition)?;
+                }
+            }
+            reject_probe_retarget(unsafe { libc::connect(left.as_raw_fd(), address_ptr, length) })?;
+            let bound_path = directory.0.join(format!("{kind}-bound.sock"));
+            let bound_address = probe_address(&bound_path)?;
+            check_probe_status(unsafe {
+                libc::bind(
+                    left.as_raw_fd(),
+                    std::ptr::from_ref(&bound_address).cast(),
+                    length,
+                )
+            })?;
+            reject_probe_retarget(unsafe { libc::listen(left.as_raw_fd(), 1) })?;
+            fs::remove_file(bound_path)?;
+        }
+    }
+    fs::remove_dir_all(&directory.0)?;
+    Ok(())
+}
+
+struct PairProbeDirectory(PathBuf);
+impl Drop for PairProbeDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn probe_address(path: &Path) -> io::Result<libc::sockaddr_un> {
+    // SAFETY: zero initializes every field and padding byte of sockaddr_un.
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as _;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.len() >= address.sun_path.len() || bytes.contains(&0) {
+        return Err(io::Error::other(
+            "kernel probe socket path exceeds its address bound",
+        ));
+    }
+    for (target, byte) in address.sun_path.iter_mut().zip(bytes) {
+        *target = *byte as _;
+    }
+    Ok(address)
+}
+
+#[derive(Clone, Copy)]
+enum PairTransition {
+    Unchanged,
+    Unspecified,
+    Shutdown(libc::c_int),
+    PeerClosed,
+    PeerClosedSend,
+    PeerClosedSendTo,
+    PeerClosedSendMsg,
+}
+
+fn probe_socket(kind: libc::c_int) -> io::Result<OwnedFd> {
+    // SAFETY: socket does not dereference pointers and returns a new descriptor.
+    let descriptor = unsafe {
+        libc::socket(
+            libc::AF_UNIX,
+            kind | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: this is the sole owner of the descriptor returned by socket.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn check_probe_status(status: libc::c_int) -> io::Result<()> {
+    if status != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn reject_probe_retarget(status: libc::c_int) -> io::Result<()> {
+    if status == -1
+        && matches!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::EISCONN | libc::EINVAL)
+        )
+    {
+        return Ok(());
+    }
+    Err(io::Error::other(
+        "anonymous pair could regain an external peer or listener",
+    ))
+}
+
+fn exercise_dead_peer(descriptor: libc::c_int, transition: PairTransition) -> io::Result<()> {
+    if matches!(transition, PairTransition::PeerClosed) {
+        return Ok(());
+    }
+    let data = b"SAYA_SYNTHETIC_PAIR_PROBE";
+    let mut vector = libc::iovec {
+        iov_base: data.as_ptr().cast_mut().cast(),
+        iov_len: data.len(),
+    };
+    // SAFETY: a zero msghdr starts with no destination or ancillary pointers.
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut vector;
+    message.msg_iovlen = 1;
+    for _ in 0..3 {
+        // SAFETY: each send references only the live synthetic byte buffer.
+        // NOSIGNAL prevents this host-side capability probe from raising SIGPIPE.
+        let status = unsafe {
+            match transition {
+                PairTransition::PeerClosedSend => libc::send(
+                    descriptor,
+                    data.as_ptr().cast(),
+                    data.len(),
+                    libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
+                ),
+                PairTransition::PeerClosedSendTo => libc::sendto(
+                    descriptor,
+                    data.as_ptr().cast(),
+                    data.len(),
+                    libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
+                    std::ptr::null(),
+                    0,
+                ),
+                PairTransition::PeerClosedSendMsg => libc::sendmsg(
+                    descriptor,
+                    &message,
+                    libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
+                ),
+                _ => return Err(io::Error::other("unknown dead-peer probe transition")),
+            }
+        };
+        if status != -1
+            || !matches!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPIPE | libc::ECONNRESET | libc::ECONNREFUSED | libc::ENOTCONN)
+            )
+        {
+            return Err(io::Error::other(
+                "dead-peer send did not report a known closed state",
+            ));
+        }
+    }
+    Ok(())
+}
 fn bind(
     args: &mut Vec<OsString>,
     descriptors: &mut Vec<Arc<fs::File>>,
@@ -495,11 +764,11 @@ fn filter(payload: bool) -> Vec<libc::sock_filter> {
         libc::SYS_io_uring_register,
     ];
     if payload {
-        // Anonymous connected streams support runtime self-pipes. They cannot
-        // be retargeted like Unix datagram pairs. Named AF_UNIX socket creation,
-        // datagram pairs and sequenced-packet pairs remain denied.
+        // Anonymous connected streams and sequenced packets support runtime
+        // self-pipes and Rust's child-exec error channel. Both keep a fixed peer,
+        // unlike retargetable datagram pairs. Named AF_UNIX sockets stay denied.
         program.extend([
-            instruction(EQUAL, 0, 11, libc::SYS_socketpair as u32),
+            instruction(EQUAL, 0, 12, libc::SYS_socketpair as u32),
             instruction(LOAD, 0, 0, 16),
             instruction(EQUAL, 1, 0, libc::AF_UNIX as u32),
             instruction(RETURN, 0, 0, DENY),
@@ -510,7 +779,8 @@ fn filter(payload: bool) -> Vec<libc::sock_filter> {
                 0,
                 !(libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK) as u32,
             ),
-            instruction(EQUAL, 1, 0, libc::SOCK_STREAM as u32),
+            instruction(EQUAL, 2, 0, libc::SOCK_STREAM as u32),
+            instruction(EQUAL, 1, 0, libc::SOCK_SEQPACKET as u32),
             instruction(RETURN, 0, 0, DENY),
             instruction(LOAD, 0, 0, 32),
             instruction(EQUAL, 1, 0, 0),
@@ -715,6 +985,9 @@ mod tests {
             libc::SOCK_STREAM,
             libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
             libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            libc::SOCK_SEQPACKET,
+            libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+            libc::SOCK_SEQPACKET | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
         ] {
             assert_eq!(
                 evaluate_arguments(
@@ -726,7 +999,13 @@ mod tests {
                 ALLOW
             );
         }
-        for kind in [libc::SOCK_DGRAM, libc::SOCK_SEQPACKET, libc::SOCK_RAW] {
+        for kind in [
+            libc::SOCK_DGRAM,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            libc::SOCK_RAW,
+            libc::SOCK_STREAM | 0x1000,
+            libc::SOCK_SEQPACKET | 0x1000,
+        ] {
             assert_eq!(
                 evaluate_arguments(
                     &payload,
@@ -746,15 +1025,17 @@ mod tests {
             ),
             DENY
         );
-        assert_eq!(
-            evaluate_arguments(
-                &payload,
-                arch,
-                libc::SYS_socketpair as u32,
-                [libc::AF_UNIX as u32, libc::SOCK_STREAM as u32, 1]
-            ),
-            DENY
-        );
+        for kind in [libc::SOCK_STREAM, libc::SOCK_SEQPACKET] {
+            assert_eq!(
+                evaluate_arguments(
+                    &payload,
+                    arch,
+                    libc::SYS_socketpair as u32,
+                    [libc::AF_UNIX as u32, kind as u32, 1]
+                ),
+                DENY
+            );
+        }
         assert_eq!(
             evaluate(&base, arch, libc::SYS_socket as u32, libc::AF_UNIX as u32),
             ALLOW
@@ -772,6 +1053,54 @@ mod tests {
         assert_eq!(
             evaluate(&payload, arch, 0x4000_0000 | libc::SYS_socket as u32, 0),
             0x8000_0000
+        );
+    }
+    #[test]
+    fn kernel_socket_pair_release_gate_accepts_only_confirmed_fixed_ranges() {
+        for release in [
+            "5.15.86",
+            "5.15.200-generic",
+            "6.1.2",
+            "6.1.100-vendor",
+            "6.2.0",
+            "6.8.0-azure",
+            "7.0.0+custom",
+        ] {
+            assert!(known_fixed_pair_kernel_release(release), "{release}");
+        }
+        for release in [
+            "5.4.300",
+            "5.10.250",
+            "5.15.0-1092-azure",
+            "5.15.85",
+            "6.0.19",
+            "6.1.1",
+            "6.2.0-rc1",
+            "6.2.0-RC1",
+            "6.20.0-rc9",
+            "6.2",
+            "6.2.0.1",
+            "6.2.0unknown",
+            "unknown",
+            "",
+        ] {
+            assert!(!known_fixed_pair_kernel_release(release), "{release}");
+        }
+    }
+    #[test]
+    fn connected_pair_kernel_probe_removes_private_paths_on_success_and_failure() {
+        let root = tempfile::tempdir().expect("probe scratch");
+        verify_connected_pair_boundaries(root.path()).expect("connected pair kernel semantics");
+        assert_eq!(
+            fs::read_dir(root.path()).expect("scratch entries").count(),
+            0
+        );
+        let long = root.path().join("x".repeat(100));
+        fs::create_dir(&long).expect("long probe scratch");
+        assert!(verify_connected_pair_boundaries(&long).is_err());
+        assert_eq!(
+            fs::read_dir(&long).expect("failed scratch entries").count(),
+            0
         );
     }
     #[test]

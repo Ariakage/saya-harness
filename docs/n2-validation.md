@@ -103,6 +103,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/mcp_acceptance.py target/release/sa
 
 工具链目录已进入可读视图且argv已指定`--sysroot`。根据glibc通过`/proc/self/exe`解析origin的实现，缺少该路径可导致相对动态库定位失败。当前候选为隔离内编译命令显式设置工具链`lib`路径，后端策略保留。原因推断与Linux修复结果分别记录。[glibc实现记录](https://sourceware.org/pipermail/glibc-cvs/2022q4/081599.html)
 
+## Linux Rust子进程兼容复验
+
+`1c988470` 的Linux两架构复验证明显式库路径已使编译器进入链接阶段，随后创建`cc`子进程返回EPERM。Rust标准库的Unix fork路径使用匿名AF_UNIX SOCK_SEQPACKET通道报告exec结果，当前payload过滤器仅放行STREAM，因此需要运行时兼容修复。候选仅扩展已连接的匿名pair类型，保留命名Unix socket与datagram限制，并扩展实际防重定向／FD传递及带pre_exec的Rust子进程回归。当前候选已加入精确pair放行、内核正式版本身份门禁及行为探测。确认范围为5.15分支≥5.15.86、6.1分支≥6.1.2或正式6.2及以后版本，其他身份按未确认必需能力处理。有限探测不能证明历史竞态修复，因此与版本条件共同使用。原peer间允许传递已有FD，宿主FD继承边界继续由CLOEXEC与私有通道隔离。该项在Linux实际复验完成后更新状态。[Rust标准库实现](https://doc.rust-lang.org/src/std/sys/process/unix/unix.rs.html)
+
+候选在本机通过完整格式、workspace全目标严格Clippy、904项Rust测试及优化构建，日志为 `target/n2/seqpacket-workspace.log`。两Linux目标在独立后端harness完成全目标严格Clippy，实际版本函数的21个样本通过。交叉检查作为类型证据，Linux native/fork/内核探测仍待真实runner。Mac优化程序SHA仍为 `8f7810773f90b81b91d3ee7a4916ced17e15ef945b4050f96a3210c2d4f15585`，与本机18原生、25MCP及24TUI已测程序逐字节一致。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

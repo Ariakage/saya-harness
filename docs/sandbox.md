@@ -19,6 +19,14 @@ core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独
 
 模型上下文分别注入宿主信息与实际执行环境身份、能力及 MCP 连接事实。当前原生后端采用规范化宿主路径，策略快照绑定本次 Run 的环境与调用。模式和授权在调用边界复查，进入 PLAN 的清理屏障覆盖后台写入及本地服务。
 
+## Linux匿名Unix通道的内核条件
+
+Rust子进程启动使用已连接的匿名AF_UNIX SOCK_SEQPACKET通道，异步运行时还使用SOCK_STREAM通道。payload策略按这两类匿名pair限定协议及flags，命名Unix socket与datagram继续受限制。原peer间的SCM_RIGHTS可以复制发送方已有的FD，宿主描述符通过两层CLOEXEC清理与私有启动协议隔离。
+
+部分旧内核的shutdown及peer-close处理曾改变连接状态，匿名pair可能因此重新connect／listen。当前候选同时采用明确的正式版本范围和私有监听器行为探测，检测到重定向能力、未知行为或无法确认时返回 `sandbox_capability_unavailable`。范围为5.15分支≥5.15.86、6.1分支≥6.1.2，或正式6.2及以后版本。版本条件用于约束已知竞态修复身份，有限行为探测用于核对可观测语义。[peer-close修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)、[shutdown回补](https://github.com/gregkh/linux/commit/80d709875d920f7ca959040457b7393df706fe44)
+
+5.4／5.10本轮未纳入内核确认矩阵。厂商 `5.15.0-xxx` 无法仅凭版本串确认对应上游回补，RC和未知版本按必需能力无法确认处理。能力探测结果、Rust fork路径与原生防重定向回归需由实际Linux程序验证，见[N2记录](n2-validation.md)。
+
 ## 控制链
 
 模型参数经过类型校验、可信操作描述、必要命令结构分析、工作模式／规则／核查／确认，再保存执行意图并交给选定后端。结果和副作用状态由 Store 保存，文件 worker 与命令继续遵循当前输入、输出和时间上限。
@@ -38,7 +46,7 @@ AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑�
 
 Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/saya-core/src/execution/linux.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
 
-宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 允许协议为 0 的 `AF_UNIX`／`SOCK_STREAM` 匿名已连接 socketpair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，供运行时 self-pipe 使用；命名 Unix socket 创建、datagram／seqpacket pair 受过滤器拒绝。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
+宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 候选允许协议为0的 `AF_UNIX`／`SOCK_STREAM` 与 `SOCK_SEQPACKET` 匿名已连接pair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，用于运行时self-pipe和Rust fork结果通道。命名Unix socket创建及datagram pair受过滤器拒绝，匿名pair同时受前述内核身份与行为探测约束。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
 
 启动创建独立 session，执行前规范化未声明描述符的 close-on-exec 标志，并约束 TIOCSTI 等终端相关入口。宿主固定私有 launcher 镜像，通过有界、解除目录链接的文件描述符传入实际环境值。Browser 专用 profile 和其自身 sandbox 的组合留在后续 [Browser 阶段](browser.md)验收。
 
