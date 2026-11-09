@@ -16,9 +16,9 @@ DEV-078实现manifest／lock的离线结构、语义、SemVer、feature／能力
 
 DEV-084／087的GlobalMemoryStore独立组件新增可读Markdown、事实粒度来源、当前workspace过滤、纯提案、幂等提交、排他锁、WAL恢复、私有ledger及索引历史。33项定向测试通过，包含源元数据和旧updated_at在forget后经旧索引／rollback抑制的回归。独立复核确认修复，入口／投影／界面由后续任务接线。[组件格式与保证](memory.md#dev-084087-存储组件)
 
-项目负责人提供四份压缩／续接／系统组装参考，以及三份记忆参考，要求提示词使用纯英文。已形成英文Compact与Continuation草案并记录四份压缩来源的SHA和取舍，当前运行时仍加载已有11份英文提示词，草案接入由DEV-063完成。[提示词来源与接入契约](prompt/drafts/n3/README.md)
+项目负责人提供四份压缩／续接／系统组装参考，以及三份记忆参考，要求提示词使用纯英文。已形成英文Compact与Continuation草案并记录四份压缩来源的SHA和取舍，当前源码已接入14份英文提示词，包含结构化Compact、固定前缀条件式续接与有来源的Memory Context，协议与正常运行验收继续按DEV-063／077维护。[提示词来源与接入契约](prompt/drafts/n3/README.md)
 
-三份记忆来源进一步形成英文Memory Context与Consolidation草案，记录默认注入、渐进检索、来源／作用域／版本、更正、撤回及明确遗忘。参考中的多版本模板和二进制残留按来源身份保留，草案采用Saya专用变更与核查契约，由DEV-084至DEV-089接入。[记忆来源与验收矩阵](prompt/drafts/n3/memory-sources.md)
+三份记忆来源进一步形成英文Memory Context与Consolidation草案，记录默认注入、渐进检索、来源／作用域／版本、更正、撤回及明确遗忘。参考中的多版本模板和二进制残留按来源身份保留，已将Saya专用记忆工具、证据选择、更正／遗忘与独立核查契约接入英文工具／审核提示词，独立整理器仍保留草案，实际入口与平台证据继续按DEV-084至DEV-089维护。[记忆来源与验收矩阵](prompt/drafts/n3/memory-sources.md)
 
 全局记忆默认读取和注入，auto写入／遗忘通过规则与独立模型审核，由本轮明确选择D-052确认。格式、索引、工具、遗忘、界面及联合验收分别由DEV-084至DEV-089交付。
 
