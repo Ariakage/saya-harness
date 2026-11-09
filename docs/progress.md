@@ -12,6 +12,10 @@ DEV-054已完成工具注册、可信操作描述和统一外部适配器派发�
 
 DEV-054的隔离源码快照在本机macOS27.2 ARM／Rust1.99.1执行完整 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、workspace全目标严格Clippy、752项Rust测试及优化构建通过。六项新回归包含48组分类／模式／权限组合、离线与有界schema、身份指纹、元数据凭据拒绝、一次性派发、持久化期间目录替换及执行租约、未知副作用和认证／输入请求终止。独立复核确认的目录竞态、嵌套schema资源重定向和目录凭据边界均补入回归。证据为 `target/n2/dev054-workspace.log` 和 `target/n2/dev054-tests.log`，实现约定见[工具注册](tool-registry.md)。CLI中的MCP连接与真实后端接线由后续DEV阶段完成。
 
+### 生命周期测试夹具竞态
+
+DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。
+
 ## 完整 Markdown、数学、图表与 debug 预览
 
 2026-11-09，本阶段完成本机开发与验证。项目负责人补充完整Markdown语法、Unicode数学、Mermaid及source／render显示要求，并指定仅debug构建提供 `saya tui-preview`。本轮构建本地测试版，四平台同步验证安排在N2阶段。

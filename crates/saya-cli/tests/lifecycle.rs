@@ -13,6 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Publish the marker only after its complete PID line has been written and closed.
+const BACKGROUND_PROCESS_SCRIPT: &str =
+    r#"printf '%s\n' "$$" > tool.pid.tmp && /bin/mv tool.pid.tmp tool.pid && exec sleep 30"#;
+
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
@@ -88,7 +92,7 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (url, _) = fixture::server_dynamic(2, move |index, _| {
         let message = if index == 0 {
-            json!({"role":"assistant","content":null,"tool_calls":[{"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","echo $$ > tool.pid; exec sleep 30"]}}).to_string()}}]})
+            json!({"role":"assistant","content":null,"tool_calls":[{"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c",BACKGROUND_PROCESS_SCRIPT]}}).to_string()}}]})
         } else {
             let _ = release_rx.recv_timeout(Duration::from_secs(10));
             json!({"role":"assistant","content":"done"})
@@ -227,7 +231,7 @@ fn broken_stdout_case(completed_only: bool) {
         if completed_only {
             let item = if index == 0 {
                 json!({"type":"function_call","id":"launch-item","call_id":"launch","status":"completed",
-                    "name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","echo $$ > tool.pid; exec sleep 30"]}}).to_string()})
+                    "name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c",BACKGROUND_PROCESS_SCRIPT]}}).to_string()})
             } else {
                 let _ = release_rx.recv_timeout(Duration::from_secs(10));
                 json!({"type":"message","id":"reply","role":"assistant","status":"completed",
@@ -236,7 +240,7 @@ fn broken_stdout_case(completed_only: bool) {
             return ("text/event-stream", fixture::sse(&[json!({"type":"response.completed","response":{"status":"completed","output":[item]}})]));
         }
         if index == 0 {
-            let call = json!({"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","echo $$ > tool.pid; exec sleep 30"]}}).to_string()}});
+            let call = json!({"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c",BACKGROUND_PROCESS_SCRIPT]}}).to_string()}});
             return ("text/event-stream", fixture::sse(&[
                 json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":call["id"],"type":"function","function":call["function"]}]},"finish_reason":null}]}),
                 json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
