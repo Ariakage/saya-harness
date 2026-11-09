@@ -207,6 +207,16 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 最终本机以 `RUST_TEST_THREADS=4` 执行完整workspace门禁，906项Rust测试、格式、全目标严格Clippy及优化构建通过，记录为 `target/n2/human-budget-workspace-final.log`。此前默认线程数下的CLI／生命周期等待失败保留于 `target/n2/human-budget-workspace.log`，定向生命周期6项复验通过。四平台门禁继续使用各runner默认测试并发，最终新源码验收另行记录。
 
+## 完整性能证据补充
+
+终审对照DEV-057起点设计确认，已有四指标记录缺少独立热启动、文件写入、搜索和代理延迟。性能证据v2现记录每个Host／原生后端的冷启动、读取、写入、搜索、短命令、同Run热命令及四Run并发七项，逐样本保留实际成功操作与后端证明。热命令预热一次后取样，使用实际模型响应发送完至后继工具结果请求的单调时间戳，并验证同一Run／环境。CPU和内存按整次CLI及每个并发child的内核数据记录。
+
+代理组分别测量Host直连、原生HTTP代理与CONNECT，payload单调时钟覆盖socket建立、发送、完整16字节响应及关闭。每个样本要求真实目标只收到一次授权路径请求，CLI整体资源与网络RTT分别存储。CONNECT采用隧道内明文HTTP，操作与资源的测量范围随报告记录。
+
+固定本机程序 `9d90b4bf6b82a174e5930d80203e5a23b1584e63044b8a147622a888366ec019` 在同一次脚本执行通过18项原生场景、两后端七指标及三种网络路径各3样本，记录为 `target/n2/performance-final-local/native-evidence.json`。47项Python离线回归通过，独立核验器的21项判据及25项坏数据反例通过。核验器支持1／3／20样本，并已接入四平台工作流，强制 `measurement_version=2`、完整单次报告、精确样本数、分位数／比较值重算及资源范围。
+
+本机观察到热命令P50原生30.817ms、Host15.465ms，网络RTT P50直连0.797ms、HTTP代理1.521ms、CONNECT1.510ms。这些值对应上述三样本与明确测量范围，四平台实际值按新固定源码重新记录。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

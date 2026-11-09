@@ -145,26 +145,55 @@ static int proxy_port(void) {
         || strcmp(host, "127.0.0.1")) return 0;
     return port;
 }
-static int proxy(const char *origin, int tunnel) {
-    int port = proxy_port();
-    if (!port) { puts("NO_PROXY"); return 0; }
-    int fd = tcp(AF_INET, port);
-    if (fd < 0) return denied();
+static int network_error(int measured) {
+    if (!measured) return denied();
+    printf("NETWORK_FAILED errno=%d\n", errno);
+    return 70;
+}
+static int loopback_origin_port(const char *origin, int tunnel) {
+    const char *prefix = tunnel ? "https://127.0.0.1:" : "http://127.0.0.1:";
+    size_t prefix_length = strlen(prefix);
+    if (strnlen(origin, 129) > 128 || strncmp(origin, prefix, prefix_length)) return 0;
+    const char *number = origin + prefix_length;
+    if (*number < '0' || *number > '9') return 0;
+    unsigned int port = 0;
+    for (const char *cursor = number; *cursor; cursor++) {
+        if (*cursor < '0' || *cursor > '9') return 0;
+        port = port * 10 + (unsigned int)(*cursor - '0');
+        if (port > 65535) return 0;
+    }
+    return (int)port;
+}
+static int proxy(const char *origin, int tunnel, int measured, int direct) {
+    int target_port = measured ? loopback_origin_port(origin, tunnel) : 0;
+    if (measured && !target_port) return 64;
     const char *authority = strstr(origin, "://");
-    if (!authority) { close(fd); return 64; }
+    if (!authority) return 64;
     authority += 3;
+    int port = direct ? target_port : proxy_port();
+    if (port <= 0 || port > 65535) {
+        if (measured) return 70;
+        puts("NO_PROXY"); return 0;
+    }
+    struct timespec started = {0}, finished = {0};
+    if (measured && clock_gettime(CLOCK_MONOTONIC, &started) < 0) return 70;
+    int fd = tcp(AF_INET, port);
+    if (fd < 0) return network_error(measured);
     char request[2048];
     int length;
     if (tunnel) {
         length = snprintf(request, sizeof(request),
             "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", authority, authority);
+    } else if (direct) {
+        length = snprintf(request, sizeof(request),
+            "GET /probe HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", authority);
     } else {
         length = snprintf(request, sizeof(request),
             "GET %s/probe HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
             origin, authority);
     }
     if (length < 0 || length >= (int)sizeof(request)
-        || write(fd, request, (size_t)length) != length) { close(fd); return denied(); }
+        || write(fd, request, (size_t)length) != length) { close(fd); return network_error(measured); }
     char response[2048] = {0};
     size_t used = 0;
     if (tunnel) {
@@ -173,20 +202,40 @@ static int proxy(const char *origin, int tunnel) {
             if (count <= 0) break;
             used += (size_t)count;
         }
-        if (!strstr(response, " 200 ")) { close(fd); puts("PROXY_DENIED"); return 0; }
+        if (!strstr(response, "\r\n\r\n") || !strstr(response, " 200 ")
+            || (measured && strncmp(response, "HTTP/1.1 200 ", 13)
+                && strncmp(response, "HTTP/1.0 200 ", 13))) {
+            close(fd);
+            if (measured) return 70;
+            puts("PROXY_DENIED"); return 0;
+        }
         length = snprintf(request, sizeof(request),
             "GET /probe HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", authority);
         if (length < 0 || length >= (int)sizeof(request)
-            || write(fd, request, (size_t)length) != length) { close(fd); return denied(); }
+            || write(fd, request, (size_t)length) != length) { close(fd); return network_error(measured); }
         memset(response, 0, sizeof(response));
         used = 0;
     }
     while (used < sizeof(response) - 1) {
         ssize_t count = read(fd, response + used, sizeof(response) - 1 - used);
+        if (count < 0 && measured) { close(fd); return network_error(1); }
         if (count <= 0) break;
         used += (size_t)count;
     }
-    close(fd);
+    int closed = close(fd);
+    if (measured) {
+        if (closed < 0 || clock_gettime(CLOCK_MONOTONIC, &finished) < 0) return 70;
+        const char *body = strstr(response, "\r\n\r\n");
+        if ((strncmp(response, "HTTP/1.0 200 ", 13) && strncmp(response, "HTTP/1.1 200 ", 13))
+            || !body || used != (size_t)(body - response) + 4 + 16
+            || memcmp(body + 4, "N2_PROXY_ALLOWED", 16)
+            || !strstr(response, "\r\nContent-Length: 16\r\n")) return 70;
+        double elapsed = (double)(finished.tv_sec - started.tv_sec) * 1000.0
+            + (double)(finished.tv_nsec - started.tv_nsec) / 1000000.0;
+        if (elapsed <= 0.0 || elapsed > 10000.0) return 70;
+        printf("N2_NETWORK_MS=%.6f\n", elapsed);
+        return 0;
+    }
     puts(strstr(response, " 200 ") && strstr(response, "N2_PROXY_ALLOWED")
          ? "PROXY_ALLOWED" : "PROXY_DENIED");
     return 0;
@@ -255,8 +304,11 @@ int main(int argc, char **argv) {
         puts("CONNECTED");
         return 0;
     }
-    if (!strcmp(argv[1], "proxy") && argc == 3) return proxy(argv[2], 0);
-    if (!strcmp(argv[1], "connect") && argc == 3) return proxy(argv[2], 1);
+    if (!strcmp(argv[1], "proxy") && argc == 3) return proxy(argv[2], 0, 0, 0);
+    if (!strcmp(argv[1], "connect") && argc == 3) return proxy(argv[2], 1, 0, 0);
+    if (!strcmp(argv[1], "http_latency") && argc == 3) return proxy(argv[2], 0, 1, 1);
+    if (!strcmp(argv[1], "proxy_latency") && argc == 3) return proxy(argv[2], 0, 1, 0);
+    if (!strcmp(argv[1], "connect_latency") && argc == 3) return proxy(argv[2], 1, 1, 0);
     if (!strcmp(argv[1], "proxy_port")) { printf("PROXY_PORT=%d\n", proxy_port()); return 0; }
     if (!strcmp(argv[1], "hold") && argc == 3) return hold(argv[2]);
     if (!strcmp(argv[1], "host_process_metadata") && argc == 3)
@@ -320,6 +372,7 @@ def tool_results(requests):
 class ModelFixture:
     def __init__(self):
         self.requests = []
+        self.observations = []
         self.steps = []
         self.position = 0
         self.lock = threading.Lock()
@@ -337,7 +390,9 @@ class ModelFixture:
                 if length > CAPTURE_BYTES:
                     self.send_error(413)
                     return
-                request = json.loads(self.rfile.read(length))
+                encoded_request = self.rfile.read(length)
+                received_ns = time.perf_counter_ns()
+                request = json.loads(encoded_request)
                 with fixture.lock:
                     if len(fixture.requests) >= MAX_REQUESTS:
                         self.send_error(429)
@@ -356,6 +411,11 @@ class ModelFixture:
                             'function': {'name': name, 'arguments': json.dumps(arguments)}}]}, 'tool_calls')
                     else:
                         value = reply({'role': 'assistant', 'content': 'N2_FIXTURE_DONE'})
+                    calls = value['choices'][0]['message'].get('tool_calls', [])
+                    observation = {'request_index': len(fixture.requests) - 1,
+                        'request_received_ns': received_ns, 'response_sent_ns': None,
+                        'tool_call_id': calls[0]['id'] if calls else None}
+                    fixture.observations.append(observation)
                 if fixture.block_after_tool and tool_results([request]):
                     fixture.blocked.set()
                     fixture.release.wait(20)
@@ -366,6 +426,10 @@ class ModelFixture:
                     self.send_header('Content-Length', str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
+                    self.wfile.flush()
+                    sent_ns = time.perf_counter_ns()
+                    with fixture.lock:
+                        observation['response_sent_ns'] = sent_ns
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -1006,36 +1070,192 @@ def file_descriptors_case(case):
     return {'backend': case.native(), 'additional_fds_before_failure': count, 'payload': text.strip()}
 
 
-def validate_benchmark_sample(case, backend, kind):
+def validate_benchmark_sample(case, backend, kind, expected_tools=1):
     if backend == 'auto':
-        case.native()
+        facts = case.native()
     else:
         facts = case.facts()
         require(facts['identity']['backend'] == 'host', 'Host benchmark used a different backend')
         require(all(facts['capabilities'][name] == 'unsupported' for name in ('filesystem', 'network')),
                 'Host benchmark reported native isolation capabilities')
     results = case.results()
+    proof = {'kind': kind, 'backend': facts['identity']['backend'], 'tool_calls': len(results)}
     if kind == 'cold_start':
         require(not results, 'Cold-start benchmark unexpectedly executed a tool')
-        return
-    require(set(results) == {'n2-1'}, 'Benchmark did not complete its one requested tool')
+        return proof
+    expected_ids = [f'n2-{index}' for index in range(1, expected_tools + 1)]
+    require(set(results) == set(expected_ids), 'Benchmark did not complete its requested tools')
+    require(all(result.get('ok') is True for result in results.values()),
+            'Benchmark tool failed instead of measuring a successful operation')
+    if kind == 'warm_command':
+        require(2 <= expected_tools <= 21, 'Warm benchmark requires one warmup and 1..20 samples')
+        require(len(case.invocations) == 1, 'Warm benchmark used more than one CLI invocation')
+        requests = case.model.requests
+        require(len(requests) == expected_tools + 1, 'Warm benchmark has unexpected model request count')
+        identity = facts['identity']
+        require(isinstance(identity.get('id'), str) and bool(identity['id']),
+                'Warm benchmark omitted its prepared-environment identity')
+        marker = '{"saya_execution_environment_v1"'
+        for request in requests:
+            identities = []
+            for message in request.get('messages', []):
+                content = message.get('content')
+                if isinstance(content, str) and marker in content:
+                    value, _ = json.JSONDecoder().raw_decode(content[content.index(marker):])
+                    identities.append(value['saya_execution_environment_v1']['identity'])
+            require(identities and all(value == identity for value in identities),
+                    'Warm benchmark changed its prepared environment between tool calls')
+        observations = case.model.observations
+        require(len(observations) == len(requests), 'Warm benchmark omitted model time observations')
+        intervals = []
+        for index, call_id in enumerate(expected_ids):
+            result = results[call_id]
+            require(result['data']['exit_code'] == 0, 'Warm benchmark command failed')
+            sent = observations[index]
+            received = observations[index + 1]
+            require(sent['request_index'] == index and received['request_index'] == index + 1
+                    and sent['tool_call_id'] == call_id, 'Warm benchmark timing belongs to a different call')
+            require(tool_results([requests[index + 1]]).get(call_id) == result,
+                    'Warm benchmark next model request omitted its actual tool result')
+            start = sent['response_sent_ns']
+            end = received['request_received_ns']
+            require(type(start) is int and type(end) is int and 0 < start < end,
+                    'Warm benchmark did not observe a complete response-to-tool-result interval')
+            require(end - start <= 40_000_000_000,
+                    'Warm benchmark interval exceeded the bounded CLI invocation')
+            intervals.append({'call_id': call_id, 'response_sent_ns': start,
+                'tool_result_request_received_ns': end, 'elapsed_ms': (end - start) / 1_000_000,
+                'proof': {'kind': kind, 'backend': proof['backend'],
+                          'environment_id': identity['id'], 'exit_code': 0}})
+        proof.update({'environment_identity': identity, 'model_requests': len(requests),
+                      'request_environment_ids': [identity['id']] * len(requests),
+                      'invocation_count': len(case.invocations),
+                      'call_ids': expected_ids, 'call_intervals': intervals})
+        return proof
+    require(expected_tools == 1, 'Single-operation benchmark expected multiple tools')
     result = results['n2-1']
-    require(result.get('ok'), 'Benchmark tool failed instead of measuring a successful operation')
     if kind == 'file_roundtrip':
         require(result['data']['content'] == 'N2_BENCH\n', 'Benchmark read returned the wrong file content')
-    else:
+        proof.update({'content_sha256': hashlib.sha256(b'N2_BENCH\n').hexdigest(), 'bytes': 9})
+    elif kind == 'file_write':
+        path = case.workspace / 'written.txt'
+        require(path.is_file() and path.read_bytes() == b'N2_BENCH_WRITE\n',
+                'Benchmark write did not create the expected file content')
+        require(Path(result['data']['path']).resolve() == path.resolve()
+                and result['data']['created'] is True and result['data']['version'] == digest(path),
+                'Benchmark write result did not describe the created file')
+        proof.update({'path': str(path.resolve()), 'content_sha256': digest(path), 'bytes': path.stat().st_size})
+    elif kind == 'search_text':
+        data = result['data']
+        items = data['items']
+        require(data.get('truncated') is False and len(items) == 1,
+                'Benchmark search did not return its complete expected match')
+        hit = items[0]
+        require(Path(hit['path']).resolve() == (case.workspace / 'bench.txt').resolve()
+                and hit['line'] == 1 and hit['text'] == 'N2_BENCH',
+                'Benchmark search returned the wrong path, line or matching text')
+        proof.update({'path': str(Path(hit['path']).resolve()), 'line': 1, 'text': hit['text'], 'matches': 1})
+    elif kind == 'short_command':
         require(result['data']['exit_code'] == 0, 'Benchmark command did not exit successfully')
+        proof['exit_code'] = 0
+    else:
+        raise AssertionError('Unknown benchmark operation ' + kind)
+    return proof
+
+
+def proxy_elapsed_ms(result):
+    output = stdout(result)
+    require(result['data'].get('exit_code') == 0, 'Network latency probe did not exit successfully')
+    match = re.fullmatch(r'N2_NETWORK_MS=([0-9]+\.[0-9]{6})\n', output)
+    require(match is not None, 'Network latency probe returned an invalid timing record')
+    elapsed = float(match.group(1))
+    require(math.isfinite(elapsed) and 0 < elapsed <= 10000,
+            'Network latency probe returned an out-of-range duration')
+    return elapsed
+
+
+def benchmark_proxy(binary, probe, base, samples):
+    require(isinstance(samples, int) and not isinstance(samples, bool) and 1 <= samples <= 20,
+            'Proxy benchmark sample count is outside its supported bound')
+    result = {
+        'samples_per_variant': samples,
+        'percentile': 'nearest-rank',
+        'clock': 'payload CLOCK_MONOTONIC',
+        'scope': 'fresh socket creation, connect, HTTP request, complete 16-byte response body and close; '
+                 'CONNECT also includes tunnel negotiation; plaintext HTTP inside the tunnel, no TLS; '
+                 'excludes CLI, model, backend preparation and process startup',
+        'whole_cli_rusage_scope': 'separate whole CLI invocation wall time and aggregate wait4 CPU counters; '
+                                  'kernel ru_maxrss, not aggregate simultaneous Run memory',
+        'variants': {},
+    }
+    with http_target() as (port, seen):
+        for variant, action, scheme in [
+                ('host_direct', 'http_latency', 'http'),
+                ('native_http', 'proxy_latency', 'http'),
+                ('native_connect', 'connect_latency', 'https')]:
+            origin = f'{scheme}://127.0.0.1:{port}'
+            timings = []
+            resources = []
+            for _ in range(samples):
+                before = len(seen)
+                with fixture(binary, probe, base) as case:
+                    if variant == 'host_direct':
+                        case.configure('[sandbox]\nbackend="host"')
+                    else:
+                        case.configure('[sandbox.network]\nmode="proxy"\nallowed_origins=['
+                                       + json.dumps(origin) + ']\nlocalhost_development_origin='
+                                       + json.dumps(origin))
+                    outcome = case.run([case.command(action, origin)])
+                    complete(outcome)
+                    facts = case.facts() if variant == 'host_direct' else case.native()
+                    if variant == 'host_direct':
+                        require(facts['identity']['backend'] == 'host'
+                                and all(facts['capabilities'][name] == 'unsupported'
+                                        for name in ('filesystem', 'network')),
+                                'Direct network baseline did not use explicit Host execution')
+                    results = case.results()
+                    require(set(results) == {'n2-1'}, 'Proxy benchmark did not complete its one exec tool')
+                    timings.append({'elapsed_ms': proxy_elapsed_ms(results['n2-1'])})
+                    require(seen[before:] == ['/probe'],
+                            'Proxy benchmark target did not receive exactly its authorized request')
+                    resources.append({key: outcome[key] for key in (
+                        'elapsed_ms', 'user_cpu_ms', 'system_cpu_ms', 'peak_rss_bytes')})
+            ordered = sorted(sample['elapsed_ms'] for sample in timings)
+            result['variants'][variant] = {
+                'backend': facts['identity']['backend'],
+                'origin': origin,
+                'target_path': '/probe',
+                'target_requests': samples,
+                'p50_ms': ordered[math.ceil(0.5 * samples) - 1],
+                'p95_ms': ordered[math.ceil(0.95 * samples) - 1],
+                'samples': timings,
+                'whole_cli_rusage': resources,
+            }
+        require(seen == ['/probe'] * (3 * samples),
+                'Proxy benchmark target observed an unexpected request or sample count')
+    baseline = result['variants']['host_direct']
+    result['native_over_host'] = {}
+    for variant in ('native_http', 'native_connect'):
+        measured = result['variants'][variant]
+        result['native_over_host'][variant] = {
+            'p50_extra_ms': measured['p50_ms'] - baseline['p50_ms'],
+            'p95_extra_ms': measured['p95_ms'] - baseline['p95_ms'],
+            'p50_ratio': measured['p50_ms'] / baseline['p50_ms'],
+            'p95_ratio': measured['p95_ms'] / baseline['p95_ms'],
+        }
+    return result
 
 
 def benchmark(binary, probe, base, samples):
-    result = {'samples_per_variant': samples, 'percentile': 'nearest-rank',
+    require(type(samples) is int and 1 <= samples <= 20, 'Benchmark sample count must be 1..20')
+    result = {'measurement_version': 2, 'samples_per_variant': samples, 'percentile': 'nearest-rank',
               'resource_measurement': 'wait4 rusage for each CLI child',
               'peak_rss_scope': 'kernel ru_maxrss, not an aggregate simultaneous Run memory peak',
               'cold_start_scope': 'new CLI process and new Run/environment, OS page cache retained',
               'variants': {}}
     for backend in ('auto', 'host'):
         variants = {}
-        for kind in ('cold_start', 'file_roundtrip', 'short_command'):
+        for kind in ('cold_start', 'file_roundtrip', 'file_write', 'search_text', 'short_command'):
             measured = []
             for _ in range(samples):
                 with fixture(binary, probe, base) as case:
@@ -1044,32 +1264,60 @@ def benchmark(binary, probe, base, samples):
                     steps = []
                     if kind == 'file_roundtrip':
                         steps = [('read_file', {'path': 'bench.txt', 'start_line': 1, 'line_count': 1})]
+                    elif kind == 'file_write':
+                        steps = [('write_file', {'path': 'written.txt', 'content': 'N2_BENCH_WRITE\n',
+                                                 'expected_version': None})]
+                    elif kind == 'search_text':
+                        steps = [('search_text', {'path': '.', 'pattern': 'N2_BENCH'})]
                     elif kind == 'short_command':
                         steps = [('exec', {'argv': ['/usr/bin/true']})]
                     outcome = case.run(steps)
                     complete(outcome)
-                    validate_benchmark_sample(case, backend, kind)
-                    measured.append({key: outcome[key] for key in
-                        ('elapsed_ms', 'user_cpu_ms', 'system_cpu_ms', 'peak_rss_bytes')})
+                    proof = validate_benchmark_sample(case, backend, kind)
+                    measured.append({**{key: outcome[key] for key in
+                        ('elapsed_ms', 'user_cpu_ms', 'system_cpu_ms', 'peak_rss_bytes')}, 'proof': proof})
             ordered = sorted(sample['elapsed_ms'] for sample in measured)
-            variants[kind] = {'p50_ms': ordered[math.ceil(0.5 * samples) - 1],
+            variants[kind] = {'scope': 'new CLI process and Run; successful operation including setup, dispatch, persistence and loopback model fixture',
+                'p50_ms': ordered[math.ceil(0.5 * samples) - 1],
                 'p95_ms': ordered[math.ceil(0.95 * samples) - 1], 'samples': measured}
+        with fixture(binary, probe, base) as case:
+            case.configure('[sandbox]\nbackend=' + json.dumps(backend))
+            outcome = case.run([('exec', {'argv': ['/usr/bin/true']})] * (samples + 1))
+            complete(outcome)
+            proof = validate_benchmark_sample(case, backend, 'warm_command', samples + 1)
+            proof['run_id'] = outcome['result']['run_id']
+            intervals = proof.pop('call_intervals')
+            measured = intervals[1:]
+            ordered = sorted(sample['elapsed_ms'] for sample in measured)
+            variants['warm_command'] = {
+                'scope': 'same CLI Run and PreparedEnvironment after one exec warmup; model response fully sent to next actual tool-result request received, including dispatch, process launch, persistence and loopback overhead',
+                'warmup_calls': 1, 'warmup_sample': intervals[0], 'operation_proof': proof,
+                'p50_ms': ordered[math.ceil(0.5 * samples) - 1],
+                'p95_ms': ordered[math.ceil(0.95 * samples) - 1], 'samples': measured,
+                'whole_cli_rusage': {**{key: outcome[key] for key in
+                    ('elapsed_ms', 'user_cpu_ms', 'system_cpu_ms', 'peak_rss_bytes')},
+                    'scope': 'whole CLI invocation wait4 rusage including warmup and all samples; CPU/RSS are not measured separately for each warm tool call'}}
         def concurrent_run(_index):
             with fixture(binary, probe, base) as case:
                 case.configure('[sandbox]\nbackend=' + json.dumps(backend))
                 outcome = case.run([('exec', {'argv': ['/usr/bin/true']})])
                 complete(outcome)
-                validate_benchmark_sample(case, backend, 'short_command')
-                return outcome['elapsed_ms']
+                proof = validate_benchmark_sample(case, backend, 'short_command')
+                return {**{key: outcome[key] for key in
+                    ('elapsed_ms', 'user_cpu_ms', 'system_cpu_ms', 'peak_rss_bytes')}, 'proof': proof}
         batches = []
         for _ in range(samples):
             started = time.monotonic()
             with ThreadPoolExecutor(max_workers=4) as executor:
-                durations = list(executor.map(concurrent_run, range(4)))
+                resources = list(executor.map(concurrent_run, range(4)))
             batches.append({'elapsed_ms': (time.monotonic() - started) * 1000,
-                            'run_elapsed_ms': durations})
+                'run_elapsed_ms': [run['elapsed_ms'] for run in resources], 'run_resources': resources,
+                'user_cpu_ms': sum(run['user_cpu_ms'] for run in resources),
+                'system_cpu_ms': sum(run['system_cpu_ms'] for run in resources),
+                'max_child_peak_rss_bytes': max(run['peak_rss_bytes'] for run in resources)})
         ordered = sorted(batch['elapsed_ms'] for batch in batches)
         variants['concurrent_runs'] = {'scope': 'four-worker batch of independent CLI Runs, including fixture setup and cleanup',
+            'resource_scope': 'CPU sums four CLI wait4 samples, excluding model fixture; max_child_peak_rss_bytes is max of four kernel child peaks and is not simultaneous aggregate Run memory',
             'p50_ms': ordered[math.ceil(0.5 * samples) - 1],
             'p95_ms': ordered[math.ceil(0.95 * samples) - 1], 'batches': batches}
         result['variants'][backend] = variants
@@ -1193,6 +1441,8 @@ def main():
             if not options.skip_benchmarks:
                 try:
                     evidence['performance'] = benchmark(image, probe, base, options.benchmark_samples)
+                    evidence['performance']['proxy_latency'] = benchmark_proxy(
+                        image, probe, base, options.benchmark_samples)
                 except (AssertionError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
                     evidence['cases'].append({'name': 'performance', 'status': 'failed', 'message': str(error)[:4096]})
             evidence['binary']['executed_copy_sha256_after'] = digest(image)

@@ -140,4 +140,8 @@ DEV-055／056 已形成统一环境、独立原生后端与网络 broker 的开�
 
 性能测试记录无隔离基线与原生后端的冷／热启动、短命令 p50／p95、文件读写、搜索、并发任务、CPU／RSS 和代理延迟。实际 Seatbelt、Bubblewrap、Seccomp 和网络约束在具备相应后端的环境验收，CLI 的跨平台替身测试单独记录。
 
+性能证据v2保留原始样本与nearest-rank分位数。冷启动使用新CLI进程与新Run，保留OS页缓存。热启动定义为同一已准备Run／环境内预热一次后的重复命令，计时覆盖模型响应发送完至后继工具结果到达，包含调度、进程启动、持久化及loopback传输。`file_roundtrip`沿用读取指标名称，写入和搜索分别记录实际内容与匹配证明。四个并发Run分别保留wait4资源，并汇总CPU及各child内核峰值RSS的最大值。
+
+代理延迟由payload的 `CLOCK_MONOTONIC` 测量Host直连、原生HTTP代理与CONNECT转发的完整请求RTT，CONNECT样本采用隧道内明文HTTP。CLI整体资源另行记录。样本数支持1至20，CI固定每组3次，独立[性能核验器](../scripts/n2/verify_performance.py)重算分位数、比较值、资源汇总与实际操作证明。[完整证据范围](n2-validation.md#完整性能证据补充)
+
 任务分解见[后续开发计划](post-mvp-plan.md)。

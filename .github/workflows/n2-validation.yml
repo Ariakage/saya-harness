@@ -75,6 +75,7 @@ jobs:
         run: |
           python3 scripts/n2/test_native_acceptance.py -v 2>&1 | tee target/n2/acceptance/acceptance-oracles.log
           python3 scripts/n2/test_install_linux_tools.py -v 2>&1 | tee target/n2/acceptance/installer-oracles.log
+          python3 scripts/n2/test_verify_performance.py -v 2>&1 | tee target/n2/acceptance/performance-oracles.log
       - name: Install pinned Rust toolchain
         id: toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy 2>&1 | tee target/n2/acceptance/toolchain.log
@@ -205,6 +206,10 @@ jobs:
             --working-directory="$PWD" \
             /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$PWD/target/release/saya" \
             --require-cgroup 2>&1 | tee target/n2/acceptance/native.log
+      - name: Verify complete native performance evidence
+        id: performance
+        if: ${{ !cancelled() && (steps.macos_native.outcome == 'success' || steps.linux_native.outcome == 'success') }}
+        run: python3 scripts/n2/verify_performance.py target/n2/acceptance/native-evidence.json --samples 3 | tee target/n2/acceptance/performance-verification.json
       - name: MCP and OAuth acceptance
         id: mcp
         if: ${{ !cancelled() && steps.architecture.outcome == 'success' && (runner.os != 'macOS' || steps.macos_baseline.outcome == 'success') && (runner.os != 'Linux' || steps.linux_baseline.outcome == 'success') }}

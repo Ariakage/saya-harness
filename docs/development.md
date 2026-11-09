@@ -76,6 +76,19 @@ TUI的CommonMark／GFM使用pulldown-cmark与一致的Unicode脚注标签匹配�
 
 默认开发构建可运行 `MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-cli -- tui-preview syntax`。场景、源码／渲染切换和离线单元格快照见[Markdown说明](markdown-rendering.md#debug-预览)。完整检查仍使用本文件既有workspace命令，本轮四平台同步测试按项目负责人要求安排在N2。
 
+## N2 原生性能证据
+
+在具备对应原生后端的机器上对指定优化程序执行验收，使用完整单次报告核对性能字段。Linux委派资源的运行要求见[N2验收记录](n2-validation.md)。
+
+```sh
+python3 scripts/n2/native_acceptance.py target/release/saya --benchmark-samples 3
+python3 scripts/n2/verify_performance.py target/n2/acceptance/native-evidence.json --samples 3
+python3 scripts/n2/test_native_acceptance.py
+python3 scripts/n2/test_verify_performance.py
+```
+
+报告保留原始样本、实际操作证明和CPU／RSS范围，核验器重算nearest-rank分位数及比较值。热命令复用同一已准备Run，代理RTT使用payload内部时钟，具体定义见[隔离性能说明](sandbox.md#取消恢复与验收)。
+
 ## 授权后的发行构建
 
 [Release candidates](../.github/workflows/release-candidates.yml) 由操作者手动触发，在 Ubuntu 22.04 ARM／Intel 和 macOS 15 ARM／Intel 原生构建同一提交。各 job 执行完整 Rust 检查，生成单目标候选压缩包，并对解包程序执行工具、交互和审查回归。Linux 验证实际 glibc 2.35 与符号上限，macOS 验证实际系统主版本 15 和部署目标 15.0。
