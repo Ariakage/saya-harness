@@ -2760,6 +2760,7 @@ def run_feedback_journey(binary):
                       [gated_reply(mode, gate) for mode, gate in zip(modes, gates)] +
                       [{'text': 'RUN_FEEDBACK_UNKNOWN_USAGE'}])
     observed = {}
+    observed_positions = {}
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-feedback-') as directory:
             root = Path(directory)
@@ -2782,7 +2783,8 @@ def run_feedback_journey(binary):
                     terminal.wait(lambda: len(fixture.requests) == index + 1 and
                                   terminal.screen.status() == 'Thinking', 'blocked model request ' + mode)
                     held_since = time.monotonic()
-                    phases = set()
+                    phases = []
+                    positions = []
 
                     def animation_advanced():
                         if terminal.screen.status() != 'Thinking':
@@ -2791,18 +2793,27 @@ def run_feedback_journey(binary):
                         width = terminal.screen.main_width()
                         blocks = [column for column in range(1, width - 1)
                                   if terminal.screen.cells[row][column] == '█']
-                        if len(blocks) > 6:
-                            raise RuntimeError('activity animation exceeded its six-cell width')
-                        for column in blocks:
-                            if terminal.screen.colors[row][column] != (MODE_COLORS[mode], (9, 9, 11)):
-                                raise RuntimeError('activity animation did not use the actual mode color')
-                        if blocks:
-                            phases.add(terminal.screen.main_row_text(row))
-                        return len(phases) >= 3
+                        if len(blocks) != 1:
+                            return False
+                        column = blocks[0]
+                        if terminal.screen.colors[row][column] != (MODE_COLORS[mode], (9, 9, 11)):
+                            raise RuntimeError('activity animation did not use the actual mode color')
+                        line = terminal.screen.main_row_text(row)
+                        position = column - (line.index('Thinking') + len('Thinking '))
+                        if not 0 <= position < 6:
+                            raise RuntimeError('activity animation moved outside its six-cell width')
+                        if not positions or position != positions[-1]:
+                            positions.append(position)
+                            phases.append(line)
+                        return (len(set(positions)) >= 3 and 0 in positions and 5 in positions and
+                                any(right < left for left, right in zip(positions, positions[1:])) and
+                                any(right > left for left, right in zip(positions, positions[1:])))
 
-                    terminal.wait(animation_advanced, 'three activity phases without model deltas', timeout=5)
+                    terminal.wait(animation_advanced, 'activity reaching both ends and reversing without model deltas',
+                                  timeout=5)
                     held_seconds = time.monotonic() - held_since
-                    observed[mode] = sorted(phases)
+                    observed[mode] = phases
+                    observed_positions[mode] = positions
                     save_interactive_screen(terminal, 'run-feedback-working-' + mode.lower())
                     gates[index].set()
                     result = wait_idle(terminal, root, count=index + 1)
@@ -2853,7 +2864,8 @@ def run_feedback_journey(binary):
                 if terminal.process.returncode != 0:
                     raise RuntimeError('feedback TUI exited unsuccessfully')
                 terminal.verify_restoration()
-                return {'activity_frames': observed, 'completed_screen': snapshot}
+                return {'activity_frames': observed, 'activity_positions': observed_positions,
+                        'completed_screen': snapshot}
             finally:
                 for gate in gates:
                     gate.set()

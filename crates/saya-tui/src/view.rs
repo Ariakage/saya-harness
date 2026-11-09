@@ -1324,20 +1324,10 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
     let available = usize::from(area.width)
         .saturating_sub(permission_width + usize::from(permission_width > 0));
     if state.activity_visible() && label.width() + 7 <= available {
-        let phase = (state.activity_frame % 12) as usize;
-        let (start, end) = if phase < 6 {
-            (0, phase + 1)
-        } else {
-            (phase - 5, 6)
-        };
+        let phase = (state.activity_frame % 10) as usize;
+        let position = phase.abs_diff(5);
         let blocks = (0..6)
-            .map(|index| {
-                if (start..end).contains(&index) {
-                    '█'
-                } else {
-                    ' '
-                }
-            })
+            .map(|index| if index == position { '█' } else { ' ' })
             .collect::<String>();
         label.spans.push(Span::styled(
             format!(" {blocks}"),
@@ -3510,13 +3500,17 @@ mod tests {
                 ..State::default()
             };
             for (phase, expected) in [
-                (0, "█     "),
-                (3, "████  "),
-                (5, "██████"),
-                (6, " █████"),
+                (0, "     █"),
+                (1, "    █ "),
+                (2, "   █  "),
+                (3, "  █   "),
+                (4, " █    "),
+                (5, "█     "),
+                (6, " █    "),
+                (7, "  █   "),
+                (8, "   █  "),
+                (9, "    █ "),
                 (10, "     █"),
-                (11, "      "),
-                (12, "█     "),
             ] {
                 state.activity_frame = phase;
                 let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
