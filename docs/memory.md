@@ -77,3 +77,7 @@ CLI／TUI提供列表、搜索、查看、修改建议、批准、禁用、导�
 ## DEV-085 有界查询组件
 
 2026-11-10，查询与投影组件提供UTF-8原文分页、revision／filter绑定游标、当前workspace过滤、来源与alias检索、有限路由和事实预算。缺失根保持零创建，外部编辑、更正及遗忘立即改变后续投影身份。13项新增查询／投影回归与33项既有存储回归通过，全workspace全目标严格Clippy通过，日志分别为 `target/n3/integration-core-tests-3.log` 与 `target/n3/integration-clippy-3.log`。运行入口与最终平台矩阵按[N3验收](n3-validation.md)继续维护。
+
+## DEV-087 活动视图备份与恢复
+
+2026-11-10，新增带workspace、内容校验和、当前遗忘约束及主题引用的备份格式，恢复沿既有提案、锁、WAL、幂等receipt与原子发布链路执行。导入保留其他workspace内容和当前墓碑，旧备份无法恢复已遗忘事实，缺失或变化的主题拒绝发布。3项新增回归与既有查询／存储共49项通过，全workspace全目标严格Clippy通过。CLI／TUI管理及正常入口、平台证据继续按[N3验收](n3-validation.md)维护。

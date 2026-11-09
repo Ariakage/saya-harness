@@ -30,6 +30,10 @@ pub enum MemoryChange {
     RestoreVersion {
         version: String,
     },
+    /// Administrative import. Model memory tools do not expose this variant.
+    RestoreDocument {
+        backup: super::restore::MemoryBackupV1,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -382,6 +386,9 @@ pub(super) fn propose(
                     retraction.entry_metadata = entry_metadata;
                 }
             }
+        }
+        MemoryChange::RestoreDocument { backup } => {
+            document = super::restore::reconcile(store, &document, backup)?;
         }
         MemoryChange::RestoreVersion { version } => {
             let mut restored = store.history_document(version)?;

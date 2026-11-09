@@ -23,6 +23,7 @@ mod document;
 mod projection;
 mod proposal;
 mod query;
+mod restore;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -389,6 +390,7 @@ pub use query::{
     MemoryCursor, MemoryFragment, MemoryMatchField, MemoryQueryLimits, MemoryReadOptions,
     MemoryReadPage, MemoryReference, MemorySearchHit, MemorySearchOptions, MemorySearchPage,
 };
+pub use restore::{MemoryBackupCoverage, MemoryBackupV1};
 pub use state::{MemoryHistoryVersion, MemoryOperationReceipt};
 pub use transaction::{MemoryCommitOutcome, MemoryCommitStatus};
 
