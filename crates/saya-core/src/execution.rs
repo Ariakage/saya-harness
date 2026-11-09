@@ -323,6 +323,7 @@ fn prepare_inner(
         ));
     }
     let cgroup = cgroup::Cgroup::prepare(
+        policy.backend,
         policy.cgroup_root.as_deref(),
         &policy.resources,
         &policy.write_roots,

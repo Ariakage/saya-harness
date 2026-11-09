@@ -1269,7 +1269,16 @@ mod tests {
     use super::*;
 
     fn run(argv: &[&str]) -> CommandAnalysis {
-        run_limits(argv, AnalysisLimits::default())
+        let mut analysis = run_limits(argv, AnalysisLimits::default());
+        // Structural fixtures can be descheduled during parsing. Each attempt
+        // uses the production deadline. Explicit-limit fixtures call run_limits.
+        for _ in 0..2 {
+            if analysis.reasons != [IncompleteReason::DeadlineExceeded] {
+                break;
+            }
+            analysis = run_limits(argv, AnalysisLimits::default());
+        }
+        analysis
     }
 
     fn run_limits(argv: &[&str], limits: AnalysisLimits) -> CommandAnalysis {

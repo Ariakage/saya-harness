@@ -22,6 +22,7 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         shell: bash
@@ -61,6 +62,7 @@ jobs:
               'workflow_sha': os.environ['GITHUB_WORKFLOW_SHA'],
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'dev_debug_information': os.environ.get('CARGO_PROFILE_DEV_DEBUG'),
           }
           encoded = json.dumps(evidence, indent=2) + '\n'
           pathlib.Path('target/n2/acceptance/source-platform.json').write_text(encoded)
@@ -121,6 +123,9 @@ jobs:
               'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'binary': str(binary),
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'optimized_binary_bytes': binary.stat().st_size,
+              'debug_binary_bytes': pathlib.Path('target/debug/saya').stat().st_size,
+              'dev_debug_information': os.environ.get('CARGO_PROFILE_DEV_DEBUG'),
               'runner_label': os.environ['RUNNER_LABEL'],
               'runner_system': platform.system(),
               'runner_machine': platform.machine(),

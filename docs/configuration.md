@@ -73,7 +73,7 @@ mode = "deny"
 | `write_roots` | 额外允许执行环境写入的目录，相对路径以工作区为基准 |
 | `protected_paths` | 优先于可读／可写根的宿主保护路径 |
 | `resources` | 可选的单进程与已委派 cgroup 资源限制 |
-| `cgroup_root` | 显式委派的 Linux cgroup v2 绝对目录 |
+| `cgroup_root` | 原生 Linux 后端使用的显式委派 cgroup v2 绝对目录，Host 指定此项会在准备时失败 |
 | `network` | 默认 `deny`，或显式 `proxy` 与完整 origin 允许列表 |
 
 Linux默认只读系统视图在目录存在时包含 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 和 `/etc/alternatives`，使系统工具的包管理器别名可沿既有可见目标解析。目录内容按实际只读映射，保护路径在所有根挂载后应用，并覆盖系统目录的全部规范路径／guest别名。[执行边界](sandbox.md)
@@ -88,9 +88,13 @@ x86_64 GNU Linux的Rust默认LLD wrapper还会通过 `/proc/self/exe` 查找同�
 
 宿主默认保护启动时已存在的配置文件、data、state、cache 目录以及工作区 `.saya/local`。启用凭据引用而新建凭据目录后，宿主会把实际凭据目录加入保护集合。其他 `.saya` 项目指令和 Skills 仍按[项目上下文约定](project-context.md)读取。Linux 无法安全表示保护路径时返回 `unsupported_fs_policy`，具体约束见[执行契约](execution.md#n2-原生执行边界)。
 
-显式 `backend = "host"` 选择宿主兼容执行，其文件系统与网络隔离能力报告为 `unsupported`，工作模式、权限规则与运行预算继续生效。启用了 `credential_ref` 的 HTTP MCP 服务，或 state 目录下已经存在 `credentials` 存储目录时，应用拒绝 Host 启动。
+显式 `backend = "host"` 选择宿主兼容执行，其文件系统、网络及聚合资源隔离能力报告为 `unsupported`，工作模式、权限规则与运行预算继续生效。Host 支持现有单进程 rlimit。指定 `cgroup_root` 或请求 `total_memory_bytes`、`total_processes`、`cpu_quota` 中任一项时，Run 准备在模型派发前返回 `sandbox_capability_unavailable`。启用了 `credential_ref` 的 HTTP MCP 服务，或 state 目录下已经存在 `credentials` 存储目录时，应用继续拒绝 Host 启动。
 
-可选资源字段为 `cpu_seconds`、`file_size_bytes`、`open_files`、`total_memory_bytes`、`total_processes`，以及 `cpu_quota.quota_micros`／`period_micros`。前三项使用单进程 rlimit。后三项依赖有效的 Linux cgroup v2 委派，`cpu_quota` 表示周期 CPU 带宽。必需的资源控制不可用时准备失败，能力分别报告为 `hard`、`best_effort` 或 `unsupported`。
+可选资源字段为 `cpu_seconds`、`file_size_bytes`、`open_files`、`total_memory_bytes`、`total_processes`，以及 `cpu_quota.quota_micros`／`period_micros`。前三项使用单进程 rlimit。后三项依赖 Bubblewrap 原生文件系统边界与有效的 Linux cgroup v2 委派，`cpu_quota` 表示周期 CPU 带宽。必需的资源控制不可用时准备失败，能力分别报告为 `hard`、`best_effort` 或 `unsupported`。
+
+Linux 原生后端拒绝把任何 `cgroup`／`cgroup2` 挂载或其祖先、后代及 bind 别名纳入可写视图，返回 `unsupported_fs_policy`。此限制覆盖默认工作区、`sandbox.write_roots` 与 `permissions.additional_roots`，包含与委派根互为兄弟的其他 cgroup。`sandbox.read_roots` 可按只读方式开放 cgroup 目录，其他策略检查继续生效。
+
+本轮资源配置边界和委派正负对照的最终四平台验收待重跑。当前委派用例检查内核限制、活动成员和清理，资源耗尽压力仍未验证。[资源与清理边界](sandbox.md#资源与清理能力矩阵)、[N2 验收](n2-validation.md)
 
 网络代理采用 HTTP 代理请求与 HTTPS CONNECT，按完整 origin 授权。示例允许一个外部 HTTPS origin。
 

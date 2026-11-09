@@ -164,20 +164,60 @@ fn invalid_paths_proxy_and_resource_limits_fail_before_launch() {
     );
 }
 #[test]
-fn aggregate_resources_require_real_delegation() {
+fn host_rejects_aggregate_limits_and_explicit_delegation() {
     let workspace = tempfile::tempdir().expect("workspace");
+    let delegated = tempfile::tempdir().expect("delegation fixture");
     let mut policy = SandboxPolicy::workspace(workspace.path().to_path_buf());
     policy.backend = BackendKind::Host;
-    policy.resources.total_memory_bytes = Some(1024 * 1024);
-    assert_eq!(
-        execution::prepare(&policy)
-            .expect_err("no delegated root")
-            .0
-            .code,
-        "sandbox_capability_unavailable"
-    );
-    policy.cgroup_root = Some(workspace.path().into());
-    assert!(execution::prepare(&policy).is_err());
+    for (resources, root) in [
+        (
+            ResourceLimits {
+                total_memory_bytes: Some(1024 * 1024),
+                ..ResourceLimits::default()
+            },
+            None,
+        ),
+        (
+            ResourceLimits {
+                total_processes: Some(16),
+                ..ResourceLimits::default()
+            },
+            None,
+        ),
+        (
+            ResourceLimits {
+                cpu_quota: Some(execution::CpuQuota {
+                    quota_micros: 10_000,
+                    period_micros: 100_000,
+                }),
+                ..ResourceLimits::default()
+            },
+            None,
+        ),
+        (
+            ResourceLimits::default(),
+            Some(delegated.path().to_path_buf()),
+        ),
+        (
+            ResourceLimits {
+                total_memory_bytes: Some(1024 * 1024),
+                ..ResourceLimits::default()
+            },
+            Some(delegated.path().to_path_buf()),
+        ),
+    ] {
+        policy.resources = resources;
+        policy.cgroup_root = root;
+        let error = execution::prepare(&policy).expect_err("Host cannot isolate cgroup controls");
+        assert_eq!(error.0.code, "sandbox_capability_unavailable");
+        assert!(error.0.message.contains("host execution cannot enforce"));
+        assert_eq!(
+            fs::read_dir(delegated.path())
+                .expect("unchanged root")
+                .count(),
+            0
+        );
+    }
 }
 #[test]
 fn explicit_host_backend_reports_absent_isolation() {
@@ -194,6 +234,13 @@ fn explicit_host_backend_reports_absent_isolation() {
         CapabilityLevel::Unsupported
     );
     assert_eq!(environment.identity().backend, BackendKind::Host);
+    for capability in [
+        environment.capabilities().total_memory,
+        environment.capabilities().total_processes,
+        environment.capabilities().cpu_bandwidth,
+    ] {
+        assert_eq!(capability, CapabilityLevel::Unsupported);
+    }
     assert!(environment.cleanup().expect("cleanup").complete);
     assert!(environment.cleanup().expect("idempotent cleanup").complete);
 }
@@ -441,7 +488,7 @@ fn requested_cgroup_limits_use_only_the_explicitly_delegated_tree() {
     };
     let workspace = tempfile::tempdir().expect("workspace");
     let mut policy = SandboxPolicy::workspace(workspace.path().into());
-    policy.backend = BackendKind::Host;
+    policy.backend = BackendKind::Bubblewrap;
     policy.cgroup_root = Some(root.into());
     policy.resources.total_memory_bytes = Some(256 * 1024 * 1024);
     policy.resources.total_processes = Some(16);
@@ -450,6 +497,7 @@ fn requested_cgroup_limits_use_only_the_explicitly_delegated_tree() {
         period_micros: 100_000,
     });
     let environment = execution::prepare(&policy).expect("explicit real delegation");
+    assert_eq!(environment.capabilities().filesystem, CapabilityLevel::Hard);
     assert_eq!(
         environment.capabilities().total_memory,
         CapabilityLevel::Hard
@@ -462,13 +510,6 @@ fn requested_cgroup_limits_use_only_the_explicitly_delegated_tree() {
         environment.capabilities().cpu_bandwidth,
         CapabilityLevel::Hard
     );
-    let output = launch(
-        &environment,
-        workspace.path(),
-        &["/bin/sh", "-c", "cat /proc/self/cgroup"],
-    );
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("/saya-"));
     environment
         .cleanup()
         .expect("actual cgroup kill and removal");

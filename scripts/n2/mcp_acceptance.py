@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Offline MCP acceptance through an immutable copy of the ordinary Saya CLI."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -25,6 +27,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(REPOSITORY / 'scripts' / 'release'))
 from tui_journey import Terminal, protocol_stream
+from process_witness import ProcessLease
 
 TOKEN = 'n2-mcp-controlled-fixture-token'
 ACCESS = 'n2-oauth-controlled-access-token'
@@ -84,7 +87,14 @@ def mcp_result(request, scenario, lists):
 
 
 STDIO_SERVER = r'''import json,os,sys,time
-pid_path,log_path,scenario=sys.argv[1:4]
+pid_path,log_path,scenario,lease_path=sys.argv[1:5]
+lease=os.open(lease_path,os.O_WRONLY)
+os.write(lease,b'READY\n')
+ready_deadline=time.monotonic()+15
+while not os.path.isfile(lease_path+'.ack'):
+    if time.monotonic()>=ready_deadline:
+        raise RuntimeError('host did not acknowledge the live fixture writer')
+    time.sleep(.01)
 open(pid_path+'.tmp','w').write(str(os.getpid()))
 os.replace(pid_path+'.tmp',pid_path)
 lists=0
@@ -116,6 +126,8 @@ class Fixture:
         self.auth_requests = []
         self.tool_started = threading.Event()
         self.tool_release = threading.Event()
+        self.resources = ExitStack()
+        self.lease = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -229,9 +241,12 @@ class Fixture:
         self.thread.start()
 
     def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
+        try:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+        finally:
+            self.resources.close()
 
 
 def configuration(root, fixture, transport='http', permission='bypass', reference=None, active_budget=None):
@@ -248,8 +263,10 @@ def configuration(root, fixture, transport='http', permission='bypass', referenc
     if transport == 'stdio':
         server = root / 'workspace' / 'server.py'
         server.write_text(STDIO_SERVER)
+        fixture.lease = fixture.resources.enter_context(ProcessLease(root / 'workspace' / 'server.lease'))
         argv = [str(Path(sys.executable).resolve()), '-u', str(server),
-                str(root / 'workspace' / 'server.pid'), str(root / 'workspace' / 'server.log'), fixture.scenario]
+                str(root / 'workspace' / 'server.pid'), str(root / 'workspace' / 'server.log'),
+                fixture.scenario, str(fixture.lease.path)]
         lines += ['argv=' + json.dumps(argv), 'env={SERVER_TOKEN="N2_MCP_TOKEN"}']
     else:
         lines += ['endpoint=' + json.dumps(fixture.endpoint), 'allow_insecure_http=true', 'scopes=["read"]']
@@ -299,14 +316,34 @@ def final_result(text):
     raise AssertionError('CLI did not emit a final result')
 
 
-def invoke(binary, root, config, extra, output='json'):
-    result = subprocess.run(arguments(binary, root, config, output) + extra,
-        cwd=root / 'workspace', env=environment(root), text=True, capture_output=True, timeout=40)
+def acknowledge_ready_lease(lease):
+    if not lease.active():
+        return False
+    acknowledgement = Path(str(lease.path) + '.ack')
+    if not acknowledgement.exists():
+        acknowledgement.touch(mode=0o600, exist_ok=False)
+    return True
+
+
+def invoke(binary, root, config, extra, output='json', lease=None):
+    def run():
+        return subprocess.run(arguments(binary, root, config, output) + extra,
+            cwd=root / 'workspace', env=environment(root), text=True, capture_output=True, timeout=40)
+    if lease is None:
+        result = run()
+    else:
+        # Drain subprocess output while observing the live writer before cleanup.
+        with ThreadPoolExecutor(max_workers=1) as observer:
+            pending = observer.submit(run)
+            while not pending.done() and not acknowledge_ready_lease(lease):
+                time.sleep(0.01)
+            result = pending.result()
+        require(lease.ready(), 'stdio server lacked a live writer positive control')
     require(TOKEN not in result.stdout + result.stderr, 'credential escaped CLI output')
     return result
 
 
-def invoke_pty(argv, root, fixture=None):
+def invoke_pty(argv, root, fixture=None, lease=None):
     child, master = pty.fork()
     if child == 0:
         os.chdir(root / 'workspace')
@@ -319,6 +356,8 @@ def invoke_pty(argv, root, fixture=None):
     status = None
     try:
         while time.monotonic() < deadline:
+            if lease is not None:
+                acknowledge_ready_lease(lease)
             ready, _, _ = select.select([master], [], [], .05)
             if ready:
                 try:
@@ -387,15 +426,9 @@ def local_methods(root):
     return log.read_text().splitlines() if log.exists() else []
 
 
-def validate_reaped(root):
-    path = root / 'workspace' / 'server.pid'
-    if path.exists():
-        pid = int(path.read_text())
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        raise AssertionError('owned stdio server remained alive after CLI return')
+def validate_released(fixture):
+    if fixture.lease is not None:
+        fixture.lease.wait_released()
 
 
 def main():
@@ -440,7 +473,8 @@ def main():
         fixture = Fixture(protocol)
         try:
             config = configuration(root, fixture, transport)
-            result = invoke(binary, root, config, ['run', 'controlled MCP acceptance'], output)
+            result = invoke(binary, root, config, ['run', 'controlled MCP acceptance'], output,
+                            lease=fixture.lease)
             (report_dir / ('mcp-' + protocol + '-' + transport + '-' + output + '.log')).write_text(result.stdout + result.stderr)
             final = final_result(result.stdout)
             require(result.returncode == 0 and final['status'] == 'completed', 'MCP round trip failed ' + str(final))
@@ -449,7 +483,7 @@ def main():
             require(calls == 1, 'MCP tool was replayed or skipped')
             messages, _ = stored(root)
             require('[REDACTED]' in '\n'.join(messages), 'MCP credential was not projected as redacted history')
-            validate_reaped(root)
+            validate_released(fixture)
             if output == 'jsonl':
                 states = [value['data']['servers'] for value in records(result.stdout) if value.get('type') == 'mcp.status']
                 require(states and any(server['state'] == 'connected' and server['tools'] == 2
@@ -559,17 +593,18 @@ def main():
         try:
             config = configuration(root, fixture, 'stdio', 'manual')
             if interactive:
-                code, text, approvals = invoke_pty(arguments(binary, root, config) + ['run', '--interactive', 'manual startup and tool approval'], root)
+                code, text, approvals = invoke_pty(arguments(binary, root, config) + ['run', '--interactive', 'manual startup and tool approval'], root, lease=fixture.lease)
                 (report_dir / 'mcp-manual-stdio.log').write_text(text)
                 require(code == 0 and final_result(text)['status'] == 'completed', 'interactive Manual Approval failed')
                 require(approvals == 2, 'Manual Approval did not approve startup and each MCP tool separately')
                 require(local_methods(root).count('tools/call') == 1, 'manual MCP tool was skipped or replayed')
-                validate_reaped(root)
+                validate_released(fixture)
                 return {'approvals': approvals, 'tool_posts': 1}
             result = invoke(binary, root, config, ['run', 'manual noninteractive'])
             final = final_result(result.stdout)
             require(final['status'] == 'needs_confirmation', 'manual noninteractive startup did not stop for confirmation')
             require(not local_methods(root) and not fixture.models, 'unapproved stdio startup or model request occurred')
+            require(not fixture.lease.started(), 'unapproved stdio startup opened its lifetime writer')
             return {'status': final['status'], 'model_requests': 0, 'server_starts': 0}
         finally:
             fixture.close()
@@ -585,6 +620,7 @@ def main():
             require(final['status'] == 'completed', 'PLAN failed ' + str(final))
             if transport == 'stdio':
                 require(not local_methods(root) and not (root / 'workspace/server.pid').exists(), 'PLAN launched a stdio process')
+                require(not fixture.lease.started(), 'PLAN opened a stdio lifetime writer')
                 require(len(fixture.models) == 1, 'PLAN stdio attempted a tool')
             else:
                 require(fixture.calls == 1, 'PLAN failed to call a host-classified read-only HTTP tool')
@@ -606,7 +642,7 @@ def main():
             delay = 5 if active_budget == 2 else 3
             config = configuration(root, fixture, transport, active_budget=active_budget)
             started = time.monotonic()
-            result = invoke(binary, root, config, ['run', 'bounded MCP service startup'])
+            result = invoke(binary, root, config, ['run', 'bounded MCP service startup'], lease=fixture.lease)
             elapsed = time.monotonic() - started
             final = final_result(result.stdout)
             require(elapsed < active_budget + 1.5, 'MCP service wait exceeded its active budget ' + str(elapsed))
@@ -616,7 +652,7 @@ def main():
             require(local_methods(root).count('tools/call') == 0, 'MCP budget expiry dispatched a stdio tool')
             if transport == 'stdio' and scenario == 'slow_catalog':
                 require('tools/list' in local_methods(root), 'native stdio did not reach the catalogue stage')
-            validate_reaped(root)
+            validate_released(fixture)
             return {'run_elapsed_seconds': round(elapsed, 3), 'active_budget_seconds': active_budget,
                     'service_delay_seconds': delay, 'stop_reason': final['stop_reason'],
                     'model_requests': 0, 'tool_posts': 0}

@@ -15,7 +15,9 @@ core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独
 
 默认 `backend = "auto"` 在 macOS 选择 Seatbelt，在 Linux 选择 Bubblewrap。运行开始时实际探测后端，必需约束缺失时返回 `sandbox_capability_unavailable` 等明确错误。后续容器／VM 实现可沿用该接口，并提供实际 guest OS、架构、路径映射、凭据传递和资源语义。配置语法和实际准备分别处理，见[原生隔离配置](configuration.md#n2-原生隔离配置)。
 
-`host` 是显式选择的兼容后端，文件系统、网络和 syscall 隔离能力报告为 `unsupported`，资源与进程监督按实际能力报告。底层准备会拒绝同时要求保护路径或代理隔离的 Host 策略。共享应用在启用凭据引用或已有私有凭据存储时拒绝 Host 启动，私有存储和默认保护路径见[MCP 与凭据管理](mcp.md#私有存储与执行边界)。权限模式和后端选择分别生效。
+`host` 是显式选择的兼容后端，文件系统、网络和 syscall 隔离能力报告为 `unsupported`，进程监督按实际能力报告。Host 支持现有单进程 rlimit，聚合资源能力为 `unsupported`。显式提供 `cgroup_root` 或请求任一聚合限制时，准备返回 `sandbox_capability_unavailable`。Host 缺少文件系统边界，同 UID 进程仍可访问其有权写入的其他 cgroup，聚合硬约束要求原生隔离。
+
+底层准备继续拒绝要求保护路径或代理隔离的 Host 策略。共享应用在启用凭据引用或已有私有凭据存储时拒绝 Host 启动，私有存储和默认保护路径见[MCP 与凭据管理](mcp.md#私有存储与执行边界)。权限模式和后端选择分别生效。
 
 模型上下文分别注入宿主信息与实际执行环境身份、能力及 MCP 连接事实。当前原生后端采用规范化宿主路径，策略快照绑定本次 Run 的环境与调用。模式和授权在调用边界复查，进入 PLAN 的清理屏障覆盖后台写入及本地服务。
 
@@ -95,17 +97,21 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 
 ## 资源与清理能力矩阵
 
-| 能力 | Linux | macOS |
+| 能力 | Linux Bubblewrap | macOS Seatbelt |
 | --- | --- | --- |
 | 文件／网络执行约束 | 命名空间、mount、Seccomp 与代理组合 | Seatbelt profile 与代理组合 |
 | 单进程 CPU／文件／FD 限额 | 按显式资源设置应用 rlimit | 按显式资源设置应用 rlimit |
-| Run 总内存／CPU／进程数硬限额 | 需要可写且 controller 完整的显式委派 cgroup v2 子树 | `unsupported`，要求该约束时 prepare 失败 |
+| Run 总内存／CPU／进程数硬限额 | 需要原生文件系统边界及可写、controller 完整的显式委派 cgroup v2 子树 | `unsupported`，要求该约束时 prepare 失败 |
 | 超时与取消 | 共享进程监督器及所属 PID namespace／cgroup | 共享进程监督器与进程组清理 |
 | 后代进程清理能力等级 | Bubblewrap 后端报告 `hard` | `best_effort`，清理依赖所属进程组，脱离进程组的后代结果需单独核对 |
 
-`cpu_seconds`、`file_size_bytes` 与 `open_files` 是可选的单进程设置，`RLIMIT_CPU` 按进程计 CPU 时间。聚合设置采用 `total_memory_bytes`、`total_processes` 和 `cpu_quota`，资源等级分别报告为 `hard`／`best_effort`／`unsupported`。
+`cpu_seconds`、`file_size_bytes` 与 `open_files` 是可选的单进程设置，在原生及 Host 后端沿现有 rlimit 路径生效，`RLIMIT_CPU` 按进程计 CPU 时间。聚合设置采用 `total_memory_bytes`、`total_processes` 和 `cpu_quota`，资源等级分别报告为 `hard`／`best_effort`／`unsupported`。
 
-Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独有子目录，核对 controller 文件并回读已请求的限制，加入其拥有的 payload，结束时 kill、等待空组并移除该目录。委派根与可写工具根分离，系统 controller 的委派和启用由宿主准备。用户请求的聚合硬限制缺少必要委派时 prepare 失败。[资源实现](../crates/saya-core/src/execution/cgroup.rs)、[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独有子目录，核对 controller 文件并回读已请求的限制，加入其拥有的 payload，结束时 kill、等待空组并移除该目录。系统 controller 的委派和启用由宿主准备。用户请求的聚合硬限制缺少必要委派时 prepare 失败。[资源实现](../crates/saya-core/src/execution/cgroup.rs)、[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+
+Linux 原生后端依据宿主 mountinfo 拒绝与任何 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，返回 `unsupported_fs_policy`。检查覆盖工作区、`write_roots`、`permissions.additional_roots`、委派根的兄弟路径及 bind 挂载别名。`read_roots` 可提供只读 cgroup 视图，其他根与保护规则继续检查。[文件系统检查](../crates/saya-core/src/execution/linux.rs)
+
+委派验收保留内核限制读回、活动成员与自有子组清理，并在同一专属委派范围内增加兄弟可写组和 Host 配置的模型派发前拒绝对照。本轮资源配置修复的最终四平台验收待重跑，资源耗尽压力仍未验证。[N2 验收记录](n2-validation.md)
 
 ## AST／CST 分析
 

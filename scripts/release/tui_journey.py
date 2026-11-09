@@ -2,6 +2,7 @@
 """Offline native TUI journey using a PTY and loopback protocol fixtures."""
 import argparse
 import codecs
+from contextlib import ExitStack
 import errno
 import fcntl
 import json
@@ -22,6 +23,7 @@ import time
 import tty
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from process_witness import ProcessLease
 
 
 EDITOR_PLACEHOLDER = 'Describe a task…'
@@ -2499,7 +2501,7 @@ def reveal_details(terminal, predicate, description):
 def background_control_and_unknown_records(binary):
     job = {}
     start = ('background-parent', 'background_start', {'tool': 'exec', 'arguments': {
-        'argv': ['/bin/sh', '-c', 'echo $$ > child.pid; sleep 20; echo unsafe > late-write.txt'],
+        'argv': ['/bin/sh', '-c', "exec 9>child.lease; printf 'READY\\n' >&9; echo $$ > child.pid; sleep 20; echo unsafe > late-write.txt"],
         'timeout_seconds': 30}})
     def after_start(request):
         result = tool_result(request, 'background-parent')
@@ -2510,31 +2512,25 @@ def background_control_and_unknown_records(binary):
     fixture = Fixture('openai-chat-completions', [{'call': start}, after_start,
                       expect_tool('after-background', {'text': 'BG_CONTROL_DONE'})])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-background-') as directory:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-background-') as directory, ExitStack() as resources:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
+            lease = resources.enter_context(ProcessLease(workspace / 'child.lease'))
             (workspace / 'fact.txt').write_text('background fixture\n')
             config = configuration(root, fixture, 'bypass')
             terminal = invoke(binary, root, config)
             try:
                 terminal.title()
                 terminal.line('Start the background fixture')
-                terminal.wait(lambda: 'id' in job and (workspace / 'child.pid').exists(), 'running background child')
-                child_pid = int((workspace / 'child.pid').read_text())
+                terminal.wait(lambda: 'id' in job and lease.ready(), 'live background writer')
                 terminal.line('/jobs')
                 terminal.until('Background jobs · UI snapshot')
                 terminal.send(b'\x1b')
                 terminal.wait(lambda: 'Background jobs · UI snapshot' not in terminal.screen.text, 'background jobs closed')
                 terminal.line('/cancel-job ' + job['id'])
                 terminal.until('Background cancellation requested')
-                def stopped():
-                    try:
-                        os.kill(child_pid, 0)
-                        return False
-                    except ProcessLookupError:
-                        return True
-                terminal.wait(stopped, 'background child cleanup')
+                terminal.wait(lease.released, 'background command and inherited writer cleanup')
                 terminal.line('/mode plan')
                 terminal.until('BG_CONTROL_DONE')
                 wait_idle(terminal, root)
@@ -2663,33 +2659,28 @@ def first_task_validation_failure(binary):
 
 def active_hangup_cleanup(binary):
     call = ('hup-command', 'exec', {'argv': ['/bin/sh', '-c',
-        'echo $$ > child.pid; sleep 20; echo unsafe > late-write.txt'], 'timeout_seconds': 30})
+        "exec 9>child.lease; printf 'READY\\n' >&9; echo $$ > child.pid; sleep 20; echo unsafe > late-write.txt"], 'timeout_seconds': 30})
     fixture = Fixture('openai-chat-completions', [{'call': call}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-hangup-') as directory:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-hangup-') as directory, ExitStack() as resources:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
+            lease = resources.enter_context(ProcessLease(workspace / 'child.lease'))
             config = configuration(root, fixture, 'bypass')
             terminal = invoke(binary, root, config)
             disconnected = False
             try:
                 terminal.title()
                 terminal.line('Run the controlled hangup fixture')
-                terminal.wait(lambda: (workspace / 'child.pid').exists(), 'active command before hangup')
-                child_pid = int((workspace / 'child.pid').read_text())
+                terminal.wait(lease.ready, 'live command writer before hangup')
                 os.kill(terminal.process.pid, signal.SIGHUP)
                 os.close(terminal.master)
                 disconnected = True
                 terminal.process.wait(timeout=15)
                 if terminal.process.returncode != 130:
                     raise RuntimeError(f'active hangup returned {terminal.process.returncode}, expected 130')
-                try:
-                    os.kill(child_pid, 0)
-                except ProcessLookupError:
-                    pass
-                else:
-                    raise RuntimeError('hangup left the controlled command alive')
+                lease.wait_released()
                 if (workspace / 'late-write.txt').exists():
                     raise RuntimeError('hangup command performed its late write')
                 with sqlite3.connect(root / 'data' / 'saya' / 'sessions.sqlite3') as connection:

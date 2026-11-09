@@ -39,10 +39,12 @@ impl LinuxBackend {
         &self.helper_path
     }
     pub(super) fn prepare(policy: &SandboxPolicy, scratch: &Path) -> Result<Self, BoundaryError> {
-        reject_process_filesystem_roots(policy)?;
+        reject_control_filesystem_roots(policy)?;
         verify_supported_pair_kernel()?;
-        verify_connected_pair_boundaries(scratch).map_err(|_| {
-            unavailable("host kernel anonymous Unix socket-pair boundaries could not be verified")
+        verify_connected_pair_boundaries(scratch).map_err(|error| {
+            unavailable(format!(
+                "host kernel anonymous Unix socket-pair boundaries could not be verified ({error})"
+            ))
         })?;
         let bwrap = trusted_program(&["/usr/local/bin/bwrap", "/usr/bin/bwrap", "/bin/bwrap"])?;
         let version = Command::new(&bwrap)
@@ -407,9 +409,17 @@ fn verify_connected_pair_boundaries(scratch: &Path) -> io::Result<()> {
     let path = scratch.join("pair-probe");
     fs::DirBuilder::new().mode(0o700).create(&path)?;
     let directory = PairProbeDirectory(path);
+    // The trusted host keeps this directory open throughout the probe. Its
+    // descriptor path stays short even when the private TMPDIR exceeds sun_path.
+    // No procfs path or directory descriptor is exposed to a sandbox payload.
+    let directory_descriptor = fs::File::open(&directory.0)?;
+    let address_root = PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        directory_descriptor.as_raw_fd()
+    ));
     for kind in [libc::SOCK_STREAM, libc::SOCK_SEQPACKET] {
         let listener = probe_socket(kind)?;
-        let path = directory.0.join(format!("{kind}.sock"));
+        let path = address_root.join(format!("{kind}.sock"));
         let address = probe_address(&path)?;
         let address_ptr = std::ptr::from_ref(&address).cast::<libc::sockaddr>();
         let length = std::mem::size_of_val(&address) as libc::socklen_t;
@@ -480,7 +490,7 @@ fn verify_connected_pair_boundaries(scratch: &Path) -> io::Result<()> {
             }
             reject_probe_retarget(unsafe { libc::connect(left.as_raw_fd(), address_ptr, length) })?;
             let bound_path = directory.0.join(format!("{kind}-bound.sock"));
-            let bound_address = probe_address(&bound_path)?;
+            let bound_address = probe_address(&address_root.join(format!("{kind}-bound.sock")))?;
             check_probe_status(unsafe {
                 libc::bind(
                     left.as_raw_fd(),
@@ -645,22 +655,11 @@ fn bind_descriptor(
     ]);
     descriptors.push(descriptor);
 }
-// A proc mount would expose the same-UID bridge and launcher through mem/fd
-// even when ptrace/process_vm syscalls are blocked. Keep procfs out of the view,
-// including host aliases nested below an explicitly bound root.
-fn reject_process_filesystem_roots(policy: &SandboxPolicy) -> Result<(), BoundaryError> {
+// Procfs exposes the same-UID bridge through mem/fd; writable cgroup control
+// files permit migration and resource changes. Include bind aliases and roots
+// above or below a mount, while allowing a read-only cgroup filesystem view.
+fn reject_control_filesystem_roots(policy: &SandboxPolicy) -> Result<(), BoundaryError> {
     use std::io::Read;
-    let roots = policy
-        .read_roots
-        .iter()
-        .chain(&policy.write_roots)
-        .collect::<Vec<_>>();
-    if roots.iter().any(|root| root.starts_with("/proc")) {
-        return Err(failure(
-            "unsupported_fs_policy",
-            "procfs cannot be exposed to sandbox payloads",
-        ));
-    }
     let mut mounts = String::new();
     fs::File::open("/proc/self/mountinfo")
         .map_err(super::io_error)?
@@ -672,14 +671,37 @@ fn reject_process_filesystem_roots(policy: &SandboxPolicy) -> Result<(), Boundar
             "host mount table exceeds sandbox validation budget",
         ));
     }
-    reject_proc_mount_aliases(&roots, &mounts)
+    reject_control_mount_aliases(policy, &mounts)
 }
-fn reject_proc_mount_aliases(roots: &[&PathBuf], mounts: &str) -> Result<(), BoundaryError> {
+fn reject_control_mount_aliases(policy: &SandboxPolicy, mounts: &str) -> Result<(), BoundaryError> {
+    let roots = policy
+        .read_roots
+        .iter()
+        .chain(&policy.write_roots)
+        .collect::<Vec<_>>();
+    if roots.iter().any(|root| root.starts_with("/proc")) {
+        return Err(failure(
+            "unsupported_fs_policy",
+            "procfs cannot be exposed to sandbox payloads",
+        ));
+    }
+    reject_mount_aliases(&roots, mounts, "proc")?;
+    let write_roots = policy.write_roots.iter().collect::<Vec<_>>();
+    for filesystem in ["cgroup", "cgroup2"] {
+        reject_mount_aliases(&write_roots, mounts, filesystem)?;
+    }
+    Ok(())
+}
+fn reject_mount_aliases(
+    roots: &[&PathBuf],
+    mounts: &str,
+    filesystem: &str,
+) -> Result<(), BoundaryError> {
     for line in mounts.lines() {
         let (before, after) = line
             .split_once(" - ")
             .ok_or_else(|| unavailable("host mount table is malformed"))?;
-        if after.split_whitespace().next() != Some("proc") {
+        if after.split_whitespace().next() != Some(filesystem) {
             continue;
         }
         let mount = before
@@ -699,7 +721,7 @@ fn reject_proc_mount_aliases(roots: &[&PathBuf], mounts: &str) -> Result<(), Bou
         {
             return Err(failure(
                 "unsupported_fs_policy",
-                "a configured root contains a procfs mount",
+                format!("a configured root exposes the protected {filesystem} control filesystem"),
             ));
         }
     }
@@ -1144,18 +1166,23 @@ mod tests {
         }
     }
     #[test]
-    fn connected_pair_kernel_probe_removes_private_paths_on_success_and_failure() {
+    fn connected_pair_kernel_probe_supports_long_private_paths_and_cleans_up() {
         let root = tempfile::tempdir().expect("probe scratch");
         verify_connected_pair_boundaries(root.path()).expect("connected pair kernel semantics");
         assert_eq!(
             fs::read_dir(root.path()).expect("scratch entries").count(),
             0
         );
-        let long = root.path().join("x".repeat(100));
-        fs::create_dir(&long).expect("long probe scratch");
-        assert!(verify_connected_pair_boundaries(&long).is_err());
+        let long = root.path().join("x".repeat(120));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&long)
+            .expect("long private probe scratch");
+        assert!(long.as_os_str().as_bytes().len() > 108);
+        verify_connected_pair_boundaries(&long)
+            .expect("long scratch uses short host directory-fd addresses");
         assert_eq!(
-            fs::read_dir(&long).expect("failed scratch entries").count(),
+            fs::read_dir(&long).expect("long scratch entries").count(),
             0
         );
     }
@@ -1372,9 +1399,63 @@ mod tests {
         let mounts = "1 0 0:1 / / rw - ext4 root rw\n2 1 0:2 / /mnt/proc-alias rw - proc proc rw\n";
         for root in ["/mnt", "/mnt/proc-alias", "/mnt/proc-alias/123/fd"] {
             let root = PathBuf::from(root);
-            assert!(reject_proc_mount_aliases(&[&root], mounts).is_err());
+            assert!(reject_mount_aliases(&[&root], mounts, "proc").is_err());
         }
         let other = PathBuf::from("/mnt/proc-alias-other");
-        assert!(reject_proc_mount_aliases(&[&other], mounts).is_ok());
+        assert!(reject_mount_aliases(&[&other], mounts, "proc").is_ok());
+    }
+    #[test]
+    fn cgroup_filesystems_are_read_only_even_through_bind_aliases() {
+        let mounts = "1 0 0:1 / / rw - ext4 root rw\n\
+            2 1 0:2 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n\
+            3 1 0:2 /delegated /mnt/cgroup-alias rw - cgroup2 cgroup rw\n\
+            4 1 0:3 /cpu /mnt/legacy-alias rw - cgroup cpu rw\n\
+            5 1 0:2 /delegated /escaped\\040control/cgroup rw - cgroup2 cgroup rw\n";
+        let mut policy = SandboxPolicy::workspace("/workspace".into());
+        policy.read_roots.extend([
+            "/sys/fs/cgroup".into(),
+            "/mnt/cgroup-alias/child".into(),
+            "/mnt/legacy-alias".into(),
+            "/escaped control/cgroup".into(),
+        ]);
+        reject_control_mount_aliases(&policy, mounts).expect("read-only controller views");
+        for root in [
+            "/sys",
+            "/sys/fs/cgroup",
+            "/sys/fs/cgroup/other-group",
+            "/mnt",
+            "/mnt/cgroup-alias",
+            "/mnt/cgroup-alias/child",
+            "/mnt/legacy-alias",
+            "/mnt/legacy-alias/child",
+            "/escaped control",
+            "/escaped control/cgroup/child",
+        ] {
+            policy.write_roots = vec![root.into()];
+            let error = reject_control_mount_aliases(&policy, mounts).expect_err(root);
+            assert_eq!(error.0.code, "unsupported_fs_policy", "{root}");
+        }
+        for root in [
+            "/workspace",
+            "/sys/fs/cgroup-neighbor",
+            "/mnt/cgroup-alias-other",
+        ] {
+            policy.write_roots = vec![root.into()];
+            reject_control_mount_aliases(&policy, mounts).expect(root);
+        }
+    }
+    #[test]
+    fn procfs_remains_denied_for_read_only_roots_after_control_mount_extension() {
+        let mounts = "1 0 0:1 / / rw - ext4 root rw\n2 1 0:2 / /mnt/proc-alias rw - proc proc rw\n";
+        let mut policy = SandboxPolicy::workspace("/workspace".into());
+        for root in ["/proc", "/proc/self/fd", "/mnt", "/mnt/proc-alias/123/fd"] {
+            policy.read_roots = vec![root.into()];
+            assert!(
+                reject_control_mount_aliases(&policy, mounts).is_err(),
+                "{root}"
+            );
+        }
+        policy.read_roots = vec!["/mnt/proc-alias-neighbor".into()];
+        reject_control_mount_aliases(&policy, mounts).expect("nonoverlapping read root");
     }
 }

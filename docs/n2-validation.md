@@ -145,6 +145,24 @@ Linux见证记录实际Ubuntu22.04／glibc2.35、ELF最大GLIBC符号≤2.35及l
 
 静态验证涵盖YAML、14个Shell片段、所有内嵌Python、失败／取消依赖场景，12项native／installer离线回归及独立只读复核通过。实际Actions运行结果在固定源码后记录，源CI仍执行完整workspace门禁。[条件状态函数](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
 
+## Linux 长路径与资源控制修复
+
+`72e79a0` 的四平台记录中，macOS15 ARM完整源码门禁及18项原生、25项MCP、24项TUI通过，Intel同样通过三个程序验收套件，其源码结构夹具受到解析截止时间影响。Linux两架构在原生准备时暴露私有TMPDIR超过Unix socket地址长度的问题。宿主能力探测现持有私有目录FD，以短 `/proc/self/fd` 地址执行同一STREAM／SEQPACKET语义探测，payload继续使用既有文件系统视图。长于108字节的真实scratch路径加入回归。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42571348707)
+
+资源约束检查拒绝可写cgroup／cgroup2挂载及其bind别名和重叠根。显式Host请求委派根或聚合硬限制时准备失败。Linux委派验收保留实际内核读回、活动成员与清理，并加入兄弟controller可写根及Host配置负对照。该用例验证配置与成员，资源耗尽压力仍未测试。
+
+本机macOS27.2 ARM完成905项Rust测试、完整格式／严格Clippy及优化构建，记录为 `target/n2/ci-profile-workspace.log`。最终Linux模块另通过两架构严格交叉检查和mountinfo函数探针，真实Linux行为待新runner验证。
+
+## 命名空间生命周期见证
+
+Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包含EPERM。共享FIFO见证现要求子进程写入READY并保持writer，宿主观察现场writer后才发送ACK；stdio服务随后发布阶段标记并进入协议。取消或关闭后要求EOF，继承writer的后代也纳入结束判定。未启动负对照检查任何启动活动，保留真实宿主CLI信号操作。
+
+13项脚本回归覆盖历史READY／EOF、从未启动、writer继承及READY／ACK顺序。固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 在本机通过18项原生场景、每variant三次性能样本、25项MCP和24项TUI，报告位于 `target/n2/validated-local/`。该记录的源码工作区包含本轮待提交修复，Linux PID命名空间的实际见证由四平台工作流重新确认。
+
+## CI 调试镜像与结构夹具
+
+源码CI和N2工作流设置 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`，保留行表并记录实际debug／优化镜像大小。结构夹具仅在唯一未完成原因为 `DeadlineExceeded` 时最多重试两次，每次沿用生产50ms限制，显式预算测试继续使用独立入口。19项结构测试及最终全目标严格Clippy通过，生产解析预算和运行预算保持现有值。最终完成仍要求新固定源码的全部四平台源码门禁和程序验收成功。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

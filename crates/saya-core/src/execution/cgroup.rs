@@ -1,7 +1,7 @@
 //! Optional resource control confined to a caller-delegated cgroup v2 subtree.
 #[cfg(target_os = "linux")]
 use super::failure;
-use super::{ResourceLimits, unavailable};
+use super::{BackendKind, ResourceLimits, unavailable};
 use crate::contract::BoundaryError;
 use std::{
     fs, io,
@@ -18,6 +18,7 @@ pub(super) struct Cgroup {
 }
 impl Cgroup {
     pub(super) fn prepare(
+        backend: BackendKind,
         root: Option<&Path>,
         limits: &ResourceLimits,
         writable: &[PathBuf],
@@ -25,6 +26,11 @@ impl Cgroup {
         let required = limits.total_memory_bytes.is_some()
             || limits.total_processes.is_some()
             || limits.cpu_quota.is_some();
+        if backend == BackendKind::Host && (root.is_some() || required) {
+            return Err(unavailable(
+                "host execution cannot enforce aggregate cgroup resources without filesystem isolation",
+            ));
+        }
         let Some(root) = root else {
             return if required {
                 Err(unavailable(

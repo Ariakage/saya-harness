@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Check opt-in script effects and generated configuration without live requests."""
 from contextlib import redirect_stdout
+import errno
+import fcntl
 import io
 import json
 import os
@@ -8,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -17,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import live_modes_smoke
 import live_protocol_smoke
 import tui_journey
+from process_witness import ProcessLease
+from n2 import mcp_acceptance
 
 
 def generated_profile(command):
@@ -30,6 +35,159 @@ def generated_profile(command):
 
 
 class ScriptHelpersTest(unittest.TestCase):
+    def test_process_lease_requires_live_readiness_before_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with ProcessLease(Path(temporary) / 'writer.fifo') as lease:
+                flags = fcntl.fcntl(lease.fileno(), fcntl.F_GETFL)
+                self.assertTrue(flags & os.O_NONBLOCK)
+                self.assertTrue(fcntl.fcntl(lease.fileno(), fcntl.F_GETFD) & fcntl.FD_CLOEXEC)
+                writer = os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    os.write(writer, b'READY\n')
+                    lease.wait_ready(timeout=1)
+                    self.assertTrue(lease.started())
+                    self.assertTrue(lease.ready())
+                    self.assertTrue(lease.active())
+                    self.assertFalse(lease.released())
+                finally:
+                    os.close(writer)
+                lease.wait_released(timeout=1)
+                self.assertTrue(lease.released())
+                self.assertFalse(lease.active())
+
+    def test_process_lease_never_started_is_not_successful_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with ProcessLease(Path(temporary) / 'writer.fifo') as lease:
+                self.assertFalse(lease.ready())
+                self.assertFalse(lease.started())
+                self.assertFalse(lease.released())
+                with self.assertRaisesRegex(RuntimeError, 'positive control'):
+                    lease.wait_released(timeout=0)
+                with self.assertRaisesRegex(RuntimeError, 'no live'):
+                    lease.wait_ready(timeout=0)
+
+    def test_process_lease_rejects_readiness_observed_only_after_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with ProcessLease(Path(temporary) / 'writer.fifo') as lease:
+                writer = os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+                os.write(writer, b'READY\n')
+                os.close(writer)
+                self.assertFalse(lease.ready())
+                self.assertTrue(lease.started())
+                self.assertFalse(lease.released())
+                with self.assertRaisesRegex(RuntimeError, 'positive control'):
+                    lease.wait_released(timeout=0)
+
+    def test_process_lease_detects_writer_before_its_readiness_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with ProcessLease(Path(temporary) / 'writer.fifo') as lease:
+                writer = os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    self.assertTrue(lease.started())
+                    self.assertFalse(lease.ready())
+                    self.assertFalse(lease.released())
+                finally:
+                    os.close(writer)
+
+    def test_process_lease_inherited_writer_survives_parent_handle_close(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with ProcessLease(Path(temporary) / 'writer.fifo') as lease:
+                writer = os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+                child = None
+                try:
+                    os.write(writer, b'READY\n')
+                    lease.wait_ready(timeout=1)
+                    child = subprocess.Popen([sys.executable, '-c',
+                        'import sys; sys.stdin.buffer.read(1)'],
+                        stdin=subprocess.PIPE, pass_fds=(writer,))
+                finally:
+                    os.close(writer)
+                try:
+                    self.assertIsNone(child.poll())
+                    self.assertFalse(lease.released())
+                    with self.assertRaisesRegex(RuntimeError, 'survived cleanup'):
+                        lease.wait_released(timeout=0)
+                    child.communicate(b'x', timeout=5)
+                    self.assertEqual(child.returncode, 0)
+                    lease.wait_released(timeout=1)
+                finally:
+                    if child.poll() is None:
+                        child.kill()
+                    child.communicate(timeout=5)
+
+    def test_process_lease_close_is_idempotent_and_preserves_replaced_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'writer.fifo'
+            with ProcessLease(path) as lease:
+                descriptor = lease.fileno()
+                path.unlink()
+                path.write_text('replacement fixture')
+            lease.close()
+            with self.assertRaises(OSError) as error:
+                os.fstat(descriptor)
+            self.assertEqual(error.exception.errno, errno.EBADF)
+            self.assertEqual(path.read_text(), 'replacement fixture')
+            with self.assertRaisesRegex(RuntimeError, 'closed'):
+                lease.ready()
+            with self.assertRaises(FileExistsError):
+                ProcessLease(path)
+            self.assertEqual(path.read_text(), 'replacement fixture')
+
+    def test_process_lease_context_cleans_reader_and_fifo_after_exception(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'writer.fifo'
+            with self.assertRaisesRegex(ValueError, 'controlled failure'):
+                with ProcessLease(path) as lease:
+                    descriptor = lease.fileno()
+                    raise ValueError('controlled failure')
+            self.assertFalse(path.exists())
+            with self.assertRaises(OSError) as error:
+                os.fstat(descriptor)
+            self.assertEqual(error.exception.errno, errno.EBADF)
+            lease.close()
+
+    def test_stdio_fixture_waits_for_live_host_acknowledgement_before_publishing_pid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pid = root / 'namespace-pid'
+            log = root / 'methods.log'
+            with ProcessLease(root / 'server.lease') as lease:
+                child = subprocess.Popen([sys.executable, '-u', '-c', mcp_acceptance.STDIO_SERVER,
+                    str(pid), str(log), 'normal', str(lease.path)],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    lease.wait_ready(timeout=5)
+                    self.assertFalse(pid.exists())
+                    self.assertFalse(Path(str(lease.path) + '.ack').exists())
+                    self.assertTrue(mcp_acceptance.acknowledge_ready_lease(lease))
+                    deadline = time.monotonic() + 5
+                    while not pid.exists():
+                        self.assertLess(time.monotonic(), deadline, 'fixture did not publish its namespace PID')
+                        time.sleep(0.01)
+                    self.assertGreater(int(pid.read_text()), 0)
+                    stdout, stderr = child.communicate(timeout=5)
+                    self.assertEqual(child.returncode, 0, stderr)
+                    self.assertEqual(stdout, b'')
+                    lease.wait_released(timeout=1)
+                finally:
+                    if child.poll() is None:
+                        child.kill()
+                    child.communicate(timeout=5)
+
+    def test_stdio_acknowledgement_rejects_a_previously_live_released_writer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with ProcessLease(Path(temporary) / 'server.lease') as lease:
+                writer = os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    os.write(writer, b'READY\n')
+                    lease.wait_ready(timeout=1)
+                finally:
+                    os.close(writer)
+                self.assertTrue(lease.ready())
+                self.assertTrue(lease.released())
+                self.assertFalse(mcp_acceptance.acknowledge_ready_lease(lease))
+                self.assertFalse(Path(str(lease.path) + '.ack').exists())
+
     def test_screen_capture_requires_an_explicit_directory(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(Path, 'mkdir') as mkdir, \

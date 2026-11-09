@@ -881,9 +881,39 @@ def recovery_case(case):
 def resources_case(case, cgroup_root=None):
     if cgroup_root:
         with delegated_group(Path(cgroup_root)) as delegated:
-            case.configure('[sandbox]\ncgroup_root=' + json.dumps(str(delegated)) + '\n'
-                '[sandbox.resources]\ntotal_memory_bytes=536870912\ntotal_processes=64\n'
+            runtime_root = delegated / 'runtime-root'
+            escape = delegated / 'escape'
+            runtime_root.mkdir()
+            escape.mkdir()
+            (runtime_root / 'cgroup.subtree_control').write_text('+cpu +memory +pids')
+            root_setting = 'cgroup_root=' + json.dumps(str(runtime_root)) + '\n'
+            resource_settings = ('[sandbox.resources]\ntotal_memory_bytes=536870912\ntotal_processes=64\n'
                 '[sandbox.resources.cpu_quota]\nquota_micros=50000\nperiod_micros=100000')
+            negative_controls = {}
+            for name, configuration, expected_error in [
+                ('writable_sibling_cgroup', '[sandbox]\n' + root_setting
+                    + 'write_roots=' + json.dumps([str(escape)]) + '\n' + resource_settings,
+                    'unsupported_fs_policy'),
+                ('host_delegated_aggregate', '[sandbox]\nbackend="host"\n' + root_setting
+                    + resource_settings, 'sandbox_capability_unavailable'),
+                ('host_aggregate_without_delegation', '[sandbox]\nbackend="host"\n'
+                    + resource_settings, 'sandbox_capability_unavailable'),
+                ('host_delegation_without_aggregate', '[sandbox]\nbackend="host"\n'
+                    + root_setting, 'sandbox_capability_unavailable'),
+            ]:
+                case.configure(configuration)
+                before = len(case.model.requests)
+                rejected = case.run()
+                require(rejected['exit_code'] != 0 and rejected['result']['status'] == 'failed',
+                        name + ' did not fail before model dispatch')
+                error = rejected['result'].get('error', {})
+                require(error.get('code') == expected_error, name + ' failed for an unrelated reason')
+                require(len(case.model.requests) == before, name + ' reached the model')
+                groups = [path for path in runtime_root.iterdir() if path.is_dir()]
+                require(not groups, name + ' created a Run cgroup before rejecting the configuration')
+                negative_controls[name] = {'failed_before_model_dispatch': True, 'error': error,
+                    'model_requests': len(case.model.requests) - before, 'created_run_cgroups': len(groups)}
+            case.configure('[sandbox]\n' + root_setting + resource_settings)
             ready = case.workspace / 'resource-ready'
             release = case.workspace / 'resource-release'
             invocation = case.start([case.command('gate', ready, release)])
@@ -892,7 +922,7 @@ def resources_case(case, cgroup_root=None):
                 while (not ready.exists() or ready.stat().st_size == 0) and time.monotonic() < deadline:
                     time.sleep(0.02)
                 require(ready.exists() and ready.read_text() == 'READY', 'Cgroup payload did not become active')
-                groups = [path for path in delegated.iterdir() if path.is_dir()]
+                groups = [path for path in runtime_root.iterdir() if path.is_dir()]
                 require(len(groups) == 1, 'Native Run did not create exactly one owned cgroup')
                 members = (groups[0] / 'cgroup.procs').read_text().split()
                 require(members and str(invocation.process.pid) not in members,
@@ -906,13 +936,14 @@ def resources_case(case, cgroup_root=None):
             outcome = invocation.finish()
             outcome['result'] = json.loads(outcome['stdout'])
             complete(outcome)
-            require(not any(path.is_dir() for path in delegated.iterdir()), 'Run left an owned cgroup after cleanup')
+            require(not any(path.is_dir() for path in runtime_root.iterdir()), 'Run left an owned cgroup after cleanup')
             facts = case.native()
             for capability in ('total_memory', 'total_processes', 'cpu_bandwidth'):
                 require(facts['capabilities'][capability] == 'hard', 'Delegated cgroup capability was not hard')
             return {'backend': facts, 'delegated_limits_configured': True, 'kernel_readback': actual,
                     'measurement_scope': 'kernel limit readback and active membership; resource exhaustion not exercised',
-                    'payload_active_member_count': len(members), 'owned_run_cgroup_removed': True}
+                    'payload_active_member_count': len(members), 'owned_run_cgroup_removed': True,
+                    'negative_controls': negative_controls}
     case.configure('[sandbox.resources]\ntotal_memory_bytes=536870912')
     outcome = case.run()
     require(outcome['exit_code'] != 0 and outcome['result']['status'] == 'failed',

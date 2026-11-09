@@ -94,6 +94,12 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 YAML、14个Shell片段、内嵌Python、失败／取消依赖场景和12项验收／安装器离线回归通过，独立只读复核无确认阻断。真实Actions编排和完整最终四平台结果继续验证。
 
+### 四平台复验修复
+
+`72e79a0` 的macOS15 ARM完整源码门禁及18项原生／25项MCP／24项TUI通过，Intel三个程序验收套件通过，源码结构夹具遇截止时间。Linux实际运行暴露长TMPDIR的Unix地址上限和guest PID宿主查询问题。本轮修复采用宿主目录FD短地址与FIFO现场存活／ACK／EOF见证，并收紧可写controller及Host聚合资源配置。CI调试镜像使用行表，结构夹具仅对唯一解析超时作有界重试。四平台仍等待新源码重新验收。
+
+最新本机macOS27.2 ARM完成905项Rust测试、完整门禁及30项Python离线回归，并在固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 上通过18项原生、25项MCP及24项TUI。源码检查与程序证据在 `target/n2/ci-profile-workspace.log`、`target/n2/validated-local/`，修复范围与原始远端失败见[N2验收记录](n2-validation.md#linux-长路径与资源控制修复)。Linux委派与四平台最终完成状态继续保留待验收。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

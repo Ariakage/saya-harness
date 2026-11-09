@@ -146,7 +146,11 @@ JSONL事件序号严格递增，预留可产生空洞。每个4096序号预留�
 
 Linux 视图保留最小系统目录、工作区、显式根及私有临时目录，procfs 与其已检测别名不进入 payload 视图。Seccomp 拒绝危险命名空间、进程内存和内核入口，并限定 socket family。匿名 Unix 流式 pair 用于受控进程内部通信。macOS 使用系统 sandbox-exec，按规范化路径和受控 SBPL 参数配置。
 
-显式 Host 兼容模式的文件／网络隔离报告为 `unsupported`，工作模式、许可和运行预算继续生效。存在私有凭据存储或启用 `credential_ref` 时应用拒绝 Host。资源按 `hard`、`best_effort`、`unsupported` 分别报告，Linux 总内存／进程数／CPU 带宽硬约束要求有效 cgroup v2 委派，macOS 后代进程清理保持 `best_effort`。
+显式 Host 兼容模式的文件／网络及聚合资源隔离报告为 `unsupported`，工作模式、许可和运行预算继续生效。Host 支持现有单进程 rlimit，显式 `cgroup_root` 或任一总内存／总进程数／CPU 带宽请求会在模型派发前以 `sandbox_capability_unavailable` 失败。存在私有凭据存储或启用 `credential_ref` 时应用继续拒绝 Host。
+
+资源按 `hard`、`best_effort`、`unsupported` 分别报告。Linux 聚合硬约束要求 Bubblewrap 文件系统边界和有效 cgroup v2 委派。Linux 原生后端依据 mountinfo 拒绝所有与 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，包含 bind 别名及委派根的兄弟路径，错误为 `unsupported_fs_policy`。默认工作区与 `permissions.additional_roots` 同样接受检查，显式只读 cgroup 根可按其余策略处理。macOS 后代进程清理保持 `best_effort`。
+
+本轮资源配置修复的最终四平台验收待重跑。委派正向用例检查内核限值、活动成员和自有子组清理，负对照检查模型派发前拒绝，资源耗尽压力仍未验证。[资源验收边界](sandbox.md#资源与清理能力矩阵)
 
 无法表示的文件策略、缺失的必需控制或清理无法确认均返回明确错误，原生后端继续保持失败关闭。完整参数见[配置](configuration.md#n2-原生隔离配置)，设计与平台边界见[原生隔离设计](sandbox.md)。
 
