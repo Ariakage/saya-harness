@@ -3,6 +3,7 @@ mod events;
 mod export;
 mod logs;
 mod mcp;
+mod plugin_commands;
 mod signals;
 use saya_app::{new_session, session};
 
@@ -105,6 +106,11 @@ impl From<OutputOption> for Output {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect and manage local, explicitly enabled plugin packages.
+    Plugin {
+        #[command(subcommand)]
+        action: plugin_commands::PluginAction,
+    },
     /// Manage explicitly configured MCP connections and credential references.
     Mcp {
         #[command(subcommand)]
@@ -1162,6 +1168,27 @@ async fn main() -> std::process::ExitCode {
         {
             Err(error) => query_error(error, cli.output.map(Into::into)),
             Ok(config) => mcp::run(&config, action).await,
+        },
+        Some(Command::Plugin { action }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
+        {
+            Err(error) => query_error(error, cli.output.map(Into::into)),
+            Ok(config) => match plugin_commands::run(action, &config).await {
+                Ok(mut value) => {
+                    if config.output == Output::Jsonl {
+                        value["type"] = serde_json::json!("plugin.result");
+                    }
+                    match writeln!(io::stdout().lock(), "{value}") {
+                        Ok(()) => 0,
+                        Err(_) => query_error("cannot write plugin result", Some(config.output)),
+                    }
+                }
+                Err(error) => query_error(
+                    safe_output(&error.to_string(), &config),
+                    Some(config.output),
+                ),
+            },
         },
         Some(Command::Config {
             action: ConfigAction::Init,

@@ -118,16 +118,18 @@ Hook 事件草案为 `run.started`、`run.finished`、`tool.before_dispatch`、`
 
 Hook 进程作为独立操作保存意图、结果与 parent call，使用当前模式／权限。Manual Approval 产生相应操作确认。人工等待按运行预算规则计时，实际执行使用独立超时。拒绝、格式错误或 check 超时阻止原操作，observer 失败记录诊断。递归 Hook 触发由宿主深度与事件身份约束。
 
-## 用户命令草案
+## 本地管理命令
 
 ```sh
 saya plugin validate ./plugin-root
 saya plugin install --path ./plugin-root
 saya plugin list
 saya plugin inspect io.saya.examples.rust-workflow
-saya plugin enable io.saya.examples.rust-workflow --scope workspace
+saya plugin enable io.saya.examples.rust-workflow --digest <tree-sha256> --scope workspace
 saya plugin disable io.saya.examples.rust-workflow
-saya plugin uninstall io.saya.examples.rust-workflow
+saya plugin update io.saya.examples.rust-workflow --path ./updated-plugin --expected-digest <tree-sha256>
+saya plugin uninstall io.saya.examples.rust-workflow --digest <tree-sha256>
+saya plugin recover
 ```
 
 CLI／TUI 展示版本、来源、树摘要、依赖、申请能力、有效范围和实例状态。升级展示内容与能力差异，新的摘要及能力范围重新记录启用决定。
@@ -141,3 +143,12 @@ DEV-078已交付独立Rust验证组件 `plugin_manifest`，包含manifest／lock
 本机执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、942项Rust测试及优化构建通过。独立源码复核发现的Unicode碰撞与别名首字符问题已修复并复核，日志见 `target/n3/dev078-workspace.log`。安装器、运行时加载、权限接入和命令由DEV-065／066／067继续实现。
 
 2026-11-10，新增已打开目录句柄的检查入口，私有安装树复验沿同一cap-std能力读取。路径被替换的回归验证原目录内容与替代目录分别保持独立身份。该增量随本机完整门禁986项Rust测试通过，记录见 `target/n3/dev076-062-workspace.log`。
+
+
+## DEV-066 本地生命周期组件
+
+`plugin_store` 已实现内容寻址只读对象、严格索引及lock、工作区／用户启用覆盖、固定依赖闭包、明确摘要授权、更新、停用、卸载和恢复。安装后保持未启用，新的内容摘要需要明确启用。工作区停用覆盖用户启用，依赖显式停用撤销相应闭包，更新保留既有Run持有的版本。
+
+租约持久化并用文件锁标记所有权。完成资源清理后才能释放租约，进程退出或清理未知时保留unknown及对象pin。对象／索引文件经目录句柄校验，单次Store上限为128对象、512MiB与1024租约。同步文件操作由入口放入阻塞工作线程。
+
+CLI提供上述本地管理命令，列表每页最多20条，使用显式配置的data目录下plugins目录。启用要求完整树摘要与作用域，结果区分启用状态、版本和清理状态。PLAN拒绝管理写操作。本阶段以暂存源码的独立副本执行格式检查、全workspace全目标严格Clippy、组件15项及CLI 6项回归，全部通过，日志为 `target/n3/dev066-stage-validation.log`，前序定向日志为 `target/n3/plugin-store-component.log` 和 `target/n3/plugin-cli-tests.log`。正常Run中的Skill／MCP服务组装及最终平台证据继续在[N3验收](n3-validation.md)维护。
