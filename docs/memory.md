@@ -73,3 +73,7 @@ CLI／TUI提供列表、搜索、查看、修改建议、批准、禁用、导�
 33项组件回归覆盖缺失根、外部编辑、scope、路径／链接、凭据、遗忘元数据、WAL各阶段故障、并发、取消、幂等、历史及回滚。独立源码复核发现的来源及时间元数据泄漏已修复并补真实提交、旧索引回放和rollback回归。正常运行入口与跨平台联合验收继续见[N3验收记录](n3-validation.md)。
 
 该组件定向33项测试及全workspace全目标严格Clippy通过，日志为 `target/n3/memory-component.log` 与 `target/n3/n3-components-clippy.log`。
+
+## DEV-085 有界查询组件
+
+2026-11-10，查询与投影组件提供UTF-8原文分页、revision／filter绑定游标、当前workspace过滤、来源与alias检索、有限路由和事实预算。缺失根保持零创建，外部编辑、更正及遗忘立即改变后续投影身份。13项新增查询／投影回归与33项既有存储回归通过，全workspace全目标严格Clippy通过，日志分别为 `target/n3/integration-core-tests-3.log` 与 `target/n3/integration-clippy-3.log`。运行入口与最终平台矩阵按[N3验收](n3-validation.md)继续维护。

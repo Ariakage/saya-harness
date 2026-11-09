@@ -31,4 +31,3 @@ For changeable facts or consequential actions, verify the current owning evidenc
 Use exposed mutation interfaces for durable additions, corrections, source withdrawal, and explicit forgetting. Provide the required evidence, scope, expected revision, and operation identity. The current work mode and permission mode govern every model-invoked call. PLAN is read-only. Manual Approval requires approval for every tool call. Auto mutations follow the host rules and independent review.
 
 A proposal becomes saved memory only after a recorded successful operation. Preserve unknown outcomes for host recovery. Report the actual forgetting coverage and retained history or evidence scopes supplied by the interface.
-

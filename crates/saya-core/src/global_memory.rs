@@ -20,10 +20,14 @@ use unicode_normalization::UnicodeNormalization;
 
 mod disk;
 mod document;
+mod projection;
 mod proposal;
+mod query;
 mod state;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_query;
 #[cfg(test)]
 mod tests_transaction;
 mod transaction;
@@ -376,7 +380,15 @@ pub struct MemorySnapshot {
     pub forget_revision: String,
 }
 
+pub use projection::{
+    MEMORY_CONTEXT_INSTRUCTIONS, MemoryProjection, MemoryProjectionOptions, MemoryProjectionStatus,
+    MemoryRoute,
+};
 pub use proposal::{MemoryChange, MemoryProposal};
+pub use query::{
+    MemoryCursor, MemoryFragment, MemoryMatchField, MemoryQueryLimits, MemoryReadOptions,
+    MemoryReadPage, MemoryReference, MemorySearchHit, MemorySearchOptions, MemorySearchPage,
+};
 pub use state::{MemoryHistoryVersion, MemoryOperationReceipt};
 pub use transaction::{MemoryCommitOutcome, MemoryCommitStatus};
 
@@ -424,6 +436,38 @@ impl GlobalMemoryStore {
     }
     pub fn limits(&self) -> MemoryLimits {
         self.limits
+    }
+    /// Host approval covers every indexed topic and the store's internal
+    /// transaction targets. Query and mutation callers bind this revision.
+    pub fn authorization_paths(&self) -> Result<(String, Vec<PathBuf>), BoundaryError> {
+        let loaded = self.load()?;
+        let mut paths = std::collections::BTreeSet::from([
+            self.root.join("MEMORY.md"),
+            self.root.join(".saya-memory.lock"),
+            self.root.join(state::STATE_PATH),
+            self.root.join(state::JOURNAL_PATH),
+            self.root.join(state::STAGE_PATH),
+            self.root.join("memory/.saya-history"),
+        ]);
+        for entry in &loaded.document.entries {
+            for path in &entry.resources {
+                paths.insert(self.root.join(path));
+            }
+        }
+        for version in self.history()? {
+            paths.insert(
+                self.root
+                    .join(format!("memory/.saya-history/{}.md", version.version)),
+            );
+        }
+        if let Some(version) = &loaded.index_digest {
+            paths.insert(self.root.join(format!("memory/.saya-history/{version}.md")));
+        }
+        let paths = paths
+            .into_iter()
+            .map(|path| crate::execution::normalize_path(&path))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((loaded.snapshot.revision, paths))
     }
     pub fn workspace(&self) -> &WorkspaceIdentity {
         &self.workspace
