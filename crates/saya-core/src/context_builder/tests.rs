@@ -44,6 +44,7 @@ fn input<'a>(request: &'a ModelRequest, identity: &'a CountingIdentity) -> Build
         committed_view: None,
         protected_ranges: &[],
         output_projections: &[],
+        group_retirements: &[],
     }
 }
 fn call(id: &str) -> HistoryItem {
@@ -88,6 +89,7 @@ fn view(request: &ModelRequest, identity: &CountingIdentity, prefix: usize) -> C
         profile: request.profile.clone(),
         identity: identity.clone(),
         summary: json!({"facts":["The user requested a bounded review"],"pending":["Verify current sources"]}),
+        retirement_manifest: Vec::new(),
     }
 }
 
@@ -701,4 +703,122 @@ fn structured_context_depth_and_serialized_size_have_finite_limits() {
     assert_eq!(code(history_digest(&[item])), "context_limit");
     let value = "x".repeat(128);
     assert_eq!(code(counting::measure(&value, 64)), "context_limit");
+}
+
+#[test]
+fn single_user_long_tool_loops_can_compact_with_source_bound_verbatim_user_replay() {
+    for protocol in [
+        ModelProtocol::ChatCompletions,
+        ModelProtocol::Responses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        let id = identity(protocol);
+        let mut history = vec![user(
+            "Complete the exact original objective without losing constraints.",
+        )];
+        for index in 0..4 {
+            let call_id = format!("call-{index}");
+            history.push(call(&call_id));
+            history.push(HistoryItem::ToolResult {
+                call_id,
+                result: ToolResult {
+                    ok: true,
+                    data: Some(json!({"content":"retained evidence ".repeat(100)})),
+                    error: None,
+                    truncated: false,
+                },
+            });
+        }
+        let request = request(history);
+        let mut spec = input(&request, &id);
+        spec.budget = ContextBudget::new(3000, 100, 100);
+        let built = build(spec, None).unwrap();
+        assert!(
+            matches!(built.decision, ContextDecision::NeedsCompact { max_prefix_end, .. } if max_prefix_end == request.history.len())
+        );
+        let checkpoint = view(&request, &id, request.history.len());
+        let mut spec = input(&request, &id);
+        spec.budget = ContextBudget::new(3000, 100, 100);
+        spec.committed_view = Some(&checkpoint);
+        let projected = build(spec, None).unwrap();
+        assert_eq!(projected.decision, ContextDecision::Ready);
+        assert_eq!(projected.request.history[0], request.history[0]);
+        assert_eq!(projected.request.history.len(), 2);
+        assert_eq!(
+            projected.retained_groups[0].range,
+            ItemRange { start: 0, end: 1 }
+        );
+        assert_eq!(
+            projected.retained_groups[0].source_sha256,
+            history_digest(&request.history[..1]).unwrap()
+        );
+        let HistoryItem::UserText(envelope) = &projected.request.history[1] else {
+            panic!("summary data carrier")
+        };
+        let envelope: Value = serde_json::from_str(envelope).unwrap();
+        assert_eq!(
+            envelope["saya_context_summary"]["retained_original_groups"][0]["reason"],
+            "latest_user"
+        );
+        assert_eq!(projected.watermark.item_count, request.history.len());
+        assert_eq!(request.history.len(), 9);
+    }
+}
+
+#[test]
+fn a_new_latest_user_supersedes_the_older_replay_pin_without_changing_raw_history() {
+    let id = identity(ModelProtocol::ChatCompletions);
+    let mut request = request(vec![
+        user("original task"),
+        call("a"),
+        result("a"),
+        assistant("recent progress"),
+    ]);
+    let checkpoint = view(&request, &id, 3);
+    let mut spec = input(&request, &id);
+    spec.committed_view = Some(&checkpoint);
+    let first = build(spec, None).unwrap();
+    assert_eq!(first.retained_groups.len(), 1);
+    assert_eq!(first.request.history[0], request.history[0]);
+    assert_eq!(first.request.history[2], request.history[3]);
+    request.history.push(user("latest correction stays exact"));
+    let mut spec = input(&request, &id);
+    spec.committed_view = Some(&checkpoint);
+    let second = build(spec, None).unwrap();
+    assert!(second.retained_groups.is_empty());
+    assert_eq!(second.request.history.last(), request.history.last());
+    assert_eq!(second.request.history[1], request.history[3]);
+    assert_eq!(request.history[0], user("original task"));
+}
+
+#[test]
+fn replayed_latest_user_stays_in_the_required_budget_and_its_source_hash_is_verified() {
+    let id = identity(ModelProtocol::ChatCompletions);
+    let request = request(vec![
+        user(&"mandatory original task ".repeat(300)),
+        call("a"),
+        result("a"),
+    ]);
+    let mut spec = input(&request, &id);
+    spec.budget = ContextBudget::new(3000, 100, 100);
+    assert!(matches!(
+        build(spec, None).unwrap().decision,
+        ContextDecision::ContextLimit {
+            reason: ContextLimitReason::RequiredContent,
+            ..
+        }
+    ));
+    let checkpoint = view(&request, &id, 3);
+    let mut changed = request.clone();
+    changed.history[0] = user("tampered user text");
+    let mut spec = input(&changed, &id);
+    spec.committed_view = Some(&checkpoint);
+    assert_eq!(code(build(spec, None)), "context_view");
+    let pins = [ItemRange { start: 1, end: 2 }];
+    assert!(
+        group_history(id.protocol, &request.history)
+            .unwrap()
+            .safe_prefix_ends(&pins)
+            .is_empty()
+    );
 }

@@ -17,11 +17,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod counting;
 mod groups;
+mod retirement;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) mod tests_retirement;
 
 pub use counting::{CountEvidence, CountMethod, CountingIdentity, RequestCounter, TokenCount};
 pub use groups::{AtomicGroup, Grouping, ItemRange, group_history};
+pub use retirement::{
+    GroupRetirement, MechanicalObservation, ObservationBinding, RetirementBinding, RetirementOrigin,
+};
 
 const MAX_SERIALIZED_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_HISTORY_ITEMS: usize = 65_536;
@@ -103,6 +109,8 @@ pub struct ContextView {
     pub profile: String,
     pub identity: CountingIdentity,
     pub summary: Value,
+    #[serde(default)]
+    pub retirement_manifest: Vec<RetirementBinding>,
 }
 
 /// A host-authenticated replacement, bound to one exact durable result item.
@@ -131,6 +139,9 @@ pub struct BuildInput<'a> {
     /// Source ordinals whose entire protocol groups must remain verbatim.
     pub protected_ranges: &'a [ItemRange],
     pub output_projections: &'a [ResultProjection],
+    /// Host-authenticated stale-memory/exposure groups. Never infer these from
+    /// tool names, JSON markers, or model-supplied text.
+    pub group_retirements: &'a [GroupRetirement],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +152,39 @@ pub struct SourceWatermark {
     pub history_sha256: String,
     pub builder_version: String,
     pub identity: CountingIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetentionReason {
+    LatestUser,
+}
+
+/// Exact source groups replayed outside a summary covering their ordinals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetainedGroup {
+    pub range: ItemRange,
+    pub source_sha256: String,
+    pub reason: RetentionReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceProjectionKind {
+    Original,
+    OutputReference,
+    RetainedOriginal,
+    Summary,
+    RetiredGroup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceProjection {
+    pub source_range: ItemRange,
+    pub projected_range: ItemRange,
+    pub kind: SourceProjectionKind,
+    pub observations: Vec<MechanicalObservation>,
 }
 
 /// Component rows always report the provider-neutral serialized-byte heuristic.
@@ -180,7 +224,8 @@ pub enum ContextDecision {
         call_ids: Vec<String>,
     },
     NeedsCompact {
-        /// Largest closed source prefix before the latest user and every pin.
+        /// Largest closed prefix before explicit pins. A covered latest user
+        /// is replayed verbatim outside the historical summary data.
         max_prefix_end: usize,
         target_input_tokens: u64,
         exceeds_input_capacity: bool,
@@ -197,6 +242,10 @@ pub struct BuiltContext {
     pub accounting: ContextAccounting,
     pub watermark: SourceWatermark,
     pub grouping: Grouping,
+    pub retained_groups: Vec<RetainedGroup>,
+    pub source_projections: Vec<SourceProjection>,
+    pub retirement_manifest: Vec<RetirementBinding>,
+    pub mechanical_observations: Vec<MechanicalObservation>,
     pub decision: ContextDecision,
     pub applied_checkpoint: Option<String>,
 }
@@ -227,7 +276,7 @@ pub fn build(
     input: BuildInput<'_>,
     counter: Option<&dyn RequestCounter>,
 ) -> Result<BuiltContext, BoundaryError> {
-    let capacity = input.budget.input_capacity()?;
+    input.budget.input_capacity()?;
     input.identity.validate()?;
     if input
         .request
@@ -254,7 +303,26 @@ pub fn build(
     }
     let grouping = group_history(input.identity.protocol, input.source_history)?;
     validate_ranges(input.protected_ranges, input.source_history.len())?;
+    let retired = retirement::prepare(&input, &grouping)?;
     let covered = validate_view(&input, &grouping)?;
+    let retirement_manifest: Vec<_> = retired.values().map(|item| item.binding.clone()).collect();
+    let mechanical_observations: Vec<_> = retired
+        .values()
+        .flat_map(|item| item.observations.iter().cloned())
+        .collect();
+    if let Some(view) = input.committed_view {
+        let expected: Vec<_> = retirement_manifest
+            .iter()
+            .filter(|binding| binding.range.end <= covered)
+            .cloned()
+            .collect();
+        if view.retirement_manifest != expected {
+            return Err(error(
+                "context_view",
+                "Committed summary used different memory retirement projections",
+            ));
+        }
+    }
     validate_projections(&input)?;
     let projections: BTreeMap<_, _> = input
         .output_projections
@@ -273,16 +341,68 @@ pub fn build(
         .flat_map(|group| group.range.start..group.range.end)
         .collect();
 
+    let retained_groups = retained_latest_user(&input, &grouping, covered)?;
+    let mut source_projections = Vec::new();
     let mut projected = input.request.clone();
     projected.history.truncate(input.history_offset);
-    if let Some(view) = input.committed_view {
-        projected.history.push(summary_item(view)?);
+    for group in &retained_groups {
+        let start = projected.history.len();
+        projected
+            .history
+            .extend_from_slice(&input.source_history[group.range.start..group.range.end]);
+        source_projections.push(SourceProjection {
+            source_range: group.range,
+            projected_range: ItemRange {
+                start,
+                end: projected.history.len(),
+            },
+            kind: SourceProjectionKind::RetainedOriginal,
+            observations: Vec::new(),
+        });
     }
-    for (index, item) in input.source_history.iter().enumerate().skip(covered) {
+    if let Some(view) = input.committed_view {
+        let start = projected.history.len();
+        projected
+            .history
+            .push(summary_item(view, &retained_groups)?);
+        source_projections.push(SourceProjection {
+            source_range: ItemRange {
+                start: 0,
+                end: covered,
+            },
+            projected_range: ItemRange {
+                start,
+                end: start + 1,
+            },
+            kind: SourceProjectionKind::Summary,
+            observations: Vec::new(),
+        });
+    }
+    let mut index = covered;
+    while index < input.source_history.len() {
+        if let Some(retirement) = retired.get(&index) {
+            let start = projected.history.len();
+            projected.history.push(retirement.item.clone());
+            source_projections.push(SourceProjection {
+                source_range: retirement.binding.range,
+                projected_range: ItemRange {
+                    start,
+                    end: start + 1,
+                },
+                kind: SourceProjectionKind::RetiredGroup,
+                observations: retirement.observations.clone(),
+            });
+            index = retirement.binding.range.end;
+            continue;
+        }
+        let item = &input.source_history[index];
+        let start = projected.history.len();
+        let mut kind = SourceProjectionKind::Original;
         if let Some(projection) = projections
             .get(&index)
             .filter(|_| !pinned_items.contains(&index))
         {
+            kind = SourceProjectionKind::OutputReference;
             projected.history.push(HistoryItem::ToolResult {
                 call_id: projection.call_id.clone(),
                 result: projection.replacement.clone(),
@@ -290,6 +410,19 @@ pub fn build(
         } else {
             projected.history.push(item.clone());
         }
+        source_projections.push(SourceProjection {
+            source_range: ItemRange {
+                start: index,
+                end: index + 1,
+            },
+            projected_range: ItemRange {
+                start,
+                end: start + 1,
+            },
+            kind,
+            observations: Vec::new(),
+        });
+        index += 1;
     }
     let replay = group_history(input.identity.protocol, &projected.history)?;
     let accounting = counting::account(
@@ -309,8 +442,8 @@ pub fn build(
             covered,
             &projected,
             &accounting,
-            capacity,
             counter,
+            &source_projections,
         )?
     };
     Ok(BuiltContext {
@@ -324,6 +457,10 @@ pub fn build(
             identity: input.identity.clone(),
         },
         grouping,
+        retained_groups,
+        source_projections,
+        retirement_manifest,
+        mechanical_observations,
         decision,
         applied_checkpoint: input.committed_view.map(|view| view.checkpoint_id.clone()),
     })
@@ -374,7 +511,29 @@ fn validate_view(input: &BuildInput<'_>, grouping: &Grouping) -> Result<usize, B
     Ok(view.covered_prefix)
 }
 
-fn summary_item(view: &ContextView) -> Result<HistoryItem, BoundaryError> {
+fn retained_latest_user(
+    input: &BuildInput<'_>,
+    grouping: &Grouping,
+    covered: usize,
+) -> Result<Vec<RetainedGroup>, BoundaryError> {
+    let Some(index) = grouping.latest_user_index.filter(|index| *index < covered) else {
+        return Ok(Vec::new());
+    };
+    let range = ItemRange {
+        start: index,
+        end: index + 1,
+    };
+    Ok(vec![RetainedGroup {
+        range,
+        source_sha256: history_digest(&input.source_history[range.start..range.end])?,
+        reason: RetentionReason::LatestUser,
+    }])
+}
+
+fn summary_item(
+    view: &ContextView,
+    retained: &[RetainedGroup],
+) -> Result<HistoryItem, BoundaryError> {
     // This is explicitly historical source data even on a provider whose only
     // data carrier is a user-role message. It grants no authority or approvals.
     let data = json!({"saya_context_summary": {
@@ -384,6 +543,7 @@ fn summary_item(view: &ContextView) -> Result<HistoryItem, BoundaryError> {
         "checkpoint_id": view.checkpoint_id,
         "covered_prefix": view.covered_prefix,
         "source_prefix_sha256": view.source_prefix_sha256,
+        "retained_original_groups": retained,
         "summary": view.summary,
     }});
     let text = serde_json::to_string(&data)
@@ -473,9 +633,10 @@ fn decide(
     covered: usize,
     projected: &ModelRequest,
     accounting: &ContextAccounting,
-    capacity: u64,
     counter: Option<&dyn RequestCounter>,
+    mappings: &[SourceProjection],
 ) -> Result<ContextDecision, BoundaryError> {
+    let capacity = input.budget.input_capacity()?;
     let used = accounting.total.tokens;
     let trigger = input
         .budget
@@ -504,12 +665,25 @@ fn decide(
     // has to budget the replacement summary itself.
     let mut required = projected.clone();
     required.history.truncate(input.history_offset);
-    let suffix_start =
-        input.history_offset + usize::from(input.committed_view.is_some()) + max_prefix_end
-            - covered;
-    required
-        .history
-        .extend_from_slice(&projected.history[suffix_start..]);
+    if let Some(latest) = grouping
+        .latest_user_index
+        .filter(|index| *index < max_prefix_end)
+    {
+        required.history.push(input.source_history[latest].clone());
+    }
+    for mapping in mappings.iter().filter(|mapping| {
+        mapping.source_range.start >= max_prefix_end
+            && matches!(
+                mapping.kind,
+                SourceProjectionKind::Original
+                    | SourceProjectionKind::OutputReference
+                    | SourceProjectionKind::RetiredGroup
+            )
+    }) {
+        required.history.extend_from_slice(
+            &projected.history[mapping.projected_range.start..mapping.projected_range.end],
+        );
+    }
     let minimum = counting::account(&required, input.identity, input.history_offset, counter)?;
     if minimum.total.tokens > capacity {
         return Ok(ContextDecision::ContextLimit {

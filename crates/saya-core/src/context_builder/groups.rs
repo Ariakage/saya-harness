@@ -32,13 +32,15 @@ pub struct Grouping {
     pub open_call_ids: Vec<String>,
 }
 impl Grouping {
-    /// A compactable prefix ends at a whole closed group, before the newest
-    /// user, and before any pinned group. Ordinal zero is the unchanged view.
+    /// A compactable prefix ends at a closed group before any explicit pin.
+    /// When it crosses the latest user, the builder replays that original user
+    /// separately. Crossing only that user adds no compactable material.
     pub fn is_safe_prefix(&self, end: usize, protected: &[ItemRange]) -> bool {
         if end == 0 {
             return true;
         }
-        self.latest_user_index.is_some_and(|latest| end <= latest)
+        self.latest_user_index
+            .is_some_and(|latest| end <= latest || end > latest + 1)
             && self
                 .groups
                 .iter()
@@ -49,15 +51,22 @@ impl Grouping {
     }
 
     pub fn safe_prefix_ends(&self, protected: &[ItemRange]) -> Vec<usize> {
-        let latest = self.latest_user_index.unwrap_or(0);
+        let Some(latest) = self.latest_user_index else {
+            return Vec::new();
+        };
+        let history_end = self.groups.last().map_or(0, |group| group.range.end);
         let first_pinned = self
             .groups
             .iter()
             .find(|group| protected.iter().any(|range| range.overlaps(group.range)))
-            .map_or(latest, |group| group.range.start.min(latest));
+            .map_or(history_end, |group| group.range.start);
         self.groups
             .iter()
-            .filter(|group| group.closed && group.range.end <= first_pinned)
+            .filter(|group| {
+                group.closed
+                    && group.range.end <= first_pinned
+                    && (group.range.end <= latest || group.range.end > latest + 1)
+            })
             .map(|group| group.range.end)
             .collect()
     }

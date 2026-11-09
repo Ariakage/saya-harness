@@ -107,6 +107,7 @@ impl AgentRuntime {
                 committed_view: view.as_ref(),
                 protected_ranges: &protected,
                 output_projections: &projections,
+                group_retirements: &[],
             },
             self.model.request_counter(),
         )?;

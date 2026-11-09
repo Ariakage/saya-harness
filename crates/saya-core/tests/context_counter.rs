@@ -167,3 +167,51 @@ async fn local_counter_matches_actual_wire_body_for_all_three_protocols()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn required_input_near_provider_guard_is_rejected_before_network_dispatch()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::context_builder::{
+        self, BuildInput, ContextBudget, ContextDecision, CountingIdentity,
+    };
+    for protocol in [
+        ModelProtocol::ChatCompletions,
+        ModelProtocol::Responses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        let (url, received) = fixture::server(vec![("application/json", response(protocol))])?;
+        let model = adapter(protocol, url, "fixture", None)?;
+        let mut request = request("fixture", ModelPurpose::Execution);
+        request.history = vec![HistoryItem::UserText("x".repeat(440_000))];
+        let identity = CountingIdentity {
+            protocol,
+            model: "fixture-model".into(),
+            adapter_version: saya_core::provider::COUNTING_ADAPTER_VERSION.into(),
+        };
+        let built = context_builder::build(
+            BuildInput {
+                request: &request,
+                identity: &identity,
+                budget: ContextBudget::new(128_000, 8192, 12_801),
+                source_history: &request.history,
+                history_offset: 0,
+                revision: 1,
+                committed_view: None,
+                protected_ranges: &[],
+                output_projections: &[],
+                group_retirements: &[],
+            },
+            model.request_counter(),
+        )?;
+        assert!(matches!(
+            built.decision,
+            ContextDecision::ContextLimit { .. }
+        ));
+        match model.start(&request, &Never).await {
+            Err(error) => assert_eq!(error.0.code, "context_budget"),
+            Ok(_) => panic!("oversized request reached provider transport"),
+        }
+        assert!(received.try_recv().is_err());
+    }
+    Ok(())
+}
