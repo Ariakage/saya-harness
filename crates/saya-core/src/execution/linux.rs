@@ -436,6 +436,7 @@ const LOAD: u16 = 0x20;
 const EQUAL: u16 = 0x15;
 const BITS: u16 = 0x45;
 const RETURN: u16 = 0x06;
+const AND: u16 = 0x54;
 const DENY: u32 = 0x0005_0000 | libc::EPERM as u32;
 const ALLOW: u32 = 0x7fff_0000;
 fn filter(payload: bool) -> Vec<libc::sock_filter> {
@@ -494,9 +495,27 @@ fn filter(payload: bool) -> Vec<libc::sock_filter> {
         libc::SYS_io_uring_register,
     ];
     if payload {
+        // Anonymous connected streams support runtime self-pipes. They cannot
+        // be retargeted like Unix datagram pairs. Named AF_UNIX socket creation,
+        // datagram pairs and sequenced-packet pairs remain denied.
         program.extend([
-            instruction(EQUAL, 0, 1, libc::SYS_socketpair as u32),
+            instruction(EQUAL, 0, 11, libc::SYS_socketpair as u32),
+            instruction(LOAD, 0, 0, 16),
+            instruction(EQUAL, 1, 0, libc::AF_UNIX as u32),
             instruction(RETURN, 0, 0, DENY),
+            instruction(LOAD, 0, 0, 24),
+            instruction(
+                AND,
+                0,
+                0,
+                !(libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK) as u32,
+            ),
+            instruction(EQUAL, 1, 0, libc::SOCK_STREAM as u32),
+            instruction(RETURN, 0, 0, DENY),
+            instruction(LOAD, 0, 0, 32),
+            instruction(EQUAL, 1, 0, 0),
+            instruction(RETURN, 0, 0, DENY),
+            instruction(RETURN, 0, 0, ALLOW),
         ]);
     }
     for number in blocked {
@@ -582,6 +601,14 @@ pub(super) fn install_payload_filter() -> io::Result<()> {
 mod tests {
     use super::*;
     fn evaluate(program: &[libc::sock_filter], arch: u32, syscall: u32, argument: u32) -> u32 {
+        evaluate_arguments(program, arch, syscall, [argument, 0, 0])
+    }
+    fn evaluate_arguments(
+        program: &[libc::sock_filter],
+        arch: u32,
+        syscall: u32,
+        arguments: [u32; 3],
+    ) -> u32 {
         let mut accumulator = 0;
         let mut pc = 0;
         for _ in 0..program.len() {
@@ -591,7 +618,9 @@ mod tests {
                     accumulator = match instruction.k {
                         0 => syscall,
                         4 => arch,
-                        16 => argument,
+                        16 => arguments[0],
+                        24 => arguments[1],
+                        32 => arguments[2],
                         _ => panic!("unexpected BPF load"),
                     }
                 }
@@ -609,6 +638,7 @@ mod tests {
                         instruction.jf as usize
                     }
                 }
+                AND => accumulator &= instruction.k,
                 RETURN => return instruction.k,
                 _ => panic!("unexpected BPF instruction"),
             }
@@ -678,6 +708,50 @@ mod tests {
                 arch,
                 libc::SYS_socketpair as u32,
                 libc::AF_UNIX as u32
+            ),
+            DENY
+        );
+        for kind in [
+            libc::SOCK_STREAM,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+        ] {
+            assert_eq!(
+                evaluate_arguments(
+                    &payload,
+                    arch,
+                    libc::SYS_socketpair as u32,
+                    [libc::AF_UNIX as u32, kind as u32, 0]
+                ),
+                ALLOW
+            );
+        }
+        for kind in [libc::SOCK_DGRAM, libc::SOCK_SEQPACKET, libc::SOCK_RAW] {
+            assert_eq!(
+                evaluate_arguments(
+                    &payload,
+                    arch,
+                    libc::SYS_socketpair as u32,
+                    [libc::AF_UNIX as u32, kind as u32, 0]
+                ),
+                DENY
+            );
+        }
+        assert_eq!(
+            evaluate_arguments(
+                &payload,
+                arch,
+                libc::SYS_socketpair as u32,
+                [libc::AF_INET as u32, libc::SOCK_STREAM as u32, 0]
+            ),
+            DENY
+        );
+        assert_eq!(
+            evaluate_arguments(
+                &payload,
+                arch,
+                libc::SYS_socketpair as u32,
+                [libc::AF_UNIX as u32, libc::SOCK_STREAM as u32, 1]
             ),
             DENY
         );

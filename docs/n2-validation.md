@@ -22,6 +22,16 @@ core已提供统一准备环境、能力等级、固定策略身份和清理接�
 
 本阶段提交执行组件和显式 `ExecConfig.execution` 接线。正常CLI默认策略、运行期代理及MCP服务继续整合，DEV-055／056的完整完成状态依据最终正常入口与四平台验收更新。Linux CI通过固定SHA-256校验安装非setuid的Bubblewrap0.13.1及socat，后端缺失时明确失败。
 
+## DEV-056 网络与原生约束组件
+
+每Run网络broker支持HTTP absolute-form与CONNECT、精确origin、每连接DNS地址核查及固定目标地址、双栈loopback端口占有、解析／字节／连接／时间预算和关闭等待。受控真实TCP／Unix socket的18项broker回归包含请求走私、认证目标、DNS变化、取消、限额与监听器生命周期。
+
+隔离源码快照完成格式、workspace严格Clippy、823项Rust测试与优化构建，日志为 `target/n2/dev056-workspace-final2.log`。macOS回归确认宿主进程参数查询被显式拒绝、私有launcher保留自身FD处理能力、标准根symlink可解析，代理仅允许TCP。正常CLI的UDP同端口及宿主进程查询对抗将随DEV-057重跑。
+
+首次Linux原生CI已保留实际失败证据。原Seccomp阻止匿名socketpair，Tokio信号驱动初始化因此panic，原始日志在 `target/n2/research/dev055-direct-linux-{arm,x86}-ci.log`。修复仅放行AF_UNIX的已连接stream pair与必要flags，其余Unix socket创建保持受限，并补充真实Linux重定向／SCM_RIGHTS探针。候选通过两架构类型与严格静态检查，实际Linux修复结果继续由后续CI验证。
+
+上述823项本机测试的操作系统为macOS27.2 ARM，Linux修复、委派cgroup和最终默认入口仍待相应原生验收。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

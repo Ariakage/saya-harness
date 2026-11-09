@@ -752,3 +752,211 @@ async fn file_worker_scan_budget_is_independent_of_return_frame_budget() {
             .ok
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_allows_runtime_sysctls_and_denies_process_argument_queries() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let source = workspace.path().join("sysctl-probe.c");
+    let program = workspace.path().join("sysctl-probe");
+    fs::write(
+        &source,
+        r#"
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    char buffer[262144];
+    size_t length = sizeof(buffer);
+    int operating_system[] = {CTL_KERN, KERN_OSRELEASE};
+    int allowed = sysctl(operating_system, 2, buffer, &length, NULL, 0);
+    length = sizeof(buffer);
+    int arguments[] = {CTL_KERN, KERN_PROCARGS2, atoi(argv[1])};
+    int process_arguments = sysctl(arguments, 3, buffer, &length, NULL, 0);
+    int error = errno;
+    printf("os=%d process_arguments=%d error=%d\n", allowed, process_arguments, error);
+    return 0;
+}
+"#,
+    )
+    .expect("probe source");
+    assert!(
+        Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&program)
+            .status()
+            .expect("compile sysctl probe")
+            .success()
+    );
+    let program = program.canonicalize().expect("canonical probe path");
+    let parent = std::process::id().to_string();
+    let control = Command::new(&program)
+        .arg(&parent)
+        .output()
+        .expect("control probe");
+    assert!(String::from_utf8_lossy(&control.stdout).contains("os=0 process_arguments=0"));
+    let environment =
+        execution::prepare(&native_policy(workspace.path().into())).expect("Seatbelt");
+    let result = launch(
+        &environment,
+        workspace.path(),
+        &[program.to_str().expect("probe path"), &parent],
+    );
+    assert!(
+        result.status.success(),
+        "status={:?} stdout={} stderr={}",
+        result.status,
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&result.stdout),
+        "os=0 process_arguments=-1 error=1\n"
+    );
+    let alias = workspace.path().join("sysctl-probe");
+    let through_alias = launch(
+        &environment,
+        workspace.path(),
+        &[alias.to_str().expect("alias path"), &parent],
+    );
+    assert!(
+        through_alias.status.success(),
+        "root symlink alias did not resolve"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&through_alias.stdout),
+        "os=0 process_arguments=-1 error=1\n"
+    );
+    environment.cleanup().expect("cleanup");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn anonymous_stream_pairs_cannot_retarget_or_deliver_rights_to_host_unix_peers() {
+    use std::os::unix::{
+        net::{UnixDatagram, UnixListener},
+        process::CommandExt,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let stream_path = root.path().join("host-stream.sock");
+    let datagram_path = root.path().join("host-datagram.sock");
+    let fixture_path = root.path().join("fixture.txt");
+    fs::write(&fixture_path, "SYNTHETIC-PAIR-LOCAL-RIGHTS").unwrap();
+    let stream = UnixListener::bind(&stream_path).unwrap();
+    let datagram = UnixDatagram::bind(&datagram_path).unwrap();
+    stream.set_nonblocking(true).unwrap();
+    datagram.set_nonblocking(true).unwrap();
+    let program = r#"
+import array
+import ctypes
+import errno
+import os
+import socket
+import sys
+
+stream_path, datagram_path, fixture_path = sys.argv[1:]
+for kind in (socket.SOCK_DGRAM, socket.SOCK_SEQPACKET):
+    try:
+        socket.socketpair(socket.AF_UNIX, kind)
+    except OSError as error:
+        assert error.errno == errno.EPERM
+    else:
+        raise AssertionError('non-stream pair was allowed')
+try:
+    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+except OSError as error:
+    assert error.errno == errno.EPERM
+else:
+    raise AssertionError('named Unix socket was allowed')
+
+left, right = socket.socketpair(
+    socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK
+)
+for endpoint in (left, right):
+    try:
+        endpoint.connect(stream_path)
+    except OSError:
+        pass
+    else:
+        raise AssertionError('connected stream was retargeted')
+
+libc = ctypes.CDLL(None, use_errno=True)
+class Address(ctypes.Structure):
+    _fields_ = [('family', ctypes.c_ushort), ('data', ctypes.c_ubyte * 14)]
+unspecified = Address(socket.AF_UNSPEC)
+assert libc.connect(left.fileno(), ctypes.byref(unspecified), ctypes.sizeof(unspecified)) == -1
+try:
+    left.connect(stream_path)
+except OSError:
+    pass
+else:
+    raise AssertionError('AF_UNSPEC permitted stream retargeting')
+left.send(b'local')
+assert right.recv(16) == b'local'
+for destination in (stream_path, datagram_path):
+    try:
+        length = left.sendto(b'addressed', destination)
+    except OSError:
+        pass
+    else:
+        assert length == 9 and right.recv(16) == b'addressed'
+
+fd = os.open(fixture_path, os.O_RDONLY)
+def receive_local_rights():
+    data, ancillary, flags, address = left.recvmsg(1, socket.CMSG_SPACE(array.array('i').itemsize))
+    assert data == b'f' and not flags and not address
+    assert len(ancillary) == 1 and ancillary[0][:2] == (socket.SOL_SOCKET, socket.SCM_RIGHTS)
+    received = array.array('i')
+    received.frombytes(ancillary[0][2])
+    assert len(received) == 1
+    try:
+        assert os.fstat(received[0]).st_ino == os.fstat(fd).st_ino
+    finally:
+        os.close(received[0])
+try:
+    rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))]
+    right.sendmsg([b'f'], rights)
+    receive_local_rights()
+    for destination in (stream_path, datagram_path):
+        try:
+            length = right.sendmsg([b'f'], rights, 0, destination)
+        except OSError:
+            pass
+        else:
+            assert length == 1
+            receive_local_rights()
+finally:
+    os.close(fd)
+left.close()
+right.close()
+"#;
+    let mut command = Command::new("/usr/bin/python3");
+    command
+        .args(["-I", "-S", "-c", program])
+        .arg(&stream_path)
+        .arg(&datagram_path)
+        .arg(&fixture_path)
+        .env_clear()
+        .stdin(Stdio::null());
+    let filter = execution::prepare_linux_payload_filter().unwrap();
+    // SAFETY: the program was prepared before fork; installation only invokes prctl.
+    unsafe {
+        command.pre_exec(move || filter.install());
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "filtered synthetic pair probe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(matches!(stream.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock));
+    let mut bytes = [0u8; 128];
+    assert!(
+        matches!(datagram.recv(&mut bytes),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
+    );
+}

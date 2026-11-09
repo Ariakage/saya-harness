@@ -21,6 +21,7 @@ pub mod logging;
 pub mod memory;
 pub mod metrics;
 pub mod mode;
+pub mod network;
 pub mod permissions;
 pub mod project_context;
 pub mod prompt;

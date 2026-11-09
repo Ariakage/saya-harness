@@ -21,7 +21,48 @@ impl SeatbeltBackend {
             return Err(unavailable("system sandbox-exec is unavailable"));
         }
         let mut profile = String::from(
-            "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow process-info* (target same-sandbox))\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-metadata (vnode-type DIRECTORY))\n(allow file-read* file-map-executable (literal \"/\") (subpath \"/System\") (subpath \"/usr/lib\") (subpath \"/bin\") (subpath \"/usr/bin\") (subpath \"/usr/share\") (subpath \"/private/var/db/dyld\") (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\"))\n(allow file-write-data (literal \"/dev/null\"))\n",
+            r#"(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+(allow process-info* (target same-sandbox))
+(deny process-info-pidinfo (require-not (target self)))
+(allow signal (target same-sandbox))
+(allow sysctl-read
+  (sysctl-name-prefix "hw.")
+  (sysctl-name-prefix "machdep.cpu.")
+  (sysctl-name "kern.argmax")
+  (sysctl-name "kern.hostname")
+  (sysctl-name "kern.maxfilesperproc")
+  (sysctl-name "kern.maxproc")
+  (sysctl-name "kern.osproductversion")
+  (sysctl-name "kern.osrelease")
+  (sysctl-name "kern.ostype")
+  (sysctl-name "kern.osversion")
+  (sysctl-name "kern.secure_kernel")
+  (sysctl-name "kern.osvariant_status")
+  (sysctl-name "kern.usrstack64")
+  (sysctl-name "kern.version")
+  (sysctl-name "kern.sysv.semmns")
+  (sysctl-name "sysctl.proc_cputype")
+  (sysctl-name "vm.loadavg"))
+(allow file-read-metadata (vnode-type DIRECTORY))
+(allow file-read*
+  (require-all (vnode-type SYMLINK)
+    (require-any (literal "/tmp") (literal "/var") (literal "/etc"))))
+(allow file-read* file-map-executable
+  (literal "/")
+  (subpath "/System")
+  (subpath "/usr/lib")
+  (subpath "/bin")
+  (subpath "/usr/bin")
+  (subpath "/usr/share")
+  (subpath "/private/var/db/dyld")
+  (literal "/dev/null")
+  (literal "/dev/urandom")
+  (literal "/dev/random"))
+(allow file-write-data (literal "/dev/null"))
+"#,
         );
         let mut parameters = Vec::new();
         let helper_path = scratch.join("saya-worker");
@@ -72,7 +113,7 @@ impl SeatbeltBackend {
             // SBPL only accepts localhost or * here. The host broker must own
             // this port on both IPv4 and IPv6 loopback.
             profile.push_str(&format!(
-                "(allow network-outbound (remote ip \"{address}\"))\n"
+                "(allow network-outbound (remote tcp \"{address}\"))\n"
             ));
         }
         let backend = Self {
