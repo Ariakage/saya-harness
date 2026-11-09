@@ -926,3 +926,8 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 ## N3 DEV-066 生命周期组件阶段
 
 2026-11-10，完成私有内容寻址PluginStore及本地CLI管理入口，分别15项和6项回归通过。暂存源码独立副本的格式检查与全workspace全目标严格Clippy通过，日志为 `target/n3/dev066-stage-validation.log`。覆盖安装默认禁用、精确摘要启用、作用域覆盖、固定依赖、更新与既有Run租约、停用／卸载／恢复、未知清理状态及目录句柄验证。实际Skill／MCP／Hook运行装配与四平台联合验收按[N3记录](n3-validation.md)继续。
+
+
+## N3 DEV-067 Hook 组件阶段
+
+2026-11-10，完成四事件Hook执行接口与独立SQLite日志，分别12项执行及12项日志组件回归通过，暂存源码独立产物目录的格式与严格Clippy通过，日志为 `target/n3/dev067-stage-validation.log`。覆盖意图先行、当前宿主权限回调、check否决、幂等事件、预算、超时计时、真实退出恢复Unknown和清理未知。正常Run及原生执行接入按[N3记录](n3-validation.md)继续。

@@ -18,6 +18,8 @@ pub mod dispatch;
 pub mod execution;
 pub mod export;
 pub mod global_memory;
+pub mod hook_store;
+pub mod hooks;
 pub mod input;
 pub mod logging;
 

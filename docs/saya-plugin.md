@@ -152,3 +152,12 @@ DEV-078已交付独立Rust验证组件 `plugin_manifest`，包含manifest／lock
 租约持久化并用文件锁标记所有权。完成资源清理后才能释放租约，进程退出或清理未知时保留unknown及对象pin。对象／索引文件经目录句柄校验，单次Store上限为128对象、512MiB与1024租约。同步文件操作由入口放入阻塞工作线程。
 
 CLI提供上述本地管理命令，列表每页最多20条，使用显式配置的data目录下plugins目录。启用要求完整树摘要与作用域，结果区分启用状态、版本和清理状态。PLAN拒绝管理写操作。本阶段以暂存源码的独立副本执行格式检查、全workspace全目标严格Clippy、组件15项及CLI 6项回归，全部通过，日志为 `target/n3/dev066-stage-validation.log`，前序定向日志为 `target/n3/plugin-store-component.log` 和 `target/n3/plugin-cli-tests.log`。正常Run中的Skill／MCP服务组装及最终平台证据继续在[N3验收](n3-validation.md)维护。
+
+
+## DEV-067 Hook 执行与日志组件
+
+`hooks` 已实现四个事件的独立操作接口、当前宿主执行回调、observer／check返回契约、调用预算、递归约束、超时与取消清理。check只在工具派发前使用，pass／abstain继续核对原操作权限，deny、格式错误与超时阻止原派发。执行计时从宿主确认Started开始，人工等待由共享预算暂停／恢复处理。
+
+`hook_store` 使用独立私有SQLite和生命周期所有者文件锁，原子认领事件与每Run调用限额，重复事件复用同一结果。重启把未完成Running转Unknown，保留原意图并等待明确处理。执行结果先完成资源清理再保存，结果保存失败仍通过BoundaryError保留脱敏后的可观察记录。
+
+本阶段暂存源码使用独立产物目录执行格式与全workspace全目标严格Clippy，12项Hook执行及12项SQLite日志测试均通过，日志为 `target/n3/dev067-stage-validation.log`。覆盖真实子进程在意图提交后退出、跨重启预算、并发认领、重复结果、凭据变化、超时和清理未知。真实Run事件、插件原生执行器与四平台验收按[N3记录](n3-validation.md)继续集成。
