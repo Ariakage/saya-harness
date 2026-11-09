@@ -38,10 +38,10 @@ pub struct ModelSettings {
 }
 impl ModelSettings {
     fn validate(&self, request: &ModelRequest) -> Result<u32, BoundaryError> {
-        if request.purpose == ModelPurpose::Review && !request.tools.is_empty() {
+        if request.purpose != ModelPurpose::Execution && !request.tools.is_empty() {
             return Err(failure(
                 "invalid_config",
-                "review requests cannot contain tools",
+                "review and compaction requests cannot contain tools",
             ));
         }
         if self.profile.is_empty()
@@ -181,5 +181,50 @@ fn object(value: &Value) -> Result<&Map<String, Value>, BoundaryError> {
             "invalid_model_response",
             "provider response has invalid structure",
         )
+    })
+}
+
+/// Version for the provider serializers used by local context accounting.
+pub const COUNTING_ADAPTER_VERSION: &str = "saya-provider-wire-v1";
+
+fn count_wire(
+    request: &crate::boundary::ModelRequest,
+    identity: &crate::context_builder::CountingIdentity,
+    fingerprint: &str,
+    settings: &ModelSettings,
+    protocol: crate::contract::ModelProtocol,
+    body: &Value,
+) -> Result<crate::context_builder::CountEvidence, BoundaryError> {
+    if identity.model != settings.model
+        || identity.protocol != protocol
+        || identity.adapter_version != COUNTING_ADAPTER_VERSION
+        || request.profile != settings.profile
+    {
+        return Err(failure(
+            "context_counter",
+            "Wire counter identity differs from the selected serializer",
+        ));
+    }
+    let text = serde_json::to_string(body)
+        .map_err(|_| failure("context_counter", "Wire request cannot be counted"))?;
+    if text.len() > 32 * 1024 * 1024 {
+        return Err(failure(
+            "context_limit",
+            "Wire request exceeds the counting limit",
+        ));
+    }
+    let ascii = text.chars().filter(char::is_ascii).count() as u64;
+    let other = text
+        .chars()
+        .filter(|character| !character.is_ascii())
+        .count() as u64;
+    Ok(crate::context_builder::CountEvidence {
+        request_fingerprint: fingerprint.into(),
+        identity: identity.clone(),
+        input_tokens: ascii.div_ceil(4).saturating_add(other),
+        method: crate::context_builder::CountMethod::SerializedHeuristic {
+            name: "saya-wire-characters".into(),
+            version: "1".into(),
+        },
     })
 }

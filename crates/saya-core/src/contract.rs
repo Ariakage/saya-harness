@@ -236,6 +236,7 @@ pub struct RunResult {
 pub enum ModelPurpose {
     Execution,
     Review,
+    Compaction,
 }
 
 /// Source of a permission decision produced before user confirmation.

@@ -716,6 +716,13 @@ impl OneShotPermit {
     pub(crate) fn finish_external(&self) -> Result<(), BoundaryError> {
         self.end()
     }
+    pub(crate) fn authorize_output(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<bool, BoundaryError> {
+        self.check(call, context, &Operation::output_query(&call.name)?)
+    }
     pub(crate) fn authorize_todo(
         &self,
         call: &ToolCall,

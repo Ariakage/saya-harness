@@ -122,6 +122,8 @@ pub struct ExecResult {
 pub(crate) struct WorkerCapture {
     pub process: ExecResult,
     pub stdout: Vec<u8>,
+    pub(crate) outputs: Vec<crate::output_store::SealedOutput>,
+    pub(crate) output_errors: Vec<ErrorInfo>,
 }
 struct InputWriter(Option<tokio::task::JoinHandle<io::Result<()>>>);
 impl Drop for InputWriter {
@@ -137,6 +139,7 @@ pub struct ExecTool {
     store: Arc<dyn Store>,
     gate: Arc<dyn ExecGate>,
     config: ExecConfig,
+    output_store: Option<Arc<crate::output_store::OutputStore>>,
 }
 impl ExecTool {
     pub fn new(
@@ -150,7 +153,19 @@ impl ExecTool {
             store,
             gate,
             config,
+            output_store: None,
         }
+    }
+    pub(crate) fn with_output_capture(
+        mut self,
+        store: Option<Arc<crate::output_store::OutputStore>>,
+    ) -> Self {
+        self.output_store = store;
+        self
+    }
+    pub fn with_output_store(mut self, store: Arc<crate::output_store::OutputStore>) -> Self {
+        self.output_store = Some(store);
+        self
     }
 }
 fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
@@ -445,6 +460,8 @@ pub(crate) fn resolve_executable(
 struct Output {
     data: Vec<u8>,
     truncated: bool,
+    capture: Option<crate::output_store::OutputCapture>,
+    capture_error: Option<ErrorInfo>,
 }
 async fn drain<R: AsyncRead + Unpin>(
     mut reader: R,
@@ -460,6 +477,15 @@ async fn drain<R: AsyncRead + Unpin>(
         let mut out = target
             .lock()
             .map_err(|_| io::Error::other("output lock poisoned"))?;
+        if let Some(capture) = &mut out.capture
+            && let Err(error) = capture.push(&buf[..n])
+        {
+            out.capture = None;
+            out.capture_error = Some(ErrorInfo {
+                code: error.0.code,
+                message: "Output capture is unavailable".into(),
+            });
+        }
         let take = n.min(max.saturating_sub(out.data.len()));
         out.data.extend_from_slice(&buf[..take]);
         if take < n {
@@ -801,15 +827,29 @@ impl Drop for ManagedProcess {
     }
 }
 
+#[derive(Default)]
+struct ProcessIo {
+    input: Option<Vec<u8>>,
+    capture_wire: bool,
+    capture: Option<(
+        Arc<crate::output_store::OutputStore>,
+        crate::output_store::OutputScope,
+    )>,
+}
+
 async fn run_process(
     plan: &ExecPlan,
     cwd: cap_std::fs::Dir,
     env: BTreeMap<OsString, OsString>,
     config: &ExecConfig,
     cancel: &dyn Cancellation,
-    input: Option<Vec<u8>>,
-    capture_wire: bool,
+    io: ProcessIo,
 ) -> Result<WorkerCapture, BoundaryError> {
+    let ProcessIo {
+        input,
+        capture_wire,
+        capture,
+    } = io;
     if cancel.is_cancelled() {
         return Err(failure("cancelled", "command cancelled before spawn"));
     }
@@ -820,8 +860,25 @@ async fn run_process(
     let stderr = process
         .take_stderr()
         .ok_or_else(|| failure("spawn_error", "stderr pipe unavailable"))?;
-    let out = Arc::new(Mutex::new(Output::default()));
-    let err = Arc::new(Mutex::new(Output::default()));
+    let make_output = |stream, limit| {
+        let mut output = Output::default();
+        if let Some((store, scope)) = &capture {
+            let mut scope = scope.clone();
+            scope.stream = stream;
+            match store.begin(scope, limit) {
+                Ok(capture) => output.capture = Some(capture),
+                Err(error) => {
+                    output.capture_error = Some(ErrorInfo {
+                        code: error.0.code,
+                        message: "Output capture is unavailable".into(),
+                    })
+                }
+            }
+        }
+        Arc::new(Mutex::new(output))
+    };
+    let out = make_output(crate::output_store::OutputStream::Stdout, config.stdout_max);
+    let err = make_output(crate::output_store::OutputStream::Stderr, config.stderr_max);
     let mut out_task = tokio::spawn(drain(stdout, config.stdout_max, out.clone()));
     let mut err_task = tokio::spawn(drain(stderr, config.stderr_max, err.clone()));
     let mut input_writer = InputWriter(match input {
@@ -868,7 +925,7 @@ async fn run_process(
     let mut out = out
         .lock()
         .map_err(|_| failure("process_io_error", "stdout lock poisoned"))?;
-    let err = err
+    let mut err = err
         .lock()
         .map_err(|_| failure("process_io_error", "stderr lock poisoned"))?;
     let stdout = if capture_wire {
@@ -881,7 +938,25 @@ async fn run_process(
     } else {
         Vec::new()
     };
+    let mut outputs = Vec::new();
+    let mut output_errors = Vec::new();
+    for output in [&mut *out, &mut *err] {
+        if let Some(capture) = output.capture.take() {
+            match capture.seal(crate::output_store::CaptureCompletion::Eof) {
+                Ok(sealed) => outputs.push(sealed),
+                Err(error) => output_errors.push(ErrorInfo {
+                    code: error.0.code,
+                    message: "Output capture could not be sealed".into(),
+                }),
+            }
+        }
+        if let Some(error) = output.capture_error.take() {
+            output_errors.push(error);
+        }
+    }
     Ok(WorkerCapture {
+        outputs,
+        output_errors,
         process: ExecResult {
             exit_code: end.status.code(),
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -950,7 +1025,19 @@ pub(crate) async fn run_worker(
         environment: Environment::from_pairs([]),
         ..ExecConfig::default()
     };
-    run_process(&plan, directory, env, &config, cancel, Some(input), true).await
+    run_process(
+        &plan,
+        directory,
+        env,
+        &config,
+        cancel,
+        ProcessIo {
+            input: Some(input),
+            capture_wire: true,
+            capture: None,
+        },
+    )
+    .await
 }
 
 fn bound_output(value: &mut String, limit: usize, truncated: &mut bool) {
@@ -968,7 +1055,7 @@ impl Tool for ExecTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "exec".into(),
-            description: "Run a directly specified local command".into(),
+            description: "Run a directly specified local command. Host output_refs support bounded output_search and output_read when available; inspect capture completeness and gaps.".into(),
             input_schema: serde_json::json!({"type":"object","properties":{
                 "argv":{"type":"array","minItems":1,"items":{"type":"string"}},
                 "cwd":{"type":["string","null"]},"timeout_seconds":{"type":["integer","null"],"minimum":1},
@@ -1075,14 +1162,25 @@ impl Tool for ExecTool {
                     current_env,
                     &self.config,
                     cancel,
-                    None,
-                    false,
+                    ProcessIo {
+                        capture: self.output_store.as_ref().map(|store| {
+                            (
+                                store.clone(),
+                                crate::output_store::OutputScope {
+                                    session_id: context.run.session_id,
+                                    run_id: context.run.id,
+                                    call_id: call.call_id.clone(),
+                                    stream: crate::output_store::OutputStream::Stdout,
+                                },
+                            )
+                        }),
+                        ..ProcessIo::default()
+                    },
                 )
                 .await
-                .map(|capture| capture.process)
             }
             .await;
-            let process_result = match post_intent {
+            let capture = match post_intent {
                 Ok(value) => value,
                 Err(error) => {
                     // Once spawned, an error can leave side effects unknown. Do
@@ -1115,6 +1213,38 @@ impl Tool for ExecTool {
                     return Ok(result);
                 }
             };
+            let mut process_result = capture.process;
+            let outputs: Vec<_> = capture
+                .outputs
+                .iter()
+                .map(|value| value.metadata.clone())
+                .collect();
+            if self.output_store.is_some() {
+                // Render only sanitized previews. Capture failures withhold the
+                // corresponding raw prefix, including incomplete encodings.
+                process_result.stdout.clear();
+                process_result.stderr.clear();
+                for metadata in &outputs {
+                    let (text, truncated) = match metadata.scope.stream {
+                        crate::output_store::OutputStream::Stdout => (
+                            &mut process_result.stdout,
+                            &mut process_result.stdout_truncated,
+                        ),
+                        crate::output_store::OutputStream::Stderr => (
+                            &mut process_result.stderr,
+                            &mut process_result.stderr_truncated,
+                        ),
+                        _ => continue,
+                    };
+                    *text = metadata.preview_head.clone();
+                    *truncated =
+                        !metadata.artifact_complete || metadata.retained_bytes > text.len();
+                }
+                if !capture.output_errors.is_empty() {
+                    process_result.stdout_truncated = true;
+                    process_result.stderr_truncated = true;
+                }
+            }
             let ok = process_result.exit_code == Some(0)
                 && !process_result.timed_out
                 && !process_result.cancelled;
@@ -1170,7 +1300,47 @@ impl Tool for ExecTool {
             result.data = Some(serde_json::to_value(process_result).map_err(|_| {
                 failure("serialization_error", "command result could not be encoded")
             })?);
-            super::write::save_result(self.store.as_ref(), call, context, &result).await?;
+            if let Some(data) = result
+                .data
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
+                && self.output_store.is_some()
+            {
+                data.insert(
+                    "output_refs".into(),
+                    serde_json::to_value(&outputs).map_err(|_| {
+                        failure("serialization_error", "Output metadata cannot be encoded")
+                    })?,
+                );
+                data.insert(
+                    "output_capture_errors".into(),
+                    serde_json::to_value(&capture.output_errors).map_err(|_| {
+                        failure("serialization_error", "Output errors cannot be encoded")
+                    })?,
+                );
+            }
+            super::write::save_result_with_outputs(
+                self.store.as_ref(),
+                call,
+                context,
+                &result,
+                &outputs,
+            )
+            .await?;
+            if let Some(store) = &self.output_store {
+                for output in &capture.outputs {
+                    store
+                        .publish(context.run.session_id, &output.metadata.output_ref)
+                        .map_err(|mut error| {
+                            error.0.code = "storage_error".into();
+                            error.0.message =
+                                "Tool result committed, but output publication requires recovery"
+                                    .into();
+                            error.2 = Some(Box::new(result.clone()));
+                            error
+                        })?;
+                }
+            }
             Ok(result)
         })
     }

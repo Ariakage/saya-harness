@@ -39,6 +39,13 @@ impl ResponsesModel {
         }
     }
     fn request_body(&self, request: &ModelRequest) -> Result<Value, BoundaryError> {
+        self.serialized_request(request, true)
+    }
+    fn serialized_request(
+        &self,
+        request: &ModelRequest,
+        check_budget: bool,
+    ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
         let input = history(&request.history)?;
         let mut body = json!({"model":self.settings.model,"instructions":request.combined_instructions(),"input":input,"store":false,"stream":self.settings.stream,"max_output_tokens":output});
@@ -63,11 +70,35 @@ impl ResponsesModel {
             }
             map.insert("tools".into(), Value::Array(tools));
         }
-        self.settings.check_context(&body, output)?;
+        if check_budget {
+            self.settings.check_context(&body, output)?;
+        }
         Ok(body)
     }
 }
+impl crate::context_builder::RequestCounter for ResponsesModel {
+    fn count(
+        &self,
+        request: &ModelRequest,
+        identity: &crate::context_builder::CountingIdentity,
+        fingerprint: &str,
+    ) -> Result<crate::context_builder::CountEvidence, BoundaryError> {
+        let body = self.serialized_request(request, false)?;
+        super::count_wire(
+            request,
+            identity,
+            fingerprint,
+            &self.settings,
+            crate::contract::ModelProtocol::Responses,
+            &body,
+        )
+    }
+}
 impl Model for ResponsesModel {
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        Some(self)
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         if session.protocol != ModelProtocol::Responses
             || session.profile != self.settings.profile

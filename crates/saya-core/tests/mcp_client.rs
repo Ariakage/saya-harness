@@ -1262,3 +1262,107 @@ async fn stored_bearer_revocation_stops_an_already_connected_client_before_anoth
     assert_eq!(fixture.calls.load(Ordering::Acquire), 1);
     client.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn captured_adapter_retains_text_before_projection_caps_and_redacts_known_secrets() {
+    use saya_core::{
+        boundary::{Tool, ToolContext},
+        contract::{PermissionMode, Run, RunId, SessionId, ToolCall, WorkMode},
+        credentials::SecretRegistry,
+        mcp::McpToolAdapter,
+        output_store::{OutputLimits, OutputStore, SearchOptions},
+    };
+    for era in [Era::Modern, Era::Legacy] {
+        let root = tempfile::tempdir().unwrap();
+        let registry = Arc::new(SecretRegistry::default());
+        registry
+            .register(&["fixture-private-credential".into()])
+            .unwrap();
+        let outputs = OutputStore::open(
+            root.path().join("outputs"),
+            OutputLimits::default(),
+            registry,
+        )
+        .unwrap();
+        let (client, _fixture) = stdio_fixture(
+            Scenario {
+                era,
+                ..Scenario::default()
+            },
+            McpLimits {
+                max_result_bytes: 512,
+                ..fast_limits()
+            },
+        )
+        .await;
+        let catalogue = client.list_tools(&Never).await.unwrap();
+        let client = Arc::new(client);
+        let adapter = McpToolAdapter::new(
+            client.clone(),
+            catalogue.tools[0].clone(),
+            catalogue.generation,
+        );
+        let context = ToolContext {
+            run: Run {
+                id: RunId::new(),
+                session_id: SessionId::new(),
+                work_mode: WorkMode::Work,
+                permissions: PermissionMode::Auto,
+            },
+            workspace: root.path().into(),
+        };
+        let message = format!(
+            "{}\nfixture-private-credential\nneedle-after-projection",
+            "line of retained evidence\n".repeat(2000)
+        );
+        let call = ToolCall {
+            call_id: "captured-mcp".into(),
+            name: "echo".into(),
+            arguments: json!({"message":message}).to_string(),
+        };
+        let captured = adapter
+            .execute_captured(&call, &context, &Never, Some(&outputs))
+            .await
+            .unwrap();
+        assert!(captured.result.truncated);
+        assert_eq!(captured.outputs.len(), 1);
+        assert!(captured.capture_errors.is_empty());
+        let metadata = &captured.outputs[0].metadata;
+        assert!(metadata.artifact_complete);
+        assert_eq!(metadata.scope.call_id, call.call_id);
+        outputs
+            .publish(context.run.session_id, &metadata.output_ref)
+            .unwrap();
+        let found = outputs
+            .search(
+                context.run.session_id,
+                &metadata.output_ref,
+                SearchOptions {
+                    pattern: "needle-after-projection".into(),
+                    ..SearchOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(found.matches.len(), 1);
+        for entry in std::fs::read_dir(outputs.protected_path()).unwrap() {
+            let entry = entry.unwrap();
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "out")
+            {
+                assert!(
+                    !String::from_utf8_lossy(&std::fs::read(entry.path()).unwrap())
+                        .contains("fixture-private-credential")
+                );
+            }
+        }
+        drop(adapter);
+        Arc::try_unwrap(client)
+            .ok()
+            .unwrap()
+            .shutdown()
+            .await
+            .unwrap();
+    }
+}

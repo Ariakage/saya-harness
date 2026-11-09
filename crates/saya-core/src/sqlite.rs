@@ -652,6 +652,37 @@ fn apply(
             }
             journal(tx, &session, Some(&run), "tool_finished", Some(call_id))?;
         }
+        StoreChange::OutputReferences {
+            run_id,
+            call_id,
+            outputs,
+        } => {
+            let run = id(run_id.0);
+            let session = run_session(tx, &run)?;
+            let raw: String = tx.query_row(
+                "SELECT result FROM tool_calls WHERE run_id=?1 AND call_id=?2 AND state IN ('succeeded','failed')",
+                params![run, call_id], |row| row.get(0)).map_err(sql_error)?;
+            let result: ToolResult = serde_json::from_str(&raw)
+                .map_err(|_| error("storage_corrupt", "Invalid producer result"))?;
+            let session_id = crate::contract::SessionId(
+                uuid::Uuid::parse_str(&session)
+                    .map_err(|_| error("storage_corrupt", "Invalid producer session"))?,
+            );
+            crate::output_store::validate_references(
+                outputs, session_id, *run_id, call_id, &result,
+            )?;
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM change_log WHERE run_id=?1 AND kind='output_refs' AND json_extract(reference,'$[0].scope.call_id')=?2)",
+                params![run, call_id], |row| row.get(0)).map_err(sql_error)?;
+            if exists {
+                return Err(error(
+                    "output_registration",
+                    "Producer outputs are already registered",
+                ));
+            }
+            let record = json(outputs, secrets)?;
+            journal(tx, &session, Some(&run), "output_refs", Some(&record))?;
+        }
         StoreChange::ToolState {
             run_id,
             call_id,
@@ -1655,6 +1686,31 @@ impl Store for SqliteStore {
             .map_err(|_| error("storage_error", "database worker failed"))?
         })
     }
+    fn output_references(
+        &self,
+        session_id: SessionId,
+    ) -> Operation<'_, Vec<crate::output_store::OutputMetadata>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let conn = inner.lock().map_err(|_| error("storage_error", "database lock failed"))?;
+                let mut stmt = conn.prepare("SELECT reference FROM change_log WHERE session_id=?1 AND kind='output_refs' ORDER BY seq LIMIT 4097").map_err(sql_error)?;
+                let rows = stmt.query_map([id(session_id.0)], |row| row.get::<_, String>(0)).map_err(sql_error)?;
+                let mut outputs = Vec::new();
+                for (index, row) in rows.enumerate() {
+                    let raw = row.map_err(sql_error)?;
+                    if index >= 4096 || raw.len() > 128 * 1024 { return Err(error("output_registration_limit", "Output registry exceeds its read limit")); }
+                    let records: Vec<crate::output_store::OutputMetadata> = serde_json::from_str(&raw)
+                        .map_err(|_| error("storage_corrupt", "Invalid output registry"))?;
+                    if records.iter().any(|value| value.scope.session_id != session_id) {
+                        return Err(error("storage_corrupt", "Output registry session mismatch"));
+                    }
+                    outputs.extend(records);
+                }
+                Ok(outputs)
+            }).await.map_err(|_| error("storage_error", "database worker failed"))?
+        })
+    }
     fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
         let inner = self.inner.clone();
         let secrets = self.secrets.clone();
@@ -1674,6 +1730,7 @@ impl Store for SqliteStore {
                         prepare_guard(&tx, &root, session, &secrets)?;
                     }
                 }
+                crate::output_store::validate_changes(&changes)?;
                 for change in &changes {
                     apply(&tx, change, &secrets)?;
                 }

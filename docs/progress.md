@@ -10,6 +10,10 @@
 
 DEV-078实现manifest／lock的离线结构、语义、SemVer、feature／能力、依赖、树摘要和工具别名校验。包文件采用有界NOFOLLOW读取并密封内容，Unicode NFC与完整大小写折叠用于碰撞检查。独立复核的两处缺口已修复，13项插件回归及本机完整门禁通过，共942项Rust测试，包含格式、严格Clippy和优化构建，日志为 `target/n3/dev078-workspace.log`。[规范与实现边界](saya-plugin.md#验收与实现状态)
 
+2026-11-10，DEV-076核心链路及DEV-062预算基础接入共享运行入口。exec保留原有效捕获上限并继续排空，MCP在模型投影前捕获解码文本和结构化内容，二进制内容用省略描述记录。宿主引用与工具结果在同一SQLite事务登记，发布失败保留已观察结果，恢复完成发布，运行租约与会话ACL接入。output_read／output_search经过Manual Approval、PLAN及显式deny检查。[配置与上限](configuration.md#输出捕获与上下文预算)
+
+本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、986项Rust测试与优化构建通过。新增17项OutputStore、19项ContextBuilder、5项运行时边界、1项三协议wire计数及1项MCP长输出回归。计数测试核对真实HTTP请求体，并确认计数期间没有请求。发布故障回归核对副作用只发生一次。日志见 `target/n3/dev076-062-workspace.log`。独立复核后继续修复结果投影状态保留与单用户长任务切点，DEV-062保持验收中，自动／手动Compact和全局记忆正常入口继续开发。
+
 项目负责人提供四份压缩／续接／系统组装参考，以及三份记忆参考，要求提示词使用纯英文。已形成英文Compact与Continuation草案并记录四份压缩来源的SHA和取舍，当前运行时仍加载已有11份英文提示词，草案接入由DEV-063完成。[提示词来源与接入契约](prompt/drafts/n3/README.md)
 
 三份记忆来源进一步形成英文Memory Context与Consolidation草案，记录默认注入、渐进检索、来源／作用域／版本、更正、撤回及明确遗忘。参考中的多版本模板和二进制残留按来源身份保留，草案采用Saya专用变更与核查契约，由DEV-084至DEV-089接入。[记忆来源与验收矩阵](prompt/drafts/n3/memory-sources.md)

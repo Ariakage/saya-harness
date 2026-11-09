@@ -152,6 +152,63 @@ fn truncate(text: &mut String, mut length: usize) {
     text.truncate(length);
 }
 
+/// Capture decoded text and structured data before model projection caps.
+/// Binary media is represented by an explicit omission descriptor.
+pub(super) fn capture_text_result(
+    result: &CallToolResult,
+    store: &crate::output_store::OutputStore,
+    scope: crate::output_store::OutputScope,
+    max_bytes: usize,
+) -> (
+    Vec<crate::output_store::SealedOutput>,
+    Vec<crate::contract::ErrorInfo>,
+) {
+    let captured = (|| {
+        let mut capture = store.begin(scope, max_bytes)?;
+        for (index, block) in result.content.iter().enumerate() {
+            let value = match block {
+                ContentBlock::Text(text) => {
+                    serde_json::json!({"index":index,"kind":"text","text":text.text})
+                }
+                ContentBlock::Resource(resource) => match &resource.resource {
+                    ResourceContents::TextResourceContents {
+                        uri,
+                        mime_type,
+                        text,
+                        ..
+                    } => {
+                        serde_json::json!({"index":index,"kind":"text_resource","uri":uri,"mime_type":mime_type,"text":text})
+                    }
+                    _ => serde_json::json!({"index":index,"kind":"omitted_binary_resource"}),
+                },
+                _ => serde_json::json!({"index":index,"kind":"omitted_non_text_content"}),
+            };
+            serde_json::to_writer(crate::output_store::CaptureWriter(&mut capture), &value)
+                .map_err(|_| error("output_capture", "MCP text capture failed"))?;
+            capture.push(b"\n")?;
+        }
+        if let Some(structured) = &result.structured_content {
+            serde_json::to_writer(
+                crate::output_store::CaptureWriter(&mut capture),
+                &serde_json::json!({"kind":"structured_content","value":structured}),
+            )
+            .map_err(|_| error("output_capture", "MCP structured capture failed"))?;
+            capture.push(b"\n")?;
+        }
+        capture.seal(crate::output_store::CaptureCompletion::Eof)
+    })();
+    match captured {
+        Ok(output) => (vec![output], Vec::new()),
+        Err(error) => (
+            Vec::new(),
+            vec![crate::contract::ErrorInfo {
+                code: error.0.code,
+                message: "MCP output capture is unavailable".into(),
+            }],
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

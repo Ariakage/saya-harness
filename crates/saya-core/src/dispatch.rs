@@ -39,6 +39,13 @@ struct ObservedStore {
     finished: AtomicBool,
 }
 impl Store for ObservedStore {
+    fn output_references(
+        &self,
+        id: SessionId,
+    ) -> StoreOperation<'_, Vec<crate::output_store::OutputMetadata>> {
+        self.inner.output_references(id)
+    }
+
     fn load_session(&self, id: SessionId) -> StoreOperation<'_, Option<Session>> {
         self.inner.load_session(id)
     }
@@ -81,6 +88,13 @@ struct BackgroundStore {
     call_id: String,
 }
 impl Store for BackgroundStore {
+    fn output_references(
+        &self,
+        id: SessionId,
+    ) -> StoreOperation<'_, Vec<crate::output_store::OutputMetadata>> {
+        self.inner.output_references(id)
+    }
+
     fn load_session(&self, id: SessionId) -> StoreOperation<'_, Option<Session>> {
         self.inner.load_session(id)
     }
@@ -108,6 +122,7 @@ pub struct ToolDispatcher {
     modes: ModeController,
     read_only: bool,
     context_guard: OnceLock<Arc<ContextGuard>>,
+    output_store: OnceLock<Arc<crate::output_store::OutputStore>>,
     known_secrets: Vec<String>,
     registry: RwLock<ToolRegistry>,
     external_active: Arc<AtomicUsize>,
@@ -415,6 +430,7 @@ impl ToolDispatcher {
             modes,
             read_only: false,
             context_guard: OnceLock::new(),
+            output_store: OnceLock::new(),
             known_secrets: known_secrets.clone(),
             registry: RwLock::new(ToolRegistry::with_known_secrets(known_secrets)),
             external_active: Arc::new(AtomicUsize::new(0)),
@@ -429,6 +445,39 @@ impl ToolDispatcher {
                 .register_builtin(definition)?;
         }
         Ok(dispatcher)
+    }
+    pub(crate) async fn recover_outputs(&self, session_id: SessionId) -> Result<(), BoundaryError> {
+        if let Some(store) = self.output_store.get() {
+            let records = self.store.output_references(session_id).await?;
+            let registered: std::collections::BTreeMap<_, _> = records
+                .iter()
+                .map(|metadata| (metadata.output_ref.as_str(), metadata))
+                .collect();
+            for item in store.inventory()? {
+                if item.state == crate::output_store::OutputObjectState::Sealed
+                    && let Some(reference) = item.output_ref
+                    && let Some(metadata) = registered.get(reference.as_str())
+                    && metadata.scope == item.scope
+                {
+                    store.publish(session_id, &reference)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn set_output_store(
+        &self,
+        store: Arc<crate::output_store::OutputStore>,
+    ) -> Result<(), BoundaryError> {
+        use crate::tools::output::OutputToolKind;
+        let limits = store.limits();
+        self.output_store
+            .set(store)
+            .map_err(|_| failure("output_config", "Output storage is already configured"))?;
+        for kind in [OutputToolKind::Read, OutputToolKind::Search] {
+            self.register_control_definition(kind.definition(limits))?;
+        }
+        Ok(())
     }
     pub(crate) fn with_write_limit(mut self, max_bytes: usize) -> Self {
         self.write_max_bytes = max_bytes;
@@ -489,6 +538,13 @@ impl ToolDispatcher {
         } else if call.name == "ask_user" {
             crate::input::InputRequest::parse(call)?;
             Operation::ask_user()
+        } else if matches!(call.name.as_str(), "output_read" | "output_search") {
+            let store = self
+                .output_store
+                .get()
+                .ok_or_else(|| failure("unknown_tool", "Output storage is unavailable"))?;
+            crate::tools::output::validate_call(call, store.limits())?;
+            Operation::output_query(&call.name)?
         } else if call.name == "todo_write" {
             crate::tools::todo::parse(call)?;
             Operation::todo_write()
@@ -631,6 +687,52 @@ impl ToolDispatcher {
                 .await;
         }
         match call.name.as_str() {
+            "output_read" | "output_search" => {
+                let output_store = self
+                    .output_store
+                    .get()
+                    .ok_or_else(|| failure("unknown_tool", "Output storage is unavailable"))?;
+                crate::tools::output::validate_call(call, output_store.limits())?;
+                if !permit.authorize_output(call, context)? {
+                    return Err(failure(
+                        "stale_approval",
+                        "Output query authorization is stale",
+                    ));
+                }
+                let _lease = TodoLease(&permit);
+                store
+                    .commit(&[StoreChange::ToolIntent {
+                        run_id: context.run.id,
+                        call: call.clone(),
+                    }])
+                    .await?;
+                let kind = if call.name == "output_read" {
+                    crate::tools::output::OutputToolKind::Read
+                } else {
+                    crate::tools::output::OutputToolKind::Search
+                };
+                let outcome = if permit.authorize_output(call, context)? {
+                    crate::tools::output::OutputTool::new(output_store.clone(), kind)
+                        .execute(call, context, cancel)
+                        .await
+                } else {
+                    Err(failure(
+                        "stale_approval",
+                        "Output query authorization changed",
+                    ))
+                };
+                let result = match &outcome {
+                    Ok(result) => crate::redaction::tool_result(result, &self.current_secrets()?)?,
+                    Err(error) => ToolResult {
+                        ok: false,
+                        data: None,
+                        error: Some(error.0.clone()),
+                        truncated: false,
+                    },
+                };
+                save_result(store.as_ref(), call, context, &result).await?;
+                outcome.map(|_| result)
+            }
             "todo_write" => {
                 if !permit.authorize_todo(call, context)? {
                     return Err(failure(
@@ -728,12 +830,15 @@ impl ToolDispatcher {
                     finished: AtomicBool::new(false),
                 });
                 let tool: Box<dyn Tool> = match call.name.as_str() {
-                    "exec" => Box::new(ExecTool::new(
-                        self.files.clone(),
-                        observed.clone(),
-                        permit,
-                        self.effective_exec_config()?,
-                    )),
+                    "exec" => Box::new(
+                        ExecTool::new(
+                            self.files.clone(),
+                            observed.clone(),
+                            permit,
+                            self.effective_exec_config()?,
+                        )
+                        .with_output_capture(self.output_store.get().cloned()),
+                    ),
                     name => Box::new(
                         WriteTool::new(
                             self.files.clone(),
@@ -811,7 +916,14 @@ impl ToolDispatcher {
                             {
                                 remote.name = remote_name.clone();
                             }
-                            adapter.execute(&remote, context, cancel).await
+                            adapter
+                                .execute_captured(
+                                    &remote,
+                                    context,
+                                    cancel,
+                                    self.output_store.get().map(Arc::as_ref),
+                                )
+                                .await
                         } else {
                             Err(failure(
                                 "stale_approval",
@@ -821,17 +933,78 @@ impl ToolDispatcher {
                     }
                     Err(error) => Err(error),
                 };
-                let result = match outcome {
-                    Ok(result) => result,
-                    Err(error) => ToolResult {
-                        ok: false,
-                        data: None,
-                        error: Some(error.0),
-                        truncated: false,
+                let capture = match outcome {
+                    Ok(capture) => capture,
+                    Err(error) => crate::output_store::CapturedToolResult {
+                        result: ToolResult {
+                            ok: false,
+                            data: None,
+                            error: Some(error.0),
+                            truncated: false,
+                        },
+                        outputs: Vec::new(),
+                        capture_errors: Vec::new(),
                     },
                 };
-                let result = crate::redaction::tool_result(&result, &self.current_secrets()?)?;
-                save_result(store.as_ref(), call, context, &result).await?;
+                let mut result =
+                    crate::redaction::tool_result(&capture.result, &self.current_secrets()?)?;
+                let outputs: Vec<_> = capture
+                    .outputs
+                    .iter()
+                    .map(|output| output.metadata.clone())
+                    .collect();
+                if let Some(data) = result
+                    .data
+                    .as_mut()
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    // Reserve this field even when a server invents its own refs.
+                    data.remove("output_refs");
+                    if !outputs.is_empty() {
+                        data.insert(
+                            "output_refs".into(),
+                            serde_json::to_value(&outputs).map_err(|_| {
+                                failure(
+                                    "serialization_error",
+                                    "Output references cannot be encoded",
+                                )
+                            })?,
+                        );
+                        data.insert(
+                            "output_capture_format".into(),
+                            serde_json::json!("mcp_text_projection_ndjson_v1"),
+                        );
+                    }
+                    if !capture.capture_errors.is_empty() {
+                        data.insert(
+                            "output_capture_errors".into(),
+                            serde_json::to_value(&capture.capture_errors).map_err(|_| {
+                                failure(
+                                    "serialization_error",
+                                    "Output capture errors cannot be encoded",
+                                )
+                            })?,
+                        );
+                    }
+                }
+                crate::tools::write::save_result_with_outputs(
+                    store.as_ref(),
+                    call,
+                    context,
+                    &result,
+                    &outputs,
+                )
+                .await?;
+                if let Some(store) = self.output_store.get() {
+                    for output in &capture.outputs {
+                        store.publish(context.run.session_id, &output.metadata.output_ref).map_err(|mut error| {
+                        error.0.code = "storage_error".into();
+                        error.0.message = "Tool result committed, but output publication requires recovery".into();
+                        error.2 = Some(Box::new(result.clone()));
+                        error
+                    })?;
+                    }
+                }
                 Ok(result)
             }
         }

@@ -127,3 +127,29 @@ argv = ["/absolute/path/to/server", "--stdio"]
 HTTP 配置使用 `[mcp.servers.NAME.transport]`，设置 `type = "http"` 与完整 `endpoint`。默认要求 HTTPS。明确设置 `allow_insecure_http = true` 可选择明文测试端点。凭据通过 `bearer_env`、`headers_env` 或私有存储的 `credential_ref` 选择，`bearer_env` 与 `credential_ref` 互斥。`scopes` 绑定凭据授权范围。登录、撤销、作用域及完整示例见[MCP 使用说明](mcp.md)。
 
 每个服务可设置 `[mcp.servers.NAME.limits]`。默认连接超时 20 秒，请求／目录发现超时 120 秒，单个 wire 消息和完整工具目录各 1 MiB，最多 32 页、256 个工具，结果投影 256 KiB、128 个内容块。运行时同时执行共享活跃时间与工具预算，人工确认期间暂停活跃计时，收尾独立完成。
+
+## 输出捕获与上下文预算
+
+N3开发线默认开启私有OutputStore，位置为所选 `data_dir` 下的 `outputs/`。新增配置独立控制捕获存储，原有 `limits.command_stdout_max_bytes`／`command_stderr_max_bytes`继续限制各流的有效捕获量，默认各64KiB。显式扩大这些值时仍受OutputStore对象及Run剩余额度约束。
+
+```toml
+[output_capture]
+enabled = true
+
+[output_capture.limits]
+max_object_bytes = 16777216
+max_run_bytes = 134217728
+max_store_bytes = 1073741824
+max_objects = 4096
+tail_bytes = 4096
+preview_bytes = 4096
+max_page_bytes = 16384
+max_page_lines = 200
+max_search_matches = 200
+```
+
+捕获器提供首尾、保留范围、缺口和完整性，超额后继续排空。无法安全解码或脱敏的窗口保留withheld原因。MCP保存投影前的文本／structuredContent为NDJSON，非文本媒体保留省略描述。模型侧output_read默认8KiB／100行，最多8KiB／200行；output_search最多50项、4行上下文、8KiB。小于这些值的宿主配置优先。查询游标绑定脱敏视图摘要，凭据集合变化后旧游标返回cursor_invalid。
+
+宿主引用在工具结果事务内登记，然后发布对象。恢复核对已封存对象及宿主登记。查询按当前权限和Session归属执行。Manual Approval覆盖读取和搜索，PLAN允许只读查询，显式deny优先。Run发布的对象持有租约，历史引用作为可回收记录保留，对象被回收后返回output_unavailable。读取宿主引用登记设4096条记录的有界保护，超过时返回明确错误。
+
+共享运行入口以所选profile的上下文窗口、实际最大输出token预留及窗口5%的余量构建ContextBudget。本地计数直接使用当前协议的完整请求序列化器，ASCII每4字符和其他Unicode标量每1字符估算输入token，记录估算方法与版本。供应商最终窗口检查继续执行。ContextBuilder在必留内容超过预算时返回context_limit，并保留原始Session历史。自动／手动摘要的接入和逐项状态见[上下文设计](context-management.md)与[N3验收](n3-validation.md)。

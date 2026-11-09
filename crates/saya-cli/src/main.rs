@@ -507,6 +507,10 @@ impl ModelStream for PrintStream {
     }
 }
 impl Model for PrintModel {
+    fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
+        self.0.request_counter()
+    }
+
     fn validate_session(&self, s: &Session) -> Result<(), BoundaryError> {
         self.0.validate_session(s)
     }

@@ -81,6 +81,13 @@ impl AnthropicModel {
         )
     }
     fn request_body(&self, request: &ModelRequest) -> Result<Value, BoundaryError> {
+        self.serialized_request(request, true)
+    }
+    fn serialized_request(
+        &self,
+        request: &ModelRequest,
+        check_budget: bool,
+    ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
         let messages = history(&request.history)?;
         let system = if self.prompt_cache
@@ -120,11 +127,35 @@ impl AnthropicModel {
             }).collect();
             map.insert("tools".into(), Value::Array(tools));
         }
-        self.settings.check_context(&body, output)?;
+        if check_budget {
+            self.settings.check_context(&body, output)?;
+        }
         Ok(body)
     }
 }
+impl crate::context_builder::RequestCounter for AnthropicModel {
+    fn count(
+        &self,
+        request: &ModelRequest,
+        identity: &crate::context_builder::CountingIdentity,
+        fingerprint: &str,
+    ) -> Result<crate::context_builder::CountEvidence, BoundaryError> {
+        let body = self.serialized_request(request, false)?;
+        super::count_wire(
+            request,
+            identity,
+            fingerprint,
+            &self.settings,
+            crate::contract::ModelProtocol::AnthropicMessages,
+            &body,
+        )
+    }
+}
 impl Model for AnthropicModel {
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        Some(self)
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         if session.protocol != ModelProtocol::AnthropicMessages
             || session.profile != self.settings.profile

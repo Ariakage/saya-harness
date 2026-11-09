@@ -150,6 +150,18 @@ pub(super) fn changes(
                         state,
                     }
                 }
+                StoreChange::OutputReferences {
+                    run_id,
+                    call_id,
+                    outputs,
+                } => {
+                    require_clean(&(&call_id, &outputs), source)?;
+                    StoreChange::OutputReferences {
+                        run_id,
+                        call_id,
+                        outputs,
+                    }
+                }
                 StoreChange::ApprovalRequested(value) => {
                     StoreChange::ApprovalRequested(redact(value, source)?)
                 }

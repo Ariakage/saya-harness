@@ -1,12 +1,14 @@
 # 上下文、Compact 与长工具输出
 
-**更新于 2026-11-08。本文为 F-06、DEV-062／063／076／077 的设计草案，候选限额在实现阶段通过三协议验证后固定。**
+**更新于2026-11-10。DEV-076输出链路与DEV-062预算基础已接入本机集成检查，其余Compact与联合验收按逐项状态推进。候选项与实际配置分开维护。**
 
 ## 当前实现与新增边界
 
-当前运行时将项目／个人上下文和 Session history 组装为 ModelRequest。读取工具已有返回上限，默认读取返回最多 256 KiB、内容搜索最多 200 项／128 KiB。exec 默认分别保留 stdout、stderr 的前 64 KiB，并继续排空后续数据。现有截断结果通过标记呈现，超出保留范围的文本缺少后续检索引用。
+当前共享运行入口已接OutputStore、output_read／output_search与ContextBuilder。exec按配置捕获stdout／stderr，默认各64KiB，持续排空并维护首尾及缺口。MCP在结果解码后、模型正文限额前按块捕获文本和structuredContent。引用由宿主独立通道返回，与ToolFinished及历史结果原子登记后发布。
 
-后续增加三个模块。
+三协议本地计数共用实际请求体序列化，包含静态／动态指令、工具、消息封装、协议及opaque字段，采用标记为估算的字符启发式。默认ContextBudget预留所选profile的最大输出及窗口5%余量。独立复核继续完善投影状态及单用户长任务切点，自动摘要与检查点接入由DEV-063完成。[实际证据](n3-validation.md)、[配置](configuration.md#输出捕获与上下文预算)
+
+模块分工如下。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -69,7 +71,7 @@ exec 的捕获接入点位于管道 drain 阶段，MCP 接入点位于结果解�
 
 模型默认优先使用 `find_files`、`search_text` 和有界 `read_file`，已有输出通过 `output_search` 定位，再分页读取相关区间。`grep`／`rg` 可通过获准的 exec 使用，PLAN 的调查由内置只读搜索工具承接。
 
-未来提示词片段采用英文，并随实际工具注册情况注入。
+当前英文工具提示词已说明输出引用、完整性和缺口，并根据实际注册的查询工具使用。
 
 ```text
 Search before reading large sources. Prefer the native search tools and bounded

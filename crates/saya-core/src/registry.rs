@@ -306,7 +306,7 @@ pub fn builtin_effect(name: &str) -> Option<ToolEffect> {
         "read_file" | "list_dir" | "find_files" | "search_text" => ToolEffect::FileRead,
         "write_file" | "apply_patch" => ToolEffect::FileWrite,
         "exec" => ToolEffect::Process,
-        "todo_write" => ToolEffect::SessionMetadata,
+        "todo_write" | "output_read" | "output_search" => ToolEffect::SessionMetadata,
         "ask_user" => ToolEffect::Interaction,
         "background_start" | "background_status" | "background_cancel" => ToolEffect::Control,
         _ => return None,

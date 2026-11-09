@@ -63,6 +63,10 @@ impl ThinkingModel {
     }
 }
 impl Model for ThinkingModel {
+    fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
+        self.inner.request_counter()
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         self.inner.validate_session(session)
     }

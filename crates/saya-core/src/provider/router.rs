@@ -34,7 +34,30 @@ impl ProfileRouter {
         })
     }
 }
+impl crate::context_builder::RequestCounter for ProfileRouter {
+    fn count(
+        &self,
+        request: &ModelRequest,
+        identity: &crate::context_builder::CountingIdentity,
+        fingerprint: &str,
+    ) -> Result<crate::context_builder::CountEvidence, BoundaryError> {
+        self.profiles
+            .get(&request.profile)
+            .and_then(|model| model.request_counter())
+            .ok_or_else(|| {
+                failure(
+                    "context_counter",
+                    "Selected profile has no local wire counter",
+                )
+            })?
+            .count(request, identity, fingerprint)
+    }
+}
 impl Model for ProfileRouter {
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        Some(self)
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         if session.profile != self.execution_profile {
             return Err(failure(
@@ -53,18 +76,17 @@ impl Model for ProfileRouter {
         cancel: &'a dyn Cancellation,
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
-            if request.purpose == ModelPurpose::Execution
-                && request.profile != self.execution_profile
+            if request.purpose != ModelPurpose::Review && request.profile != self.execution_profile
             {
                 return Err(failure(
                     "invalid_config",
                     "execution profile cannot change during a session",
                 ));
             }
-            if request.purpose == ModelPurpose::Review && !request.tools.is_empty() {
+            if request.purpose != ModelPurpose::Execution && !request.tools.is_empty() {
                 return Err(failure(
                     "invalid_config",
-                    "review requests cannot contain tools",
+                    "review and compaction requests cannot contain tools",
                 ));
             }
             let model = self.profiles.get(&request.profile).ok_or_else(|| {

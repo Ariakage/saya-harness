@@ -2,6 +2,7 @@
 
 pub mod exec;
 pub mod isolated;
+pub mod output;
 pub mod read;
 pub mod todo;
 pub mod write;

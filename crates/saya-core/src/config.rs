@@ -350,6 +350,21 @@ impl Limits {
         Ok(())
     }
 }
+/// Private host-owned output retention. Existing command stream caps still apply.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OutputCaptureSettings {
+    pub enabled: bool,
+    pub limits: crate::output_store::OutputLimits,
+}
+impl Default for OutputCaptureSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            limits: crate::output_store::OutputLimits::default(),
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Document {
@@ -370,6 +385,8 @@ struct Document {
     sandbox: SandboxSettings,
     #[serde(default)]
     mcp: McpSettings,
+    #[serde(default)]
+    output_capture: OutputCaptureSettings,
 }
 /// Effective settings; no model is implicitly selected. Secret values stay in Environment.
 #[derive(Clone)]
@@ -390,6 +407,7 @@ pub struct Config {
     pub limits: Limits,
     pub sandbox: SandboxSettings,
     pub mcp: McpSettings,
+    pub output_capture: OutputCaptureSettings,
     env: Environment,
 }
 impl Config {
@@ -587,6 +605,7 @@ pub fn load(
     doc.limits.validate()?;
     doc.sandbox.validate()?;
     validate_mcp(&doc.mcp, &env)?;
+    doc.output_capture.limits.validate()?;
     if doc.review.max_output_tokens == 0 {
         return Err(invalid("review output limit must be positive"));
     }
@@ -675,6 +694,7 @@ pub fn load(
         limits: doc.limits,
         sandbox: doc.sandbox,
         mcp: doc.mcp,
+        output_capture: doc.output_capture,
         env,
     })
 }

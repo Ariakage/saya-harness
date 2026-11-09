@@ -334,6 +334,16 @@ impl Operation {
             target: Target::Metadata,
         }
     }
+    /// Read retained output owned by the current session.
+    pub fn output_query(tool: &str) -> Result<Self, BoundaryError> {
+        if !matches!(tool, "output_read" | "output_search") {
+            return Err(failure("invalid_args", "Unsupported output query"));
+        }
+        Ok(Self {
+            tool: tool.into(),
+            target: Target::Metadata,
+        })
+    }
     /// Construct a model-facing background status or cancellation operation.
     pub fn background_control(tool: &str) -> Result<Self, BoundaryError> {
         if !matches!(tool, "background_status" | "background_cancel") {
@@ -484,6 +494,8 @@ impl Policy {
                         | "background_status"
                         | "background_cancel"
                         | "todo_write"
+                        | "output_read"
+                        | "output_search"
                 ) && !crate::registry::valid_external_name(tool)
                 {
                     return Err(failure("invalid_config", "unknown rule tool"));

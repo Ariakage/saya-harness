@@ -82,6 +82,11 @@ pub trait ModelStream: Send {
 
 /// Starts a provider request. Review calls must not be supplied executable tools.
 pub trait Model: Send + Sync {
+    /// Local counting of the exact serialized request, with no network I/O.
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        None
+    }
+
     /// Verify that a persisted execution session still matches its provider,
     /// profile and model. Test doubles may use the default implementation.
     fn validate_session(&self, _session: &Session) -> Result<(), BoundaryError> {
@@ -99,6 +104,24 @@ pub trait Model: Send + Sync {
 /// A local tool adapter. The scheduler handles mode, permission and persistence.
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
+
+    /// Host capture channel. Only trusted adapters can return sealed objects.
+    /// The default preserves existing adapters and does not trust tool-body refs.
+    fn execute_captured<'a>(
+        &'a self,
+        call: &'a ToolCall,
+        context: &'a ToolContext,
+        cancel: &'a dyn Cancellation,
+        _outputs: Option<&'a crate::output_store::OutputStore>,
+    ) -> Operation<'a, crate::output_store::CapturedToolResult> {
+        Box::pin(async move {
+            Ok(crate::output_store::CapturedToolResult {
+                result: self.execute(call, context, cancel).await?,
+                outputs: Vec::new(),
+                capture_errors: Vec::new(),
+            })
+        })
+    }
 
     /// Execute one complete call after validation and authorization. This can
     /// have side effects; callers must persist intent before dispatch, and must
@@ -151,6 +174,12 @@ pub enum StoreChange {
         call_id: String,
         result: ToolResult,
     },
+    /// Host-sealed output identities, committed with the matching tool result.
+    OutputReferences {
+        run_id: crate::contract::RunId,
+        call_id: String,
+        outputs: Vec<crate::output_store::OutputMetadata>,
+    },
     /// Record waiting, denied, or unknown states without executing an operation.
     ToolState {
         run_id: crate::contract::RunId,
@@ -167,6 +196,13 @@ pub enum StoreChange {
 
 /// Storage boundary. The available in-memory implementation is not durable.
 pub trait Store: Send + Sync {
+    /// Trusted host output records for recovery. Tool bodies are not a registry.
+    fn output_references(
+        &self,
+        _id: crate::contract::SessionId,
+    ) -> Operation<'_, Vec<crate::output_store::OutputMetadata>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     /// Read the saved session and its ordered history. Returns `None` if absent;
     /// errors include inaccessible or invalid data. This never replays tools.
     fn load_session<'a>(&'a self, id: crate::contract::SessionId)

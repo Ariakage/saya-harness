@@ -41,12 +41,35 @@ impl Store for MemoryStore {
         })
     }
 
+    fn output_references(
+        &self,
+        id: SessionId,
+    ) -> Operation<'_, Vec<crate::output_store::OutputMetadata>> {
+        Box::pin(async move {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("memory store lock poisoned"))?;
+            Ok(state
+                .changes
+                .iter()
+                .filter_map(|change| match change {
+                    StoreChange::OutputReferences { outputs, .. } => Some(outputs),
+                    _ => None,
+                })
+                .flatten()
+                .filter(|output| output.scope.session_id == id)
+                .cloned()
+                .collect())
+        })
+    }
     fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
         Box::pin(async move {
             let mut guard = self
                 .state
                 .lock()
                 .map_err(|_| failure("memory store lock poisoned"))?;
+            crate::output_store::validate_changes(changes)?;
             let mut next = guard.clone();
             for change in changes {
                 match change {
@@ -104,6 +127,41 @@ impl Store for MemoryStore {
                         } else {
                             ToolState::Failed
                         };
+                    }
+                    StoreChange::OutputReferences {
+                        run_id,
+                        call_id,
+                        outputs,
+                    } => {
+                        let run = next
+                            .runs
+                            .get(run_id)
+                            .ok_or_else(|| failure("run not found"))?;
+                        let result = changes
+                            .iter()
+                            .find_map(|change| match change {
+                                StoreChange::ToolFinished {
+                                    run_id: producer,
+                                    call_id: id,
+                                    result,
+                                } if producer == run_id && id == call_id => Some(result),
+                                _ => None,
+                            })
+                            .ok_or_else(|| failure("producer result missing"))?;
+                        crate::output_store::validate_references(
+                            outputs,
+                            run.session_id,
+                            *run_id,
+                            call_id,
+                            result,
+                        )?;
+                        if next.changes.iter().any(|change| {
+                            matches!(change,
+                            StoreChange::OutputReferences {run_id: producer,call_id:id,..}
+                            if producer == run_id && id == call_id)
+                        }) {
+                            return Err(failure("producer outputs already registered"));
+                        }
                     }
                     StoreChange::ToolState {
                         run_id,

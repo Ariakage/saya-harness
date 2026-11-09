@@ -18,13 +18,19 @@ use tracing::Instrument;
 pub struct RunMetrics {
     pub execution_requests: u64,
     pub review_requests: u64,
+    #[serde(default)]
+    pub compaction_requests: u64,
     pub tool_calls: u64,
     pub tool_executions: u64,
     pub duration_ms: u64,
     pub execution_usage: Option<Usage>,
     pub review_usage: Option<Usage>,
+    #[serde(default)]
+    pub compaction_usage: Option<Usage>,
     pub execution_cost: Option<CostEstimate>,
     pub review_cost: Option<CostEstimate>,
+    #[serde(default)]
+    pub compaction_cost: Option<CostEstimate>,
 }
 /// An estimate in millionths of the explicitly configured currency; it is not a bill.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -93,6 +99,7 @@ struct State {
     started: Option<Instant>,
     execution: Totals,
     review: Totals,
+    compaction: Totals,
     tools: u64,
     executions: u64,
     calls: HashMap<String, String>,
@@ -126,6 +133,7 @@ impl Metrics {
             let totals = match purpose {
                 ModelPurpose::Execution => &mut state.execution,
                 ModelPurpose::Review => &mut state.review,
+                ModelPurpose::Compaction => &mut state.compaction,
             };
             totals.requests = totals.requests.saturating_add(1);
         }
@@ -135,6 +143,7 @@ impl Metrics {
             match purpose {
                 ModelPurpose::Execution => &mut state.execution,
                 ModelPurpose::Review => &mut state.review,
+                ModelPurpose::Compaction => &mut state.compaction,
             }
             .finish(usage);
         }
@@ -172,38 +181,44 @@ impl Metrics {
             .unwrap_or(0);
         let execution = state.execution.usage();
         let review = state.review.usage();
-        let total = match (&execution, &review) {
-            (None, None) => None,
-            _ => {
-                let add = |a: Option<&Usage>,
-                           b: Option<&Usage>,
-                           get: fn(&Usage) -> Option<u64>|
-                 -> Option<u64> {
-                    let first = a.map(get).unwrap_or(Some(0))?;
-                    let second = b.map(get).unwrap_or(Some(0))?;
-                    first.checked_add(second)
-                };
-                let input_tokens = add(execution.as_ref(), review.as_ref(), |u| u.input_tokens);
-                let output_tokens = add(execution.as_ref(), review.as_ref(), |u| u.output_tokens);
-                Some(Usage {
-                    input_tokens,
-                    output_tokens,
-                    estimated: execution.as_ref().is_some_and(|u| u.estimated)
-                        || review.as_ref().is_some_and(|u| u.estimated)
-                        || input_tokens.is_none()
-                        || output_tokens.is_none(),
-                })
-            }
+        let compaction = state.compaction.usage();
+        let usages: Vec<_> = [&execution, &review, &compaction]
+            .into_iter()
+            .flatten()
+            .collect();
+        let sum = |field: fn(&Usage) -> Option<u64>| {
+            usages
+                .iter()
+                .try_fold(0u64, |total, usage| total.checked_add(field(usage)?))
+        };
+        let total = if usages.is_empty() {
+            None
+        } else {
+            let input_tokens = sum(|usage| usage.input_tokens);
+            let output_tokens = sum(|usage| usage.output_tokens);
+            Some(Usage {
+                input_tokens,
+                output_tokens,
+                estimated: usages.iter().any(|usage| usage.estimated)
+                    || input_tokens.is_none()
+                    || output_tokens.is_none(),
+            })
         };
         Some((
             RunMetrics {
                 execution_requests: state.execution.requests,
                 review_requests: state.review.requests,
+                compaction_requests: state.compaction.requests,
                 tool_calls: state.tools,
                 tool_executions: state.executions,
                 duration_ms: u64::try_from(duration).unwrap_or(u64::MAX),
                 execution_usage: execution,
                 review_usage: review,
+                compaction_usage: compaction,
+                compaction_cost: estimate(
+                    state.execution_pricing.as_ref(),
+                    state.compaction.usage().as_ref(),
+                ),
                 execution_cost: estimate(
                     state.execution_pricing.as_ref(),
                     state.execution.usage().as_ref(),
@@ -271,6 +286,10 @@ struct MeasuredStream {
     completion: Completion,
 }
 impl Model for MeasuredModel {
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        self.inner.request_counter()
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         self.inner.validate_session(session)
     }
@@ -284,6 +303,7 @@ impl Model for MeasuredModel {
             let purpose = match request.purpose {
                 ModelPurpose::Execution => "execution",
                 ModelPurpose::Review => "review",
+                ModelPurpose::Compaction => "compaction",
             };
             let span = tracing::info_span!(target: "saya::model", "model", request_id = request.request_id.as_str(), profile = request.profile.as_str(), purpose);
             span.in_scope(|| tracing::info!(target: "saya::model", event = "model.started"));

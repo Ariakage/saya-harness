@@ -296,6 +296,8 @@ mod tests {
     }
     fn capture(response: &FileWorkerResponse) -> WorkerCapture {
         WorkerCapture {
+            outputs: Vec::new(),
+            output_errors: Vec::new(),
             process: ExecResult {
                 exit_code: Some(0),
                 stdout: String::new(),

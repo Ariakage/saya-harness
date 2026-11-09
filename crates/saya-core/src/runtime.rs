@@ -1,5 +1,7 @@
 //! Reusable, UI-independent run loop. Network providers and durable storage are
 //! supplied by callers. Memory-backed side effects are suitable only for tests.
+#[path = "runtime_context.rs"]
+mod context;
 #[path = "runtime_secrets.rs"]
 mod secrets;
 #[path = "runtime_services.rs"]
@@ -95,6 +97,13 @@ struct RuntimeStore {
     secrets: secrets::SecretSource,
 }
 impl Store for RuntimeStore {
+    fn output_references(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> Operation<'_, Vec<crate::output_store::OutputMetadata>> {
+        self.inner.output_references(id)
+    }
+
     fn load_session<'a>(
         &'a self,
         id: crate::contract::SessionId,
@@ -227,6 +236,7 @@ pub struct AgentRuntime {
     input: Option<Arc<dyn InputHandler>>,
     project_context: Option<Arc<Mutex<ProjectState>>>,
     personal_context: PersonalContext,
+    context_state: Option<context::ContextState>,
     limits: RuntimeLimits,
     read_only: bool,
     used: bool,
@@ -462,6 +472,7 @@ impl AgentRuntime {
             input: None,
             project_context: None,
             personal_context: PersonalContext::default(),
+            context_state: None,
             limits,
             read_only,
             used: false,
@@ -507,6 +518,24 @@ impl AgentRuntime {
                 "Dynamic secret registry could not be attached",
             )
         })? = Some(registry);
+        Ok(self)
+    }
+    /// Apply a finite execution request budget with a profile-clamped reserve.
+    pub fn with_context_budget(
+        mut self,
+        budget: crate::context_builder::ContextBudget,
+    ) -> Result<Self, BoundaryError> {
+        budget.input_capacity()?;
+        self.context_state = Some(context::ContextState::new(budget));
+        Ok(self)
+    }
+    /// Attach private output storage before this single-use run starts.
+    pub fn with_output_store(
+        self,
+        store: Arc<crate::output_store::OutputStore>,
+    ) -> Result<Self, BoundaryError> {
+        self.dispatcher
+            .set_output_store(Arc::new(store.for_run(self.run.id)))?;
         Ok(self)
     }
     pub fn with_execution_settings(
@@ -708,6 +737,13 @@ impl AgentRuntime {
                 Err(e) => {
                     self.modes.finish()?;
                     return Err(e);
+                }
+            };
+            let request = match self.context_request(session, request).await {
+                Ok(request) => request,
+                Err(error) => {
+                    self.modes.finish()?;
+                    return Err(error);
                 }
             };
             if let Err(error) = secrets::model_request(&request, &self.secret_source) {
@@ -1535,6 +1571,7 @@ impl AgentRuntime {
         self.metrics.start();
         self.used = true;
         let initial = session.history.len();
+        self.dispatcher.recover_outputs(session.id).await?;
         let outcome = self.run_inner(session).await;
         let unfinished = self.jobs.running_count()?;
         let cleanup = self.jobs.shutdown().await;
@@ -1574,7 +1611,9 @@ impl AgentRuntime {
             Err(err) => {
                 let status = match err.0.code.as_str() {
                     "cancelled" => RunStatus::Cancelled,
-                    "limit_reached" | "context_budget" | "output_limit" => RunStatus::LimitReached,
+                    "limit_reached" | "context_budget" | "context_limit" | "output_limit" => {
+                        RunStatus::LimitReached
+                    }
                     "needs_confirmation" => RunStatus::NeedsConfirmation,
                     "needs_input" | "needs_auth" => RunStatus::NeedsInput,
                     _ => RunStatus::Failed,

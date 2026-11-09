@@ -242,6 +242,11 @@ pub fn build_runtime(
         confirmation: launch.confirmation,
         limits,
     })?;
+    runtime = runtime.with_context_budget(saya_core::context_builder::ContextBudget::new(
+        selected.context_window_tokens,
+        u64::from(selected.max_output_tokens),
+        selected.context_window_tokens / 20,
+    ))?;
     let (mut sandbox, broker) = config.sandbox.resolve(&session.workspace)?;
     sandbox
         .read_roots
@@ -290,6 +295,19 @@ pub fn build_runtime(
         } else {
             None
         };
+    if config.output_capture.enabled {
+        let outputs = Arc::new(saya_core::output_store::OutputStore::open(
+            config.data_dir.join("outputs"),
+            config.output_capture.limits,
+            registry.clone(),
+        )?);
+        if sandbox.backend != saya_core::execution::BackendKind::Host {
+            sandbox
+                .protected_paths
+                .push(outputs.protected_path().to_owned());
+        }
+        runtime = runtime.with_output_store(outputs)?;
+    }
     runtime = runtime.with_execution_settings(sandbox, broker)?;
     if dynamic_credentials {
         runtime = runtime.with_mcp_settings(
@@ -298,6 +316,8 @@ pub fn build_runtime(
             authorizer,
             registry,
         )?;
+    } else {
+        runtime = runtime.with_secret_registry(registry)?;
     }
     let review_profile = config.review.profile.as_ref().unwrap_or(profile);
     runtime = runtime.with_pricing(

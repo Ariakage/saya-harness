@@ -368,6 +368,13 @@ pub fn timestamp() -> Result<String, BoundaryError> {
 
 pub struct EventStore(pub Arc<EventWriter>);
 impl Store for EventStore {
+    fn output_references(
+        &self,
+        id: SessionId,
+    ) -> Operation<'_, Vec<saya_core::output_store::OutputMetadata>> {
+        self.0.store.output_references(id)
+    }
+
     fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
         self.0.store.load_session(id)
     }
@@ -410,6 +417,10 @@ impl Drop for ModelGuard {
     }
 }
 impl Model for EventModel {
+    fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
+        self.0.request_counter()
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         self.0.validate_session(session)
     }

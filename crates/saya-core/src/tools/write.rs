@@ -367,6 +367,16 @@ pub(crate) async fn save_result(
     context: &crate::boundary::ToolContext,
     result: &crate::contract::ToolResult,
 ) -> Result<(), crate::contract::BoundaryError> {
+    save_result_with_outputs(store, call, context, result, &[]).await
+}
+
+pub(crate) async fn save_result_with_outputs(
+    store: &dyn crate::boundary::Store,
+    call: &crate::contract::ToolCall,
+    context: &crate::boundary::ToolContext,
+    result: &crate::contract::ToolResult,
+    outputs: &[crate::output_store::OutputMetadata],
+) -> Result<(), crate::contract::BoundaryError> {
     use crate::boundary::StoreChange;
     use crate::contract::{HistoryItem, ToolState};
     let mut changes = vec![
@@ -383,6 +393,13 @@ pub(crate) async fn save_result(
             },
         },
     ];
+    if !outputs.is_empty() {
+        changes.push(StoreChange::OutputReferences {
+            run_id: context.run.id,
+            call_id: call.call_id.clone(),
+            outputs: outputs.to_vec(),
+        });
+    }
     let state = result
         .error
         .as_ref()

@@ -48,6 +48,13 @@ impl ChatModel {
     }
 
     fn request_body(&self, request: &ModelRequest) -> Result<Value, BoundaryError> {
+        self.serialized_request(request, true)
+    }
+    fn serialized_request(
+        &self,
+        request: &ModelRequest,
+        check_budget: bool,
+    ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
         let messages = chat_history(&request.combined_instructions(), &request.history)?;
         let mut body = json!({"model":self.settings.model, "messages":messages, "store":false, "stream":self.settings.stream});
@@ -81,7 +88,9 @@ impl ChatModel {
             }
             map.insert("tools".into(), Value::Array(tools));
         }
-        self.settings.check_context(&body, output)?;
+        if check_budget {
+            self.settings.check_context(&body, output)?;
+        }
         Ok(body)
     }
 }
@@ -209,7 +218,29 @@ fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value
     Ok(messages)
 }
 
+impl crate::context_builder::RequestCounter for ChatModel {
+    fn count(
+        &self,
+        request: &ModelRequest,
+        identity: &crate::context_builder::CountingIdentity,
+        fingerprint: &str,
+    ) -> Result<crate::context_builder::CountEvidence, BoundaryError> {
+        let body = self.serialized_request(request, false)?;
+        super::count_wire(
+            request,
+            identity,
+            fingerprint,
+            &self.settings,
+            crate::contract::ModelProtocol::ChatCompletions,
+            &body,
+        )
+    }
+}
 impl Model for ChatModel {
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        Some(self)
+    }
+
     fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
         if session.protocol != ModelProtocol::ChatCompletions
             || session.profile != self.settings.profile

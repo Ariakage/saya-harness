@@ -547,6 +547,29 @@ impl McpClient {
         expected_generation: u64,
         cancel: &dyn Cancellation,
     ) -> Result<McpToolResult, BoundaryError> {
+        self.call_tool_captured(name, arguments, expected_generation, cancel, None)
+            .await
+            .map(|value| value.0)
+    }
+
+    pub(crate) async fn call_tool_captured(
+        &self,
+        name: &str,
+        arguments: Value,
+        expected_generation: u64,
+        cancel: &dyn Cancellation,
+        capture: Option<(
+            &crate::output_store::OutputStore,
+            crate::output_store::OutputScope,
+        )>,
+    ) -> Result<
+        (
+            McpToolResult,
+            Vec<crate::output_store::SealedOutput>,
+            Vec<crate::contract::ErrorInfo>,
+        ),
+        BoundaryError,
+    > {
         self.ensure_connected()?;
         let catalog = self.catalog.read().await;
         let catalog = catalog.as_ref().ok_or_else(|| {
@@ -625,7 +648,17 @@ impl McpClient {
                             ));
                         }
                     }
+                    let (outputs, capture_errors) = match capture {
+                        Some((store, scope)) => projection::capture_text_result(
+                            &result,
+                            store,
+                            scope,
+                            self.limits.max_wire_bytes,
+                        ),
+                        None => (Vec::new(), Vec::new()),
+                    };
                     projection::project_result(result, &self.limits)
+                        .map(|result| (result, outputs, capture_errors))
                 })();
                 accepted.map_err(|failure|error("outcome_unknown",match failure.0.code.as_str(){
                     "mcp_schema"=>"MCP tool returned an invalid output schema. Its result cannot be accepted and the call was not replayed",
