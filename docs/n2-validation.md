@@ -12,7 +12,7 @@
 | DEV-058 | 显式stdio MCP配置、版本与生命周期、启动授权、受控进程与关闭 | 连接组件四平台CI通过，最终整体验收待完成 |
 | DEV-059 | 工具schema／结果类型／大小、统一权限与记录、取消、列表变化、三模型协议的外部工具往返 | 正常运行时与CLI／TUI已整合，最终四平台待验收 |
 | DEV-060 | 首个凭据后端、引用／撤销、最小化注入、日志／会话／机器输出的凭据边界 | 管理入口与本机边界验证通过，最终四平台待验收 |
-| DEV-061 | 固定SDK与协议矩阵、Streamable HTTP、OAuth与续期、断连不重放、额外输入及非交互路径 | 组件开发中 |
+| DEV-061 | 固定SDK与协议矩阵、Streamable HTTP、OAuth与续期、断连不重放、额外输入及非交互路径 | 本机25项联合验收通过，最终四平台待验收 |
 
 ## DEV-055 原生执行组件
 
@@ -77,6 +77,25 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/native_acceptance.py target/release
 ```
 
 macOS本机未执行Linux委派用例。最终四平台固定源码结果在后续记录，正式发行按独立授权处理。
+
+## DEV-061 MCP 协议与正常入口矩阵
+
+| 边界 | 固定实现与验证 |
+| --- | --- |
+| SDK／协议 | rmcp3.9.0，首选2026-07-28，兼容2025-11-25，核心受控连接测试包含协商与legacy初始化 |
+| 模型协议 | Chat Completions、Responses、Anthropic Messages各自完成stdio及HTTP外部工具往返 |
+| HTTP | 有界JSON／SSE、单次工具POST、目录变化、schema失效、401和断连保留明确状态 |
+| 授权 | 明确scope、PKCE／state／issuer／resource绑定、轮换刷新、撤销与动态凭据脱敏 |
+| 交互 | 两次stdio人工批准、非交互终止、PLAN本地服务停止与宿主只读HTTP工具 |
+| 生命周期 | 四项连接／目录预算边界、恢复单次派发、同Run状态事件、真实TUI及终端恢复 |
+
+永久 `scripts/n2/mcp_acceptance.py` 使用实际普通CLI、控制终端与默认路由TUI。相同本机优化程序通过25／25项，报告为 `target/n2/final-local/mcp/mcp-report.json`，运行前后SHA-256均为 `8f7810773f90b81b91d3ee7a4916ced17e15ef945b4050f96a3210c2d4f15585`。实际界面验证Configured、Connected／HTTP／2工具、Stopped／0工具，SQLite事件归属同一个Run，退出恢复termios、文件flags与alternate screen。
+
+报告将本机macOS27.2 ARM、当时源码提交及dirty状态分别保存，本地记录对应该优化程序。最终四平台工作流将从固定提交重新构建，逐平台保存新的程序哈希。OAuth／MCP均使用本地可控服务，真实厂商互操作与付费模型联调保留独立证据层级。
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/mcp_acceptance.py target/release/saya
+```
 
 ## 已推送基础阶段
 

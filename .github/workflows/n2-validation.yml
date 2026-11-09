@@ -153,6 +153,9 @@ jobs:
             --working-directory="$PWD" \
             /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$PWD/target/release/saya" \
             --require-cgroup 2>&1 | tee target/n2/acceptance/native.log
+      - name: MCP and OAuth acceptance
+        id: mcp
+        run: python3 scripts/n2/mcp_acceptance.py target/release/saya 2>&1 | tee target/n2/acceptance/mcp.log
       - name: Markdown, TUI and recovery acceptance
         id: journeys
         run: |

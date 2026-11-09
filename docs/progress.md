@@ -50,6 +50,12 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 固定优化程序 `8f7810773f90b81b91d3ee7a4916ced17e15ef945b4050f96a3210c2d4f15585` 在本机macOS27.2 ARM通过18项原生用例及每variant三次性能样本，最终脚本记录于 `target/n2/final-local/native-reviewed-evidence.json`。8项Python回归与工作流／Shell语法检查通过。Linux委派cgroup本机未运行，四平台工作流待执行。
 
+### DEV-061 MCP／OAuth 联合验收
+
+新增永久正常 CLI／PTY／TUI 验收脚本，覆盖三模型协议各自的stdio／HTTP工具往返、JSONL脱敏、真实服务状态、Manual Approval、PLAN、连接／目录共享活跃预算、长结果、失效schema与目录、认证／输入请求、断连unknown、恢复单次派发，以及交互OAuth／刷新／撤销。
+
+同一固定优化程序在本机macOS27.2 ARM通过25／25项，报告为 `target/n2/final-local/mcp/mcp-report.json`，运行前后程序SHA一致。真实TUI从Configured进入Connected／HTTP／2工具，结束后Stopped／0工具，SQLite状态同Run配对且终端恢复通过。四平台N2工作流同时执行本脚本与原生、Markdown／TUI验收，最终源码结果待运行。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。
