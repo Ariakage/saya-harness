@@ -2,6 +2,7 @@ mod chat;
 mod events;
 mod export;
 mod logs;
+mod mcp;
 mod signals;
 use saya_app::{new_session, session};
 
@@ -104,6 +105,11 @@ impl From<OutputOption> for Output {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Manage explicitly configured MCP connections and credential references.
+    Mcp {
+        #[command(subcommand)]
+        action: mcp::McpAction,
+    },
     /// Open the debug-only interactive TUI fixture viewer.
     #[cfg(debug_assertions)]
     TuiPreview {
@@ -1145,6 +1151,13 @@ async fn main() -> std::process::ExitCode {
                     Some(config.output),
                 ),
             },
+        },
+        Some(Command::Mcp { action }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
+        {
+            Err(error) => query_error(error, cli.output.map(Into::into)),
+            Ok(config) => mcp::run(&config, action).await,
         },
         Some(Command::Config {
             action: ConfigAction::Init,

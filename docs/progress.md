@@ -38,6 +38,12 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 整合工作区在本机 macOS27.2 ARM 完成格式、workspace 严格 Clippy、904项 Rust 测试与优化构建，日志为 `target/n2/integration-workspace-5.log`。DEV-059 独立提交快照完成901项Rust测试与完整门禁，日志为 `target/n2/dev059-workspace-final.log`。实际 Linux 与 macOS15 两架构正常入口验收继续进行，此处保留平台未验收状态。
 
+### DEV-060 凭据管理入口
+
+新增显式 MCP 凭据导入、元数据列表、撤销与交互 OAuth 登录命令，首个后端为 0700／0600 私有明文文件。服务、精确 endpoint、scope 与 OAuth issuer／canonical resource 绑定引用，轮换和撤销复用运行期凭据集合。管理审批、URL 显示和浏览器导航前检查已知凭据及有界编码视图，导入来源在审批前加入检查。
+
+10项 CLI bin 测试、格式及 CLI 全目标严格 Clippy 通过，日志为 `target/n2/dev060-{admin-tests,clippy}.log`。当前 Rust 源码清单与904项完整门禁及固定优化程序一致，独立复核的原始失败与修复证据保留于 `target/n2/independent-review/`。最终四平台凭据与 OAuth 证据继续按 DEV-061 验收。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

@@ -2,6 +2,8 @@
 
 当前 N2 开发线支持显式配置的 stdio、HTTP MCP 和宿主凭据引用，完整四平台整体验收仍在进行。0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](release-notes-0.2.0.md)
 
+接入使用固定 `rmcp = 3.9.0`，协商首选协议 `2026-07-28`，兼容 `2025-11-25`。当前工具发现、目录变化与工具调用复用宿主注册、权限和持久化边界。[MCP 实现](../crates/saya-core/src/mcp.rs)
+
 ## 配置与工具发现
 
 MCP 服务通过显式 TOML 配置选择，最多 16 个。运行创建连接并发现工具目录，结束时清理所拥有的进程和连接。恢复会话后等待新输入，下一次 Run 按本次配置重新建立服务。
@@ -24,11 +26,11 @@ argv = ["/absolute/path/to/mcp-server", "--stdio"]
 # env = { SERVICE_TOKEN = "SAYA_MCP_TOKEN" }
 ```
 
-启动参数采用结构化 argv。`cwd` 省略时使用工作区，`env` 的值是启动环境变量名。目标变量与环境摘要由宿主绑定，默认模型命令的敏感环境过滤仍适用。解释器或工具链位于原生视图之外时，需添加实际 `sandbox.read_roots`。[配置说明](configuration.md#n2-原生隔离配置)
+启动参数采用结构化 argv。`cwd` 省略时使用工作区，`env` 的值是启动环境变量名。宿主显式选择服务可接收的来源引用，并绑定目标变量与实际环境摘要；常规模型命令执行采用自身的敏感环境过滤。解释器或工具链位于原生视图之外时，需添加实际 `sandbox.read_roots`。[配置说明](configuration.md#n2-原生隔离配置)
 
 stdio 启动按通用命令执行策略完成规则判断、模型核查或人工确认，执行前后持久化启动记录。Manual Approval 会确认服务启动及之后每次模型工具调用。服务器进程在与本地命令相同的 ExecutionBackend 中启动，stdout 用于有界 MCP 协议，stderr 并发排空。
 
-PLAN 保持 stdio 服务停止。切入 PLAN 先取消并清理运行中的本地 MCP 进程，再应用工作模式。运行结束同样等待清理。握手前尚未派发进程的预算耗尽保存为已知失败，进程启动后握手中断保存为 `unknown`，随后继续完成进程收尾。
+PLAN 保持 stdio 服务停止。切换请求按当前前台调用边界协调，待审批或握手阶段按切换取消，随后关闭本地 MCP 进程，清理确认后应用 PLAN。服务重启安排在下一次用户输入的新 Run，并重新走启动授权。运行结束同样等待清理。握手前尚未派发进程的预算耗尽保存为已知失败，进程启动后握手中断保存为 `unknown`，随后继续完成进程收尾。
 
 ## HTTP 服务
 
@@ -43,11 +45,54 @@ endpoint = "https://mcp.example.com/mcp"
 scopes = ["files:read"]
 ```
 
-完整 endpoint 由宿主配置。HTTP MCP 默认使用 HTTPS，显式 `allow_insecure_http = true` 用于明文测试。该连接由宿主管理，和原生工具进程的 `sandbox.network` 代理策略分别处理。
+完整 endpoint 由宿主配置。HTTP MCP 默认使用 HTTPS，明文 endpoint 需要显式 `allow_insecure_http = true`。该连接由宿主管理，和原生工具进程的 `sandbox.network` 代理策略分别处理。[原生网络边界](sandbox.md#网络代理桥)
 
-可用 `bearer_env` 引用进程提供的 bearer token，或通过 `headers_env` 为额外请求头指定环境变量名。启用服务时校验这些引用，实际值加入共享已知凭据集合。`credential_ref` 选择宿主私有存储，与 `bearer_env` 互斥。请求目标绑定完整配置 endpoint，HTTP 传输关闭自动重定向与请求重试。
+可用 `bearer_env` 引用进程提供的 bearer token，或通过 `headers_env` 为额外请求头指定环境变量名。启用服务时校验这些引用，实际值加入共享已知凭据集合。`credential_ref` 选择下节的宿主私有存储，与 `bearer_env` 互斥。请求目标绑定完整配置 endpoint，HTTP 传输关闭自动重定向与请求重试。
 
 运行期仅开放宿主 `read_only_tools` 明确分类的 PLAN HTTP 工具。其他工具继续按副作用未知处理，服务器自报只读 annotations 不能授予权限。401／403 返回鉴权或权限错误，宿主等待新的显式授权流程。401 后原 MCP 工具请求保持单次发送。
+
+## 导入、登录与引用
+
+管理命令使用显式 HTTP 服务名，凭据值通过已提供的环境引用或授权码交换取得。以下命令中的 `SAYA_MCP_ACCESS_TOKEN` 是环境变量名，值由使用者的凭据管理方式在启动前提供。
+
+```sh
+saya --config /path/to/config.toml mcp credentials import remote \
+  --from-env SAYA_MCP_ACCESS_TOKEN --scope files:read --approve-scopes
+saya --config /path/to/config.toml mcp credentials list
+```
+
+导入和登录的授权范围由配置 `scopes` 与重复 `--scope` 参数的并集组成。默认在控制终端展示服务器、endpoint 和完整 scope 集并询问确认，`--approve-scopes` 显式批准本次选择。成功返回新的不透明 UUID reference，列表仅返回元数据。
+
+管理入口在审批前检查服务器、原始 endpoint、scope 和 client ID 中的已知凭据，导入来源变量的实际值也计入检查。实际授权 URL 在显示或交给系统 URL handler 前再次检查，包括有界 URL 编码视图；命中时返回 `sensitive_data`。正常授权流程中的 state 与 PKCE challenge 按授权 UI 字段展示。[管理入口](../crates/saya-cli/src/mcp.rs)
+
+交互 OAuth 使用授权码、PKCE S256、单次 state、精确 loopback 回调地址、issuer 与有效期检查。可指定已有 public client ID，省略时尝试动态注册 public client。授权 URL 写入 stderr，`--open-browser` 使用系统 URL handler 打开该地址。登录要求 stdin 与 stderr 均连接终端，即使已经提供 `--approve-scopes` 也会检查交互条件。
+
+```sh
+saya --config /path/to/config.toml mcp login remote \
+  --scope files:read --client-id YOUR_PUBLIC_CLIENT_ID --open-browser
+```
+
+默认授权等待 300 秒，`--timeout-seconds` 支持 1 至 600 秒，`--callback-port` 可显式选择 IPv4 loopback 端口。发现、回调等待和令牌交换共享本次登录的有效期，并响应取消。进入本地私有凭据提交阶段后，宿主等待原子写入的实际结果并返回真实 reference。
+
+将返回的 reference 写入服务的 transport 配置。下面 UUID 是格式示例，需替换成实际返回值。
+
+```toml
+[mcp.servers.remote.transport]
+type = "http"
+endpoint = "https://mcp.example.com/mcp"
+credential_ref = "00000000-0000-0000-0000-000000000000"
+scopes = ["files:read"]
+```
+
+服务器名称、精确 endpoint 与批准的 scope 集共同绑定该引用。OAuth 还记录 issuer 与发现的 canonical resource。canonical resource 可以是同 origin 下覆盖 endpoint 的祖先路径，仍与精确的 MCP 请求 endpoint 分别保存和检查。恢复时验证 issuer 与 canonical resource，变化后需要重新登录。Resource Indicator 用于授权和令牌请求，issuer 回调按 RFC 9207 比较。[MCP 授权规范](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)、[RFC 9207](https://www.rfc-editor.org/rfc/rfc9207.html)
+
+运行中的 MCP 客户端在每次新 HTTP 请求前重新解析引用。OAuth 刷新采用跨进程刷新锁，并重新核对 scope、client 与 issuer，令牌轮换持续加入共享脱敏集合。撤销使引用永久失效，旧刷新结果不能恢复该引用。需要新授权时创建新的 reference。
+
+```sh
+saya --config /path/to/config.toml mcp credentials revoke RETURNED_REFERENCE
+```
+
+管理命令的 stdout 返回 `schema_version = 1` 的单个 `data`／`error` JSON 对象。JSONL 模式增加 `type = "mcp.result"`。成功退出 0，需要交互或重新鉴权退出 4，需要确认退出 3，取消退出 130，配置／引用／scope 错误退出 2，普通操作失败退出 1，达到限制退出 5。人工批准提示与授权 URL 使用 stderr 或控制终端。
 
 ## 私有存储与执行边界
 

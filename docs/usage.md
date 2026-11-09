@@ -1,6 +1,6 @@
 # Saya 使用指南
 
-0.1.0 已发布 CLI，当前开发线增加默认 TUI、增强日志和会话导出。本指南说明当前开发线行为，版本与实际验收见[开发进度](progress.md)。运行模型任务需要兼容所选协议的模型服务和用户配置的凭据。[验收索引](acceptance.md)区分受控替身与真实服务验证。
+0.2.0 已发布默认 TUI、增强日志和会话导出，当前 N2 开发线增加原生隔离、MCP 和凭据引用。本指南说明当前开发线行为，完整四平台整体验收仍在进行，版本与实际验收见[开发进度](progress.md)和[N2 验收记录](n2-validation.md)。运行模型任务需要兼容所选协议的模型服务和用户配置的凭据。[验收索引](acceptance.md)区分受控替身与真实服务验证。
 
 ## 构建与配置
 
@@ -63,7 +63,7 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 ./target/release/saya --config "$config_path" run --session SESSION_ID 'Continue the task'
 ```
 
-将 `SESSION_ID` 替换为列表中的实际 ID。也可用 `run --prompt-file PATH` 或 `run --stdin` 提供任务，三种输入方式互斥；`run --interactive` 使用控制终端确认和澄清，即使任务从 stdin 读取。`--output json` 输出最终结果，`jsonl` 输出有序运行事件；会话查询支持文本和 JSON。控制终端提示不会混入机器输出。配置已知凭据时，文本输出可能等待整条模型消息以完成脱敏。
+将 `SESSION_ID` 替换为列表中的实际 ID。也可用 `run --prompt-file PATH` 或 `run --stdin` 提供任务，三种输入方式互斥；`run --interactive` 使用控制终端确认和澄清，即使任务从 stdin 读取。`--output json` 输出最终结果，`jsonl` 输出有序运行事件；会话查询支持文本和 JSON。控制终端提示不会混入机器输出。配置已知凭据时，文本输出可能等待整条模型消息以完成脱敏。启用 MCP 后使用动态凭据集合，模型正文与可读 Thinking 在本次请求完成后按最新凭据快照脱敏展示。
 
 `chat` 中使用 `/mode` 切换 PLAN、BUILD、CODE、WORK；模型只能建议切换。工作模式在当前调用完成后、下一次调用前生效；进入 PLAN 前先清理后台写入和命令。`/permissions` 在空闲时修改权限；`/status`、`/help` 和 `/exit` 分别查看状态、帮助和退出。完整交互命令与 Ctrl-C 行为见 [CLI 开发预览](cli-preview.md)。
 
@@ -71,7 +71,7 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 
 文本 CLI 的流式与完整回答统一替换终端控制字符和双向文本控制符，保留换行、Tab 和正常 Unicode。JSON／JSONL 与已保存历史保留原始文本，由 JSON 编码转义控制字符。
 
-默认工作模式为 WORK，默认权限为 `auto`。PLAN 保持只读，禁止文件写入和通用命令。`auto` 先执行规则判断，必要时进行独立模型审核，不能安全判断时请求人工确认；`manual` 对每次工具调用要求人工批准，包括读取、搜索和后台状态查询。`bypass` 跳过人工确认及路径限制，但 PLAN 和显式 deny 仍然生效。**当前没有操作系统沙箱**；命令启动路径的检查不等于对子进程文件系统或网络的隔离。
+默认工作模式为 WORK，默认权限为 `auto`。PLAN 保持只读，禁止文件写入和通用命令。`auto` 先执行规则判断，必要时进行独立模型审核，不能安全判断时请求人工确认；`manual` 对每次工具调用要求人工批准，包括读取、搜索和后台状态查询。`bypass` 跳过人工确认及路径限制，但 PLAN 和显式 deny 仍然生效。当前 N2 开发线默认使用原生 `sandbox.backend = "auto"`，权限决定许可，执行环境落实独立的文件／网络约束。`bypass` 继续受实际原生执行边界约束。0.2.0 的无 OS 沙箱限制保留在[历史发行说明](release-notes-0.2.0.md)。
 
 非交互任务无法取得必要确认时返回 `needs_confirmation`（退出码 3）；需要用户澄清时返回 `needs_input`（退出码 4）。对确切命令可使用一次运行内的[预授权示例](../examples/approval.example.json)：
 
@@ -82,6 +82,22 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 该文件仅匹配工作区内默认 cwd 的 `[/bin/echo, hello]`，不会自行运行命令；只有模型提出匹配的调用才会使用，且不覆盖 PLAN、deny 或路径规则。预授权不会在恢复会话后继承。使用者应在授权前检查完整 argv 和 cwd；详细规则见[执行与恢复契约](execution.md)。文件写入要求父目录已存在；需要创建目录时须通过适用权限允许的命令完成。
 
 模型可显式启动运行内后台工具；交互期间 `/jobs`、`/job ID`、`/cancel-job ID` 可查询和取消。运行结束会清理未完成任务。Saya 被强制终止后，失去管理的进程可能仍在运行；恢复时不重放工具，结果未知不等于已停止。
+
+## 原生隔离与 MCP
+
+默认 Auto 在 macOS 选择 Seatbelt，在 Linux 选择 Bubblewrap 与 Seccomp。Linux 代理网络使用 socat 与宿主 NetworkBroker。缺少依赖或必需能力时，Run 返回明确启动错误。`config check` 验证配置，实际隔离能力在 Run 开始时探测。
+
+工作区默认进入原生视图。额外工具链目录通过 `sandbox.read_roots` 显式提供，原生文件工具的逻辑权限仍由工作区与 `permissions.additional_roots` 控制。默认网络为 `deny`，代理 origin、资源限额和显式 Host 兼容模式见[配置](configuration.md#n2-原生隔离配置)。已有凭据存储或活动 `credential_ref` 会使 Host 启动失败。
+
+MCP 的 stdio 启动、HTTP 服务、宿主只读分类和凭据管理见[MCP 使用说明](mcp.md)。配置文件中的服务默认仅是待连接项，运行实际连接并完成目录发现后，TUI 侧栏才显示 Connected 和真实工具数。结束时清理服务，JSONL 可看到 `mcp.status` 生命周期事件。
+
+```sh
+saya --config /path/to/config.toml mcp credentials list
+saya --config /path/to/config.toml mcp login remote --scope files:read --open-browser
+saya --config /path/to/config.toml mcp credentials revoke RETURNED_REFERENCE
+```
+
+登录在宿主交互终端中完成，运行期缺失授权时返回 `needs_auth`。凭据引用绑定服务器、精确 endpoint、批准 scope 以及 OAuth 的 issuer／canonical resource，令牌刷新与撤销由宿主处理。工具已执行但无法确认完成时保留 `unknown`，恢复与重连继续遵守执行记录，原始工具调用保持单次派发。
 
 ## 项目上下文、持久化与用量
 
@@ -102,7 +118,7 @@ Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工�
 - **会话正在使用、配置改变或恢复失败**：先确认是否有另一 Saya 进程持有会话锁；核对 profile 和工作区。不要删除数据库或 WAL 来强行解锁；涉及损坏时先保留原文件及备份，再调查错误。
 - **日志不可写**：检查状态目录权限与剩余空间；日志路径不应指向不安全的符号链接。
 
-OS 沙箱、MCP、可执行插件、自动上下文压缩和 GUI 按后续版本规划推进，见[能力路线图](capability-roadmap.md)。
+原生隔离与 MCP 属于当前 N2 开发线，实际平台验收见[N2 记录](n2-validation.md)。可执行插件、自动上下文压缩和 GUI 继续按[能力路线图](capability-roadmap.md)推进。
 
 ## 会话导出
 
