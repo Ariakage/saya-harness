@@ -363,7 +363,7 @@ fn process_lease_requires_live_control_and_waits_for_inherited_writers() {
         Command::new("/bin/sh")
             .args([
                 "-c",
-                "exec 9>tool.lease; printf 'READY\\n' >&9; /bin/sh -c 'IFS= read -r release' <&0 &",
+                "exec 8<&0; exec 9>tool.lease; printf 'READY\\n' >&9; /bin/sh -c 'IFS= read -r release <&8' &",
             ])
             .current_dir(root.path())
             .stdin(Stdio::piped())

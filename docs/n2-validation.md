@@ -161,6 +161,8 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 `1a932cc` 的两Linux架构已通过25项MCP、24项TUI及委派资源正负对照。源码门禁继续到Rust生命周期夹具，五项旧断言同样把guest PID交给宿主查询。该夹具改为FIFO现场READY／writer及CLI退出后的立即EOF，shell和sleep后代共同持有writer，保留真实CLI信号与原退出码。新增未启动、历史READY与继承writer回归，本机三轮共18项测试、定向严格Clippy及格式检查通过，日志为 `target/n2/research/lifecycle-namespace-*.log`。Linux重新执行仍待新源码runner确认。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42579723866)
 
+`551acc26` 的Linux源码门禁中原五项生命周期场景全部通过，新增继承writer夹具在dash后台命令的stdin重定向处返回BrokenPipe。夹具在异步列表之前以FD8保存控制管道，后代显式从FD8读取，FD9继续见证生命周期。本机真实dash对照复现旧路径提前EOF／BrokenPipe并确认新路径收到release后结束，6项生命周期测试、定向严格Clippy、格式及独立复核通过，记录为 `target/n2/research/lifecycle-{dash-release-control.json,async-release-fd.log}`。最终Linux完整门禁仍由新固定源码执行。
+
 ## Linux 代理桥接镜像身份
 
 `1a932cc` 的Linux HTTP／CONNECT用例均在launcher返回exit74／EPERM。桥接启动仍以guest的 `metadata.uid() == 0` 判断宿主root所有的socat，而当前user namespace仅映射runner UID。修复在宿主打开源FD并复验root所有、无group／other写权限及可执行性，复用有界复制和前后fingerprint校验，固定为私有0500镜像并通过只读FD挂载。guest核对该镜像的精确device／inode、无写权限与可执行性。PID2入口、清洁环境、payload过滤和桥接进程清理继续由既有边界执行。
