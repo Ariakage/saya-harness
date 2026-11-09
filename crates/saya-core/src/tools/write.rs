@@ -383,15 +383,19 @@ pub(crate) async fn save_result(
             },
         },
     ];
-    if result
+    let state = result
         .error
         .as_ref()
-        .is_some_and(|error| error.code == "permission_denied")
-    {
+        .and_then(|error| match error.code.as_str() {
+            "permission_denied" => Some(ToolState::Denied),
+            "outcome_unknown" => Some(ToolState::Unknown),
+            _ => None,
+        });
+    if let Some(state) = state {
         changes.push(StoreChange::ToolState {
             run_id: context.run.id,
             call_id: call.call_id.clone(),
-            state: ToolState::Denied,
+            state,
         });
     }
     if let Err(mut error) = store.commit(&changes).await {

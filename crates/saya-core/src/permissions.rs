@@ -106,8 +106,31 @@ enum Target {
     Input,
     BackgroundControl,
     Metadata,
+    External(crate::registry::OperationDescriptor),
 }
 impl Operation {
+    /// Construct an external operation from a host-owned registry snapshot.
+    pub fn external(
+        descriptor: &crate::registry::OperationDescriptor,
+    ) -> Result<Self, BoundaryError> {
+        use crate::registry::{ToolEffect, ToolSource};
+        if !crate::registry::valid_external_name(&descriptor.name)
+            || !matches!(descriptor.source, ToolSource::Mcp { .. })
+            || !matches!(
+                descriptor.effect,
+                ToolEffect::ExternalReadOnly | ToolEffect::ExternalUnknown
+            )
+        {
+            return Err(failure(
+                "invalid_args",
+                "invalid external operation identity",
+            ));
+        }
+        Ok(Self {
+            tool: descriptor.name.clone(),
+            target: Target::External(descriptor.clone()),
+        })
+    }
     /// Construct a file operation. Existing targets and existing parents of new
     /// targets are canonicalized. This reads filesystem metadata, not content.
     pub fn file(workspace: &Path, tool: &str, path: &Path) -> Result<Self, BoundaryError> {
@@ -195,6 +218,17 @@ impl Operation {
                     "argv".into(),
                     serde_json::to_value(argv)
                         .map_err(|e| failure("invalid_args", e.to_string()))?,
+                );
+            }
+            Target::External(descriptor) => {
+                if map.contains_key("__saya_operation") {
+                    return Err(failure("invalid_args", "reserved external operation field"));
+                }
+                map.insert(
+                    "__saya_operation".into(),
+                    serde_json::to_value(descriptor).map_err(|_| {
+                        failure("invalid_args", "invalid external operation identity")
+                    })?,
                 );
             }
             Target::Input | Target::BackgroundControl | Target::Metadata => {}
@@ -388,7 +422,8 @@ impl Policy {
                         | "background_status"
                         | "background_cancel"
                         | "todo_write"
-                ) {
+                ) && !crate::registry::valid_external_name(tool)
+                {
                     return Err(failure("invalid_config", "unknown rule tool"));
                 }
                 if tool != "exec" && (rule.executable.is_some() || rule.args_prefix.is_some()) {
@@ -441,7 +476,8 @@ impl Policy {
         let read = matches!(
             op.tool.as_str(),
             "read_file" | "list_dir" | "find_files" | "search_text"
-        );
+        ) || matches!(&op.target, Target::External(descriptor)
+            if descriptor.effect == crate::registry::ToolEffect::ExternalReadOnly);
         let input = op.tool == "ask_user";
         let control = matches!(op.target, Target::BackgroundControl);
         let metadata = matches!(op.target, Target::Metadata);
@@ -451,7 +487,9 @@ impl Policy {
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input | Target::BackgroundControl | Target::Metadata => None,
+            Target::Input | Target::BackgroundControl | Target::Metadata | Target::External(_) => {
+                None
+            }
         };
         if permissions != PermissionMode::Bypass
             && path.is_some_and(|path| !self.roots.iter().any(|root| path.starts_with(root)))
@@ -531,7 +569,9 @@ impl Rule {
         let path = match &op.target {
             Target::File(path) => Some(path.as_path()),
             Target::Exec { cwd, .. } => Some(cwd.as_path()),
-            Target::Input | Target::BackgroundControl | Target::Metadata => None,
+            Target::Input | Target::BackgroundControl | Target::Metadata | Target::External(_) => {
+                None
+            }
         };
         if let Some(pattern) = &self.path
             && !path.is_some_and(|path| pattern.is_match(path))

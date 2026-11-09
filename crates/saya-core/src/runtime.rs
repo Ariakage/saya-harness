@@ -320,6 +320,28 @@ impl RuntimeHandle {
     }
 }
 impl AgentRuntime {
+    /// Register a host-controlled external adapter under the shared tool policy.
+    pub fn register_external(
+        &self,
+        server: &str,
+        revision: &str,
+        adapter: Arc<dyn crate::boundary::Tool>,
+        access: crate::registry::ExternalAccess,
+    ) -> Result<String, BoundaryError> {
+        self.dispatcher
+            .register_external(server, revision, adapter, access)
+    }
+    pub fn replace_external(
+        &self,
+        server: &str,
+        revision: &str,
+        tools: Vec<(
+            Arc<dyn crate::boundary::Tool>,
+            crate::registry::ExternalAccess,
+        )>,
+    ) -> Result<Vec<String>, BoundaryError> {
+        self.dispatcher.replace_external(server, revision, tools)
+    }
     pub fn new(setup: RuntimeSetup) -> Result<Self, BoundaryError> {
         Self::with_read_only(setup, false)
     }
@@ -397,6 +419,14 @@ impl AgentRuntime {
             setup.summary.clone(),
             setup.confirmation.is_some(),
         ));
+        dispatcher.register_control_definition(crate::input::definition())?;
+        for kind in [
+            BackgroundToolKind::Start,
+            BackgroundToolKind::Status,
+            BackgroundToolKind::Cancel,
+        ] {
+            dispatcher.register_control_definition(background.tool(kind).definition())?;
+        }
         Ok(Self {
             run: setup.run,
             model,
@@ -467,32 +497,17 @@ impl AgentRuntime {
     pub fn mode(&self) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
         self.modes.snapshot()
     }
-    fn definitions(&self, mode: WorkMode) -> Vec<ToolDefinition> {
-        let mut tools = self.dispatcher.definitions();
-        if mode == WorkMode::Plan {
-            tools.retain(|d| {
-                matches!(
-                    d.name.as_str(),
-                    "read_file" | "list_dir" | "find_files" | "search_text" | "todo_write"
-                )
-            });
+    fn definitions(&self, mode: WorkMode) -> Result<Vec<ToolDefinition>, BoundaryError> {
+        let mut tools = self.dispatcher.definitions(mode)?;
+        if (self.read_only || mode == WorkMode::Plan)
+            && let Some(definition) = tools
+                .iter_mut()
+                .find(|definition| definition.name == "background_start")
+        {
+            definition.input_schema["properties"]["tool"]["enum"] =
+                serde_json::json!(["read_file", "list_dir", "find_files", "search_text"]);
         }
-        tools.push(crate::input::definition());
-        for kind in [
-            BackgroundToolKind::Start,
-            BackgroundToolKind::Status,
-            BackgroundToolKind::Cancel,
-        ] {
-            let mut definition = self.background.tool(kind).definition();
-            if (self.read_only || mode == WorkMode::Plan)
-                && matches!(kind, BackgroundToolKind::Start)
-            {
-                definition.input_schema["properties"]["tool"]["enum"] =
-                    serde_json::json!(["read_file", "list_dir", "find_files", "search_text"]);
-            }
-            tools.push(definition);
-        }
-        tools
+        Ok(tools)
     }
     fn context(&self, session: &Session, mode: WorkMode) -> ToolContext {
         let mut run = self.run.clone();
@@ -568,7 +583,7 @@ impl AgentRuntime {
                 sleep(Duration::from_millis(10)).await;
             };
             let request = (|| {
-                let tools = self.definitions(snap.current);
+                let tools = self.definitions(snap.current)?;
                 let instructions =
                     crate::prompt::execution(snap.current, self.run.permissions, &tools)?
                         .instructions;
@@ -1386,6 +1401,13 @@ impl AgentRuntime {
                         .await?;
                     return Err(error("needs_input", "user input required"));
                 }
+                if let Some(failure) = &result.error
+                    && matches!(failure.code.as_str(), "needs_auth" | "outcome_unknown")
+                {
+                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
+                        .await?;
+                    return Err(BoundaryError(failure.clone(), None, None));
+                }
                 if result
                     .error
                     .as_ref()
@@ -1463,7 +1485,7 @@ impl AgentRuntime {
                     "cancelled" => RunStatus::Cancelled,
                     "limit_reached" | "context_budget" | "output_limit" => RunStatus::LimitReached,
                     "needs_confirmation" => RunStatus::NeedsConfirmation,
-                    "needs_input" => RunStatus::NeedsInput,
+                    "needs_input" | "needs_auth" => RunStatus::NeedsInput,
                     _ => RunStatus::Failed,
                 };
                 let recent_history = session.history.get(initial..).ok_or_else(|| {

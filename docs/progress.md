@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## N2 隔离与 MCP
+
+2026-11-09，项目负责人启动完成N2及对应验收的目标。范围为DEV-054至DEV-061及DEV-075，依赖和退出条件沿用[后续开发计划](post-mvp-plan.md#n2-隔离与-mcp)。本轮起点为 `547e5fe`，工作区当时干净。
+
+DEV-054已完成工具注册、可信操作描述和统一外部适配器派发。DEV-075及原生后端、MCP和凭据组件继续整合，N2整体验收尚待完成。负责人已确认N2默认启用原生隔离，按平台选择Seatbelt／Bubblewrap，必需约束无法满足时明确失败，见D-050。后端选择与权限模式分别处理。阶段门禁、原生约束和四平台证据按[N2验收记录](n2-validation.md)逐项维护。
+
+DEV-054的隔离源码快照在本机macOS27.2 ARM／Rust1.99.1执行完整 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、workspace全目标严格Clippy、752项Rust测试及优化构建通过。六项新回归包含48组分类／模式／权限组合、离线与有界schema、身份指纹、元数据凭据拒绝、一次性派发、持久化期间目录替换及执行租约、未知副作用和认证／输入请求终止。独立复核确认的目录竞态、嵌套schema资源重定向和目录凭据边界均补入回归。证据为 `target/n2/dev054-workspace.log` 和 `target/n2/dev054-tests.log`，实现约定见[工具注册](tool-registry.md)。CLI中的MCP连接与真实后端接线由后续DEV阶段完成。
+
 ## 完整 Markdown、数学、图表与 debug 预览
 
 2026-11-09，本阶段完成本机开发与验证。项目负责人补充完整Markdown语法、Unicode数学、Mermaid及source／render显示要求，并指定仅debug构建提供 `saya tui-preview`。本轮构建本地测试版，四平台同步验证安排在N2阶段。

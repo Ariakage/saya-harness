@@ -26,6 +26,8 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [后续开发计划](post-mvp-plan.md) | 0.2.0 候选、N0 至 N5、DEV-038 至 DEV-089 | 任务定义与设计草案 |
 | [全局记忆](memory.md) | MEMORY.md、模型编辑／遗忘、审阅与回滚 | 设计草案，DEV-084 至 DEV-089 待开发 |
 | [原生 Sandbox](sandbox.md) | Seatbelt、Linux 原生组合、网络、AST 与能力等级 | 后端组合已明确，接口待实现 |
+| [工具注册](tool-registry.md) | 可信操作描述、外部schema、权限、版本和派发 | DEV-054实现与验收见开发进度 |
+| [N2验收](n2-validation.md) | 原生隔离、命令分析与MCP的阶段要求及证据 | 开发中 |
 | [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | 设计草案 |
 | [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | 设计草案 |
 | [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | DEV-047 至 DEV-053 已完成候选验收，后续交互完善见开发进度 |

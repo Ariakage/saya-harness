@@ -15,6 +15,7 @@ bytes = "1.12.1"
 diffy = "0.5.2"
 globset = "0.4.21"
 ignore = "0.4.34"
+jsonschema = { version = "=0.61.0", default-features = false }
 libc = "0.2.191"
 nix = { version = "0.31.3", features = ["signal", "process"] }
 regex = "1.13.1"

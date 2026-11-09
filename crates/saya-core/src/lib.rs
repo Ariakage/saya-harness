@@ -24,6 +24,7 @@ pub mod project_context;
 pub mod prompt;
 pub mod provider;
 pub mod redaction;
+pub mod registry;
 pub mod review;
 pub mod runtime;
 pub mod sqlite;

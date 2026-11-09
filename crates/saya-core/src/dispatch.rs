@@ -13,6 +13,7 @@ use crate::{
     contract::{BoundaryError, ErrorInfo, HistoryItem, Session, SessionId, ToolCall, ToolResult},
     mode::ModeController,
     permissions::{Operation, Policy, PolicyGate},
+    registry::{ExternalAccess, RegisteredTool, ToolRegistry},
     review::{ReviewConfig, SharedBudget},
     tools::{
         exec::{ExecConfig, ExecTool},
@@ -24,8 +25,8 @@ use crate::{
 use std::{
     path::Path,
     sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock, RwLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -106,9 +107,23 @@ pub struct ToolDispatcher {
     read_only: bool,
     context_guard: OnceLock<Arc<ContextGuard>>,
     known_secrets: Vec<String>,
+    registry: RwLock<ToolRegistry>,
+    external_active: Arc<AtomicUsize>,
 }
 type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
 struct TodoLease<'a>(&'a OneShotPermit);
+struct ExternalLease<'a>(&'a OneShotPermit);
+struct RegistryLease(Arc<AtomicUsize>);
+impl Drop for RegistryLease {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+impl Drop for ExternalLease<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.finish_external();
+    }
+}
 impl Drop for TodoLease<'_> {
     fn drop(&mut self) {
         let _ = self.0.finish_todo();
@@ -121,8 +136,91 @@ pub struct DispatchReview<'a> {
     pub config: &'a ReviewConfig,
 }
 impl ToolDispatcher {
+    pub(crate) fn register_control_definition(
+        &self,
+        definition: crate::boundary::ToolDefinition,
+    ) -> Result<(), BoundaryError> {
+        self.registry
+            .write()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?
+            .register_builtin(definition)
+    }
     /// Return native tool schemas without executing or authorizing a call.
-    pub fn definitions(&self) -> Vec<crate::boundary::ToolDefinition> {
+    pub fn definitions(
+        &self,
+        mode: crate::contract::WorkMode,
+    ) -> Result<Vec<crate::boundary::ToolDefinition>, BoundaryError> {
+        Ok(self
+            .registry
+            .read()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?
+            .definitions(mode, !self.read_only))
+    }
+    fn registered(&self, name: &str) -> Result<Option<RegisteredTool>, BoundaryError> {
+        Ok(self
+            .registry
+            .read()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?
+            .get(name)
+            .cloned())
+    }
+    /// Add a host-configured external adapter. The descriptor remains bound to
+    /// this discovery revision for the complete approval and execution path.
+    pub fn register_external(
+        &self,
+        server: &str,
+        revision: &str,
+        adapter: Arc<dyn Tool>,
+        access: ExternalAccess,
+    ) -> Result<String, BoundaryError> {
+        let mut registry = self
+            .registry
+            .write()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
+        if self.external_active.load(Ordering::Acquire) != 0 {
+            return Err(failure("registry_busy", "external calls are still active"));
+        }
+        registry.register_external(server, revision, adapter, access)
+    }
+    pub fn replace_external(
+        &self,
+        server: &str,
+        revision: &str,
+        tools: Vec<(Arc<dyn Tool>, ExternalAccess)>,
+    ) -> Result<Vec<String>, BoundaryError> {
+        let mut registry = self
+            .registry
+            .write()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
+        if self.external_active.load(Ordering::Acquire) != 0 {
+            return Err(failure("registry_busy", "external calls are still active"));
+        }
+        registry.replace_external(server, revision, tools)
+    }
+    fn begin_external(
+        &self,
+        entry: &RegisteredTool,
+    ) -> Result<(Arc<dyn Tool>, RegistryLease), BoundaryError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
+        let current = registry
+            .get(&entry.descriptor().name)
+            .filter(|current| current.descriptor() == entry.descriptor())
+            .ok_or_else(|| {
+                failure(
+                    "stale_approval",
+                    "external tool discovery changed before dispatch",
+                )
+            })?;
+        let adapter = current
+            .adapter()
+            .ok_or_else(|| failure("unknown_tool", "tool adapter is unavailable"))?;
+        self.external_active.fetch_add(1, Ordering::AcqRel);
+        Ok((adapter, RegistryLease(self.external_active.clone())))
+    }
+    fn native_definitions(&self) -> Vec<crate::boundary::ToolDefinition> {
         use crate::tools::read::ReadToolKind;
         let mut definitions = Vec::new();
         for kind in [
@@ -178,7 +276,7 @@ impl ToolDispatcher {
             store.clone(),
             setup,
         )?;
-        Ok(Self {
+        let dispatcher = Self {
             manager,
             policy,
             files,
@@ -189,8 +287,18 @@ impl ToolDispatcher {
             modes,
             read_only: false,
             context_guard: OnceLock::new(),
-            known_secrets,
-        })
+            known_secrets: known_secrets.clone(),
+            registry: RwLock::new(ToolRegistry::with_known_secrets(known_secrets)),
+            external_active: Arc::new(AtomicUsize::new(0)),
+        };
+        for definition in dispatcher.native_definitions() {
+            dispatcher
+                .registry
+                .write()
+                .map_err(|_| failure("registry_error", "tool registry lock failed"))?
+                .register_builtin(definition)?;
+        }
+        Ok(dispatcher)
     }
     pub(crate) fn with_write_limit(mut self, max_bytes: usize) -> Self {
         self.write_max_bytes = max_bytes;
@@ -283,6 +391,9 @@ impl ToolDispatcher {
                 ));
             }
             Operation::background_control(&call.name)?
+        } else if let Some(entry) = self.registered(&call.name)? {
+            entry.validate_arguments(call)?;
+            Operation::external(entry.descriptor())?
         } else {
             return Err(failure("unknown_tool", "unsupported local tool"));
         };
@@ -515,7 +626,72 @@ impl ToolDispatcher {
                 }
                 Ok(result)
             }
-            _ => Err(failure("unknown_tool", "unsupported local tool")),
+            _ => {
+                let entry = self
+                    .registered(&call.name)?
+                    .ok_or_else(|| failure("unknown_tool", "unsupported tool"))?;
+                entry.validate_arguments(call)?;
+                if self.read_only && entry.descriptor().requires_durability() {
+                    return Err(failure(
+                        "durability_required",
+                        "side effects require durable storage",
+                    ));
+                }
+                if !permit.authorize_external(call, context, entry.descriptor())? {
+                    return Err(failure(
+                        "stale_approval",
+                        "external approval is stale or cancelled",
+                    ));
+                }
+                let _lease = ExternalLease(&permit);
+                let mut recorded = call.clone();
+                let mut arguments = serde_json::from_str(&recorded.arguments)
+                    .map_err(|_| failure("invalid_args", "invalid external arguments"))?;
+                arguments =
+                    Operation::external(entry.descriptor())?.normalized_arguments(arguments)?;
+                crate::redaction::redact(&mut arguments, &self.known_secrets)?;
+                recorded.arguments = serde_json::to_string(&arguments)
+                    .map_err(|_| failure("invalid_args", "invalid external arguments"))?;
+                store
+                    .commit(&[StoreChange::ToolIntent {
+                        run_id: context.run.id,
+                        call: recorded,
+                    }])
+                    .await?;
+                let outcome = match self.begin_external(&entry) {
+                    Ok((adapter, _registry_lease)) => {
+                        if !cancel.is_cancelled()
+                            && permit.authorize_external(call, context, entry.descriptor())?
+                        {
+                            let mut remote = call.clone();
+                            if let crate::registry::ToolSource::Mcp { remote_name, .. } =
+                                &entry.descriptor().source
+                            {
+                                remote.name = remote_name.clone();
+                            }
+                            adapter.execute(&remote, context, cancel).await
+                        } else {
+                            Err(failure(
+                                "stale_approval",
+                                "external approval is stale or cancelled",
+                            ))
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                let result = match outcome {
+                    Ok(result) => result,
+                    Err(error) => ToolResult {
+                        ok: false,
+                        data: None,
+                        error: Some(error.0),
+                        truncated: false,
+                    },
+                };
+                let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
+                save_result(store.as_ref(), call, context, &result).await?;
+                Ok(result)
+            }
         }
     }
 }

@@ -661,6 +661,17 @@ pub struct OneShotPermit {
     lease_active: AtomicBool,
 }
 impl OneShotPermit {
+    pub(crate) fn authorize_external(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        descriptor: &crate::registry::OperationDescriptor,
+    ) -> Result<bool, BoundaryError> {
+        self.check(call, context, &Operation::external(descriptor)?)
+    }
+    pub(crate) fn finish_external(&self) -> Result<(), BoundaryError> {
+        self.end()
+    }
     pub(crate) fn authorize_todo(
         &self,
         call: &ToolCall,

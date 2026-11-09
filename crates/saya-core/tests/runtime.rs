@@ -139,6 +139,78 @@ fn runtime(
 }
 
 #[tokio::test]
+async fn external_auth_input_and_unknown_outcomes_stop_before_following_side_effects()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        boundary::{Tool, ToolContext, ToolDefinition},
+        contract::ToolResult,
+        registry::{ExternalAccess, ToolRegistry},
+    };
+    struct ExternalFailure(&'static str);
+    impl Tool for ExternalFailure {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "remote".into(),
+                description: "fixture".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }
+        }
+        fn execute<'a>(
+            &'a self,
+            _: &'a ToolCall,
+            _: &'a ToolContext,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, ToolResult> {
+            Box::pin(async move { Err(err(self.0)) })
+        }
+    }
+    for (code, status) in [
+        ("needs_input", RunStatus::NeedsInput),
+        ("needs_auth", RunStatus::NeedsInput),
+        ("outcome_unknown", RunStatus::Failed),
+    ] {
+        let temp = support::temp_workspace()?;
+        let (mut session, run) = fixture(temp.path(), PermissionMode::Bypass);
+        let adapter = Arc::new(ExternalFailure(code));
+        let name = ToolRegistry::default().register_external(
+            "fixture",
+            "v1",
+            adapter.clone(),
+            ExternalAccess::Unclassified,
+        )?;
+        let model = Arc::new(FakeModel::new(vec![vec![
+            call("external", &name, serde_json::json!({})),
+            call(
+                "later",
+                "write_file",
+                serde_json::json!({"path":"must-not-exist.txt","content":"wrong","expected_version":null}),
+            ),
+        ]]));
+        let mut runtime = runtime(
+            temp.path(),
+            run,
+            model.clone(),
+            Arc::new(MemoryStore::default()),
+            Arc::new(NoCancel),
+        )?;
+        assert_eq!(
+            runtime.register_external("fixture", "v1", adapter, ExternalAccess::Unclassified)?,
+            name
+        );
+        let result = runtime.run(&mut session).await?;
+        assert_eq!(result.status, status);
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some(code)
+        );
+        assert!(!temp.path().join("must-not-exist.txt").exists());
+        assert_eq!(model.seen.lock().unwrap().len(), 1);
+        assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult {call_id,result} if call_id=="later" && result.error.as_ref().is_some_and(|error|error.code=="not_executed"))));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_tool_requests_return_paired_errors_and_allow_model_correction()
 -> Result<(), Box<dyn std::error::Error>> {
     for background in [false, true] {
