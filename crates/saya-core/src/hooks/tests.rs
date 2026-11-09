@@ -64,6 +64,23 @@ struct Fixture {
 }
 impl Fixture {
     fn new(mode: WorkMode, permissions: PermissionMode) -> Self {
+        Self::with_hooks(
+            mode,
+            permissions,
+            &[
+                ("started", "run.started", "observer"),
+                ("finished", "run.finished", "observer"),
+                ("before", "tool.before_dispatch", "observer"),
+                ("after", "tool.finished", "observer"),
+                ("check", "tool.before_dispatch", "check"),
+            ],
+        )
+    }
+    fn with_hooks(
+        mode: WorkMode,
+        permissions: PermissionMode,
+        entries: &[(&str, &str, &str)],
+    ) -> Self {
         let root = PrivateRoot(tempfile::tempdir().unwrap());
         let source = tempfile::tempdir().unwrap();
         let mut manifest = r#"schema_version = 1
@@ -79,13 +96,7 @@ requires_features = ["plugin-manifest-v1", "hook-events-v1"]
 requested = ["process.exec", "hook.observe", "hook.check"]
 "#
         .to_string();
-        for (id, event, kind) in [
-            ("started", "run.started", "observer"),
-            ("finished", "run.finished", "observer"),
-            ("before", "tool.before_dispatch", "observer"),
-            ("after", "tool.finished", "observer"),
-            ("check", "tool.before_dispatch", "check"),
-        ] {
+        for (id, event, kind) in entries {
             manifest.push_str(&format!("\n[[hooks]]\nid = {id:?}\nevent = {event:?}\nkind = {kind:?}\nprogram = \"python3\"\nargs = [\"@plugin/hooks/hook.py\"]\ntimeout_ms = 5\n"));
         }
         std::fs::create_dir(source.path().join("hooks")).unwrap();
@@ -135,9 +146,9 @@ requested = ["process.exec", "hook.observe", "hook.check"]
                 )
                 .unwrap(),
         );
-        let hooks = ["started", "finished", "before", "after", "check"]
+        let hooks = entries
             .iter()
-            .map(|id| EnabledHook::from_lease(lease.clone(), id).unwrap())
+            .map(|(id, _, _)| EnabledHook::from_lease(lease.clone(), id).unwrap())
             .collect();
         Self {
             hooks,
@@ -170,6 +181,166 @@ requested = ["process.exec", "hook.observe", "hook.check"]
     }
     fn check(&self) -> Vec<EnabledHook> {
         vec![self.hooks[4].clone()]
+    }
+}
+
+#[tokio::test]
+async fn each_hook_entry_rebuilds_payload_after_an_earlier_start_registers_a_credential() {
+    struct RegisteringExecutor {
+        inner: Executor,
+        secrets: Arc<SecretRegistry>,
+        value: String,
+    }
+    impl HookHostExecutor for RegisteringExecutor {
+        fn begin<'a>(
+            &'a self,
+            request: &'a HookExecutionRequest,
+            cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, HookBegin> {
+            Box::pin(async move {
+                let begun = self.inner.begin(request, cancel).await?;
+                if self.inner.calls.load(Ordering::SeqCst) == 1 {
+                    self.secrets.register(std::slice::from_ref(&self.value))?;
+                }
+                Ok(begun)
+            })
+        }
+    }
+    let fixture = Fixture::with_hooks(
+        WorkMode::Work,
+        PermissionMode::Auto,
+        &[
+            ("first", "run.started", "observer"),
+            ("second", "run.started", "observer"),
+        ],
+    );
+    let secret = "fixture-newly-registered-credential";
+    let secrets = Arc::new(SecretRegistry::default());
+    let journal = Arc::new(Journal::default());
+    let executor = Arc::new(RegisteringExecutor {
+        inner: Executor::new(journal.clone(), Behavior::default()),
+        secrets: secrets.clone(),
+        value: secret.into(),
+    });
+    let engine = HookEngine::new(
+        fixture.run.clone(),
+        HookLimits::default(),
+        secrets,
+        executor.clone(),
+        journal.clone(),
+    )
+    .unwrap();
+    let mut context = fixture.context(HookEvent::RunStarted);
+    context.data = json!({"observation":secret});
+    let outcome = engine
+        .fire(
+            &context,
+            &fixture.observer(HookEvent::RunStarted),
+            &NeverCancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.records.len(), 2);
+    assert!(
+        outcome
+            .records
+            .iter()
+            .all(|record| record.status == HookStatus::Succeeded)
+    );
+    let payloads = executor.inner.payloads.lock().unwrap();
+    assert_eq!(payloads.len(), 2);
+    assert!(payloads[0].to_string().contains(secret));
+    assert!(!payloads[1].to_string().contains(secret));
+    for (entry, payload) in ["first", "second"].iter().zip(payloads.iter()) {
+        let record = outcome
+            .records
+            .iter()
+            .find(|record| record.intent.entry_id == *entry)
+            .unwrap();
+        assert_eq!(
+            record.intent.payload_sha256,
+            digest(&serde_json::to_vec(payload).unwrap())
+        );
+    }
+    assert_ne!(
+        outcome.records[0].intent.payload_sha256,
+        outcome.records[1].intent.payload_sha256
+    );
+    assert!(
+        !serde_json::to_string(&outcome.records)
+            .unwrap()
+            .contains(secret)
+    );
+    assert_eq!(journal.rows.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn retry_with_running_or_unknown_first_hook_does_not_start_later_event_entries() {
+    let fixture = Fixture::with_hooks(
+        WorkMode::Work,
+        PermissionMode::Auto,
+        &[
+            ("first", "run.started", "observer"),
+            ("second", "run.started", "observer"),
+        ],
+    );
+    let context = fixture.context(HookEvent::RunStarted);
+    for unknown in [true, false] {
+        let journal = Arc::new(Journal::default());
+        let (first, executor) = engine(
+            &fixture,
+            Behavior {
+                begin_unknown: true,
+                ..Behavior::default()
+            },
+            HookLimits::default(),
+            Arc::new(SecretRegistry::default()),
+            journal.clone(),
+        );
+        let first_outcome = first
+            .fire(
+                &context,
+                &fixture.observer(HookEvent::RunStarted),
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert!(first_outcome.blocked);
+        assert!(first_outcome.cleanup_pending);
+        assert_eq!(first_outcome.records.len(), 1);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        let intent = first_outcome.records[0].intent.clone();
+        // The concrete journal returns Unknown for an uncertain result and
+        // Running for a currently claimed, unfinished invocation.
+        journal.rows.lock().unwrap().insert(
+            intent.invocation_id.clone(),
+            if unknown {
+                Row::Unknown(intent)
+            } else {
+                Row::Running(intent)
+            },
+        );
+        let (retry, retry_executor) = engine(
+            &fixture,
+            Behavior::default(),
+            HookLimits::default(),
+            Arc::new(SecretRegistry::default()),
+            journal.clone(),
+        );
+        let outcome = retry
+            .fire(
+                &context,
+                &fixture.observer(HookEvent::RunStarted),
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert!(outcome.blocked);
+        assert!(outcome.cleanup_pending);
+        assert!(outcome.records.is_empty());
+        assert_eq!(retry_executor.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(journal.rows.lock().unwrap().len(), 1);
+        assert_eq!(outcome.diagnostics[0].code, "hook_unknown");
     }
 }
 

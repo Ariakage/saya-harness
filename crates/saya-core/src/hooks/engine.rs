@@ -9,7 +9,6 @@ impl HookEngine {
         cancel: &dyn Cancellation,
     ) -> Result<HookBatchOutcome, BoundaryError> {
         self.validate_context(context)?;
-        let payload = output::payload(context, self.limits.max_payload_bytes, &self.secrets)?;
         let selected: Vec<_> = hooks
             .iter()
             .filter(|hook| hook.event == context.event)
@@ -40,6 +39,8 @@ impl HookEngine {
                 outcome.blocked = true;
                 break;
             }
+            output::reject_identity_secrets(&hook.entry, &self.secrets)?;
+            let payload = output::payload(context, self.limits.max_payload_bytes, &self.secrets)?;
             let intent = self.intent(context, hook, &payload)?;
             if context.depth >= self.limits.max_depth
                 || context
@@ -112,7 +113,7 @@ impl HookEngine {
                     .await?;
                     outcome.blocked = true;
                     outcome.cleanup_pending = true;
-                    continue;
+                    break;
                 }
                 HookClaim::Conflict => {
                     self.note(
