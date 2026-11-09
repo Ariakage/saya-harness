@@ -1,6 +1,6 @@
 # MCP 与凭据管理
 
-当前 N2 开发线支持显式配置的 stdio、HTTP MCP 和宿主凭据引用，完整四平台整体验收仍在进行。0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](release-notes-0.2.0.md)
+当前 N2 开发线支持显式配置的 stdio、HTTP MCP 和宿主凭据引用，已通过完整四平台整体验收。0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](release-notes-0.2.0.md)
 
 接入使用固定 `rmcp = 3.9.0`，协商首选协议 `2026-07-28`，兼容 `2025-11-25`。当前工具发现、目录变化与工具调用复用宿主注册、权限和持久化边界。[MCP 实现](../crates/saya-core/src/mcp.rs)
 
@@ -109,5 +109,7 @@ saya --config /path/to/config.toml mcp credentials revoke RETURNED_REFERENCE
 JSONL 运行事件使用 `mcp.status`，其服务器条目仅包含 `server`、`transport`、`state` 与 `tools`。已建立服务在清理确认后显示 Stopped，随后才产生运行终态。新 Run 先将当前配置服务初始化为 Configured，恢复会话后的连接在新输入启动。
 
 每个服务的连接、鉴权、握手和目录发现均受到配置超时及运行共享活跃预算约束。stdio 启动同时消耗工具预算，模型核查消耗共享模型请求预算。人工确认暂停活跃计时，进程与连接清理在活跃预算结束后继续完成。
+
+MCP服务要求额外输入时，当前Run以 `needs_input` 结束并保存实际调用状态。用户可在后续输入中补充信息，新的执行继续经过正常授权。服务调用内的交互补充和原调用续接属于后续扩展范围。
 
 macOS 后代进程清理仍按能力等级报告为 `best_effort`。Linux 使用私有 PID namespace，系统依赖、有效委派资源控制及原生执行证据按[N2 验收记录](n2-validation.md)维护。可执行插件、Browser 和自动上下文压缩继续按[后续计划](post-mvp-plan.md)推进。

@@ -1,6 +1,6 @@
 # 架构设计
 
-**0.2.0 已发布 N0 共享基础、N1 默认 TUI 及交互与审查修复。当前 N2 开发线已接入原生执行隔离、MCP 与凭据管理，最终四平台整体验收仍在进行。本文记录实际架构与后续扩展边界，各源码版本的验收范围见[开发进度](progress.md)和[N2 验收](n2-validation.md)。**
+**0.2.0 已发布 N0 共享基础、N1 默认 TUI 及交互与审查修复。当前 N2 开发线已完成原生执行隔离、MCP 与凭据管理，并通过四平台整体验收。本文记录实际架构与后续扩展边界，各源码版本的验收范围见[开发进度](progress.md)和[N2 验收](n2-validation.md)。**
 
 约束为 Rust、CLI → TUI → GUI、Saya 自己驱动 Agent 循环，同时支持编程与通用任务。CLI 包含交互和单次运行、四种工作模式、三种权限模式、三类模型协议、本地工具、流式／结构化输出和会话恢复，默认 WORK 与 auto。精确契约以[完整基线](mvp-baseline.md)为准，范围见[需求规格](requirements.md)，行为见[执行契约](execution.md)。
 
@@ -107,7 +107,7 @@ flowchart TD
 
 产品与接口基线由[完整基线](mvp-baseline.md) B-01 至 B-24 定义。当前直接依赖包含 Tokio、clap、reqwest＋rustls、serde／toml、tracing 与 rusqlite，补丁解析使用 diffy，边界错误使用显式 Rust 类型。具体版本与直接依赖以各 crate 的 Cargo.toml 和 Cargo.lock 为准。
 
-saya-core、saya-app、saya-tui、saya-cli 四个 crate 和锁文件已建立。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI，当前 N2 源码另包含原生隔离及 MCP。saya-tui 通过 saya-app 组装服务，并直接使用 saya-core 的配置、契约、脱敏与任务清单类型。0.1.0、0.2.0 及历史候选的四平台证据继续归属各自源码。N2 本机整合门禁与正常入口验收已通过，最终四平台 CI 与原生验收仍在进行，见[发行验证](release-validation.md)、[TUI 验证](tui-validation.md)、[N2 验收](n2-validation.md)和[开发进度](progress.md)。
+saya-core、saya-app、saya-tui、saya-cli 四个 crate 和锁文件已建立。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI，当前 N2 源码另包含原生隔离及 MCP。saya-tui 通过 saya-app 组装服务，并直接使用 saya-core 的配置、契约、脱敏与任务清单类型。0.1.0、0.2.0 及历史候选的四平台证据继续归属各自源码。N2 本机整合门禁及固定源码的四平台源码 CI、原生／MCP／Markdown／TUI 正常入口与性能验收均已通过，见[发行验证](release-validation.md)、[TUI 验证](tui-validation.md)、[N2 验收](n2-validation.md)和[开发进度](progress.md)。
 
 ## 提示词装配
 

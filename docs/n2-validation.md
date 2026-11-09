@@ -1,18 +1,83 @@
 # N2 隔离与 MCP 验收
 
-本轮目标为完整交付N2及对应验收。起点为 `547e5fe`，状态由[开发进度](progress.md)维护。以下表格列出需要满足的要求，开发中的代码和研究探针分别记录。
+本轮N2及对应验收已完成。起点为 `547e5fe`，最终实现与验收源码为 `aaec8c5b81ddb464320fd46f6dc6dd00a0a547f2`。下表与[最终四平台验收](#最终四平台验收)记录当前结果，后续各节保留逐阶段开发、失败、修复和本机研究历史，原有“待验收”表述归属各节当时源码。状态由[开发进度](progress.md)维护。
 
 | 任务 | 必须具备的证据 | 当前状态 |
 | --- | --- | --- |
-| DEV-054 | 本地／外部工具注册、稳定名称、schema校验、宿主副作用分类、三权限与PLAN、版本审批绑定、取消与记录 | 本机阶段通过，752项Rust测试及完整门禁见DEV-054记录 |
-| DEV-055 | prepare／execute／文件服务／cleanup的正常入口接线、真实能力等级、显式约束缺失时失败、实际后端上下文 | 本机正常入口通过，最终四平台待验收 |
-| DEV-056 | Seatbelt与Bubblewrap／Seccomp／socat、受控网络broker、可用委派资源controller | 本机原生验收通过，Linux委派controller待验收 |
-| DEV-075 | 真实shell CST、直接argv、包装器、重定向与动态行为、错误／预算、核查事实与批准版本绑定 | 本机阶段通过，773项Rust测试及CST探针见DEV-075记录 |
-| DEV-057 | 路径与链接对抗、缺失保护路径、namespace／syscall、网络旁路、资源与清理故障、性能和恢复的原生证据 | 本机18项与性能通过，最终四平台待验收 |
-| DEV-058 | 显式stdio MCP配置、版本与生命周期、启动授权、受控进程与关闭 | 连接组件四平台CI通过，最终整体验收待完成 |
-| DEV-059 | 工具schema／结果类型／大小、统一权限与记录、取消、列表变化、三模型协议的外部工具往返 | 正常运行时与CLI／TUI已整合，最终四平台待验收 |
-| DEV-060 | 首个凭据后端、引用／撤销、最小化注入、日志／会话／机器输出的凭据边界 | 管理入口与本机边界验证通过，最终四平台待验收 |
-| DEV-061 | 固定SDK与协议矩阵、Streamable HTTP、OAuth与续期、断连不重放、额外输入及非交互路径 | 本机25项联合验收通过，最终四平台待验收 |
+| DEV-054 | 本地／外部工具注册、稳定名称、schema校验、宿主副作用分类、三权限与PLAN、版本审批绑定、取消与记录 | 完成，最终四平台完整门禁及外部工具矩阵通过 |
+| DEV-055 | prepare／execute／文件服务／cleanup的正常入口接线、真实能力等级、显式约束缺失时失败、实际后端上下文 | 完成，四平台正常入口和能力正负对照通过 |
+| DEV-056 | Seatbelt与Bubblewrap／Seccomp／socat、受控网络broker、可用委派资源controller | 完成，两种原生后端及Linux两架构实际委派验收通过 |
+| DEV-075 | 真实shell CST、直接argv、包装器、重定向与动态行为、错误／预算、核查事实与批准版本绑定 | 完成，最终四平台回归及既有CST研究探针通过 |
+| DEV-057 | 路径与链接对抗、缺失保护路径、namespace／syscall、网络旁路、资源与清理故障、性能和恢复的原生证据 | 完成，Linux各19项／macOS各18项及完整性能v2通过 |
+| DEV-058 | 显式stdio MCP配置、版本与生命周期、启动授权、受控进程与关闭 | 完成，四平台正常CLI／PTY／TUI生命周期通过 |
+| DEV-059 | 工具schema／结果类型／大小、统一权限与记录、取消、列表变化、三模型协议的外部工具往返 | 完成，四平台统一运行时和三模型协议矩阵通过 |
+| DEV-060 | 首个凭据后端、引用／撤销、最小化注入、日志／会话／机器输出的凭据边界 | 完成，四平台私有文件后端与凭据边界通过 |
+| DEV-061 | 固定SDK与协议矩阵、Streamable HTTP、OAuth与续期、断连不重放、额外输入及非交互路径 | 完成，四平台各25项联合验收通过 |
+
+## 最终四平台验收
+
+2026-11-09，固定源码 `aaec8c5b81ddb464320fd46f6dc6dd00a0a547f2` 的源码CI与N2验收均以四个原生job成功结束。所有平台完整workspace格式、严格Clippy、Rust测试、优化构建及49项Python工具回归通过。验收使用各平台从该固定源码构建的程序。[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42607697386)、[N2原生验收](https://github.com/Ariakage/saya-harness/actions/runs/42607698976)
+
+| 实际环境 | Rust测试 | 原生用例 | MCP／OAuth | TUI旅程 | 性能v2判据 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ubuntu22.04.5 x86_64／glibc2.35 | 923 | 19 | 25 | 24 | 21／21 |
+| Ubuntu22.04.5 aarch64／glibc2.35 | 923 | 19 | 25 | 24 | 21／21 |
+| macOS15.8.2 ARM／24H232 | 907 | 18 | 25 | 24 | 21／21 |
+| macOS15.7.9 Intel／24G830 | 907 | 18 | 25 | 24 | 21／21 |
+
+Linux实际内核均为 `6.8.0-1070-azure`，ELF最高GLIBC符号为2.34，运行库为2.35。macOS两端均在实际15系主机执行，Mach-O架构分别与主机匹配且 `minos=15.0`。Linux新增加的STREAM／SEQPACKET真实fork／exec关闭引用回归与原长路径能力探测在源码CI和N2门禁均通过。
+
+| Runner | 验收程序SHA-256 |
+| --- | --- |
+| `ubuntu-22.04` | `b41ed794e168479dad471b0720aaecff661bc205e72b37eca3476c03a3bb3106` |
+| `ubuntu-22.04-arm` | `66626971e33befe42d49ccbd2f809f9f72dc81783c2d8529aedde287c80bdfc2` |
+| `macos-15` | `2d9af57dc8d5ebb96e640bdc16819750109be03c41e0895a6baa815a3ab5f2f1` |
+| `macos-15-intel` | `93e746a43259c370e1d5640c5d88ef708c246b265344e8f5d52d2504a8923a93` |
+
+下载后的独立核验将固定提交归档的209项源码／构建／脚本清单和全树摘要分别与native／MCP记录比对，并检查干净源码、workflow身份、架构、基线、实际测试前后哈希及两份保留程序副本。各端TUI通过固定工作流的 `target/release/saya` 入口执行，MCP保存的末帧诊断为complete／exit0，raw长度及程序归属均核对通过。两Linux的系统别名保护、controller读回、活动cgroup成员、结束清理及四项模型派发前拒绝对照全部通过。
+
+最终记录位于 `target/n2/remote-review/aaec8c5b/`，索引为 `monitoring-complete.json`，包含每端完整job日志、原始artifact、独立报告与性能重算。原生清单摘要为 `6333707a372bad367551e5fdb3bba4a65fa5749d075f8031af45cea2e45668b2`，全树摘要为 `c180bc6e53f946d2f2b5478343dcb7c5c9465d776dfab991bbd6944e3853b5cf`。
+
+Actions保留期为14天，本轮artifact于2026-11-23到期。下表记录API声明的归档digest，程序摘要已在下载解包后独立核对。
+
+| Runner | Artifact ID | API归档SHA-256 |
+| --- | --- | --- |
+| `ubuntu-22.04` | [13669876303](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13669876303) | `dd2b97c65dfd146e064470510f80ccfa715d723eebf5db8d80d53d74f1b2b5c6` |
+| `ubuntu-22.04-arm` | [13668814442](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13668814442) | `82d4e4733bf4952a8e5209c312a2bd85e8908bd36bec6aa22323597d3ca5f7df` |
+| `macos-15` | [13669387523](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13669387523) | `5dd7670089ab3170e340b793fbfe7f2a66fa9233b0f3d7ccf800b9e42f2c2cf3` |
+| `macos-15-intel` | [13669744661](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13669744661) | `4cc70cbb1491372d476cb4c084960c20e2f1e2de26dc55b11aa557b9835d13a0` |
+
+### 最终性能测量
+
+完整v2报告覆盖Host／原生两后端的冷启动、同Run热命令、短命令、文件读取、写入、搜索与四Run并发七项，以及直连、HTTP代理和CONNECT三条网络路径。每端在同一次原生脚本运行取齐所有指标，再由固定源码的 `scripts/n2/verify_performance.py` 传入实际报告路径及 `--samples 3`，在CI与下载后分别校验全部原始样本、成功操作证明、nearest-rank分位数和比较值，21项判据均通过。
+
+每格为原生／Host 的p50毫秒。冷启动、读写、搜索和并发批次包含CLI与夹具开销，热调用在同一Run的一次预热后单独计时。每项三个样本，采用nearest-rank，用于本轮开销观测。
+
+| Runner | Cold | Warm | Short | Read | Write | Search | Four-Run batch |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ubuntu-22.04 | 262.424 / 30.531 | 15.049 / 15.498 | 322.721 / 60.877 | 272.219 / 272.191 | 302.603 / 262.164 | 272.343 / 292.419 | 894.126 / 77.373 |
+| ubuntu-22.04-arm | 201.738 / 20.588 | 16.357 / 15.984 | 221.936 / 40.754 | 222.008 / 211.947 | 221.976 / 221.882 | 222.009 / 211.868 | 679.519 / 54.172 |
+| macos-15 | 164.697 / 79.943 | 32.291 / 19.639 | 170.241 / 103.903 | 152.909 / 151.467 | 161.027 / 146.604 | 163.678 / 175.841 | 305.403 / 259.574 |
+| macos-15-intel | 270.174 / 169.483 | 194.364 / 25.906 | 333.046 / 184.128 | 352.568 / 325.174 | 373.258 / 296.311 | 402.883 / 272.199 | 820.964 / 265.912 |
+
+代理表单独测量payload内完整socket请求／响应／关闭的p50毫秒，包含CONNECT建链。CLI整体资源另行记录。CONNECT内使用明文HTTP。
+
+| Runner | Host direct | Native HTTP | Native CONNECT |
+|---|---:|---:|---:|
+| ubuntu-22.04 | 0.426 | 0.975 | 1.046 |
+| ubuntu-22.04-arm | 0.582 | 1.228 | 1.219 |
+| macos-15 | 1.023 | 0.931 | 1.066 |
+| macos-15-intel | 1.438 | 2.380 | 2.074 |
+
+CPU与RSS来自内核wait4。热命令间隔从模型响应发送完成计至后继工具结果请求，包含调度、持久化与本地夹具开销，CLI整体CPU／RSS单列。四Run并发记录各child资源、CPU之和及最大child峰值RSS，同时聚合内存峰值未测。冷启动指新CLI／新Run且保留OS页缓存。代理RTT由payload内单调时钟测量，CONNECT在隧道中使用明文HTTP。全部p95、样本、作用域与操作证明保留于各端 `native-evidence.json`。
+
+### 验收范围与后续边界
+
+- 凭据首个后端使用0700／0600私有明文文件，系统凭据库属于后续扩展。MCP额外输入以 `needs_input` 结束当前Run，原调用内交互续接另行实现。
+- macOS后代清理能力为best_effort，Linux使用所属PID namespace。Linux聚合硬限制要求显式委派cgroup，委派验收包含内核读回、成员、清理与配置负对照，资源耗尽压力未测。
+- OAuth、三模型协议和代理使用受控本地服务。真实厂商互操作、外部DNS与TLS加密内容检查保留独立未测范围。
+- 历史Intel启动与JSONL偶发失败缺少足够原始观测，唯一根因保留未确认状态。已确认的终端计时和FD所有权问题有永久回归，最终四端重新执行全部门禁和正常入口验收通过。
+- 本机完整门禁采用四测试线程控制本机I/O争用，最终四平台门禁沿各runner默认测试并发执行。后续N3从DEV-076 OutputStore进入DEV-062 Context Builder，发行版本按单独准备流程确定。
 
 ## DEV-055 原生执行组件
 
@@ -251,4 +316,4 @@ MCP采用官方Rust SDK的明确版本进行接口核实，原生后端与远程
 
 每个DEV阶段在适用格式、静态检查、回归测试和文档同步后独立提交。最终验收应关联固定源码、构建环境、实际程序哈希和测试对象。Linux x86_64／aarch64与macOS15 Intel／ARM分别保留原生结果，编译和替身测试单独记录。
 
-N2还需对本地开发线的Markdown与TUI执行四平台同步检查，沿用项目负责人此前约定。正式发行按单独授权处理。
+本轮已对相同固定源码的Markdown与TUI执行四平台同步检查，结果见[最终四平台验收](#最终四平台验收)。正式发行按单独授权处理。

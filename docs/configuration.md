@@ -49,11 +49,11 @@ output_microunits_per_million = 2000000
 
 ## N2 原生隔离配置
 
-当前 N2 开发线的完整四平台整体验收仍在进行，0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](release-notes-0.2.0.md)
+当前 N2 开发线已通过完整四平台整体验收，0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](release-notes-0.2.0.md)
 
 省略 `sandbox` 时采用 `backend = "auto"`，在 macOS 使用系统 Seatbelt，在 Linux 使用 Bubblewrap 与 Seccomp。Linux 要求 Bubblewrap 0.13.1 或更新版本，代理网络还需要 socat，可执行文件需符合宿主可信路径和权限检查。macOS 固定使用系统 `/usr/bin/sandbox-exec`。依赖及必需能力缺失会使运行启动失败。`config check` 仅验证语法、数值和环境引用，原生能力在 Run 启动时探测。
 
-Linux 匿名 Unix 通道的连接状态影响网络边界。当前候选要求可确认的正式内核范围，5.15分支至少5.15.86、6.1分支至少6.1.2，或正式6.2及以后版本，并执行关闭／重连接行为探测。RC、无法解析或无法确认回补身份的版本返回 `sandbox_capability_unavailable`。5.4／5.10本轮未纳入确认范围。厂商的 `5.15.0-xxx` 版本串无法直接等同于上游5.15.86。[原生边界](sandbox.md)、[上游修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)
+Linux 匿名 Unix 通道的连接状态影响网络边界。当前原生后端要求可确认的正式内核范围，5.15分支至少5.15.86、6.1分支至少6.1.2，或正式6.2及以后版本，并执行关闭／重连接行为探测。RC、无法解析或无法确认回补身份的版本返回 `sandbox_capability_unavailable`。5.4／5.10本轮未纳入确认范围。厂商的 `5.15.0-xxx` 版本串无法直接等同于上游5.15.86。[原生边界](sandbox.md)、[上游修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)
 
 ```toml
 [sandbox]
@@ -82,7 +82,7 @@ Linux默认只读系统视图在目录存在时包含 `/usr`、`/bin`、`/sbin`�
 
 解释器、包管理器和编译器位于工作区及系统运行库之外时，需要显式提供其可读目录。可将实际工具链目录加入 `sandbox.read_roots`。对应目录必须存在。此配置适用于进程读取工具链，文件工具访问该目录还需满足逻辑权限策略。原生根数量各限 128 项，根目录 `/` 无法作为原生开放根。
 
-Linux原生视图省略 `/proc`。依赖 `/proc/self/exe` 定位工具链的程序可能需要显式路径，Rust 编译可同时指定 `--sysroot`，并在隔离内的编译命令中设置 `LD_LIBRARY_PATH` 指向该工具链的 `lib`。glibc 的 `$ORIGIN` 计算使用 `/proc/self/exe`，这是当前缺库日志的原因推断，修复后的Linux实际结果由[N2验收](n2-validation.md)记录。[glibc实现记录](https://sourceware.org/pipermail/glibc-cvs/2022q4/081599.html)
+Linux原生视图省略 `/proc`。依赖 `/proc/self/exe` 定位工具链的程序可能需要显式路径，Rust 编译可同时指定 `--sysroot`，并在隔离内的编译命令中设置 `LD_LIBRARY_PATH` 指向该工具链的 `lib`。早期验收按 glibc 通过 `/proc/self/exe` 计算 `$ORIGIN` 的机制推断缺库原因。显式工具链路径配置已通过 Linux x86_64／aarch64 的实际编译验收。[N2验收](n2-validation.md)、[glibc实现记录](https://sourceware.org/pipermail/glibc-cvs/2022q4/081599.html)
 
 x86_64 GNU Linux的Rust默认LLD wrapper还会通过 `/proc/self/exe` 查找同目录链接器。当前编译夹具显式加入 `-C linker-features=-lld`，使用宿主已配置的系统链接器，保留无proc视图。该选项按目标限定，ARM和macOS夹具保持各自已有命令。实际Linux结果见[N2记录](n2-validation.md)。[Rust链接器选项](https://doc.rust-lang.org/rustc/codegen-options/index.html#linker-features)
 
@@ -94,7 +94,7 @@ x86_64 GNU Linux的Rust默认LLD wrapper还会通过 `/proc/self/exe` 查找同�
 
 Linux 原生后端拒绝把任何 `cgroup`／`cgroup2` 挂载或其祖先、后代及 bind 别名纳入可写视图，返回 `unsupported_fs_policy`。此限制覆盖默认工作区、`sandbox.write_roots` 与 `permissions.additional_roots`，包含与委派根互为兄弟的其他 cgroup。`sandbox.read_roots` 可按只读方式开放 cgroup 目录，其他策略检查继续生效。
 
-本轮资源配置边界和委派正负对照的最终四平台验收待重跑。当前委派用例检查内核限制、活动成员和清理，资源耗尽压力仍未验证。[资源与清理边界](sandbox.md#资源与清理能力矩阵)、[N2 验收](n2-validation.md)
+本轮资源配置边界已通过四平台验收，Linux x86_64／aarch64 的委派正负对照通过。委派用例检查内核限制、活动成员和清理，资源耗尽压力仍未验证。[资源与清理边界](sandbox.md#资源与清理能力矩阵)、[N2 验收](n2-validation.md)
 
 网络代理采用 HTTP 代理请求与 HTTPS CONNECT，按完整 origin 授权。示例允许一个外部 HTTPS origin。
 

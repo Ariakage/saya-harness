@@ -132,7 +132,7 @@ JSONL事件序号严格递增，预留可产生空洞。每个4096序号预留�
 
 ## N2 原生执行边界
 
-当前开发线默认采用 `sandbox.backend = "auto"`，macOS 选择独立 SeatbeltBackend，Linux 选择 Bubblewrap、Seccomp 与可选 socat 代理桥。实际准备、能力报告、命令和文件服务通过同一 ExecutionBackend 连接。配置加载与原生能力探测分别进行，完整四平台整体验收状态见[N2 验收记录](n2-validation.md)。
+当前开发线默认采用 `sandbox.backend = "auto"`，macOS 选择独立 SeatbeltBackend，Linux 选择 Bubblewrap、Seccomp 与可选 socat 代理桥。实际准备、能力报告、命令和文件服务通过同一 ExecutionBackend 连接。配置加载与原生能力探测分别进行，已通过的完整四平台整体验收见[N2 验收记录](n2-validation.md)。
 
 权限许可继续绑定规范化操作、模式、权限版本、环境摘要及执行环境身份。`bypass` 保留 PLAN、显式 deny、参数和预算规则，并继续受原生执行策略约束。宿主保护路径优先于可写根，默认包括启动时已存在的配置、data、state、cache 和工作区 `.saya/local`。活动凭据存储新建后会强制加入实际保护路径。
 
@@ -150,7 +150,7 @@ Linux 视图保留最小系统目录、工作区、显式根及私有临时目�
 
 资源按 `hard`、`best_effort`、`unsupported` 分别报告。Linux 聚合硬约束要求 Bubblewrap 文件系统边界和有效 cgroup v2 委派。Linux 原生后端依据 mountinfo 拒绝所有与 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，包含 bind 别名及委派根的兄弟路径，错误为 `unsupported_fs_policy`。默认工作区与 `permissions.additional_roots` 同样接受检查，显式只读 cgroup 根可按其余策略处理。macOS 后代进程清理保持 `best_effort`。
 
-本轮资源配置修复的最终四平台验收待重跑。委派正向用例检查内核限值、活动成员和自有子组清理，负对照检查模型派发前拒绝，资源耗尽压力仍未验证。[资源验收边界](sandbox.md#资源与清理能力矩阵)
+本轮资源配置边界已通过四平台验收，Linux x86_64／aarch64 的委派正负对照通过。正向用例检查内核限值、活动成员和自有子组清理，负对照检查模型派发前拒绝，资源耗尽压力仍未验证。[资源验收边界](sandbox.md#资源与清理能力矩阵)
 
 无法表示的文件策略、缺失的必需控制或清理无法确认均返回明确错误，原生后端继续保持失败关闭。完整参数见[配置](configuration.md#n2-原生隔离配置)，设计与平台边界见[原生隔离设计](sandbox.md)。
 

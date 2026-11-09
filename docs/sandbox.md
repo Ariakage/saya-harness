@@ -1,6 +1,6 @@
 # Sandbox 与命令结构分析
 
-**更新于 2026-11-09。N2 开发线已接入 Linux Bubblewrap + Seccomp + socat、独立 macOS SeatbeltBackend 和受控网络 broker。本文说明当前实现及能力边界，最终集成的四平台验收仍在进行，证据见 [N2 验收记录](n2-validation.md)。**
+**更新于 2026-11-09。N2 开发线已接入 Linux Bubblewrap + Seccomp + socat、独立 macOS SeatbeltBackend 和受控网络 broker。本文说明当前实现及能力边界，固定源码的四平台整体验收已通过，证据见 [N2 验收记录](n2-validation.md)。**
 
 ## 后端边界
 
@@ -27,11 +27,11 @@ Linux默认系统视图额外只读映射存在的 `/etc/alternatives`，其目�
 
 Rust子进程启动使用已连接的匿名AF_UNIX SOCK_SEQPACKET通道，异步运行时还使用SOCK_STREAM通道。payload策略按这两类匿名pair限定协议及flags，命名Unix socket与datagram继续受限制。原peer间的SCM_RIGHTS可以复制发送方已有的FD，宿主描述符通过两层CLOEXEC清理与私有启动协议隔离。
 
-部分旧内核的shutdown及peer-close处理曾改变连接状态，匿名pair可能因此重新connect／listen。当前候选同时采用明确的正式版本范围和私有监听器行为探测，检测到重定向能力、未知行为或无法确认时返回 `sandbox_capability_unavailable`。范围为5.15分支≥5.15.86、6.1分支≥6.1.2，或正式6.2及以后版本。版本条件用于约束已知竞态修复身份，有限行为探测用于核对可观测语义。[peer-close修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)、[shutdown回补](https://github.com/gregkh/linux/commit/80d709875d920f7ca959040457b7393df706fe44)
+部分旧内核的shutdown及peer-close处理曾改变连接状态，匿名pair可能因此重新connect／listen。当前后端同时采用明确的正式版本范围和私有监听器行为探测，检测到重定向能力、未知行为或无法确认时返回 `sandbox_capability_unavailable`。范围为5.15分支≥5.15.86、6.1分支≥6.1.2，或正式6.2及以后版本。版本条件用于约束已知竞态修复身份，有限行为探测用于核对可观测语义。[peer-close修复](https://github.com/torvalds/linux/commit/3ff8bff704f4de125dca2262e5b5b963a3da1d87)、[shutdown回补](https://github.com/gregkh/linux/commit/80d709875d920f7ca959040457b7393df706fe44)
 
 peer-close分支先确认完整 `POLLHUP`，再执行发送及重定向验证。并行fork可能短暂继承CLOEXEC peer，所有关闭分支共享一秒绝对截止，超时或未知状态返回失败。描述符无效、迟到HUP和中断均按同一截止处理，探测记录实际发送返回值与errno用于诊断。[探针验收记录](n2-validation.md#匿名通道关闭引用的探测同步)
 
-5.4／5.10本轮未纳入内核确认矩阵。厂商 `5.15.0-xxx` 无法仅凭版本串确认对应上游回补，RC和未知版本按必需能力无法确认处理。能力探测结果、Rust fork路径与原生防重定向回归需由实际Linux程序验证，见[N2记录](n2-validation.md)。
+5.4／5.10本轮未纳入内核确认矩阵。厂商 `5.15.0-xxx` 无法仅凭版本串确认对应上游回补，RC和未知版本按必需能力无法确认处理。能力探测、Rust fork路径与原生防重定向回归已在本轮 Linux x86_64／aarch64 的实际程序上通过，见[N2记录](n2-validation.md)。
 
 ## 控制链
 
@@ -52,7 +52,7 @@ AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑�
 
 Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/saya-core/src/execution/linux.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
 
-宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 候选允许协议为0的 `AF_UNIX`／`SOCK_STREAM` 与 `SOCK_SEQPACKET` 匿名已连接pair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，用于运行时self-pipe和Rust fork结果通道。命名Unix socket创建及datagram pair受过滤器拒绝，匿名pair同时受前述内核身份与行为探测约束。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
+宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 过滤器允许协议为0的 `AF_UNIX`／`SOCK_STREAM` 与 `SOCK_SEQPACKET` 匿名已连接pair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，用于运行时self-pipe和Rust fork结果通道。命名Unix socket创建及datagram pair受过滤器拒绝，匿名pair同时受前述内核身份与行为探测约束。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
 
 启动创建独立 session，执行前规范化未声明描述符的 close-on-exec 标志，并约束 TIOCSTI 等终端相关入口。宿主固定私有 launcher 镜像，通过有界、解除目录链接的文件描述符传入实际环境值。Browser 专用 profile 和其自身 sandbox 的组合留在后续 [Browser 阶段](browser.md)验收。
 
@@ -87,7 +87,7 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 
 网络策略仅允许连接本次受控代理端口的 TCP，再由 NetworkBroker 检查目标。proxy 环境变量由宿主设置，同端口 UDP、直接外联、额外本地服务和 Unix socket 访问分别进入验收。profile 明确拒绝其他进程的 PID 信息读取，保留自身描述符处理所需权限，并为 `/tmp`、`/var`、`/etc` 根 symlink 提供读取规则。[Seatbelt 实现](../crates/saya-core/src/execution/seatbelt.rs)
 
-本机 macOS 27.2 的 `man sandbox-exec` 将该命令标记为 deprecated，当前独立后端使用系统提供的程序。macOS 15 ARM／Intel 与最终集成程序的证据按 [N2 验收记录](n2-validation.md)分别维护，后续系统兼容性通过后端接口继续验证。
+本机 macOS 27.2 的 `man sandbox-exec` 将该命令标记为 deprecated，当前独立后端使用系统提供的程序。macOS 15 ARM／Intel 的实际集成程序已通过验收，源码与程序证据见 [N2 验收记录](n2-validation.md)，后续系统兼容性通过后端接口继续验证。
 
 ## 文件策略与性能
 
@@ -117,7 +117,7 @@ Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独
 
 Linux 原生后端依据宿主 mountinfo 拒绝与任何 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，返回 `unsupported_fs_policy`。检查覆盖工作区、`write_roots`、`permissions.additional_roots`、委派根的兄弟路径及 bind 挂载别名。`read_roots` 可提供只读 cgroup 视图，其他根与保护规则继续检查。[文件系统检查](../crates/saya-core/src/execution/linux.rs)
 
-委派验收保留内核限制读回、活动成员与自有子组清理，并在同一专属委派范围内增加兄弟可写组和 Host 配置的模型派发前拒绝对照。本轮资源配置修复的最终四平台验收待重跑，资源耗尽压力仍未验证。[N2 验收记录](n2-validation.md)
+委派验收保留内核限制读回、活动成员与自有子组清理，并在同一专属委派范围内增加兄弟可写组和 Host 配置的模型派发前拒绝对照。本轮 Linux x86_64／aarch64 的委派正负对照已通过，资源耗尽压力仍未验证。[N2 验收记录](n2-validation.md)
 
 ## AST／CST 分析
 
@@ -138,11 +138,11 @@ DEV-075使用固定Tree-sitter Bash处理直接argv、可执行程序、cwd和�
 
 取消先关闭新调度，再收尾所属工具、worker、MCP 与 socat。模式切换按当前调用边界协调，进入 PLAN 前清理后台写入与本地 MCP 服务。执行环境由活动进程租约保留，无法确认清理时保存 `outcome_unknown`，相关环境与代理资源继续按清理屏障管理。
 
-DEV-055／056 已形成统一环境、独立原生后端与网络 broker 的开发实现。DEV-057／075 的验收范围覆盖路径越界、链接竞态、缺失保护路径、规则与授权变化、父进程信号、进程脱离、syscall profile、网络旁路、资源缺失和清理失败，实际完成状态由 [N2 验收记录](n2-validation.md)维护。
+DEV-055 至 DEV-057 及 DEV-075 已完成统一环境、独立原生后端、网络 broker 与命令结构事实，固定源码的四平台源码门禁和原生验收通过。验证覆盖路径越界、链接竞态、缺失保护路径、规则与授权变化、父进程信号、进程脱离、syscall profile、网络旁路、资源缺失和清理失败，实际完成状态由 [N2 验收记录](n2-validation.md)维护。
 
-性能测试记录无隔离基线与原生后端的冷／热启动、短命令 p50／p95、文件读写、搜索、并发任务、CPU／RSS 和代理延迟。实际 Seatbelt、Bubblewrap、Seccomp 和网络约束在具备相应后端的环境验收，CLI 的跨平台替身测试单独记录。
+四平台性能测试已记录无隔离基线与原生后端的冷／热启动、短命令 p50／p95、文件读写、搜索、并发任务、CPU／RSS 和代理延迟。实际 Seatbelt、Bubblewrap、Seccomp 和网络约束在具备相应后端的环境验收，CLI 的跨平台替身测试单独记录。
 
-性能证据v2保留原始样本与nearest-rank分位数。冷启动使用新CLI进程与新Run，保留OS页缓存。热启动定义为同一已准备Run／环境内预热一次后的重复命令，计时覆盖模型响应发送完至后继工具结果到达，包含调度、进程启动、持久化及loopback传输。`file_roundtrip`沿用读取指标名称，写入和搜索分别记录实际内容与匹配证明。四个并发Run分别保留wait4资源，并汇总CPU及各child内核峰值RSS的最大值。
+四平台性能证据v2保留原始样本与nearest-rank分位数。冷启动使用新CLI进程与新Run，保留OS页缓存。热启动定义为同一已准备Run／环境内预热一次后的重复命令，计时覆盖模型响应发送完至后继工具结果到达，包含调度、进程启动、持久化及loopback传输。`file_roundtrip`沿用读取指标名称，写入和搜索分别记录实际内容与匹配证明。四个并发Run分别保留wait4资源，并汇总CPU及各child内核峰值RSS的最大值。
 
 代理延迟由payload的 `CLOCK_MONOTONIC` 测量Host直连、原生HTTP代理与CONNECT转发的完整请求RTT，CONNECT样本采用隧道内明文HTTP。CLI整体资源另行记录。样本数支持1至20，CI固定每组3次，独立[性能核验器](../scripts/n2/verify_performance.py)重算分位数、比较值、资源汇总与实际操作证明。[完整证据范围](n2-validation.md#完整性能证据补充)
 

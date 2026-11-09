@@ -6,7 +6,7 @@
 
 0.1.0 与 0.2.0-rc.2 的历史发行及验收保留各自源码和产物归属。
 
-当前开发线已实现 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI。本机整合门禁及正常入口验收通过，最终四平台 CI 与原生验收仍在进行。0.2.0 的功能与限制继续归属已发布产物。Linux原生后端另要求可确认的内核修复身份与能力探测，范围见[隔离配置](docs/configuration.md#n2-原生隔离配置)。当前实现与平台证据见[原生隔离](docs/sandbox.md)、[MCP 与凭据](docs/mcp.md)和[N2 验收记录](docs/n2-validation.md)。
+当前开发线已完成 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI。固定源码 `aaec8c5` 已通过 Ubuntu 22.04 x86_64／aarch64 与 macOS 15 Intel／ARM 的源码 CI、原生／MCP／Markdown／TUI 和完整性能验收。0.2.0 的功能与限制继续归属已发布产物。Linux 原生后端另要求可确认的内核修复身份与能力探测。[隔离配置](docs/configuration.md#n2-原生隔离配置)、[原生隔离](docs/sandbox.md)、[MCP 与凭据](docs/mcp.md)、[N2 最终验收记录](docs/n2-validation.md)
 
 ## 已确认方向
 
@@ -69,7 +69,7 @@
 | [全局记忆](docs/memory.md) | 可读 MEMORY.md、模型编辑、检索、遗忘与回滚的后续设计 |
 | [原生 Sandbox](docs/sandbox.md) | Seatbelt、Bubblewrap／Seccomp／socat、HTTP／CONNECT broker 和 CST 边界 |
 | [MCP 与凭据管理](docs/mcp.md) | stdio／HTTP 工具、服务生命周期、私有凭据与 OAuth |
-| [N2 验收](docs/n2-validation.md) | 原生隔离、MCP、凭据及最终四平台验证进展 |
+| [N2 验收](docs/n2-validation.md) | 固定源码、四平台原生／MCP／Markdown／TUI 和性能证据 |
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
@@ -86,7 +86,7 @@
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。当前 N2 实现默认原生隔离与 MCP，继续完成最终四平台验收。N3 的上下文、OutputStore、Compact、检查点、插件／Hooks 与全局记忆，以及后续 Goal、Browser 和 GUI 按依赖规划，后续版本号在发行范围收敛时确定。
+后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。当前 N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、检查点、插件／Hooks 与全局记忆，以及后续 Goal、Browser 和 GUI 按依赖规划，后续版本号在发行范围收敛时确定。
 
 ## 许可证
 
