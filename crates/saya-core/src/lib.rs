@@ -12,12 +12,14 @@ pub mod boundary;
 pub mod command_analysis;
 pub mod config;
 pub mod contract;
+pub mod credentials;
 pub mod dispatch;
 pub mod execution;
 pub mod export;
 pub mod input;
 pub mod logging;
 
+pub mod mcp;
 pub mod memory;
 pub mod metrics;
 pub mod mode;

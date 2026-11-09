@@ -32,6 +32,16 @@ core已提供统一准备环境、能力等级、固定策略身份和清理接�
 
 上述823项本机测试的操作系统为macOS27.2 ARM，Linux修复、委派cgroup和最终默认入口仍待相应原生验收。
 
+## DEV-058 MCP 连接与认证组件
+
+固定官方Rust SDK rmcp3.9.0，核心连接支持stdio与Streamable HTTP，兼容2026-07-28及2025-11-25协议。stdio接收宿主已经监督的管道，SDK适配器与进程创建分别处理。目录、schema、JSON／SSE与工具结果具有输入、大小和时间边界，工具发送一次，断连、认证、额外输入与不明确结果经类型化错误返回。
+
+本阶段同时提供连接所需的私有凭据组件及OAuth基础，DEV-060／061继续负责公共管理入口与整体验收。凭据后端使用私有明文文件、原子发布和撤销记录。OAuth具有PKCE、state、issuer、明确scope与资源绑定，并区分精确transport endpoint和合法canonical resource。动态轮换保留旧／新值供宿主脱敏，恢复和更新再次核对绑定。
+
+SDK需要的reqwest0.13单独服务于MCP，原有模型接入继续使用其已验证的0.12依赖。async-trait用于SDK凭据存储接口，futures和sse-stream用于有界流处理。
+
+隔离源码快照完成格式、workspace严格Clippy、873项Rust测试及优化构建，日志为 `target/n2/dev058-workspace.log`。正常应用配置、默认后端、服务生命周期和界面接线在DEV-059阶段整合，最终四平台程序随后统一验收。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

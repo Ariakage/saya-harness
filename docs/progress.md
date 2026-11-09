@@ -28,6 +28,10 @@ DEV-075采用Tree-sitter0.27.1／Bash0.25.1，直接argv保持字面含义，显
 
 MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／WouldBlock失败。终端写入现保留offset，遇背压让出执行并响应取消。独立PTY填满夹具在旧实现返回terminal_error，修复后七项CLI bin测试与全测试目标严格Clippy通过，证据为 `target/n2/approval-backpressure-{before,after}.log`。正常MCP长审批随后在固定debug程序完成两次人工批准并通过任务。
 
+### DEV-058 MCP 连接组件
+
+核心MCP连接、工具投影和必要认证组件已完成隔离源码门禁，873项Rust测试、workspace严格Clippy和优化构建通过。stdio使用宿主提供的受控管道，HTTP请求／结果有界且工具发送一次；私有凭据、撤销、OAuth校验与资源绑定有定向回归。公共运行时与CLI／TUI接线继续按DEV-059至061整合，阶段证据见[N2验收](n2-validation.md)。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。
