@@ -3,8 +3,10 @@
 pub mod context;
 pub mod events;
 pub mod export;
+mod extensions;
 pub mod interaction;
 pub mod mcp;
+pub mod memory_admin;
 pub mod session;
 pub mod thinking;
 use saya_core::{
@@ -175,7 +177,9 @@ pub fn build_runtime(
         .collect::<Result<Vec<_>, _>>()?;
     let registry = launch.secret_registry.unwrap_or_default();
     registry.register(&known_secrets)?;
-    let dynamic_credentials = config.mcp.servers.values().any(|server| server.enabled);
+    let plugin_store = extensions::selected_store(config, session, registry.clone())?;
+    let dynamic_credentials =
+        plugin_store.is_some() || config.mcp.servers.values().any(|server| server.enabled);
     let streamed = selected.stream
         && config.output == Output::Text
         && known_secrets.is_empty()
@@ -240,13 +244,27 @@ pub fn build_runtime(
         known_secrets,
         summary: summary.to_owned(),
         confirmation: launch.confirmation,
-        limits,
+        limits: limits.clone(),
     })?;
-    runtime = runtime.with_context_budget(saya_core::context_builder::ContextBudget::new(
-        selected.context_window_tokens,
-        u64::from(selected.max_output_tokens),
-        selected.context_window_tokens / 20,
-    ))?;
+    let compact = saya_core::compaction::CompactionConfig {
+        summary_output_tokens: config
+            .context
+            .summary_max_output_tokens
+            .min(selected.max_output_tokens),
+        max_model_calls: config.context.max_compaction_calls,
+        connect_timeout: limits.model_connect.min(Duration::from_secs(3600)),
+        idle_timeout: limits.model_idle.min(Duration::from_secs(3600)),
+        request_timeout: limits.model_total.min(Duration::from_secs(3600)),
+        operation_timeout: Duration::from_secs(config.context.compaction_timeout_seconds)
+            .min(limits.active_time),
+        retry_jitter_max: limits.retry_jitter_max,
+        ..Default::default()
+    };
+    runtime = runtime.with_context_settings(
+        config.context.budget(selected),
+        config.context.auto_compact,
+        compact,
+    )?;
     let (mut sandbox, broker) = config.sandbox.resolve(&session.workspace)?;
     sandbox
         .read_roots
@@ -308,16 +326,57 @@ pub fn build_runtime(
         }
         runtime = runtime.with_output_store(outputs)?;
     }
+    let memory_root = config.memory_root()?;
+    let memory = Arc::new(saya_core::global_memory::GlobalMemoryStore::open(
+        &memory_root,
+        saya_core::global_memory::WorkspaceIdentity::from_path(&session.workspace)?,
+        saya_core::global_memory::MemoryLimits::default(),
+        registry.clone(),
+    )?);
+    let memory_paths = vec![
+        memory_root.join("MEMORY.md"),
+        memory_root.join("memory"),
+        memory_root.join(".saya-memory.lock"),
+    ];
+    if sandbox.backend != saya_core::execution::BackendKind::Host {
+        sandbox.protected_paths.extend(memory_paths.iter().cloned());
+    }
+    runtime = runtime.with_global_memory(memory, config.memory.clone())?;
+    let mut private_paths = vec![
+        config.config_path.clone(),
+        config.data_dir.clone(),
+        config.state_dir.clone(),
+        config.cache_dir.clone(),
+        session.workspace.join(".saya/local"),
+    ];
+    private_paths.extend(memory_paths);
+    private_paths.extend(sandbox.protected_paths.iter().cloned());
+    runtime = runtime.with_private_paths(private_paths.clone())?;
+    let checkpoints = Arc::new(saya_core::checkpoint::CheckpointStore::open(
+        config.data_dir.join("checkpoints"),
+        registry.clone(),
+        saya_core::checkpoint::CheckpointLimits::default(),
+    )?);
+    private_paths.push(checkpoints.protected_path().to_owned());
+    if sandbox.backend != saya_core::execution::BackendKind::Host {
+        sandbox
+            .protected_paths
+            .extend(private_paths.iter().cloned());
+    }
+    runtime = runtime.with_checkpoints(checkpoints, private_paths, sandbox.write_roots.clone())?;
+    if let Some(store) = plugin_store {
+        runtime = extensions::attach(runtime, config, session, &sandbox, store, registry.clone())?;
+    }
     runtime = runtime.with_execution_settings(sandbox, broker)?;
     if dynamic_credentials {
         runtime = runtime.with_mcp_settings(
             config.mcp.clone(),
             config.environment().clone(),
             authorizer,
-            registry,
+            registry.clone(),
         )?;
     } else {
-        runtime = runtime.with_secret_registry(registry)?;
+        runtime = runtime.with_secret_registry(registry.clone())?;
     }
     let review_profile = config.review.profile.as_ref().unwrap_or(profile);
     runtime = runtime.with_pricing(
@@ -332,6 +391,12 @@ pub fn build_runtime(
         .map(PathBuf::from);
     runtime =
         runtime.with_project_context(ProjectContext::new(&session.workspace, home.as_deref())?)?;
+    runtime = runtime.with_skill_manager(saya_core::skills::SkillManager::new(
+        &session.workspace,
+        home.as_deref(),
+        registry,
+        saya_core::skills::SkillLimits::default(),
+    )?)?;
     if let Some(input) = launch.input {
         runtime = runtime.with_input_handler(input);
     }

@@ -63,6 +63,9 @@ impl ThinkingModel {
     }
 }
 impl Model for ThinkingModel {
+    fn check_start(&self, request: &ModelRequest) -> Result<(), BoundaryError> {
+        self.inner.check_start(request)
+    }
     fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
         self.inner.request_counter()
     }

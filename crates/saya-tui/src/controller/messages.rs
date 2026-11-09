@@ -39,10 +39,10 @@ impl App {
                     self.sync_thinking_request(&request_id);
                 }
                 if self.pending.is_none() {
-                    self.state.status = if purpose == ModelPurpose::Review {
-                        "Reviewing"
-                    } else {
-                        "Thinking"
+                    self.state.status = match purpose {
+                        ModelPurpose::Review => "Reviewing",
+                        ModelPurpose::Compaction => "Compacting",
+                        ModelPurpose::Execution => "Thinking",
                     }
                     .into();
                 }

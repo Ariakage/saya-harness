@@ -103,6 +103,7 @@ impl Drop for Console {
     }
 }
 struct Active {
+    kind: RunKind,
     handle: RuntimeHandle,
     cancel: Arc<Cancel>,
     join: tokio::task::JoinHandle<(Result<RunResult, BoundaryError>, Session)>,
@@ -110,6 +111,60 @@ struct Active {
     requests_open: bool,
     streamed: bool,
     cancelling: bool,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Execution,
+    Compaction,
+}
+struct RunSettings<'a> {
+    permissions: PermissionMode,
+    store: Arc<dyn Store>,
+    personal_context: &'a PersonalContext,
+    anthropic_prompt_cache: bool,
+}
+fn start_run(
+    config: &Config,
+    session: &mut Option<Session>,
+    summary: &str,
+    kind: RunKind,
+    settings: RunSettings<'_>,
+) -> Result<Active, Box<dyn std::error::Error>> {
+    let current = session.as_ref().ok_or("session missing")?;
+    let cancel = Arc::new(Cancel::new());
+    let (ui, requests) = input_channel(16)?;
+    let launch = Launch {
+        permissions: settings.permissions,
+        store: settings.store,
+        cancellation: cancel.clone(),
+        confirmation: Some(ui.clone()),
+        input: Some(ui),
+        approvals: Preauthorizations::default(),
+        personal_context: settings.personal_context.clone(),
+        anthropic_prompt_cache: settings.anthropic_prompt_cache,
+        events: None,
+        run_id: None,
+    };
+    let (mut runtime, streamed) = build_runtime(config, current, summary, launch)?;
+    let handle = runtime.handle();
+    let mut current = session.take().ok_or("session missing")?;
+    let join = tokio::spawn(async move {
+        let result = match kind {
+            RunKind::Execution => runtime.run(&mut current).await,
+            RunKind::Compaction => runtime.compact(&mut current).await,
+        };
+        (result, current)
+    });
+    Ok(Active {
+        kind,
+        handle,
+        cancel,
+        join,
+        requests,
+        requests_open: true,
+        streamed: streamed && kind == RunKind::Execution,
+        cancelling: false,
+    })
 }
 impl Active {
     fn cancel(&mut self) {
@@ -264,7 +319,7 @@ fn invalidate_approval(pending: &mut Option<UiRequest>) {
     }
 }
 fn help(console: &mut Console) -> io::Result<()> {
-    console.print("/mode [plan|build|code|work]  /permissions [auto|bypass|manual]\n/status  /cancel  /jobs  /job ID  /cancel-job ID  /help  /exit\nUse // to send text beginning with /.\n")
+    console.print("/mode [plan|build|code|work]  /permissions [auto|bypass|manual]\n/compact  /status  /cancel  /jobs  /job ID  /cancel-job ID  /help  /exit\n/compact summarizes saved context, or queues at the next model boundary during a run.\nUse // to send text beginning with /.\n")
 }
 fn job_display(status: Option<saya_core::background::JobStatus>, config: &Config) -> String {
     use saya_core::background::JobStatus;
@@ -375,6 +430,7 @@ pub async fn chat(
                 }
                 Event::Finished(result) => {
                     let old = active.take().ok_or("missing active run")?;
+                    let compact_after_run = old.kind == RunKind::Execution && !old.cancelling && !old.cancel.is_cancelled() && old.handle.compaction_pending();
                     let (outcome, finished) = match result {
                         Ok(result) => result,
                         Err(_) => {
@@ -384,8 +440,10 @@ pub async fn chat(
                         }
                     };
                     pending = None;
+                    let mut completed = false;
                     match outcome {
                         Ok(result) => {
+                            completed = result.status == RunStatus::Completed;
                             log_run_result(&config, &result);
                             report_result(&result, &finished, old.streamed, &config);
                         }
@@ -408,6 +466,14 @@ pub async fn chat(
                             console.print("Goodbye.\n")?;
                         }
                         return Ok(code);
+                    }
+                    if compact_after_run && completed {
+                        match start_run(&config, &mut session, "Compact the saved session context", RunKind::Compaction, RunSettings {
+                            permissions, store: store.clone(), personal_context: &personal_context, anthropic_prompt_cache,
+                        }) {
+                            Ok(run) => { active = Some(run); console.print("Compacting context...\n")?; continue; }
+                            Err(error) => console.print(&format!("saya: {}\n", safe_terminal_text(&error.to_string())))?,
+                        }
                     }
                     console.print("> ")?;
                 }
@@ -457,7 +523,7 @@ pub async fn chat(
                             || (arg.is_some()
                                 && matches!(
                                     command,
-                                    "/help" | "/status" | "/cancel" | "/exit" | "/jobs"
+                                    "/help" | "/status" | "/cancel" | "/exit" | "/jobs" | "/compact"
                                 ))
                         {
                             console.print("Invalid command arguments.\n")?;
@@ -490,6 +556,25 @@ pub async fn chat(
                                     console.print("Cancelling run...\n")?;
                                 } else {
                                     console.print("No active run.\n")?;
+                                }
+                            }
+                            "/compact" => {
+                                if let Some(run) = active.as_ref() {
+                                    if run.cancelling {
+                                        console.print("Wait for cancellation cleanup before compacting.\n")?;
+                                    } else if run.kind == RunKind::Compaction {
+                                        console.print("Compaction is already running.\n")?;
+                                    } else {
+                                        run.handle.request_compaction()?;
+                                        console.print("Compaction requested for the next model boundary.\n")?;
+                                    }
+                                } else {
+                                    match start_run(&config, &mut session, "Compact the saved session context", RunKind::Compaction, RunSettings {
+                                        permissions, store: store.clone(), personal_context: &personal_context, anthropic_prompt_cache,
+                                    }) {
+                                        Ok(run) => { active = Some(run); console.print("Compacting context...\n")?; }
+                                        Err(error) => console.print(&format!("saya: {}\n", safe_terminal_text(&error.to_string())))?,
+                                    }
                                 }
                             }
                             "/jobs" => {
@@ -652,63 +737,35 @@ pub async fn chat(
                         continue;
                     }
                     if active.is_some() {
-                        console.print("Run in progress; use /status, /mode or /cancel.\n")?;
+                        console.print("Run in progress; use /compact, /status, /mode or /cancel.\n")?;
                         continue;
                     }
                     if text.trim().is_empty() {
                         console.print("> ")?;
                         continue;
                     }
-                    let mut current = session.take().ok_or("session missing")?;
+                    let current_id = session.as_ref().ok_or("session missing")?.id;
                     let item = HistoryItem::UserText(text.clone());
                     store
                         .commit(&[StoreChange::History {
-                            session_id: current.id,
+                            session_id: current_id,
                             item: item.clone(),
                         }])
                         .await?;
-                    current = store
-                        .load_session(current.id)
+                    session = Some(store
+                        .load_session(current_id)
                         .await?
-                        .ok_or("session not found")?;
-                    let cancel = Arc::new(Cancel::new());
-                    let (ui, requests_rx) = input_channel(16)?;
-                    let launch = Launch {
-                        permissions,
-                        store: store.clone(),
-                        cancellation: cancel.clone(),
-                        confirmation: Some(ui.clone()),
-                        input: Some(ui.clone()),
-                        approvals: Preauthorizations::default(),
-                        personal_context: personal_context.clone(),
-                        anthropic_prompt_cache,
-                        events: None,
-                        run_id: None,
-                    };
-                    let (mut runtime, streamed) = match build_runtime(&config, &current, &text, launch)
-                    {
-                        Ok(v) => v,
+                        .ok_or("session not found")?);
+                    match start_run(&config, &mut session, &text, RunKind::Execution, RunSettings {
+                        permissions, store: store.clone(), personal_context: &personal_context, anthropic_prompt_cache,
+                    }) {
+                        Ok(run) => active = Some(run),
                         Err(e) => {
                             console
                                 .print(&format!("saya: {}\n> ", safe_terminal_text(&e.to_string())))?;
-                            session = Some(current);
                             continue;
                         }
-                    };
-                    let handle = runtime.handle();
-                    let join = tokio::spawn(async move {
-                        let result = runtime.run(&mut current).await;
-                        (result, current)
-                    });
-                    active = Some(Active {
-                        handle,
-                        cancel,
-                        join,
-                        requests: requests_rx,
-                        requests_open: true,
-                        streamed,
-                        cancelling: false,
-                    });
+                    }
                 }
             }
         }
@@ -794,6 +851,7 @@ mod tests {
             });
             let (_, requests) = mpsc::channel(1);
             let mut active = Active {
+                kind: RunKind::Execution,
                 handle,
                 cancel: cancel.clone(),
                 join,

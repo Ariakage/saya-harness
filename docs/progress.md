@@ -939,3 +939,9 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 独立复核确认并修复摘要发前Memory／Skill版本竞态及初始插件准备任务被中止后的资源owner缺口。每次摘要发送前重新核对已捕获来源，初始worker由Run持有，清理先取消并join再接管，未知继续保留pin。Core正常入口覆盖18组协议／权限／PLAN记忆调用、16组读取／注入／写入设置，以及SQLite恢复、审批中遗忘与输出回取边界。
 
 当前源码在本机macOS27.2 ARM通过1301项Rust测试、格式、workspace全目标严格Clippy与优化构建，日志为 `target/n3/integration-workspace-gate-3.log`。7项既有真实原生插件／Hook用例已通过，新加入的第8项初始准备abort用例与最终固定候选继续验收。CLI／TUI及四平台最终结果继续按[N3验收](n3-validation.md)维护，当前状态不代表macOS15或Linux已完成本轮验收。
+
+### DEV-088 管理与交互入口
+
+CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提供 `/memory`／`/compact`。管理输入、完整差异与确认身份独立于消息草稿，未知提交保留结构化实际receipt，终止信号传给磁盘worker并等待真实完成。Memory导出复用已批准的目录句柄及原字节，长输入光标按显示单元格保持可见。
+
+共享App、CLI及TUI阶段随本机1301项完整Rust门禁通过，包含11项App管理／父目录、27项CLI bin及61项既有正常CLI测试。首次插件启用的真实CLI诊断发现缺少Hook日志父目录，现已补安全私有创建及链接／权限回归。固定新候选的32条CLI与15条PTY最终验收继续进行，旧候选诊断分别保留为 `target/n3/cli-diagnostic-bootstrap.json` 和 `target/n3/tui-diagnostic-6.json`，它们各自的准备范围与程序身份独立记录。

@@ -43,6 +43,7 @@ const WHEEL_LINES: usize = 3;
 const MAX_FOOTNOTE_ANCHORS: usize = 2048;
 const MAX_FOOTNOTE_HISTORY: usize = 64;
 
+mod memory;
 mod render_cache;
 use render_cache::RenderCache;
 mod selection;
@@ -89,6 +90,17 @@ pub struct Message {
 pub struct Details {
     pub title: String,
     pub lines: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct MemoryPanel {
+    pub lines: Vec<String>,
+    pub input: Editor,
+    pub settings: String,
+    pub scroll: usize,
+    pub page_rows: usize,
+    pub busy: bool,
+    pub confirmation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +157,7 @@ pub struct State {
     pub context_breakdown: Vec<ContextEntry>,
     pub context_breakdown_estimated: bool,
     pub skills_count: Option<usize>,
+    pub plugins_enabled: Option<bool>,
     pub thinking_effort: Option<String>,
     pub todos: Vec<TodoItem>,
     pub mcp_servers: Vec<McpServerStatus>,
@@ -152,6 +165,7 @@ pub struct State {
     pub completion: Completion,
     /// Selected catalog index while the command modal is open.
     pub command_palette: Option<usize>,
+    pub memory_panel: Option<MemoryPanel>,
     pub markdown_display: MarkdownDisplay,
     pub messages: VecDeque<Message>,
     pub details: Option<Details>,
@@ -201,12 +215,14 @@ impl Default for State {
             context_breakdown: Vec::new(),
             context_breakdown_estimated: true,
             skills_count: None,
+            plugins_enabled: None,
             thinking_effort: None,
             todos: Vec::new(),
             mcp_servers: Vec::new(),
             editor: Editor::default(),
             completion: Completion::default(),
             command_palette: None,
+            memory_panel: None,
             markdown_display: MarkdownDisplay::default(),
             messages: VecDeque::new(),
             details: None,
@@ -238,6 +254,21 @@ impl Default for State {
 impl State {
     /// Handle presentation-only mouse gestures, including selection and clicks.
     pub fn mouse(&mut self, event: MouseEvent) -> bool {
+        if let Some(panel) = &mut self.memory_panel {
+            if contains(self.details_viewport, event.column, event.row) {
+                match event.kind {
+                    MouseEventKind::ScrollUp => {
+                        panel.scroll = panel.scroll.saturating_sub(WHEEL_LINES)
+                    }
+                    MouseEventKind::ScrollDown => {
+                        panel.scroll = panel.scroll.saturating_add(WHEEL_LINES)
+                    }
+                    _ => return false,
+                }
+                return true;
+            }
+            return false;
+        }
         if self.command_palette.is_some() {
             self.selection.reset();
             let selected = self.palette_index_at(event.column, event.row);
@@ -296,7 +327,13 @@ impl State {
         self.activity_active
             && matches!(
                 self.status.as_str(),
-                "Ready" | "Running" | "Thinking" | "Responding" | "Reviewing" | "Cancelling"
+                "Ready"
+                    | "Running"
+                    | "Thinking"
+                    | "Responding"
+                    | "Reviewing"
+                    | "Compacting"
+                    | "Cancelling"
             )
     }
 
@@ -823,7 +860,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         draw_session(frame, state, area);
     }
     draw_command_palette(frame, state);
-    let areas = if state.command_palette.is_some() || state.completion_viewport.is_some() {
+    memory::draw(frame, state);
+    let areas = if state.memory_panel.is_some()
+        || state.command_palette.is_some()
+        || state.completion_viewport.is_some()
+    {
         [None, None]
     } else {
         [state.transcript_viewport, state.details_viewport]
@@ -1051,8 +1092,14 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
     for (index, server) in state.mcp_servers.iter().take(server_rows).enumerate() {
         lines[extensions_row + 2 + index] = mcp_server_line(server, usize::from(content.width));
     }
-    lines[extensions_row + 2 + server_rows] =
-        Line::styled("Plugins  Not implemented", Style::default().fg(MUTED));
+    lines[extensions_row + 2 + server_rows] = Line::styled(
+        match state.plugins_enabled {
+            Some(true) => "Plugins  Enabled in config",
+            Some(false) => "Plugins  Disabled in config",
+            None => "Plugins  Not inspected",
+        },
+        Style::default().fg(MUTED),
+    );
     lines[extensions_row + 3 + server_rows] = Line::styled(
         match state.skills_count {
             Some(count) => format!("Skills {count} discovered"),
@@ -1380,7 +1427,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
         "Failed" => RED,
         "Awaiting approval" | "Awaiting input" | "NeedsConfirmation" | "NeedsInput"
         | "LimitReached" => AMBER,
-        "Running" | "Reviewing" | "Thinking" | "Responding" => BLUE,
+        "Running" | "Reviewing" | "Thinking" | "Responding" | "Compacting" => BLUE,
         _ => MUTED,
     };
     let mut label = Line::from(vec![
@@ -3044,7 +3091,7 @@ mod tests {
                     (4, "Unknown before request"),
                     (15, "Extensions"),
                     (16, "MCP  No servers"),
-                    (17, "Plugins  Not implemented"),
+                    (17, "Plugins  Not inspected"),
                     (18, "Skills —"),
                     (height - 1, "/tmp/workspace"),
                 ] {

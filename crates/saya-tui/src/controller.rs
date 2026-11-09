@@ -1,7 +1,12 @@
 //! Interface orchestration using shared application services and durable events.
 #[cfg(test)]
+mod compact_tests;
+#[cfg(test)]
 mod control_tests;
 mod controls;
+mod memory;
+#[cfg(test)]
+mod memory_tests;
 #[cfg(test)]
 mod message_tests;
 mod messages;
@@ -31,7 +36,7 @@ use saya_app::{
 };
 use saya_core::{
     approvals::Preauthorizations,
-    boundary::Store,
+    boundary::{Cancellation, Store},
     config::Config,
     contract::{
         BoundaryError, Event, EventPayload, HistoryItem, ModelPurpose, RunId, RunResult, Session,
@@ -47,6 +52,11 @@ use tokio::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type RunOutcome = (std::result::Result<RunResult, BoundaryError>, Session);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Execution,
+    Compaction,
+}
 /// Launch options supplied by the executable, independent of terminal rendering.
 pub struct Options {
     pub personal_context: PersonalContext,
@@ -56,6 +66,7 @@ pub struct Options {
     pub mode_override: Option<WorkMode>,
 }
 struct Active {
+    kind: RunKind,
     cancel: Arc<RunCancellation>,
     join: tokio::task::JoinHandle<RunOutcome>,
     events: mpsc::Receiver<Event>,
@@ -89,6 +100,10 @@ struct App {
     ui_job: Option<services::UiJob>,
     deferred_mode: Option<WorkMode>,
     queued_prompt: Option<String>,
+    queued_compaction: bool,
+    memory_pending: Option<saya_app::memory_admin::PreparedMemoryAction>,
+    memory_next: Option<String>,
+    memory_last_operation: Option<String>,
 }
 impl App {
     fn new(mut config: Config, options: Options) -> Result<Self> {
@@ -121,6 +136,10 @@ impl App {
             ui_job: None,
             deferred_mode: None,
             queued_prompt: None,
+            queued_compaction: false,
+            memory_pending: None,
+            memory_next: None,
+            memory_last_operation: None,
         };
         app.refresh_header();
         app.reset_mcp_statuses();
@@ -172,6 +191,7 @@ impl App {
         }
     }
     fn refresh_header(&mut self) {
+        self.state.plugins_enabled = Some(self.config.plugins.enabled);
         self.state.workspace = self.safe(&self.config.cwd.to_string_lossy());
         self.state.profile = self.safe(self.config.profile.as_deref().unwrap_or("No profile"));
         self.state.model = self
@@ -275,6 +295,38 @@ impl App {
         false
     }
     async fn start(&mut self, text: String) -> Result<()> {
+        self.start_run(text, RunKind::Execution).await
+    }
+
+    async fn compact(&mut self) -> Result<()> {
+        if let Some(active) = &self.active {
+            if active.cancel.is_cancelled() {
+                return Err("Wait for cancellation cleanup before compacting".into());
+            }
+            if active.kind == RunKind::Compaction {
+                self.notice("Compaction is already running.");
+                return Ok(());
+            }
+            active.handle.request_compaction()?;
+            self.notice("Compaction requested for the next model boundary.");
+            return Ok(());
+        }
+        if self.prepared.is_none() {
+            return Err("Create or resume a session before using /compact".into());
+        }
+        if self.ui_job.is_some() {
+            self.queued_compaction = true;
+            self.notice("Compaction waits for the UI operation to finish.");
+            return Ok(());
+        }
+        self.start_run(
+            "Compact the saved session context".into(),
+            RunKind::Compaction,
+        )
+        .await
+    }
+
+    async fn start_run(&mut self, text: String, kind: RunKind) -> Result<()> {
         if self.active.is_some() {
             self.notice("A run is active. Ctrl+C cancels it.");
             return Ok(());
@@ -348,34 +400,45 @@ impl App {
                     Some(registry) => thinking.with_secret_registry(registry),
                     None => thinking,
                 };
-                Arc::new(ContextModel::new(
-                    Arc::new(EventModel(Arc::new(thinking), writer)),
-                    context_sender,
-                    context_sources,
-                ))
+                Arc::new(
+                    ContextModel::new(
+                        Arc::new(EventModel(Arc::new(thinking), writer)),
+                        context_sender,
+                        context_sources,
+                    )
+                    .with_managed_sources(true, true),
+                )
             },
         )?;
-        session::append(prepared, text.clone()).await.map_err(|_| {
-            BoundaryError(
-                saya_core::contract::ErrorInfo {
-                    code: "storage_error".into(),
-                    message: "conversation could not be saved or reloaded".into(),
-                },
-                None,
-                None,
-            )
-        })?;
+        if kind == RunKind::Execution {
+            session::append(prepared, text.clone()).await.map_err(|_| {
+                BoundaryError(
+                    saya_core::contract::ErrorInfo {
+                        code: "storage_error".into(),
+                        message: "conversation could not be saved or reloaded".into(),
+                    },
+                    None,
+                    None,
+                )
+            })?;
+        }
         let mut current = prepared.session.clone();
         self.refresh_header();
         self.reset_context();
-        self.state.push_message(Role::User, "You", display);
+        if kind == RunKind::Execution {
+            self.state.push_message(Role::User, "You", display);
+        }
         let handle = runtime.handle();
         summary.start(Instant::now());
         let join = tokio::spawn(async move {
-            let result = runtime.run(&mut current).await;
+            let result = match kind {
+                RunKind::Execution => runtime.run(&mut current).await,
+                RunKind::Compaction => runtime.compact(&mut current).await,
+            };
             (result, current)
         });
         self.active = Some(Active {
+            kind,
             cancel,
             join,
             events,
@@ -391,13 +454,19 @@ impl App {
             requests_open: true,
             summary,
         });
-        self.state.status = "Running".into();
+        self.state.status = if kind == RunKind::Compaction {
+            "Compacting"
+        } else {
+            "Running"
+        }
+        .into();
         self.refresh_activity(Instant::now());
         self.state.scroll_to_bottom();
         Ok(())
     }
 
     fn refresh_activity(&mut self, now: Instant) -> bool {
+        let memory_changed = self.scrub_memory();
         let was_active = self.state.activity_active;
         let previous_frame = self.state.activity_frame;
         self.state.activity_active = self.active.is_some();
@@ -408,7 +477,8 @@ impl App {
         } else if !self.state.activity_active {
             self.state.activity_frame = 0;
         }
-        was_active != self.state.activity_active
+        memory_changed
+            || was_active != self.state.activity_active
             || (self.state.activity_visible() && previous_frame != self.state.activity_frame)
     }
 
@@ -420,6 +490,7 @@ impl App {
         );
     }
     fn cancel(&mut self) {
+        self.queued_compaction = false;
         if let Some(job) = &self.ui_job {
             job.cancel.cancel();
         }
@@ -481,6 +552,16 @@ impl App {
         if let Some(snapshot) = snapshot {
             self.record_context_snapshot(snapshot);
         }
+        let compact = self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.kind == RunKind::Compaction);
+        let compact_after_run = self.active.as_ref().is_some_and(|active| {
+            active.kind == RunKind::Execution
+                && !active.cancel.is_cancelled()
+                && active.handle.compaction_pending()
+        });
+        let mut completed = false;
         let mut failure = None;
         let mut summary_usage = None;
         match result {
@@ -492,10 +573,15 @@ impl App {
                 }
                 match outcome {
                     Ok(result) => {
+                        completed = result.status == saya_core::contract::RunStatus::Completed;
                         summary_usage = result.usage.clone();
                         if let Some(text) = result.text.filter(|text| !text.is_empty()) {
-                            let id = self.assistant_message();
-                            self.state.replace_message(id, self.safe(&text));
+                            if compact {
+                                self.notice(&text);
+                            } else {
+                                let id = self.assistant_message();
+                                self.state.replace_message(id, self.safe(&text));
+                            }
                         }
                         self.state.status = format!("{:?}", result.status);
                         if let Some(error) = result.error {
@@ -548,6 +634,13 @@ impl App {
         if let Some(error) = failure {
             return Err(error);
         }
+        if compact_after_run
+            && completed
+            && self.exit_after_run.is_none()
+            && let Err(error) = self.compact().await
+        {
+            self.notice(&format!("Compaction could not start — {error}"));
+        }
         Ok(())
     }
     fn mouse(&mut self, event: MouseEvent) -> bool {
@@ -563,7 +656,7 @@ impl App {
         self.state.completion.update(
             self.state.editor.text(),
             self.state.editor.cursor(),
-            self.state.command_palette.is_none(),
+            self.state.command_palette.is_none() && self.state.memory_panel.is_none(),
         );
     }
     async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -572,6 +665,9 @@ impl App {
                 && key.kind != KeyEventKind::Press)
         {
             return Ok(false);
+        }
+        if self.state.memory_panel.is_some() {
+            return self.memory_key(key).await;
         }
         if matches!(self.pending, Some(Request::Approval(..)))
             && (key.kind != KeyEventKind::Press
@@ -844,7 +940,9 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 app.mouse(event);
             }
             Action::Input(Some(Ok(TerminalEvent::Paste(text)))) => {
-                if app.state.command_palette.is_none() {
+                if let Some(panel) = &mut app.state.memory_panel {
+                    panel.input.insert_paste(&text);
+                } else if app.state.command_palette.is_none() {
                     app.state.editor.insert_paste(&text);
                 }
             }

@@ -1,78 +1,91 @@
 # 全局记忆与模型编辑
 
-**更新于2026-11-10。DEV-084／087的独立存储组件已完成定向验证，正常工具、投影和界面仍按N3逐项接入。**
+**更新于2026-11-10。N3开发线已包含全局存储、运行时投影、专用模型工具及CLI／TUI管理入口。当前源码集成检查与联合验收继续进行，实际结果由[开发进度](progress.md)和[N3验收](n3-validation.md)维护。**
 
-项目负责人要求后续提供可由模型维护的全局记忆，参考可直接阅读和编辑的全局 `MEMORY.md` 组织方式。Saya 的候选入口为 `~/.saya/MEMORY.md`，较长的主题资料可放入 `~/.saya/memory/`。路径、格式版本、限额和自动注入默认值在对应DEV中验收收敛。
+默认记忆根为 `~/.saya`，索引为 `~/.saya/MEMORY.md`，主题资料位于 `~/.saya/memory/`。宿主可以在显式运行配置中选择其他绝对根路径。读取缺失根或空索引保持只读，首次目录及索引发布沿已授权写入流程进行。
 
-本轮另提供Codex记忆分析、读取注入和整理阶段提取文本。英文草案采用分层读取、来源与版本、增量整理、来源撤回和明确遗忘，具体映射、来源摘要和验收矩阵见[记忆提示词来源](prompt/drafts/n3/memory-sources.md)。草案随MemoryStore、专用工具和schema接入运行时。
+参考材料中的分层读取、来源版本、增量整理、更正与遗忘已按Saya的权限和存储契约定制。原始材料的来源身份与取舍见[记忆提示词来源](prompt/drafts/n3/memory-sources.md)。运行时英文规则与后续独立整理任务草案分别维护。
 
-## 当前基础
+## 配置与显式文件
 
-当前 `--memory-file` 和 `--preferences-file` 显式读取UTF-8文本并注入本次运行。新增 `global_memory::GlobalMemoryStore` 提供真实磁盘索引、事实／来源／作用域、提案、提交、历史与恢复。正常模型工具、自动注入和CLI／TUI入口由DEV-085／086／088继续接入。显式文件参数的行为见[使用指南](usage.md)。原有 `memory::MemoryStore` 继续作为会话存储测试替身。
+读取、自动注入和写入分别由 `[memory]` 的 `read`、`inject`、`write` 控制，默认均为 `true`。`read = false` 关闭模型读取／检索与自动事实注入；`inject = false` 关闭自动注入，保留获准的主动查询；`write = false` 关闭更新、遗忘、回滚和备份恢复。PLAN始终只读。完整字段见[配置](configuration.md#全局记忆)。
 
-## 目标
+`--memory-file` 和 `--preferences-file` 继续显式读取UTF-8文本，作为本次运行的个人上下文来源。它们与全局MemoryStore的根、版本、专用工具及三个开关分别处理。调用者应按当前任务选择这些显式输入。[使用指南](usage.md)
 
-- 用户可以直接查看、修改和导出记忆文件，也能通过CLI／TUI审阅模型提出的变更。
-- 模型通过专用工具读取、检索、添加、更正和遗忘记忆，跨会话复用已经确认的事实、偏好与经验。
-- 全局知识、工作区知识、当前任务清单和会话历史具有各自作用域，检索结果携带来源和版本。
-- 用户更正和遗忘能反映在后续检索与请求投影中，模型能追溯事实来源。
+自动注入是宿主上下文装配的一部分。宿主提供有界路由和相关事实，显式deny／ask规则可以抑制相应注入。模型发起的补充读取、检索和证据查询均进入普通工具授权流程。Manual Approval对这些调用逐次确认。
 
-## 文件与索引
+## 文件、来源与作用域
 
-`MEMORY.md` 作为有界的用户可读索引，主题文件保存较长条目。候选条目字段包括稳定ID、内容、global／workspace作用域、来源会话／工具记录、时间、验证依据和有效状态。侧写、推测与用户明确给出的偏好分别标记，避免将一次模型输出直接当成事实。
+索引采用版本1的可读Markdown格式，包含 `saya-memory`、`saya-entry`、`saya-fact` JSON元数据注释及结束标记。entry、fact和source使用稳定ID。事实携带kind、来源版本、alias和derived_from，分别标记明确偏好、用户更正、观察事实、任务决定和推测。
 
-首先提供文本检索、分页和路径引用。语义检索根据实际召回效果另行评估。外部编辑通过摘要变化检测并重建索引，解析失败时保留原文件并给出明确错误。
+global条目与当前workspace条目组成可见视图。WorkspaceIdentity由真实工作区路径及设备／inode派生，同名仓库和其他checkout具有各自身份。检索和备份按这一可见范围过滤。来源reference为不透明的证据身份，实际源内容的读取仍经过对应接口与权限。
 
-## 模型工具与权限
+主题路径限于 `memory/` 内的规范相对Markdown路径，经目录句柄与NOFOLLOW读取。默认索引512KiB，单主题64KiB，主题合计1MiB，最多256条entry、1024条fact／source、64个主题，单事实16KiB。历史默认保留32个索引版本。外部修改参与当前revision，解析或版本失败返回明确错误并保留原文件。
 
-候选工具为 `memory_read`、`memory_search`、`memory_update` 和 `memory_forget`。更新参数包含条目／文件ID、预期版本和明确变更，输出带新版本与来源。专用工具只操作已配置的记忆根，独立验证路径、链接和引用，不能据此访问配置凭据或其他用户目录。
+宿主保护 `MEMORY.md` 和 `memory/`，通用文件工具及原生文件worker执行相同保护。其他 `.saya` 指令与Skills仍遵循各自发现路径。已知凭据在索引、主题、提案、审阅、结果及导出边界校验，动态凭据变化会重新验证待执行内容。
 
-读取、自动注入和模型写入分别配置。D-052确认默认启用读取与注入，auto写入／遗忘通过规则与独立模型审核。Manual Approval对模型发起的每次记忆工具调用维持人工审核，显式deny持续生效，PLAN提供只读记忆接口。首次启用、配置字段及人工审阅入口在DEV-086中实现和验证。
+## 模型工具
 
-工作区文件、网页、工具输出和已有记忆均不能改变记忆根或授权策略。记忆以带来源的数据进入上下文，服从当前指令与作用域。已知凭据等敏感值在写入、审阅、记录与导出边界验证，错误信息保持有界。
+当前请求中的工具manifest与schema决定实际可调用集合。
 
-## 一致性与遗忘
+| 工具 | 行为与边界 |
+| --- | --- |
+| `memory_read` | 按entry／fact ID分页读取当前事实，或读取当前索引声明的topic_path。主题读取要求当前expected_revision，结果标记片段范围与完整性 |
+| `memory_search` | 对当前作用域内的正文、标题、alias及来源做有界文本检索，游标绑定查询与快照版本 |
+| `memory_evidence` | 发现当前Session中实际存在的来源selector、hash与观察状态，默认最新32项，使用next_cursor读取较早来源 |
+| `memory_update` | 提供operation_id、expected_revision、scope及每项事实的证据selector。已有事实使用稳定ID更正，未提交的已有事实继续保留 |
+| `memory_forget` | 提供operation_id、expected_revision、scope及明确fact_ids，结果说明活动视图清理和仍保留范围 |
 
-更新采用基于内容摘要的并发检查、排他写入和原子发布，明确文件系统所能提供的保证。每次变更记录来源、前后版本和实际提交结果。取消、重试、并发外部编辑和写入失败均需要可验证的恢复路径。
+证据目录只返回宿主历史元数据，read或write启用时提供，PLAN可用。`memory_evidence` 的 `user_message.ordinal` 是原始持久历史中的一基UserText序号，Compact后保持同一来源身份。`tool_result.call_id` 绑定真实且闭合的调用／结果对。证据目录提供身份和状态，具体事实仍需具备相应的可见原文依据。既有记忆工具的输出从独立事实来源中排除，避免将旧记忆循环转述成新证据。
 
-提供审阅差异、撤销与版本恢复。遗忘需要同时处理索引、检索缓存和之后的上下文投影，历史保留策略由用户配置，遗忘完成状态按照实际清理结果记录。会话恢复采用当前记忆版本和本次授权，已经执行的记忆写入保持可追溯。
+global事实需要用户消息支持，工具观察限于对应workspace。用户输入、成功、失败及unknown状态分别表达证据等级，结果或excerpt截断继续保留缺口。模型正文和压缩摘要不能自行制造用户授权、已执行结果或来源身份。
 
-## 上下文、Compact 与界面
+默认查询页为16KiB、16项，可请求最多64项，查询词最多1024字节。自动投影最多16KiB，其中路由预算4KiB、选中正文预算8KiB，路由和选中事实各最多16项。工具参数最多64KiB，每次更新最多32项事实，每项最多8个来源selector，总选择最多32项。独立核查默认最多32KiB，excerpt默认最多2048字节，省略状态进入核查数据。
 
-ContextBuilder对索引、检索片段和来源元数据分配有界预算，侧栏Memory分项显示实际加入本次请求的内容估算。记忆版本参与请求快照和缓存失效，稳定内容保持可复用前缀。Compact保存引用和版本，避免把过期或已遗忘条目重新写回全局记忆。
+## 授权、审阅与一致性
 
-CLI／TUI提供列表、搜索、查看、修改建议、批准、禁用、导出及恢复入口，展示global／workspace作用域和来源。默认自动注入范围及跨工作区匹配规则随DEV-085／088验证。
+auto变更先经过当前规则，再进行独立模型核查，必要时由人工确认。Manual Approval覆盖每次模型工具调用，包括读取和证据目录。PLAN开放只读能力，更新与遗忘硬拒绝。bypass仍服从PLAN、显式deny及宿主受保护资源边界。
+
+宿主在 `__saya_managed.review` 中提供当前用户来源、选中证据、scope、前后差异、版本与截断信息。审核器按证据等级判断语义和授权，`goal_summary`保留调用方任务摘要的身份。更新绑定完整目标集合、当前模式／策略、Session／Run／call、来源hash及预期revision，在实际存取前再次核对。
+
+`GlobalMemoryStore::propose`为纯变更计算。`commit_cancellable`持排他锁，核对索引、凭据、根身份与预期版本后发布。host_request_digest进入receipt与WAL，旧请求在后续更正／遗忘后重试时返回原操作记录及当前revision。执行前后Session记录和MemoryStore发布各自保留实际状态，unknown结果交由宿主恢复，调度器停止受影响的后续执行。
+
+WAL意图、私有stage、原子索引替换与独立ledger共同维持提交状态。锁等待上限200ms，取消前置检查保持零创建。会话恢复使用本次配置、权限和当前记忆版本。
+
+## 更正、遗忘与实际保留范围
+
+明确遗忘对目标、alias、词法重复及派生事实记录墓碑。来源撤回按支持关系移除受影响内容，保留仍有独立支持的事实。活动投影抑制受影响的旧entry标题、updated_at、主题链接以及source的description、reference和observed_at，来源元数据使用withheld标记，稳定身份与版本继续用于审计。
+
+当前ledger约束旧索引回放、历史rollback和备份restore。被遗忘内容不能借这些入口重新进入活动视图。删除主题链接后，主题原件沿其拥有者的生命周期保留。历史索引版本、原始Session证据及既有导出也分别保留，遗忘结果和界面展示这一范围。
+
+当前记忆／遗忘版本参与ContextView和摘要兼容性。宿主记录请求实际使用的Memory来源与返回历史hash，对失效的记忆调用组及受旧记忆影响的模型输出实施完整协议组替换。下一次请求和Compact输入使用经宿主验证的当前投影，原始历史继续用于持久审计与用户导出。[上下文设计](context-management.md)
+
+## CLI管理
+
+`saya memory`提供settings、list、version、show、search、diff、review、apply、forget、history、rollback、export、restore、operation和recover。使用 `saya memory --help` 与具体子命令帮助查看完整参数。
+
+显式CLI持久变更由write独立控制，read关闭时仍可应用已提供版本的apply、forget、rollback、restore或recover。settings、version、operation与history仅返回配置、版本或操作元数据；内容列表、查询、完整差异和导出需要read启用。变更使用完整expected_revision和稳定operation_id。`diff`／`review`读取显式MemoryChange JSON，展示有界分页差异，`apply`应用对应的明确用户操作。forget按声明scope和fact ID处理。rollback选择历史索引版本，restore校验活动视图备份、来源、遗忘约束和当前主题引用。PLAN拒绝持久管理写入，`write = false`拒绝记忆变更。
+
+备份覆盖当前global及workspace活动视图、来源元数据、当前遗忘约束和主题引用。主题正文、历史版本和原始Session证据沿各自存储保留。导出采用私有权限、完整字节校验和排他创建。未知发布可使用显式 `saya memory recover` 收敛已登记WAL，输入操作保持原身份。信号取消置入同一worker标志，宿主等待实际磁盘操作完成并报告已观察结果，unknown保留结构化receipt。
+
+## TUI管理
+
+`/memory`打开独立弹窗，保留当前消息草稿。弹窗使用自己的命令输入，PgUp／PgDn或滚轮只滚动弹窗内容，Esc关闭。
+
+- `list [PAGE]`、`search QUERY`、`show ENTRY_ID|FACT_ID`、`sources ID`和`next`展示当前条目、来源、scope及版本。列表每页12项，读取／检索沿原生cursor继续。
+- `correct FACT_ID TEXT`、`forget FACT_ID`、`diff MEMORY_CHANGE_JSON`、`rollback INDEX_VERSION`和`restore PATH`先准备只读提案，展示完整变更事实、entry／source元数据及资源链接差异。单次完整review上限64KiB，超限需要缩小操作或使用CLI分页审阅。
+- `review`重新显示当前提案。`confirm OP_ID FULL_REVISION`明确批准当前不可替换的提案，`reject`丢弃提案。提交前重新核对本次配置、scope、版本、PLAN及write开关。
+- `export PATH`先捕获备份字节、真实父目录身份与目录句柄，确认后在同一目录句柄内原子发布。审阅期间的路径换向、目录替换及新凭据会使操作失败。
+- `history [PAGE]`、`operation OP_ID`查看保留版本和操作记录。unknown结果保留receipt与最后确认的operation ID，并提示显式CLI恢复。
+- `set read|inject|write on|off`在空闲时调整当前进程设置。`help`展示命令，`close`返回会话。
+
+运行中允许管理查询，变更准备、发布和开关修改要求空闲。TUI完整差异包含before正文，因此准备与确认要求read启用，关闭read会丢弃已有提案并隐藏其正文。管理属于用户明确发起的界面操作，模型工具沿运行时的权限与人工审批契约执行。取消后等待实际磁盘worker结束，已经发布的结果继续展示。
 
 ## 实施与验收
 
-| 任务 | 交付 |
-| --- | --- |
-| DEV-084 | 文件格式、稳定条目、来源／作用域与有界MemoryStore |
-| DEV-085 | 有来源的读取／文本检索、请求投影、预算与缓存失效 |
-| DEV-086 | 模型编辑／遗忘工具、权限与明确的变更协议 |
-| DEV-087 | 并发版本检查、原子发布、历史、回滚和遗忘一致性 |
-| DEV-088 | CLI／TUI管理与人工审阅、配置和迁移说明 |
-| DEV-089 | 跨会话／工作区、注入、凭据、故障、恢复与Compact联合验证 |
+DEV-084至DEV-089覆盖存储、读取投影、模型写入、版本与遗忘、管理界面及跨会话联合矩阵。组件阶段已记录33项存储回归与严格Clippy证据，见 `target/n3/memory-component.log` 和 `target/n3/n3-components-clippy.log`。新增运行入口、证据目录、Compact、UI和当前源码的结果按[N3验收](n3-validation.md)继续维护。
 
-实现需要覆盖用户外部编辑、并发冲突、重复请求、进程中断、符号链接、超限输入、未知来源、作用域错误、已遗忘内容再次检索以及三种权限模式。实际状态由[开发进度](progress.md)维护。
-
-## DEV-084／087 存储组件
-
-`GlobalMemoryStore::open`接受宿主显式根目录、由真实工作区路径和设备／inode派生的WorkspaceIdentity、MemoryLimits及动态SecretRegistry。打开缺失根、snapshot和只读查询均不创建目录。读取重建当前有界索引，外部文件变化参与revision，无法解析时保留原文件并返回静态错误。
-
-索引使用版本1的Markdown格式，含 `saya-memory`、`saya-entry`、`saya-fact` JSON元数据注释和明确结束标记。正文可直接阅读和编辑。entry、fact及source具有稳定ID，事实记录kind、来源版本、alias及derived_from。global与当前workspace分别过滤，来源reference作为证据身份处理。主题路径限制在 `memory/` 的规范相对Markdown路径内，通过目录句柄与NOFOLLOW读取。
-
-默认索引512KiB，单主题64KiB、主题合计1MiB，最多256条entry、1024条fact／source和64个主题，单事实16KiB。历史默认保留32个索引版本。宿主可缩小限额，较高值受组件硬上限验证。所有实际秘密值在正文、元数据、提案和主题读取边界检查，错误不回显原文。
-
-`propose`是纯变更计算，绑定expected_revision、operation_id、change_digest和Store身份。专用工具可另绑定规范化host_request_digest，该摘要进入receipt与WAL，后续更新或forget后，相同旧请求只返回原操作记录与当前revision。`commit_cancellable`持排他锁，在写任何历史／stage前再次核对实际旧索引、最新凭据、版本和根身份。WAL意图、临时索引、原子替换及独立ledger共同维护提交状态，未知结果由recover观察并完成相同操作，重试按原operation身份收敛。锁等待有200ms上限，取消前置检查保持零创建。
-
-明确forget对目标、alias、词法重复与派生事实记录墓碑，来源撤回保留独立支持的事实。当前ledger持续过滤原始旧索引回放及历史rollback。受影响的entry旧标题、旧updated_at、主题链接，以及source的description、reference和observed_at在活动投影中抑制，缺失状态用withheld标记。stable IDs及来源revision继续支持引用与审计。宿主新建ID采用组件的UUID生成器。
-
-历史保存索引版本，主题原件及原始证据沿各自生命周期保留。rollback恢复索引时继续应用当前遗忘约束，主题内容变更采用实际当前摘要，历史接口会显示覆盖范围。CLI／工具结果需要说明这些实际保留范围。
-
-33项组件回归覆盖缺失根、外部编辑、scope、路径／链接、凭据、遗忘元数据、WAL各阶段故障、并发、取消、幂等、历史及回滚。独立源码复核发现的来源及时间元数据泄漏已修复并补真实提交、旧索引回放和rollback回归。正常运行入口与跨平台联合验收继续见[N3验收记录](n3-validation.md)。
-
-该组件定向33项测试及全workspace全目标严格Clippy通过，日志为 `target/n3/memory-component.log` 与 `target/n3/n3-components-clippy.log`。
+验收需要覆盖外部编辑、并发冲突、重试幂等、WAL故障、符号链接、凭据轮换、来源伪造、跨workspace、旧历史／摘要重注入及三协议正常入口。源码集成结果与原生四平台证据分别记录。[任务分解](post-mvp-plan.md)
 
 ## DEV-085 有界查询组件
 

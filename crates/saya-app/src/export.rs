@@ -7,9 +7,10 @@ use saya_core::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    ffi::OsString,
     io::{Read, Write},
     os::unix::fs::MetadataExt,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 fn failure(code: &str, message: &str) -> BoundaryError {
@@ -55,6 +56,117 @@ pub fn publish_session(
     publish_with_roots(target, bytes, &[workspace, session_workspace], mode, cancel)
 }
 
+/// A read-only captured destination. Ownership retains the approved directory
+/// descriptor and binds both the selected alias and its canonical identity.
+/// Capturing this value creates no files. It is intentionally single-use.
+pub struct PreparedTarget {
+    path: PathBuf,
+    requested_path: PathBuf,
+    parent: PathBuf,
+    original_parent: PathBuf,
+    name: OsString,
+    dir: Dir,
+    device: u64,
+    inode: u64,
+}
+impl PreparedTarget {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn requested_path(&self) -> &Path {
+        &self.requested_path
+    }
+    fn check_parent(&self) -> Result<(), BoundaryError> {
+        let selected = std::fs::canonicalize(&self.original_parent)
+            .map_err(|_| failure("export_path_changed", "selected export directory changed"))?;
+        let canonical = std::fs::canonicalize(&self.parent)
+            .map_err(|_| failure("export_path_changed", "export directory changed"))?;
+        let named = std::fs::symlink_metadata(&self.parent)
+            .map_err(|_| failure("export_path_changed", "export directory changed"))?;
+        let held = self.dir.dir_metadata().map_err(|_| {
+            failure(
+                "export_path_changed",
+                "approved export directory is unavailable",
+            )
+        })?;
+        if selected != self.parent
+            || canonical != self.parent
+            || !named.is_dir()
+            || named.dev() != self.device
+            || named.ino() != self.inode
+            || held.dev() != self.device
+            || held.ino() != self.inode
+        {
+            return Err(failure(
+                "export_path_changed",
+                "export directory differs from its captured identity",
+            ));
+        }
+        Ok(())
+    }
+}
+/// Resolve and hold the actual publication parent before human review.
+/// The final name remains exclusive-create at publication time.
+pub fn prepare_target(target: &Path) -> Result<PreparedTarget, BoundaryError> {
+    let name = target
+        .file_name()
+        .ok_or_else(|| failure("invalid_export_path", "export requires a file name"))?
+        .to_owned();
+    let requested_path = if target.is_absolute() {
+        target.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| failure("invalid_export_path", "current directory is unavailable"))?
+            .join(target)
+    };
+    let original_parent = requested_path
+        .parent()
+        .ok_or_else(|| failure("invalid_export_path", "export requires a parent directory"))?
+        .to_owned();
+    let parent = std::fs::canonicalize(&original_parent).map_err(|_| {
+        failure(
+            "invalid_export_path",
+            "export parent directory is unavailable",
+        )
+    })?;
+    let path = parent.join(&name);
+    if path.to_str().is_none() {
+        return Err(failure("invalid_export_path", "export path must be UTF-8"));
+    }
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(&parent)
+        .map_err(|_| failure("export_io", "cannot open export directory"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| failure("export_io", "cannot inspect export directory"))?;
+    let captured = PreparedTarget {
+        path,
+        requested_path,
+        parent,
+        original_parent,
+        name,
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        dir: Dir::from_std_file(file),
+    };
+    captured.check_parent()?;
+    Ok(captured)
+}
+/// Publish only through the directory descriptor captured before review.
+/// Named-path changes reject before publication or report an uncertain result
+/// after publication. Existing destinations are never replaced.
+pub fn publish_prepared(
+    target: PreparedTarget,
+    bytes: &[u8],
+    workspace: &Path,
+    mode: WorkMode,
+    cancel: &dyn Cancellation,
+) -> Result<Value, BoundaryError> {
+    publish_prepared_with_roots(target, bytes, &[workspace], mode, cancel)
+}
 fn publish_with_roots(
     target: &Path,
     bytes: &[u8],
@@ -63,28 +175,25 @@ fn publish_with_roots(
     cancel: &dyn Cancellation,
 ) -> Result<Value, BoundaryError> {
     check_cancel(cancel)?;
-    let name = target
-        .file_name()
-        .ok_or_else(|| failure("invalid_export_path", "export requires a file name"))?;
-    let parent = target
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let parent = std::fs::canonicalize(parent).map_err(|_| {
-        failure(
-            "invalid_export_path",
-            "export parent directory is unavailable",
-        )
-    })?;
-    let published_path = parent.join(name);
-    let published_name = published_path
+    publish_prepared_with_roots(prepare_target(target)?, bytes, workspaces, mode, cancel)
+}
+fn publish_prepared_with_roots(
+    target: PreparedTarget,
+    bytes: &[u8],
+    workspaces: &[&Path],
+    mode: WorkMode,
+    cancel: &dyn Cancellation,
+) -> Result<Value, BoundaryError> {
+    check_cancel(cancel)?;
+    let published_name = target
+        .path
         .to_str()
         .ok_or_else(|| failure("invalid_export_path", "export path must be UTF-8"))?;
     if mode == WorkMode::Plan {
         for workspace in workspaces {
             let root = std::fs::canonicalize(workspace)
                 .map_err(|_| failure("invalid_workspace", "workspace is unavailable"))?;
-            if parent.starts_with(root) {
+            if target.parent.starts_with(root) {
                 return Err(failure(
                     "plan_write_denied",
                     "PLAN export target must be outside the workspace",
@@ -92,31 +201,10 @@ fn publish_with_roots(
             }
         }
     }
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let parent_file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
-        .open(&parent)
-        .map_err(|_| failure("export_io", "cannot open export directory"))?;
-    let identity = parent_file
-        .metadata()
-        .map_err(|_| failure("export_io", "cannot inspect export directory"))?;
-    let check_parent = || -> Result<(), BoundaryError> {
-        let canonical = std::fs::canonicalize(&parent)
-            .map_err(|_| failure("export_path_changed", "export directory changed"))?;
-        let actual = std::fs::symlink_metadata(&parent)
-            .map_err(|_| failure("export_path_changed", "export directory changed"))?;
-        if canonical != parent
-            || !actual.is_dir()
-            || actual.ino() != identity.ino()
-            || actual.dev() != identity.dev()
-        {
-            return Err(failure("export_path_changed", "export directory changed"));
-        }
-        Ok(())
-    };
+    let check_parent = || target.check_parent();
     check_parent()?;
-    let dir = Dir::from_std_file(parent_file);
+    let dir = &target.dir;
+    let name = &target.name;
     match dir.symlink_metadata(name) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         _ => {
@@ -165,7 +253,7 @@ fn publish_with_roots(
             .map_err(|_| failure("export_io", "cannot synchronize export file"))?;
         check_cancel(cancel)?;
         check_parent()?;
-        staging.hard_link("content", &dir, name).map_err(|error| {
+        staging.hard_link("content", dir, name).map_err(|error| {
             if error.kind() == std::io::ErrorKind::AlreadyExists {
                 failure("export_exists", "export target already exists")
             } else {

@@ -567,6 +567,7 @@ async fn attach_model(app: &mut App, model: Arc<dyn Model>) {
     let (_thinking_sender, thinking) = watch::channel(ThinkingLog::default());
     let (_interaction, requests) = input_channel(1).unwrap();
     app.active = Some(Active {
+        kind: RunKind::Execution,
         cancel,
         join,
         events,

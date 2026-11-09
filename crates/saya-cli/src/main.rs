@@ -3,6 +3,7 @@ mod events;
 mod export;
 mod logs;
 mod mcp;
+mod memory_commands;
 mod plugin_commands;
 mod signals;
 use saya_app::{new_session, session};
@@ -106,6 +107,11 @@ impl From<OutputOption> for Output {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect and administer the configured managed global memory.
+    Memory {
+        #[command(subcommand)]
+        action: memory_commands::MemoryAction,
+    },
     /// Inspect and manage local, explicitly enabled plugin packages.
     Plugin {
         #[command(subcommand)]
@@ -130,6 +136,12 @@ enum Command {
         action: logs::LogsAction,
     },
     Run(RunArgs),
+    /// Compact saved history without executing tools or adding a user message.
+    Compact {
+        session_id: String,
+        #[arg(long)]
+        accept_config_change: bool,
+    },
     Chat,
     Resume {
         session_id: String,
@@ -239,6 +251,74 @@ fn query_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
         2
     } else {
         fail(message)
+    }
+}
+
+fn memory_failure_value(
+    action: &memory_commands::MemoryAction,
+    error: BoundaryError,
+) -> serde_json::Value {
+    serde_json::json!({"schema_version":1,"kind":"memory","action":action.name(),"ok":false,"data":null,"error":error.0,"actual_result":error.2})
+}
+async fn administer_memory(action: &memory_commands::MemoryAction, config: &Config) -> u8 {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let secrets = match config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(secrets) => secrets,
+        Err(_) => return query_error("memory credentials are unavailable", Some(config.output)),
+    };
+    let mut signals = match signals::Signals::new() {
+        Ok(signals) => signals,
+        Err(_) => {
+            return query_error(
+                "cannot listen for memory administration cancellation",
+                Some(config.output),
+            );
+        }
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
+    let worker_config = config.clone();
+    let worker_action = action.clone();
+    let mut worker = tokio::task::spawn_blocking(move || {
+        memory_commands::run_cancellable(&worker_action, &worker_config, &worker_cancel)
+    });
+    let (outcome, interrupted) = tokio::select! {
+        result = &mut worker => (result,None),
+        signal = signals.recv() => {
+            if signal.is_some() { cancel.store(true,Ordering::Release); }
+            (worker.await,signal)
+        },
+    };
+    let (mut value, status) = match outcome {
+        Ok(Ok(value)) => (value, 0),
+        Ok(Err(error)) => (memory_failure_value(action, error), 2),
+        Err(_) => return query_error("memory administration worker failed", Some(config.output)),
+    };
+    let status = match interrupted {
+        Some(signals::Received::Interrupt) => 130,
+        Some(signals::Received::Terminate) => 143,
+        None => status,
+    };
+    if interrupted.is_some() {
+        value["interrupted"] = true.into();
+    }
+    if saya_core::redaction::redact(&mut value, &secrets).is_err() {
+        return query_error(
+            "memory result contains unavailable sensitive details",
+            Some(config.output),
+        );
+    }
+    if config.output == Output::Jsonl {
+        value["type"] = "memory.result".into();
+    }
+    match writeln!(io::stdout().lock(), "{value}") {
+        Ok(()) => status,
+        Err(_) => query_error("cannot write memory result", Some(config.output)),
     }
 }
 fn init(overrides: &Overrides, env: &Environment) -> Result<(), Box<dyn std::error::Error>> {
@@ -619,6 +699,74 @@ fn install_diagnostics(config: &Config) -> Result<(), Box<dyn std::error::Error>
         *current = Some(diagnostic);
     }
     Ok(())
+}
+async fn compact_session(
+    cli: &Cli,
+    config: &Config,
+    session_id: &str,
+    accept_config_change: bool,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    let mut prepared = session::resume(
+        config,
+        session_id,
+        session::ResumeOptions {
+            accept_config_change,
+            cwd_explicit: cli.cwd.is_some(),
+            profile_explicit: cli.profile.is_some(),
+            mode_override: cli.mode.map(Into::into),
+        },
+    )
+    .await?;
+    let cancel = Arc::new(Cancel::new());
+    let _signals = signals::CancellationListener::start(cancel.clone())?;
+    let run_id = RunId::new();
+    let events = if config.output == Output::Jsonl {
+        let secrets = config
+            .secret_env_names()
+            .iter()
+            .map(|name| config.secret(name).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        Some(Arc::new(
+            events::EventWriter::new(
+                prepared.store.clone(),
+                prepared.session.id,
+                run_id,
+                secrets,
+                Arc::new(events::StdoutSink),
+            )
+            .with_secret_registry(Arc::default())?,
+        ))
+    } else {
+        None
+    };
+    let store: Arc<dyn Store> = match &events {
+        Some(events) => Arc::new(events::EventStore(events.clone())),
+        None => prepared.store.clone(),
+    };
+    let (mut runtime, _) = build_runtime(
+        config,
+        &prepared.session,
+        "Compact the saved context",
+        Launch {
+            permissions: config.permissions_mode,
+            store,
+            cancellation: cancel,
+            confirmation: None,
+            input: None,
+            approvals: Preauthorizations::default(),
+            personal_context: personal_context(cli, config)?,
+            anthropic_prompt_cache: cli.anthropic_prompt_cache,
+            events,
+            run_id: Some(run_id),
+        },
+    )?;
+    let result = runtime.compact(&mut prepared.session).await?;
+    log_run_result(config, &result);
+    match config.output {
+        Output::Jsonl => Ok(status_code(result.status)),
+        Output::Json => report_json(&result, config),
+        Output::Text => Ok(report_result(&result, &prepared.session, false, config)),
+    }
 }
 fn build_runtime(
     config: &Config,
@@ -1169,6 +1317,13 @@ async fn main() -> std::process::ExitCode {
             Err(error) => query_error(error, cli.output.map(Into::into)),
             Ok(config) => mcp::run(&config, action).await,
         },
+        Some(Command::Memory { action }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
+        {
+            Err(error) => query_error(error, cli.output.map(Into::into)),
+            Ok(config) => administer_memory(action, &config).await,
+        },
         Some(Command::Plugin { action }) => match std::env::current_dir()
             .map_err(|_| "cannot determine current directory".to_owned())
             .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
@@ -1210,6 +1365,24 @@ async fn main() -> std::process::ExitCode {
                 0
             }
             Err(e) => fail(e),
+        },
+        Some(Command::Compact {
+            session_id,
+            accept_config_change,
+        }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
+        {
+            Err(error) => output_error(error, cli.output.map(Into::into)),
+            Ok(config) => {
+                match compact_session(&cli, &config, session_id, *accept_config_change).await {
+                    Ok(code) => code,
+                    Err(error) => output_error(
+                        safe_output(&error.to_string(), &config),
+                        Some(config.output),
+                    ),
+                }
+            }
         },
         Some(Command::Run(args)) => match std::env::current_dir()
             .map_err(|_| "cannot determine current directory".to_owned())
@@ -1460,5 +1633,34 @@ mod report_tests {
             &format!("prefix {encoded} suffix"),
             std::slice::from_ref(&secret)
         ));
+    }
+    #[test]
+    fn memory_failure_keeps_observed_receipt_structured_and_redactable() {
+        let action = memory_commands::MemoryAction::Recover;
+        let failure = BoundaryError(
+            ErrorInfo {
+                code: "outcome_unknown".into(),
+                message: "Publication needs recovery".into(),
+            },
+            None,
+            Some(Box::new(saya_core::contract::ToolResult {
+                ok: false,
+                data: Some(
+                    serde_json::json!({"status":"unknown","receipt":{"operation_id":"op_explicit","detail":"test-private-value"},"current_revision":"a".repeat(64)}),
+                ),
+                error: None,
+                truncated: false,
+            })),
+        );
+        let mut value = memory_failure_value(&action, failure);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "outcome_unknown");
+        assert_eq!(
+            value["actual_result"]["data"]["receipt"]["operation_id"],
+            "op_explicit"
+        );
+        saya_core::redaction::redact(&mut value, &["test-private-value".into()]).unwrap();
+        assert!(!value.to_string().contains("test-private-value"));
+        assert!(value["actual_result"].is_object());
     }
 }

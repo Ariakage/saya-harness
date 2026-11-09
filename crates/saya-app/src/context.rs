@@ -36,6 +36,8 @@ pub struct ContextModel {
     inner: Arc<dyn Model>,
     sender: watch::Sender<Option<ContextSnapshot>>,
     sources: ContextSources,
+    managed_memory: bool,
+    active_skills: bool,
 }
 impl ContextModel {
     pub fn new(
@@ -47,10 +49,22 @@ impl ContextModel {
             inner,
             sender,
             sources,
+            managed_memory: false,
+            active_skills: false,
         }
+    }
+    /// The shared runtime installs these host frames consecutively, including
+    /// empty frames, so later user text cannot masquerade as an injected source.
+    pub fn with_managed_sources(mut self, memory: bool, skills: bool) -> Self {
+        self.managed_memory = memory;
+        self.active_skills = skills;
+        self
     }
 }
 impl Model for ContextModel {
+    fn check_start(&self, request: &ModelRequest) -> Result<(), BoundaryError> {
+        self.inner.check_start(request)
+    }
     fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
         self.inner.request_counter()
     }
@@ -65,8 +79,12 @@ impl Model for ContextModel {
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
             if request.purpose == ModelPurpose::Execution {
-                self.sender
-                    .send_replace(Some(snapshot(request, self.sources)));
+                self.sender.send_replace(Some(snapshot(
+                    request,
+                    self.sources,
+                    self.managed_memory,
+                    self.active_skills,
+                )));
             }
             self.inner.start(request, cancel).await
         })
@@ -147,12 +165,18 @@ fn injected(history: &[HistoryItem], index: usize, key: &str) -> Option<Value> {
             data.get(*key)
                 .is_some_and(|value| value.is_null() || value.is_string())
         }),
+        "saya_active_skills" => data.get("skills").is_some_and(Value::is_array),
         _ => false,
     };
     valid.then(|| Value::Object(data.clone()))
 }
 
-fn snapshot(request: &ModelRequest, sources: ContextSources) -> ContextSnapshot {
+fn snapshot(
+    request: &ModelRequest,
+    sources: ContextSources,
+    managed_memory: bool,
+    active_skills: bool,
+) -> ContextSnapshot {
     let mut counts = [Estimate::default(); LABELS.len()];
     counts[SYSTEM].text(&request.instructions);
     if let Some(dynamic) = &request.dynamic_instructions {
@@ -186,16 +210,42 @@ fn snapshot(request: &ModelRequest, sources: ContextSources) -> ContextSnapshot 
                 complete = false;
             }
         }
+        if complete && sources.personal {
+            if let Some(personal) = injected(&request.history, first, "saya_personal_context_v1") {
+                if let Some(preferences) = personal.get("preferences") {
+                    counts[PREFERENCES].value(preferences);
+                }
+                if let Some(memory) = personal.get("memory") {
+                    counts[MEMORY].value(memory);
+                }
+                first += 1;
+            } else {
+                complete = false;
+            }
+        }
+        if complete && managed_memory {
+            if let Some(HistoryItem::UserText(text)) = request.history.get(first)
+                && text
+                    .strip_prefix("# Memory context data\n")
+                    .is_some_and(|text| {
+                        serde_json::from_str::<Value>(text).is_ok_and(|data| {
+                            data["schema_version"] == 1
+                                && data["routing"].is_array()
+                                && data["selected"].is_array()
+                        })
+                    })
+            {
+                counts[MEMORY].text(text);
+                first += 1;
+            } else {
+                complete = false;
+            }
+        }
         if complete
-            && sources.personal
-            && let Some(personal) = injected(&request.history, first, "saya_personal_context_v1")
+            && active_skills
+            && let Some(skills) = injected(&request.history, first, "saya_active_skills")
         {
-            if let Some(preferences) = personal.get("preferences") {
-                counts[PREFERENCES].value(preferences);
-            }
-            if let Some(memory) = personal.get("memory") {
-                counts[MEMORY].value(memory);
-            }
+            counts[SKILLS].value(&skills);
             first += 1;
         }
     }

@@ -290,6 +290,13 @@ impl App {
                 }
             }
             "/cancel" => self.cancel(),
+            "/compact" => {
+                if !argument.is_empty() {
+                    return Err("Use /compact without arguments".into());
+                }
+                self.compact().await?;
+            }
+            "/memory" => self.open_memory(argument).await?,
             "/mode" => {
                 let target = mode(argument).ok_or("Use /mode plan|build|code|work")?;
                 self.request_mode(target, true).await?;
@@ -364,6 +371,8 @@ impl App {
                             "Click a footnote number to jump to its definition; click its definition marker to return".into(),
                             "/footnote NUMBER jumps in the newest matching assistant message; /footnote back returns".into(),
                             "/markdown source|render selects the assistant presentation".into(),
+                            "/compact summarizes saved history, or queues at the next model boundary during a run".into(),
+                            "/memory opens current memory, source/scope, review, forgetting, history and backup controls".into(),
                             "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"
                                 .into(),
                         ])

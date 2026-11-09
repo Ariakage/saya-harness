@@ -61,3 +61,27 @@ endpoint = "https://mcp.example.invalid/mcp"
 # bearer_env = "SAYA_MCP_TOKEN"
 # credential_ref = "00000000-0000-0000-0000-000000000000"
 # scopes = ["files:read"]
+
+# N3 context uses the selected profile's window and output limit. It also
+# reserves ceil(window / 10) + 1 safety tokens, plus the extra amount below.
+[context]
+auto_compact = true
+trigger_percent = 80
+target_percent = 55
+extra_safety_tokens = 0
+summary_max_output_tokens = 4096
+max_compaction_calls = 32
+compaction_timeout_seconds = 600
+
+# The default host-selected root is ~/.saya. A missing store stays absent until
+# an approved write. read=false also suppresses automatic memory injection.
+# Explicit --memory-file input remains independent from these switches.
+[memory]
+read = true
+inject = true
+write = true
+# root = "/absolute/path/to/private-memory"
+
+# Local installation and enablement require explicit plugin management commands.
+[plugins]
+enabled = true

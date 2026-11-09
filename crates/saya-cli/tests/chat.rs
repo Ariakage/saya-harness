@@ -629,6 +629,7 @@ fn help_and_control_commands_report_errors_without_ending_session() {
     let help = pty.until("Use //");
     assert!(help.contains("/mode"));
     assert!(help.contains("/cancel"));
+    assert!(help.contains("/compact"));
     pty.until("> ");
     pty.send("/exit extra\n");
     pty.until("Invalid command arguments.");
@@ -642,6 +643,116 @@ fn help_and_control_commands_report_errors_without_ending_session() {
     pty.send("/mode\n");
     pty.until("Mode: work");
     pty.until("> ");
+    assert!(pty.finish().success());
+}
+
+fn compact_summary(request: &serde_json::Value) -> String {
+    let data: serde_json::Value = serde_json::from_str(
+        request["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut objective = Vec::new();
+    for unit in data["source_units"].as_array().unwrap() {
+        for source in unit.as_array().unwrap() {
+            if source["role"] == "user" {
+                objective.push(json!({"text":"Continue the recorded user task.","source_ids":[source["source_id"]],"evidence":"user_request","status":"active"}));
+            }
+        }
+    }
+    answer(&json!({"schema_version":1,"covered_range":data["assigned_source_range"],"objective":objective,"constraints":[],"decisions":[],"completed":[],"remaining":[],"uncertainties":[],"required_ids":[],"references":[]}).to_string())
+}
+fn saved_history(storage: &Path) -> Vec<String> {
+    let db = rusqlite::Connection::open(storage.join("data/saya/sessions.sqlite3")).unwrap();
+    let mut statement = db
+        .prepare("SELECT item FROM messages ORDER BY session_id,ordinal")
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn idle_chat_compact_preserves_raw_history_and_uses_only_one_tool_free_summary_request() {
+    let temp = TempDir::new().unwrap();
+    let storage = Arc::new(TempDir::new().unwrap());
+    let (url, requests) = fixture::server_dynamic(2, |index, request| {
+        (
+            "application/json",
+            if index == 0 {
+                answer(&format!(
+                    "first answer {}",
+                    "Earlier repetitive observation. ".repeat(300)
+                ))
+            } else {
+                compact_summary(request)
+            },
+        )
+    })
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start_with_storage(temp.path(), &cfg, &["chat"], storage.clone());
+    pty.until("> ");
+    pty.send("first task\n");
+    pty.until("first answer");
+    pty.until("> ");
+    let raw = saved_history(storage.path());
+    assert_eq!(raw.len(), 2);
+    pty.send("/compact extra\n");
+    pty.until("Invalid command arguments.");
+    pty.until("> ");
+    pty.send("/compact\n");
+    pty.until("Context checkpoint published");
+    pty.until("> ");
+    assert_eq!(saved_history(storage.path()), raw);
+    let first = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(first.get("tools").is_some());
+    let summary = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(summary.get("tools").is_none());
+    assert!(requests.try_recv().is_err());
+    assert!(pty.finish().success());
+}
+
+#[test]
+fn chat_compact_queued_during_the_final_answer_runs_after_the_existing_run() {
+    let temp = TempDir::new().unwrap();
+    let storage = Arc::new(TempDir::new().unwrap());
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let (url, requests) = fixture::server_dynamic(2, move |index, request| {
+        if index == 0 {
+            entered.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+            (
+                "application/json",
+                answer(&format!(
+                    "final answer {}",
+                    "Earlier repetitive observation. ".repeat(300)
+                )),
+            )
+        } else {
+            ("application/json", compact_summary(request))
+        }
+    })
+    .unwrap();
+    let cfg = config(temp.path(), &url, "auto", true);
+    let mut pty = Pty::start_with_storage(temp.path(), &cfg, &["chat"], storage.clone());
+    pty.until("> ");
+    pty.send("only task\n");
+    pty.wait_for_model_signal(&ready);
+    pty.send("/compact\n");
+    pty.until("Compaction requested for the next model boundary.");
+    release.send(()).unwrap();
+    pty.until("Context checkpoint published");
+    pty.until("> ");
+    assert_eq!(saved_history(storage.path()).len(), 2);
+    let first = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(first.get("tools").is_some());
+    let second = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(second.get("tools").is_none());
     assert!(pty.finish().success());
 }
 

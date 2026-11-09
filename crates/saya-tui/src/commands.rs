@@ -74,6 +74,14 @@ pub const COMMANDS: &[Suggestion] = &[
         description: "Cancel owned work and leave the terminal interface",
     },
     Suggestion {
+        text: "/compact",
+        description: "Compact saved context now, or queue it during the active run",
+    },
+    Suggestion {
+        text: "/memory",
+        description: "Browse current memory, review changes and manage backups",
+    },
+    Suggestion {
         text: "/profile ",
         description: "Add a configured profile name to select while idle",
     },
@@ -222,7 +230,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 28);
+        assert_eq!(COMMANDS.len(), 30);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -240,6 +248,8 @@ mod tests {
             "/cancel",
             "/help",
             "/exit",
+            "/compact",
+            "/memory",
             "/profile ",
             "/resume ",
             "/resume-accept ",

@@ -1,139 +1,116 @@
 # 上下文、Compact 与长工具输出
 
-**更新于2026-11-10。DEV-076输出链路与DEV-062预算基础已接入本机集成检查，其余Compact与联合验收按逐项状态推进。候选项与实际配置分开维护。**
+**更新于2026-11-10。N3开发线已接入OutputStore、ContextBuilder、自动／手动Compact和记忆投影。本文描述当前接口与有限预算，实际检查、质量和平台证据见[N3验收](n3-validation.md)及[开发进度](progress.md)。**
 
-## 当前实现与新增边界
-
-当前共享运行入口已接OutputStore、output_read／output_search与ContextBuilder。exec按配置捕获stdout／stderr，默认各64KiB，持续排空并维护首尾及缺口。MCP在结果解码后、模型正文限额前按块捕获文本和structuredContent。引用由宿主独立通道返回，与ToolFinished及历史结果原子登记后发布。
-
-三协议本地计数共用实际请求体序列化，包含静态／动态指令、工具、消息封装、协议及opaque字段，采用标记为估算的字符启发式。默认ContextBudget预留所选profile的最大输出及窗口5%余量。独立复核继续完善投影状态及单用户长任务切点，自动摘要与检查点接入由DEV-063完成。[实际证据](n3-validation.md)、[配置](configuration.md#输出捕获与上下文预算)
-
-模块分工如下。
+## 模块与持久历史
 
 | 模块 | 职责 |
 | --- | --- |
-| OutputStore | 有界捕获、脱敏存储、预览、分页与搜索 |
-| ContextBuilder | 请求投影、token 预算、协议分组、固定前缀与动态数据 |
-| CompactionCoordinator | 安全切点、摘要调用、校验及持久化上下文检查点 |
+| OutputStore | 有界捕获、动态脱敏、首尾预览、分页／搜索和引用租约 |
+| ContextBuilder | 完整请求预算、协议原子组、来源绑定、历史投影及压缩信号 |
+| CompactionCoordinator | 合法前缀切片、有限摘要／合并调用、schema与目标预算校验 |
+| ContextStore | 来源水位CAS、CompactionRecord与ContextView原子检查点 |
+| MemoryStore与Exposure记录 | 当前记忆作用域、遗忘约束、失效历史组与摘要版本兼容性 |
 
-Session 原始记录用于历史、恢复与导出，模型请求使用可重建的 ContextView。
+Session原始历史保留用户输入、调用及结果。模型请求使用可重建的ContextView，用户历史导出继续读取原始记录。摘要作为显式历史来源数据进入投影，当前模式、权限、工具、预算和用户任务原文由宿主重新提供。
 
-## 长输出处理
-
-输出按流式路径处理。
-
-```text
-工具产生数据
-  -> 边界缓存、解码与脱敏
-  -> 有界 OutputStore 与完整性元数据
-  -> 短预览、状态、output_ref
-  -> 模型按需 output_search / output_read
-```
-
-exec 的捕获接入点位于管道 drain 阶段，MCP 接入点位于结果解码阶段，浏览器接入点位于快照及产物规范化阶段。读取与搜索工具保持分页，并提供受限预览。
-
-首轮候选策略如下，生效上限还取决于用户配置及剩余上下文。
-
-| 项目 | 候选策略 |
-| --- | --- |
-| 单个模型可见结果 | 最多约 4,096 tokens，并受字节上限约束 |
-| 一次分页读取 | 最多约 2,048 tokens |
-| 本轮工具结果总投影 | 最多约 8,192 tokens，按请求余量缩减 |
-| 新输出捕获 profile | 每项 16 MiB、每 Run 128 MiB 的实测起点 |
-| 已有配置的捕获／返回上限 | 继续作为有效约束，扩大捕获需要显式配置和迁移说明 |
-
-持久化内容经过脱敏，结构化或编码内容无法安全处理时保存 withheld 元数据。超过捕获额度后继续排空管道，维护有限尾部预览和已观察字节数。保存 `artifact_complete`、保留范围及缺口，搜索结果同时声明覆盖范围。
-
-模型可见结果优先包含退出码、错误、超时／取消、截断状态和输出引用，再包含首尾或错误附近的文本。候选结果形状如下。
-
-```json
-{
-  "exit_code": 1,
-  "preview": "compiler error near the retained tail",
-  "output_ref": "out_session_run_call_stdout",
-  "truncated": true,
-  "artifact_complete": false,
-  "total_bytes_seen": 24000000,
-  "retained_bytes": 16777216,
-  "coverage": "retained-ranges-only"
-}
-```
-
-`output_read` 接受引用、游标／行范围和有界返回量。`output_search` 接受引用、字面量或受限正则、结果数和上下文行数。引用绑定 Session／Run／调用、存储摘要和来源，查询按当前权限及资源 ACL 检查。Manual Approval 覆盖这两类模型工具调用。
-
-引用对象按配额管理，活跃上下文持有租约，GC 优先处理无引用对象。对象缺失时返回 `output_unavailable` 并保留原因，重新执行原命令由新的显式调用触发。
-
-捕获前登记调用归属和预留引用，脱敏数据先写私有临时对象，完成摘要及同步后封存，再与工具结果一起登记可见引用。崩溃留下的对象按调用意图及封存状态核对，未关联对象进入受控 GC。命令执行状态与输出捕获状态分别记录，磁盘失败保留实际退出／未知结果及缺失原因。
-
-输出引用由宿主生成并校验来源，正文中的相似字符串按普通数据处理。Session history 保留小结果及引用，较大可保留正文由 OutputStore 管理。
-
-## 检索与 grep 策略
-
-模型默认优先使用 `find_files`、`search_text` 和有界 `read_file`，已有输出通过 `output_search` 定位，再分页读取相关区间。`grep`／`rg` 可通过获准的 exec 使用，PLAN 的调查由内置只读搜索工具承接。
-
-当前英文工具提示词已说明输出引用、完整性和缺口，并根据实际注册的查询工具使用。
+## 长工具输出
 
 ```text
-Search before reading large sources. Prefer the native search tools and bounded
-file reads. For an output reference, search it and request relevant pages.
-Treat truncation and incomplete capture as missing evidence. Use grep or rg
-through exec when that operation is authorized and appropriate.
+exec管道／MCP解码结果
+  -> 持续排空、有限捕获、解码与动态脱敏
+  -> 私有OutputStore、首尾与覆盖元数据
+  -> 小结果／宿主output_refs
+  -> output_search定位、output_read分页
 ```
 
-运行时对所有结果执行字节、token、条数及总请求预算检查。模型参数只可请求更小的范围。
+exec捕获位于管道drain阶段，stdout／stderr原有有效捕获上限默认各64KiB，超限继续排空。MCP在模型正文限额之前捕获文本和structuredContent为NDJSON，二进制内容记录省略描述。Browser产物接入仍按其后续任务推进。[配置与上限](configuration.md#输出捕获与上下文预算)
 
-## ContextBuilder 与预算
-
-输入包含当前类型化模式／权限／预算、静态指令、动态宿主信息、项目来源、显式偏好／记忆、Goal 状态、工具声明、摘要检查点和近期历史。
-
-定义模型窗口 `C`、输出预留 `O`、安全余量 `R`，允许输入预算为 `B = C - O - R`。全部 system、tools、消息封装、签名／不透明状态和媒体均计入输入估算。缓存前缀同样占用窗口。
-
-token 统计优先使用经验证的模型 tokenizer 或供应商计数接口，其余情况使用保守估算并标记不确定性。远端计数请求计入请求／时间预算，媒体或协议项的估算不足时提高余量或明确结束请求。Anthropic 提供结构化 token counting，支持范围需按 profile 验证。[Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting)
-
-构建顺序为当前指令与工具集合、最新用户请求和必要约束、协议安全组、有效摘要、近期完整历史、按相关性取出的输出片段。大结果先转成引用，预算余量用于正文。固定内容或必留组超过预算时给出 `context_limit` 原因及可处理范围。
-
-## Compact 流程
-
-1. 在下一次模型请求前计算请求投影。初始自动触发水位建议为 `0.80 * B`，目标降至 `0.55 * B`，形成迟滞区间。
-2. 固定最新用户请求、当前真实运行状态、必要原始约束、未闭合调用、活跃后台任务引用及供应商必留内容。
-3. 适配器给出可压缩的完整协议组。选择较早的已闭合前缀，大正文先引用化，近期完整组按剩余预算保留。
-4. 默认复用执行 profile，在额度内请求英文摘要任务，输入为可展示文本和类型化来源，工具集合为空，输出结构化事实、决定、约束来源、已完成／待办、产物引用及不确定项。
-5. 摘要输入过长时按完整组分块，每块受输入／输出预算约束，再进行有界合并。单个不可拆组过大时报告原因。
-6. 校验 schema、引用、必留项和新投影预算。摘要作为带来源的数据加入上下文，模式、权限和预算从运行状态重新注入。
-7. 以源水位、前缀摘要、profile／适配器版本和 Session revision 做条件提交，原子保存 CompactionRecord 与 ContextView 指针。
-8. 使用新视图继续请求。传输重试遵循 B-16，摘要校验失败返回 `compaction_invalid`。全部摘要、计数和重试消耗计入 Run／Goal 预算。
-
-同一 Session revision 只有一个压缩任务，等待方共享结果。压缩任务具有取消、超时和次数限制，内部再次压缩关闭。源码范围变化后重新验证水位，长模型调用期间释放数据库事务。
-
-## 三协议安全边界
-
-| 协议 | 压缩分组要求 |
+| 项目 | 当前默认或边界 |
 | --- | --- |
-| Chat Completions | assistant 工具调用及全部对应结果保持闭合，保留调用顺序和 ID |
-| Responses | typed items、混合输出和 opaque reasoning 按适配器安全组处理，保留后缀原始协议状态 |
-| Anthropic Messages | tool_use／tool_result 及适用 thinking／signature／redacted blocks 按所选版本整体保留 |
+| OutputStore单对象／单Run／总库配额 | 16MiB／128MiB／1GiB，原有producer捕获上限同时生效 |
+| 对象数、尾部和预览 | 4096项，tail及preview各4096字节 |
+| 模型侧output_read | 默认8KiB、100行，最多8KiB、200行，较低宿主上限优先 |
+| 模型侧output_search | 最多50项、4行上下文及8KiB，较低宿主上限优先 |
+| 大历史结果投影 | 宿主有对应durable引用且原结果超过16KiB时，以引用和必要状态投影 |
 
-适配器先验证候选切点，再验证重建请求。无法安全裁剪的状态保留原组，并明确报告剩余预算。Anthropic 对 thinking 的工具往返和签名回传有具体约束。[Thinking 与工具调用](https://platform.claude.com/docs/en/build-with-claude/thinking)
+元数据包括output_ref、Session／Run／call／stream归属、capture_limit_bytes、total_bytes_seen、retained_bytes、retained_source_bytes、retained_ranges、gaps、artifact_complete、completion、coverage、withheld_reason、preview_head／tail及sha256。退出码、超时、取消和实际执行错误继续保留在工具结果中。
 
-首轮提供本地可追溯摘要。供应商原生 Compact／context editing 作为后续适配策略，在对应协议矩阵中单独验证。
+引用通过宿主独立通道登记，并与ToolFinished和历史结果在同一事务关联后发布。正文中相似的output_ref字符串保持普通源数据。无法安全解码或脱敏时返回withheld原因，捕获缺口进入覆盖范围。搜索只覆盖实际保留数据，查不到匹配时仍需考虑缺口。
 
-## 缓存、持久化与恢复
+output_read返回metadata、chunks及next_cursor，output_search返回相应匹配与页游标。游标绑定脱敏视图摘要，凭据集合变化后需要重新查询。Manual Approval覆盖每次查询调用，PLAN允许获准的只读查询，当前显式deny和Session归属检查持续生效。
 
-- 静态系统指令与规范化工具声明先于动态上下文，工具顺序稳定，能力变化有版本指纹。
-- 时间、Goal 进度、输出水位和近期检索结果进入动态段。摘要按检查点复用。
-- 原有 Anthropic 显式 cache control 及各 profile 能力继续由协议适配器处理。压缩后复用稳定静态前缀，并记录历史前缀重建的缓存影响。
-- CompactionRecord 保存来源范围／哈希、保留组、摘要、提示词版本、用量和视图版本。恢复验证记录与 profile 兼容性，再应用本次权限。
-- 会话导出读取原始持久历史，full 范围可按版本包含压缩记录和输出引用元数据。
+Run发布对象持有租约，历史引用遵循有界存储和回收策略。缺失对象返回output_unavailable，重新执行producer沿新的明确调用与权限流程处理。磁盘发布失败保留实际工具结果及捕获错误，恢复核对原意图和封存对象，避免重复副作用。
+
+## 检索与grep
+
+优先使用find_files、search_text及有界read_file定位源材料。已有output_ref先output_search，再读取相关页。grep／rg可通过已获准的exec使用，PLAN调查使用内置只读工具。
+
+工具schema、字节上限、条数与完整请求预算共同限制实际返回。模型可以请求更小的范围。截断、部分产物、缺失引用和未知执行状态分别作为证据缺口保留。
+
+## 完整请求预算
+
+定义模型窗口 `C`、最大输出预留 `O`、安全余量 `R`及输入容量 `B = C - O - R`。默认 `O = profile.max_output_tokens`，`R = ceil(C / 10) + 1 + context.extra_safety_tokens`。所有静态／动态system段、工具schema、history、协议封装、opaque状态和缓存前缀都占用输入容量。
+
+三协议计数复用实际发送请求体的序列化路径，证据绑定完整请求指纹、协议、模型及适配器版本。当前token值使用明确标记为estimated的字符启发式，ASCII每4字符和其他Unicode标量每1字符。缺少可用counter时使用有界字节估算，并记录方法和不确定性。计数保持本地执行，远端计数或经验证tokenizer属于后续适配接缝。
+
+ContextBuilder保留最新原始UserText、未闭合调用、宿主标记的保护组及供应商必留协议内容。工具组以完整调用／结果配对为原子单位。固定前缀或必留内容超限时返回context_limit和原因，完整原历史继续用于恢复。
+
+单个用户任务持续运行时，最新UserText可以从较早已摘要前缀中逐字重放。保留来源范围及hash与摘要切片分别校验，原始工具组继续保持完整。该路径支持没有第二条用户输入的长任务压缩。
+
+## 自动与手动Compact
+
+默认 `context.auto_compact = true`，下一次Execution请求前在80%输入容量触发，成功后的投影必须降至55%以内。较高的固定前缀或必留内容使目标不可达时，协调器返回明确限制原因。配置见[ContextSettings](configuration.md#输出捕获与上下文预算)。
+
+- `saya compact SESSION_ID`独占保存Session的写锁，在当前配置下执行独立Compact，支持显式接受配置引用变更的参数。
+- 文本会话与TUI `/compact`在空闲时压缩当前Session，运行中请求在下一模型边界排队，重复请求合并。末轮完成仍有待处理请求时执行独立Compact。
+- 独立Compact沿摘要请求路径工作，保留原始用户／工具历史，完成后等待用户继续。自动压缩关闭时仍保留手动入口和请求预算保护。
+
+协调流程如下。
+
+1. 构建当前请求与来源到投影的ordinal映射，先应用宿主输出引用及记忆失效组替换。
+2. 选择合法的已闭合协议前缀，保留最新用户原文、当前运行控制和协议必留组。
+3. 使用执行profile和空工具集合请求结构化英文摘要。每个单元带来源角色、范围、hash及证据等级。
+4. 长输入按完整组分块，默认最多16块、4轮合并，单个不可拆组超过预算时明确失败。
+5. 校验schema、来源、引用、必留项、当前版本、严格55%目标及完整请求预算，拒绝摘要tool calls或超大正文。
+6. 以完整原历史水位／hash、前缀hash、profile／model／protocol、适配器与上下文版本做CAS，原子写入ContextView和CompactionRecord。
+7. 成功后重新构建下一次请求，应用当前模式、记忆版本与工具集合。CAS冲突和摘要错误保留原历史及此前有效检查点。
+
+默认摘要输出最多4096tokens，并受profile最大输出约束。每次Compact最多32次实际模型调用、600秒操作时间，实际调用、允许的传输重试和活跃时间共用Run剩余预算。单次摘要请求沿当前模型的连接、idle及总超时配置，最多2次允许的传输重试。人工等待沿共享活跃预算暂停规则处理。
+
+取消后停止调度并收敛已开始的调用，摘要调用期间持久事务保持短生命周期。协调器校验源版本后才返回可提交检查点。摘要字段包含objective、constraints、decisions、completed、remaining、uncertainties、required_ids和references，事实携带source IDs、evidence等级及状态。
+
+## 三协议原子组
+
+| 协议 | 分组与切点 |
+| --- | --- |
+| Chat Completions | assistant调用及全部对应tool结果闭合，调用顺序与call ID保持一致 |
+| Responses | typed items、对应镜像和opaque reasoning依照适配器规则分组，保留所需原始后缀 |
+| Anthropic Messages | tool_use／tool_result及适用thinking／signature／redacted blocks整组处理 |
+
+先验证原始历史及镜像配对，再验证切点、保留组和重建请求。无法安全裁剪的组保持必留。供应商原生Compact或context editing作为后续协议策略单独验收。
+
+## 缓存与恢复
+
+静态系统规则、规范工具顺序和条件式续接规则保持稳定前缀。动态 `checkpoint_selected_by_host` 表示本次请求是否选择已提交检查点，续接段按该标志适用。时间、模式、任务、记忆、Skill状态和输出水位进入动态来源段。
+
+摘要与保留来源带明确的历史数据envelope。固定前缀、续接规则及动态标志全部参与计数，压缩前后使用同一静态前缀。Anthropic cache_control及各协议现有缓存能力继续沿provider适配器处理。
+
+CompactionRecord保存源范围／hash、保留组、失效组manifest、提示词与适配器版本、用量及目标／实际投影统计。恢复验证当前profile、项目／Skill／记忆版本和原始历史，版本不兼容的视图需要重新构建。会话恢复采用本次权限配置。
+
+## 记忆遗忘与上下文
+
+默认全局索引为 `~/.saya/MEMORY.md`。路由、选中事实、来源与revision进入有界Memory分项。当前记忆和遗忘版本参与检查点兼容性及缓存指纹。[记忆工具与管理](memory.md)
+
+宿主对原生记忆调用及实际使用Memory的模型请求保存durable来源证明。遗忘、来源撤回或策略变化后，ContextBuilder只根据这些证明将失效的完整闭合组替换为明确历史数据envelope，保留有界机械观察。原工具参数、正文和ProviderItem随该组退出模型投影，旧摘要也需通过当前记忆版本校验。
+
+Compact只读取这一经验证的投影，来源到投影ordinal映射参与切片。用户原始输入与当前宿主控制保持各自权威，摘要中的权限或记忆声明继续沿其来源处理。
 
 ## 验收
 
-DEV-076 验证管道排空、stdout／stderr、跨块秘密、输出配额、首尾缺口、检索分页、权限、取消及 GC。DEV-062／063／077 验证估算误差、超大静态前缀、长单组、多工具、签名状态、摘要注入、重复压缩、并发水位、存储失败、恢复及缓存前缀。
+DEV-076验证管道排空、跨块秘密、配额、缺口、查询、权限、取消、发布及GC。DEV-062／063／077验证完整序列化计数、单用户长Run、协议闭合、固定前缀、80／55水位、有限摘要／重试、CAS、恢复、质量和缓存。DEV-085／089联合验证记忆来源、更正、遗忘、旧Session／摘要、凭据轮换及新请求实际字节。
 
-质量夹具核对压缩前后的用户约束、工作模式、剩余任务、调用配对和证据引用。任务定义见[后续开发计划](post-mvp-plan.md)。
-
-## 记忆接入
-
-后续F-07通过MemoryStore和专用模型工具维护全局／项目记忆，候选文件为 `~/.saya/MEMORY.md`。读取片段与版本进入ContextBuilder的Memory预算，Compact和缓存处理需要遵循遗忘与当前版本。设计及待开发任务见[全局记忆](memory.md)和DEV-084至DEV-089。
+本机受控模型、实际模型质量、PTY和四平台原生隔离分别记录各自证据。Plugin／MCP已接入正常Run组装，HTTP broker与原生后端联合验收仍按当前修复和实际runner结果维护。[实施任务](post-mvp-plan.md)
 
 ## DEV-064 文件检查点组件
 

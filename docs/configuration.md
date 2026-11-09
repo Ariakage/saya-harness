@@ -152,4 +152,52 @@ max_search_matches = 200
 
 宿主引用在工具结果事务内登记，然后发布对象。恢复核对已封存对象及宿主登记。查询按当前权限和Session归属执行。Manual Approval覆盖读取和搜索，PLAN允许只读查询，显式deny优先。Run发布的对象持有租约，历史引用作为可回收记录保留，对象被回收后返回output_unavailable。读取宿主引用登记设4096条记录的有界保护，超过时返回明确错误。
 
-共享运行入口以所选profile的上下文窗口、实际最大输出token预留及窗口5%的余量构建ContextBudget。本地计数直接使用当前协议的完整请求序列化器，ASCII每4字符和其他Unicode标量每1字符估算输入token，记录估算方法与版本。供应商最终窗口检查继续执行。ContextBuilder在必留内容超过预算时返回context_limit，并保留原始Session历史。自动／手动摘要的接入和逐项状态见[上下文设计](context-management.md)与[N3验收](n3-validation.md)。
+共享运行入口以所选profile构建ContextBudget。窗口为 `C`，输出预留 `O = profile.max_output_tokens`，安全余量为 `R = ceil(C / 10) + 1 + extra_safety_tokens`，输入容量为 `B = C - O - R`。余量与供应商请求保护保持一致，所有缓存前缀、工具schema、动态数据、消息封装和opaque状态都参与计数。必留内容超限时返回 `context_limit`，原始Session历史保持可恢复。
+
+```toml
+[context]
+auto_compact = true
+trigger_percent = 80
+target_percent = 55
+extra_safety_tokens = 0
+summary_max_output_tokens = 4096
+max_compaction_calls = 32
+compaction_timeout_seconds = 600
+```
+
+默认在下一次Execution模型请求前达到80%输入容量时触发Compact，成功投影必须降至55%容量以内。target要求大于0且小于trigger，trigger最多100%。摘要输出上限为配置值与profile最大输出的较小值，配置上限16384。单次压缩最多32次实际模型调用，可配置1至64；操作超时默认600秒，可配置1至3600秒，同时受当前Run剩余活跃时间约束。
+
+摘要使用执行profile和空工具集合。实际摘要请求、传输重试与运行活跃时间共用Run预算，默认最多16个完整组分块、4轮合并和每次请求2次允许的传输重试。失败不会切换为无限摘要循环。`auto_compact = false`保留手动入口及完整请求预算检查。
+
+`saya compact SESSION_ID`在独占已保存Session的写锁下执行独立摘要。文本会话和TUI的 `/compact` 在空闲时压缩当前Session，运行时排队至下一模型边界；末轮完成仍有请求时再执行独立Compact。它们保留原始UserText及工具历史，成功检查点通过来源水位CAS提交。[流程与恢复](context-management.md)
+
+本地计数直接使用三协议实际请求序列化器。当前输入token采用标记为estimated的字符启发式，ASCII每4字符、其他Unicode标量每1字符，证据绑定完整请求指纹、协议与适配器版本。计数在本地执行，远端tokenizer／count服务属于后续可验证接缝。供应商最终窗口保护继续执行，估算方法与版本进入记录。[逐项证据](n3-validation.md)
+
+## 全局记忆
+
+```toml
+[memory]
+read = true
+inject = true
+write = true
+# root = "/absolute/private/saya-memory-root"
+```
+
+默认根为启动环境 `HOME` 下的 `.saya`，索引为 `MEMORY.md`，主题目录为 `memory/`。显式root要求绝对路径。运行配置仍从本次显式选择的配置文件加载，指令／Skill发现保持独立规则。
+
+三个开关默认启用。read关闭模型查询与自动事实注入，inject单独关闭自动注入，write关闭更新／遗忘／回滚／备份恢复。内部仍需读取版本和遗忘状态以验证旧上下文兼容性。缺失根按空记忆处理，读和投影保持零创建。`--memory-file`和`--preferences-file`沿显式文件参数提供本次个人上下文。
+
+write与内容读取独立，read关闭时显式CLI仍可按给定版本执行持久变更，版本和receipt只返回元数据。TUI完整review包含旧正文，需先启用read，关闭read会使待确认review失效。
+
+PLAN只读，Manual Approval对每次模型记忆工具调用确认，auto变更采用规则与独立模型核查。显式deny和宿主受保护路径继续生效。`saya memory`提供离线管理，TUI `/memory`提供有界浏览、差异、确认、导出、恢复和空闲时的进程级开关。[实际工具、默认限额与保留范围](memory.md)
+
+### 插件宿主绑定
+
+`[plugins] enabled = true`允许本次Run选择已由用户安装并启用的包，未启用的包保持未加载。包不能从工作区指令修改运行配置。宿主可在 `plugins.bindings.runtimes` 指定当前实际解释器，例如下面的绝对路径。绑定的解释器与只读运行库由宿主核对后进入私有entry视图。
+
+```toml
+[plugins.bindings.runtimes.shell]
+program = "/bin/sh"
+```
+
+当前插件HTTP凭据支持明确的环境变量、header及bearer绑定。插件的存储式 `credential_ref` 尚缺少限定origin的适配器，使用时返回 `plugin_credential_scope_unsupported`。普通MCP既有凭据流程继续沿其自身契约执行。配置Run聚合memory／process／CPU约束并启用进程型插件时，当前返回 `unsupported_resource_policy`，避免将同一Run额度重复分配给各entry。原生后端自身无法满足约束时可先返回 `sandbox_capability_unavailable`。

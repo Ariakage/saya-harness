@@ -12,6 +12,7 @@ pub(super) enum UiResult {
     Details(Details),
     Session { prepared: Prepared, resumed: bool },
     Export(serde_json::Value),
+    Memory(super::memory::MemoryUiResult),
 }
 pub(super) struct UiJob {
     pub cancel: Arc<RunCancellation>,
@@ -84,7 +85,7 @@ impl App {
         }
         Ok(())
     }
-    fn begin_ui(
+    pub(super) fn begin_ui(
         &mut self,
         cancel: Arc<RunCancellation>,
         join: tokio::task::JoinHandle<std::result::Result<UiResult, BoundaryError>>,
@@ -395,6 +396,7 @@ impl App {
             self.state.pending_mode = None;
         }
         match result {
+            Ok(UiResult::Memory(result)) => self.finish_memory(result, cancelled)?,
             Ok(UiResult::Details(_)) if cancelled => self.notice("UI query cancelled"),
             Ok(UiResult::Session { .. }) if cancelled => {
                 self.notice("Session metadata prepared; view activation cancelled")
@@ -431,7 +433,24 @@ impl App {
             Ok(UiResult::Export(receipt)) => {
                 self.notice(&format!("Exported {}", self.safe(&receipt.to_string())))
             }
-            Err(error) => self.notice(&format!("{} — {}", error.0.code, error.0.message)),
+            Err(error) => {
+                let message = self.safe(&format!("{} — {}", error.0.code, error.0.message));
+                let operation = self.memory_last_operation.as_ref().map(|id| {
+                    format!(
+                        "Last explicitly confirmed memory operation {}",
+                        self.safe(id)
+                    )
+                });
+                if let Some(panel) = &mut self.state.memory_panel {
+                    panel.busy = false;
+                    panel.lines=vec![format!("Memory operation failed · {message}"),"The pending input was not retried. Retain its operation ID; unfinished WAL recovery uses the explicit saya memory recover CLI command.".into()];
+                    panel.scroll = 0;
+                    if let Some(operation) = operation {
+                        panel.lines.push(operation);
+                    }
+                }
+                self.notice(&message);
+            }
         }
         if let Some(prompt) = self.queued_prompt.take() {
             if self.prepared.is_some() && !cancelled && self.active.is_none() {
@@ -446,6 +465,15 @@ impl App {
         }
         if let Some(mode) = deferred_mode {
             self.command(&format!("/mode {mode:?}")).await?;
+        }
+        if self.queued_compaction
+            && self.active.is_none()
+            && self.prepared.is_some()
+            && !cancelled
+            && self.exit_after_run.is_none()
+        {
+            self.queued_compaction = false;
+            self.compact().await?;
         }
         Ok(())
     }

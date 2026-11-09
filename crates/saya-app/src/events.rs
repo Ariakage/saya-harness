@@ -368,6 +368,19 @@ pub fn timestamp() -> Result<String, BoundaryError> {
 
 pub struct EventStore(pub Arc<EventWriter>);
 impl Store for EventStore {
+    fn memory_exposures(
+        &self,
+        id: saya_core::contract::SessionId,
+    ) -> Operation<'_, Vec<saya_core::memory_context::MemoryExposure>> {
+        self.0.store.memory_exposures(id)
+    }
+    fn context_checkpoint(
+        &self,
+        id: saya_core::contract::SessionId,
+    ) -> Operation<'_, Option<saya_core::context_store::ContextCheckpoint>> {
+        self.0.store.context_checkpoint(id)
+    }
+
     fn output_references(
         &self,
         id: SessionId,
@@ -417,6 +430,9 @@ impl Drop for ModelGuard {
     }
 }
 impl Model for EventModel {
+    fn check_start(&self, request: &ModelRequest) -> Result<(), BoundaryError> {
+        self.0.check_start(request)
+    }
     fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
         self.0.request_counter()
     }
