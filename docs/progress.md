@@ -945,3 +945,9 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提供 `/memory`／`/compact`。管理输入、完整差异与确认身份独立于消息草稿，未知提交保留结构化实际receipt，终止信号传给磁盘worker并等待真实完成。Memory导出复用已批准的目录句柄及原字节，长输入光标按显示单元格保持可见。
 
 共享App、CLI及TUI阶段随本机1301项完整Rust门禁通过，包含11项App管理／父目录、27项CLI bin及61项既有正常CLI测试。首次插件启用的真实CLI诊断发现缺少Hook日志父目录，现已补安全私有创建及链接／权限回归。固定新候选的32条CLI与15条PTY最终验收继续进行，旧候选诊断分别保留为 `target/n3/cli-diagnostic-bootstrap.json` 和 `target/n3/tui-diagnostic-6.json`，它们各自的准备范围与程序身份独立记录。
+
+### 凭据授权原参数回归修复
+
+最终候选的历史审查回归发现，始终启用动态凭据注册表后，模型返回的工具参数在授权前被脱敏改写，独立核查会看到不完整视图。现保留原始ToolCall供精确授权和执行，另生成脱敏副本用于Session、持久化及记忆来源哈希。标识符及opaque内容继续失败关闭，歧义JSON在持久化前拒绝。
+
+新增完成边界单元测试及真实SQLite运行回归，核对轮内新登记凭据、人工批准、原值分发、零独立审核请求，以及审批预览、数据库和后续模型请求脱敏。独立源码复核与五项历史审查诊断通过。本机 `RUST_TEST_THREADS=1 just check`通过1304项Rust测试、格式、严格Clippy与优化构建，日志为 `target/n3/integration-workspace-gate-4.log`。`just test-tooling`的75项Python回归通过，记录为 `target/n3/final-tooling-2.log`。最终固定新候选另行验收。

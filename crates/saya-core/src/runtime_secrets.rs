@@ -192,6 +192,24 @@ pub(super) fn history(
         .collect()
 }
 
+// Authorization and execution must observe the exact arguments returned by the
+// model. Only persisted/replayed history may contain a redacted copy.
+pub(super) fn model_response(
+    items: Vec<HistoryItem>,
+    source: &SecretSource,
+) -> Result<Vec<HistoryItem>, BoundaryError> {
+    items
+        .into_iter()
+        .map(|item| match &item {
+            HistoryItem::ToolCall(call) => {
+                require_clean(&(&call.call_id, &call.name), source)?;
+                Ok(item)
+            }
+            _ => history_item(item, source),
+        })
+        .collect()
+}
+
 pub(super) struct GuardedModel {
     inner: Arc<dyn Model>,
     source: SecretSource,
@@ -265,7 +283,7 @@ impl ModelStream for GuardedStream {
                 Ok(Some(ModelUpdate::Finished { items, usage })) => {
                     self.partial.clear();
                     Ok(Some(ModelUpdate::Finished {
-                        items: history(items, &self.source)?,
+                        items: model_response(items, &self.source)?,
                         usage,
                     }))
                 }
@@ -398,6 +416,37 @@ mod tests {
             history(vec![opaque], &source).unwrap_err().0.code,
             "sensitive_data"
         );
+    }
+    #[tokio::test]
+    async fn tool_arguments_remain_exact_until_authorization_while_history_is_redacted() {
+        let secret = "fixture\"secret\\tail".to_owned();
+        let mut nested = serde_json::json!({"token":secret}).to_string();
+        for _ in 0..8 {
+            nested = serde_json::to_string(&nested).unwrap();
+        }
+        let call = HistoryItem::ToolCall(ToolCall {
+            call_id: "credential-call".into(),
+            name: "exec".into(),
+            arguments: serde_json::json!({"env":{"PAYLOAD":{"source":"literal","value":nested}}})
+                .to_string(),
+        });
+        let (mut stream, registry) = guarded(vec![ModelUpdate::Finished {
+            items: vec![call.clone()],
+            usage: None,
+        }]);
+        registry.register(std::slice::from_ref(&secret)).unwrap();
+        let Some(ModelUpdate::Finished { items, .. }) = stream.next(&Never).await.unwrap() else {
+            panic!("expected finished response");
+        };
+        let items = model_response(items, &stream.source).unwrap();
+        assert_eq!(items, vec![call.clone()]);
+        let stored = history(items.clone(), &stream.source).unwrap();
+        assert!(!crate::redaction::contains_secret(
+            &serde_json::to_string(&stored).unwrap(),
+            std::slice::from_ref(&secret)
+        ));
+        assert_ne!(stored, items);
+        assert_eq!(items, vec![call]);
     }
     #[test]
     fn store_changes_use_the_latest_registry_snapshot() {

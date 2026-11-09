@@ -2560,3 +2560,223 @@ async fn runtime_handle_awaits_background_process_cleanup_after_run_panic_or_abo
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn dynamically_learned_credentials_keep_original_dispatch_and_sanitized_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        boundary::{Tool, ToolContext, ToolDefinition},
+        contract::{ApprovalRequest, ModelPurpose, ToolResult},
+        credentials::SecretRegistry,
+        registry::{ExternalAccess, ToolRegistry},
+        runtime::ApprovalHandler,
+        sqlite::SqliteStore,
+    };
+
+    struct LearningModel {
+        inner: Arc<FakeModel>,
+        registry: Arc<SecretRegistry>,
+        secret: String,
+    }
+    impl Model for LearningModel {
+        fn start<'a>(
+            &'a self,
+            request: &'a ModelRequest,
+            cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn ModelStream>> {
+            Box::pin(async move {
+                let stream = self.inner.start(request, cancel).await?;
+                // Learn the value after request preflight and before the raw
+                // response crosses GuardedStream's completion boundary.
+                self.registry.register(std::slice::from_ref(&self.secret))?;
+                Ok(stream)
+            })
+        }
+    }
+    struct CaptureTool(Mutex<Vec<ToolCall>>);
+    impl Tool for CaptureTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "capture".into(),
+                description: "Controlled in-process credential boundary fixture".into(),
+                input_schema: serde_json::json!({"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"],"additionalProperties":false}),
+            }
+        }
+        fn execute<'a>(
+            &'a self,
+            call: &'a ToolCall,
+            _: &'a ToolContext,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, ToolResult> {
+            Box::pin(async move {
+                self.0
+                    .lock()
+                    .map_err(|_| err("capture_lock"))?
+                    .push(call.clone());
+                Ok(ToolResult {
+                    ok: true,
+                    data: Some(
+                        serde_json::from_str(&call.arguments).map_err(|_| err("capture_args"))?,
+                    ),
+                    error: None,
+                    truncated: false,
+                })
+            })
+        }
+    }
+    struct ExactApproval {
+        tool: String,
+        requests: Mutex<Vec<ApprovalRequest>>,
+    }
+    impl ApprovalHandler for ExactApproval {
+        fn confirm<'a>(
+            &'a self,
+            request: &'a ApprovalRequest,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, Option<bool>> {
+            Box::pin(async move {
+                if request.call_id != "credential-operation" || request.tool != self.tool {
+                    return Err(err("unexpected_approval"));
+                }
+                self.requests
+                    .lock()
+                    .map_err(|_| err("approval_lock"))?
+                    .push(request.clone());
+                Ok(Some(true))
+            })
+        }
+    }
+
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    session.protocol = ModelProtocol::ChatCompletions;
+    let store = Arc::new(SqliteStore::open(&temp.path().join("state"), vec![])?);
+    let registry = Arc::new(SecretRegistry::default());
+    let secret = "fixture\"credential\\tail".to_owned();
+    let mut payload = serde_json::json!({"token":secret}).to_string();
+    for _ in 0..3 {
+        payload = serde_json::to_string(&payload)?;
+    }
+    let adapter = Arc::new(CaptureTool(Mutex::new(Vec::new())));
+    let name = ToolRegistry::default().register_external(
+        "credential-fixture",
+        "v1",
+        adapter.clone(),
+        ExternalAccess::Unclassified,
+    )?;
+    let model = Arc::new(FakeModel::new(vec![
+        vec![call(
+            "credential-operation",
+            &name,
+            serde_json::json!({"payload":payload}),
+        )],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let approval = Arc::new(ExactApproval {
+        tool: name.clone(),
+        requests: Mutex::new(Vec::new()),
+    });
+    let mut runtime = AgentRuntime::new(RuntimeSetup {
+        run: run.clone(),
+        model: Arc::new(LearningModel {
+            inner: model.clone(),
+            registry: registry.clone(),
+            secret: secret.clone(),
+        }),
+        store: store.clone(),
+        policy: Arc::new(Policy::new(temp.path(), PermissionConfig::default())?),
+        files: Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        cancellation: Arc::new(NoCancel),
+        review: ReviewConfig::new("fake".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "Exercise exact human approval without sharing credentials with a reviewer".into(),
+        confirmation: Some(approval.clone()),
+        limits: RuntimeLimits::default(),
+    })?
+    .with_secret_registry(registry.clone())?;
+    assert!(registry.snapshot()?.is_empty());
+    assert_eq!(
+        runtime.register_external(
+            "credential-fixture",
+            "v1",
+            adapter.clone(),
+            ExternalAccess::Unclassified
+        )?,
+        name
+    );
+    assert_eq!(
+        runtime.run(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    let known = vec![secret];
+    let captured = adapter.0.lock().map_err(|_| "capture lock")?.clone();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&captured[0].arguments)?["payload"],
+        payload
+    );
+    let requests = approval
+        .requests
+        .lock()
+        .map_err(|_| "approval lock")?
+        .clone();
+    assert_eq!(requests.len(), 1);
+    assert!(!saya_core::redaction::contains_secret(
+        &serde_json::to_string(&requests)?,
+        &known
+    ));
+    let seen = model.seen.lock().map_err(|_| "model lock")?.clone();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter()
+            .all(|request| request.purpose == ModelPurpose::Execution)
+    );
+    for request in seen.iter() {
+        assert!(!saya_core::redaction::contains_secret(
+            &serde_json::to_string(&request.history)?,
+            &known
+        ));
+    }
+    assert!(seen[1].history.iter().any(|item| matches!(item,HistoryItem::ToolResult{call_id,result} if call_id=="credential-operation" && result.ok)));
+    let saved = store
+        .load_session(session.id)
+        .await?
+        .ok_or("missing saved session")?;
+    assert_eq!(saved.history, session.history);
+    assert!(!saya_core::redaction::contains_secret(
+        &serde_json::to_string(&saved)?,
+        &known
+    ));
+    let persisted_call = saved
+        .history
+        .iter()
+        .find_map(|item| match item {
+            HistoryItem::ToolCall(call) if call.call_id == "credential-operation" => Some(call),
+            _ => None,
+        })
+        .ok_or("missing sanitized tool call")?;
+    assert_ne!(
+        serde_json::from_str::<serde_json::Value>(&persisted_call.arguments)?["payload"],
+        payload
+    );
+    let connection = rusqlite::Connection::open(store.path())?;
+    for sql in [
+        "SELECT item FROM messages",
+        "SELECT call FROM tool_calls",
+        "SELECT result FROM tool_calls",
+        "SELECT request FROM approval_requests",
+    ] {
+        let mut statement = connection.prepare(sql)?;
+        for row in statement.query_map([], |row| row.get::<_, String>(0))? {
+            assert!(!saya_core::redaction::contains_secret(&row?, &known));
+        }
+    }
+    Ok(())
+}

@@ -986,7 +986,7 @@ impl AgentRuntime {
                             "model completed without text or tool calls",
                         ));
                     }
-                    return secrets::history(items, &self.secret_source);
+                    return secrets::model_response(items, &self.secret_source);
                 }
                 Err(err) => {
                     if received {
@@ -1717,7 +1717,9 @@ impl AgentRuntime {
                     _ => {}
                 }
             }
-            let mut changes: Vec<_> = items
+            let history_items = secrets::history(items.clone(), &self.secret_source)
+                .map_err(normalize_storage_error)?;
+            let mut changes: Vec<_> = history_items
                 .iter()
                 .cloned()
                 .map(|item| StoreChange::History {
@@ -1725,11 +1727,11 @@ impl AgentRuntime {
                     item,
                 })
                 .collect();
-            if let Some(record) = self.memory_response_change(session, &items)? {
+            if let Some(record) = self.memory_response_change(session, &history_items)? {
                 changes.push(record);
             }
             self.store.commit(&changes).await?;
-            session.history.extend(items.iter().cloned());
+            session.history.extend(history_items);
             let calls: Vec<_> = items
                 .iter()
                 .filter_map(|item| {
