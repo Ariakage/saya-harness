@@ -147,3 +147,7 @@ DEV-055 至 DEV-057 及 DEV-075 已完成统一环境、独立原生后端、网
 代理延迟由payload的 `CLOCK_MONOTONIC` 测量Host直连、原生HTTP代理与CONNECT转发的完整请求RTT，CONNECT样本采用隧道内明文HTTP。CLI整体资源另行记录。样本数支持1至20，CI固定每组3次，独立[性能核验器](../scripts/n2/verify_performance.py)重算分位数、比较值、资源汇总与实际操作证明。[完整证据范围](n2-validation.md#完整性能证据补充)
 
 任务分解见[后续开发计划](post-mvp-plan.md)。
+
+## N3 多入口共享网络预算
+
+`RunNetworkBudget`为base broker及各插件entry listener提供同一Run的连接并发、累计连接、总字节和固定截止时间。origin、DNS／IP校验及更严格的局部限额继续按各listener生效。字节在转发前预留，失败预留保守计入累计额度，活动连接槽沿Drop归还。6项跨listener预算回归及既有网络回归、严格全目标Clippy通过，实际HTTP／原生平台证据按N3记录维护。

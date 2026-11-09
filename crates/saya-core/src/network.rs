@@ -4,8 +4,10 @@
 //! requests are individually framed and use a fresh upstream connection. No redirects are followed.
 //! The sandbox must independently prevent direct egress and access to other local sockets.
 
+mod budget;
 mod http;
 mod policy;
+pub use budget::RunNetworkBudget;
 
 pub use policy::{
     BrokerLimits, BrokerPolicy, NetworkTarget, NormalizedOrigin, OriginScheme, is_public_address,
@@ -146,7 +148,28 @@ impl NetworkBroker {
         cancel: Arc<dyn Cancellation>,
         resolver: Arc<dyn NetworkResolver>,
     ) -> Result<BrokerHandle, NetworkError> {
+        let budget = RunNetworkBudget::new(&policy.limits)?;
+        Self::start_scoped_with_resolver(policy, cancel, budget, resolver).await
+    }
+
+    /// Share cumulative byte/connection/time ceilings with other Run listeners.
+    /// Origin checks and any stricter per-listener policy remain independent.
+    pub async fn start_scoped(
+        policy: BrokerPolicy,
+        cancel: Arc<dyn Cancellation>,
+        budget: Arc<RunNetworkBudget>,
+    ) -> Result<BrokerHandle, NetworkError> {
+        Self::start_scoped_with_resolver(policy, cancel, budget, Arc::new(SystemResolver)).await
+    }
+    /// Use a host-owned resolver while retaining the same shared Run ceiling.
+    pub async fn start_scoped_with_resolver(
+        policy: BrokerPolicy,
+        cancel: Arc<dyn Cancellation>,
+        budget: Arc<RunNetworkBudget>,
+        resolver: Arc<dyn NetworkResolver>,
+    ) -> Result<BrokerHandle, NetworkError> {
         policy.validate()?;
+        budget.check()?;
         if cancel.is_cancelled() {
             return Err(NetworkError::new(NetworkErrorKind::Shutdown));
         }
@@ -167,6 +190,7 @@ impl NetworkBroker {
             policy,
             resolver,
             total_bytes: AtomicU64::new(0),
+            budget,
         });
         let task = tokio::spawn(async move {
             supervise(
@@ -229,6 +253,7 @@ struct BrokerState {
     policy: BrokerPolicy,
     resolver: Arc<dyn NetworkResolver>,
     total_bytes: AtomicU64,
+    budget: Arc<RunNetworkBudget>,
 }
 impl BrokerState {
     fn charge(&self, bytes: usize) -> Result<(), NetworkError> {
@@ -240,7 +265,8 @@ impl BrokerState {
                     .filter(|total| *total <= self.policy.limits.max_total_bytes)
             })
             .map(|_| ())
-            .map_err(|_| NetworkError::new(NetworkErrorKind::LimitExceeded))
+            .map_err(|_| NetworkError::new(NetworkErrorKind::LimitExceeded))?;
+        self.budget.charge(count)
     }
 
     async fn connect(&self, origin: &NormalizedOrigin) -> Result<TcpStream, NetworkError> {
@@ -283,7 +309,10 @@ async fn supervise(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut jobs = JoinSet::new();
-    let lifetime = tokio::time::sleep(Duration::from_millis(state.policy.limits.active_timeout_ms));
+    let deadline = (tokio::time::Instant::now()
+        + Duration::from_millis(state.policy.limits.active_timeout_ms))
+    .min(state.budget.deadline());
+    let lifetime = tokio::time::sleep_until(deadline);
     tokio::pin!(lifetime);
     let mut accepted = 0usize;
     loop {
@@ -326,9 +355,13 @@ fn spawn_client(
     {
         return;
     }
+    let Ok(connection) = state.budget.acquire() else {
+        return;
+    };
     *accepted += 1;
     let state = state.clone();
     jobs.spawn(async move {
+        let _connection = connection;
         let _ = timeout(
             Duration::from_millis(state.policy.limits.connection_timeout_ms),
             http::serve(stream, state),
