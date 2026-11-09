@@ -56,6 +56,10 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 同一固定优化程序在本机macOS27.2 ARM通过25／25项，报告为 `target/n2/final-local/mcp/mcp-report.json`，运行前后程序SHA一致。真实TUI从Configured进入Connected／HTTP／2工具，结束后Stopped／0工具，SQLite状态同Run配对且终端恢复通过。四平台N2工作流同时执行本脚本与原生、Markdown／TUI验收，最终源码结果待运行。
 
+### Linux 编译夹具兼容修复
+
+最终源码 `97b40f9` 的首次四平台验收在Linux两架构复现Rust编译器动态库定位失败，BUILD／CODE夹具的工具结果为exit127。工具链可读根与`--sysroot`已配置，当前修复显式在隔离内的编译命令设置工具链`lib`路径。保留原生`/proc`策略，Linux实际复验继续进行，失败日志在 `target/n2/remote-review/linux-{arm,x86}-job-*.log`。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

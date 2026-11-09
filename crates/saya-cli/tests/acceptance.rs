@@ -155,8 +155,7 @@ fn allow_compiler(sandbox: &Sandbox) {
 }
 fn compile_and_run() -> Vec<String> {
     #[cfg(not(target_os = "macos"))]
-    let command =
-        "\"$1\" --sysroot \"$2\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
+    let command = "LD_LIBRARY_PATH=\"$2/lib\" \"$1\" --sysroot \"$2\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
     #[cfg(target_os = "macos")]
     let command = "\"$1\" --sysroot \"$2\" -C \"linker=$3\" -C link-arg=-isysroot -C \"link-arg=$4\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
     let argv = vec![

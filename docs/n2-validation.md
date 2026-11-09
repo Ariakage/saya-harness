@@ -97,6 +97,12 @@ macOS本机未执行Linux委派用例。最终四平台固定源码结果在后�
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/mcp_acceptance.py target/release/saya
 ```
 
+## 首次最终源码验证与Linux工具链兼容
+
+`97b40f96aad20751e3f803d9e0b0904fee90e175` 已正常推送并启动源码CI与N2四平台验收。Linux两架构的完整门禁均在BUILD／CODE夹具失败，Rust编译器在启动时报告无法加载`librustc_driver`并退出127，后续原生／MCP步骤因门禁失败跳过。原始日志为 `target/n2/remote-review/linux-arm-job-128982907369.log` 与 `linux-x86-job-128982907119.log`。[首次验收](https://github.com/Ariakage/saya-harness/actions/runs/42562872298)
+
+工具链目录已进入可读视图且argv已指定`--sysroot`。根据glibc通过`/proc/self/exe`解析origin的实现，缺少该路径可导致相对动态库定位失败。当前候选为隔离内编译命令显式设置工具链`lib`路径，后端策略保留。原因推断与Linux修复结果分别记录。[glibc实现记录](https://sourceware.org/pipermail/glibc-cvs/2022q4/081599.html)
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

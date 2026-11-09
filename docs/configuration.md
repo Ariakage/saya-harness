@@ -78,6 +78,8 @@ mode = "deny"
 
 解释器、包管理器和编译器位于工作区及系统运行库之外时，需要显式提供其可读目录。可将实际工具链目录加入 `sandbox.read_roots`。对应目录必须存在。此配置适用于进程读取工具链，文件工具访问该目录还需满足逻辑权限策略。原生根数量各限 128 项，根目录 `/` 无法作为原生开放根。
 
+Linux原生视图省略 `/proc`。依赖 `/proc/self/exe` 定位工具链的程序可能需要显式路径，Rust 编译可同时指定 `--sysroot`，并在隔离内的编译命令中设置 `LD_LIBRARY_PATH` 指向该工具链的 `lib`。glibc 的 `$ORIGIN` 计算使用 `/proc/self/exe`，这是当前缺库日志的原因推断，修复后的Linux实际结果由[N2验收](n2-validation.md)记录。[glibc实现记录](https://sourceware.org/pipermail/glibc-cvs/2022q4/081599.html)
+
 宿主默认保护启动时已存在的配置文件、data、state、cache 目录以及工作区 `.saya/local`。启用凭据引用而新建凭据目录后，宿主会把实际凭据目录加入保护集合。其他 `.saya` 项目指令和 Skills 仍按[项目上下文约定](project-context.md)读取。Linux 无法安全表示保护路径时返回 `unsupported_fs_policy`，具体约束见[执行契约](execution.md#n2-原生执行边界)。
 
 显式 `backend = "host"` 选择宿主兼容执行，其文件系统与网络隔离能力报告为 `unsupported`，工作模式、权限规则与运行预算继续生效。启用了 `credential_ref` 的 HTTP MCP 服务，或 state 目录下已经存在 `credentials` 存储目录时，应用拒绝 Host 启动。
