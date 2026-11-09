@@ -527,6 +527,66 @@ fn mode_name(state: ToolState) -> &'static str {
         ToolState::Unknown => "unknown",
     }
 }
+fn stored_session(
+    conn: &Connection,
+    session_id: SessionId,
+) -> Result<Option<Session>, BoundaryError> {
+    let key = id(session_id.0);
+    let raw: Option<String> = conn
+        .query_row("SELECT metadata FROM sessions WHERE id=?1", [&key], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(sql_error)?;
+    let Some(raw) = raw else { return Ok(None) };
+    let mut session: Session =
+        serde_json::from_str(&raw).map_err(|_| error("storage_corrupt", "invalid session data"))?;
+    if session.id != session_id || !session.history.is_empty() {
+        return Err(error("storage_corrupt", "invalid session identity"));
+    }
+    let mut stmt = conn
+        .prepare("SELECT item FROM messages WHERE session_id=?1 ORDER BY ordinal")
+        .map_err(sql_error)?;
+    let rows = stmt
+        .query_map([key], |r| r.get::<_, String>(0))
+        .map_err(sql_error)?;
+    for row in rows {
+        let raw = row.map_err(sql_error)?;
+        let item: HistoryItem = serde_json::from_str(&raw)
+            .map_err(|_| error("storage_corrupt", "invalid stored history"))?;
+        session.history.push(item);
+    }
+    Ok(Some(session))
+}
+
+fn stored_checkpoint(
+    conn: &Connection,
+    session_id: SessionId,
+) -> Result<Option<crate::context_store::ContextCheckpoint>, BoundaryError> {
+    let raw: Option<String> = conn.query_row(
+        "SELECT reference FROM change_log WHERE session_id=?1 AND kind='context_checkpoint' ORDER BY seq DESC LIMIT 1",
+        [id(session_id.0)], |row| row.get(0)).optional().map_err(sql_error)?;
+    let Some(raw) = raw else { return Ok(None) };
+    if raw.len() > 2 * 1024 * 1024 {
+        return Err(error(
+            "storage_corrupt",
+            "Context checkpoint exceeds its read limit",
+        ));
+    }
+    let checkpoint: crate::context_store::ContextCheckpoint = serde_json::from_str(&raw)
+        .map_err(|_| error("storage_corrupt", "Invalid context checkpoint"))?;
+    checkpoint
+        .validate_persisted()
+        .map_err(|_| error("storage_corrupt", "Context checkpoint integrity is invalid"))?;
+    if checkpoint.record.session_id != session_id {
+        return Err(error(
+            "storage_corrupt",
+            "Context checkpoint session differs",
+        ));
+    }
+    Ok(Some(checkpoint))
+}
+
 fn apply(
     tx: &Transaction<'_>,
     change: &StoreChange,
@@ -552,6 +612,51 @@ fn apply(
                 .map_err(sql_error)?;
             }
             journal(tx, &key, None, "session", None)?;
+        }
+        StoreChange::MemoryExposure(value) => {
+            let run = id(value.run_id.0);
+            let session = run_session(tx, &run)?;
+            if session != id(value.session_id.0) {
+                return Err(error("memory_exposure", "Exposure run differs"));
+            }
+            let source = stored_session(tx, value.session_id)?
+                .ok_or_else(|| error("storage_error", "Exposure session is absent"))?;
+            value.validate_source(&source)?;
+            let encoded = json(value, secrets)?;
+            if encoded.len() > 8192 {
+                return Err(error("context_limit", "Exposure record exceeds its limit"));
+            }
+            journal(tx, &session, Some(&run), "memory_exposure", Some(&encoded))?;
+        }
+        StoreChange::ContextCheckpoint { run_id, checkpoint } => {
+            let run = id(run_id.0);
+            let session = run_session(tx, &run)?;
+            if session != id(checkpoint.record.session_id.0) {
+                return Err(error(
+                    "compaction_conflict",
+                    "Checkpoint producer session differs",
+                ));
+            }
+            let source = stored_session(tx, checkpoint.record.session_id)?
+                .ok_or_else(|| error("storage_error", "Checkpoint session is absent"))?;
+            checkpoint.validate_source(&source)?;
+            let current = stored_checkpoint(tx, source.id)?;
+            if checkpoint.follows(current.as_ref())? {
+                let record = json(checkpoint, secrets)?;
+                if record.len() > 2 * 1024 * 1024 {
+                    return Err(error(
+                        "context_limit",
+                        "Checkpoint record exceeds its storage limit",
+                    ));
+                }
+                journal(
+                    tx,
+                    &session,
+                    Some(&run),
+                    "context_checkpoint",
+                    Some(&record),
+                )?;
+            }
         }
         StoreChange::RunStarted(run) => {
             let key = id(run.id.0);
@@ -1655,32 +1760,46 @@ impl Store for SqliteStore {
                 let conn = inner
                     .lock()
                     .map_err(|_| error("storage_error", "database lock failed"))?;
-                let key = id(session_id.0);
-                let raw: Option<String> = conn
-                    .query_row("SELECT metadata FROM sessions WHERE id=?1", [&key], |r| {
-                        r.get(0)
-                    })
-                    .optional()
-                    .map_err(sql_error)?;
-                let Some(raw) = raw else { return Ok(None) };
-                let mut session: Session = serde_json::from_str(&raw)
-                    .map_err(|_| error("storage_corrupt", "invalid session data"))?;
-                if session.id != session_id || !session.history.is_empty() {
-                    return Err(error("storage_corrupt", "invalid session identity"));
-                }
-                let mut stmt = conn
-                    .prepare("SELECT item FROM messages WHERE session_id=?1 ORDER BY ordinal")
-                    .map_err(sql_error)?;
-                let rows = stmt
-                    .query_map([key], |r| r.get::<_, String>(0))
-                    .map_err(sql_error)?;
-                for row in rows {
+                stored_session(&conn, session_id)
+            })
+            .await
+            .map_err(|_| error("storage_error", "database worker failed"))?
+        })
+    }
+    fn memory_exposures(
+        &self,
+        session_id: SessionId,
+    ) -> Operation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let conn = inner.lock().map_err(|_| error("storage_error", "database lock failed"))?;
+                let mut statement = conn.prepare("SELECT reference FROM change_log WHERE session_id=?1 AND kind='memory_exposure' ORDER BY seq LIMIT 65537").map_err(sql_error)?;
+                let rows = statement.query_map([id(session_id.0)], |row| row.get::<_, String>(0)).map_err(sql_error)?;
+                let mut values = Vec::new();
+                let source = stored_session(&conn, session_id)?.ok_or_else(|| error("storage_error", "Exposure source is absent"))?;
+                for (index, row) in rows.enumerate() {
                     let raw = row.map_err(sql_error)?;
-                    let item: HistoryItem = serde_json::from_str(&raw)
-                        .map_err(|_| error("storage_corrupt", "invalid stored history"))?;
-                    session.history.push(item);
+                    if index >= 65536 || raw.len() > 8192 { return Err(error("context_limit", "Exposure registry exceeds its limit")); }
+                    let value: crate::memory_context::MemoryExposure = serde_json::from_str(&raw).map_err(|_| error("storage_corrupt", "Invalid exposure record"))?;
+                    value.validate_source(&source)?;
+                    values.push(value);
                 }
-                Ok(Some(session))
+                Ok(values)
+            }).await.map_err(|_| error("storage_error", "database worker failed"))?
+        })
+    }
+    fn context_checkpoint(
+        &self,
+        session_id: SessionId,
+    ) -> Operation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let conn = inner
+                    .lock()
+                    .map_err(|_| error("storage_error", "database lock failed"))?;
+                stored_checkpoint(&conn, session_id)
             })
             .await
             .map_err(|_| error("storage_error", "database worker failed"))?

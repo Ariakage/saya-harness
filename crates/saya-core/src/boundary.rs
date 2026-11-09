@@ -82,6 +82,11 @@ pub trait ModelStream: Send {
 
 /// Starts a provider request. Review calls must not be supplied executable tools.
 pub trait Model: Send + Sync {
+    /// Local host preflight immediately before consuming a request budget.
+    /// It performs no provider call or side effect.
+    fn check_start(&self, _request: &ModelRequest) -> Result<(), BoundaryError> {
+        Ok(())
+    }
     /// Local counting of the exact serialized request, with no network I/O.
     fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
         None
@@ -145,6 +150,12 @@ pub struct ToolContext {
 #[derive(Debug, Clone)]
 pub enum StoreChange {
     Session(Session),
+    /// Publish summary record and active pointer atomically against their source.
+    ContextCheckpoint {
+        run_id: crate::contract::RunId,
+        checkpoint: Box<crate::context_store::ContextCheckpoint>,
+    },
+    MemoryExposure(crate::memory_context::MemoryExposure),
     RunStarted(Run),
     History {
         session_id: crate::contract::SessionId,
@@ -196,6 +207,18 @@ pub enum StoreChange {
 
 /// Storage boundary. The available in-memory implementation is not durable.
 pub trait Store: Send + Sync {
+    fn memory_exposures(
+        &self,
+        _id: crate::contract::SessionId,
+    ) -> Operation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn context_checkpoint(
+        &self,
+        _id: crate::contract::SessionId,
+    ) -> Operation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Trusted host output records for recovery. Tool bodies are not a registry.
     fn output_references(
         &self,

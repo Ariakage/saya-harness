@@ -91,8 +91,9 @@ impl AnthropicModel {
         let output = self.settings.validate(request)?;
         let messages = history(&request.history)?;
         let system = if self.prompt_cache
-            && request.purpose == crate::contract::ModelPurpose::Execution
-            && request.dynamic_instructions.is_some()
+            && ((request.purpose == crate::contract::ModelPurpose::Execution
+                && request.dynamic_instructions.is_some())
+                || request.purpose == crate::contract::ModelPurpose::Compaction)
         {
             let mut blocks = Vec::new();
             if !request.instructions.is_empty() {

@@ -103,6 +103,14 @@ pub(super) fn changes(
             Ok(match change {
                 StoreChange::Session(value) => StoreChange::Session(session(value, source)?),
                 StoreChange::RunStarted(value) => StoreChange::RunStarted(redact(value, source)?),
+                StoreChange::MemoryExposure(value) => {
+                    require_clean(&value, source)?;
+                    StoreChange::MemoryExposure(value)
+                }
+                StoreChange::ContextCheckpoint { run_id, checkpoint } => {
+                    require_clean(&checkpoint, source)?;
+                    StoreChange::ContextCheckpoint { run_id, checkpoint }
+                }
                 StoreChange::History { session_id, item } => StoreChange::History {
                     session_id,
                     item: history_item(item, source)?,
@@ -194,6 +202,13 @@ impl GuardedModel {
     }
 }
 impl Model for GuardedModel {
+    fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
+        self.inner.request_counter()
+    }
+    fn check_start(&self, request: &ModelRequest) -> Result<(), BoundaryError> {
+        model_request(request, &self.source)?;
+        self.inner.check_start(request)
+    }
     fn validate_session(&self, session: &crate::contract::Session) -> Result<(), BoundaryError> {
         self.inner.validate_session(session)
     }

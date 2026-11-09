@@ -11,8 +11,10 @@ pub mod background;
 pub mod boundary;
 pub mod checkpoint;
 pub mod command_analysis;
+pub mod compaction;
 pub mod config;
 pub mod context_builder;
+pub mod context_store;
 pub mod contract;
 pub mod credentials;
 pub mod dispatch;
@@ -26,6 +28,7 @@ pub mod logging;
 
 pub mod mcp;
 pub mod memory;
+pub mod memory_context;
 pub mod metrics;
 pub mod mode;
 pub mod network;

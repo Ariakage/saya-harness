@@ -11,6 +11,7 @@ struct State {
     runs: HashMap<RunId, Run>,
     tools: HashMap<(RunId, String), ToolState>,
     changes: Vec<StoreChange>,
+    contexts: HashMap<SessionId, crate::context_store::ContextCheckpoint>,
 }
 
 /// A transactional in-memory store. State is lost when this value is dropped.
@@ -41,6 +42,41 @@ impl Store for MemoryStore {
         })
     }
 
+    fn memory_exposures(
+        &self,
+        id: SessionId,
+    ) -> Operation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        Box::pin(async move {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("memory store lock poisoned"))?;
+            Ok(state
+                .changes
+                .iter()
+                .filter_map(|change| match change {
+                    StoreChange::MemoryExposure(value) if value.session_id == id => {
+                        Some(value.clone())
+                    }
+                    _ => None,
+                })
+                .collect())
+        })
+    }
+    fn context_checkpoint(
+        &self,
+        id: SessionId,
+    ) -> Operation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        Box::pin(async move {
+            Ok(self
+                .state
+                .lock()
+                .map_err(|_| failure("memory store lock poisoned"))?
+                .contexts
+                .get(&id)
+                .cloned())
+        })
+    }
     fn output_references(
         &self,
         id: SessionId,
@@ -75,6 +111,35 @@ impl Store for MemoryStore {
                 match change {
                     StoreChange::Session(session) => {
                         next.sessions.insert(session.id, session.clone());
+                    }
+                    StoreChange::MemoryExposure(value) => {
+                        let run = next
+                            .runs
+                            .get(&value.run_id)
+                            .ok_or_else(|| failure("run not found"))?;
+                        if run.session_id != value.session_id {
+                            return Err(failure("memory exposure run mismatch"));
+                        }
+                        value.validate_source(
+                            next.sessions
+                                .get(&value.session_id)
+                                .ok_or_else(|| failure("session not found"))?,
+                        )?;
+                    }
+                    StoreChange::ContextCheckpoint { run_id, checkpoint } => {
+                        let run = next
+                            .runs
+                            .get(run_id)
+                            .ok_or_else(|| failure("run not found"))?;
+                        let session = next
+                            .sessions
+                            .get(&run.session_id)
+                            .ok_or_else(|| failure("session not found"))?;
+                        checkpoint.validate_source(session)?;
+                        if checkpoint.follows(next.contexts.get(&session.id))? {
+                            next.contexts
+                                .insert(session.id, checkpoint.as_ref().clone());
+                        }
                     }
                     StoreChange::RunStarted(run) => {
                         if !next.sessions.contains_key(&run.session_id) {

@@ -103,11 +103,10 @@ fn adapter(
             settings,
             ResponsesCompatibility::default(),
         )),
-        ModelProtocol::AnthropicMessages => Arc::new(AnthropicModel::new(
-            transport,
-            settings,
-            AnthropicVersion::default(),
-        )),
+        ModelProtocol::AnthropicMessages => Arc::new(
+            AnthropicModel::new(transport, settings, AnthropicVersion::default())
+                .with_prompt_cache(true),
+        ),
     })
 }
 
@@ -123,47 +122,62 @@ async fn local_counter_matches_actual_wire_body_for_all_three_protocols()
         ModelProtocol::Responses,
         ModelProtocol::AnthropicMessages,
     ] {
-        let (url, received) = fixture::server(vec![("application/json", response(protocol))])?;
-        let model = adapter(protocol, url, "fixture", Some(ThinkingEffort::High))?;
-        let mut request = request("fixture", ModelPurpose::Execution);
-        request.instructions = "Static rules. 静态指令。".into();
-        request.dynamic_instructions = Some("Current host data. 动态上下文。".into());
-        request.tools.push(ToolDefinition {name:"read_file".into(),description:"Bounded source evidence".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})});
-        let identity = CountingIdentity {
-            protocol,
-            model: "fixture-model".into(),
-            adapter_version: saya_core::provider::COUNTING_ADAPTER_VERSION.into(),
-        };
-        let fingerprint = context_builder::request_fingerprint(&request, &identity)?;
-        let evidence = model
-            .request_counter()
-            .expect("local adapter counter")
-            .count(&request, &identity, &fingerprint)?;
-        assert!(
-            received.try_recv().is_err(),
-            "counting must not perform HTTP"
-        );
-        let mut stream = model.start(&request, &Never).await?;
-        assert!(stream.next(&Never).await?.is_some());
-        let body = received.recv_timeout(Duration::from_secs(1))?.to_string();
-        let ascii = body.chars().filter(char::is_ascii).count() as u64;
-        let other = body
-            .chars()
-            .filter(|character| !character.is_ascii())
-            .count() as u64;
-        assert_eq!(evidence.input_tokens, ascii.div_ceil(4) + other);
-        assert_eq!(evidence.request_fingerprint, fingerprint);
-        let wrong = CountingIdentity {
-            model: "wrong-model".into(),
-            ..identity
-        };
-        assert!(
-            model
+        for purpose in [ModelPurpose::Execution, ModelPurpose::Compaction] {
+            let (url, received) = fixture::server(vec![("application/json", response(protocol))])?;
+            let model = adapter(protocol, url, "fixture", Some(ThinkingEffort::High))?;
+            let mut request = request("fixture", purpose);
+            request.instructions = "Static rules. 静态指令。".into();
+            if purpose == ModelPurpose::Execution {
+                request.dynamic_instructions = Some("Current host data. 动态上下文。".into());
+                request.tools.push(ToolDefinition {name:"read_file".into(),description:"Bounded source evidence".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})});
+            }
+            let identity = CountingIdentity {
+                protocol,
+                model: "fixture-model".into(),
+                adapter_version: saya_core::provider::COUNTING_ADAPTER_VERSION.into(),
+            };
+            let fingerprint = context_builder::request_fingerprint(&request, &identity)?;
+            let evidence = model
                 .request_counter()
-                .unwrap()
-                .count(&request, &wrong, &fingerprint)
-                .is_err()
-        );
+                .expect("local adapter counter")
+                .count(&request, &identity, &fingerprint)?;
+            assert!(
+                received.try_recv().is_err(),
+                "counting must not perform HTTP"
+            );
+            let mut stream = model.start(&request, &Never).await?;
+            assert!(stream.next(&Never).await?.is_some());
+            let received_body = received.recv_timeout(Duration::from_secs(1))?;
+            if protocol == ModelProtocol::AnthropicMessages {
+                assert_eq!(
+                    received_body["system"][0]["cache_control"]["type"],
+                    "ephemeral"
+                );
+                assert_eq!(received_body["system"][0]["text"], request.instructions);
+            }
+            if purpose == ModelPurpose::Compaction {
+                assert!(request.tools.is_empty());
+            }
+            let body = received_body.to_string();
+            let ascii = body.chars().filter(char::is_ascii).count() as u64;
+            let other = body
+                .chars()
+                .filter(|character| !character.is_ascii())
+                .count() as u64;
+            assert_eq!(evidence.input_tokens, ascii.div_ceil(4) + other);
+            assert_eq!(evidence.request_fingerprint, fingerprint);
+            let wrong = CountingIdentity {
+                model: "wrong-model".into(),
+                ..identity
+            };
+            assert!(
+                model
+                    .request_counter()
+                    .unwrap()
+                    .count(&request, &wrong, &fingerprint)
+                    .is_err()
+            );
+        }
     }
     Ok(())
 }

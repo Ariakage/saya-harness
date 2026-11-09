@@ -286,6 +286,9 @@ struct MeasuredStream {
     completion: Completion,
 }
 impl Model for MeasuredModel {
+    fn check_start(&self, request: &ModelRequest) -> Result<(), BoundaryError> {
+        self.inner.check_start(request)
+    }
     fn request_counter(&self) -> Option<&dyn crate::context_builder::RequestCounter> {
         self.inner.request_counter()
     }
