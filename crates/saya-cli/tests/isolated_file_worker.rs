@@ -351,3 +351,63 @@ async fn native_parent_rpc_accepts_large_limits_when_actual_packets_fit() {
     assert_eq!(fs::read_to_string(path).unwrap(), "small result\n");
     assert!(environment.cleanup().unwrap().complete);
 }
+
+#[test]
+fn native_direct_prepared_worker_returns_a_valid_response_before_parent_supervision() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().canonicalize().unwrap();
+    let path = workspace.join("direct-worker.txt");
+    fs::write(&path, "SYNTHETIC-DIRECT-WORKER\n").unwrap();
+    let environment = native_environment(&workspace, Vec::new());
+    let argv = environment.file_worker_argv().unwrap();
+    let prepared = environment
+        .prepare_command(&argv, &workspace, &std::collections::BTreeMap::new())
+        .unwrap();
+    let mut command = Command::new(&prepared.program);
+    prepared.configure(&mut command).unwrap();
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut bytes = serde_json::to_vec(&request(
+        &workspace,
+        "read_file",
+        json!({"path":"direct-worker.txt","start_line":1,"line_count":1}),
+        &path,
+    ))
+    .unwrap();
+    bytes.push(b'\n');
+    child.stdin.take().unwrap().write_all(&bytes).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut expired = false;
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            expired = true;
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(8192)]);
+    let stderr = String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(8192)]);
+    assert!(
+        !expired && output.status.success(),
+        "synthetic direct worker status={} expired={expired} stdout={stdout:?} stderr={stderr:?}",
+        output.status
+    );
+    let response: FileWorkerResponse =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "synthetic direct worker invalid JSON {error}: stdout={stdout:?} stderr={stderr:?}"
+            )
+        });
+    assert!(response.result.ok, "{:?}", response.result.error);
+    assert_eq!(
+        response.result.data.unwrap()["content"],
+        "SYNTHETIC-DIRECT-WORKER\n"
+    );
+    assert!(environment.cleanup().unwrap().complete);
+}
