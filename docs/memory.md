@@ -81,3 +81,7 @@ CLI／TUI提供列表、搜索、查看、修改建议、批准、禁用、导�
 ## DEV-087 活动视图备份与恢复
 
 2026-11-10，新增带workspace、内容校验和、当前遗忘约束及主题引用的备份格式，恢复沿既有提案、锁、WAL、幂等receipt与原子发布链路执行。导入保留其他workspace内容和当前墓碑，旧备份无法恢复已遗忘事实，缺失或变化的主题拒绝发布。3项新增回归与既有查询／存储共49项通过，全workspace全目标严格Clippy通过。CLI／TUI管理及正常入口、平台证据继续按[N3验收](n3-validation.md)维护。
+
+## DEV-086 受控记忆工具组件
+
+专用memory_read／search／evidence／update／forget使用当前宿主根、workspace、Session原始来源与稳定版本。准备阶段生成绑定完整历史、证据和差异的不可复制操作，执行沿MemoryGate两次授权并核对实际Rule／Model Review／User来源。证据目录默认最新32项，append-only历史游标保持原始ordinal，已有记忆工具输出不能充当独立事实来源。20项组件回归及严格全目标Clippy通过，正常运行权限与遗忘联合证据继续按N3记录维护。
