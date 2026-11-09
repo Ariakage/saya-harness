@@ -120,6 +120,7 @@ fn features() -> BTreeSet<String> {
         "skill-directory-v1",
         "mcp-stdio-v1",
         "mcp-http-v1",
+        "hook-events-v1",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -753,6 +754,64 @@ media_type="text/markdown"
         assert_eq!(disabled["data"]["cleanup_pending"]["total"], 0);
     }
     #[tokio::test]
+    async fn cli_enable_accepts_hook_packages_with_the_runtime_feature_and_explicit_ceiling() {
+        #[derive(Parser)]
+        struct Arguments {
+            #[command(subcommand)]
+            action: PluginAction,
+        }
+        let fixture = Fixture::new(None);
+        let manifest = MANIFEST
+            .replace(
+                "requires_features=[\"plugin-manifest-v1\"]",
+                "requires_features=[\"plugin-manifest-v1\",\"hook-events-v1\"]",
+            )
+            .replace(
+                "requested=[\"workspace.read\"]",
+                "requested=[\"workspace.read\",\"process.exec\",\"hook.observe\"]",
+            );
+        fs::write(
+            fixture.package.join(MANIFEST_NAME),
+            format!("{manifest}\n[[hooks]]\nid=\"started\"\nevent=\"run.started\"\nkind=\"observer\"\nprogram=\"shell\"\nargs=[\"@plugin/hook.sh\"]\ntimeout_ms=5000\n"),
+        ).unwrap();
+        fs::write(fixture.package.join("hook.sh"), "#!/bin/sh\nexit 93\n").unwrap();
+        let validated = run(
+            &PluginAction::Validate {
+                path: fixture.package.clone(),
+            },
+            &fixture.config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(validated["data"]["compatibility"]["compatible"], true);
+        assert!(
+            validated["data"]["compatibility"]["host_features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|feature| feature == "hook-events-v1")
+        );
+        let digest = fixture.install().await;
+        let action =
+            Arguments::try_parse_from(["plugin", "enable", "io.saya.test", "--digest", &digest])
+                .unwrap()
+                .action;
+        let enabled = run(&action, &fixture.config).await.unwrap();
+        assert_eq!(enabled["data"]["enabled"]["scope"]["kind"], "workspace");
+        let granted = enabled["data"]["enabled"]["grant"]["capabilities"]
+            .as_array()
+            .unwrap();
+        for capability in ["workspace.read", "process.exec", "hook.observe"] {
+            assert!(granted.iter().any(|value| value == capability));
+        }
+        assert_eq!(granted.len(), 3);
+        let store = open_store(&fixture.config, known_registry(&fixture.config).unwrap()).unwrap();
+        let installed = store.inspect(&digest).unwrap();
+        assert_eq!(installed.manifest.hooks.len(), 1);
+        assert!(installed.summary.instances.is_empty());
+        assert!(!features().contains("browser-managed-v1"));
+    }
+    #[tokio::test]
     async fn update_uses_compare_and_swap_and_uninstall_reports_owned_cleanup_pending() {
         let fixture = Fixture::new(None);
         let old = fixture.install().await;
@@ -944,7 +1003,7 @@ media_type="text/markdown"
             ])
             .is_err()
         );
-        assert!(!features().contains("hook-events-v1"));
+        assert!(features().contains("hook-events-v1"));
         assert!(!features().contains("browser-managed-v1"));
     }
 }

@@ -1,6 +1,6 @@
 # saya-plugin v1 规范草案
 
-**更新于2026-11-09。系统名称沿用D-031，本文细化F-03／DEV-065至DEV-067、DEV-078。manifest v1表示插件格式版本，DEV-078验证组件已完成本机验收，实际支持情况由宿主能力声明与验收结果决定。**
+**更新于2026-11-10。系统名称沿用D-031，本文细化F-03／DEV-065至DEV-067、DEV-078。manifest v1表示插件格式版本，验证、安装、运行装配及Hook组件已接正常入口，实际支持情况由宿主能力声明与验收结果决定。N3最终冻结候选与四平台验收继续按[验收记录](n3-validation.md)维护。**
 
 ## 规范文件
 
@@ -21,7 +21,7 @@ plugin-root/
   hooks/record_summary.py
 ```
 
-v1 定义声明式 Skills、资源、MCP 服务与受控 Hook 入口。执行组件经批准的解释器／运行环境启动，宿主内部扩展由稳定的工具与应用接口承接。浏览器通过宿主已启用的托管能力使用。
+v1 定义声明式 Skills、资源、MCP 服务与受控 Hook 入口。执行组件经批准的解释器／运行环境启动，宿主内部扩展由稳定的工具与应用接口承接。Browser能力保留在格式中，当前宿主尚未声明 `browser-managed-v1`。
 
 | 字段 | 约束 |
 | --- | --- |
@@ -81,7 +81,7 @@ Skill 文本、资源和服务输出以低信任来源数据传递，执行组�
 
 碰撞键按Unicode NFC、完整大小写折叠、再次NFC的顺序生成。声明引用与封存文件名按实际UTF-8字节精确匹配，树摘要使用这些实际路径字节。验证器以目录FD逐组件打开，拒绝链接、特殊文件和硬链接，文件读取前后核对身份及内容长度。返回值持有实际读取的封存字节，安装器消费该字节快照。
 
-包内容安装到XDG数据目录的私有内容寻址存储，按digest固定，按只读策略提供给原生worker。验证器上限为4,096个普通文件、8,192个总路径项（包含隐式目录）、展开总量64MiB、单文件16MiB、目录深度16、UTF-8相对路径1,024字节及manifest 256KiB。归档提取器在创建条目与展开内容前执行同一增量FileBudget，归档格式与安装接入由DEV-066交付。
+包内容安装到所选data目录下 `plugins/` 的私有内容寻址存储，按digest固定，按只读策略提供给原生worker。验证器上限为4,096个普通文件、8,192个总路径项（包含隐式目录）、展开总量64MiB、单文件16MiB、目录深度16、UTF-8相对路径1,024字节及manifest 256KiB。FileBudget提供增量清单与内容配额检查。当前管理命令只接受本地目录，归档提取及远程下载接入仍待实现。
 
 树摘要算法为 `saya-tree-sha256-v1`。
 
@@ -98,25 +98,27 @@ lock采用TOML v1，顶层字段为 `schema_version`、`digest_algorithm`、`pac
 
 ```text
 validate -> install -> inspect -> enable
-  -> 注册元数据与能力 -> 按需启动 -> 运行租约
+  -> 注册元数据与能力 -> Run准备／事件启动 -> 运行租约
   -> disable -> 取消与清理 -> 释放租约 -> uninstall / GC
 ```
 
 安装先完成解析、结构／语义校验、文件清单与摘要。依赖从已显式取得的包中解析，缺失或循环依赖返回错误。安装阶段只处理包内容与登记。
 
-Skills 按激活请求加载正文。MCP 服务在需要时按 package／entry／Run 身份启动，调用与结果进入统一记录。更新先保存新版本，运行中的实例持有原版本租约，后续 Run 使用选定的新版本。停用立即关闭新调度，并取消、清理已拥有的执行资源。
+Skills按激活请求加载正文。MCP服务按package／entry／Run身份准备、启动并发现目录，调用与结果进入统一记录。更新先保存新版本，运行中的实例持有原版本租约，后续Run使用选定的新版本。
 
-全局安装状态、作用域启用状态和运行实例健康状态分别保存。cleanup pending／unknown 有独立展示，卸载在租约及资源处理后回收对象。工作区产物通过自身生命周期管理。
+全局安装状态、作用域启用状态和运行实例健康状态分别保存。停用登记StopRequested并关闭新的调度，拥有资源的Run在撤回检查和收尾阶段完成取消及清理。cleanup pending／unknown通过CLI结果保留，卸载在租约及资源处理后回收对象。工作区产物通过自身生命周期管理。
 
 ## 可执行入口和 Hooks
 
 `program` 为宿主批准的运行环境名称。`args` 为直接 argv，`@plugin/` 路径前缀解析到当前已验证包的只读访问位置。替换使用路径值，解释器和 shell 入口经过命令分析与当前策略。
 
-MCP transport 首版覆盖 stdio，远程 HTTPS 需通过 `mcp.http`、网络及相应 feature 检查。服务器扩展请求按协商能力、请求预算和宿主策略处理。
+当前MCP transport覆盖stdio与HTTPS，远程连接需通过 `mcp.http`、网络及相应feature检查，并使用宿主受控broker。HTTP凭据可通过宿主显式绑定环境引用、header及bearer。插件的存储式 `credential_ref` 尚缺限定origin的适配器，使用时返回 `plugin_credential_scope_unsupported`。服务器扩展请求按协商能力、请求预算和宿主策略处理。
 
-Hook 事件草案为 `run.started`、`run.finished`、`tool.before_dispatch`、`tool.finished`。observer 返回受限 annotations，check 只在 `tool.before_dispatch` 使用，返回 `pass`、`deny` 或 `abstain`。检查结果与其他权限条件共同决定派发。
+Hook v1事件为 `run.started`、`run.finished`、`tool.before_dispatch`、`tool.finished`。observer返回受限annotations，check只在 `tool.before_dispatch`使用，返回 `pass`、`deny`或 `abstain`。pass／abstain之后仍需原操作的当前权限检查。
 
 Hook 进程作为独立操作保存意图、结果与 parent call，使用当前模式／权限。Manual Approval 产生相应操作确认。人工等待按运行预算规则计时，实际执行使用独立超时。拒绝、格式错误或 check 超时阻止原操作，observer 失败记录诊断。递归 Hook 触发由宿主深度与事件身份约束。
+
+当前默认每个事件最多32个Hook、每Run最多256次调用、深度4，payload最多32KiB、输出最多16KiB、清理等待5秒。manifest中的执行超时为1至5000毫秒。日志默认最多65,536个调用及65,536条诊断，SQLite容量64MiB。超时或取消后仍等待实际资源清理结果，无法确认时保留Unknown。
 
 ## 本地管理命令
 
@@ -132,15 +134,17 @@ saya plugin uninstall io.saya.examples.rust-workflow --digest <tree-sha256>
 saya plugin recover
 ```
 
-CLI／TUI 展示版本、来源、树摘要、依赖、申请能力、有效范围和实例状态。升级展示内容与能力差异，新的摘要及能力范围重新记录启用决定。
+CLI的list／inspect展示版本、来源、树摘要、申请能力、启用范围与租约健康状态，inspect同时返回manifest和固定lock。列表每页最多20条，每包先展示最多4个已启用范围并返回总数及省略数量，完整管理结果受1MiB输出限制。update绑定预期旧摘要，返回新内容身份与申请能力，新的摘要需再次显式enable。
+
+TUI当前在Extensions区展示 `Enabled in config`／`Disabled in config`，尚未检查配置时显示 `Not inspected`。该行表示本次配置开关，已安装包与运行租约的具体状态通过CLI查询。TUI现有MCP状态和Skill发现条目分别由各自运行状态维护。
 
 ## 验收与实现状态
 
-DEV-078 实现结构及语义验证、内容摘要、lock 和命名规则，DEV-065／066／067 接入激活、生命周期和执行入口。测试覆盖未知字段、版本、缺失 feature、恶意路径、归档膨胀、摘要损坏、依赖环、并发更新／停用、过期批准、Hook 递归和清理失败。
+DEV-078实现结构及语义验证、内容摘要、lock和命名规则，DEV-065／066／067接入激活、生命周期和执行入口。测试范围包含未知字段、版本、缺失feature、恶意路径、展开清单配额、摘要损坏、依赖环、并发更新／停用、过期批准、Hook递归和清理失败。各阶段既有结果保留如下，最终候选及平台状态以N3验收记录为准。
 
 DEV-078已交付独立Rust验证组件 `plugin_manifest`，包含manifest／lock解析、schema与语义、宿主兼容、密封文件内容、树摘要、依赖和工具别名检查。13项定向回归覆盖Unicode规范等价路径、实际请求装配器的别名契约及文件边界。新增unicode-normalization用于路径碰撞键的NFC处理，semver与unicase复用已有锁定版本。
 
-本机执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、942项Rust测试及优化构建通过。独立源码复核发现的Unicode碰撞与别名首字符问题已修复并复核，日志见 `target/n3/dev078-workspace.log`。安装器、运行时加载、权限接入和命令由DEV-065／066／067继续实现。
+DEV-078独立验证阶段本机执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、942项Rust测试及优化构建通过。独立源码复核发现的Unicode碰撞与别名首字符问题已修复并复核，日志见 `target/n3/dev078-workspace.log`。后续安装器、运行时加载、权限接入和命令的实现阶段分别在下文记录。
 
 2026-11-10，新增已打开目录句柄的检查入口，私有安装树复验沿同一cap-std能力读取。路径被替换的回归验证原目录内容与替代目录分别保持独立身份。该增量随本机完整门禁986项Rust测试通过，记录见 `target/n3/dev076-062-workspace.log`。
 
