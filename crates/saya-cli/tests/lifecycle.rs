@@ -3,36 +3,84 @@ mod fixture;
 
 use serde_json::json;
 use std::{
+    ffi::CString,
     fs,
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::process::CommandExt,
+        unix::{ffi::OsStrExt, fs::OpenOptionsExt, process::CommandExt},
     },
+    path::Path,
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
-// Publish the marker only after its complete PID line has been written and closed.
-const BACKGROUND_PROCESS_SCRIPT: &str =
-    r#"printf '%s\n' "$$" > tool.pid.tmp && /bin/mv tool.pid.tmp tool.pid && exec sleep 30"#;
+// The shell and its sleep child both hold the lease. PIDs are namespace-local
+// startup metadata, while the FIFO witnesses their lifetime from the host.
+const BACKGROUND_PROCESS_SCRIPT: &str = r#"exec 9>tool.lease
+printf 'READY\n' >&9
+sleep 30 &
+printf '%s\n' "$$" > tool.pid.tmp && /bin/mv tool.pid.tmp tool.pid
+wait"#;
+
+struct ProcessLease {
+    reader: fs::File,
+    marker_bytes: usize,
+    observed_live: bool,
+}
+impl ProcessLease {
+    const READY: &[u8] = b"READY\n";
+
+    fn new(path: &Path) -> Self {
+        let encoded = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: encoded is a valid terminated path in this fixture's private directory.
+        assert_eq!(unsafe { libc::mkfifo(encoded.as_ptr(), 0o600) }, 0);
+        let reader = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(path)
+            .unwrap();
+        Self {
+            reader,
+            marker_bytes: 0,
+            observed_live: false,
+        }
+    }
+
+    fn live(&mut self) -> bool {
+        let mut bytes = [0; 64];
+        loop {
+            match self.reader.read(&mut bytes) {
+                Ok(0) => return false,
+                Ok(count) => {
+                    let end = self.marker_bytes + count;
+                    assert!(end <= Self::READY.len(), "unexpected lease data");
+                    assert_eq!(&bytes[..count], &Self::READY[self.marker_bytes..end]);
+                    self.marker_bytes = end;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    // EOF can also contain an old READY marker. Only EAGAIN proves
+                    // that a writer still holds the FIFO at this observation.
+                    self.observed_live |= self.marker_bytes == Self::READY.len();
+                    return self.observed_live;
+                }
+                Err(error) => panic!("cannot observe process lease: {error}"),
+            }
+        }
+    }
+
+    fn assert_released(&mut self) {
+        assert!(self.observed_live, "missing live process positive control");
+        assert!(!self.live(), "background process retained its FIFO writer");
+    }
+}
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
-    }
-}
-struct ProcessGuard(Option<i32>);
-impl Drop for ProcessGuard {
-    fn drop(&mut self) {
-        // SAFETY: the fixture records the leader PID of its own process group.
-        if let Some(pid) = self.0 {
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-            }
-        }
     }
 }
 fn wait_for(mut condition: impl FnMut() -> bool) {
@@ -89,6 +137,7 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     fs::create_dir(&workspace).unwrap();
+    let mut lease = ProcessLease::new(&workspace.join("tool.lease"));
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (url, _) = fixture::server_dynamic(2, move |index, _| {
         let message = if index == 0 {
@@ -145,15 +194,15 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
     }
     let pid_file = workspace.join("tool.pid");
     wait_for(|| pid_file.exists());
-    let pid: i32 = fs::read_to_string(pid_file)
+    let namespace_pid: u32 = fs::read_to_string(pid_file)
         .unwrap()
         .trim()
         .parse()
         .unwrap();
-    let mut process = ProcessGuard(Some(pid));
-    // SAFETY: both PIDs belong to subprocesses created by this fixture.
-    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    assert!(namespace_pid > 0);
+    wait_for(|| lease.live());
     if let Some(signal) = signal {
+        // SAFETY: Child::id is the host PID of the CLI spawned by this fixture.
         assert_eq!(unsafe { libc::kill(child.0.id() as i32, signal) }, 0);
     } else {
         drop(master.take());
@@ -185,16 +234,7 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
         "chat={chat} signal={signal:?} tty={:?}",
         String::from_utf8_lossy(&transcript)
     );
-    assert_eq!(
-        unsafe { libc::kill(pid, 0) },
-        -1,
-        "tool outlived graceful termination"
-    );
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
-    );
-    process.0 = None;
+    lease.assert_released();
 }
 
 #[test]
@@ -226,6 +266,7 @@ fn completed_only_stdout_error_waits_for_background_cleanup() {
 }
 fn broken_stdout_case(completed_only: bool) {
     let root = tempfile::tempdir().unwrap();
+    let mut lease = ProcessLease::new(&root.path().join("tool.lease"));
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (url, _) = fixture::server_dynamic(2, move |index, _| {
         if completed_only {
@@ -275,13 +316,13 @@ fn broken_stdout_case(completed_only: bool) {
     );
     let marker = root.path().join("tool.pid");
     wait_for(|| marker.exists());
-    let pid = fs::read_to_string(marker)
+    let namespace_pid = fs::read_to_string(marker)
         .unwrap()
         .trim()
-        .parse::<i32>()
+        .parse::<u32>()
         .unwrap();
-    let mut process = ProcessGuard(Some(pid));
-    assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+    assert!(namespace_pid > 0);
+    wait_for(|| lease.live());
     drop(child.0.stdout.take());
     release_tx.send(()).unwrap();
     let mut status = None;
@@ -289,14 +330,7 @@ fn broken_stdout_case(completed_only: bool) {
         status = child.0.try_wait().unwrap();
         status.is_some()
     });
-    let state = unsafe { libc::kill(pid, 0) };
-    let error = std::io::Error::last_os_error().raw_os_error();
-    assert_eq!(
-        state, -1,
-        "stream failure left its background process alive"
-    );
-    assert_eq!(error, Some(libc::ESRCH));
-    process.0 = None;
+    lease.assert_released();
     assert_eq!(status.unwrap().code(), Some(1));
     let mut stderr = String::new();
     child
@@ -307,4 +341,45 @@ fn broken_stdout_case(completed_only: bool) {
         .read_to_string(&mut stderr)
         .unwrap();
     assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
+fn process_lease_requires_live_control_and_waits_for_inherited_writers() {
+    let root = tempfile::tempdir().unwrap();
+    let mut historical = ProcessLease::new(&root.path().join("historical.lease"));
+    assert!(!historical.live());
+    assert!(!historical.observed_live);
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("historical.lease"))
+        .unwrap();
+    writer.write_all(ProcessLease::READY).unwrap();
+    drop(writer);
+    assert!(!historical.live());
+    assert!(!historical.observed_live, "historical READY is not live");
+
+    let mut inherited = ProcessLease::new(&root.path().join("tool.lease"));
+    let mut parent = ChildGuard(
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "exec 9>tool.lease; printf 'READY\\n' >&9; /bin/sh -c 'IFS= read -r release' <&0 &",
+            ])
+            .current_dir(root.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut release = parent.0.stdin.take().unwrap();
+    assert!(parent.0.wait().unwrap().success());
+    wait_for(|| inherited.live());
+    assert!(
+        inherited.live(),
+        "descendant must retain its inherited writer"
+    );
+    release.write_all(b"release\n").unwrap();
+    wait_for(|| !inherited.live());
+    inherited.assert_released();
 }

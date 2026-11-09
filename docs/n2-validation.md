@@ -159,6 +159,8 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 13项脚本回归覆盖历史READY／EOF、从未启动、writer继承及READY／ACK顺序。固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 在本机通过18项原生场景、每variant三次性能样本、25项MCP和24项TUI，报告位于 `target/n2/validated-local/`。该记录的源码工作区包含本轮待提交修复，Linux PID命名空间的实际见证由四平台工作流重新确认。
 
+`1a932cc` 的两Linux架构已通过25项MCP、24项TUI及委派资源正负对照。源码门禁继续到Rust生命周期夹具，五项旧断言同样把guest PID交给宿主查询。该夹具改为FIFO现场READY／writer及CLI退出后的立即EOF，shell和sleep后代共同持有writer，保留真实CLI信号与原退出码。新增未启动、历史READY与继承writer回归，本机三轮共18项测试、定向严格Clippy及格式检查通过，日志为 `target/n2/research/lifecycle-namespace-*.log`。Linux重新执行仍待新源码runner确认。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42579723866)
+
 ## CI 调试镜像与结构夹具
 
 源码CI和N2工作流设置 `CARGO_PROFILE_DEV_DEBUG=line-tables-only`，保留行表并记录实际debug／优化镜像大小。结构夹具仅在唯一未完成原因为 `DeadlineExceeded` 时最多重试两次，每次沿用生产50ms限制，显式预算测试继续使用独立入口。19项结构测试及最终全目标严格Clippy通过，生产解析预算和运行预算保持现有值。最终完成仍要求新固定源码的全部四平台源码门禁和程序验收成功。
