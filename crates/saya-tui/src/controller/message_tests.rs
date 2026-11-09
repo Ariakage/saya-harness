@@ -611,3 +611,58 @@ async fn restore_uses_current_profile_and_redacts_native_reasoning_before_its_di
     );
     assert_eq!(app.state.status, "Ready");
 }
+
+#[test]
+fn mcp_connection_state_requires_matching_host_events_and_resets_for_the_next_run() {
+    use saya_core::contract::{McpServerState, McpServerStatus, McpTransport};
+    let (_root, mut app) = fixture();
+    app.config.mcp = serde_json::from_value(json!({"servers":{
+        "fixture":{"transport":{"type":"stdio","argv":["/usr/bin/true"]}},
+        "disabled":{"enabled":false,"transport":{"type":"stdio","argv":["/usr/bin/true"]}}
+    }}))
+    .unwrap();
+    app.reset_mcp_statuses();
+    assert_eq!(app.state.mcp_servers.len(), 1);
+    assert_eq!(app.state.mcp_servers[0].state, McpServerState::Configured);
+    let status = |server: &str, transport, state, tools| McpServerStatus {
+        server: server.into(),
+        transport,
+        state,
+        tools,
+    };
+    event(
+        &mut app,
+        EventPayload::McpStatus {
+            servers: vec![
+                status("unknown", McpTransport::Stdio, McpServerState::Connected, 9),
+                status(
+                    "disabled",
+                    McpTransport::Stdio,
+                    McpServerState::Connected,
+                    9,
+                ),
+                status("fixture", McpTransport::Http, McpServerState::Connected, 9),
+            ],
+        },
+    );
+    assert_eq!(app.state.mcp_servers[0].state, McpServerState::Configured);
+    for (state, tools) in [
+        (McpServerState::Connecting, 0),
+        (McpServerState::Connected, 3),
+        (McpServerState::Stopped, 0),
+        (McpServerState::NeedsAuth, 0),
+        (McpServerState::Failed, 0),
+    ] {
+        event(
+            &mut app,
+            EventPayload::McpStatus {
+                servers: vec![status("fixture", McpTransport::Stdio, state, tools)],
+            },
+        );
+        assert_eq!(app.state.mcp_servers[0].state, state);
+        assert_eq!(app.state.mcp_servers[0].tools, tools);
+    }
+    app.reset_mcp_statuses();
+    assert_eq!(app.state.mcp_servers[0].state, McpServerState::Configured);
+    assert_eq!(app.state.mcp_servers[0].tools, 0);
+}

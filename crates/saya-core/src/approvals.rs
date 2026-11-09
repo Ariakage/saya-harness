@@ -21,7 +21,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
@@ -256,10 +256,40 @@ pub struct ApprovalManager {
     initial_mode_revision: u64,
     initial_permission_revision: u64,
     secrets: Vec<String>,
+    secret_registry: OnceLock<Arc<crate::credentials::SecretRegistry>>,
     state: Arc<Mutex<State>>,
     authorize_lock: tokio::sync::Mutex<()>,
 }
 impl ApprovalManager {
+    pub(crate) fn set_secret_registry(
+        &self,
+        registry: Arc<crate::credentials::SecretRegistry>,
+    ) -> Result<(), BoundaryError> {
+        match self.secret_registry.set(registry.clone()) {
+            Ok(()) => Ok(()),
+            Err(_)
+                if self
+                    .secret_registry
+                    .get()
+                    .is_some_and(|current| Arc::ptr_eq(current, &registry)) =>
+            {
+                Ok(())
+            }
+            Err(_) => Err(failure(
+                "credential_registry",
+                "secret registry is already configured",
+            )),
+        }
+    }
+    fn current_secrets(&self) -> Result<Vec<String>, BoundaryError> {
+        let mut values = self.secrets.clone();
+        if let Some(registry) = self.secret_registry.get() {
+            values.extend(registry.snapshot()?);
+        }
+        values.sort();
+        values.dedup();
+        Ok(values)
+    }
     pub(crate) fn owns_context(&self, context: &ToolContext) -> bool {
         self.run_id == context.run.id && self.session_id == context.run.session_id
     }
@@ -299,6 +329,7 @@ impl ApprovalManager {
             initial_mode_revision,
             initial_permission_revision,
             secrets: setup.known_secrets,
+            secret_registry: OnceLock::new(),
             authorize_lock: tokio::sync::Mutex::new(()),
             state: Arc::new(Mutex::new(State {
                 pending: HashMap::new(),
@@ -421,9 +452,7 @@ impl ApprovalManager {
             .map_err(|e| failure("invalid_args", e.to_string()))?;
         let environment_override = has_exec_environment_override(&raw);
         let mut review_config = config.clone();
-        review_config
-            .known_secrets
-            .extend(self.secrets.iter().cloned());
+        review_config.known_secrets.extend(self.current_secrets()?);
         let review = review_operation(
             &self.policy,
             ReviewInput {
@@ -523,9 +552,10 @@ impl ApprovalManager {
         }
         let mut arguments: Value = serde_json::from_str(&binding.normalized_args)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
-        crate::redaction::redact(&mut arguments, &self.secrets)?;
+        let secrets = self.current_secrets()?;
+        crate::redaction::redact(&mut arguments, &secrets)?;
         let mut summary = Value::String(input.summary.to_owned());
-        crate::redaction::redact(&mut summary, &self.secrets)?;
+        crate::redaction::redact(&mut summary, &secrets)?;
         let request = ApprovalRequest {
             approval_id: uuid::Uuid::now_v7().to_string(),
             call_id: input.call.call_id.clone(),
@@ -675,7 +705,6 @@ impl OneShotPermit {
     pub(crate) fn finish_file(&self) -> Result<(), BoundaryError> {
         self.end()
     }
-
     pub(crate) fn authorize_external(
         &self,
         call: &ToolCall,

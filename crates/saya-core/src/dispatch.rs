@@ -23,6 +23,8 @@ use crate::{
     },
 };
 use std::{
+    collections::BTreeSet,
+    ffi::OsString,
     path::Path,
     sync::{
         Arc, OnceLock, RwLock,
@@ -109,6 +111,8 @@ pub struct ToolDispatcher {
     known_secrets: Vec<String>,
     registry: RwLock<ToolRegistry>,
     external_active: Arc<AtomicUsize>,
+    execution: RwLock<Option<Arc<crate::execution::PreparedEnvironment>>>,
+    secret_registry: OnceLock<Arc<crate::credentials::SecretRegistry>>,
 }
 type ContextGuard = dyn Fn(&ToolCall) -> Result<bool, BoundaryError> + Send + Sync;
 struct TodoLease<'a>(&'a OneShotPermit);
@@ -141,7 +145,120 @@ pub struct DispatchReview<'a> {
     pub budget: &'a SharedBudget,
     pub config: &'a ReviewConfig,
 }
+pub(crate) struct McpLaunch {
+    pub plan: crate::tools::exec::ExecPlan,
+    pub cwd: cap_std::fs::Dir,
+    pub environment: std::collections::BTreeMap<OsString, OsString>,
+    pub config: ExecConfig,
+    pub operation: Operation,
+}
 impl ToolDispatcher {
+    /// Prepare only the explicit host-configured startup references. This does
+    /// not broaden the normal model-facing exec environment policy.
+    pub(crate) fn prepare_mcp_launch(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        allowed_refs: &BTreeSet<String>,
+    ) -> Result<McpLaunch, BoundaryError> {
+        if self.read_only {
+            return Err(failure(
+                "durability_required",
+                "server startup requires durable storage",
+            ));
+        }
+        let config = self.effective_exec_config()?;
+        let planner = ExecTool::new(
+            self.files.clone(),
+            self.store.clone(),
+            Arc::new(PolicyGate::new(self.policy.clone())),
+            config.clone(),
+        );
+        let (plan, cwd, environment) = planner.prepare_host_launch(call, context, allowed_refs)?;
+        let keys = environment
+            .keys()
+            .map(|key| key.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let operation = Operation::exec_with_environment_keys(&plan, &keys)?;
+        Ok(McpLaunch {
+            plan,
+            cwd,
+            environment,
+            config,
+            operation,
+        })
+    }
+    pub(crate) async fn authorize_mcp_launch(
+        &self,
+        input: AuthorizationInput<'_>,
+        review: DispatchReview<'_>,
+    ) -> Result<Authorization, BoundaryError> {
+        if self.read_only || input.call.name != "exec" || input.operation.tool_name() != "exec" {
+            return Err(failure(
+                "permission_denied",
+                "invalid server startup operation",
+            ));
+        }
+        let mut config = review.config.clone();
+        config.known_secrets.extend(self.current_secrets()?);
+        self.manager
+            .authorize(input, review.model, review.budget, &config)
+            .await
+    }
+    /// Install a prepared environment at a runtime-controlled safe boundary.
+    pub(crate) fn set_execution_environment(
+        &self,
+        environment: Arc<crate::execution::PreparedEnvironment>,
+    ) -> Result<(), BoundaryError> {
+        *self
+            .execution
+            .write()
+            .map_err(|_| failure("sandbox_error", "execution environment lock failed"))? =
+            Some(environment);
+        Ok(())
+    }
+    pub(crate) fn effective_exec_config(&self) -> Result<ExecConfig, BoundaryError> {
+        let mut config = self.exec_config.clone();
+        if let Some(environment) = self
+            .execution
+            .read()
+            .map_err(|_| failure("sandbox_error", "execution environment lock failed"))?
+            .as_ref()
+        {
+            config.execution = Some(environment.as_ref().clone());
+        }
+        Ok(config)
+    }
+    pub(crate) fn set_secret_registry(
+        &self,
+        registry: Arc<crate::credentials::SecretRegistry>,
+    ) -> Result<(), BoundaryError> {
+        self.manager.set_secret_registry(registry.clone())?;
+        match self.secret_registry.set(registry.clone()) {
+            Ok(()) => Ok(()),
+            Err(_)
+                if self
+                    .secret_registry
+                    .get()
+                    .is_some_and(|current| Arc::ptr_eq(current, &registry)) =>
+            {
+                Ok(())
+            }
+            Err(_) => Err(failure(
+                "credential_registry",
+                "secret registry is already configured",
+            )),
+        }
+    }
+    fn current_secrets(&self) -> Result<Vec<String>, BoundaryError> {
+        let mut values = self.known_secrets.clone();
+        if let Some(registry) = self.secret_registry.get() {
+            values.extend(registry.snapshot()?);
+        }
+        values.sort();
+        values.dedup();
+        Ok(values)
+    }
     pub(crate) fn register_control_definition(
         &self,
         definition: crate::boundary::ToolDefinition,
@@ -156,11 +273,12 @@ impl ToolDispatcher {
         &self,
         mode: crate::contract::WorkMode,
     ) -> Result<Vec<crate::boundary::ToolDefinition>, BoundaryError> {
-        Ok(self
+        let registry = self
             .registry
             .read()
-            .map_err(|_| failure("registry_error", "tool registry lock failed"))?
-            .definitions(mode, !self.read_only))
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
+        registry.validate_current_secrets(&self.current_secrets()?)?;
+        Ok(registry.definitions(mode, !self.read_only))
     }
     fn registered(&self, name: &str) -> Result<Option<RegisteredTool>, BoundaryError> {
         Ok(self
@@ -179,6 +297,7 @@ impl ToolDispatcher {
         adapter: Arc<dyn Tool>,
         access: ExternalAccess,
     ) -> Result<String, BoundaryError> {
+        let secrets = self.current_secrets()?;
         let mut registry = self
             .registry
             .write()
@@ -186,6 +305,7 @@ impl ToolDispatcher {
         if self.external_active.load(Ordering::Acquire) != 0 {
             return Err(failure("registry_busy", "external calls are still active"));
         }
+        registry.set_known_secrets(secrets);
         registry.register_external(server, revision, adapter, access)
     }
     pub fn replace_external(
@@ -194,6 +314,7 @@ impl ToolDispatcher {
         revision: &str,
         tools: Vec<(Arc<dyn Tool>, ExternalAccess)>,
     ) -> Result<Vec<String>, BoundaryError> {
+        let secrets = self.current_secrets()?;
         let mut registry = self
             .registry
             .write()
@@ -201,6 +322,7 @@ impl ToolDispatcher {
         if self.external_active.load(Ordering::Acquire) != 0 {
             return Err(failure("registry_busy", "external calls are still active"));
         }
+        registry.set_known_secrets(secrets);
         registry.replace_external(server, revision, tools)
     }
     fn begin_external(
@@ -296,6 +418,8 @@ impl ToolDispatcher {
             known_secrets: known_secrets.clone(),
             registry: RwLock::new(ToolRegistry::with_known_secrets(known_secrets)),
             external_active: Arc::new(AtomicUsize::new(0)),
+            execution: RwLock::new(None),
+            secret_registry: OnceLock::new(),
         };
         for definition in dispatcher.native_definitions() {
             dispatcher
@@ -358,7 +482,7 @@ impl ToolDispatcher {
                 self.files.clone(),
                 self.store.clone(),
                 Arc::new(PolicyGate::new(self.policy.clone())),
-                self.exec_config.clone(),
+                self.effective_exec_config()?,
             );
             let (plan, keys) = planner.plan_with_environment_keys(call, context)?;
             Operation::exec_with_environment_keys(&plan, &keys)?
@@ -450,6 +574,7 @@ impl ToolDispatcher {
         cancel: &dyn Cancellation,
         background: bool,
     ) -> Result<ToolResult, BoundaryError> {
+        let known_secrets = self.current_secrets()?;
         if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
             return Err(failure(
                 "durability_required",
@@ -499,7 +624,7 @@ impl ToolDispatcher {
         if matches!(
             call.name.as_str(),
             "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
-        ) && let Some(environment) = self.exec_config.execution.clone()
+        ) && let Some(environment) = self.effective_exec_config()?.execution
         {
             return self
                 .execute_file_worker(call, context, &permit, store.as_ref(), cancel, &environment)
@@ -537,7 +662,7 @@ impl ToolDispatcher {
                     ))
                 };
                 let mut result = match &outcome {
-                    Ok(result) => crate::redaction::tool_result(result, &self.known_secrets)?,
+                    Ok(result) => crate::redaction::tool_result(result, &self.current_secrets()?)?,
                     Err(error) => ToolResult {
                         ok: false,
                         data: None,
@@ -577,7 +702,8 @@ impl ToolDispatcher {
                 let tool = ReadTool::with_gate(self.files.clone(), kind, permit);
                 match tool.execute(call, context, cancel).await {
                     Ok(result) => {
-                        let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
+                        let result =
+                            crate::redaction::tool_result(&result, &self.current_secrets()?)?;
                         save_result(store.as_ref(), call, context, &result).await?;
                         tracing::info!(target: "saya::tools", event = "tool.finished", status = if result.ok { "completed" } else { "failed" });
                         Ok(result)
@@ -606,7 +732,7 @@ impl ToolDispatcher {
                         self.files.clone(),
                         observed.clone(),
                         permit,
-                        self.exec_config.clone(),
+                        self.effective_exec_config()?,
                     )),
                     name => Box::new(
                         WriteTool::new(
@@ -620,11 +746,11 @@ impl ToolDispatcher {
                             },
                             self.write_max_bytes,
                         )
-                        .with_known_secrets(self.known_secrets.clone()),
+                        .with_known_secrets(known_secrets.clone()),
                     ),
                 };
                 let result = tool.execute(call, context, cancel).await?;
-                let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
+                let result = crate::redaction::tool_result(&result, &self.current_secrets()?)?;
                 if !observed.intent.load(Ordering::Acquire) {
                     // No side effect was dispatched. Avoid storing unvalidated,
                     // potentially credential-bearing arguments in this record.
@@ -665,7 +791,7 @@ impl ToolDispatcher {
                     .map_err(|_| failure("invalid_args", "invalid external arguments"))?;
                 arguments =
                     Operation::external(entry.descriptor())?.normalized_arguments(arguments)?;
-                crate::redaction::redact(&mut arguments, &self.known_secrets)?;
+                crate::redaction::redact(&mut arguments, &known_secrets)?;
                 recorded.arguments = serde_json::to_string(&arguments)
                     .map_err(|_| failure("invalid_args", "invalid external arguments"))?;
                 store
@@ -704,7 +830,7 @@ impl ToolDispatcher {
                         truncated: false,
                     },
                 };
-                let result = crate::redaction::tool_result(&result, &self.known_secrets)?;
+                let result = crate::redaction::tool_result(&result, &self.current_secrets()?)?;
                 save_result(store.as_ref(), call, context, &result).await?;
                 Ok(result)
             }
@@ -737,9 +863,22 @@ impl ToolDispatcher {
             .file_target()
             .ok_or_else(|| failure("invalid_args", "file operation requires a target"))?
             .to_owned();
+        let read_roots = if self.files.bypass {
+            let root = if target.is_dir() {
+                target.clone()
+            } else {
+                target
+                    .parent()
+                    .ok_or_else(|| failure("invalid_path", "file target has no parent"))?
+                    .to_owned()
+            };
+            vec![root]
+        } else {
+            self.files.root_paths()
+        };
         let mut recorded = call.clone();
         let mut normalized = operation.normalized_arguments(arguments)?;
-        crate::redaction::redact(&mut normalized, &self.known_secrets)?;
+        crate::redaction::redact(&mut normalized, &self.current_secrets()?)?;
         recorded.arguments = serde_json::to_string(&normalized)
             .map_err(|_| failure("invalid_args", "file arguments cannot be encoded"))?;
         store
@@ -757,7 +896,7 @@ impl ToolDispatcher {
                         call: call.clone(),
                         context: context.clone(),
                         approved_target: target,
-                        read_roots: self.files.root_paths(),
+                        read_roots,
                         read_limits: self.files.limits.clone(),
                         write_max_bytes: self.write_max_bytes,
                     },
@@ -777,12 +916,12 @@ impl ToolDispatcher {
                 ok: false,
                 data: error
                     .2
-                    .and_then(|observed| serde_json::to_value(observed).ok()),
+                    .map(|observed| serde_json::json!({"observed_result":observed})),
                 error: Some(error.0),
                 truncated: false,
             },
         };
-        let result = crate::tools::write::sanitize_result(&result, &self.known_secrets)?;
+        let result = crate::tools::write::sanitize_result(&result, &self.current_secrets()?)?;
         save_result(store, call, context, &result).await?;
         Ok(result)
     }

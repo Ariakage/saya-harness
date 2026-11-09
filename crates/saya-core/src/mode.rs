@@ -171,6 +171,25 @@ impl ModeController {
         s.active = active;
         Ok(true)
     }
+    /// Hold a host cleanup barrier before requesting a mode transition. The
+    /// owner must release it with `finish`, including on cancellation or error.
+    pub(crate) fn hold_transition(&self) -> Result<(), BoundaryError> {
+        let mut state = self.0.lock().map_err(|_| poisoned())?;
+        state.active = state.active.checked_add(1).ok_or_else(|| {
+            BoundaryError(
+                ErrorInfo {
+                    code: "mode_busy".into(),
+                    message: "mode transition guard capacity exhausted".into(),
+                },
+                None,
+                None,
+            )
+        })?;
+        Ok(())
+    }
+    pub(crate) fn active_invocations(&self) -> Result<usize, BoundaryError> {
+        Ok(self.0.lock().map_err(|_| poisoned())?.active)
+    }
     /// Mark an invocation complete, including on failure, timeout or cancel,
     /// and apply the last pending request. The caller must persist the change
     /// before dispatching again; lock poisoning returns an error.

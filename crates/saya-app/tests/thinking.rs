@@ -416,3 +416,38 @@ async fn log_and_entry_limits_are_utf8_safe_and_raw_overflow_does_not_fail_execu
         snapshot.text.is_empty() && snapshot.truncated && snapshot.available && !snapshot.active
     );
 }
+
+#[tokio::test]
+async fn rotating_secrets_are_observed_after_capture_begins_and_never_stream_live() {
+    let registry = Arc::new(saya_core::credentials::SecretRegistry::default());
+    let (model, log) = observe(
+        vec![
+            Ok(thought("rotation-")),
+            Ok(thought("synthetic-value")),
+            Ok(finished(vec![HistoryItem::AssistantText("answer".into())])),
+        ],
+        vec!["static-synthetic-secret".into()],
+    );
+    let model = model.with_secret_registry(registry.clone());
+    let request = request("rotation");
+    let mut stream = model.start(&request, &Cancel(false)).await.unwrap();
+    assert!(
+        registry
+            .snapshot()
+            .unwrap()
+            .contains(&"static-synthetic-secret".into())
+    );
+    tokio::time::sleep(Duration::from_millis(35)).await;
+    stream.next(&Cancel(false)).await.unwrap();
+    assert!(log.borrow().entries[0].text.is_empty());
+    registry
+        .register(&["rotation-synthetic-value".into()])
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(35)).await;
+    stream.next(&Cancel(false)).await.unwrap();
+    assert!(log.borrow().entries[0].text.is_empty());
+    stream.next(&Cancel(false)).await.unwrap();
+    let snapshot = &log.borrow().entries[0];
+    assert_eq!(snapshot.text, "[REDACTED]");
+    assert!(!snapshot.active);
+}

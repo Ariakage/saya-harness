@@ -626,6 +626,7 @@ fn build_runtime(
             personal_context: launch.personal_context,
             anthropic_prompt_cache: launch.anthropic_prompt_cache,
             run_id: launch.run_id,
+            secret_registry: events.as_ref().and_then(|writer| writer.secret_registry()),
         },
         move |router, streamed| {
             if let Some(events) = events {
@@ -820,13 +821,19 @@ async fn run(
             .iter()
             .map(|name| config.secret(name).map(str::to_owned))
             .collect::<Result<Vec<_>, _>>()?;
-        Some(Arc::new(events::EventWriter::new(
+        let writer = events::EventWriter::new(
             prepared.store.clone(),
             session.id,
             run_id,
             secrets,
             Arc::new(events::StdoutSink),
-        )))
+        );
+        let writer = if config.mcp.servers.values().any(|server| server.enabled) {
+            writer.with_secret_registry(Arc::default())?
+        } else {
+            writer
+        };
+        Some(Arc::new(writer))
     } else {
         None
     };
@@ -1359,7 +1366,6 @@ mod report_tests {
         assert!(answer.is_none());
         stop.await.unwrap();
     }
-
     #[test]
     fn tui_preview_command_follows_the_build_profile_gate() {
         #[cfg(debug_assertions)]

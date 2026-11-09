@@ -5,12 +5,12 @@
 | 任务 | 必须具备的证据 | 当前状态 |
 | --- | --- | --- |
 | DEV-054 | 本地／外部工具注册、稳定名称、schema校验、宿主副作用分类、三权限与PLAN、版本审批绑定、取消与记录 | 本机阶段通过，752项Rust测试及完整门禁见DEV-054记录 |
-| DEV-055 | prepare／execute／文件服务／cleanup的正常入口接线、真实能力等级、显式约束缺失时失败、实际后端上下文 | 开发中 |
-| DEV-056 | Seatbelt与Bubblewrap／Seccomp／socat、受控网络broker、可用委派资源controller | 开发中 |
+| DEV-055 | prepare／execute／文件服务／cleanup的正常入口接线、真实能力等级、显式约束缺失时失败、实际后端上下文 | 本机正常入口通过，最终四平台待验收 |
+| DEV-056 | Seatbelt与Bubblewrap／Seccomp／socat、受控网络broker、可用委派资源controller | 本机原生验收通过，Linux委派controller待验收 |
 | DEV-075 | 真实shell CST、直接argv、包装器、重定向与动态行为、错误／预算、核查事实与批准版本绑定 | 本机阶段通过，773项Rust测试及CST探针见DEV-075记录 |
 | DEV-057 | 路径与链接对抗、缺失保护路径、namespace／syscall、网络旁路、资源与清理故障、性能和恢复的原生证据 | 待执行 |
-| DEV-058 | 显式stdio MCP配置、版本与生命周期、启动授权、受控进程与关闭 | 组件开发中 |
-| DEV-059 | 工具schema／结果类型／大小、统一权限与记录、取消、列表变化、三模型协议的外部工具往返 | 待整合 |
+| DEV-058 | 显式stdio MCP配置、版本与生命周期、启动授权、受控进程与关闭 | 连接组件四平台CI通过，最终整体验收待完成 |
+| DEV-059 | 工具schema／结果类型／大小、统一权限与记录、取消、列表变化、三模型协议的外部工具往返 | 正常运行时与CLI／TUI已整合，最终四平台待验收 |
 | DEV-060 | 首个凭据后端、引用／撤销、最小化注入、日志／会话／机器输出的凭据边界 | 待实现 |
 | DEV-061 | 固定SDK与协议矩阵、Streamable HTTP、OAuth与续期、断连不重放、额外输入及非交互路径 | 组件开发中 |
 
@@ -28,9 +28,9 @@ core已提供统一准备环境、能力等级、固定策略身份和清理接�
 
 隔离源码快照完成格式、workspace严格Clippy、823项Rust测试与优化构建，日志为 `target/n2/dev056-workspace-final2.log`。macOS回归确认宿主进程参数查询被显式拒绝、私有launcher保留自身FD处理能力、标准根symlink可解析，代理仅允许TCP。正常CLI的UDP同端口及宿主进程查询对抗将随DEV-057重跑。
 
-首次Linux原生CI已保留实际失败证据。原Seccomp阻止匿名socketpair，Tokio信号驱动初始化因此panic，原始日志在 `target/n2/research/dev055-direct-linux-{arm,x86}-ci.log`。修复仅放行AF_UNIX的已连接stream pair与必要flags，其余Unix socket创建保持受限，并补充真实Linux重定向／SCM_RIGHTS探针。候选通过两架构类型与严格静态检查，实际Linux修复结果继续由后续CI验证。
+首次Linux原生CI已保留实际失败证据。原Seccomp阻止匿名socketpair，Tokio信号驱动初始化因此panic，原始日志在 `target/n2/research/dev055-direct-linux-{arm,x86}-ci.log`。修复仅放行AF_UNIX的已连接stream pair与必要flags，其余Unix socket创建保持受限，并补充真实Linux重定向／SCM_RIGHTS探针。后续源码 `b15bbe8` 四平台CI全部通过，包含两种Linux架构的真实原生回归，证据为 `target/n2/dev056-four-platform-ci.json`。[CI记录](https://github.com/Ariakage/saya-harness/actions/runs/42555064671)
 
-上述823项本机测试的操作系统为macOS27.2 ARM，Linux修复、委派cgroup和最终默认入口仍待相应原生验收。
+上述823项本机测试的操作系统为macOS27.2 ARM。Linux修复已有CI回归证据，委派cgroup及最终默认入口仍待完整原生验收。
 
 ## DEV-058 MCP 连接与认证组件
 
@@ -40,7 +40,17 @@ core已提供统一准备环境、能力等级、固定策略身份和清理接�
 
 SDK需要的reqwest0.13单独服务于MCP，原有模型接入继续使用其已验证的0.12依赖。async-trait用于SDK凭据存储接口，futures和sse-stream用于有界流处理。
 
-隔离源码快照完成格式、workspace严格Clippy、873项Rust测试及优化构建，日志为 `target/n2/dev058-workspace.log`。正常应用配置、默认后端、服务生命周期和界面接线在DEV-059阶段整合，最终四平台程序随后统一验收。
+隔离源码快照完成格式、workspace严格Clippy、873项Rust测试及优化构建，日志为 `target/n2/dev058-workspace.log`。组件提交 `e69e6c1` 四平台CI全部通过，证据为 `target/n2/dev058-four-platform-ci.json`。[CI记录](https://github.com/Ariakage/saya-harness/actions/runs/42557002296)
+
+正常应用配置、默认后端、服务生命周期和界面接线在DEV-059阶段整合，最终四平台程序随后统一验收。
+
+## DEV-059 正常入口整合
+
+应用层默认采用原生后端，执行环境身份与能力进入实际系统上下文。文件 worker 复用意图持久化、许可复查与未知结果记录，额外逻辑权限根和 OS 视图分别落实。显式 Host 兼容模式保留能力报告，活动凭据存储要求原生保护。
+
+MCP 服务连接、启动授权、目录发现和刷新共享运行预算。人工确认暂停活跃计时，清理在预算结束后继续执行。PLAN 切换通过生命周期屏障等待本地服务及副作用收尾。动态凭据集合持续覆盖旧值与新值，进入模型、存储、事件、正文和 Thinking 显示前使用当前集合检查。
+
+整合工作区在本机 macOS27.2 ARM／Rust1.99.1 执行完整门禁，904项 Rust 测试及优化构建通过，日志为 `target/n2/integration-workspace-5.log`。独立提交快照完成901项Rust测试和完整门禁，日志为 `target/n2/dev059-workspace-final.log`。首次并行负载下的CLI启动就绪等待超时保留于 `target/n2/dev059-workspace-before-readiness.log`，停止其他验收进程后完整重跑通过，测试超时与产品行为保持原有约定。最终四平台验收继续分别记录。旧 TUI 脚本要求 MCP 显示“未实现”的断言已依据新功能改为实际空服务状态，真实服务连接另由 MCP 验收脚本覆盖。
 
 ## 已推送基础阶段
 

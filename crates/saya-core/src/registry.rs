@@ -136,6 +136,24 @@ pub struct ToolRegistry {
     known_secrets: Vec<String>,
 }
 impl ToolRegistry {
+    pub(crate) fn set_known_secrets(&mut self, values: Vec<String>) {
+        self.known_secrets = values;
+    }
+    pub(crate) fn validate_current_secrets(&self, secrets: &[String]) -> Result<(), BoundaryError> {
+        for entry in self.entries.values() {
+            let value = serde_json::json!({"descriptor":entry.descriptor,"name":entry.definition.name,
+                "description":entry.definition.description,"schema":entry.definition.input_schema});
+            let encoded = serde_json::to_string(&value)
+                .map_err(|_| failure("invalid_tool", "cannot encode tool metadata"))?;
+            if crate::redaction::contains_secret(&encoded, secrets) {
+                return Err(failure(
+                    "credential_exposure",
+                    "tool metadata contains a known credential",
+                ));
+            }
+        }
+        Ok(())
+    }
     pub fn with_known_secrets(known_secrets: Vec<String>) -> Self {
         Self {
             known_secrets,

@@ -4,6 +4,7 @@ pub mod context;
 pub mod events;
 pub mod export;
 pub mod interaction;
+pub mod mcp;
 pub mod session;
 pub mod thinking;
 use saya_core::{
@@ -112,6 +113,7 @@ pub struct Launch {
     pub personal_context: PersonalContext,
     pub anthropic_prompt_cache: bool,
     pub run_id: Option<RunId>,
+    pub secret_registry: Option<Arc<saya_core::credentials::SecretRegistry>>,
 }
 /// Build empty session metadata from the selected profile and canonical workspace.
 /// Returns an error for missing configuration or an unavailable workspace.
@@ -171,7 +173,13 @@ pub fn build_runtime(
         .iter()
         .map(|name| config.secret(name).map(str::to_owned))
         .collect::<Result<Vec<_>, _>>()?;
-    let streamed = selected.stream && config.output == Output::Text && known_secrets.is_empty();
+    let registry = launch.secret_registry.unwrap_or_default();
+    registry.register(&known_secrets)?;
+    let dynamic_credentials = config.mcp.servers.values().any(|server| server.enabled);
+    let streamed = selected.stream
+        && config.output == Output::Text
+        && known_secrets.is_empty()
+        && !dynamic_credentials;
     let model = decorate(router, streamed);
     let policy = Arc::new(Policy::new(&session.workspace, config.permissions.clone())?);
     let lim = &config.limits;
@@ -234,6 +242,63 @@ pub fn build_runtime(
         confirmation: launch.confirmation,
         limits,
     })?;
+    let (mut sandbox, broker) = config.sandbox.resolve(&session.workspace)?;
+    sandbox
+        .read_roots
+        .extend(config.permissions.additional_roots.iter().cloned());
+    sandbox
+        .write_roots
+        .extend(config.permissions.additional_roots.iter().cloned());
+    let credential_path = config.state_dir.join("credentials");
+    let credential_backed = config.mcp.servers.values().any(|server| {
+        server.enabled
+            && matches!(
+                &server.transport,
+                saya_core::mcp::config::McpTransportSettings::Http(settings)
+                    if settings.credential_ref.is_some()
+            )
+    });
+    if sandbox.backend != saya_core::execution::BackendKind::Host {
+        for path in [
+            config.config_path.clone(),
+            config.data_dir.clone(),
+            config.state_dir.clone(),
+            config.cache_dir.clone(),
+        ] {
+            if path.try_exists()? {
+                sandbox.protected_paths.push(path);
+            }
+        }
+        let project_control = session.workspace.join(".saya/local");
+        if project_control.try_exists()? {
+            sandbox.protected_paths.push(project_control);
+        }
+    } else if credential_backed || credential_path.exists() {
+        return Err("host execution cannot protect the credential store".into());
+    }
+    let authorizer: Option<Arc<dyn saya_core::mcp::config::McpHttpAuthorizer>> =
+        if credential_backed {
+            std::fs::create_dir_all(&config.state_dir)?;
+            let credentials = saya_core::credentials::FileCredentialStore::open(
+                &credential_path,
+                registry.clone(),
+            )?;
+            sandbox
+                .protected_paths
+                .push(credentials.protected_path().to_owned());
+            Some(Arc::new(mcp::StoredMcpAuthorizer::new(credentials)))
+        } else {
+            None
+        };
+    runtime = runtime.with_execution_settings(sandbox, broker)?;
+    if dynamic_credentials {
+        runtime = runtime.with_mcp_settings(
+            config.mcp.clone(),
+            config.environment().clone(),
+            authorizer,
+            registry,
+        )?;
+    }
     let review_profile = config.review.profile.as_ref().unwrap_or(profile);
     runtime = runtime.with_pricing(
         selected.pricing.clone(),

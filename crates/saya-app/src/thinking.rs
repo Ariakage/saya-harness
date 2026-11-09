@@ -38,6 +38,7 @@ pub struct ThinkingModel {
     inner: Arc<dyn Model>,
     sender: watch::Sender<ThinkingLog>,
     secrets: Arc<Vec<String>>,
+    secret_registry: Option<Arc<saya_core::credentials::SecretRegistry>>,
 }
 impl ThinkingModel {
     pub fn new(
@@ -49,7 +50,16 @@ impl ThinkingModel {
             inner,
             sender,
             secrets: Arc::new(known_secrets),
+            secret_registry: None,
         }
+    }
+    /// Defer live plaintext until completion while credentials may rotate.
+    pub fn with_secret_registry(
+        mut self,
+        registry: Arc<saya_core::credentials::SecretRegistry>,
+    ) -> Self {
+        self.secret_registry = Some(registry);
+        self
     }
 }
 impl Model for ThinkingModel {
@@ -62,11 +72,22 @@ impl Model for ThinkingModel {
         cancel: &'a dyn Cancellation,
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
+            if let Some(registry) = &self.secret_registry {
+                registry.register(
+                    &self
+                        .secrets
+                        .iter()
+                        .filter(|value| !value.is_empty())
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )?;
+            }
             let capture = (request.purpose == ModelPurpose::Execution).then(|| {
                 Capture::new(
                     request.request_id.clone(),
                     self.sender.clone(),
                     self.secrets.clone(),
+                    self.secret_registry.clone(),
                 )
             });
             let inner = self.inner.start(request, cancel).await?;
@@ -109,6 +130,7 @@ struct Capture {
     request_id: String,
     sender: watch::Sender<ThinkingLog>,
     secrets: Arc<Vec<String>>,
+    secret_registry: Option<Arc<saya_core::credentials::SecretRegistry>>,
     raw: String,
     available: bool,
     withheld: bool,
@@ -120,6 +142,7 @@ impl Capture {
         request_id: String,
         sender: watch::Sender<ThinkingLog>,
         secrets: Arc<Vec<String>>,
+        secret_registry: Option<Arc<saya_core::credentials::SecretRegistry>>,
     ) -> Self {
         sender.send_modify(|log| {
             log.entries.retain(|entry| entry.request_id != request_id);
@@ -136,6 +159,7 @@ impl Capture {
             request_id,
             sender,
             secrets,
+            secret_registry,
             raw: String::new(),
             available: false,
             withheld: false,
@@ -182,9 +206,19 @@ impl Capture {
         let mut truncated = self.withheld;
         // An incomplete secret can cross any delta or the display truncation
         // boundary. Keep the original complete buffer until terminal outcome.
-        if !self.withheld && (!active || self.secrets.iter().all(String::is_empty)) {
+        let secrets = match &self.secret_registry {
+            Some(registry) => registry.snapshot(),
+            None => Ok(self.secrets.as_ref().clone()),
+        };
+        if secrets.is_err() {
+            truncated = true;
+        }
+        if let Ok(secrets) = secrets
+            && !self.withheld
+            && (!active || (self.secret_registry.is_none() && secrets.iter().all(String::is_empty)))
+        {
             let mut value = Value::String(self.raw.clone());
-            if saya_core::redaction::redact(&mut value, &self.secrets).is_ok() {
+            if saya_core::redaction::redact(&mut value, &secrets).is_ok() {
                 if let Value::String(safe) = value {
                     let end = boundary(&safe, MAX_ENTRY_BYTES);
                     truncated |= end < safe.len();

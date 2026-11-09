@@ -1144,3 +1144,32 @@ async fn terminal_error_teardown_awaits_background_cleanup_after_runtime_panic()
     assert_eq!(process_error, Some(libc::ESRCH));
     assert!(settled);
 }
+
+#[test]
+fn refreshed_credentials_are_redacted_from_notices_and_terminal_titles() {
+    let (_root, mut app) = fixture();
+    assert_eq!(
+        app.safe("synthetic-refresh-token"),
+        "synthetic-refresh-token"
+    );
+    app.secret_registry
+        .register(&["synthetic-refresh-token".into()])
+        .unwrap();
+    assert_eq!(
+        app.safe("prefix synthetic-refresh-token suffix"),
+        "prefix [REDACTED] suffix"
+    );
+    assert!(
+        !app.safe_title("synthetic-refresh-token")
+            .contains("synthetic-refresh-token")
+    );
+    app.notice("Failed with synthetic-refresh-token");
+    assert!(
+        !app.state
+            .messages
+            .back()
+            .unwrap()
+            .text
+            .contains("synthetic-refresh-token")
+    );
+}

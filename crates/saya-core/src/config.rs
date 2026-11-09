@@ -2,6 +2,7 @@
 //! Loading configuration does not create files, call providers or execute tools.
 use crate::{
     contract::{BoundaryError, ErrorInfo, PermissionMode, WorkMode},
+    mcp::config::{McpSettings, McpTransportSettings},
     permissions::{PermissionConfig, Policy},
 };
 use reqwest::{
@@ -14,8 +15,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     net::IpAddr,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
+
+mod sandbox;
+pub use sandbox::{SandboxNetworkSettings, SandboxSettings};
 
 fn invalid(message: &'static str) -> BoundaryError {
     BoundaryError(
@@ -82,6 +86,29 @@ fn valid_env_name(name: &str) -> bool {
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+fn launch_path(path: PathBuf, process_cwd: &Path) -> Result<PathBuf, BoundaryError> {
+    let path = std::path::absolute(process_cwd.join(path))
+        .map_err(|_| invalid("launch path cannot be resolved"))?;
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        if component == Component::ParentDir {
+            match std::fs::canonicalize(&resolved) {
+                Ok(directory) if directory.is_dir() => resolved = directory,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if std::fs::symlink_metadata(&resolved).is_ok() {
+                        return Err(invalid("launch path contains a dangling symlink"));
+                    }
+                }
+                _ => return Err(invalid("launch path parent is unavailable")),
+            }
+            resolved.pop();
+        } else {
+            resolved.push(component);
+        }
+    }
+    Ok(resolved)
 }
 
 /// Command-line values. Unset values are resolved from the environment, file, then defaults.
@@ -339,6 +366,10 @@ struct Document {
     commands: Commands,
     #[serde(default)]
     limits: Limits,
+    #[serde(default)]
+    sandbox: SandboxSettings,
+    #[serde(default)]
+    mcp: McpSettings,
 }
 /// Effective settings; no model is implicitly selected. Secret values stay in Environment.
 #[derive(Clone)]
@@ -357,6 +388,8 @@ pub struct Config {
     pub permissions: PermissionConfig,
     pub commands: Commands,
     pub limits: Limits,
+    pub sandbox: SandboxSettings,
+    pub mcp: McpSettings,
     env: Environment,
 }
 impl Config {
@@ -369,11 +402,27 @@ impl Config {
         self.env.reference(name)
     }
     pub fn secret_env_names(&self) -> BTreeSet<String> {
-        self.profiles
+        let mut names: BTreeSet<String> = self
+            .profiles
             .values()
             .flat_map(|p| p.api_key_env.iter().chain(p.headers_env.values()))
             .cloned()
-            .collect()
+            .collect();
+        for server in self.mcp.servers.values().filter(|server| server.enabled) {
+            match &server.transport {
+                McpTransportSettings::Stdio(settings) => {
+                    names.extend(settings.env.values().cloned())
+                }
+                McpTransportSettings::Http(settings) => names.extend(
+                    settings
+                        .bearer_env
+                        .iter()
+                        .chain(settings.headers_env.values())
+                        .cloned(),
+                ),
+            }
+        }
+        names
     }
 }
 fn default_dir(env: &Environment, xdg: &str, fallback: &str) -> Result<PathBuf, BoundaryError> {
@@ -487,16 +536,48 @@ fn validate_profile(p: &Profile, env: &Environment) -> Result<(), BoundaryError>
     }
     Ok(())
 }
+
+fn validate_mcp(settings: &McpSettings, env: &Environment) -> Result<(), BoundaryError> {
+    settings
+        .validate()
+        .map_err(|_| invalid("MCP server configuration is invalid"))?;
+    for server in settings.servers.values().filter(|server| server.enabled) {
+        match &server.transport {
+            McpTransportSettings::Stdio(settings) => {
+                for reference in settings.env.values() {
+                    if env.reference(reference)?.contains('\0') {
+                        return Err(invalid(
+                            "MCP environment reference contains an invalid value",
+                        ));
+                    }
+                }
+            }
+            McpTransportSettings::Http(settings) => {
+                for reference in settings
+                    .bearer_env
+                    .iter()
+                    .chain(settings.headers_env.values())
+                {
+                    HeaderValue::from_str(env.reference(reference)?).map_err(|_| {
+                        invalid("MCP authentication reference contains an invalid value")
+                    })?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
 /// Load exactly one configuration file and validate every configured profile.
-/// `process_cwd` resolves the default workspace; the function has no side effects.
+/// `process_cwd` anchors relative launch paths; the function has no side effects.
 pub fn load(
     overrides: Overrides,
     env: Environment,
     process_cwd: &Path,
 ) -> Result<Config, BoundaryError> {
-    let path = config_path(&overrides, &env)?;
-    let text = std::fs::read_to_string(&path)
+    let selected_path = process_cwd.join(config_path(&overrides, &env)?);
+    let text = std::fs::read_to_string(&selected_path)
         .map_err(|_| invalid("cannot read selected configuration file"))?;
+    let path = launch_path(selected_path, process_cwd)?;
     // Do not print parse errors: TOML diagnostics may contain credential-like source text.
     let doc: Document = toml::from_str(&text)
         .map_err(|_| invalid("invalid configuration syntax, type, enum or unknown key"))?;
@@ -504,6 +585,8 @@ pub fn load(
         return Err(invalid("unsupported configuration schema version"));
     }
     doc.limits.validate()?;
+    doc.sandbox.validate()?;
+    validate_mcp(&doc.mcp, &env)?;
     if doc.review.max_output_tokens == 0 {
         return Err(invalid("review output limit must be positive"));
     }
@@ -556,17 +639,25 @@ pub fn load(
     let cwd = overrides
         .cwd
         .or_else(|| env.path("SAYA_CWD"))
+        .map(|path| process_cwd.join(path))
         .unwrap_or_else(|| process_cwd.to_path_buf());
     // Validate paths and rule semantics before execution, but do not expose
     // path, glob, or operating system diagnostics that might contain secrets.
     Policy::new(&cwd, doc.permissions.clone())
         .map_err(|_| invalid("invalid workspace, permission roots or permission rules"))?;
-    let data_dir = match overrides.data_dir.or_else(|| env.path("SAYA_DATA_DIR")) {
-        Some(p) => p,
-        None => default_dir(&env, "XDG_DATA_HOME", ".local/share")?,
-    };
-    let state_dir = default_dir(&env, "XDG_STATE_HOME", ".local/state")?;
-    let cache_dir = default_dir(&env, "XDG_CACHE_HOME", ".cache")?;
+    let cwd = launch_path(cwd, process_cwd)?;
+    let data_dir = launch_path(
+        match overrides.data_dir.or_else(|| env.path("SAYA_DATA_DIR")) {
+            Some(p) => p,
+            None => default_dir(&env, "XDG_DATA_HOME", ".local/share")?,
+        },
+        process_cwd,
+    )?;
+    let state_dir = launch_path(
+        default_dir(&env, "XDG_STATE_HOME", ".local/state")?,
+        process_cwd,
+    )?;
+    let cache_dir = launch_path(default_dir(&env, "XDG_CACHE_HOME", ".cache")?, process_cwd)?;
     Ok(Config {
         config_path: path,
         cwd,
@@ -582,6 +673,8 @@ pub fn load(
         permissions: doc.permissions,
         commands: doc.commands,
         limits: doc.limits,
+        sandbox: doc.sandbox,
+        mcp: doc.mcp,
         env,
     })
 }

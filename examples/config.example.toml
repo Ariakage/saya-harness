@@ -28,3 +28,36 @@ stream = true
 # auth = "bearer"
 # api_key_env = "SAYA_API_KEY"
 # context_window_tokens = 128000
+
+# N2 development defaults. Backend preparation happens when a run starts.
+# config check validates policy syntax without launching native isolation.
+[sandbox]
+backend = "auto"
+read_roots = []
+write_roots = []
+protected_paths = []
+
+[sandbox.network]
+mode = "deny"
+
+# Enable a server only after selecting its executable, permissions and roots.
+# Toolchain files outside the workspace may require sandbox.read_roots.
+[mcp.servers.local_example]
+enabled = false
+read_only_tools = []
+
+[mcp.servers.local_example.transport]
+type = "stdio"
+argv = ["/absolute/path/to/mcp-server", "--stdio"]
+# env = { SERVICE_TOKEN = "SAYA_MCP_TOKEN" }
+
+[mcp.servers.remote_example]
+enabled = false
+read_only_tools = []
+
+[mcp.servers.remote_example.transport]
+type = "http"
+endpoint = "https://mcp.example.invalid/mcp"
+# bearer_env = "SAYA_MCP_TOKEN"
+# credential_ref = "00000000-0000-0000-0000-000000000000"
+# scopes = ["files:read"]

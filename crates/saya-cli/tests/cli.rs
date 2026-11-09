@@ -456,7 +456,13 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     let messages = request["messages"].as_array().unwrap();
     let system = messages[0]["content"].as_str().unwrap();
     assert!(system.contains("# Dynamic request context"));
-    let facts: serde_json::Value = serde_json::from_str(system.lines().last().unwrap()).unwrap();
+    let facts = system
+        .split_once("# Dynamic request context\n")
+        .unwrap()
+        .1
+        .lines()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .unwrap();
     assert_eq!(facts["host"]["os"], std::env::consts::OS);
     assert_eq!(facts["host"]["architecture"], std::env::consts::ARCH);
     assert!(facts["captured_at"]["utc"].as_str().unwrap().ends_with('Z'));
@@ -464,6 +470,13 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     assert_eq!(facts["project_context_available"], true);
     assert_eq!(facts["user_preferences_supplied"], true);
     assert_eq!(facts["long_term_memory_supplied"], true);
+    let execution = system
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|value| value.get("saya_execution_environment_v1").cloned())
+        .unwrap();
+    assert_eq!(execution["identity"]["execution_os"], std::env::consts::OS);
+    assert_eq!(execution["capabilities"]["filesystem"], "hard");
     assert!(!system.contains("PROJECT_CONVENTION"));
     assert!(!system.contains("PREF_CONTENT"));
     assert!(!system.contains("MEMORY_CONTENT"));

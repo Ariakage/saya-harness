@@ -104,15 +104,88 @@ fn rustc() -> String {
     );
     candidate.to_string_lossy().into_owned()
 }
+fn compiler_root() -> PathBuf {
+    Path::new(&rustc())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+}
+#[cfg(target_os = "macos")]
+fn developer_path(argument: &str) -> PathBuf {
+    let output = Command::new("/usr/bin/xcrun")
+        .arg(argument)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+        .canonicalize()
+        .unwrap()
+}
+fn allow_compiler(sandbox: &Sandbox) {
+    use std::io::Write;
+    let roots = vec![compiler_root()];
+    #[cfg(target_os = "macos")]
+    let roots = {
+        let mut roots = roots;
+        let clang = Command::new("/usr/bin/xcrun")
+            .args(["--find", "clang"])
+            .output()
+            .unwrap();
+        assert!(clang.status.success());
+        let clang = PathBuf::from(String::from_utf8(clang.stdout).unwrap().trim())
+            .canonicalize()
+            .unwrap();
+        roots.push(clang.parent().unwrap().parent().unwrap().to_owned());
+        roots.push(developer_path("--show-sdk-path"));
+        roots
+    };
+    let mut config = fs::OpenOptions::new()
+        .append(true)
+        .open(&sandbox.config)
+        .unwrap();
+    writeln!(
+        config,
+        "\n[sandbox]\nread_roots = {}",
+        serde_json::to_string(&roots).unwrap()
+    )
+    .unwrap();
+}
 fn compile_and_run() -> Vec<String> {
-    vec![
+    #[cfg(not(target_os = "macos"))]
+    let command =
+        "\"$1\" --sysroot \"$2\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
+    #[cfg(target_os = "macos")]
+    let command = "\"$1\" --sysroot \"$2\" -C \"linker=$3\" -C link-arg=-isysroot -C \"link-arg=$4\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt";
+    let argv = vec![
         "/bin/sh".into(),
         "-c".into(),
-        "\"$1\" --edition=2024 src/main.rs -o textstats && ./textstats sample.txt".into(),
+        command.into(),
         "sh".into(),
         rustc(),
-    ]
+        compiler_root().to_string_lossy().into_owned(),
+    ];
+    #[cfg(target_os = "macos")]
+    let argv = {
+        let mut argv = argv;
+        let clang = Command::new("/usr/bin/xcrun")
+            .args(["--find", "clang"])
+            .output()
+            .unwrap();
+        assert!(clang.status.success());
+        argv.push(String::from_utf8(clang.stdout).unwrap().trim().to_owned());
+        argv.push(
+            developer_path("--show-sdk-path")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        argv
+    };
+    argv
 }
+
 fn exec_args(argv: &[String]) -> Value {
     json!({"argv":argv,"cwd":null,"timeout_seconds":null})
 }
@@ -188,6 +261,7 @@ fn build_creates_and_verifies_a_text_statistics_program() {
     ])
     .unwrap();
     let sandbox = Sandbox::new(&url, "openai-chat-completions", "auto");
+    allow_compiler(&sandbox);
     fs::create_dir(sandbox.root().join("src")).unwrap();
     fs::write(sandbox.root().join("sample.txt"), "alpha  beta\nnext row\n").unwrap();
     sandbox.ask_commands();
@@ -259,6 +333,7 @@ fn code_reproduces_and_fixes_the_statistics_defect() {
     })
     .unwrap();
     let sandbox = Sandbox::new(&url, "openai-chat-completions", "auto");
+    allow_compiler(&sandbox);
     fs::create_dir(sandbox.root().join("src")).unwrap();
     fs::write(sandbox.root().join("src/main.rs"), BUGGY).unwrap();
     fs::write(sandbox.root().join("sample.txt"), "alpha    beta\n").unwrap();
@@ -519,7 +594,7 @@ fn auto_review_invalid_response_falls_back_without_executing_command() {
 }
 
 #[test]
-fn bypass_accesses_outside_root_but_explicit_deny_still_wins() {
+fn bypass_accesses_explicit_native_roots_but_permission_deny_still_wins() {
     for denied in [false, true] {
         let outside = TempDir::new().unwrap();
         let target = outside.path().join("outside.txt");
@@ -536,6 +611,19 @@ fn bypass_accesses_outside_root_but_explicit_deny_still_wins() {
         ])
         .unwrap();
         let sandbox = Sandbox::new(&url, "openai-chat-completions", "bypass");
+        {
+            use std::io::Write;
+            let mut config = fs::OpenOptions::new()
+                .append(true)
+                .open(&sandbox.config)
+                .unwrap();
+            writeln!(
+                config,
+                "\n[sandbox]\nwrite_roots = {}",
+                serde_json::to_string(&vec![outside.path().canonicalize().unwrap()]).unwrap()
+            )
+            .unwrap();
+        }
         if denied {
             use std::io::Write;
             let mut config = fs::OpenOptions::new()

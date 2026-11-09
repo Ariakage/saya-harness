@@ -1,5 +1,9 @@
 //! Reusable, UI-independent run loop. Network providers and durable storage are
 //! supplied by callers. Memory-backed side effects are suitable only for tests.
+#[path = "runtime_secrets.rs"]
+mod secrets;
+#[path = "runtime_services.rs"]
+mod services;
 use crate::{
     approvals::{ApprovalSetup, Authorization, PermissionRevision, Preauthorizations},
     background::{BackgroundJobs, BackgroundToolKind, BackgroundTools},
@@ -88,6 +92,7 @@ fn context_target(call: &ToolCall) -> Option<PathBuf> {
 struct RuntimeStore {
     inner: Arc<dyn Store>,
     metrics: Arc<Metrics>,
+    secrets: secrets::SecretSource,
 }
 impl Store for RuntimeStore {
     fn load_session<'a>(
@@ -95,19 +100,22 @@ impl Store for RuntimeStore {
         id: crate::contract::SessionId,
     ) -> Operation<'a, Option<Session>> {
         Box::pin(async move {
-            self.inner
+            let session = self
+                .inner
                 .load_session(id)
                 .await
-                .map_err(normalize_storage_error)
+                .map_err(normalize_storage_error)?;
+            secrets::loaded_session(session, &self.secrets)
         })
     }
     fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
         Box::pin(async move {
+            let changes = secrets::changes(changes, &self.secrets)?;
             self.inner
-                .commit(changes)
+                .commit(&changes)
                 .await
                 .map_err(normalize_storage_error)?;
-            self.metrics.observe(changes);
+            self.metrics.observe(&changes);
             Ok(())
         })
     }
@@ -223,6 +231,8 @@ pub struct AgentRuntime {
     read_only: bool,
     used: bool,
     started: AtomicBool,
+    secret_source: secrets::SecretSource,
+    services: Arc<services::RuntimeServices>,
 }
 /// Explicitly supplied personal information, included as lower-trust request
 /// data. It is neither discovered automatically nor saved by the runtime.
@@ -289,10 +299,12 @@ fn project_context_is_current(
 pub struct RuntimeHandle {
     jobs: Arc<BackgroundJobs>,
     modes: ModeController,
+    dispatcher: Arc<ToolDispatcher>,
+    services: Arc<services::RuntimeServices>,
 }
 impl RuntimeHandle {
     pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
-        self.jobs.request_mode(mode)
+        self.services.request_mode(self, mode)
     }
     pub fn mode(&self) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
         self.modes.snapshot()
@@ -310,7 +322,8 @@ impl RuntimeHandle {
     /// cleanup. This remains available after the owning run future fails or is
     /// aborted. Repeated calls are safe; completed job status stays readable.
     pub async fn shutdown_background(&self) -> Result<(), BoundaryError> {
-        self.jobs.shutdown().await
+        self.jobs.shutdown().await?;
+        self.services.shutdown(self.dispatcher.as_ref()).await
     }
     /// Snapshot background lifecycle transitions in the order observed by this run.
     pub fn background_events(
@@ -364,12 +377,17 @@ impl AgentRuntime {
             return Err(error("invalid_config", "runtime limits must be positive"));
         }
         let metrics = Arc::new(Metrics::default());
+        let secret_source = secrets::source();
         let store: Arc<dyn Store> = Arc::new(RuntimeStore {
             inner: setup.store,
             metrics: metrics.clone(),
+            secrets: secret_source.clone(),
         });
         let model: Arc<dyn Model> = Arc::new(MeasuredModel {
-            inner: setup.model,
+            inner: Arc::new(secrets::GuardedModel::new(
+                setup.model,
+                secret_source.clone(),
+            )),
             metrics: metrics.clone(),
         });
         let modes = ModeController::recording(setup.run.work_mode);
@@ -448,12 +466,16 @@ impl AgentRuntime {
             read_only,
             used: false,
             started: AtomicBool::new(false),
+            secret_source,
+            services: Arc::new(services::RuntimeServices::default()),
         })
     }
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle {
             jobs: self.jobs.clone(),
             modes: self.modes.clone(),
+            dispatcher: self.dispatcher.clone(),
+            services: self.services.clone(),
         }
     }
     /// Apply explicitly configured rates to the two request categories.
@@ -464,6 +486,49 @@ impl AgentRuntime {
     ) -> Self {
         self.metrics.pricing(execution, review);
         self
+    }
+    pub fn with_secret_registry(
+        self,
+        registry: Arc<crate::credentials::SecretRegistry>,
+    ) -> Result<Self, BoundaryError> {
+        registry.register(
+            &self
+                .review
+                .known_secrets
+                .iter()
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .collect::<Vec<_>>(),
+        )?;
+        self.dispatcher.set_secret_registry(registry.clone())?;
+        *self.secret_source.write().map_err(|_| {
+            error(
+                "sensitive_data",
+                "Dynamic secret registry could not be attached",
+            )
+        })? = Some(registry);
+        Ok(self)
+    }
+    pub fn with_execution_settings(
+        self,
+        policy: crate::execution::SandboxPolicy,
+        broker: Option<crate::network::BrokerPolicy>,
+    ) -> Result<Self, BoundaryError> {
+        self.services.configure_execution(policy, broker)?;
+        Ok(self)
+    }
+    pub fn with_mcp_settings(
+        self,
+        settings: crate::mcp::config::McpSettings,
+        environment: crate::config::Environment,
+        authorizer: Option<Arc<dyn crate::mcp::config::McpHttpAuthorizer>>,
+        registry: Arc<crate::credentials::SecretRegistry>,
+    ) -> Result<Self, BoundaryError> {
+        let runtime = self.with_secret_registry(registry.clone())?;
+        runtime
+            .services
+            .configure_mcp(settings, environment, authorizer, registry)?;
+        Ok(runtime)
     }
     /// Install a UI clarification handler before starting this single-use run.
     pub fn with_input_handler(mut self, handler: Arc<dyn InputHandler>) -> Self {
@@ -491,7 +556,7 @@ impl AgentRuntime {
     }
     /// Queue a user-selected mode; PLAN first cancels mutating background jobs.
     pub fn request_mode(&self, mode: WorkMode) -> Result<(), BoundaryError> {
-        self.jobs.request_mode(mode)
+        self.handle().request_mode(mode)
     }
     /// Snapshot current and pending mode. This never changes authorization.
     pub fn mode(&self) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
@@ -556,6 +621,9 @@ impl AgentRuntime {
         if let Some(error) = self.jobs.fatal_failure()? {
             return Err(error);
         }
+        if let Some(error) = self.services.fatal()? {
+            return Err(error);
+        }
         if self.budget.remaining()?.is_zero() {
             return Err(error("limit_reached", "active time budget exceeded"));
         }
@@ -573,6 +641,7 @@ impl AgentRuntime {
     async fn model_turn(&self, session: &mut Session) -> Result<Vec<HistoryItem>, BoundaryError> {
         for attempt in 0..=2u32 {
             self.check()?;
+            self.services.refresh(self).await?;
             self.budget.consume()?;
             let snap = loop {
                 let snap = self.sync_mode(session).await?;
@@ -582,6 +651,7 @@ impl AgentRuntime {
                 }
                 sleep(Duration::from_millis(10)).await;
             };
+            let environment_facts = self.services.facts(snap.current).await?;
             let request = (|| {
                 let tools = self.definitions(snap.current)?;
                 let instructions =
@@ -589,13 +659,17 @@ impl AgentRuntime {
                         .instructions;
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
-                let dynamic_instructions = Some(crate::prompt::system_context(
+                let mut dynamic_instructions = crate::prompt::system_context(
                     session,
                     &run,
                     self.project_context.is_some(),
                     self.personal_context.preferences.is_some(),
                     self.personal_context.memory.is_some(),
-                )?);
+                )?;
+                if let Some(facts) = environment_facts {
+                    dynamic_instructions.push_str(&facts);
+                }
+                let dynamic_instructions = Some(dynamic_instructions);
                 let request_id = uuid::Uuid::now_v7().to_string();
                 let mut record = None;
                 let mut history = vec![crate::prompt::runtime_context(session, &run)?];
@@ -636,6 +710,10 @@ impl AgentRuntime {
                     return Err(e);
                 }
             };
+            if let Err(error) = secrets::model_request(&request, &self.secret_source) {
+                self.modes.finish()?;
+                return Err(error);
+            }
             if let Some(record) = record
                 && let Err(e) = self
                     .store
@@ -701,11 +779,14 @@ impl AgentRuntime {
                             "model completed without text or tool calls",
                         ));
                     }
-                    return Ok(items);
+                    return secrets::history(items, &self.secret_source);
                 }
                 Err(err) => {
                     if received {
-                        let item = HistoryItem::AssistantPartial(partial);
+                        let item = HistoryItem::AssistantPartial(secrets::redact(
+                            partial,
+                            &self.secret_source,
+                        )?);
                         self.store
                             .commit(&[StoreChange::History {
                                 session_id: session.id,
@@ -1290,7 +1371,8 @@ impl AgentRuntime {
         start.push(StoreChange::RunStarted(self.run.clone()));
         self.store.commit(&start).await?;
         self.started.store(true, Ordering::Release);
-        let mut calls_used = 0usize;
+        self.services.initialize(self, session).await?;
+        let mut calls_used = self.services.startup_calls();
         let mut previous: Option<(String, serde_json::Value, u8)> = None;
         loop {
             self.check()?;
@@ -1457,6 +1539,7 @@ impl AgentRuntime {
         let unfinished = self.jobs.running_count()?;
         let cleanup = self.jobs.shutdown().await;
         cleanup?;
+        let service_cleanup = self.services.shutdown(self.dispatcher.as_ref()).await;
         if let Some(error) = self.jobs.fatal_failure()? {
             return Err(error);
         }
@@ -1465,6 +1548,14 @@ impl AgentRuntime {
         {
             return Err(e.clone());
         }
+        let outcome = match service_cleanup {
+            Ok(()) => outcome,
+            Err(failure) if failure.0.code == "storage_error" => return Err(failure),
+            Err(_) => Err(error(
+                "outcome_unknown",
+                "Run service cleanup could not be confirmed",
+            )),
+        };
         if self.started.load(Ordering::Acquire) {
             self.sync_mode(session).await?;
         }
@@ -1549,6 +1640,7 @@ impl AgentRuntime {
                 error: None,
             }),
         };
+        let result = secrets::redact(result, &self.secret_source)?;
         if started {
             self.store
                 .commit(&[
@@ -1689,6 +1781,41 @@ mod mode_event_tests {
             concurrent: Mutex::new(None),
             batches: Mutex::new(vec![]),
         })
+    }
+    struct CleanupFailureModel(Arc<services::RuntimeServices>);
+    impl Model for CleanupFailureModel {
+        fn start<'a>(
+            &'a self,
+            request: &'a ModelRequest,
+            cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn crate::boundary::ModelStream>> {
+            self.0
+                .fail(error("outcome_unknown", "controlled cleanup failure"));
+            EndModel.start(request, cancel)
+        }
+    }
+    #[tokio::test]
+    async fn unknown_service_cleanup_persists_a_failed_run_without_releasing_its_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let store = store(false);
+        let (mut runtime, mut session) = fixture(root.path(), store.clone());
+        runtime.model = Arc::new(CleanupFailureModel(runtime.services.clone()));
+        runtime.modes.hold_transition().unwrap();
+        let result = runtime.run(&mut session).await.unwrap();
+        assert_eq!(result.status, RunStatus::Failed);
+        assert_eq!(result.stop_reason.as_deref(), Some("outcome_unknown"));
+        assert_eq!(runtime.modes.active_invocations().unwrap(), 1);
+        assert!(
+            store
+                .batches
+                .lock()
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|change| {
+                    matches!(change, StoreChange::RunFinished(saved) if saved == &result)
+                })
+        );
     }
     #[tokio::test]
     async fn mode_transaction_acknowledges_only_its_snapshot_during_concurrent_request() {

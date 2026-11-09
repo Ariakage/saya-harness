@@ -172,3 +172,128 @@ async fn failure_terminal_is_unique_and_a_new_writer_starts_after_its_reserved_r
     next.emit(payload, None, false).await.unwrap();
     assert!(receiver.recv().await.unwrap().seq > terminal.seq);
 }
+
+#[tokio::test]
+async fn dynamic_event_registry_buffers_split_text_and_refreshes_before_delivery() {
+    use saya_app::events::EventModel;
+    use saya_core::{
+        boundary::{Model, ModelRequest, ModelStream, ModelUpdate, Operation},
+        contract::{HistoryItem, ModelPurpose},
+        credentials::SecretRegistry,
+    };
+    use std::collections::VecDeque;
+
+    struct Fixed;
+    struct Stream(VecDeque<ModelUpdate>);
+    impl Model for Fixed {
+        fn start<'a>(
+            &'a self,
+            _: &'a ModelRequest,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn ModelStream>> {
+            Box::pin(async {
+                Ok(Box::new(Stream(VecDeque::from([
+                    ModelUpdate::TextDelta("rotation-".into()),
+                    ModelUpdate::TextDelta("synthetic-value".into()),
+                    ModelUpdate::Finished {
+                        items: vec![HistoryItem::AssistantText("answer".into())],
+                        usage: None,
+                    },
+                ]))) as Box<dyn ModelStream>)
+            })
+        }
+    }
+    impl ModelStream for Stream {
+        fn next<'a>(&'a mut self, _: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
+            Box::pin(async move { Ok(self.0.pop_front()) })
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(saya_core::sqlite::SqliteStore::open(root.path(), vec![]).unwrap());
+    let session = Session {
+        id: SessionId::new(),
+        workspace: root.path().into(),
+        work_mode: WorkMode::Work,
+        profile: "fixture".into(),
+        protocol: ModelProtocol::ChatCompletions,
+        model: "fake".into(),
+        history: vec![],
+    };
+    store.create_session(&session, "fingerprint").await.unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
+    let registry = Arc::new(SecretRegistry::default());
+    let run = saya_core::contract::Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: saya_core::contract::PermissionMode::Auto,
+    };
+    saya_core::boundary::Store::commit(
+        &*store,
+        &[saya_core::boundary::StoreChange::RunStarted(run.clone())],
+    )
+    .await
+    .unwrap();
+    let writer = Arc::new(
+        EventWriter::new(
+            store,
+            session.id,
+            run.id,
+            vec!["static-synthetic-secret".into()],
+            Arc::new(ChannelSink(sender)),
+        )
+        .with_secret_registry(registry.clone())
+        .unwrap(),
+    );
+    assert!(Arc::ptr_eq(&writer.secret_registry().unwrap(), &registry));
+    assert!(
+        registry
+            .snapshot()
+            .unwrap()
+            .contains(&"static-synthetic-secret".into())
+    );
+    let model = EventModel(Arc::new(Fixed), writer.clone());
+    let request = ModelRequest {
+        request_id: "rotation".into(),
+        purpose: ModelPurpose::Execution,
+        profile: "fixture".into(),
+        instructions: String::new(),
+        dynamic_instructions: None,
+        max_output_tokens: None,
+        history: vec![],
+        tools: vec![],
+    };
+    let cancel = RunCancellation::new();
+    let mut stream = model.start(&request, &cancel).await.unwrap();
+    assert!(matches!(
+        receiver.recv().await.unwrap().payload,
+        EventPayload::ModelStarted { .. }
+    ));
+    stream.next(&cancel).await.unwrap();
+    assert!(receiver.try_recv().is_err());
+    registry
+        .register(&["rotation-synthetic-value".into()])
+        .unwrap();
+    stream.next(&cancel).await.unwrap();
+    assert!(receiver.try_recv().is_err());
+    stream.next(&cancel).await.unwrap();
+    let event = receiver.recv().await.unwrap();
+    assert!(
+        matches!(event.payload, EventPayload::ModelTextDelta { ref text, .. } if text == "[REDACTED]")
+    );
+    writer
+        .emit(
+            EventPayload::ModelTextDelta {
+                request_id: "fresh-snapshot".into(),
+                text: "rotation-synthetic-value static-synthetic-secret".into(),
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let event = receiver.recv().await.unwrap();
+    let encoded = serde_json::to_string(&event).unwrap();
+    assert!(!encoded.contains("rotation-synthetic-value"));
+    assert!(!encoded.contains("static-synthetic-secret"));
+}

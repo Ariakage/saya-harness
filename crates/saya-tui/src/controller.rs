@@ -74,6 +74,7 @@ struct App {
     config: Config,
     options: Options,
     secrets: Vec<String>,
+    secret_registry: Arc<saya_core::credentials::SecretRegistry>,
     prepared: Option<Prepared>,
     active: Option<Active>,
     state: State,
@@ -93,10 +94,19 @@ impl App {
             .iter()
             .map(|name| config.secret(name).map(str::to_owned))
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let secret_registry = Arc::new(saya_core::credentials::SecretRegistry::default());
+        secret_registry.register(
+            &secrets
+                .iter()
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .collect::<Vec<_>>(),
+        )?;
         let mut app = Self {
             config,
             options,
             secrets,
+            secret_registry,
             prepared: None,
             active: None,
             state: State::default(),
@@ -107,14 +117,23 @@ impl App {
             queued_prompt: None,
         };
         app.refresh_header();
+        app.reset_mcp_statuses();
         if app.config.profile.is_none() {
             app.notice("Choose a configured model profile before sending a message.");
         }
         Ok(app)
     }
+    fn current_secrets(&self) -> std::result::Result<Vec<String>, BoundaryError> {
+        let mut secrets = self.secret_registry.snapshot()?;
+        secrets.extend(self.secrets.iter().cloned());
+        Ok(secrets)
+    }
     fn safe(&self, text: &str) -> String {
         let mut value = serde_json::Value::String(text.into());
-        if saya_core::redaction::redact(&mut value, &self.secrets).is_err() {
+        let Ok(secrets) = self.current_secrets() else {
+            return "Sensitive details withheld".into();
+        };
+        if saya_core::redaction::redact(&mut value, &secrets).is_err() {
             return "Sensitive details withheld".into();
         }
         value
@@ -138,7 +157,9 @@ impl App {
     }
     fn safe_title(&self, text: &str) -> String {
         let title = self.safe(&crate::terminal::safe_title(text));
-        if saya_core::redaction::contains_secret(&title, &self.secrets) {
+        if self.current_secrets().map_or(true, |secrets| {
+            saya_core::redaction::contains_secret(&title, &secrets)
+        }) {
             "Sensitive details withheld".into()
         } else {
             title
@@ -192,6 +213,29 @@ impl App {
         self.state.context_input_tokens = usage.as_ref().and_then(|usage| usage.input_tokens);
         self.state.context_estimated = usage.is_some_and(|usage| usage.estimated);
     }
+    fn reset_mcp_statuses(&mut self) {
+        use saya_core::{
+            contract::{MAX_MCP_STATUS_SERVERS, McpServerState, McpServerStatus, McpTransport},
+            mcp::config::McpTransportSettings,
+        };
+        self.state.mcp_servers = self
+            .config
+            .mcp
+            .servers
+            .iter()
+            .filter(|(_, server)| server.enabled)
+            .take(MAX_MCP_STATUS_SERVERS)
+            .map(|(name, server)| McpServerStatus {
+                server: self.safe(name),
+                transport: match &server.transport {
+                    McpTransportSettings::Stdio(_) => McpTransport::Stdio,
+                    McpTransportSettings::Http(_) => McpTransport::Http,
+                },
+                state: McpServerState::Configured,
+                tools: 0,
+            })
+            .collect();
+    }
     fn reset_context(&mut self) {
         self.record_context_input(None);
         self.state.context_breakdown.clear();
@@ -241,24 +285,37 @@ impl App {
             self.queued_prompt = Some(text);
             return Ok(());
         }
+        self.reset_mcp_statuses();
         let prepared = self.prepared.as_mut().ok_or("session is unavailable")?;
         let run_id = RunId::new();
         let (sender, events) = mpsc::channel(256);
         let (context_sender, context) = watch::channel(None);
         let (thinking_sender, thinking) = watch::channel(ThinkingLog::default());
         let thinking_secrets = self.secrets.clone();
+        let dynamic_credentials = self
+            .config
+            .mcp
+            .servers
+            .values()
+            .any(|server| server.enabled);
+        let thinking_registry = dynamic_credentials.then(|| self.secret_registry.clone());
         let context_sources = ContextSources {
             project: true,
             personal: self.options.personal_context.preferences.is_some()
                 || self.options.personal_context.memory.is_some(),
         };
-        let writer = Arc::new(EventWriter::new(
+        let writer = EventWriter::new(
             prepared.store.clone(),
             prepared.session.id,
             run_id,
             self.secrets.clone(),
             Arc::new(ChannelSink(sender)),
-        ));
+        );
+        let writer = Arc::new(if dynamic_credentials {
+            writer.with_secret_registry(self.secret_registry.clone())?
+        } else {
+            writer
+        });
         let store: Arc<dyn Store> = Arc::new(EventStore(writer.clone()));
         let cancel = Arc::new(RunCancellation::new());
         let (interaction, requests) = input_channel(16)?;
@@ -276,13 +333,16 @@ impl App {
                 personal_context: self.options.personal_context.clone(),
                 anthropic_prompt_cache: self.options.anthropic_prompt_cache,
                 run_id: Some(run_id),
+                secret_registry: Some(self.secret_registry.clone()),
             },
             move |model, _| {
+                let thinking = ThinkingModel::new(model, thinking_sender, thinking_secrets);
+                let thinking = match thinking_registry {
+                    Some(registry) => thinking.with_secret_registry(registry),
+                    None => thinking,
+                };
                 Arc::new(ContextModel::new(
-                    Arc::new(EventModel(
-                        Arc::new(ThinkingModel::new(model, thinking_sender, thinking_secrets)),
-                        writer,
-                    )),
+                    Arc::new(EventModel(Arc::new(thinking), writer)),
                     context_sender,
                     context_sources,
                 ))

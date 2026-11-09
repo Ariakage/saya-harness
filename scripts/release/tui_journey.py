@@ -1405,8 +1405,8 @@ def reference_layout_and_title_journey(binary):
                                       'sidebar fixed context and extension regions')
                         if screen.colors[0][screen.main_width() + 1][1] != (20, 20, 22):
                             raise RuntimeError('sidebar did not use its reference gray background')
-                        if 'Not implemented' not in screen.sidebar_row_text(16) or 'MCP' not in screen.sidebar_row_text(16):
-                            raise RuntimeError('sidebar presented MCP as implemented')
+                        if screen.sidebar_row_text(16) != 'MCP  No servers':
+                            raise RuntimeError('sidebar did not report the empty MCP configuration')
                         if 'Not implemented' not in screen.sidebar_row_text(17) or 'Plugins' not in screen.sidebar_row_text(17):
                             raise RuntimeError('sidebar presented plugins as implemented')
                         if 'Skills' not in screen.sidebar_row_text(18):

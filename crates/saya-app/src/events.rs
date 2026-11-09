@@ -71,6 +71,7 @@ pub struct EventWriter {
     session: SessionId,
     run: RunId,
     secrets: Vec<String>,
+    secret_registry: Option<Arc<saya_core::credentials::SecretRegistry>>,
     state: tokio::sync::Mutex<State>,
     interrupted: std::sync::Mutex<Vec<EventPayload>>,
 }
@@ -88,6 +89,7 @@ impl EventWriter {
             session,
             run,
             secrets,
+            secret_registry: None,
             interrupted: std::sync::Mutex::new(Vec::new()),
             state: tokio::sync::Mutex::new(State {
                 next: 1,
@@ -97,6 +99,48 @@ impl EventWriter {
                 terminal_emitted: false,
             }),
         }
+    }
+    /// Share refreshed credentials with the host-side display boundary.
+    pub fn with_secret_registry(
+        mut self,
+        registry: Arc<saya_core::credentials::SecretRegistry>,
+    ) -> Result<Self, BoundaryError> {
+        registry.register(
+            &self
+                .secrets
+                .iter()
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .collect::<Vec<_>>(),
+        )?;
+        self.secret_registry = Some(registry);
+        Ok(self)
+    }
+    pub fn secret_registry(&self) -> Option<Arc<saya_core::credentials::SecretRegistry>> {
+        self.secret_registry.clone()
+    }
+    fn current_secrets(&self) -> Result<Vec<String>, BoundaryError> {
+        match &self.secret_registry {
+            Some(registry) => registry.snapshot(),
+            None => Ok(self.secrets.clone()),
+        }
+    }
+    fn safe_event(&self, event: &Event) -> Result<Event, BoundaryError> {
+        let secrets = self.current_secrets()?;
+        let mut value = serde_json::to_value(event)
+            .map_err(|_| cli_error("output_error", "cannot serialize event"))?;
+        redact_value(&mut value, &secrets, 0);
+        if contains_encoded_secret(&value.to_string(), &secrets) {
+            return Err(cli_error(
+                "output_error",
+                "sensitive event details withheld",
+            ));
+        }
+        serde_json::from_value(value).map_err(|_| cli_error("output_error", "cannot encode event"))
+    }
+    async fn publish(&self, event: &Event) -> Result<(), BoundaryError> {
+        let safe = self.safe_event(event)?;
+        self.sink.publish(&safe).await
     }
     async fn event(
         &self,
@@ -125,7 +169,7 @@ impl EventWriter {
         seq: u64,
     ) -> Result<Event, BoundaryError> {
         let timestamp = timestamp()?;
-        let mut value = serde_json::to_value(Event {
+        self.safe_event(&Event {
             schema_version: SCHEMA_VERSION,
             session_id: self.session,
             run_id: run,
@@ -133,15 +177,6 @@ impl EventWriter {
             timestamp,
             payload,
         })
-        .map_err(|_| cli_error("output_error", "cannot serialize event"))?;
-        redact_value(&mut value, &self.secrets, 0);
-        if contains_encoded_secret(&value.to_string(), &self.secrets) {
-            return Err(cli_error(
-                "output_error",
-                "sensitive event details withheld",
-            ));
-        }
-        serde_json::from_value(value).map_err(|_| cli_error("output_error", "cannot encode event"))
     }
     pub async fn emit(
         &self,
@@ -163,7 +198,7 @@ impl EventWriter {
             self.store
                 .commit(&[StoreChange::ReservedEvent(event.clone())])
                 .await?;
-            self.sink.publish(&event).await?;
+            self.publish(&event).await?;
         }
         let event = self.event(&mut state, payload, run).await?;
         if durable {
@@ -171,7 +206,7 @@ impl EventWriter {
                 .commit(&[StoreChange::ReservedEvent(event.clone())])
                 .await?;
         }
-        self.sink.publish(&event).await?;
+        self.publish(&event).await?;
         state.terminal_emitted |= matches!(event.payload, EventPayload::RunFinished(_));
         Ok(())
     }
@@ -198,7 +233,7 @@ impl EventWriter {
         let seq = state.next;
         state.next += 1;
         let event = self.envelope(payload, Some(self.run), seq)?;
-        self.sink.publish(&event).await?;
+        self.publish(&event).await?;
         state.terminal_emitted = true;
         Ok(())
     }
@@ -290,7 +325,7 @@ impl EventWriter {
         }
         self.store.commit(&all).await?;
         for event in &events {
-            self.sink.publish(event).await?;
+            self.publish(event).await?;
             state.terminal_emitted |= matches!(event.payload, EventPayload::RunFinished(_));
         }
         Ok(())
@@ -456,7 +491,7 @@ impl ModelStream for EventStream {
             };
             match &update {
                 Some(ModelUpdate::TextDelta(text)) if self.purpose == ModelPurpose::Execution => {
-                    if self.events.secrets.is_empty() {
+                    if self.events.secret_registry.is_none() && self.events.secrets.is_empty() {
                         self.events
                             .emit(
                                 EventPayload::ModelTextDelta {

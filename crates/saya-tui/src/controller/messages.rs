@@ -110,6 +110,9 @@ impl App {
                     self.state.status = "Running".into();
                 }
             }
+            EventPayload::McpStatus { servers } => {
+                self.install_mcp_statuses(servers);
+            }
             EventPayload::ToolFinished {
                 name,
                 call_id,
@@ -120,6 +123,40 @@ impl App {
             _ => {}
         }
         self.prune_message_ids();
+    }
+
+    fn install_mcp_statuses(&mut self, servers: Vec<saya_core::contract::McpServerStatus>) {
+        use saya_core::{
+            contract::{MAX_MCP_STATUS_SERVERS, McpTransport},
+            mcp::config::McpTransportSettings,
+        };
+        for mut status in servers.into_iter().take(MAX_MCP_STATUS_SERVERS) {
+            let known = self
+                .config
+                .mcp
+                .servers
+                .get(&status.server)
+                .is_some_and(|server| {
+                    server.enabled
+                        && matches!(
+                            (&server.transport, status.transport),
+                            (McpTransportSettings::Stdio(_), McpTransport::Stdio)
+                                | (McpTransportSettings::Http(_), McpTransport::Http)
+                        )
+                });
+            if !known {
+                continue;
+            }
+            status.server = self.safe(&status.server);
+            if let Some(existing) = self
+                .state
+                .mcp_servers
+                .iter_mut()
+                .find(|existing| existing.server == status.server)
+            {
+                *existing = status;
+            }
+        }
     }
 
     pub(super) fn assistant_message(&mut self) -> u64 {

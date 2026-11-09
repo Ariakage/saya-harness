@@ -25,7 +25,7 @@
 
 `auto` 使用 TOML 规则，deny ＞ask ＞allow；原生工作区读写默认 allow，未匹配的 exec 进入独立、无工具的核查请求。默认复用执行 profile，也可配置 review.profile；无法形成结论时由用户兜底。完整规则、核查字段与优先级见 B-10。
 
-`bypass permissions` 放开路径范围并跳过人工确认与模型核查，但保留 PLAN 只读、用户显式 deny、参数校验、取消与运行预算。PLAN 禁用通用 exec；文件路径检查不等同于操作系统沙箱，0.1 不提供子进程文件系统隔离。
+`bypass permissions` 放开路径范围并跳过人工确认与模型核查，但保留 PLAN 只读、用户显式 deny、参数校验、取消与运行预算。PLAN 禁用通用 exec。0.1／0.2 的发行范围保留无子进程文件系统隔离限制；当前 N2 开发线的原生执行边界见下节。
 
 权限模式只允许在空闲时修改；运行中拒绝修改。它不沿用工作模式的调用边界切换规则。
 
@@ -129,3 +129,33 @@ JSONL事件序号严格递增，预留可产生空洞。每个4096序号预留�
 模式请求与实际生效分别产生 `mode.change_requested` 和 `mode.changed` 事件。运行时将待发事件和会话模式一起持久化，成功后才确认已保存前缀。运行内日志最多保留256项，预留挂起切换最终生效的空间，满时返回 `mode_event_limit`，调用方可在日志排空后重试。
 
 后台任务接纳时即持有共享模式租约。切换PLAN先取消写入与命令，完成清理后才应用模式。非exec后台调用使用运行配置的工具超时，达到期限后取消并继续等待收尾，保存失败及已经发生的副作用仍按实际结果报告。exec继续使用自身超时和进程组清理。
+
+## N2 原生执行边界
+
+当前开发线默认采用 `sandbox.backend = "auto"`，macOS 选择独立 SeatbeltBackend，Linux 选择 Bubblewrap、Seccomp 与可选 socat 代理桥。实际准备、能力报告、命令和文件服务通过同一 ExecutionBackend 连接。配置加载与原生能力探测分别进行，完整四平台整体验收状态见[N2 验收记录](n2-validation.md)。
+
+权限许可继续绑定规范化操作、模式、权限版本、环境摘要及执行环境身份。`bypass` 保留 PLAN、显式 deny、参数和预算规则，并继续受原生执行策略约束。宿主保护路径优先于可写根，默认包括启动时已存在的配置、data、state、cache 和工作区 `.saya/local`。活动凭据存储新建后会强制加入实际保护路径。
+
+`sandbox.read_roots` 与 `write_roots` 控制 OS 视图，`permissions.additional_roots` 同时扩展逻辑文件权限和原生读写根。单独提供工具链可读根只允许进程访问该目录，文件工具访问仍按逻辑权限判断。解释器与编译器需要的额外目录由用户显式选择。
+
+内置六种文件工具在同一原生后端包裹的私有 worker 中执行。宿主先持久化 intent 并消费一次许可，再传递确切调用、限额和已批准目标，worker 二次解析目标并检查 PLAN。请求与响应各有 32 MiB wire 硬上限，配置中的扫描、返回和写入上限继续按各自语义校验。损坏、超限、截断响应或进程异常按实际观测报告，副作用无法确认时保留 `unknown`。
+
+命令的实际环境在隔离完成后通过专用私有 FD 恢复，宿主 launcher 使用固定最小环境。未声明 FD 在 exec 时关闭，受控传递的环境 FD 在 payload 前关闭。文件和命令共用进程组监督、超时、取消、输出排空及持久化结果边界，后台执行复用相同链路。
+
+默认网络 `deny` 阻断原生工具直接外联。`proxy` 仅向本次宿主代理入口开放 TCP，由 HTTP／CONNECT broker 核查 origin、解析后的 IP 和连接限额。Linux 通过私有网络 namespace 内的 socat 桥接，macOS 使用 Seatbelt TCP 端点规则。HTTPS 隧道的主机／端口授权独立于加密方法和路径。
+
+Linux 视图保留最小系统目录、工作区、显式根及私有临时目录，procfs 与其已检测别名不进入 payload 视图。Seccomp 拒绝危险命名空间、进程内存和内核入口，并限定 socket family。匿名 Unix 流式 pair 用于受控进程内部通信。macOS 使用系统 sandbox-exec，按规范化路径和受控 SBPL 参数配置。
+
+显式 Host 兼容模式的文件／网络隔离报告为 `unsupported`，工作模式、许可和运行预算继续生效。存在私有凭据存储或启用 `credential_ref` 时应用拒绝 Host。资源按 `hard`、`best_effort`、`unsupported` 分别报告，Linux 总内存／进程数／CPU 带宽硬约束要求有效 cgroup v2 委派，macOS 后代进程清理保持 `best_effort`。
+
+无法表示的文件策略、缺失的必需控制或清理无法确认均返回明确错误，原生后端继续保持失败关闭。完整参数见[配置](configuration.md#n2-原生隔离配置)，设计与平台边界见[原生隔离设计](sandbox.md)。
+
+## N2 外部工具与服务收尾
+
+MCP 工具由可信注册表命名和分类，服务器描述、annotations 及 schema 来自外部数据。只有宿主显式 `read_only_tools` 分类可使 HTTP 工具进入 PLAN。stdio 服务在 PLAN 中保持停止。Manual Approval 确认 stdio 启动及每次模型工具调用。目录代次变化使旧批准失效，执行前再次核对。
+
+连接、鉴权、stdio 握手和每次目录发现使用运行共享活跃预算与相应配置超时。人工确认独立暂停活跃计时，清理阶段继续完成实际进程回收、连接关闭与 broker 释放。启动 intent 保存后、进程派发前再次检查预算，耗尽时记录已知失败。派发后握手中断记录 `unknown`，继续执行清理。
+
+运行结束先清理后台任务及服务，再生成终态。切入 PLAN 持有模式切换保护直到本地 MCP 与相关副作用任务收尾。原生 payload、桥接进程与实际环境清理确认后释放代理端口，无法确认时记录未知结果。
+
+HTTP 鉴权使用宿主环境引用或私有 credential reference。每个新请求重新检查撤销，401 保持单次发送，scope 扩展需要新的显式授权。OAuth canonical resource 与精确 transport endpoint 分别绑定，恢复连接时核对 issuer 和已记录资源，刷新保存时核对 scope、client 与 issuer。凭据文件权限、登录命令与 TUI 状态见[MCP 使用说明](mcp.md)。

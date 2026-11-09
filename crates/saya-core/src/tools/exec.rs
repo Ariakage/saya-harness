@@ -238,6 +238,17 @@ impl ExecTool {
             .map_err(|e| failure("invalid_args", e.to_string()))?;
         Ok(args)
     }
+    /// Trusted MCP startup planning. Only explicitly selected reference values
+    /// may cross the ordinary model-exec credential boundary.
+    pub(crate) fn prepare_host_launch(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        allowed_secret_refs: &BTreeSet<String>,
+    ) -> Result<(ExecPlan, cap_std::fs::Dir, BTreeMap<OsString, OsString>), BoundaryError> {
+        let args = self.validated_args(call, context)?;
+        self.prepare_with_refs(&args, context, allowed_secret_refs)
+    }
     fn prepare(
         &self,
         args: &ExecArgs,
@@ -646,6 +657,13 @@ impl ManagedProcess {
     pub(crate) fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
         self.child.as_mut().and_then(|child| child.stderr.take())
     }
+    pub(crate) fn has_exited(&self) -> Result<bool, BoundaryError> {
+        if self.end.is_some() {
+            Ok(true)
+        } else {
+            leader_exited(self.pid)
+        }
+    }
     pub(crate) async fn wait(
         &mut self,
         cancel: &dyn Cancellation,
@@ -681,6 +699,18 @@ impl ManagedProcess {
         };
         self.end = Some(end.clone());
         Ok(end)
+    }
+    pub(crate) async fn terminate(&mut self) -> Result<std::process::ExitStatus, BoundaryError> {
+        if let Some(end) = &self.end {
+            return Ok(end.status);
+        }
+        let status = self.finish(false).await?;
+        self.end = Some(ProcessEnd {
+            status,
+            timed_out: false,
+            cancelled: true,
+        });
+        Ok(status)
     }
     async fn finish(&mut self, exited: bool) -> Result<std::process::ExitStatus, BoundaryError> {
         if !exited {

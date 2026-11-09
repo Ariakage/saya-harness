@@ -254,6 +254,33 @@ pub enum ApprovalSource {
     Preauthorization,
 }
 
+/// Host-provided connection lifecycle. These records contain no endpoints or credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    Stdio,
+    Http,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerState {
+    Configured,
+    Connecting,
+    Connected,
+    Stopped,
+    NeedsAuth,
+    Failed,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerStatus {
+    pub server: String,
+    pub transport: McpTransport,
+    pub state: McpServerState,
+    pub tools: usize,
+}
+pub const MAX_MCP_STATUS_SERVERS: usize = 16;
+
 /// Schema-v1 event envelope. Sequence assignment and UTC RFC 3339 timestamps
 /// are scheduler responsibilities; serialization alone does not enforce them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -354,6 +381,8 @@ pub enum EventPayload {
     },
     #[serde(rename = "input.received")]
     InputReceived { input_id: String, answer: String },
+    #[serde(rename = "mcp.status")]
+    McpStatus { servers: Vec<McpServerStatus> },
     #[serde(rename = "run.finished")]
     RunFinished(RunResult),
 }

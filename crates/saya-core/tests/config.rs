@@ -75,6 +75,8 @@ fn loads_selected_file_and_resolves_precedence_without_implicit_project_config()
     let home = temp.path();
     let default_path = write(home, ".config/saya/config.toml", fixture());
     write(home, "workspace/saya.toml", "not valid TOML");
+    write(home, "workspace/.saya/config.toml", "not valid TOML");
+    write(home, "workspace/.agents/config.toml", "not valid TOML");
     let workspace = home.join("workspace");
     let e = env(&[
         ("HOME", home.to_str().unwrap()),
@@ -106,10 +108,80 @@ fn loads_selected_file_and_resolves_precedence_without_implicit_project_config()
     assert!(!c.profiles["chat"].strict_tools);
     assert_eq!(c.review.max_output_tokens, 1024);
     assert_eq!(c.limits.max_model_requests, 10);
+    assert_eq!(c.sandbox.backend, saya_core::execution::BackendKind::Auto);
+    assert!(c.mcp.servers.is_empty());
     assert_eq!(
         c.secret_env_names().into_iter().collect::<Vec<_>>(),
         vec!["EXAMPLE_KEY"]
     );
+}
+
+#[test]
+fn relative_launch_paths_use_the_process_directory_and_remain_side_effect_free() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let selected = write(root, "settings/config.toml", "schema_version = 1\n");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    for environment_selected in [false, true] {
+        let environment = env(&[
+            ("HOME", root.to_str().unwrap()),
+            ("SAYA_CONFIG", "settings/config.toml"),
+            ("SAYA_CWD", "workspace"),
+            ("SAYA_DATA_DIR", "session-data/nested"),
+        ]);
+        let overrides = if environment_selected {
+            Overrides::default()
+        } else {
+            Overrides {
+                config: Some("settings/config.toml".into()),
+                cwd: Some("workspace".into()),
+                data_dir: Some("session-data/nested".into()),
+                ..Default::default()
+            }
+        };
+        let config = config::load(overrides, environment, root).unwrap();
+        assert_eq!(config.config_path, selected);
+        assert_eq!(config.cwd, workspace);
+        assert_eq!(config.data_dir, root.join("session-data/nested"));
+        for path in [config.config_path, config.cwd, config.data_dir] {
+            assert!(path.is_absolute());
+            assert!(
+                !path
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir)
+            );
+        }
+    }
+    assert!(!root.join("session-data").exists());
+}
+
+#[test]
+fn launch_parent_components_preserve_existing_symlink_traversal() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write(root, "config.toml", "schema_version = 1\n");
+    fs::create_dir_all(root.join("actual/storage")).unwrap();
+    std::os::unix::fs::symlink(root.join("actual/storage"), root.join("alias")).unwrap();
+    let config = config::load(
+        Overrides {
+            config: Some("alias/../../config.toml".into()),
+            cwd: Some("alias/..".into()),
+            data_dir: Some("alias/../session-data/nested".into()),
+            ..Default::default()
+        },
+        test_env(root),
+        root,
+    )
+    .unwrap();
+    let canonical = root.canonicalize().unwrap();
+    assert_eq!(config.config_path, canonical.join("config.toml"));
+    assert_eq!(config.cwd, canonical.join("actual"));
+    assert_eq!(
+        config.data_dir,
+        canonical.join("actual/session-data/nested")
+    );
+    assert!(!config.data_dir.exists());
 }
 
 #[test]
@@ -373,5 +445,251 @@ fn explicit_thinking_effort_accepts_five_levels_and_rejects_unknown_values() {
         } else {
             assert!(result.is_err(), "{level}");
         }
+    }
+}
+
+#[test]
+fn sandbox_defaults_to_native_auto_and_host_requires_explicit_configuration() {
+    use saya_core::{config::SandboxNetworkSettings, execution::BackendKind};
+    let temp = TempDir::new().unwrap();
+    for backend in ["auto", "host", "seatbelt", "bubblewrap"] {
+        let path = write(
+            temp.path(),
+            "config.toml",
+            &format!("schema_version=1\n[sandbox]\nbackend='{backend}'\n"),
+        );
+        let config = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(config.sandbox.backend).unwrap(),
+            backend
+        );
+        assert!(matches!(
+            config.sandbox.network,
+            SandboxNetworkSettings::Deny {}
+        ));
+        assert_eq!(config.permissions_mode, PermissionMode::Auto);
+        if backend == "auto" {
+            assert_eq!(config.sandbox.backend, BackendKind::Auto);
+        }
+    }
+}
+
+#[test]
+fn sandbox_resolves_paths_resources_and_broker_without_creating_runtime_artifacts() {
+    use saya_core::execution::{BackendKind, NetworkPolicy};
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().canonicalize().unwrap();
+    let path = write(
+        &workspace,
+        "config.toml",
+        r#"schema_version=1
+[sandbox]
+read_roots=['readonly']
+write_roots=['cache']
+protected_paths=['.secrets']
+cgroup_root='/delegated/saya'
+[sandbox.resources]
+cpu_seconds=10
+file_size_bytes=1048576
+open_files=128
+[sandbox.network]
+mode='proxy'
+allowed_origins=['https://example.invalid','http://localhost:4567']
+localhost_development_origin='http://localhost:4567'
+[sandbox.network.limits]
+max_connections=2
+"#,
+    );
+    let config = config::load(
+        Overrides {
+            config: Some(path),
+            ..Default::default()
+        },
+        test_env(&workspace),
+        &workspace,
+    )
+    .unwrap();
+    let (policy, broker) = config.sandbox.resolve(&workspace).unwrap();
+    assert_eq!(policy.backend, BackendKind::Auto);
+    assert_eq!(policy.workspace, workspace);
+    assert_eq!(
+        policy.read_roots,
+        [workspace.clone(), workspace.join("readonly")]
+    );
+    assert_eq!(
+        policy.write_roots,
+        [workspace.clone(), workspace.join("cache")]
+    );
+    assert_eq!(policy.protected_paths, [workspace.join(".secrets")]);
+    assert_eq!(policy.resources.cpu_seconds, Some(10));
+    assert_eq!(policy.resources.file_size_bytes, Some(1048576));
+    assert_eq!(policy.resources.open_files, Some(128));
+    assert_eq!(
+        policy.cgroup_root.as_deref(),
+        Some(Path::new("/delegated/saya"))
+    );
+    assert_eq!(policy.network, NetworkPolicy::Deny);
+    let broker = broker.unwrap();
+    assert_eq!(broker.limits.max_connections, 2);
+    assert_eq!(broker.allowed_origins.len(), 2);
+    assert_eq!(
+        broker.localhost_development_origin.as_deref(),
+        Some("http://localhost:4567")
+    );
+    assert!(broker.unix_socket.is_none());
+    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 1);
+    assert!(!config.data_dir.exists());
+    assert!(!config.state_dir.exists());
+    assert!(!config.cache_dir.exists());
+}
+
+#[test]
+fn rejects_unknown_or_invalid_sandbox_policy_without_echoing_policy_data() {
+    let temp = TempDir::new().unwrap();
+    for (case, fragment) in [
+        "[sandbox]\nbackend='unexpected'",
+        "[sandbox]\nunknown='SYNTHETIC-SENSITIVE-POLICY'",
+        "[sandbox]\nread_roots=['']",
+        "[sandbox]\nprotected_paths=[\"SYNTHETIC-SENSITIVE-POLICY\\n\"]",
+        "[sandbox]\ncgroup_root='relative'",
+        "[sandbox.resources]\ncpu_seconds=0",
+        "[sandbox.resources.cpu_quota]\nquota_micros=1\nperiod_micros=1000",
+        "[sandbox.network]\nmode='deny'\nallowed_origins=['https://example.invalid']",
+        "[sandbox.network]\nmode='proxy'\nallowed_origins=['https://SYNTHETIC-SENSITIVE-POLICY@example.invalid']",
+        "[sandbox.network]\nmode='proxy'\nallowed_origins=['https://example.invalid/path']",
+        "[sandbox.network]\nmode='proxy'\nallowed_origins=['https://example.invalid']\nlocalhost_development_origin='https://example.invalid'",
+        "[sandbox.network]\nmode='proxy'\nunix_socket='/SYNTHETIC-SENSITIVE-POLICY'",
+        "[sandbox.network]\nmode='proxy'\n[sandbox.network.limits]\nmax_connections=0",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = write(
+            temp.path(),
+            "config.toml",
+            &format!("schema_version=1\n{fragment}\n"),
+        );
+        let error = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("invalid sandbox policy case {case} accepted"));
+        assert_eq!(error.0.code, "invalid_config");
+        assert!(!error.to_string().contains("SYNTHETIC-SENSITIVE-POLICY"));
+    }
+}
+
+#[test]
+fn enabled_mcp_sources_join_model_secret_environment_names() {
+    let temp = TempDir::new().unwrap();
+    let text = format!(
+        "{}\n{}",
+        fixture(),
+        r#"[mcp.servers.local.transport]
+type='stdio'
+argv=['server','--stdio']
+env={DESTINATION_TOKEN='SOURCE_TOKEN'}
+[mcp.servers.remote.transport]
+type='http'
+endpoint='https://example.invalid/mcp'
+bearer_env='HTTP_BEARER'
+headers_env={X-Service-Key='HTTP_HEADER'}
+[mcp.servers.disabled]
+enabled=false
+[mcp.servers.disabled.transport]
+type='stdio'
+argv=['disabled-server']
+env={UNUSED_TOKEN='MISSING_DISABLED_SOURCE'}
+"#
+    );
+    let path = write(temp.path(), "config.toml", &text);
+    let environment = env(&[
+        ("HOME", temp.path().to_str().unwrap()),
+        ("EXAMPLE_KEY", "SYNTHETIC-MODEL-KEY"),
+        ("SOURCE_TOKEN", "SYNTHETIC-LOCAL-TOKEN"),
+        ("HTTP_BEARER", "SYNTHETIC-BEARER-TOKEN"),
+        ("HTTP_HEADER", "SYNTHETIC-HEADER-TOKEN"),
+    ]);
+    let loaded = config::load(
+        Overrides {
+            config: Some(path),
+            ..Default::default()
+        },
+        environment,
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(loaded.mcp.servers.len(), 3);
+    assert_eq!(
+        loaded.secret_env_names().into_iter().collect::<Vec<_>>(),
+        ["EXAMPLE_KEY", "HTTP_BEARER", "HTTP_HEADER", "SOURCE_TOKEN"]
+    );
+    assert_eq!(
+        loaded.secret("SOURCE_TOKEN").unwrap(),
+        "SYNTHETIC-LOCAL-TOKEN"
+    );
+}
+
+#[test]
+fn mcp_references_fail_closed_without_disclosing_values() {
+    let temp = TempDir::new().unwrap();
+    for (transport, value) in [
+        ("type='stdio'\nargv=['server']\nenv={TOKEN='MISSING'}", None),
+        (
+            "type='stdio'\nargv=['server']\nenv={TOKEN='SOURCE'}",
+            Some("SYNTHETIC-TOKEN\0VALUE"),
+        ),
+        (
+            "type='http'\nendpoint='https://example.invalid/mcp'\nbearer_env='MISSING'",
+            None,
+        ),
+        (
+            "type='http'\nendpoint='https://example.invalid/mcp'\nbearer_env='SOURCE'",
+            Some("SYNTHETIC-TOKEN\nVALUE"),
+        ),
+        (
+            "type='http'\nendpoint='https://example.invalid/mcp'\nheaders_env={X-Key='SOURCE'}",
+            Some("SYNTHETIC-TOKEN\rVALUE"),
+        ),
+        ("type='http'\nendpoint='http://example.invalid/mcp'", None),
+        (
+            "type='stdio'\nargv=['server']\nsecret='SYNTHETIC-TOKEN'",
+            None,
+        ),
+    ] {
+        let path = write(
+            temp.path(),
+            "config.toml",
+            &format!("schema_version=1\n[mcp.servers.test.transport]\n{transport}\n"),
+        );
+        let mut pairs = vec![("HOME", temp.path().to_str().unwrap())];
+        if let Some(value) = value {
+            pairs.push(("SOURCE", value));
+        }
+        let error = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            env(&pairs),
+            temp.path(),
+        )
+        .err()
+        .expect("invalid MCP configuration accepted");
+        assert_eq!(error.0.code, "invalid_config");
+        assert!(!error.to_string().contains("SYNTHETIC-TOKEN"));
     }
 }

@@ -17,7 +17,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
-use saya_core::tools::todo::{TodoItem, TodoStatus};
+use saya_core::{
+    contract::{MAX_MCP_STATUS_SERVERS, McpServerState, McpServerStatus, McpTransport},
+    tools::todo::{TodoItem, TodoStatus},
+};
 use std::collections::{HashSet, VecDeque};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -137,6 +140,7 @@ pub struct State {
     pub skills_count: Option<usize>,
     pub thinking_effort: Option<String>,
     pub todos: Vec<TodoItem>,
+    pub mcp_servers: Vec<McpServerStatus>,
     pub editor: Editor,
     pub completion: Completion,
     /// Selected catalog index while the command modal is open.
@@ -189,6 +193,7 @@ impl Default for State {
             skills_count: None,
             thinking_effort: None,
             todos: Vec::new(),
+            mcp_servers: Vec::new(),
             editor: Editor::default(),
             completion: Completion::default(),
             command_palette: None,
@@ -872,7 +877,12 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
     } else {
         15
     };
-    let tasks_row = if compact_tasks { 12 } else { 20 };
+    let server_rows = if area.height >= 32 {
+        state.mcp_servers.len().min(MAX_MCP_STATUS_SERVERS).min(5)
+    } else {
+        0
+    };
+    let tasks_row = if compact_tasks { 12 } else { 20 + server_rows };
     let mut lines = vec![Line::default(); usize::from(area.height.min(40))];
     for row in [1, extensions_row - 1, tasks_row - 1] {
         lines[row] = Line::styled(
@@ -944,10 +954,13 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         }
     }
     lines[extensions_row] = Line::styled("Extensions", heading);
-    lines[extensions_row + 1] = Line::styled("MCP  Not implemented", Style::default().fg(MUTED));
-    lines[extensions_row + 2] =
+    lines[extensions_row + 1] = mcp_summary(state, server_rows);
+    for (index, server) in state.mcp_servers.iter().take(server_rows).enumerate() {
+        lines[extensions_row + 2 + index] = mcp_server_line(server, usize::from(content.width));
+    }
+    lines[extensions_row + 2 + server_rows] =
         Line::styled("Plugins  Not implemented", Style::default().fg(MUTED));
-    lines[extensions_row + 3] = Line::styled(
+    lines[extensions_row + 3 + server_rows] = Line::styled(
         match state.skills_count {
             Some(count) => format!("Skills {count} discovered"),
             None => "Skills —".into(),
@@ -1051,6 +1064,66 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         Paragraph::new(safe_line(&state.workspace)).style(Style::default().fg(MUTED)),
         Rect::new(content.x, area.bottom() - 1, content.width, 1),
     );
+}
+
+fn mcp_state(state: McpServerState) -> (&'static str, &'static str, ratatui::style::Color) {
+    match state {
+        McpServerState::Configured => ("○", "Configured", MUTED),
+        McpServerState::Connecting => ("◐", "Connecting", AMBER),
+        McpServerState::Connected => ("●", "Connected", GREEN),
+        McpServerState::Stopped => ("○", "Stopped", MUTED),
+        McpServerState::NeedsAuth => ("!", "Needs auth", AMBER),
+        McpServerState::Failed => ("×", "Failed", RED),
+    }
+}
+fn mcp_server_line(server: &McpServerStatus, width: usize) -> Line<'static> {
+    let (icon, status, color) = mcp_state(server.state);
+    let name = safe_line(&server.server[..prefix_boundary(&server.server, 128)]);
+    let transport = match server.transport {
+        McpTransport::Stdio => "stdio",
+        McpTransport::Http => "HTTP",
+    };
+    let detail = if width >= 36 {
+        format!("{status} · {transport} · {}t", server.tools)
+    } else {
+        format!("{status} · {}t", server.tools)
+    };
+    let name_width = width.saturating_sub(detail.width() + 3);
+    let name = crop_display(&name, 0, name_width);
+    Line::from(vec![
+        Span::styled(format!("{icon} "), Style::default().fg(color)),
+        Span::styled(name, Style::default().fg(FOREGROUND)),
+        Span::styled(format!(" {detail}"), Style::default().fg(color)),
+    ])
+}
+
+fn mcp_summary(state: &State, visible: usize) -> Line<'static> {
+    let count = state.mcp_servers.len().min(MAX_MCP_STATUS_SERVERS);
+    if count == 0 {
+        return Line::styled("MCP  No servers", Style::default().fg(MUTED));
+    }
+    if visible == 0 {
+        let first = &state.mcp_servers[0];
+        let (_, status, color) = mcp_state(first.state);
+        let suffix = if count > 1 {
+            format!(" +{} more", count - 1)
+        } else {
+            String::new()
+        };
+        return Line::styled(
+            format!(
+                "MCP {status}{suffix} · {}",
+                safe_line(&first.server[..prefix_boundary(&first.server, 128)])
+            ),
+            Style::default().fg(color),
+        );
+    }
+    let suffix = if visible < count {
+        format!(" · +{} more", count - visible)
+    } else {
+        String::new()
+    };
+    Line::styled(format!("MCP {count}{suffix}"), Style::default().fg(MUTED))
 }
 
 fn context_rows(state: &State, width: usize) -> Vec<Line<'static>> {
@@ -2809,7 +2882,7 @@ mod tests {
                     (3, "Window 128k"),
                     (4, "Unknown before request"),
                     (15, "Extensions"),
-                    (16, "MCP  Not implemented"),
+                    (16, "MCP  No servers"),
                     (17, "Plugins  Not implemented"),
                     (18, "Skills —"),
                     (height - 1, "/tmp/workspace"),
@@ -4199,5 +4272,40 @@ mod tests {
         assert_eq!(state.details.as_ref().unwrap().title, "Approval required");
         state.command_palette = None;
         assert!(render(&mut state, 160, 45).contains("Command suggestions"));
+    }
+    #[test]
+    fn mcp_sidebar_uses_real_states_and_bounds_the_server_list_at_both_heights() {
+        let mut state = State::default();
+        assert!(render(&mut state, 160, 40).contains("MCP  No servers"));
+        state.mcp_servers = (0..16)
+            .map(|index| McpServerStatus {
+                server: format!("fixture-{index}"),
+                transport: McpTransport::Stdio,
+                state: McpServerState::Configured,
+                tools: 0,
+            })
+            .collect();
+        let configured = render(&mut state, 160, 40);
+        assert!(configured.contains("Configured"));
+        assert!(!configured.contains("Connected"));
+        assert!(configured.contains("+11 more"));
+        state.mcp_servers[0].state = McpServerState::Connected;
+        state.mcp_servers[0].tools = 3;
+        let connected = render(&mut state, 160, 40);
+        assert!(connected.contains("Connected"));
+        assert!(connected.contains("stdio · 3t"));
+        assert!(!connected.contains("fixture-5"));
+        let short = render(&mut state, 120, 24);
+        assert!(short.contains("MCP Connected +15 more"));
+        state.mcp_servers[0].state = McpServerState::Stopped;
+        assert!(render(&mut state, 160, 40).contains("Stopped"));
+        for status in [
+            McpServerState::Connecting,
+            McpServerState::NeedsAuth,
+            McpServerState::Failed,
+        ] {
+            state.mcp_servers[0].state = status;
+            assert!(render(&mut state, 160, 40).contains(mcp_state(status).1));
+        }
     }
 }
