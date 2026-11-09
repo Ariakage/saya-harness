@@ -188,6 +188,85 @@ class ScriptHelpersTest(unittest.TestCase):
                 self.assertFalse(mcp_acceptance.acknowledge_ready_lease(lease))
                 self.assertFalse(Path(str(lease.path) + '.ack').exists())
 
+    def test_tui_failure_diagnostics_preserve_readable_exit_tail_and_pending_metadata(self):
+        reader, writer = os.pipe()
+        try:
+            screen = tui_journey.Screen(160, 40)
+            raw = bytearray(b'x' * (3 * 1024 * 1024))
+            terminal = SimpleNamespace(master=reader, screen=screen, raw=raw,
+                process=SimpleNamespace(poll=lambda: 1, supervisor=SimpleNamespace(poll=lambda: None)))
+
+            def pump(_timeout):
+                data = os.read(reader, 65536)
+                raw.extend(data)
+                screen.feed(data)
+
+            terminal.pump = pump
+            tail = b'CONTROLLED_FINAL_ERROR_TAIL\x1b[\xe7\x95'
+            os.write(writer, tail)
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                value = mcp_acceptance.save_tui_diagnostics(
+                    terminal, directory, 'initial-title', RuntimeError('controlled failure'))
+                captured = (directory / 'mcp-tui-raw.ansi').read_bytes()
+                saved = json.loads((directory / 'mcp-tui-diagnostics.json').read_text())
+                self.assertEqual(saved, value)
+                self.assertEqual(len(captured), 2 * 1024 * 1024)
+                self.assertTrue(captured.endswith(tail))
+                self.assertEqual(value['raw_bytes_retained'], len(captured))
+                self.assertEqual(value['raw_tail'], captured[-8192:].decode(errors='replace'))
+                self.assertEqual(value['cli_exit_code'], 1)
+                self.assertIsNone(value['supervisor_exit_code'])
+                self.assertEqual(value['phase'], 'initial-title')
+                self.assertEqual(value['failure_type'], 'RuntimeError')
+                self.assertEqual(value['failure'], 'controlled failure')
+                self.assertEqual(value['drained_chunks'], 1)
+                self.assertIsNone(value['drain_error'])
+                self.assertEqual(value['pending_ansi_characters'], 2)
+                self.assertEqual(value['pending_utf8_bytes'], 2)
+                text = (directory / 'mcp-tui-last-screen.txt').read_text()
+                self.assertIn('CONTROLLED_FINAL_ERROR_TAIL', text)
+                self.assertLessEqual(len(text), 32768)
+                cells = json.loads((directory / 'mcp-tui-last-cells.json').read_text())
+                self.assertFalse(cells['truncated'])
+                self.assertEqual((cells['columns'], cells['rows']), (160, 40))
+        finally:
+            os.close(reader)
+            os.close(writer)
+
+    def test_tui_diagnostics_bound_screen_characters_cells_and_colors(self):
+        reader, writer = os.pipe()
+        try:
+            screen = tui_journey.Screen(300, 120)
+            screen.cells = [['界'] * screen.columns for _ in range(screen.rows)]
+            terminal = SimpleNamespace(master=reader, screen=screen, raw=bytearray(),
+                process=SimpleNamespace(poll=lambda: 0, supervisor=SimpleNamespace(poll=lambda: 0)))
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                value = mcp_acceptance.save_tui_diagnostics(terminal, directory, 'complete')
+                captured = json.loads((directory / 'mcp-tui-last-cells.json').read_text())
+                self.assertTrue(captured['truncated'])
+                self.assertEqual((captured['columns'], captured['rows']), (300, 120))
+                for name in ('cells', 'colors'):
+                    self.assertEqual(len(captured[name]), 64)
+                    self.assertTrue(all(len(row) == 240 for row in captured[name]))
+                text = (directory / 'mcp-tui-last-screen.txt').read_text()
+                self.assertEqual(len(text), 32768)
+                self.assertEqual(text, screen.text[-32768:])
+                self.assertEqual((directory / 'mcp-tui-raw.ansi').read_bytes(), b'')
+                self.assertEqual(value['raw_bytes_retained'], 0)
+                self.assertEqual(value['drained_chunks'], 0)
+                self.assertEqual(value['phase'], 'complete')
+                self.assertEqual(value['cli_exit_code'], 0)
+                self.assertEqual(value['supervisor_exit_code'], 0)
+                self.assertEqual(value['pending_ansi_characters'], 0)
+                self.assertEqual(value['pending_utf8_bytes'], 0)
+                self.assertIsNone(value['failure_type'])
+                self.assertIsNone(value['failure'])
+        finally:
+            os.close(reader)
+            os.close(writer)
+
     def test_screen_capture_requires_an_explicit_directory(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(Path, 'mkdir') as mkdir, \

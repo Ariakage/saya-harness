@@ -100,6 +100,12 @@ YAML、14个Shell片段、内嵌Python、失败／取消依赖场景和12项验�
 
 最新本机macOS27.2 ARM完成905项Rust测试、完整门禁及30项Python离线回归，并在固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 上通过18项原生、25项MCP及24项TUI。源码检查与程序证据在 `target/n2/ci-profile-workspace.log`、`target/n2/validated-local/`，修复范围与原始远端失败见[N2验收记录](n2-validation.md#linux-长路径与资源控制修复)。Linux委派与四平台最终完成状态继续保留待验收。
 
+### 终端预算与完整性能补证
+
+完整性能v2本机已通过，覆盖两后端七项操作及三种代理网络路径，独立核验器与47项Python回归已接入CI。b091四平台源码CI全通过，其N2 Intel侧栏启动失败的旧raw缺口由新夹具诊断补齐。另以确定性可写PTY对照修复渲染时间误耗帧输出预算，记录与原Intel原因分别保留。
+
+最终本机907项Rust完整门禁通过，新固定程序 `d2b0f84585ac0e66cf8953547bd9eac8b36cbd7e21b28024c0da469a8aa9479e` 通过18项原生、完整v2性能、25项MCP及24项TUI。原始与最终记录为 `target/n2/terminal-final-workspace.log`、`target/n2/terminal-final-local/`，最终四平台状态待新源码收证。[验收记录](n2-validation.md#终端输出预算与启动诊断)
+
 ### 四平台原生基线与测试同步
 
 `a6f3d99` 的N2四平台工作流及产物独立核验全部通过。两Linux端各920项Rust／19项原生／25项MCP／24项TUI，两macOS15端各906项Rust／18项原生／25项MCP／24项TUI。独立源码CI保留Intel人工确认计时夹具的失败，后续测试以虚拟人工等待和未暂停预算负对照验证暂停契约。后台artifact夹具通过实际job完成状态同步，生命周期等待增加阶段诊断。

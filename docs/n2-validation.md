@@ -217,6 +217,16 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 本机观察到热命令P50原生30.817ms、Host15.465ms，网络RTT P50直连0.797ms、HTTP代理1.521ms、CONNECT1.510ms。这些值对应上述三样本与明确测量范围，四平台实际值按新固定源码重新记录。
 
+## 终端输出预算与启动诊断
+
+`b091dee` 的四平台源码CI全部通过，N2三端完整通过，Intel仅MCP侧栏用例在启动0.505秒后退出1。旧报告保留了正确的Configured首屏，但缺少失败raw，具体原因无法唯一确认。MCP夹具现在在清理前保存有界raw、末帧、阶段、进程退出码及ANSI／UTF-8解析状态。受控150ms消费者停顿实测触发error35并成功保留诊断，正常启动、缩放及20ms停顿均通过。[该轮源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42594301076)、[该轮N2记录](https://github.com/Ariakage/saya-harness/actions/runs/42594302822)
+
+独立阴性对照确认原帧I/O截止时间在渲染前开始，纯300ms渲染延迟后即使PTY持续可写也会报WouldBlock。`TerminalGuard`复用Ratatui `try_draw`，在渲染完成后开始250ms帧输出计时。旧代码在新回归失败，修复后8项终端测试及3轮重复通过，持续慢读、关闭和恢复的原有边界断言继续执行。此独立问题与旧Intel缺raw失败分别留证。
+
+最终本机4线程完整门禁通过907项Rust测试、格式、workspace严格Clippy及优化构建，日志为 `target/n2/terminal-final-workspace.log`。49项Python离线回归通过。新程序 `d2b0f84585ac0e66cf8953547bd9eac8b36cbd7e21b28024c0da469a8aa9479e` 在同一固定副本通过18项原生、完整性能v2的21项核验、25项MCP和24项TUI，记录位于 `target/n2/terminal-final-local/`。新源码的四平台验收继续单独执行。
+
+诊断捕获失败时保留原TUI异常，成功运行中的捕获失败仍使验收失败，终端与服务清理均经finally执行。永久脚本回归覆盖退出尾部、raw／屏幕边界、阶段和进程状态。异常优先级另外以实际夹具函数的三项对照验证，记录为 `target/n2/research/tui-independent-review/lifecycle-error-probes-after.json`。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

@@ -406,7 +406,8 @@ impl TerminalGuard {
     }
 
     /// Draw a frame, tolerating transient backpressure for at most 100 ms per
-    /// write within a 250 ms frame budget. The render closure is synchronous.
+    /// write within a 250 ms frame-output budget. The synchronous render closure
+    /// completes before the frame's I/O budget starts.
     /// A stalled or closed terminal returns an I/O error so the
     /// application can cancel its owned run before leaving.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
@@ -415,12 +416,17 @@ impl TerminalGuard {
             .terminal
             .as_mut()
             .ok_or_else(|| io::Error::other("terminal initialization is incomplete"))?;
-        self.output
-            .state
-            .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?
-            .write_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
-        let result = terminal.draw(render).map(|_| ());
+        let result = terminal
+            .try_draw(|frame| -> io::Result<()> {
+                render(frame);
+                self.output
+                    .state
+                    .lock()
+                    .map_err(|_| io::Error::other("terminal output state unavailable"))?
+                    .write_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
+                Ok(())
+            })
+            .map(|_| ());
         self.output
             .state
             .lock()

@@ -99,6 +99,24 @@ fn terminal_child_probe() -> io::Result<()> {
             assert!(crossterm::terminal::is_raw_mode_enabled()?);
             drop(terminal);
         }
+        "render-delay" => {
+            let mut terminal = TerminalGuard::enter()?;
+            let mut writable = false;
+            let result = terminal.draw(|frame| {
+                std::thread::sleep(Duration::from_millis(300));
+                let mut descriptor = libc::pollfd {
+                    fd: libc::STDOUT_FILENO,
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                // SAFETY: stdout is the live PTY and poll receives one valid descriptor.
+                writable = unsafe { libc::poll(&mut descriptor, 1, 0) } > 0
+                    && descriptor.revents & libc::POLLOUT != 0;
+                frame.render_widget("WRITABLE_AFTER_SLOW_RENDER", frame.area());
+            });
+            assert!(writable, "fixture PTY was not writable after rendering");
+            result?;
+        }
         "titles" => {
             let mut terminal = TerminalGuard::enter()?;
             let malicious = "Saya | safe\x1b]52;c;payload\x07\x1b\\\r\nnext\u{009d}8;;link\u{009c}\u{202e}RTL\u{2066}end\u{2069}";
@@ -406,6 +424,14 @@ fn titles_are_protocol_safe_deduplicated_and_utf8_bounded() -> io::Result<()> {
         assert!(!operation.chars().any(|character| character.is_control() || matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')));
     }
     assert!(String::from_utf8_lossy(&output).contains("AFTER_TITLE"));
+    Ok(())
+}
+
+#[test]
+fn slow_render_does_not_consume_terminal_write_budget() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
+    let output = run_terminal_probe("render-delay")?;
+    assert!(String::from_utf8_lossy(&output).contains("WRITABLE_AFTER_SLOW_RENDER"));
     Ok(())
 }
 

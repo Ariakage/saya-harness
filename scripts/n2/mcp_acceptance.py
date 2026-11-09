@@ -431,6 +431,45 @@ def validate_released(fixture):
         fixture.lease.wait_released()
 
 
+def save_tui_diagnostics(terminal, report_dir, phase, failure=None):
+    started = time.monotonic()
+    drained = 0
+    drain_error = None
+    while drained < 16 and time.monotonic() - started < .25:
+        try:
+            if not select.select([terminal.master], [], [], 0)[0]:
+                break
+            terminal.pump(0)
+            drained += 1
+        except OSError as error:
+            drain_error = str(error)
+            break
+    raw = bytes(terminal.raw[-2 * 1024 * 1024:])
+    screen = terminal.screen
+    status = {}
+    for name, process in [('cli', terminal.process), ('supervisor', terminal.process.supervisor)]:
+        try:
+            status[name + '_exit_code'] = process.poll()
+        except (OSError, RuntimeError) as error:
+            status[name + '_status_error'] = str(error)[:1024]
+    (report_dir / 'mcp-tui-raw.ansi').write_bytes(raw)
+    (report_dir / 'mcp-tui-last-screen.txt').write_text(screen.text[-32768:])
+    (report_dir / 'mcp-tui-last-cells.json').write_text(json.dumps({
+        'columns': screen.columns, 'rows': screen.rows,
+        'cells': [row[:240] for row in screen.cells[:64]],
+        'colors': [row[:240] for row in screen.colors[:64]],
+        'truncated': screen.columns > 240 or screen.rows > 64}, ensure_ascii=False) + '\n')
+    diagnostics = {'phase': phase, **status, 'raw_bytes_retained': len(raw),
+        'raw_tail': raw[-8192:].decode(errors='replace'),
+        'drained_chunks': drained, 'drain_elapsed_ms': (time.monotonic() - started) * 1000,
+        'drain_error': drain_error, 'pending_ansi_characters': len(screen.pending),
+        'pending_utf8_bytes': len(screen.decoder.getstate()[0]),
+        'failure_type': type(failure).__name__ if failure is not None else None,
+        'failure': str(failure)[:4096] if failure is not None else None}
+    (report_dir / 'mcp-tui-diagnostics.json').write_text(json.dumps(diagnostics, indent=2) + '\n')
+    return diagnostics
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
@@ -519,12 +558,14 @@ def main():
     def tui_lifecycle(root):
         fixture = Fixture(scenario='tui_hold')
         terminal = None
+        phase = 'terminal-startup'
         try:
             config = configuration(root, fixture)
             config.write_text(config.read_text().replace('request_timeout_seconds=5', 'request_timeout_seconds=15'))
             terminal = Terminal([str(binary), '--config', str(config), '--cwd', str(root / 'workspace')],
                                 root / 'workspace', environment(root))
             terminal.resize(160, 40)
+            phase = 'initial-title'
             terminal.title()
 
             def sidebar():
@@ -533,10 +574,12 @@ def main():
             def has_status(state, tools):
                 return any('fixture' in row and state in row and str(tools) + 't' in row for row in sidebar())
 
+            phase = 'configured-sidebar'
             terminal.wait(lambda: has_status('Configured', 0), 'configured MCP sidebar before a run')
             terminal.settle()
             require(not fixture.models and fixture.calls == 0, 'idle TUI contacted a model or executed an MCP tool')
             (report_dir / 'mcp-tui-configured.txt').write_text(terminal.screen.text)
+            phase = 'connected-sidebar'
             terminal.line('Run the controlled remote echo tool')
             terminal.wait(lambda: fixture.tool_started.is_set() and has_status('Connected', 2),
                           'real connected MCP sidebar during a held remote tool', timeout=20)
@@ -548,6 +591,7 @@ def main():
                 'columns': 160, 'rows': 40, 'cells': terminal.screen.cells,
                 'colors': terminal.screen.colors}, ensure_ascii=False) + '\n')
             fixture.tool_release.set()
+            phase = 'completed-and-stopped'
             terminal.until('MCP_ACCEPTED')
             terminal.wait(lambda: has_status('Stopped', 0) and terminal.screen.status() == 'Completed',
                           'confirmed MCP cleanup and completed TUI task')
@@ -555,6 +599,7 @@ def main():
             stopped = [row for row in sidebar() if 'fixture' in row and 'Stopped' in row]
             require(stopped and terminal.mode() == 'WORK', 'TUI final sidebar or work mode changed unexpectedly')
             (report_dir / 'mcp-tui-stopped.txt').write_text(terminal.screen.text)
+            phase = 'terminal-exit-and-restoration'
             terminal.finish()
             raw = terminal.raw.decode(errors='replace')
             require(TOKEN not in raw, 'MCP credential escaped real TUI output')
@@ -576,6 +621,7 @@ def main():
                     'SQLite omitted or misordered the real TUI MCP lifecycle')
             require(events[2]['tools'] == 2 and events[3]['tools'] == 0, 'SQLite MCP catalogue counts differed from the sidebar')
             require(fixture.calls == 1 and len(fixture.models) == 2, 'TUI tool or model request count was unexpected')
+            phase = 'complete'
             return {'columns': 160, 'rows': 40, 'connected_sidebar': connected,
                     'stopped_sidebar': stopped, 'sqlite_run_id': run_id,
                     'sqlite_states': [event['state'] for event in events],
@@ -583,9 +629,20 @@ def main():
                     'terminal_restoration': 'passed', 'credential_redaction': 'passed'}
         finally:
             fixture.tool_release.set()
-            if terminal:
-                terminal.close()
-            fixture.close()
+            failure = sys.exc_info()[1]
+            try:
+                if terminal:
+                    try:
+                        save_tui_diagnostics(terminal, report_dir, phase, failure)
+                    except Exception as diagnostic_error:
+                        if failure is None:
+                            raise
+                        print('TUI diagnostic capture failed (' + type(diagnostic_error).__name__ + ')',
+                              file=sys.stderr)
+                    finally:
+                        terminal.close()
+            finally:
+                fixture.close()
     case('real-tui-mcp-sidebar-lifecycle', tui_lifecycle)
 
     def manual(root, interactive):
