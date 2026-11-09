@@ -13,9 +13,9 @@
 - 权限模式分别为 `auto`、`bypass permissions`、`Manual Approval`，默认 `auto`。Manual Approval 对每次工具调用要求人工批准，模型请求不单独确认。PLAN 在三种权限模式下均只读调查并输出计划，不修改工作区文件。
 - 权限、预授权、输出与会话恢复的具体规则见[执行与恢复契约](docs/execution.md)。工作模式和权限模式分别处理，不混用。
 - MVP 的确定接口、默认值、边界与工程选型以[完整基线](docs/mvp-baseline.md) B-01 至 B-24 为准，已由项目负责人整套确认，见 D-027；macOS 最低支持版本经 D-035 调整为 15。
-- Sandbox、MCP 等后续新增功能见[能力路线图](docs/capability-roadmap.md)。功能规划与 MVP 实施任务分别处理，不将规划清单当作已实现或自动扩入 0.1。
+- N2 已接入原生隔离、MCP 与凭据组件，实际完成状态和平台证据见[开发进度](docs/progress.md)与[N2 验收](docs/n2-validation.md)。后续增量见[能力路线图](docs/capability-roadmap.md)，功能规划与历史 MVP 发行范围分别处理。
 - 0.1.0 之后的任务分解见[后续开发计划](docs/post-mvp-plan.md)，日志、Session Export、默认 TUI 和 Goal 的细节在对应设计草案中维护。
-- 未来 Sandbox 按 D-040 使用 Linux Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 实现。实施时读取[原生隔离](docs/sandbox.md)、[上下文](docs/context-management.md)、[Browser](docs/browser.md)与[插件规范](docs/saya-plugin.md)。
+- 原生后端按 D-040 使用 Linux Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 实现。D-050 确认默认原生隔离，必需约束无法满足时明确失败。修改匿名 Unix 通道、内核能力或凭据边界时保留实际平台回归与失败关闭约定。实施时读取[原生隔离](docs/sandbox.md)、[MCP](docs/mcp.md)、[上下文](docs/context-management.md)、[Browser](docs/browser.md)与[插件规范](docs/saya-plugin.md)。
 - 产品方向与实现状态见 [README.md](README.md)、[项目范围](docs/vision.md)和[决策记录](docs/decisions.md)。已确定与已实现必须分开描述。
 
 ## 开始工作

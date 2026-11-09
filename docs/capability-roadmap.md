@@ -1,17 +1,19 @@
 # 后续能力路线图
 
-**更新于 2026-11-08。本文包含 F-01 至 F-20 的后续能力规划，MVP 基础与待开发增量分别记录。**
+**更新于 2026-11-09。本文包含 F-01 至 F-20 的能力演进，已发行基础、当前实现与待开发增量分别记录。**
 
 本文回答“CLI MVP 之后，Saya Harness 还需要开发哪些能力”。基础扩展见[决策记录](decisions.md) D-028、D-036 至 D-038，本轮 Browser、上下文／插件细化及原生后端见 D-039 至 D-041，全局记忆编辑方向见 D-045。版本候选、依赖及验收见[后续开发计划](post-mvp-plan.md)。
 
-0.1.0 已发布，其行为以[完整基线](mvp-baseline.md)及后续决策为准。P0 至 P7、DEV-001 至 DEV-037 见[MVP 实施任务](implementation-plan.md)，新增 DEV-038 至 DEV-089 见后续开发计划。
+0.1.0 已发布，其行为以[完整基线](mvp-baseline.md)及后续决策为准。0.2.0 已交付 N0／N1 及交互与审查修复，范围和限制保留在[版本说明](release-notes-0.2.0.md)。当前 N2 开发线已实现原生隔离、MCP 与远程 MCP 凭据基础，本机整合验证通过，最终四平台整体验收仍在进行。N3 至 N5 继续按规划维护。[N2 验收](n2-validation.md)
+
+P0 至 P7、DEV-001 至 DEV-037 见[MVP 实施任务](implementation-plan.md)，新增 DEV-038 至 DEV-089 见后续开发计划。
 
 ## 总体顺序
 
 | 批次 | 目标 | 主要能力 |
 | --- | --- | --- |
-| 近期候选 | 共享基础和默认 TUI | 五级日志、Session Snapshot／Export、共享应用层和 TUI，作为 0.2.0 候选范围 |
-| A：隔离与扩展基础 | 能约束实际执行，并接入外部能力 | Sandbox、MCP Client、Skills／插件、Hooks、统一凭据；观测与评估同步建设 |
+| 0.2.0 已交付 | 共享基础和默认 TUI | 五级日志、Session Snapshot／Export、共享应用层和 TUI |
+| A：隔离与扩展基础 | 能约束实际执行，并接入外部能力 | N2 已实现 Sandbox、MCP Client 与所需凭据基础，最终四平台验收中，Skills／插件、Hooks 及统一身份扩展后续推进 |
 | B：持续完成项目 | 能处理长上下文、多步骤和可恢复工作 | 工作区检查点、上下文管理、后台任务、联网读取、模型路由、项目索引／LSP |
 | C：协作与丰富输入 | 能积累知识、分工并处理更多内容 | 长期记忆、多 Agent、多模态；浏览器交互按需求进入 |
 | D：开放与部署 | 能被其他程序使用并扩展运行环境 | 稳定 SDK、本地服务／远程执行、更多平台与分发 |
@@ -81,32 +83,32 @@ flowchart TD
 
 **价值**：权限系统决定操作是否获准，sandbox 约束获准操作实际能够访问的资源。
 
-首轮开发内容：
+N2 已实现以下范围，平台保证以实际验收证据为准。
 
 - 建立可替换执行后端，支持宿主测试后端与真正隔离的后端，明确展示当前后端和能力。
 - 文件系统：工作区／临时目录、只读与可写挂载、宿主目录隔离、产物取回。
-- 网络：禁网与显式开放策略；需要域名级规则时设计对应代理或过滤机制，不把端口规则描述成完整域名控制。
-- 进程与资源：进程树清理、运行时间、CPU／内存／进程数量限制，以及环境和凭据注入范围。
+- 网络通过禁网策略及受控 HTTP／CONNECT broker，逐连接核对精确 origin、DNS 与固定目标地址。
+- 进程与资源包含所属进程清理、运行时间、可选单进程限制、显式委派 cgroup v2 聚合限制，以及环境和凭据注入范围。
 - 支持能力探测；用户选择的隔离要求无法满足时明确失败，不静默换成无隔离宿主执行。
 
-首轮采用原生后端。Linux 按项目负责人指定的 Bubblewrap + Seccomp + socat 实现，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 的后续实现。资源能力区分 hard／best_effort／unsupported，网络桥与域名策略分别验证。命令 AST／CST 风险事实、文件策略、资源及性能验收见[Sandbox 设计](sandbox.md)。
+当前默认按平台选择原生后端。Linux 使用 Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 的后续实现。资源能力区分 hard／best_effort／unsupported，macOS 后代清理为 best_effort。命令 AST／CST 风险事实、文件策略、资源及性能验收见[Sandbox 实现边界](sandbox.md)。
 
-验收：子进程不能越过已声明的隔离边界，资源耗尽与取消能清理，所报告后端与实际运行一致。未来 sandbox 与 bypass 的组合要形成明确的版本契约；推荐保留所选隔离环境的硬边界。sandbox 只读能力不自动在现有 PLAN 中启用 exec。
+验收要求子进程遵守已声明的隔离边界，资源和清理结果符合能力等级，所报告后端与实际运行一致。工作模式、权限模式与后端选择分别生效，bypass 保留所选环境的硬边界，PLAN 继续禁用通用 exec。最终四平台原生证据继续按[N2 验收](n2-validation.md)维护。
 
 ## F-02 MCP Client
 
 **价值**：让 Saya 作为 MCP 客户端／宿主，使用外部工具，而不是让用户为每种服务编写 Saya 专用工具。
 
-增量顺序：
+当前实现与后续增量如下。
 
-1. 本地 stdio：显式配置服务器、受控启动与关闭、能力协商、工具发现和调用。
-2. 远程 Streamable HTTP：服务连接、OAuth 发现与登录、令牌续期／凭据清理、取消、错误和所协商版本的兼容行为。
-3. Resources 与 Prompts：读取和选择资源／模板，明确来源与上下文占用。
-4. 进一步支持输入请求、工具列表变化、订阅与长任务等已协商能力，不假定所有服务器实现相同子集。
+1. 已实现本地 stdio 的显式配置、受控启动与关闭、能力协商、工具发现和调用。
+2. 已实现远程 Streamable HTTP、OAuth 发现与登录、令牌续期／撤销、取消与有界错误处理。
+3. 已接入工具列表变化与目录代次失效，服务额外输入请求返回明确的需要输入状态。
+4. Resources、Prompts、订阅、长任务与额外输入交互继续按后续需求扩展，并分别验证服务器支持范围。
 
-核心交付：服务器管理、稳定工具命名与模型侧名称映射、schema 校验、输出大小／内容类型处理、权限判断、执行记录、取消和非交互需要输入时的结束行为。本地 MCP 服务器本身也是进程，其启动与生命周期需要纳入执行策略，不能只审查后续 tools/call。
+服务器管理、稳定工具命名、schema 校验、输出大小／内容类型、权限判断、执行记录、取消及非交互终止已接入共享运行时。本地 MCP 服务启动和生命周期使用执行后端与独立启动授权，HTTP 服务由宿主管理，具体配置与限制见[MCP 与凭据](mcp.md)。
 
-技术调研优先评估官方 Rust SDK [rmcp](https://github.com/modelcontextprotocol/rust-sdk)。当前调研参考 MCP 2026-07-28 的 [stdio／Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)、[HTTP 授权](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)与[工具规范](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)；进入实施时锁定验证过的 SDK 与协议兼容矩阵，而不直接跟随 main。
+当前固定官方 Rust SDK [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.9.0，首选协议 2026-07-28，兼容 2025-11-25。实现依据包含 [stdio／Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)、[HTTP 授权](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)与[工具规范](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)，实际矩阵与最终四平台待验范围见[N2 验收](n2-validation.md)。
 
 验收：至少一个本地和一个远程测试服务器完成发现、调用、拒绝、取消与失败路径；同名工具不会冲突，外部工具不会绕开 Saya 的权限。服务器工具 annotations 只作为声明性信息，不能单凭只读提示获得更高权限；这也符合工具规范对不可信 annotations 的要求。
 
@@ -248,7 +250,7 @@ DEV-040 至 DEV-042 已实现五级日志、tracing span、`--log-level`、本�
 
 ## F-14 TUI 与 GUI
 
-当前开发线已接入默认 TUI，无子命令的 `saya` 在 stdin／stdout 均连接终端时进入全屏界面，文本交互使用 `saya chat`。N0 已建立共享 saya-app 与有界事件／交互桥，N1 已接入 saya-tui、TTY 路由和终端恢复。RC1 与后续交互增量分别按源码记录验证，见[TUI 文档](tui.md)和[开发进度](progress.md)。
+0.2.0 已交付默认 TUI，无子命令的 `saya` 在 stdin／stdout 均连接终端时进入全屏界面，文本交互使用 `saya chat`。N0 已建立共享 saya-app 与有界事件／交互桥，N1 已接入 saya-tui、TTY 路由和终端恢复。当前 N2 增加真实 MCP 生命周期与工具数展示，各轮交互增量按源码记录验证，见[TUI 文档](tui.md)和[开发进度](progress.md)。
 
 **价值**：让已形成的运行时能力有清楚的交互入口。
 
@@ -295,6 +297,8 @@ DEV-040 至 DEV-042 已实现五级日志、tracing span、`--log-level`、本�
 
 **价值**：为模型、MCP、插件与远程任务提供一致的凭据生命周期和作用域。
 
+N2 已实现远程 MCP 所需子集，包括私有文件存储、环境变量导入、OAuth 登录、作用域绑定引用、刷新与永久撤销。首个存储后端为 0700／0600 私有明文文件，动态已知凭据集合接入模型、持久化、事件与界面边界。管理入口与本机联合验证已通过，最终四平台验收仍在进行。系统凭据库、通用账号管理和插件／远程任务的统一身份继续按后续范围推进。[MCP 与凭据管理](mcp.md)
+
 - 在 MVP 的环境变量引用之上增加系统凭据存储或受支持的安全后端，配置与会话只保存引用。
 - 管理 OAuth 登录、令牌续期、清除／撤销与账号切换；显示凭据用途和授权范围。
 - 按服务、项目、工具与任务限定可用凭据，向 sandbox／子任务进行受控注入，不把全部宿主凭据交给每个进程。
@@ -312,7 +316,7 @@ DEV-043 至 DEV-046 已实现并通过本机离线验收。
 
 ## F-20 Goal 目标编排
 
-提供 `/goal` 与 `saya goal ...`，保存目标、步骤、验收证据和预算。手动阶段先复用有界 Run，自动阶段再接入隔离、检查点、Compact 与持久 worker，多 Agent 阶段复用 F-09。
+后续计划提供 `/goal` 与 `saya goal ...`，保存目标、步骤、验收证据和预算。手动阶段先复用有界 Run，自动阶段再接入隔离、检查点、Compact 与持久 worker，多 Agent 阶段复用 F-09。
 
 Goal 生命周期与四工作模式分别表达。每次工具执行经过当前权限与隔离边界，自动阶段需要显式有限授权及总预算，目标完成以验收证据判定。具体方案见[Goal 设计](goal.md)，任务为 DEV-069 至 DEV-074。
 
@@ -323,11 +327,11 @@ Goal 生命周期与四工作模式分别表达。每次工具执行经过当前
 1. 共享应用服务与事件桥接，复用现有 CLI 运行、审批和会话生命周期。
 2. F-12、F-19 的五级诊断、一致性快照及 Markdown／JSON 导出。
 3. F-14 的默认 TUI，提供对话、确认、会话、工具与后台状态。
-4. F-01、F-02 的工具注册、执行后端、实际隔离及 stdio MCP，随后结合 F-18 开放远程连接。
+4. F-01、F-02 的工具注册、执行后端、实际隔离、stdio／HTTP MCP 与 F-18 凭据基础。
 5. F-06、F-05、F-03、F-04 的上下文、检查点、插件与 Hooks。
 6. F-20 按手动、有限自动、多 Agent 三层逐步交付。
 
-进入任一模块时，将该项细化为设计、依赖验证、实现与验收任务，行为变化另记版本决策。N0 的共享应用服务、五级日志和会话导出，以及 N1 默认 TUI 已实现。N2 至 N5 的隔离、MCP、上下文、插件、Goal 与 Browser 按[开发进度](progress.md)维护实际状态。
+进入任一模块时，将该项细化为设计、依赖验证、实现与验收任务，行为变化另记版本决策。N0／N1 已随 0.2.0 发行，N2 隔离与 MCP 已实现并进入最终四平台验收。N3 上下文、插件与全局记忆，以及 N4 Goal、N5 Browser 继续作为规划，实际状态由[开发进度](progress.md)维护。
 
 ## 研究依据与维护
 

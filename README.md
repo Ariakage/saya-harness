@@ -6,6 +6,8 @@
 
 0.1.0 与 0.2.0-rc.2 的历史发行及验收保留各自源码和产物归属。
 
+当前开发线已实现 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI。本机整合门禁及正常入口验收通过，最终四平台 CI 与原生验收仍在进行。0.2.0 的功能与限制继续归属已发布产物。当前实现与平台证据见[原生隔离](docs/sandbox.md)、[MCP 与凭据](docs/mcp.md)和[N2 验收记录](docs/n2-validation.md)。
+
 ## 已确认方向
 
 - 实现语言：Rust。
@@ -56,15 +58,18 @@
 | [CLI 入口与实现记录](docs/cli-preview.md) | 单次运行、文本会话与默认 TUI 入口 |
 | [MVP 验收证据](docs/acceptance.md) | AC-01 至 AC-24 的测试与发行验收映射 |
 | [0.1.0 双语版本说明](docs/release-notes-0.1.0.md) | 功能、安装、兼容性与已知限制 |
+| [0.2.0 双语版本说明](docs/release-notes-0.2.0.md) | 已发布的 N0／N1、交互完善、审查修复与发行限制 |
 | [0.2.0-rc.1 与开发线双语说明](docs/release-notes-0.2.0-rc.1.md) | 候选与后续交互增量、迁移和限制 |
 | [发行验证](docs/release-validation.md) | 历史产物、源码关联、最低环境与下载复核 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规范](docs/saya-plugin.md) | manifest v1 草案、结构 schema、权限与生命周期 |
-| [后续能力路线图](docs/capability-roadmap.md) | Sandbox、MCP、Skills／插件、Hooks、记忆、多 Agent 等功能规划 |
-| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 候选范围、六个阶段与 DEV-038 至 DEV-089 |
+| [后续能力路线图](docs/capability-roadmap.md) | 已有扩展基础与 Skills／插件、Hooks、记忆、多 Agent 等后续规划 |
+| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 发行范围、当前 N2 与后续阶段，DEV-038 至 DEV-089 |
 | [全局记忆](docs/memory.md) | 可读 MEMORY.md、模型编辑、检索、遗忘与回滚的后续设计 |
-| [原生 Sandbox](docs/sandbox.md) | Seatbelt 独立后端、Bubblewrap／Seccomp／socat 和 AST |
+| [原生 Sandbox](docs/sandbox.md) | Seatbelt、Bubblewrap／Seccomp／socat、HTTP／CONNECT broker 和 CST 边界 |
+| [MCP 与凭据管理](docs/mcp.md) | stdio／HTTP 工具、服务生命周期、私有凭据与 OAuth |
+| [N2 验收](docs/n2-validation.md) | 原生隔离、MCP、凭据及最终四平台验证进展 |
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
@@ -81,7 +86,7 @@
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 候选范围为共享应用服务、增强日志、Session Export 和默认 TUI，原生 Sandbox、MCP、Compact、插件、Browser 及 Goal 按依赖交付。具体版本根据验收收敛，GUI 位于 TUI 之后。
+后续交付按[开发计划](docs/post-mvp-plan.md)推进。0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。当前 N2 实现默认原生隔离与 MCP，继续完成最终四平台验收。N3 的上下文、OutputStore、Compact、检查点、插件／Hooks 与全局记忆，以及后续 Goal、Browser 和 GUI 按依赖规划，后续版本号在发行范围收敛时确定。
 
 ## 许可证
 

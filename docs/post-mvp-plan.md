@@ -1,6 +1,6 @@
 # 0.1.0 之后的开发计划
 
-**初版制订于 2026-11-07，更新于 2026-11-09。本文包含六个阶段及 DEV-038 至 DEV-089 共 52 项开发任务，实际进度见[开发进度](progress.md)。版本分组与具体接口作为规划维护。**
+**初版制订于 2026-11-07，更新于 2026-11-09。本文包含六个阶段及 DEV-038 至 DEV-089 共 52 项开发任务。N0／N1 已随 0.2.0 发行，N2 已实现并进入最终四平台验收，N3 及后续保持规划。实际进度见[开发进度](progress.md)。**
 
 需求来源为项目负责人引用的《Harness功能设计》对话，历史来源标识为 `6aef3957-d280-83ee-9098-278ae10191f8`。需求已提取到本仓库的设计草案，核对时以文档、源码与决策记录为依据。0.1.0 的发行证据见[发行验证](release-validation.md)，原 P0 至 P7 和 DEV-001 至 DEV-037 定义保存在[MVP 实施任务](implementation-plan.md)。
 
@@ -28,7 +28,9 @@
 | N4 目标编排 | Goal 数据、手动推进、持久任务、有限自动续跑与报告 | DEV-069 至 DEV-074 | 目标完成由验收证据判定，预算、恢复及授权可验证 |
 | N5 Browser | 托管 Chromium、网络／资源 broker、界面及联合验收 | DEV-079 至 DEV-083 | 浏览器操作、来源、产物、权限及清理可验证 |
 
-N0 与 N1 是 **0.2.0 的候选范围**。实际发版根据验收结果决定。N2 的接口设计可以在 N0 后开展，Sandbox／MCP 的交付优先级为高。N3、N4 按任务依赖进入开发，后续版本号在发行范围收敛时确定。
+N0 与 N1 已随 **0.2.0 正式版**交付，包含候选阶段完善的交互与审查修复，已发布产物的功能和限制保留在[双语发行说明](release-notes-0.2.0.md)。当前 N2 已接入原生隔离、命令结构事实、stdio／HTTP MCP 与凭据管理，本机完整门禁和正常入口验证通过，最终四平台 CI 与原生验收仍在进行。[N2 验收记录](n2-validation.md)
+
+N3、N4、N5 按任务依赖进入后续开发，OutputStore、Compact、检查点、插件／Hooks、模型可编辑全局记忆、Goal 与 Browser 仍属规划。后续版本号在发行范围收敛时确定。
 
 Goal 的手动阶段可在应用服务与快照稳定后单独推进。持久自动续跑以执行隔离、检查点、上下文管理和持久调度为前提。多 Agent Goal 的后续工作归 F-09。
 
@@ -88,11 +90,13 @@ flowchart TD
 
 ## N2 隔离与 MCP
 
+以下组件已接入正常 CLI、文本会话与 TUI，本阶段整体退出条件仍需最终四平台证据。默认原生后端按平台选择 Seatbelt／Bubblewrap，显式 Host 保留能力报告与凭据保护限制。MCP 采用固定 SDK 与协议矩阵，凭据首个后端为私有明文文件。实现边界见[Sandbox](sandbox.md)、[命令分析](command-analysis.md)及[MCP 与凭据](mcp.md)。
+
 | 任务 | 内容 | 最小依赖 | 交付与验证 |
 | --- | --- | --- | --- |
 | DEV-054 | 工具注册与可信操作描述 | DEV-039 | 本地与外部工具共享命名、schema、策略、取消及记录。只读声明经过宿主分类，未知外部副作用按受限操作处理 |
-| DEV-055 | ExecutionBackend、文件／命令与能力探测 | DEV-054 | 统一 prepare／execute／files／cleanup，区分 hard／best_effort／unsupported。独立封装 Seatbelt，预留容器／VM 的平台和路径映射 |
-| DEV-056 | Seatbelt 与 Linux 原生组合后端 | DEV-055 | 实现 macOS sandbox-exec profile 及 Linux Bubblewrap + Seccomp + socat，接入受控网络 broker 和可用资源 controller |
+| DEV-055 | ExecutionBackend、文件／命令与能力探测 | DEV-054 | 统一环境准备、命令／文件 worker 与 cleanup，区分 hard／best_effort／unsupported。独立封装 Seatbelt，预留容器／VM 的平台和路径映射 |
+| DEV-056 | Seatbelt 与 Linux 原生组合后端 | DEV-055 | macOS sandbox-exec profile 及 Linux Bubblewrap + Seccomp + socat，受控 HTTP／CONNECT broker 与显式委派资源 controller |
 | DEV-057 | 隔离对抗、性能与恢复验收 | DEV-056、DEV-075 | 验证文件规则表达、namespace／syscall、代理旁路、缺失资源能力、子进程、取消和清理，记录原生开销及平台证据 |
 | DEV-058 | stdio MCP 连接与服务生命周期 | DEV-054、DEV-057 | 显式服务器配置、初始化协商、发现、命名、受控启动与清理。握手失败和启动权限单独验证 |
 | DEV-059 | MCP 工具接入统一运行时 | DEV-058 | schema、结果大小／内容类型、权限、调用记录、取消、列表变化及失败往返通过本地服务器夹具 |
@@ -100,6 +104,8 @@ flowchart TD
 | DEV-061 | Streamable HTTP MCP 与授权 | DEV-059、DEV-060 | 锁定 SDK／协议矩阵，验证连接、OAuth、续期、断连、输入请求与非交互路径 |
 
 ## N3 上下文与可执行扩展
+
+本阶段尚未开始。现有指令／Skill 发现、显式记忆注入和 TUI Context 估算作为基础，下表列出的上下文构建、长输出引用、Compact 与可执行扩展仍待实现。
 
 | 任务 | 内容 | 最小依赖 | 交付与验证 |
 | --- | --- | --- | --- |
@@ -162,16 +168,16 @@ flowchart TD
 - 每个 DEV 在适用检查通过、文档与证据更新后创建独立 Conventional Commit。推送和发行依据当次用户授权执行。
 - 最终版本说明提供中英双语，支持平台依赖实际程序验收结果。新增协议、后端和迁移均记录验证矩阵。
 
-## 在实现任务中收敛的事项
+## 实现与验收收敛位置
 
 | 事项 | 收敛位置 |
 | --- | --- |
-| 0.2.0 实际发行范围、TUI 库版本与终端支持矩阵 | DEV-047、DEV-052、DEV-053 |
+| 0.2.0 发行范围、TUI 库版本与终端矩阵已按发行证据记录 | DEV-047、DEV-052、DEV-053 |
 | 日志格式兼容扩展、队列上限与查询参数 | DEV-040 至 DEV-042 |
 | 导出 schema、快照读取上限、错误和文件提交策略 | DEV-043 至 DEV-046 |
-| 第一个 Sandbox 后端与逐平台隔离能力 | DEV-055 至 DEV-057 |
-| 原生能力等级、socat 网络桥和 AST 风险事实 | DEV-055 至 DEV-057、DEV-075 |
-| MCP SDK、协议和授权兼容矩阵 | DEV-058 至 DEV-061 |
+| 原生后端已实现，最终逐平台隔离能力继续验收 | DEV-055 至 DEV-057 |
+| 原生能力、HTTP／CONNECT 与 socat 桥、CST 风险事实的最终平台证据 | DEV-055 至 DEV-057、DEV-075 |
+| 固定 MCP SDK／协议及授权矩阵的最终四平台验收 | DEV-058 至 DEV-061 |
 | Compact 触发水位、摘要模型及协议安全边界 | DEV-062、DEV-063 |
 | 输出引用／捕获配额、检索与压缩恢复 | DEV-076、DEV-077 |
 | saya-plugin v1 schema、语义、lock 与能力绑定 | DEV-078、DEV-066 |
