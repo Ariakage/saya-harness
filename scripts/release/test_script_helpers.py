@@ -35,6 +35,21 @@ def generated_profile(command):
 
 
 class ScriptHelpersTest(unittest.TestCase):
+    def test_status_parser_excludes_activity_particles_from_status(self):
+        for width, permission, expected in [
+            (80, 'auto', 'auto'),
+            (40, 'manual', 'Manual Approval'),
+            (80, 'bypass permissions', 'bypass permissions'),
+        ]:
+            for particles in ['█▓▒░', '░▒▓█', '▓█░', '░▒▓', '']:
+                with self.subTest(width=width, permission=permission, particles=particles):
+                    screen = tui_journey.Screen(width, 8)
+                    status = '● Thinking ' + particles
+                    line = '│' + status.ljust(width - 2 - len(permission)) + permission + '│'
+                    screen.feed((f'\x1b[8;{width}H┘\x1b[6;1H' + line).encode())
+                    self.assertEqual(screen.status(), 'Thinking')
+                    self.assertEqual(screen.permissions(), expected)
+
     def test_input_stripe_has_one_cell_with_older_unicode_tables(self):
         stripe = tui_journey.INPUT_STRIPE
         category = tui_journey.unicodedata.category

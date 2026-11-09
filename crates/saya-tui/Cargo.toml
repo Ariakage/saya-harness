@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
 saya-app = { path = "../saya-app" }
 saya-core = { path = "../saya-core" }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }

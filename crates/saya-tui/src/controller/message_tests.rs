@@ -505,14 +505,58 @@ async fn joined_task_failure_takes_the_handle_and_closes_thinking_and_unknown_to
 }
 
 #[tokio::test]
+async fn copying_or_clearing_a_selection_preserves_the_pending_approval_and_draft() {
+    let (_root, mut app) = fixture();
+    app.state.clear_messages();
+    app.state.push_message(Role::User, "You", "COPY_ME");
+    let (request, mut receiver) = approval(&app, "copy-control");
+    app.request(request);
+    app.state.editor.set_text("draft stays here");
+    render(&mut app, 160, 45);
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    assert!(app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 3)));
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 8, 3));
+    app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .await
+        .unwrap();
+    assert_eq!(
+        app.state.take_clipboard_request().as_deref(),
+        Some("COPY_ME")
+    );
+    assert_eq!(app.state.editor.text(), "draft stays here");
+    assert!(app.pending.is_some());
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    render(&mut app, 160, 45);
+    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 3));
+    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 8, 3));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .await
+        .unwrap();
+    assert!(!app.state.copy_text_selection());
+    assert!(app.pending.is_some());
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    app.reply_approval(false);
+    assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
+}
+
+#[tokio::test]
 async fn mouse_and_ctrl_o_toggle_actual_cards_without_deciding_approval_or_editing_input() {
     let (_root, mut app) = fixture();
     app.state
         .push_message(Role::Thinking, "provider", "displayed thought marker");
     assert!(!render(&mut app, 80, 24).contains("displayed thought marker"));
-    assert!(app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 2)));
+    assert!(!app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 2)));
+    assert!(app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3, 2)));
     assert!(render(&mut app, 80, 24).contains("displayed thought marker"));
     assert!(!app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 3)));
+    assert!(!app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3, 3)));
     app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
         .await
         .unwrap();

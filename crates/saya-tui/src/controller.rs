@@ -18,9 +18,10 @@ use crate::{
     view::{self, Role, State},
 };
 use crossterm::event::{
-    Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-    MouseEventKind,
+    Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
 };
+#[cfg(test)]
+use crossterm::event::{MouseButton, MouseEventKind};
 use saya_app::{
     context::{ContextModel, ContextSnapshot, ContextSources},
     events::{EventModel, EventStore, EventWriter},
@@ -550,33 +551,7 @@ impl App {
         Ok(())
     }
     fn mouse(&mut self, event: MouseEvent) -> bool {
-        if self.state.command_palette.is_some() {
-            let selected = self.state.palette_index_at(event.column, event.row);
-            return match event.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(selected) = selected {
-                        self.state.command_palette = Some(selected);
-                        true
-                    } else {
-                        false
-                    }
-                }
-                MouseEventKind::ScrollUp if selected.is_some() => self.state.palette_scroll(true),
-                MouseEventKind::ScrollDown if selected.is_some() => {
-                    self.state.palette_scroll(false)
-                }
-                _ => false,
-            };
-        }
-        match event.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                self.state.footnote_at(event.column, event.row)
-                    || self.state.toggle_at(event.column, event.row)
-            }
-            MouseEventKind::ScrollUp => self.state.scroll_at(event.column, event.row, true),
-            MouseEventKind::ScrollDown => self.state.scroll_at(event.column, event.row, false),
-            _ => false,
-        }
+        self.state.mouse(event)
     }
     async fn key(&mut self, key: KeyEvent) -> Result<bool> {
         self.refresh_completion();
@@ -611,6 +586,9 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => {
+                    if key.kind != KeyEventKind::Press || self.state.copy_text_selection() {
+                        return Ok(false);
+                    }
                     self.cancel();
                     return Ok(false);
                 }
@@ -644,6 +622,12 @@ impl App {
                 }
                 _ => {}
             }
+        }
+        if key.code == KeyCode::Esc
+            && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            && self.state.clear_text_selection()
+        {
+            return Ok(false);
         }
         if let Some(selected) = self.state.command_palette {
             let selected = selected.min(COMMANDS.len().saturating_sub(1));
@@ -758,12 +742,14 @@ impl App {
                 self.show_pending();
             }
             KeyCode::PageUp if self.state.details.is_some() => {
+                self.state.clear_text_selection();
                 self.state.details_scroll = self
                     .state
                     .details_scroll
                     .saturating_sub(self.state.details_page_rows)
             }
             KeyCode::PageDown if self.state.details.is_some() => {
+                self.state.clear_text_selection();
                 self.state.details_scroll = self
                     .state
                     .details_scroll
@@ -903,6 +889,15 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
         }
         app.refresh_completion();
         dirty |= app.refresh_activity(Instant::now());
+        if let Some(text) = app.state.take_clipboard_request()
+            && let Err(error) = terminal.copy_text(&text)
+        {
+            if error.kind() != std::io::ErrorKind::InvalidInput {
+                return Err(error.into());
+            }
+            app.notice(&format!("Clipboard request failed — {error}"));
+            dirty = true;
+        }
         if redraw && dirty && app.exit_after_run.is_none() {
             let rendered = terminal
                 .set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))

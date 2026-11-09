@@ -1,4 +1,5 @@
 //! Owns terminal presentation state for one frontend invocation.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::{
     cursor::Hide,
     event::EnableBracketedPaste,
@@ -19,8 +20,8 @@ static PANIC_HOOK: Once = Once::new();
 const RESTORE_WAIT: Duration = Duration::from_millis(100);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
 const FRAME_WRITE_WAIT: Duration = Duration::from_millis(250);
-const MOUSE_BYTES: &[u8] = b"\x1b[?1000h\x1b[?1006h";
-const RESTORE_BYTES: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l";
+const MOUSE_BYTES: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const RESTORE_BYTES: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l";
 const PUSH_TITLE: &[u8] = b"\x1b[22;2t";
 const POP_TITLE: &[u8] = b"\x1b[23;2t";
 const MAX_TITLE_BYTES: usize = 512;
@@ -364,7 +365,7 @@ impl TerminalGuard {
             EnableBracketedPaste,
             Hide
         )?;
-        // Normal and SGR tracking cover clicks and wheels without motion noise.
+        // Button-motion tracking enables drag selection without hover events.
         guard.output.write_control(MOUSE_BYTES)?;
         // XTWINOPS saves only the window title, leaving the icon label alone.
         // https://www.invisible-island.net/xterm/ctlseqs/ctlseqs.html
@@ -403,6 +404,25 @@ impl TerminalGuard {
             .map_err(|_| io::Error::other("terminal output state unavailable"))?
             .title = Some(title);
         Ok(())
+    }
+
+    /// Request clipboard copy through OSC 52 after a user selection gesture.
+    /// The terminal decides whether to accept clipboard writes. At most 64 KiB
+    /// of UTF-8 text is encoded, and the control write has the existing 100 ms
+    /// budget. Empty text performs no clipboard operation.
+    pub fn copy_text(&mut self, text: &str) -> io::Result<()> {
+        self.check_active()?;
+        if text.len() > crate::view::MAX_COPY_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "selection exceeds the 64 KiB clipboard limit",
+            ));
+        }
+        if text.is_empty() {
+            return Ok(());
+        }
+        self.output
+            .write_control(format!("\x1b\\\x1b]52;c;{}\x1b\\", STANDARD.encode(text)).as_bytes())
     }
 
     /// Draw a frame, tolerating transient backpressure for at most 100 ms per

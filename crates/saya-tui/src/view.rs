@@ -10,6 +10,7 @@ use crate::{
     },
     tool_summary::summarize,
 };
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -44,6 +45,9 @@ const MAX_FOOTNOTE_HISTORY: usize = 64;
 
 mod render_cache;
 use render_cache::RenderCache;
+mod selection;
+pub(crate) use selection::MAX_COPY_BYTES;
+use selection::Selection;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MarkdownDisplay {
@@ -174,6 +178,7 @@ pub struct State {
     pending_footnote: Option<FootnoteLocation>,
     footnote_history: VecDeque<FootnoteLocation>,
     render_cache: RenderCache,
+    selection: Selection,
 }
 
 impl Default for State {
@@ -225,11 +230,68 @@ impl Default for State {
             pending_footnote: None,
             footnote_history: VecDeque::new(),
             render_cache: RenderCache::default(),
+            selection: Selection::default(),
         }
     }
 }
 
 impl State {
+    /// Handle presentation-only mouse gestures, including selection and clicks.
+    pub fn mouse(&mut self, event: MouseEvent) -> bool {
+        if self.command_palette.is_some() {
+            self.selection.reset();
+            let selected = self.palette_index_at(event.column, event.row);
+            return match event.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(selected) = selected {
+                        self.command_palette = Some(selected);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                MouseEventKind::ScrollUp if selected.is_some() => self.palette_scroll(true),
+                MouseEventKind::ScrollDown if selected.is_some() => self.palette_scroll(false),
+                _ => false,
+            };
+        }
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.selection.begin(event.column, event.row);
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) => self.selection.drag(event.column, event.row),
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(point) = self.selection.release(event.column, event.row) {
+                    self.footnote_at(point.x, point.y) || self.toggle_at(point.x, point.y)
+                } else {
+                    true
+                }
+            }
+            MouseEventKind::ScrollUp => self.scroll_at(event.column, event.row, true),
+            MouseEventKind::ScrollDown => self.scroll_at(event.column, event.row, false),
+            _ => false,
+        }
+    }
+
+    /// Clear any pending or highlighted mouse selection.
+    pub fn clear_text_selection(&mut self) -> bool {
+        self.selection.clear()
+    }
+
+    /// Queue a clipboard request for selected visible text. No terminal I/O occurs here.
+    pub fn copy_text_selection(&mut self) -> bool {
+        if self.command_palette.is_some() || self.completion_viewport.is_some() {
+            self.selection.reset();
+            return false;
+        }
+        self.selection.copy()
+    }
+
+    pub(crate) fn take_clipboard_request(&mut self) -> Option<String> {
+        self.selection.take_clipboard()
+    }
+
     pub fn activity_visible(&self) -> bool {
         self.activity_active
             && matches!(
@@ -297,6 +359,7 @@ impl State {
 
     /// Reset the viewport for a session switch while keeping message IDs distinct.
     pub fn clear_messages(&mut self) {
+        self.selection.reset();
         self.messages.clear();
         self.todos.clear();
         self.scroll = 0;
@@ -320,6 +383,7 @@ impl State {
 
     /// Select the assistant presentation for this UI and discard stale hit targets.
     pub fn set_markdown_display(&mut self, display: MarkdownDisplay) {
+        self.selection.reset();
         if self.markdown_display != display {
             self.markdown_display = display;
             self.last_width = 0;
@@ -370,6 +434,7 @@ impl State {
                 self.footnote_history.pop_front();
             }
         }
+        self.selection.clear();
         self.pending_footnote = Some(target);
         true
     }
@@ -385,6 +450,7 @@ impl State {
                 .iter()
                 .any(|position| position.location == reference)
             {
+                self.selection.clear();
                 self.pending_footnote = Some(reference);
                 return true;
             }
@@ -445,6 +511,7 @@ impl State {
             while self.footnote_history.len() > MAX_FOOTNOTE_HISTORY {
                 self.footnote_history.pop_front();
             }
+            self.selection.clear();
             self.pending_footnote = Some(target);
             true
         } else {
@@ -474,18 +541,21 @@ impl State {
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
+        self.selection.clear();
         self.fold_anchor = None;
         self.pending_footnote = None;
         self.scroll = self.scroll.saturating_add(lines);
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
+        self.selection.clear();
         self.fold_anchor = None;
         self.pending_footnote = None;
         self.scroll = self.scroll.saturating_sub(lines);
     }
 
     pub fn scroll_to_bottom(&mut self) {
+        self.selection.clear();
         self.fold_anchor = None;
         self.pending_footnote = None;
         self.scroll = 0;
@@ -494,6 +564,7 @@ impl State {
     /// Toggle a foldable message only when its actual visible header was clicked.
     /// Coordinates are terminal cells from the most recent render.
     pub fn toggle_at(&mut self, x: u16, y: u16) -> bool {
+        self.selection.clear();
         if self.command_palette.is_some() || contains(self.completion_viewport, x, y) {
             return false;
         }
@@ -537,6 +608,7 @@ impl State {
         {
             return false;
         }
+        self.selection.clear();
         if !self.expanded_messages.remove(&id) {
             self.expanded_messages.insert(id);
         }
@@ -551,6 +623,7 @@ impl State {
             return false;
         }
         if contains(self.details_viewport, x, y) {
+            self.selection.clear();
             self.details_scroll = if up {
                 self.details_scroll.saturating_sub(WHEEL_LINES)
             } else {
@@ -726,6 +799,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         area,
     );
     if area.width < 20 || area.height < 6 {
+        state.selection.reset();
         frame.render_widget(
             Paragraph::new("Saya: enlarge terminal to at least 20 x 6"),
             area,
@@ -749,6 +823,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         draw_session(frame, state, area);
     }
     draw_command_palette(frame, state);
+    let areas = if state.command_palette.is_some() || state.completion_viewport.is_some() {
+        [None, None]
+    } else {
+        [state.transcript_viewport, state.details_viewport]
+    };
+    state.selection.render(frame.buffer_mut(), areas);
 }
 
 fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
@@ -1323,16 +1403,26 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
         .min(usize::from(area.width).saturating_sub(7));
     let available = usize::from(area.width)
         .saturating_sub(permission_width + usize::from(permission_width > 0));
-    if state.activity_visible() && label.width() + 7 <= available {
-        let phase = (state.activity_frame % 10) as usize;
-        let position = phase.abs_diff(5);
-        let blocks = (0..6)
-            .map(|index| if index == position { '█' } else { ' ' })
-            .collect::<String>();
-        label.spans.push(Span::styled(
-            format!(" {blocks}"),
-            Style::default().fg(mode_color(&state.mode)),
-        ));
+    if state.activity_visible() && label.width() + 9 <= available {
+        let accent = mode_color(&state.mode);
+        let mut particles = vec![Span::styled(" ", Style::default().fg(accent)); 8];
+        for age in (0..=3).rev() {
+            let Some(previous_frame) = state.activity_frame.checked_sub(age) else {
+                continue;
+            };
+            let position = ((previous_frame % 14) as usize).abs_diff(7);
+            let modifier = if age == 0 {
+                Modifier::empty()
+            } else {
+                Modifier::DIM
+            };
+            particles[position] = Span::styled(
+                ["█", "▓", "▒", "░"][age as usize],
+                Style::default().fg(accent).add_modifier(modifier),
+            );
+        }
+        label.spans.push(Span::raw(" "));
+        label.spans.extend(particles);
     }
     draw_split_line(frame, label, permissions, area, 6);
 }
@@ -3500,17 +3590,21 @@ mod tests {
                 ..State::default()
             };
             for (phase, expected) in [
-                (0, "     █"),
-                (1, "    █ "),
-                (2, "   █  "),
-                (3, "  █   "),
-                (4, " █    "),
-                (5, "█     "),
-                (6, " █    "),
-                (7, "  █   "),
-                (8, "   █  "),
-                (9, "    █ "),
-                (10, "     █"),
+                (0, "       █"),
+                (1, "      █▓"),
+                (2, "     █▓▒"),
+                (3, "    █▓▒░"),
+                (4, "   █▓▒░ "),
+                (5, "  █▓▒░  "),
+                (6, " █▓▒░   "),
+                (7, "█▓▒░    "),
+                (8, "▓█░     "),
+                (9, "▒▓█     "),
+                (10, "░▒▓█    "),
+                (11, " ░▒▓█   "),
+                (12, "  ░▒▓█  "),
+                (13, "   ░▒▓█ "),
+                (14, "    ░▒▓█"),
             ] {
                 state.activity_frame = phase;
                 let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
@@ -3518,12 +3612,17 @@ mod tests {
                     .draw(|frame| draw_status(frame, &state, frame.area()))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
-                let animation = (10..16)
+                let animation = (10..18)
                     .map(|column| buffer[(column, 0)].symbol())
                     .collect::<String>();
                 assert_eq!(animation, expected, "{mode}, phase {phase}");
-                for column in 10..16 {
-                    assert_eq!(buffer[(column, 0)].fg, mode_color(mode));
+                for column in 10..18 {
+                    let cell = &buffer[(column, 0)];
+                    assert_eq!(cell.fg, mode_color(mode));
+                    assert_eq!(
+                        cell.modifier.contains(Modifier::DIM),
+                        matches!(cell.symbol(), "▓" | "▒" | "░"),
+                    );
                 }
                 assert!(row_text(buffer, 0).ends_with("auto"));
             }
@@ -3542,7 +3641,7 @@ mod tests {
                 let line = row_text(terminal.backend().buffer(), 0);
                 assert!(line.starts_with("● Responding"), "{line}");
                 assert!(line.ends_with(expected), "{line}");
-                assert!(!line.contains('█'), "{line}");
+                assert!(!line.contains(['█', '▓', '▒', '░']), "{line}");
             }
         }
     }
@@ -3584,7 +3683,7 @@ mod tests {
             terminal
                 .draw(|frame| draw_status(frame, &state, frame.area()))
                 .unwrap();
-            assert!(!row_text(terminal.backend().buffer(), 0).contains('█'));
+            assert!(!row_text(terminal.backend().buffer(), 0).contains(['█', '▓', '▒', '░']));
             assert_eq!(state.activity_frame, 4);
         }
         state.status = "Running".into();

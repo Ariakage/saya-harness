@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline native TUI journey using a PTY and loopback protocol fixtures."""
 import argparse
+import base64
 import codecs
 from contextlib import ExitStack
 import errno
@@ -262,7 +263,7 @@ class Screen:
         if self.main_width() - 2 < 48:
             label = {'Manual Approval': 'manual', 'bypass permissions': 'bypass'}.get(permission, permission)
         row = self.main_row_text(status_row).strip(' │')
-        status = row[:-len(label)].strip().lstrip('✓● ').rstrip(' █')
+        status = row[:-len(label)].strip().lstrip('✓● ').rstrip(' █▓▒░')
         return {'Approval': 'Awaiting approval', 'Input': 'Awaiting input',
                 'Cancel': 'Cancelling', 'Done': 'Completed'}.get(status, status)
 
@@ -2761,6 +2762,7 @@ def run_feedback_journey(binary):
                       [{'text': 'RUN_FEEDBACK_UNKNOWN_USAGE'}])
     observed = {}
     observed_positions = {}
+    observed_tail_glyphs = {}
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-feedback-') as directory:
             root = Path(directory)
@@ -2785,6 +2787,7 @@ def run_feedback_journey(binary):
                     held_since = time.monotonic()
                     phases = []
                     positions = []
+                    tail_glyphs = set()
 
                     def animation_advanced():
                         if terminal.screen.status() != 'Thinking':
@@ -2799,13 +2802,22 @@ def run_feedback_journey(binary):
                         if terminal.screen.colors[row][column] != (MODE_COLORS[mode], (9, 9, 11)):
                             raise RuntimeError('activity animation did not use the actual mode color')
                         line = terminal.screen.main_row_text(row)
-                        position = column - (line.index('Thinking') + len('Thinking '))
-                        if not 0 <= position < 6:
-                            raise RuntimeError('activity animation moved outside its six-cell width')
+                        slot_start = line.index('Thinking') + len('Thinking ')
+                        position = column - slot_start
+                        if not 0 <= position < 8:
+                            raise RuntimeError('activity animation moved outside its eight-cell width')
+                        for tail_column in range(1, width - 1):
+                            glyph = terminal.screen.cells[row][tail_column]
+                            if glyph in ('▓', '▒', '░'):
+                                if not slot_start <= tail_column < slot_start + 8:
+                                    raise RuntimeError('activity particles moved outside their eight-cell width')
+                                if terminal.screen.colors[row][tail_column] != (MODE_COLORS[mode], (9, 9, 11)):
+                                    raise RuntimeError('activity particles did not use the actual mode color')
+                                tail_glyphs.add(glyph)
                         if not positions or position != positions[-1]:
                             positions.append(position)
                             phases.append(line)
-                        return (len(set(positions)) >= 3 and 0 in positions and 5 in positions and
+                        return (bool(tail_glyphs) and len(set(positions)) >= 3 and 0 in positions and 7 in positions and
                                 any(right < left for left, right in zip(positions, positions[1:])) and
                                 any(right > left for left, right in zip(positions, positions[1:])))
 
@@ -2814,6 +2826,7 @@ def run_feedback_journey(binary):
                     held_seconds = time.monotonic() - held_since
                     observed[mode] = phases
                     observed_positions[mode] = positions
+                    observed_tail_glyphs[mode] = ''.join(glyph for glyph in '▓▒░' if glyph in tail_glyphs)
                     save_interactive_screen(terminal, 'run-feedback-working-' + mode.lower())
                     gates[index].set()
                     result = wait_idle(terminal, root, count=index + 1)
@@ -2845,7 +2858,7 @@ def run_feedback_journey(binary):
                         raise RuntimeError('summary model rate excluded the controlled provider wait')
                     if terminal.screen.body_style(mode + ' · fixture ·') != (MODE_COLORS[mode], (9, 9, 11)):
                         raise RuntimeError('summary mode label did not retain its mode color')
-                    if '█' in terminal.screen.main_row_text(terminal.screen.status_row()):
+                    if any(glyph in terminal.screen.main_row_text(terminal.screen.status_row()) for glyph in '█▓▒░'):
                         raise RuntimeError('activity animation continued after run completion: ' +
                                            repr(terminal.screen.main_row_text(terminal.screen.status_row())))
                     assert_mode_colors(terminal, mode)
@@ -2865,10 +2878,153 @@ def run_feedback_journey(binary):
                     raise RuntimeError('feedback TUI exited unsuccessfully')
                 terminal.verify_restoration()
                 return {'activity_frames': observed, 'activity_positions': observed_positions,
+                        'activity_tail_glyphs': observed_tail_glyphs,
                         'completed_screen': snapshot}
             finally:
                 for gate in gates:
                     gate.set()
+                terminal.close()
+    finally:
+        fixture.close()
+
+
+def selection_and_clipboard_journey(binary):
+    gate = threading.Event()
+    copy_text = '界e\u0301水'
+    draft = 'retained copy draft'
+    selected_style = ((232, 232, 237), (45, 65, 88))
+
+    def blocked_reply(_request):
+        if not gate.wait(10):
+            raise RuntimeError('selection observer did not release the model fixture')
+        return {'text': 'CLIPBOARD_RUN_DONE'}
+
+    fixture = Fixture('openai-chat-completions', [
+        {'text': 'COPY_START ' + copy_text + ' COPY_END'}, blocked_reply,
+    ])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-selection-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.resize(160, 45)
+                terminal.title()
+                terminal.line('Show text for the selection check')
+                terminal.until('COPY_START')
+                wait_idle(terminal, root)
+                terminal.settle()
+                if b'\x1b[?1002h' not in terminal.raw:
+                    raise RuntimeError('terminal did not enable drag reporting')
+
+                def clipboard_messages():
+                    return [base64.b64decode(match.group(1), validate=True).decode('utf-8')
+                            for match in re.finditer(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)',
+                                                     bytes(terminal.raw))]
+
+                def locate(text):
+                    width = terminal.screen.main_width()
+                    bottom = terminal.screen.status_row()
+                    if width is None or bottom is None:
+                        return None
+                    return next(((column, row) for row in range(2, bottom)
+                                 for column in range(1, width - 1)
+                                 if terminal.screen.cells[row][column] and
+                                 ''.join(terminal.screen.cells[row][column:width - 1]).startswith(text)), None)
+
+                def has_selection():
+                    return any(background == selected_style[1]
+                               for row in terminal.screen.colors for _foreground, background in row)
+
+                def drag(text, columns):
+                    terminal.wait(lambda: locate(text) is not None, 'visible selection text ' + text)
+                    column, row = locate(text)
+                    terminal.send(f'\x1b[<0;{column + 1};{row + 1}M'
+                                  f'\x1b[<32;{column + columns};{row + 1}M'
+                                  f'\x1b[<0;{column + columns};{row + 1}m')
+                    terminal.wait(lambda: terminal.screen.body_style(text) == selected_style,
+                                  'visible dragged selection')
+                    terminal.settle()
+                    return column, row
+
+                if clipboard_messages():
+                    raise RuntimeError('terminal emitted clipboard data before user selection')
+                terminal.send(draft)
+                terminal.wait(lambda: terminal.editor_text() == draft, 'copy draft')
+                drag(copy_text, 5)
+                if clipboard_messages():
+                    raise RuntimeError('drag selection copied without Ctrl+C')
+                terminal.send(b'\x03')
+                terminal.wait(lambda: clipboard_messages() == [copy_text], 'Unicode OSC 52 copy')
+                terminal.wait(lambda: not has_selection(), 'copied selection cleared')
+                if terminal.editor_text() != draft:
+                    raise RuntimeError('selection copy changed the input draft')
+
+                drag(copy_text, 5)
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: not has_selection(), 'Esc cleared selection')
+                terminal.settle()
+                drag(copy_text, 5)
+                terminal.resize(100, 32)
+                terminal.wait(lambda: terminal.screen.main_width() == 100 and
+                              locate(copy_text) is not None and not has_selection(),
+                              'resize cleared selection after repaint')
+                terminal.settle()
+                column, row = drag(copy_text, 5)
+                terminal.wheel(column, row, down=False)
+                terminal.wait(lambda: not has_selection(), 'scroll cleared selection')
+                terminal.settle()
+                if clipboard_messages() != [copy_text] or terminal.editor_text() != draft:
+                    raise RuntimeError('selection clearing copied data or changed the draft')
+
+                terminal.send(b'\x7f' * len(draft))
+                terminal.wait(lambda: terminal.editor_text() == '', 'cleared copy draft')
+                terminal.line('/profiles')
+                terminal.until('Configured profiles · UI')
+                terminal.settle()
+                details_title = 'Configured profiles · UI'
+                drag(details_title, len(details_title))
+                if clipboard_messages() != [copy_text]:
+                    raise RuntimeError('details selection copied without Ctrl+C')
+                terminal.send(b'\x03')
+                terminal.wait(lambda: clipboard_messages() == [copy_text, details_title], 'details OSC 52 copy')
+                terminal.wait(lambda: not has_selection(), 'copied details selection cleared')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: 'Configured profiles · UI' not in terminal.screen.details_text() and
+                              locate(copy_text) is not None, 'details closed')
+                terminal.settle()
+
+                terminal.line('Keep the model request active during selection')
+                terminal.wait(lambda: len(fixture.requests) == 2 and terminal.screen.status() == 'Thinking',
+                              'active model request before copy')
+                terminal.send(draft)
+                terminal.wait(lambda: terminal.editor_text() == draft, 'active-run copy draft')
+                drag(copy_text, 5)
+                if clipboard_messages() != [copy_text, details_title]:
+                    raise RuntimeError('active selection copied without Ctrl+C')
+                terminal.send(b'\x03')
+                terminal.wait(lambda: clipboard_messages() == [copy_text, details_title, copy_text],
+                              'active-run OSC 52 copy')
+                terminal.settle()
+                if terminal.screen.status() != 'Thinking' or terminal.editor_text() != draft:
+                    raise RuntimeError('selection copy cancelled the active run or changed its draft')
+                gate.set()
+                terminal.until('CLIPBOARD_RUN_DONE')
+                result = wait_idle(terminal, root, count=2)
+                if result['status'] != 'completed' or len(fixture.requests) != 2:
+                    raise RuntimeError('selection copy interrupted or replayed the model request')
+                terminal.send(b'\x7f' * len(draft))
+                terminal.wait(lambda: terminal.editor_text() == '', 'cleared active-run draft')
+                terminal.finish()
+                if b'\x1b[?1002l' not in terminal.raw:
+                    raise RuntimeError('terminal did not restore drag reporting')
+                copied = clipboard_messages()
+                if copied != [copy_text, details_title, copy_text]:
+                    raise RuntimeError('terminal emitted unexpected clipboard data during run completion or exit')
+                return {'clipboard_texts': copied, 'drag_reporting_restored': True}
+            finally:
+                gate.set()
                 terminal.close()
     finally:
         fixture.close()
@@ -2916,6 +3072,8 @@ def main():
         passed(protocol + '-stream-resize-terminal-restore')
     screens['run_feedback'] = run_feedback_journey(binary)
     passed('mode-activity-animation-run-summary-and-unknown-usage')
+    screens['selection_clipboard'] = selection_and_clipboard_journey(binary)
+    passed('drag-selection-unicode-osc52-draft-and-active-run')
     mode_permission_matrix(binary)
     passed('four-modes-three-permissions')
     command_completion_journey(binary)

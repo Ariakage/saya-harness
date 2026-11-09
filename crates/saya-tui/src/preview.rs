@@ -4,7 +4,7 @@ use crate::{
     terminal::TerminalGuard,
     view::{self, ContextEntry, Details, MarkdownDisplay, Role, State},
 };
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use saya_core::tools::todo::{TodoItem, TodoStatus};
 use std::{io, time::Duration};
 use tokio::signal::unix::{SignalKind, signal};
@@ -62,6 +62,14 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
     activity.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut exit = 0;
     loop {
+        if let Some(text) = state.take_clipboard_request()
+            && let Err(error) = terminal.copy_text(&text)
+        {
+            if error.kind() != io::ErrorKind::InvalidInput {
+                return Err(error);
+            }
+            state.push_message(Role::System, "Clipboard", error.to_string());
+        }
         terminal.set_title(&format!("Saya | TUI preview · {}", SCENES[index]))?;
         terminal.draw(|frame| view::draw(frame, &mut state))?;
         let event = tokio::select! {
@@ -80,6 +88,12 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match key.code {
                         KeyCode::Char('c') => {
+                            if key.kind != KeyEventKind::Press {
+                                continue;
+                            }
+                            if state.copy_text_selection() {
+                                continue;
+                            }
                             exit = 130;
                             break;
                         }
@@ -92,6 +106,7 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
                     continue;
                 }
                 match key.code {
+                    KeyCode::Esc if state.clear_text_selection() => {}
                     KeyCode::Esc | KeyCode::Char('q') => break,
                     KeyCode::Left | KeyCode::Right => {
                         index = if key.code == KeyCode::Right {
@@ -115,24 +130,9 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
                     _ => {}
                 }
             }
-            Event::Mouse(event) => match event.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(selected) = state.palette_index_at(event.column, event.row) {
-                        state.command_palette = Some(selected);
-                    } else if !state.footnote_at(event.column, event.row) {
-                        state.toggle_at(event.column, event.row);
-                    }
-                }
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                    let up = event.kind == MouseEventKind::ScrollUp;
-                    if state.palette_index_at(event.column, event.row).is_some() {
-                        state.palette_scroll(up);
-                    } else {
-                        state.scroll_at(event.column, event.row, up);
-                    }
-                }
-                _ => {}
-            },
+            Event::Mouse(event) => {
+                state.mouse(event);
+            }
             _ => {}
         }
     }
