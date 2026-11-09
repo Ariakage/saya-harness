@@ -19,6 +19,8 @@ core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独
 
 模型上下文分别注入宿主信息与实际执行环境身份、能力及 MCP 连接事实。当前原生后端采用规范化宿主路径，策略快照绑定本次 Run 的环境与调用。模式和授权在调用边界复查，进入 PLAN 的清理屏障覆盖后台写入及本地服务。
 
+Linux默认系统视图额外只读映射存在的 `/etc/alternatives`，其目录内容可能包含实际文件。系统工具别名的目标仍通过当前可见根解析。固定系统根保存宿主规范路径与guest路径映射，保护规则覆盖每个别名及受保护祖先下的整个挂载根。遮罩去重并在所有读写根之后应用，避免独立的 `/bin`／`/lib` 视图保留同一保护对象。其余 `/etc` 内容按既有选择性视图提供。
+
 ## Linux匿名Unix通道的内核条件
 
 Rust子进程启动使用已连接的匿名AF_UNIX SOCK_SEQPACKET通道，异步运行时还使用SOCK_STREAM通道。payload策略按这两类匿名pair限定协议及flags，命名Unix socket与datagram继续受限制。原peer间的SCM_RIGHTS可以复制发送方已有的FD，宿主描述符通过两层CLOEXEC清理与私有启动协议隔离。

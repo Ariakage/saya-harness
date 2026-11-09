@@ -2,6 +2,7 @@
 use super::{NetworkPolicy, PreparedCommand, SandboxPolicy, failure, unavailable};
 use crate::contract::BoundaryError;
 use std::{
+    collections::BTreeMap,
     ffi::{CStr, OsString},
     fs,
     io::{self, Write},
@@ -25,6 +26,14 @@ pub(super) struct LinuxBackend {
     mount_fds: Vec<Arc<fs::File>>,
     helper_path: PathBuf,
 }
+const SYSTEM_READ_ROOTS: [&str; 6] = [
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/etc/alternatives",
+];
 impl LinuxBackend {
     pub(super) fn helper_path(&self) -> &Path {
         &self.helper_path
@@ -90,8 +99,13 @@ impl LinuxBackend {
         .map(Into::into)
         .collect();
         let mut mount_fds = Vec::new();
-        for path in ["/usr", "/bin", "/sbin", "/lib", "/lib64"] {
+        let mut system_roots = Vec::new();
+        for path in SYSTEM_READ_ROOTS {
             if Path::new(path).exists() {
+                system_roots.push((
+                    fs::canonicalize(path).map_err(super::io_error)?,
+                    PathBuf::from(path),
+                ));
                 bind(
                     &mut args,
                     &mut mount_fds,
@@ -128,34 +142,33 @@ impl LinuxBackend {
         fs::write(&mask, b"").map_err(super::io_error)?;
         let mask_file = Arc::new(fs::File::open(&mask).map_err(super::io_error)?);
         fs::set_permissions(&mask, fs::Permissions::from_mode(0o000)).map_err(super::io_error)?;
-        for path in &policy.protected_paths {
-            let visible = policy
-                .read_roots
-                .iter()
-                .chain(&policy.write_roots)
-                .any(|root| path.starts_with(root))
-                || ["/usr", "/bin", "/sbin", "/lib", "/lib64"]
-                    .iter()
-                    .any(|root| path.starts_with(root));
-            if !visible {
-                continue;
-            }
-            match fs::symlink_metadata(path) {
+        for (source, destination) in protection_masks(policy, &system_roots)? {
+            match fs::symlink_metadata(&source) {
                 Ok(metadata) => {
                     if metadata.is_dir() {
-                        bind(&mut args, &mut mount_fds, "--ro-bind-fd", &empty, path)?;
+                        bind(
+                            &mut args,
+                            &mut mount_fds,
+                            "--ro-bind-fd",
+                            &empty,
+                            &destination,
+                        )?;
                     } else {
                         bind_descriptor(
                             &mut args,
                             &mut mount_fds,
                             "--ro-bind-fd",
                             mask_file.clone(),
-                            path,
+                            &destination,
                         );
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    if policy.write_roots.iter().any(|root| path.starts_with(root)) {
+                    if policy
+                        .write_roots
+                        .iter()
+                        .any(|root| destination.starts_with(root))
+                    {
                         return Err(failure(
                             "unsupported_fs_policy",
                             "a missing protected path inside a writable root cannot be safely masked",
@@ -301,6 +314,49 @@ impl LinuxBackend {
         command.mount_fds = self.mount_fds.clone();
         Ok(())
     }
+}
+
+// A descriptor bind of a symlinked system root creates a separate guest view.
+// Apply each protection to all aliases, including a root wholly below a deny.
+fn protection_masks(
+    policy: &SandboxPolicy,
+    system_roots: &[(PathBuf, PathBuf)],
+) -> Result<Vec<(PathBuf, PathBuf)>, BoundaryError> {
+    const MAX_MASKS: usize = 4096;
+    let mut masks = BTreeMap::new();
+    for protected in &policy.protected_paths {
+        for root in policy.read_roots.iter().chain(&policy.write_roots) {
+            if protected.starts_with(root) {
+                masks.insert(protected.clone(), protected.clone());
+            } else if root.starts_with(protected) {
+                masks.insert(root.clone(), root.clone());
+            }
+        }
+        for (source, destination) in system_roots {
+            if let Ok(relative) = protected.strip_prefix(source) {
+                masks.insert(destination.join(relative), protected.clone());
+            } else if source.starts_with(protected) {
+                masks.insert(destination.clone(), source.clone());
+            }
+        }
+        if masks.len() > MAX_MASKS {
+            return Err(failure(
+                "unsupported_fs_policy",
+                "filesystem protection masks exceed their budget",
+            ));
+        }
+    }
+    let mut result: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (destination, source) in masks {
+        if result
+            .last()
+            .is_some_and(|(_, parent)| destination.starts_with(parent))
+        {
+            continue;
+        }
+        result.push((source, destination));
+    }
+    Ok(result)
 }
 
 fn verify_supported_pair_kernel() -> Result<(), BoundaryError> {
@@ -1102,6 +1158,206 @@ mod tests {
             fs::read_dir(&long).expect("failed scratch entries").count(),
             0
         );
+    }
+    #[test]
+    fn protection_masks_cover_canonical_system_aliases_and_parent_denies() {
+        let mut policy = SandboxPolicy::workspace("/workspace".into());
+        policy.read_roots.push("/usr".into());
+        policy.protected_paths = vec![
+            "/usr/lib/private/key".into(),
+            "/usr/bin/env".into(),
+            "/etc".into(),
+        ];
+        let roots = vec![
+            ("/usr".into(), "/usr".into()),
+            ("/usr/lib".into(), "/lib".into()),
+            ("/usr/bin".into(), "/bin".into()),
+            ("/etc/alternatives".into(), "/etc/alternatives".into()),
+        ];
+        let masks = protection_masks(&policy, &roots).unwrap();
+        assert_eq!(
+            masks,
+            vec![
+                ("/usr/bin/env".into(), "/bin/env".into()),
+                ("/etc/alternatives".into(), "/etc/alternatives".into()),
+                ("/usr/lib/private/key".into(), "/lib/private/key".into()),
+                ("/usr/bin/env".into(), "/usr/bin/env".into()),
+                ("/usr/lib/private/key".into(), "/usr/lib/private/key".into()),
+            ]
+        );
+        policy.protected_paths = vec!["/usr/lib/private/key".into(), "/usr/lib".into()];
+        assert_eq!(
+            protection_masks(&policy, &roots).unwrap(),
+            vec![
+                ("/usr/lib".into(), "/lib".into()),
+                ("/usr/lib".into(), "/usr/lib".into()),
+            ]
+        );
+        policy.protected_paths = vec!["/workspace/private".into()];
+        policy
+            .read_roots
+            .push("/workspace/private/subdirectory".into());
+        assert_eq!(
+            protection_masks(&policy, &roots).unwrap(),
+            vec![("/workspace/private".into(), "/workspace/private".into()),]
+        );
+    }
+    #[test]
+    fn protection_mask_growth_is_bounded() {
+        let mut policy = SandboxPolicy::workspace("/workspace".into());
+        policy.protected_paths = (0..4097)
+            .map(|index| PathBuf::from(format!("/workspace/{index}")))
+            .collect();
+        assert_eq!(
+            protection_masks(&policy, &[]).unwrap_err().0.code,
+            "unsupported_fs_policy"
+        );
+    }
+    #[test]
+    fn system_alternatives_resolve_read_only_and_stay_subject_to_protected_masks() {
+        use std::os::unix::process::CommandExt;
+        fn run_view(
+            backend: &LinuxBackend,
+            workspace: &Path,
+            argv: &[&str],
+        ) -> std::process::Output {
+            let mut command = Command::new(&backend.bwrap);
+            command
+                .args(&backend.args)
+                .args(argv)
+                .current_dir(workspace)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("LC_ALL", "C")
+                .stdin(Stdio::null());
+            let descriptors = backend.mount_fds.clone();
+            // SAFETY: the inherited descriptors remain owned; the callback only
+            // changes their inheritance and no-new-privileges before exec.
+            unsafe {
+                command.pre_exec(move || {
+                    for descriptor in &descriptors {
+                        inherit_filter_descriptor(descriptor)?;
+                    }
+                    Ok(())
+                });
+            }
+            command.output().expect("native system-root view")
+        }
+        let alternatives = Path::new("/etc/alternatives");
+        if !alternatives.exists() {
+            eprintln!(
+                "system alternatives are absent on this distribution; alias fixture not applicable"
+            );
+            return;
+        }
+        let control = Command::new("/usr/bin/cc")
+            .arg("--version")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LC_ALL", "C")
+            .output()
+            .expect("host compiler positive control");
+        assert!(
+            control.status.success(),
+            "host compiler positive control failed"
+        );
+        let workspace = tempfile::tempdir().expect("workspace");
+        let scratch = tempfile::tempdir().expect("native scratch");
+        let mut policy = SandboxPolicy::workspace(workspace.path().canonicalize().unwrap());
+        let backend = LinuxBackend::prepare(&policy, scratch.path()).expect("native view");
+        let version = run_view(&backend, &policy.workspace, &["/usr/bin/cc", "--version"]);
+        assert!(
+            version.status.success(),
+            "native cc alias: {}",
+            String::from_utf8_lossy(&version.stderr)
+        );
+        assert_eq!(version.stdout, control.stdout);
+        let check = run_view(
+            &backend,
+            &policy.workspace,
+            &[
+                "/usr/bin/python3",
+                "-I",
+                "-S",
+                "-c",
+                "import os; assert os.statvfs('/etc/alternatives').f_flag & os.ST_RDONLY; assert not any(os.path.exists(p) for p in ('/etc/passwd','/etc/shadow','/etc/hostname')); print('SAYA_ALTERNATIVES_READ_ONLY')",
+            ],
+        );
+        assert!(
+            check.status.success(),
+            "native metadata boundary: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        let protected_scratch = tempfile::tempdir().expect("protected native scratch");
+        policy
+            .protected_paths
+            .push(alternatives.canonicalize().unwrap());
+        let protected =
+            LinuxBackend::prepare(&policy, protected_scratch.path()).expect("protected view");
+        let hidden = run_view(
+            &protected,
+            &policy.workspace,
+            &[
+                "/usr/bin/python3",
+                "-I",
+                "-S",
+                "-c",
+                "import os; assert os.listdir('/etc/alternatives') == []; assert os.statvfs('/etc/alternatives').f_flag & os.ST_RDONLY",
+            ],
+        );
+        assert!(
+            hidden.status.success(),
+            "system-root protection mask: {}",
+            String::from_utf8_lossy(&hidden.stderr)
+        );
+        if fs::read_link("/usr/bin/cc").is_ok_and(|target| target.starts_with(alternatives)) {
+            assert!(
+                !run_view(&protected, &policy.workspace, &["/usr/bin/cc", "--version"])
+                    .status
+                    .success()
+            );
+        }
+        let canonical = fs::canonicalize("/usr/bin/readlink").unwrap();
+        let alias_matches = fs::canonicalize("/bin/readlink").is_ok_and(|alias| alias == canonical);
+        if alias_matches {
+            policy.protected_paths.push(canonical);
+            let alias_scratch = tempfile::tempdir().expect("system alias scratch");
+            let alias =
+                LinuxBackend::prepare(&policy, alias_scratch.path()).expect("alias-protected view");
+            let denied = run_view(
+                &alias,
+                &policy.workspace,
+                &[
+                    "/usr/bin/python3",
+                    "-I",
+                    "-S",
+                    "-c",
+                    "import os\nfor path in ('/usr/bin/readlink','/bin/readlink'):\n try:\n  fd=os.open(path,os.O_RDONLY)\n except PermissionError:\n  continue\n os.close(fd)\n raise AssertionError('protected system alias was readable')",
+                ],
+            );
+            assert!(
+                denied.status.success(),
+                "canonical/guest alias protection: {}",
+                String::from_utf8_lossy(&denied.stderr)
+            );
+        }
+        if std::env::var_os("GITHUB_ACTIONS").is_some() {
+            let evidence = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/n2/acceptance/system-alternatives.json");
+            fs::create_dir_all(evidence.parent().unwrap()).expect("evidence directory");
+            let observation = serde_json::json!({
+                "cc_link": fs::read_link("/usr/bin/cc").ok(),
+                "alternatives_cc_link": fs::read_link("/etc/alternatives/cc").ok(),
+                "cc_resolved": fs::canonicalize("/usr/bin/cc").unwrap(),
+                "native_cc_matches_host": true,
+                "alternatives_read_only": true,
+                "other_etc_files_absent": true,
+                "whole_alternatives_protection_mask": true,
+                "canonical_and_guest_alias_protection": alias_matches,
+            });
+            fs::write(evidence, serde_json::to_vec_pretty(&observation).unwrap())
+                .expect("system alias evidence");
+        }
     }
     #[test]
     fn supported_bubblewrap_version_requires_the_validated_security_baseline() {

@@ -115,6 +115,16 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/mcp_acceptance.py target/release/sa
 
 安装脚本保留0.13.1及SHA-256 `0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d`。原下载地址失败后访问官方release asset API的已锁定640310180对象，最终执行相同摘要核查。官方元数据的文件名、129472字节大小与digest已核实，真实API下载摘要一致。四项离线控制流回归验证主地址成功、API兜底覆盖部分下载、坏摘要拒绝解包与双失败，记录为 `target/n2/research/installer-fallback-tests.log`。[官方asset接口](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)
 
+## Linux系统别名与保护映射复验
+
+`2b353dc2` 的N2 Linux x86已越过动态库与fork通道问题，BUILD工具结果变为 `linker cc not found`／ENOENT。宿主Meson实际识别cc与ld，隔离视图缺少包管理器别名目录是当前原因推断。候选将存在的 `/etc/alternatives` 只读映射，原生回归会记录真实 `/usr/bin/cc` 链、最终规范目标、只读标志和whole-directory保护结果。
+
+独立源码审查确认系统目录独立bind产生的guest别名没有全部应用原canonical保护mask。候选保存固定6个system roots的source／destination映射，保护路径投射到全部别名，受保护祖先覆盖整个子挂载，遮罩去重／父路径消除冗余并保留4096上限。所有遮罩在根挂载后应用。
+
+Linux原生unit增加 `/usr/bin/readlink` 与 `/bin/readlink` 同对象双路径拒绝、cc正控制和其余 `/etc` 隐藏检查。成功时保存 `system-alternatives.json`，实际host链接与防护结果由runner证据确认。本机core及两架构交叉严格检查、2项实际映射函数测试和独立代码复核通过，原生Linux结果继续记录。
+
+当前候选在本机完成904项Rust测试、格式、workspace全目标严格Clippy与优化构建，日志为 `target/n2/alternatives-workspace.log`。Mac程序与既有完整本机验收程序逐字节一致，Linux源码变更继续由原生runner验证。
+
 ## 已推送基础阶段
 
 `21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)

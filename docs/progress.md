@@ -70,6 +70,14 @@ MCP长启动审批通过正常PTY复现终端非阻塞写入的部分完成／Wo
 
 `2b353dc2` 的Linux ARM验收及源码CI的Linux任务在Bubblewrap官方下载连续HTTP504后终止，尚未进入产品测试。安装脚本保留固定0.13.1与原SHA-256，主地址失败后使用同一官方release asset API，连接／下载时长及重试均有界。真实API下载129472字节与原摘要一致，四项离线回归覆盖成功、兜底、错误摘要与双失败，CI及N2工作流均接入检查。
 
+### Linux系统工具别名与保护路径
+
+`2b353dc2` 的Linux x86复验进入链接器创建后返回`cc`路径ENOENT，宿主Meson已能识别同一编译器。候选将存在的 `/etc/alternatives` 纳入只读系统视图，并记录实际宿主链接链供Linux回归核对。独立源码审查还确认原系统目录独立挂载会产生额外guest别名，现将每个保护路径映射到全部固定系统根，后置遮罩去重并覆盖受保护祖先。
+
+新增原生回归覆盖系统编译器别名、只读视图、whole-alternatives保护及 `/usr/bin/readlink`／`/bin/readlink` 双路径拒绝。本机适用core测试与严格Clippy、两Linux目标独立harness严格Clippy及2项实际映射函数测试通过，最终Linux行为待runner。证据位于 `target/n2/research/alternatives-*`。
+
+当前候选在本机完成904项Rust测试、格式、workspace全目标严格Clippy与优化构建，日志为 `target/n2/alternatives-workspace.log`。Mac程序与既有完整本机验收程序逐字节一致，Linux源码变更继续由原生runner验证。
+
 ### 生命周期测试夹具竞态
 
 DEV-075门禁复现CLI测试先看到PID文件建立、再读到空内容的竞态。三处后台进程夹具现先写完整PID换行到临时文件，再原子重命名发布，清理和退出断言保留。五项生命周期测试重复30轮，150项全部通过，严格Clippy、格式与差异检查通过。首失败和重复记录位于 `target/n2/lifecycle-fixture/`。

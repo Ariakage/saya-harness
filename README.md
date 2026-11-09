@@ -6,7 +6,7 @@
 
 0.1.0 与 0.2.0-rc.2 的历史发行及验收保留各自源码和产物归属。
 
-当前开发线已实现 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI。本机整合门禁及正常入口验收通过，最终四平台 CI 与原生验收仍在进行。0.2.0 的功能与限制继续归属已发布产物。当前实现与平台证据见[原生隔离](docs/sandbox.md)、[MCP 与凭据](docs/mcp.md)和[N2 验收记录](docs/n2-validation.md)。
+当前开发线已实现 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI。本机整合门禁及正常入口验收通过，最终四平台 CI 与原生验收仍在进行。0.2.0 的功能与限制继续归属已发布产物。Linux原生后端另要求可确认的内核修复身份与能力探测，范围见[隔离配置](docs/configuration.md#n2-原生隔离配置)。当前实现与平台证据见[原生隔离](docs/sandbox.md)、[MCP 与凭据](docs/mcp.md)和[N2 验收记录](docs/n2-validation.md)。
 
 ## 已确认方向
 

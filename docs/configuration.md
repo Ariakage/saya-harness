@@ -76,6 +76,8 @@ mode = "deny"
 | `cgroup_root` | 显式委派的 Linux cgroup v2 绝对目录 |
 | `network` | 默认 `deny`，或显式 `proxy` 与完整 origin 允许列表 |
 
+Linux默认只读系统视图在目录存在时包含 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 和 `/etc/alternatives`，使系统工具的包管理器别名可沿既有可见目标解析。目录内容按实际只读映射，保护路径在所有根挂载后应用，并覆盖系统目录的全部规范路径／guest别名。[执行边界](sandbox.md)
+
 工作区默认进入原生读写视图，PLAN 与权限调度继续决定具体操作能否执行。`permissions.additional_roots` 同时加入逻辑文件权限根及原生读写根。单独添加 `sandbox.read_roots` 或 `write_roots` 只扩展 OS 视图，原生文件工具的逻辑权限仍按工作区与 `permissions.additional_roots` 判断。
 
 解释器、包管理器和编译器位于工作区及系统运行库之外时，需要显式提供其可读目录。可将实际工具链目录加入 `sandbox.read_roots`。对应目录必须存在。此配置适用于进程读取工具链，文件工具访问该目录还需满足逻辑权限策略。原生根数量各限 128 项，根目录 `/` 无法作为原生开放根。
