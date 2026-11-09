@@ -68,6 +68,12 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 
 建立 Rust 工程后更新“当前状态”；实现 CLI 后补充真实命令、配置和退出行为；公共接口稳定后再补接口说明。尚未实现或验证的 TUI、GUI 能力继续保留为计划。
 
+## Markdown 与 debug 预览开发
+
+TUI的CommonMark／GFM使用pulldown-cmark与一致的Unicode脚注标签匹配，高亮使用内置Syntect语法，Mermaid使用同版本merman-core与mermansi。merman-core启用JSON对象顺序保留，并通过granit-parser约束smallvec小于1.16，实际版本由Cargo.lock记录。core规范化参数显式排序，以维持审批和拒绝记忆的稳定身份。
+
+默认开发构建可运行 `MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-cli -- tui-preview syntax`。场景、源码／渲染切换和离线单元格快照见[Markdown说明](markdown-rendering.md#debug-预览)。完整检查仍使用本文件既有workspace命令，本轮四平台同步测试按项目负责人要求安排在N2。
+
 ## 授权后的发行构建
 
 [Release candidates](../.github/workflows/release-candidates.yml) 由操作者手动触发，在 Ubuntu 22.04 ARM／Intel 和 macOS 15 ARM／Intel 原生构建同一提交。各 job 执行完整 Rust 检查，生成单目标候选压缩包，并对解包程序执行工具、交互和审查回归。Linux 验证实际 glibc 2.35 与符号上限，macOS 验证实际系统主版本 15 和部署目标 15.0。

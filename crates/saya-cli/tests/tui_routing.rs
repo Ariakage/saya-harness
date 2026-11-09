@@ -77,3 +77,54 @@ fn help_and_version_are_available_without_a_terminal_or_session_side_effects() {
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }
+
+#[test]
+fn preview_command_is_present_only_in_debug_help() {
+    let root = tempfile::tempdir().unwrap();
+    let help = command(root.path()).arg("--help").output().unwrap();
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert_eq!(help.contains("tui-preview"), cfg!(debug_assertions));
+    let result = command(root.path())
+        .args(["tui-preview", "markdown"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    #[cfg(not(debug_assertions))]
+    assert!(
+        String::from_utf8(result.stderr)
+            .unwrap()
+            .contains("unrecognized subcommand")
+    );
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn preview_rejects_pipes_and_machine_output_before_configuration_or_logging() {
+    let root = tempfile::tempdir().unwrap();
+    for output in ["text", "json", "jsonl"] {
+        let result = command(root.path())
+            .env("SAYA_LOG_LEVEL", "invalid-level")
+            .args([
+                "--config",
+                "missing.toml",
+                "--output",
+                output,
+                "tui-preview",
+                "markdown",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2));
+        assert!(result.stdout.is_empty());
+        let error = String::from_utf8(result.stderr).unwrap();
+        assert!(error.contains("TUI preview requires"));
+        assert!(!error.contains("invalid log level"));
+        assert!(!error.contains('\u{1b}'));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+}

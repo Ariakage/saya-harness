@@ -90,6 +90,22 @@ pub const COMMANDS: &[Suggestion] = &[
         description: "Add the background job ID owned by the active run",
     },
     Suggestion {
+        text: "/markdown render",
+        description: "Render assistant Markdown, math, diagrams and footnotes",
+    },
+    Suggestion {
+        text: "/markdown source",
+        description: "Display the original assistant Markdown source",
+    },
+    Suggestion {
+        text: "/footnote ",
+        description: "Add a footnote number to jump to its definition",
+    },
+    Suggestion {
+        text: "/footnote back",
+        description: "Return to the previous footnote reference",
+    },
+    Suggestion {
         text: "/export json ",
         description: "Add a new target path for a JSON transcript export",
     },
@@ -206,7 +222,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 24);
+        assert_eq!(COMMANDS.len(), 28);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -228,6 +244,10 @@ mod tests {
             "/resume ",
             "/resume-accept ",
             "/cancel-job ",
+            "/markdown render",
+            "/markdown source",
+            "/footnote ",
+            "/footnote back",
             "/export json ",
             "/export markdown ",
             "/export-full json ",
@@ -265,7 +285,7 @@ mod tests {
     fn prefixes_match_the_whole_command_and_argument_scaffold() {
         let mut completion = Completion::default();
         completion.update("/", 1, true);
-        assert_eq!(completion.items.len(), 24);
+        assert_eq!(completion.items.len(), COMMANDS.len());
         completion.update("/mode ", 6, true);
         assert_eq!(
             texts(&completion),
@@ -280,6 +300,8 @@ mod tests {
         assert_eq!(texts(&completion), ["/export-full json "]);
         completion.update("/resume", 7, true);
         assert_eq!(texts(&completion), ["/resume ", "/resume-accept "]);
+        completion.update("/markdown ", 10, true);
+        assert_eq!(texts(&completion), ["/markdown render", "/markdown source"]);
         for text in ["/resume saved-id", "/export json result.json", "/MODE"] {
             completion.update(text, text.len(), true);
             assert!(!completion.visible(), "{text:?}");
@@ -289,7 +311,10 @@ mod tests {
     #[test]
     fn complete_commands_and_completed_scaffolds_hide_the_only_equal_match() {
         let mut completion = Completion::default();
-        for suggestion in COMMANDS.iter().filter(|item| item.text != "/cancel") {
+        for suggestion in COMMANDS
+            .iter()
+            .filter(|item| !matches!(item.text, "/cancel" | "/footnote "))
+        {
             completion.update(suggestion.text, suggestion.text.len(), true);
             assert!(completion.eligible());
             assert!(!completion.visible(), "{:?}", suggestion.text);
@@ -298,6 +323,8 @@ mod tests {
         completion.update("/cancel", 7, true);
         assert_eq!(texts(&completion), ["/cancel", "/cancel-job "]);
         assert!(completion.visible());
+        completion.update("/footnote ", 10, true);
+        assert_eq!(texts(&completion), ["/footnote ", "/footnote back"]);
     }
 
     #[test]
@@ -305,7 +332,7 @@ mod tests {
         let mut completion = Completion::default();
         completion.update("/m", 2, true);
         completion.previous();
-        assert_eq!(completion.current().unwrap().text, "/mode work");
+        assert_eq!(completion.current().unwrap().text, "/markdown source");
         completion.next();
         assert_eq!(completion.selected, 0);
         completion.next();

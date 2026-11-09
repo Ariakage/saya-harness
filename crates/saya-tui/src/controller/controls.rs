@@ -1,6 +1,6 @@
 //! User controls and pending human input. Authorization remains in core.
 use super::*;
-use crate::view::Details;
+use crate::view::{Details, MarkdownDisplay};
 use saya_app::interaction::Request;
 use saya_core::{boundary::StoreChange, contract::PermissionMode};
 
@@ -303,6 +303,34 @@ impl App {
                 self.refresh_header();
                 self.notice("Permissions updated for subsequent tool calls.");
             }
+            "/markdown" => {
+                let display = match argument {
+                    "source" => MarkdownDisplay::Source,
+                    "render" => MarkdownDisplay::Render,
+                    _ => return Err("Use /markdown source|render".into()),
+                };
+                self.state.set_markdown_display(display);
+                self.notice(&format!("Markdown display — {}", display.as_str()));
+            }
+            "/footnote" => {
+                let jumped = if argument == "back" {
+                    self.state.footnote_back()
+                } else {
+                    let number = argument
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|number| *number > 0)
+                        .ok_or("Use /footnote NUMBER or /footnote back")?;
+                    self.state.jump_footnote(number)
+                };
+                if !jumped {
+                    return Err(
+                        "Footnote target is unavailable in the retained rendered transcript".into(),
+                    );
+                }
+                self.state.details = None;
+                self.state.details_scroll = 0;
+            }
             "/status" => {
                 self.refresh_mode()?;
                 let session = self
@@ -311,12 +339,13 @@ impl App {
                     .map(|prepared| prepared.session.id.0.to_string())
                     .unwrap_or_else(|| "No session".into());
                 self.notice(&format!(
-                    "{} · session {} · mode {} · pending {:?} · permissions {}",
+                    "{} · session {} · mode {} · pending {:?} · permissions {} · Markdown {}",
                     self.state.status,
                     session,
                     self.state.mode,
                     self.state.pending_mode,
-                    self.state.permissions
+                    self.state.permissions,
+                    self.state.markdown_display.as_str()
                 ));
             }
             "/help" => {
@@ -332,6 +361,9 @@ impl App {
                             "PgUp/PgDn scroll · End follow output".into(),
                             "Click thinking / long tool headers to expand or collapse".into(),
                             "Ctrl+O toggles the latest foldable card · wheel scrolls the pane under the pointer".into(),
+                            "Click a footnote number to jump to its definition; click its definition marker to return".into(),
+                            "/footnote NUMBER jumps in the newest matching assistant message; /footnote back returns".into(),
+                            "/markdown source|render selects the assistant presentation".into(),
                             "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"
                                 .into(),
                         ])

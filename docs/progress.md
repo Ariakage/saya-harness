@@ -6,7 +6,15 @@
 
 ## 完整 Markdown、数学、图表与 debug 预览
 
-2026-11-09，本阶段进行中。项目负责人补充完整Markdown语法、Unicode数学、Mermaid及source／render显示要求，并指定仅debug构建提供 `saya tui-preview`。本轮继续构建本地测试版，四平台同步验证安排在N2阶段。
+2026-11-09，本阶段完成本机开发与验证。项目负责人补充完整Markdown语法、Unicode数学、Mermaid及source／render显示要求，并指定仅debug构建提供 `saya tui-preview`。本轮构建本地测试版，四平台同步验证安排在N2阶段。
+
+采用CommonMark／GFM事件解析、内置代码语言高亮、严格Unicode数学转换及有界Mermaid布局，统一表格和脚注语义锚。source／render命令、脚注点击／键盘往返和有界排版缓存已接入正常TUI。debug专属预览与render_preview共享27个场景，新增12组语法、数学、图表及回退场景。完整范围和保守回退条件见[Markdown说明](markdown-rendering.md)。
+
+本机macOS27.2 ARM／Rust1.99.1执行 `MACOSX_DEPLOYMENT_TARGET=15.0 ./scripts/check.sh`，格式、全目标严格Clippy、746项Rust测试及优化构建通过。九项发行脚本测试、工具smoke、文本会话、既有审查回归及24组正常入口PTY通过。新增场景验证source／render、脚注点击／键盘返回、窗口变化、原始消息持久化及单次模型请求。验收程序与最终优化程序SHA-256同为 `5ade01b619e19d0489f2b3a4d8c6c5eaad73413df006c73110b60af5b287bb2e`。
+
+最终debug程序通过九项独立PTY检查，包含场景切换、s／r、缩放、q／Esc／Ctrl+C及TERM／HUP退出、终端恢复和零状态文件。最终优化程序通过help隐藏与子命令拒绝门禁。10,000组随机输入在五种宽度下运行50,000次，再加40次压力验证，共50,040次渲染探针全部通过，源码前后哈希相同。探针覆盖物理行宽、10,000行预算、控制字符、脚注位置及panic边界。
+
+引用和代码卡片主题的首次正常入口失败保留于 `target/markdown-full/tui-journey-before-theme.log`，修复后全量24组通过。完整检查、探针、debug门禁和原生程序记录位于 `target/markdown-full/`，13份彩色场景／source快照及预览画廊位于 `previews/`。`.saya/local/saya-trial` 已切换到本次debug测试程序，启动、Ctrl+P、Esc、Ctrl+D及终端恢复通过，启动检查模型运行数为0。程序声明最低部署目标15.0，本轮实际验收环境为本机。
 
 ### JSON参数规范化兼容
 

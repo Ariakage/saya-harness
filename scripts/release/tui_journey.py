@@ -803,10 +803,13 @@ def stream_journey(binary, protocol):
                         ('inline', (125, 203, 155), (23, 23, 27)),
                         ('- item', (246, 173, 85), (9, 9, 11)),
                         ('quote', (129, 129, 139), (9, 9, 11)),
-                        ('╭─ rust', (48, 48, 56), (23, 23, 27)),
-                        ('let x = **literal**;', (196, 196, 204), (23, 23, 27))]:
+                        ('╭─ rust', (48, 48, 56), (23, 23, 27))]:
                     if terminal.screen.body_style(text) != (foreground, background):
                         raise RuntimeError('Markdown style was missing or incorrect for ' + text)
+                code = 'let x = **literal**;'
+                code_style = terminal.screen.body_style(code)
+                if code_style is None or code_style[1] != (23, 23, 27) or code_style[0] == (196, 196, 204):
+                    raise RuntimeError('Rust code was missing its keyword highlight or code background')
                 visible = terminal.screen.body_text()
                 if '## Heading' in visible or '**strong**' in visible or '`inline`' in visible:
                     raise RuntimeError('complete Markdown delimiters remained in the styled assistant body')
@@ -921,6 +924,90 @@ def markdown_table_links_journey(binary):
                 terminal.finish()
                 if len(fixture.requests) != 1 or fixture.requests[0].get('stream') is not True:
                     raise RuntimeError('Markdown resize or scrolling replayed a model request')
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
+def markdown_source_and_footnotes_journey(binary):
+    response = (
+        'Markdown controls\n=================\n\nREFERENCE_NOTE[^support].\n\n'
+        '***both*** and ~~removed~~ and $x^2$.\n\n'
+        '- [x] task done\n  - nested item\n\n> quoted text\n\n'
+        '<small>source HTML</small>\n\n![sample](https://example.test/sample.png)\n\n---\n\n'
+        + ''.join(f'FILLER_{index:02d}\n\n' for index in range(32))
+        + '[^support]: TARGET_NOTE with a return reference.\n')
+    fixture = Fixture('openai-chat-completions', [{'text': response}])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-markdown-source-') as directory:
+            root = Path(directory)
+            (root / 'workspace').mkdir()
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                def reveal(marker):
+                    for _ in range(80):
+                        if marker in terminal.screen.body_text():
+                            terminal.settle()
+                            return
+                        terminal.wheel(5, 8, down=False)
+                        terminal.settle()
+                    raise RuntimeError('Markdown scroll did not reveal ' + marker)
+
+                def note_point(marker):
+                    terminal.settle()
+                    for row in range(1, terminal.screen.rows - 6):
+                        text = terminal.screen.main_row_text(row)
+                        if marker in text and '[1]' in text:
+                            return text.index('[1]'), row
+                    raise RuntimeError('semantic footnote marker was not visible next to ' + marker)
+
+                terminal.resize(80, 48)
+                terminal.title()
+                terminal.line('Show Markdown source controls and the numbered footnote')
+                terminal.until('TARGET_NOTE')
+                saved = wait_idle(terminal, root)
+                if saved.get('text') != response:
+                    raise RuntimeError('Markdown rendering changed the saved answer source')
+                reveal('REFERENCE_NOTE')
+                terminal.click(*note_point('REFERENCE_NOTE'))
+                terminal.until('TARGET_NOTE')
+                terminal.click(*note_point('TARGET_NOTE'))
+                terminal.until('REFERENCE_NOTE')
+
+                terminal.resize(40, 48)
+                terminal.title()
+                reveal('REFERENCE_NOTE')
+                terminal.click(*note_point('REFERENCE_NOTE'))
+                terminal.until('TARGET_NOTE')
+                terminal.line('/footnote back')
+                terminal.until('REFERENCE_NOTE')
+
+                terminal.resize(80, 48)
+                terminal.title()
+                terminal.line('/markdown source')
+                reveal('=================')
+                source = terminal.screen.body_text()
+                for marker in ('REFERENCE_NOTE[^support]', '***both***', '~~removed~~', '$x^2$',
+                               '<small>source HTML</small>', '![sample]('):
+                    if marker not in source:
+                        raise RuntimeError('source presentation lost literal Markdown ' + marker)
+                terminal.line('/markdown render')
+                reveal('REFERENCE_NOTE')
+                terminal.settle()
+                rendered = terminal.screen.body_text()
+                if '***both***' in rendered or '~~removed~~' in rendered or 'x²' not in rendered:
+                    raise RuntimeError('render presentation did not restore Markdown and math styling')
+                terminal.line('/footnote 1')
+                terminal.until('TARGET_NOTE')
+                terminal.line('/footnote back')
+                terminal.until('REFERENCE_NOTE')
+                if len(fixture.requests) != 1:
+                    raise RuntimeError('view settings or footnote navigation submitted another model request')
+                if wait_idle(terminal, root).get('text') != response:
+                    raise RuntimeError('view commands replaced the original persisted answer')
+                terminal.finish()
             finally:
                 terminal.close()
     finally:
@@ -2069,7 +2156,7 @@ def command_palette_modal_journey(binary):
                     if width < 38:
                         if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
                             raise RuntimeError('compact command modal omitted its close instruction')
-                    elif f'{index + 1}/24' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                    elif f'{index + 1}/28' not in ''.join(terminal.screen.cells[top][left:left + width]):
                         raise RuntimeError('command modal did not report the actual catalog selection')
                     navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
                     expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
@@ -2117,7 +2204,7 @@ def command_palette_modal_journey(binary):
                 assert_mode_colors(terminal, 'PLAN')
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 23)
+                terminal.send(b'\x1b[B' * 27)
                 wait_selected('/export-full markdown')
                 terminal.send(b'\r')
                 terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'scaffold modal closed with existing draft')
@@ -2128,24 +2215,24 @@ def command_palette_modal_journey(binary):
                 open_palette()
                 terminal.send(b'\x1b[B' * 28)
                 wait_selected('/export-full markdown')
-                geometry(23)
+                geometry(27)
                 if '/mode plan' in terminal.screen.command_palette_text():
                     raise RuntimeError('long command catalog did not scroll to keep its last selection visible')
-                profile_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/profile '))
-                terminal.click(profile_row[0] + 4, profile_row[1])
-                wait_selected('/profile ')
-                if terminal.screen.command_palette_selected()[1] != profile_row[1]:
+                scaffold_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/cancel-job '))
+                terminal.click(scaffold_row[0] + 4, scaffold_row[1])
+                wait_selected('/cancel-job ')
+                if terminal.screen.command_palette_selected()[1] != scaffold_row[1]:
                     raise RuntimeError('clicking a visible command moved its highlighted row')
                 terminal.send(b'\x1b[A')
-                wait_selected('/exit')
-                if terminal.screen.command_palette_selected()[1] != profile_row[1] - 1:
+                wait_selected('/resume-accept ')
+                if terminal.screen.command_palette_selected()[1] != scaffold_row[1] - 1:
                     raise RuntimeError('Up moved the catalog viewport while its previous row was already visible')
-                terminal.send(b'\x1b[B' * 8)
+                terminal.send(b'\x1b[B' * 9)
                 wait_selected('/export-full markdown')
                 for columns, rows in [(160, 45), (80, 24), (60, 18), (20, 6), (110, 32)]:
                     terminal.resize(columns, rows)
                     wait_selected('/export-full markdown')
-                    geometry(23)
+                    geometry(27)
                     if (columns, rows) == (160, 45):
                         save_interactive_screen(terminal, 'wide-160x45')
                     if (columns, rows) == (20, 6):
@@ -2701,6 +2788,8 @@ def main():
     passed('reference-layout-input-meter-and-window-title')
     markdown_table_links_journey(binary)
     passed('markdown-table-links-stream-resize-scroll-and-source')
+    markdown_source_and_footnotes_journey(binary)
+    passed('markdown-source-render-footnotes-and-original-history')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
     thinking_tools_and_mouse_journey(binary)

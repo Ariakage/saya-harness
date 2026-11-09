@@ -1,6 +1,8 @@
 //! Terminal frontend for Saya's shared application services.
 pub mod commands;
 pub mod input;
+#[cfg(debug_assertions)]
+pub mod preview;
 pub mod terminal;
 
 mod controller;

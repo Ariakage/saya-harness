@@ -1,460 +1,557 @@
-//! Width-aware pipe tables with bounded row buffering.
-use super::{append_span, append_wrapped_line, inline_spans};
-use crate::editor::display_grapheme;
-use crate::theme::{BORDER, CODE_BACKGROUND, FOREGROUND, MUTED};
+//! Width-aware presentation of parsed table cells and semantic footnote anchors.
+use super::document::{RichLine, wrap_line};
+use crate::{
+    editor::MAX_GRAPHEME_BYTES,
+    theme::{BORDER, CODE_BACKGROUND, FOREGROUND, MUTED},
+};
+use pulldown_cmark::Alignment;
 use ratatui::{
-    layout::Alignment,
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use std::{collections::VecDeque, iter::Peekable, str::Split};
 use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_COLUMNS: usize = 32;
+const MAX_CELLS: usize = 4096;
+const MAX_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_ANCHORS: usize = 4096;
 const WIDTH_SAMPLE_ROWS: usize = 128;
 const MAX_CELL_LINES: usize = 128;
 const MAX_TABLE_LINES: usize = 10_000;
+const MAX_SPANS: usize = 256;
 
-pub(super) struct Table {
-    headers: Vec<String>,
-    field_labels: Vec<Line<'static>>,
-    alignments: Vec<Alignment>,
-    widths: Option<Vec<usize>>,
+/// Lay out parsed cells. Invalid dimensions or excessive input return to source.
+pub(super) fn render(
+    headers: Vec<RichLine>,
+    mut rows: Vec<Vec<RichLine>>,
+    alignments: &[Alignment],
     width: usize,
-    pending: VecDeque<Line<'static>>,
-    finished: bool,
-    rendered_lines: usize,
-}
-
-impl Table {
-    pub(super) fn new<'a>(
-        header: &str,
-        separator: &str,
-        following: impl Iterator<Item = &'a str>,
-        width: usize,
-    ) -> Option<Self> {
-        if !header.contains('|') {
+) -> Option<Vec<RichLine>> {
+    let columns = headers.len();
+    if columns == 0 || columns > MAX_COLUMNS || alignments.len() != columns {
+        return None;
+    }
+    let mut cell_count = columns;
+    let mut bytes = 0usize;
+    let mut anchors = 0usize;
+    for row in &mut rows {
+        if row.len() > columns {
             return None;
         }
-        let (headers, separated) = cells(header)?;
-        if !separated {
+        cell_count = cell_count.checked_add(columns)?;
+        if cell_count > MAX_CELLS {
             return None;
         }
-        let (separators, _) = cells(separator)?;
-        if separators.len() != headers.len() {
+        row.resize_with(columns, RichLine::default);
+    }
+    for cell in headers.iter().chain(rows.iter().flatten()) {
+        let length = byte_length(cell);
+        bytes = bytes.checked_add(length)?;
+        anchors = anchors.checked_add(cell.anchors.len())?;
+        for anchor in &cell.anchors {
+            if anchor.offset > length || anchor.length > length - anchor.offset {
+                return None;
+            }
+            bytes = bytes.checked_add(anchor.key.len())?;
+        }
+        if bytes > MAX_INPUT_BYTES || anchors > MAX_ANCHORS {
             return None;
         }
-        let alignments = separators
-            .iter()
-            .map(|cell| {
-                let rule = cell.strip_prefix(':').unwrap_or(cell);
-                let rule = rule.strip_suffix(':').unwrap_or(rule);
-                if rule.len() < 3 || !rule.bytes().all(|byte| byte == b'-') {
-                    return None;
+    }
+    let width = width.max(1);
+    let mut widths = headers
+        .iter()
+        .map(|header| header.line.width().clamp(4, 48))
+        .collect::<Vec<_>>();
+    for row in rows.iter().take(WIDTH_SAMPLE_ROWS) {
+        for (column, cell) in row.iter().enumerate() {
+            widths[column] = widths[column].max(cell.line.width().min(48));
+        }
+    }
+    let overhead = columns * 3 + 1;
+    let mut output = Vec::new();
+    if width < overhead + columns * 4 {
+        let labels = headers.iter().map(field_label).collect::<Vec<_>>();
+        for mut header in headers {
+            header.line.style = header.line.style.add_modifier(Modifier::BOLD);
+            for span in &mut header.line.spans {
+                span.style = span.style.add_modifier(Modifier::BOLD);
+            }
+            if !extend(&mut output, wrapped(header, width)) {
+                return Some(output);
+            }
+        }
+        for row in rows {
+            if !push(&mut output, plain("─".repeat(width.min(32)), BORDER)) {
+                return Some(output);
+            }
+            for (column, cell) in row.into_iter().enumerate() {
+                let mut line = labels[column].clone();
+                text(&mut line, "  ", Style::default());
+                append(&mut line, cell, Style::default().fg(FOREGROUND), false);
+                if !extend(&mut output, wrapped(line, width)) {
+                    return Some(output);
                 }
-                Some(match (cell.starts_with(':'), cell.ends_with(':')) {
-                    (true, true) => Alignment::Center,
-                    (false, true) => Alignment::Right,
-                    _ => Alignment::Left,
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let width = width.max(1);
-        let mut widths = headers
-            .iter()
-            .map(|cell| cell_line(cell, true).width().clamp(4, 48))
-            .collect::<Vec<_>>();
-        for line in following.take(WIDTH_SAMPLE_ROWS) {
-            let Some(row) = body_cells(line, headers.len()) else {
-                break;
-            };
-            for (column, cell) in row.iter().enumerate() {
-                widths[column] = widths[column].max(cell_line(cell, false).width().min(48));
             }
         }
-        let overhead = headers.len() * 3 + 1;
-        let widths = if width < overhead + headers.len() * 4 {
-            None
-        } else {
-            let available = width - overhead;
-            while widths.iter().sum::<usize>() > available {
-                let (index, _) = widths.iter().enumerate().max_by_key(|(_, value)| **value)?;
-                widths[index] -= 1;
-            }
-            Some(widths)
-        };
-        let field_labels = headers
-            .iter()
-            .map(|header| {
-                let mut clusters = header.graphemes(true);
-                let mut label = clusters
-                    .by_ref()
-                    .take(80)
-                    .map(display_grapheme)
-                    .collect::<String>();
-                if clusters.next().is_some() {
-                    label.push('…');
-                }
-                cell_line(&label, true)
-            })
-            .collect();
-        let mut table = Self {
-            headers,
-            field_labels,
-            alignments,
-            widths,
-            width,
-            pending: VecDeque::new(),
-            finished: false,
-            rendered_lines: 0,
-        };
-        if table.widths.is_some() {
-            table.pending.push_back(table.border('┌', '┬', '┐'));
-            let header = table.headers.clone();
-            table.render_row(&header, true);
-            table.pending.push_back(table.border('├', '┼', '┤'));
-        } else {
-            let header = table.headers.clone();
-            for cell in header {
-                table
-                    .pending
-                    .extend(wrap_cell(cell_line(&cell, true), width));
-            }
-        }
-        Some(table)
+        return Some(output);
     }
-
-    pub(super) fn next(&mut self, source: &mut Peekable<Split<'_, char>>) -> Option<Line<'static>> {
-        if self.rendered_lines == MAX_TABLE_LINES {
-            self.pending.clear();
-            self.finished = true;
-            self.rendered_lines += 1;
-            return Some(Line::styled(
-                "[table display truncated]",
-                Style::default().fg(MUTED),
-            ));
-        }
-        self.rendered_lines += 1;
-        if let Some(line) = self.pending.pop_front() {
-            return Some(line);
-        }
-        if self.finished {
-            return None;
-        }
-        if let Some(row) = source
-            .peek()
-            .and_then(|line| body_cells(line, self.headers.len()))
-        {
-            source.next();
-            self.render_row(&row, false);
-            return self.pending.pop_front();
-        }
-        self.finished = true;
-        self.widths.as_ref().map(|_| self.border('└', '┴', '┘'))
+    let available = width - overhead;
+    while widths.iter().sum::<usize>() > available {
+        let (index, _) = widths.iter().enumerate().max_by_key(|(_, value)| **value)?;
+        widths[index] -= 1;
     }
-
-    fn border(&self, left: char, middle: char, right: char) -> Line<'static> {
-        let segments = self
-            .widths
-            .as_ref()
-            .into_iter()
-            .flatten()
-            .map(|width| "─".repeat(width + 2))
-            .collect::<Vec<_>>();
-        Line::styled(
-            format!("{left}{}{right}", segments.join(&middle.to_string())),
-            Style::default().fg(BORDER),
-        )
+    push(&mut output, border(&widths, '┌', '┬', '┐'));
+    if !extend(&mut output, grid_row(headers, &widths, alignments, true)) {
+        return Some(output);
     }
-
-    fn render_row(&mut self, row: &[String], header: bool) {
-        let Some(widths) = &self.widths else {
-            self.pending.push_back(Line::styled(
-                "─".repeat(self.width.min(32)),
-                Style::default().fg(BORDER),
-            ));
-            for (index, cell) in row.iter().enumerate() {
-                let mut line = self.field_labels[index].clone();
-                line.spans.push(Span::raw("  "));
-                line.spans.extend(cell_line(cell, false).spans);
-                self.pending.extend(wrap_cell(line, self.width));
-            }
-            return;
-        };
-        let wrapped = row
-            .iter()
-            .zip(widths)
-            .map(|(cell, width)| wrap_cell(cell_line(cell, header), *width))
-            .collect::<Vec<_>>();
-        let height = wrapped.iter().map(VecDeque::len).max().unwrap_or(1);
-        let base = if header {
-            Style::default().fg(FOREGROUND).bg(CODE_BACKGROUND)
-        } else {
-            Style::default().fg(FOREGROUND)
-        };
-        let border = base.fg(BORDER);
-        for index in 0..height {
-            let mut spans = Vec::new();
-            append_span(&mut spans, "│", border);
-            for (column, width) in widths.iter().enumerate() {
-                let line = wrapped[column].get(index);
-                let padding = width.saturating_sub(line.map_or(0, Line::width));
-                let leading = match self.alignments[column] {
-                    Alignment::Right => padding,
-                    Alignment::Center => padding / 2,
-                    Alignment::Left => 0,
-                };
-                append_span(&mut spans, &" ".repeat(leading + 1), base);
-                if let Some(line) = line {
-                    for span in &line.spans {
-                        append_span(&mut spans, &span.content, base.patch(span.style));
-                    }
-                }
-                append_span(&mut spans, &" ".repeat(padding - leading + 1), base);
-                append_span(&mut spans, "│", border);
-            }
-            self.pending.push_back(Line::from(spans).style(base));
+    if !push(&mut output, border(&widths, '├', '┼', '┤')) {
+        return Some(output);
+    }
+    for row in rows {
+        if !extend(&mut output, grid_row(row, &widths, alignments, false)) {
+            return Some(output);
         }
     }
+    push(&mut output, border(&widths, '└', '┴', '┘'));
+    Some(output)
 }
 
-fn body_cells(line: &str, columns: usize) -> Option<Vec<String>> {
-    if !line.contains('|') {
-        return None;
-    }
-    let (mut row, separated) = cells(line)?;
-    if !separated {
-        return None;
-    }
-    if row.len() > columns {
-        return None;
-    }
-    row.resize(columns, String::new());
-    Some(row)
-}
-
-fn cells(line: &str) -> Option<(Vec<String>, bool)> {
-    if line.len() - line.trim_start_matches(' ').len() > 3 || line.trim().is_empty() {
-        return None;
-    }
-    let line = line.trim();
-    let mut cells = vec![String::new()];
-    let mut characters = line.chars().peekable();
-    let mut trailing_separator = false;
-    let mut separated = false;
-    while let Some(character) = characters.next() {
-        trailing_separator = false;
-        match character {
-            '\\' if characters.peek() == Some(&'|') => {
-                characters.next();
-                cells.last_mut()?.push('|');
-            }
-            '\\' if characters.peek() == Some(&'\\') => {
-                characters.next();
-                cells.last_mut()?.push_str("\\\\");
-            }
-            '|' => {
-                if cells.len() >= MAX_COLUMNS + 2 {
-                    return None;
-                }
-                cells.push(String::new());
-                trailing_separator = true;
-                separated = true;
-            }
-            _ => cells.last_mut()?.push(character),
-        }
-    }
-    if trailing_separator {
-        cells.pop();
-    }
-    if line.starts_with('|') {
-        cells.remove(0);
-    }
-    if cells.is_empty() || cells.len() > MAX_COLUMNS {
-        return None;
-    }
-    Some((
-        cells
-            .into_iter()
-            .map(|cell| cell.trim().to_owned())
-            .collect(),
-        separated,
-    ))
-}
-
-fn cell_line(cell: &str, header: bool) -> Line<'static> {
-    let mut spans = Vec::new();
+fn grid_row(
+    row: Vec<RichLine>,
+    widths: &[usize],
+    alignments: &[Alignment],
+    header: bool,
+) -> Vec<RichLine> {
+    let wrapped = row
+        .into_iter()
+        .zip(widths)
+        .map(|(cell, width)| wrapped(cell, *width))
+        .collect::<Vec<_>>();
+    let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
     let base = if header {
-        Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD)
+        Style::default().fg(FOREGROUND).bg(CODE_BACKGROUND)
     } else {
         Style::default().fg(FOREGROUND)
     };
-    inline_spans(cell, base, &mut spans, 0);
-    Line::from(spans).style(base)
+    let mut output = Vec::new();
+    for index in 0..height {
+        let mut line = RichLine {
+            line: Line::default().style(base),
+            anchors: Vec::new(),
+        };
+        text(&mut line, "│", base.fg(BORDER));
+        for (column, width) in widths.iter().enumerate() {
+            let cell = wrapped[column].get(index);
+            let padding = width.saturating_sub(cell.map_or(0, |cell| cell.line.width()));
+            let leading = match alignments[column] {
+                Alignment::Right => padding,
+                Alignment::Center => padding / 2,
+                Alignment::Left | Alignment::None => 0,
+            };
+            text(&mut line, &" ".repeat(leading + 1), base);
+            if let Some(cell) = cell {
+                append(&mut line, cell.clone(), base, header);
+            }
+            text(&mut line, &" ".repeat(padding - leading + 1), base);
+            text(&mut line, "│", base.fg(BORDER));
+        }
+        output.push(line);
+    }
+    output
 }
 
-fn wrap_cell(line: Line<'static>, width: usize) -> VecDeque<Line<'static>> {
-    let mut rows = VecDeque::new();
-    let mut count = 0;
-    append_wrapped_line(line, width, &mut rows, &mut count, MAX_CELL_LINES);
-    if count > MAX_CELL_LINES {
-        rows.pop_front();
-        rows.push_front(Line::styled(
+fn field_label(header: &RichLine) -> RichLine {
+    let content = header
+        .line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    let mut end = 0;
+    let mut truncated = false;
+    for (count, (offset, grapheme)) in content.grapheme_indices(true).enumerate() {
+        if count == 80 || grapheme.len() > MAX_GRAPHEME_BYTES {
+            truncated = true;
+            break;
+        }
+        end = offset + grapheme.len();
+    }
+    let mut output = RichLine {
+        line: Line::default().style(header.line.style.add_modifier(Modifier::BOLD)),
+        anchors: header
+            .anchors
+            .iter()
+            .filter(|anchor| anchor.offset.saturating_add(anchor.length) <= end)
+            .cloned()
+            .collect(),
+    };
+    let mut remaining = end;
+    for span in &header.line.spans {
+        let length = remaining.min(span.content.len());
+        // End is a grapheme boundary in the concatenated original spans.
+        if length > 0 {
+            text(
+                &mut output,
+                &span.content[..length],
+                header
+                    .line
+                    .style
+                    .patch(span.style)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+        remaining -= length;
+        if remaining == 0 {
+            break;
+        }
+    }
+    if truncated {
+        text(&mut output, "…", Style::default().fg(MUTED));
+    }
+    output
+}
+
+fn wrapped(line: RichLine, width: usize) -> Vec<RichLine> {
+    let mut rows = wrap_line(line, width, MAX_CELL_LINES + 1);
+    if rows.len() > MAX_CELL_LINES {
+        rows.remove(0);
+        rows[0] = plain(
             if width >= 24 {
                 "[cell display truncated]"
             } else {
                 "…"
             },
-            Style::default().fg(MUTED),
-        ));
+            MUTED,
+        );
     }
     rows
+}
+
+fn append(output: &mut RichLine, cell: RichLine, base: Style, header: bool) {
+    let offset = byte_length(output);
+    for span in cell.line.spans {
+        let mut style = base.patch(cell.line.style).patch(span.style);
+        if header {
+            style = style.add_modifier(Modifier::BOLD)
+        }
+        text(output, &span.content, style);
+    }
+    output
+        .anchors
+        .extend(cell.anchors.into_iter().map(|mut anchor| {
+            anchor.offset = anchor.offset.saturating_add(offset);
+            anchor
+        }));
+}
+
+fn text(output: &mut RichLine, content: &str, style: Style) {
+    if content.is_empty() {
+        return;
+    }
+    let full = output.line.spans.len() >= MAX_SPANS;
+    if let Some(last) = output.line.spans.last_mut()
+        && (last.style == style || full)
+    {
+        last.content.to_mut().push_str(content);
+    } else {
+        output
+            .line
+            .spans
+            .push(Span::styled(content.to_owned(), style));
+    }
+}
+
+fn byte_length(line: &RichLine) -> usize {
+    line.line.spans.iter().map(|span| span.content.len()).sum()
+}
+
+fn plain(content: impl Into<String>, color: ratatui::style::Color) -> RichLine {
+    RichLine {
+        line: Line::styled(content.into(), Style::default().fg(color)),
+        anchors: Vec::new(),
+    }
+}
+
+fn border(widths: &[usize], left: char, middle: char, right: char) -> RichLine {
+    let segments = widths
+        .iter()
+        .map(|width| "─".repeat(width + 2))
+        .collect::<Vec<_>>();
+    plain(
+        format!("{left}{}{right}", segments.join(&middle.to_string())),
+        BORDER,
+    )
+}
+
+fn push(output: &mut Vec<RichLine>, line: RichLine) -> bool {
+    if output.len() == MAX_TABLE_LINES - 1 {
+        let marker = if output.last().is_some_and(|line| line.line.width() >= 24) {
+            "[table display truncated]"
+        } else {
+            "…"
+        };
+        output.push(plain(marker, MUTED));
+        return false;
+    }
+    output.push(line);
+    true
+}
+
+fn extend(output: &mut Vec<RichLine>, lines: Vec<RichLine>) -> bool {
+    for line in lines {
+        if !push(output, line) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{editor::safe_text, rich_text::markdown_lines_with_width};
+    use crate::rich_text::document::ByteAnchor;
+    use crate::theme::{AMBER, BLUE};
 
-    fn text(line: &Line<'_>) -> String {
-        line.spans
+    fn cell(content: &str) -> RichLine {
+        RichLine {
+            line: Line::raw(content.to_owned()),
+            anchors: Vec::new(),
+        }
+    }
+
+    fn content(line: &RichLine) -> String {
+        line.line
+            .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
     }
 
+    fn reference(content: &str, marker: &str) -> RichLine {
+        let offset = content.find(marker).unwrap();
+        RichLine {
+            line: Line::styled(content.to_owned(), Style::default().fg(BLUE)),
+            anchors: vec![ByteAnchor {
+                key: "semantic-key".into(),
+                number: 7,
+                offset,
+                length: marker.len(),
+                definition: false,
+                occurrence: 12,
+            }],
+        }
+    }
+
+    fn check_anchors(lines: &[RichLine]) {
+        for line in lines {
+            let text = content(line);
+            for anchor in &line.anchors {
+                assert_eq!(anchor.key, "semantic-key");
+                assert_eq!(anchor.number, 7);
+                assert_eq!(anchor.occurrence, 12);
+                assert!(!anchor.definition);
+                let displayed = &text[anchor.offset..anchor.offset + anchor.length];
+                assert!("[7]".contains(displayed));
+            }
+        }
+    }
+
     #[test]
-    fn grid_aligns_columns_using_display_width_and_keeps_cell_styles() {
-        let source = "| Name | 中 | Count |\n| :--- | :---: | ---: |\n| **加粗** | e\u{301} | 7 |\n| plain | 中文 | 123 |";
-        let lines = markdown_lines_with_width(source, 50).collect::<Vec<_>>();
-        assert_eq!(lines.len(), 6);
-        assert!(text(&lines[0]).starts_with('┌'));
-        assert!(text(&lines[5]).ends_with('┘'));
-        assert!(lines.iter().all(|line| line.width() == lines[0].width()));
+    fn grid_uses_display_width_alignment_and_original_cell_styles() {
+        let headers = vec![cell("Name"), cell("中"), cell("Count")];
+        let mut highlighted = cell("加粗");
+        highlighted.line = highlighted
+            .line
+            .style(Style::default().fg(AMBER).add_modifier(Modifier::BOLD));
+        let rows = vec![
+            vec![highlighted, cell("e\u{301}"), cell("7")],
+            vec![cell("plain"), cell("中文"), cell("123")],
+        ];
+        let output = render(
+            headers,
+            rows,
+            &[Alignment::Left, Alignment::Center, Alignment::Right],
+            50,
+        )
+        .unwrap();
+        assert_eq!(output.len(), 6);
         assert!(
-            lines[1]
+            output
+                .iter()
+                .all(|line| line.line.width() == output[0].line.width())
+        );
+        assert!(content(&output[0]).starts_with('┌'));
+        assert!(content(&output[5]).ends_with('┘'));
+        assert!(
+            output[1]
+                .line
                 .spans
                 .iter()
                 .any(|span| span.content.contains("Name")
                     && span.style.add_modifier.contains(Modifier::BOLD))
         );
         assert!(
-            lines[3]
+            output[3]
+                .line
                 .spans
                 .iter()
                 .any(|span| span.content.contains("加粗")
+                    && span.style.fg == Some(AMBER)
                     && span.style.add_modifier.contains(Modifier::BOLD))
         );
-        let short = text(&lines[3]);
-        let long = text(&lines[4]);
         assert_eq!(
-            short.split('│').nth(3).unwrap().trim_end().len(),
-            long.split('│').nth(3).unwrap().trim_end().len()
+            content(&output[3])
+                .split('│')
+                .nth(3)
+                .unwrap()
+                .trim_end()
+                .len(),
+            content(&output[4])
+                .split('│')
+                .nth(3)
+                .unwrap()
+                .trim_end()
+                .len()
         );
     }
 
     #[test]
-    fn escaped_pipes_optional_borders_and_missing_cells_are_supported() {
-        let source = "Name | Detail\n--- | ---\nA | `left\\|right`\n| B |\n| C | final |\n\nafter";
-        let rendered = markdown_lines_with_width(source, 60)
-            .map(|line| text(&line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(rendered.contains("left|right"));
-        assert!(rendered.contains("│ B    │"));
-        assert!(rendered.ends_with("\n\nafter"));
-        assert_eq!(
-            cells(r"| one\\ | two\|three |"),
-            Some((vec![r"one\\".into(), "two|three".into()], true))
-        );
+    fn unicode_padding_moves_semantic_anchor_byte_offsets_without_guessing_labels() {
+        let output = render(
+            vec![cell("中文"), cell("Reference")],
+            vec![vec![cell("e\u{301}"), reference("链接 [7]", "[7]")]],
+            &[Alignment::Left, Alignment::Right],
+            60,
+        )
+        .unwrap();
+        check_anchors(&output);
+        let line = output.iter().find(|line| !line.anchors.is_empty()).unwrap();
+        assert_eq!(line.anchors.len(), 1);
+        assert!(line.anchors[0].offset > line.line.width() / 2);
+        assert!(content(line).contains("链接 [7]"));
+        let plain_marker = render(
+            vec![cell("Literal")],
+            vec![vec![cell("[7]")]],
+            &[Alignment::None],
+            40,
+        )
+        .unwrap();
+        assert!(plain_marker.iter().all(|line| line.anchors.is_empty()));
     }
 
     #[test]
-    fn invalid_rules_and_extra_cells_fall_back_without_dropping_text() {
-        for source in [
-            "A | B\n---\nfirst | second",
-            "A | B\n:---:: | ---\nfirst | second",
-            "A | B\n-- | ---\nfirst | second",
-        ] {
-            let rendered = markdown_lines_with_width(source, 80)
-                .map(|line| text(&line))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert_eq!(rendered, source);
+    fn wrapped_and_narrow_fields_preserve_reference_metadata() {
+        for width in [1, 20, 40] {
+            let output = render(
+                vec![cell("Name"), cell("Details"), cell("State")],
+                vec![vec![
+                    cell("中文"),
+                    reference("some long text [7]", "[7]"),
+                    cell("Done"),
+                ]],
+                &[Alignment::None; 3],
+                width,
+            )
+            .unwrap();
+            check_anchors(&output);
+            assert!(output.iter().any(|line| !line.anchors.is_empty()));
+            assert!(output.iter().all(|line| line.line.width() <= width));
         }
-        let source = "A | B\n--- | ---\none | two | extra\nafter";
-        let rendered = markdown_lines_with_width(source, 80)
-            .map(|line| text(&line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(rendered.ends_with("one | two | extra\nafter"));
-        let source = "foo\\|bar\n---\nvalue |";
-        let rendered = markdown_lines_with_width(source, 80)
-            .map(|line| text(&line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(rendered, "foo|bar\n---\nvalue |");
     }
 
     #[test]
-    fn fences_take_precedence_over_tables_and_inline_code_headers_work() {
-        let fenced = "```text | literal\n--- | ---\n**raw** | cell\n```";
-        let lines = markdown_lines_with_width(fenced, 80).collect::<Vec<_>>();
-        assert_eq!(text(&lines[0]), "╭─ text | literal");
-        assert_eq!(text(&lines[1]), "--- | ---");
-        assert_eq!(text(&lines[2]), "**raw** | cell");
-        assert_eq!(text(&lines[3]), "╰─");
-        let lines =
-            markdown_lines_with_width("`Name` | Detail\n--- | ---\nA | B", 80).collect::<Vec<_>>();
-        assert!(text(&lines[0]).starts_with('┌'));
-        assert!(text(&lines[1]).contains("Name"));
-    }
-
-    #[test]
-    fn narrow_tables_preserve_values_and_sanitized_controls() {
-        let source = safe_text(
-            "| Name | Detail | State |\n| --- | --- | --- |\n| 中文 | e\u{301}\u{1b}[2J | Done |",
-        );
-        let lines = markdown_lines_with_width(&source, 20).collect::<Vec<_>>();
-        assert!(lines.iter().all(|line| line.width() <= 20));
-        let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
-        assert!(rendered.contains("中文"));
-        assert!(rendered.contains("e\u{301}\\u{1b}[2J"));
-        assert!(rendered.contains("State  Done"));
+    fn missing_cells_pad_and_invalid_dimensions_or_anchor_ranges_fail_closed() {
+        let output = render(
+            vec![cell("A"), cell("B")],
+            vec![vec![cell("only")]],
+            &[Alignment::None; 2],
+            40,
+        )
+        .unwrap();
+        assert!(output.iter().any(|line| content(line).contains("only")));
+        assert!(render(Vec::new(), Vec::new(), &[], 40).is_none());
         assert!(
-            !rendered
-                .chars()
-                .any(|character| character.is_control() && character != '\n')
+            render(
+                vec![cell("A")],
+                vec![vec![cell("one"), cell("extra")]],
+                &[Alignment::None],
+                40
+            )
+            .is_none()
         );
+        assert!(render(vec![cell("A")], Vec::new(), &[], 40).is_none());
+        assert!(
+            render(
+                vec![cell("A"); MAX_COLUMNS + 1],
+                Vec::new(),
+                &[Alignment::None; MAX_COLUMNS + 1],
+                200
+            )
+            .is_none()
+        );
+        let mut bad = reference("[7]", "[7]");
+        bad.anchors[0].offset = usize::MAX;
+        assert!(render(vec![cell("A")], vec![vec![bad]], &[Alignment::None], 40).is_none());
     }
 
     #[test]
-    fn large_cells_columns_and_table_expansion_have_visible_budgets() {
-        let source = format!("| Name |\n| --- |\n| {} END |", "x".repeat(20_000));
-        let lines = markdown_lines_with_width(&source, 40).collect::<Vec<_>>();
-        assert!(lines.len() <= MAX_CELL_LINES + 4);
-        let rendered = lines.iter().map(text).collect::<Vec<_>>().join("\n");
-        assert!(rendered.contains("[cell display truncated]"));
-        assert!(rendered.contains("END"));
-        let source = format!(
-            "{}\n{}",
-            vec!["column"; MAX_COLUMNS + 1].join(" | "),
-            vec!["---"; MAX_COLUMNS + 1].join(" | ")
-        );
-        assert_eq!(
-            text(&markdown_lines_with_width(&source, 80).next().unwrap()),
-            source.lines().next().unwrap()
-        );
-        let source = format!(
-            "| Name |\n| --- |\n{}",
-            "| item |\n".repeat(MAX_TABLE_LINES + 10)
-        );
-        let lines = markdown_lines_with_width(&source, 40).collect::<Vec<_>>();
+    fn cropped_labels_keep_complete_anchors_and_mark_omissions() {
+        let header = reference(&format!("[7]{}", "中".repeat(90)), "[7]");
+        let label = field_label(&header);
+        assert!(content(&label).ends_with('…'));
+        assert_eq!(label.anchors.len(), 1);
+        check_anchors(&[label]);
+        let header = reference(&format!("{}[7]", "x".repeat(79)), "[7]");
+        assert!(field_label(&header).anchors.is_empty());
+        let oversized = format!("e{}", "\u{301}".repeat(MAX_GRAPHEME_BYTES));
+        assert_eq!(content(&field_label(&cell(&oversized))), "…");
+    }
+
+    #[test]
+    fn cell_and_total_expansion_limits_remain_visible_and_bounded() {
+        let large = format!("{} END", "x".repeat(20_000));
+        let output = render(
+            vec![cell("Name")],
+            vec![vec![cell(&large)]],
+            &[Alignment::None],
+            40,
+        )
+        .unwrap();
+        assert!(output.len() <= MAX_CELL_LINES + 4);
         assert!(
-            lines
+            output
                 .iter()
-                .any(|line| text(line) == "[table display truncated]")
+                .any(|line| content(line).contains("[cell display truncated]"))
         );
-        assert!(lines.len() <= MAX_TABLE_LINES + 20);
+        assert!(output.iter().any(|line| content(line).contains("END")));
+        let output = render(
+            vec![cell("A"), cell("B"), cell("C")],
+            vec![vec![cell("x"); 3]; 1000],
+            &[Alignment::None; 3],
+            1,
+        )
+        .unwrap();
+        assert!(output.len() <= MAX_TABLE_LINES);
+        assert_eq!(content(output.last().unwrap()), "…");
+        assert!(output.iter().all(|line| line.line.width() <= 1));
+        assert!(
+            render(
+                vec![cell("A")],
+                vec![vec![cell("x")]; MAX_CELLS],
+                &[Alignment::None],
+                40
+            )
+            .is_none()
+        );
+        assert!(
+            render(
+                vec![cell(&"x".repeat(MAX_INPUT_BYTES + 1))],
+                Vec::new(),
+                &[Alignment::None],
+                40
+            )
+            .is_none()
+        );
     }
 }

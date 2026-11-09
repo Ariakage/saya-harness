@@ -14,6 +14,11 @@ serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["macros", "rt", "signal", "sync", "time"] }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.0"
+pulldown-cmark = { version = "0.13.6", default-features = false }
+unicase = "2.10.0"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+mermansi = "0.1.6"
+merman-core = { version = "=0.8.0-alpha.3", default-features = false, features = ["full", "host"] }
 
 libc = "0.2.191"
 

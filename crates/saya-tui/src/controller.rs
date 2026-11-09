@@ -468,7 +468,8 @@ impl App {
         }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                self.state.toggle_at(event.column, event.row)
+                self.state.footnote_at(event.column, event.row)
+                    || self.state.toggle_at(event.column, event.row)
             }
             MouseEventKind::ScrollUp => self.state.scroll_at(event.column, event.row, true),
             MouseEventKind::ScrollDown => self.state.scroll_at(event.column, event.row, false),

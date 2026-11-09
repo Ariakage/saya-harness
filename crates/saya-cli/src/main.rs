@@ -104,6 +104,15 @@ impl From<OutputOption> for Output {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Open the debug-only interactive TUI fixture viewer.
+    #[cfg(debug_assertions)]
+    TuiPreview {
+        #[arg(default_value = "markdown", value_parser = clap::builder::PossibleValuesParser::new(saya_tui::preview::SCENES.iter().copied()))]
+        scene: String,
+        /// Initially show assistant Markdown source.
+        #[arg(long)]
+        source: bool,
+    },
     Logs {
         #[command(subcommand)]
         action: logs::LogsAction,
@@ -1038,6 +1047,21 @@ async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    #[cfg(debug_assertions)]
+    if let Some(Command::TuiPreview { scene, source }) = &cli.command {
+        if matches!(cli.output, Some(OutputOption::Json | OutputOption::Jsonl)) {
+            return std::process::ExitCode::from(fail("TUI preview requires text terminal output"));
+        }
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return std::process::ExitCode::from(fail(
+                "TUI preview requires terminal stdin and stdout",
+            ));
+        }
+        return std::process::ExitCode::from(match saya_tui::preview::run(scene, *source).await {
+            Ok(code) => code,
+            Err(error) => tui_error(&error.to_string()),
+        });
+    }
     if cli.command.is_none() {
         if matches!(cli.output, Some(OutputOption::Json | OutputOption::Jsonl)) {
             return std::process::ExitCode::from(fail(
@@ -1068,6 +1092,9 @@ async fn main() -> std::process::ExitCode {
     let o = overrides(&cli);
     let env = Environment::capture();
     let code = match &cli.command {
+        // The preview is dispatched before runtime configuration and environment capture.
+        #[cfg(debug_assertions)]
+        Some(Command::TuiPreview { .. }) => fail("TUI preview dispatch is unavailable"),
         None => launch_tui(&cli, o, env).await,
         Some(Command::Logs { action }) => match std::env::current_dir()
             .map_err(|_| "cannot determine current directory".to_owned())
@@ -1249,6 +1276,19 @@ async fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod report_tests {
     use super::*;
+    #[test]
+    fn tui_preview_command_follows_the_build_profile_gate() {
+        #[cfg(debug_assertions)]
+        {
+            let cli = Cli::try_parse_from(["saya", "tui-preview", "markdown", "--source"]).unwrap();
+            assert!(
+                matches!(cli.command, Some(Command::TuiPreview { scene, source: true }) if scene == "markdown")
+            );
+            assert!(Cli::try_parse_from(["saya", "tui-preview", "unknown-scene"]).is_err());
+        }
+        #[cfg(not(debug_assertions))]
+        assert!(Cli::try_parse_from(["saya", "tui-preview"]).is_err());
+    }
     #[test]
     fn shared_controls_are_replaced_while_unicode_and_layout_remain_readable() {
         let controls: String = (0..=0x1f)

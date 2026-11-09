@@ -83,6 +83,42 @@ fn key(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
 }
 
 #[tokio::test]
+async fn markdown_display_commands_change_only_ui_preference_and_keep_pending_approval() {
+    let (_root, mut app) = fixture();
+    let (request, mut reply) = approval(&app, "display-approval");
+    app.request(request);
+    let mode = app.config.mode;
+    let permissions = app.config.permissions_mode;
+    assert!(!app.command("/markdown source").await.unwrap());
+    assert_eq!(app.state.markdown_display, view::MarkdownDisplay::Source);
+    assert!(app.pending.is_some());
+    assert!(matches!(
+        reply.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    assert!(
+        app.state
+            .details
+            .as_ref()
+            .unwrap()
+            .title
+            .contains("Approval")
+    );
+    assert!(!app.command("/markdown render").await.unwrap());
+    assert_eq!(app.state.markdown_display, view::MarkdownDisplay::Render);
+    assert!(app.command("/markdown unknown").await.is_err());
+    assert_eq!(app.state.markdown_display, view::MarkdownDisplay::Render);
+    assert!(app.command("/footnote zero").await.is_err());
+    assert!(app.command("/footnote 0").await.is_err());
+    assert!(app.command("/footnote 1").await.is_err());
+    assert!(app.command("/footnote back").await.is_err());
+    assert_eq!(app.config.mode, mode);
+    assert_eq!(app.config.permissions_mode, permissions);
+    assert!(app.active.is_none() && app.prepared.is_none() && app.ui_job.is_none());
+    assert!(!app.config.data_dir.exists());
+}
+
+#[tokio::test]
 async fn empty_tab_cycles_all_modes_without_creating_a_conversation_or_notices() {
     let (_root, mut app) = fixture();
     for mode in [

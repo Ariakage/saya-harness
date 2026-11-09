@@ -2,7 +2,7 @@
 use crate::{
     commands::{COMMANDS, Completion},
     editor::{Editor, MAX_VISUAL_LINE_BYTES, display_grapheme, prefix_boundary, safe_text},
-    rich_text::{append_wrapped_line, markdown_lines_with_width},
+    rich_text::append_wrapped_line,
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
         INPUT_BACKGROUND, INPUT_BORDER, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
@@ -36,6 +36,27 @@ const TOOL_COLLAPSE_BYTES: usize = 512;
 const TOOL_COLLAPSE_LINES: usize = 6;
 const MAX_TODOS: usize = 64;
 const WHEEL_LINES: usize = 3;
+const MAX_FOOTNOTE_ANCHORS: usize = 2048;
+const MAX_FOOTNOTE_HISTORY: usize = 64;
+
+mod render_cache;
+use render_cache::RenderCache;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MarkdownDisplay {
+    Source,
+    #[default]
+    Render,
+}
+
+impl MarkdownDisplay {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Render => "render",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -74,6 +95,29 @@ struct MessageHit {
     id: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FootnoteLocation {
+    message: u64,
+    key: String,
+    definition: bool,
+    occurrence: usize,
+}
+
+#[derive(Debug)]
+struct FootnotePosition {
+    location: FootnoteLocation,
+    number: usize,
+    line: usize,
+    column: usize,
+    width: usize,
+}
+
+#[derive(Debug)]
+struct FootnoteHit {
+    area: Rect,
+    location: FootnoteLocation,
+}
+
 #[derive(Debug)]
 pub struct State {
     pub session_title: String,
@@ -97,6 +141,7 @@ pub struct State {
     pub completion: Completion,
     /// Selected catalog index while the command modal is open.
     pub command_palette: Option<usize>,
+    pub markdown_display: MarkdownDisplay,
     pub messages: VecDeque<Message>,
     pub details: Option<Details>,
     /// Visual line offset from the top of the current details pane.
@@ -117,6 +162,11 @@ pub struct State {
     palette_hits: Vec<(Rect, usize)>,
     palette_first: usize,
     fold_anchor: Option<(u64, u16)>,
+    footnote_positions: VecDeque<FootnotePosition>,
+    footnote_hits: Vec<FootnoteHit>,
+    pending_footnote: Option<FootnoteLocation>,
+    footnote_history: VecDeque<FootnoteLocation>,
+    render_cache: RenderCache,
 }
 
 impl Default for State {
@@ -142,6 +192,7 @@ impl Default for State {
             editor: Editor::default(),
             completion: Completion::default(),
             command_palette: None,
+            markdown_display: MarkdownDisplay::default(),
             messages: VecDeque::new(),
             details: None,
             details_scroll: 0,
@@ -159,6 +210,11 @@ impl Default for State {
             palette_hits: Vec::new(),
             palette_first: 0,
             fold_anchor: None,
+            footnote_positions: VecDeque::new(),
+            footnote_hits: Vec::new(),
+            pending_footnote: None,
+            footnote_history: VecDeque::new(),
+            render_cache: RenderCache::default(),
         }
     }
 }
@@ -201,6 +257,7 @@ impl State {
         message.text.push_str(&delta[..end]);
         message.truncated |= end < delta.len();
         message.streaming = true;
+        self.render_cache.remove_message(id);
         self.enforce_limits();
         true
     }
@@ -215,6 +272,7 @@ impl State {
         message.text = source[..end].to_owned();
         message.truncated = end < source.len();
         message.streaming = false;
+        self.render_cache.remove_message(id);
         self.enforce_limits();
         true
     }
@@ -238,6 +296,142 @@ impl State {
         self.palette_hits.clear();
         self.palette_first = 0;
         self.fold_anchor = None;
+        self.clear_footnote_navigation();
+        self.render_cache.clear();
+    }
+
+    /// Select the assistant presentation for this UI and discard stale hit targets.
+    pub fn set_markdown_display(&mut self, display: MarkdownDisplay) {
+        if self.markdown_display != display {
+            self.markdown_display = display;
+            self.last_width = 0;
+            self.last_line_count = 0;
+            self.clear_footnote_navigation();
+            self.render_cache.clear();
+        }
+    }
+
+    fn clear_footnote_navigation(&mut self) {
+        self.footnote_positions.clear();
+        self.footnote_hits.clear();
+        self.pending_footnote = None;
+        self.footnote_history.clear();
+    }
+
+    fn render_candidates(&self) -> HashSet<u64> {
+        self.messages
+            .iter()
+            .rev()
+            .filter(|message| message.role == Role::Assistant)
+            .take(render_cache::MAX_ENTRIES)
+            .map(|message| message.id)
+            .collect()
+    }
+
+    /// Resolve a numbered note in the newest retained assistant document.
+    pub fn jump_footnote(&mut self, number: usize) -> bool {
+        if self.markdown_display != MarkdownDisplay::Render || number == 0 {
+            return false;
+        }
+        let Some(target) = self
+            .footnote_positions
+            .iter()
+            .rev()
+            .find(|position| position.location.definition && position.number == number)
+        else {
+            return false;
+        };
+        let target = target.location.clone();
+        if let Some(reference) = self.footnote_positions.iter().find(|position| {
+            position.location.message == target.message
+                && position.location.key == target.key
+                && !position.location.definition
+        }) {
+            self.footnote_history.push_back(reference.location.clone());
+            while self.footnote_history.len() > MAX_FOOTNOTE_HISTORY {
+                self.footnote_history.pop_front();
+            }
+        }
+        self.pending_footnote = Some(target);
+        true
+    }
+
+    /// Return to the most recent retained footnote reference.
+    pub fn footnote_back(&mut self) -> bool {
+        if self.markdown_display != MarkdownDisplay::Render {
+            return false;
+        }
+        while let Some(reference) = self.footnote_history.pop_back() {
+            if self
+                .footnote_positions
+                .iter()
+                .any(|position| position.location == reference)
+            {
+                self.pending_footnote = Some(reference);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Follow only a semantic note marker drawn in the latest transcript frame.
+    pub fn footnote_at(&mut self, x: u16, y: u16) -> bool {
+        if self.markdown_display != MarkdownDisplay::Render
+            || self.command_palette.is_some()
+            || contains(self.completion_viewport, x, y)
+        {
+            return false;
+        }
+        let Some(hit) = self
+            .footnote_hits
+            .iter()
+            .find(|hit| hit.area.contains((x, y).into()))
+        else {
+            return false;
+        };
+        let clicked = hit.location.clone();
+        if clicked.definition {
+            if let Some(index) = self.footnote_history.iter().rposition(|reference| {
+                reference.message == clicked.message
+                    && reference.key == clicked.key
+                    && self
+                        .footnote_positions
+                        .iter()
+                        .any(|position| &position.location == reference)
+            }) {
+                self.pending_footnote = self.footnote_history.remove(index);
+                return true;
+            }
+            self.pending_footnote = self
+                .footnote_positions
+                .iter()
+                .find(|position| {
+                    position.location.message == clicked.message
+                        && position.location.key == clicked.key
+                        && !position.location.definition
+                })
+                .map(|position| position.location.clone());
+            return self.pending_footnote.is_some();
+        }
+        let target = self
+            .footnote_positions
+            .iter()
+            .find(|position| {
+                position.location.message == clicked.message
+                    && position.location.key == clicked.key
+                    && position.location.definition
+            })
+            .map(|position| position.location.clone());
+        if let Some(target) = target {
+            self.footnote_history.push_back(clicked);
+            while self.footnote_history.len() > MAX_FOOTNOTE_HISTORY {
+                self.footnote_history.pop_front();
+            }
+            self.pending_footnote = Some(target);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn finish_message(&mut self, id: u64) {
@@ -263,16 +457,19 @@ impl State {
 
     pub fn scroll_up(&mut self, lines: usize) {
         self.fold_anchor = None;
+        self.pending_footnote = None;
         self.scroll = self.scroll.saturating_add(lines);
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
         self.fold_anchor = None;
+        self.pending_footnote = None;
         self.scroll = self.scroll.saturating_sub(lines);
     }
 
     pub fn scroll_to_bottom(&mut self) {
         self.fold_anchor = None;
+        self.pending_footnote = None;
         self.scroll = 0;
     }
 
@@ -403,6 +600,7 @@ impl State {
         }
         self.expanded_messages
             .retain(|id| self.messages.iter().any(|message| message.id == *id));
+        self.render_cache.retain(&self.render_candidates());
         self.todos.truncate(MAX_TODOS);
     }
 }
@@ -496,6 +694,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     state.enforce_limits();
     state.enforce_details_limits();
     state.message_hits.clear();
+    state.footnote_hits.clear();
     state.transcript_viewport = None;
     state.details_viewport = None;
     state.completion_viewport = None;
@@ -1165,6 +1364,7 @@ fn role_style(role: Role) -> Style {
 
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     state.message_hits.clear();
+    state.footnote_hits.clear();
     state.transcript_viewport = Some(inner);
     if inner.width >= 40 {
         inner.x += 1;
@@ -1177,6 +1377,9 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     let mut lines = VecDeque::new();
     let mut line_count = 0;
     let mut headers = Vec::new();
+    let mut footnotes = VecDeque::new();
+    let render_candidates = state.render_candidates();
+    state.render_cache.retain(&render_candidates);
     if state.dropped_messages > 0 {
         append_wrapped(
             &format!(
@@ -1310,9 +1513,47 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
             continue;
         }
         let text = safe_text(&message.text);
-        if message.role == Role::Assistant {
-            for line in markdown_lines_with_width(&text, width) {
-                append_wrapped_line(line, width, &mut lines, &mut line_count, MAX_RENDER_LINES);
+        if message.role == Role::Assistant && state.markdown_display == MarkdownDisplay::Render {
+            let document = state.render_cache.document(
+                message.id,
+                width,
+                &text,
+                render_candidates.contains(&message.id),
+            );
+            for anchor in &document.footnotes {
+                if anchor.line >= document.lines.len()
+                    || anchor.column >= width
+                    || anchor.width == 0
+                    || anchor.key.is_empty()
+                    || anchor.key.len() > 256
+                    || anchor.number == 0
+                {
+                    continue;
+                }
+                if footnotes.len() == MAX_FOOTNOTE_ANCHORS {
+                    footnotes.pop_front();
+                }
+                footnotes.push_back(FootnotePosition {
+                    location: FootnoteLocation {
+                        message: message.id,
+                        key: anchor.key.clone(),
+                        definition: anchor.definition,
+                        occurrence: anchor.occurrence,
+                    },
+                    number: anchor.number,
+                    line: line_count.saturating_add(anchor.line),
+                    column: anchor.column,
+                    width: anchor.width.min(width - anchor.column),
+                });
+            }
+            for line in &document.lines {
+                append_wrapped_line(
+                    line.clone(),
+                    width,
+                    &mut lines,
+                    &mut line_count,
+                    MAX_RENDER_LINES,
+                );
             }
         } else {
             let style = match message.role {
@@ -1336,6 +1577,8 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     }
     let retained_start = line_count.saturating_sub(lines.len());
     let omitted = usize::from(line_count > MAX_RENDER_LINES);
+    footnotes.retain(|position| position.line >= retained_start);
+    state.footnote_positions = footnotes;
     if omitted > 0 {
         lines.push_front(Line::styled(
             "[earlier display lines omitted]",
@@ -1359,11 +1602,36 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
             .len()
             .saturating_sub(start.saturating_add(usize::from(inner.height)));
     }
+    if let Some(target) = state.pending_footnote.take()
+        && let Some(position) = state
+            .footnote_positions
+            .iter()
+            .find(|position| position.location == target)
+    {
+        let target_row = position.line.saturating_sub(retained_start) + omitted;
+        state.scroll = lines
+            .len()
+            .saturating_sub(target_row.saturating_add(usize::from(inner.height)));
+    }
     state.scroll = state
         .scroll
         .min(lines.len().saturating_sub(usize::from(inner.height)));
     let end = lines.len().saturating_sub(state.scroll);
     let start = end.saturating_sub(usize::from(inner.height));
+    for position in &state.footnote_positions {
+        let row = position.line.saturating_sub(retained_start) + omitted;
+        if row >= start && row < end {
+            state.footnote_hits.push(FootnoteHit {
+                area: Rect::new(
+                    inner.x + position.column as u16,
+                    inner.y + (row - start) as u16,
+                    position.width as u16,
+                    1,
+                ),
+                location: position.location.clone(),
+            });
+        }
+    }
     for (id, range) in headers {
         if range.end <= retained_start {
             continue;
@@ -2730,10 +2998,177 @@ mod tests {
             assert_eq!(buffer[(78, row)].bg, CODE_BACKGROUND);
         }
         assert!(row_text(buffer, 6).contains("**literal**"));
-        assert_eq!(buffer[(1, 6)].fg, CODE_FOREGROUND);
-        assert!(row_text(buffer, 8).contains("\\u{1b}[2J"));
+        let syntax_colors = (1..25)
+            .filter(|column| buffer[(*column, 6)].symbol() != " ")
+            .map(|column| buffer[(column, 6)].fg)
+            .collect::<HashSet<_>>();
+        assert!(syntax_colors.len() >= 2);
+        assert!(syntax_colors.iter().any(|color| *color != CODE_FOREGROUND));
+        assert!((0..20).any(|row| row_text(buffer, row).contains("\\u{1b}[2J")));
         assert_eq!(state.messages[0].text, source);
         assert!(state.last_line_count < MAX_RENDER_LINES);
+    }
+
+    #[test]
+    fn markdown_source_mode_preserves_messages_and_survives_session_reset() {
+        let source = "## Heading\n\n**strong** and [Guide](https://e.test)\n\nunsafe\x1b[2J";
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", source);
+        state.set_markdown_display(MarkdownDisplay::Source);
+        let mut terminal = Terminal::new(TestBackend::new(80, 18)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let shown = (0..18)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("## Heading"));
+        assert!(shown.contains("**strong** and [Guide](https://e.test)"));
+        assert!(shown.contains("\\u{1b}[2J"));
+        assert_eq!(state.messages[0].text, source);
+        assert!(state.footnote_hits.is_empty());
+        state.set_markdown_display(MarkdownDisplay::Render);
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let shown = (0..18)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("Heading"));
+        assert!(!shown.contains("## Heading"));
+        assert!(!shown.contains("**strong**"));
+        assert_eq!(state.messages[0].text, source);
+        state.set_markdown_display(MarkdownDisplay::Source);
+        state.clear_messages();
+        assert_eq!(state.markdown_display, MarkdownDisplay::Source);
+        assert!(state.footnote_positions.is_empty() && state.footnote_history.is_empty());
+    }
+
+    #[test]
+    fn footnote_click_and_return_follow_semantic_targets_across_resize() {
+        let source = format!(
+            "REFERENCE_NOTE[^note].\n\n{}\n\n[^note]: TARGET_NOTE",
+            "filler paragraph\n\n".repeat(30)
+        );
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "Saya", &source);
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+        state.scroll_up(usize::MAX);
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let reference = state
+            .footnote_hits
+            .iter()
+            .find(|hit| !hit.location.definition)
+            .unwrap();
+        let point = (reference.area.x, reference.area.y);
+        assert!(state.footnote_at(point.0, point.1));
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let shown = (0..8)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("TARGET_NOTE"));
+        let definition = state
+            .footnote_hits
+            .iter()
+            .find(|hit| hit.location.definition)
+            .unwrap();
+        let point = (definition.area.x, definition.area.y);
+        assert!(state.footnote_at(point.0, point.1));
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let shown = (0..8)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("REFERENCE_NOTE"));
+        assert!(state.jump_footnote(1));
+        terminal.resize(Rect::new(0, 0, 20, 8)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let shown = (0..8)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("TARGET_NOTE"));
+        assert!(state.footnote_back());
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        let shown = (0..8)
+            .map(|row| row_text(terminal.backend().buffer(), row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("REFERENCE_NOTE"));
+        assert_eq!(state.messages[0].text, source);
+    }
+
+    #[test]
+    fn footnote_numbers_are_scoped_to_messages_and_disabled_in_source_mode() {
+        let mut state = State::default();
+        state.push_message(Role::Assistant, "old", "Old[^same].\n\n[^same]: OLD_NOTE");
+        let newest = state.push_message(Role::Assistant, "new", "New[^same].\n\n[^same]: NEW_NOTE");
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        assert!(state.jump_footnote(1));
+        assert_eq!(state.pending_footnote.as_ref().unwrap().message, newest);
+        assert!(!state.jump_footnote(0));
+        assert!(!state.jump_footnote(999));
+        let point = state
+            .footnote_hits
+            .first()
+            .map(|hit| (hit.area.x, hit.area.y))
+            .unwrap();
+        state.command_palette = Some(0);
+        assert!(!state.footnote_at(point.0, point.1));
+        state.command_palette = None;
+        state.set_markdown_display(MarkdownDisplay::Source);
+        assert!(!state.footnote_at(point.0, point.1));
+        assert!(!state.jump_footnote(1));
+        assert!(!state.footnote_back());
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        assert!(state.footnote_positions.is_empty() && state.footnote_hits.is_empty());
+        state.clear_messages();
+        assert!(state.pending_footnote.is_none() && state.footnote_history.is_empty());
+        assert_eq!(state.markdown_display, MarkdownDisplay::Source);
+    }
+
+    #[test]
+    fn literal_undefined_and_oversized_footnotes_do_not_create_hit_targets() {
+        let mut state = State::default();
+        state.push_message(
+            Role::Assistant,
+            "Saya",
+            "`[^literal]` and unresolved[^missing].",
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        assert!(state.footnote_positions.is_empty() && state.footnote_hits.is_empty());
+        let key = "large".repeat(100);
+        state.clear_messages();
+        state.push_message(
+            Role::Assistant,
+            "Saya",
+            format!("Reference[^{key}].\n\n[^{key}]: Large identifier"),
+        );
+        terminal
+            .draw(|frame| draw_transcript(frame, &mut state, frame.area()))
+            .unwrap();
+        assert!(state.footnote_positions.is_empty() && state.footnote_hits.is_empty());
     }
 
     #[test]

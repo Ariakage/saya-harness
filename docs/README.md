@@ -29,6 +29,7 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | 设计草案 |
 | [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | 设计草案 |
 | [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | DEV-047 至 DEV-053 已完成候选验收，后续交互完善见开发进度 |
+| [Markdown与调试预览](markdown-rendering.md) | 语法、Unicode数学、图表、脚注导航与source／render | 本地开发线，验收见开发进度 |
 | [TUI 布局设计](tui-design.md) | 参考布局、尺寸、面板和预览 | 当前开发线设计与实现说明 |
 | [TUI 验证](tui-validation.md) | 候选与后续源码的环境、脚本和证据 | 各轮验证按实际源码记录 |
 | [日志与追踪](observability.md) | 五级日志、span、安全记录与本地查询 | DEV-040 至 DEV-042 已实现，本机验收通过 |
