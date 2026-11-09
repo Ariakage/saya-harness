@@ -353,6 +353,29 @@ fn sealed_tree_digest_uses_paths_and_bytes_and_survives_later_source_changes() {
 }
 
 #[test]
+fn open_directory_inspection_stays_with_the_original_root_after_a_path_replacement() {
+    let original = root(SIMPLE, "before");
+    let opened = cap_std::fs::Dir::from_std_file(fs::File::open(original.path()).unwrap());
+    let other = tempfile::tempdir().unwrap();
+    fs::rename(original.path(), other.path().join("moved")).unwrap();
+    fs::create_dir(original.path()).unwrap();
+    fs::create_dir(original.path().join("resources")).unwrap();
+    fs::write(original.path().join(MANIFEST_NAME), SIMPLE).unwrap();
+    fs::write(original.path().join("resources/guide.md"), "after").unwrap();
+    let anchored = inspect_package_directory(&opened).unwrap();
+    let replacement = inspect_package(original.path()).unwrap();
+    assert_eq!(
+        anchored.file("resources/guide.md").unwrap().bytes(),
+        b"before"
+    );
+    assert_eq!(
+        replacement.file("resources/guide.md").unwrap().bytes(),
+        b"after"
+    );
+    assert_ne!(anchored.digest(), replacement.digest());
+}
+
+#[test]
 fn package_paths_links_special_files_missing_entries_and_oversized_files_fail_closed() {
     let directory = root(SIMPLE, "guide");
     symlink("resources/guide.md", directory.path().join("link")).unwrap();

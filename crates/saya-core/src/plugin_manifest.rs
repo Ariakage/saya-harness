@@ -15,6 +15,7 @@ pub use lock::{DependencyPin, LockedPackage, PackageSource, PluginLock, SourceKi
 pub use package::{
     FileBudget, MAX_PACKAGE_BYTES, MAX_PACKAGE_ENTRIES, MAX_PACKAGE_FILE_BYTES, MAX_PACKAGE_FILES,
     PackageFile, TREE_DIGEST_ALGORITHM, VerifiedPackage, inspect_package,
+    inspect_package_directory,
 };
 
 pub const MANIFEST_NAME: &str = "saya-plugin.toml";

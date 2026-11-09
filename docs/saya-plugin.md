@@ -139,3 +139,5 @@ DEV-078 实现结构及语义验证、内容摘要、lock 和命名规则，DEV-
 DEV-078已交付独立Rust验证组件 `plugin_manifest`，包含manifest／lock解析、schema与语义、宿主兼容、密封文件内容、树摘要、依赖和工具别名检查。13项定向回归覆盖Unicode规范等价路径、实际请求装配器的别名契约及文件边界。新增unicode-normalization用于路径碰撞键的NFC处理，semver与unicase复用已有锁定版本。
 
 本机执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、942项Rust测试及优化构建通过。独立源码复核发现的Unicode碰撞与别名首字符问题已修复并复核，日志见 `target/n3/dev078-workspace.log`。安装器、运行时加载、权限接入和命令由DEV-065／066／067继续实现。
+
+2026-11-10，新增已打开目录句柄的检查入口，私有安装树复验沿同一cap-std能力读取。路径被替换的回归验证原目录内容与替代目录分别保持独立身份。该增量随本机完整门禁986项Rust测试通过，记录见 `target/n3/dev076-062-workspace.log`。

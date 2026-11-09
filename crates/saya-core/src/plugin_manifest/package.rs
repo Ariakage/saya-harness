@@ -201,9 +201,15 @@ pub fn inspect_package(path: &Path) -> Result<VerifiedPackage> {
         .open(path)
         .map_err(|_| invalid("package root cannot be opened safely"))?;
     let directory = Dir::from_std_file(root);
+    inspect_package_directory(&directory)
+}
+
+/// Inspect an already-open package root. Reads remain anchored to this
+/// capability even if its ambient path is replaced by another directory.
+pub fn inspect_package_directory(directory: &Dir) -> Result<VerifiedPackage> {
     let mut budget = FileBudget::default();
     let mut files = Vec::new();
-    inspect_directory(&directory, "", &mut budget, &mut files)?;
+    inspect_directory(directory, "", &mut budget, &mut files)?;
     files.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     let manifest_file = files
         .iter()
