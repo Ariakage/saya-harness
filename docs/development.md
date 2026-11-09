@@ -40,7 +40,7 @@ cargo install just --locked
 | `just run` | 运行开发版Saya，可追加CLI参数 |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
 | `just render-preview 140 60 syntax` | 输出离线场景快照，可追加 `--source` 或 `--json` |
-| `just test-tooling` | 执行CI使用的七个离线Python回归脚本 |
+| `just test-tooling` | 执行CI使用的发行、N2与N3离线Python回归 |
 | `just smoke BINARY` | 对显式指定程序执行CLI、文本会话、审查回归及完整TUI旅程 |
 
 ```sh
@@ -133,3 +133,16 @@ python3 scripts/n2/test_verify_performance.py
 [Release candidates](../.github/workflows/release-candidates.yml) 由操作者手动触发，在 Ubuntu 22.04 ARM／Intel 和 macOS 15 ARM／Intel 原生构建同一提交。各 job 执行完整 Rust 检查，生成单目标候选压缩包，并对解包程序执行工具、交互和审查回归。Linux 验证实际 glibc 2.35 与符号上限，macOS 验证实际系统主版本 15 和部署目标 15.0。
 
 通过验证的候选、校验和及环境／二进制证据上传为 Actions artifacts，保留 14 天，供已获授权的发行操作下载核验。日常 CI 执行构建与测试。发行操作者汇总四个包的 SHA256SUMS，检查源码和二进制关联，再发布固定提交的 Git 标签与 GitHub Release。发布后的下载文件应与通过验收的包逐字节一致。
+
+
+## N3 固定候选验收
+
+先执行 `just check` 与 `just test-tooling`。正常CLI和TUI使用显式程序SHA及源码commit运行，脚本保留实际源文件摘要、模型请求／工具配对、SQLite和终端恢复结果。三协议均使用本地受控HTTP替身。
+
+```sh
+python3 -B scripts/n3/acceptance.py /absolute/path/to/saya --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/cli.json
+python3 -B scripts/n3/tui_acceptance.py /absolute/path/to/saya --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/tui.json
+SAYA_TEST_EXECUTABLE=/absolute/path/to/saya cargo test -p saya-core --locked --test plugin_services -- --ignored --test-threads=1
+```
+
+原生插件套件必须实际执行8项，普通测试中的ignored状态不计入原生验收。GitHub的 `N3 native acceptance` 工作流按完整source_sha在四个原生runner执行源码门禁、基线、既有隔离／性能／MCP及N3联合任务，保留成功与失败证据14天。候选、源码、架构或必需步骤状态不匹配时验收失败。[逐项状态](n3-validation.md)

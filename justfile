@@ -48,7 +48,7 @@ tui-preview *args:
 render-preview *args:
     cargo run --locked -p saya-tui --example render_preview -- "$@"
 
-# 执行发行及 N2 验收脚本的离线 Python 回归
+# 执行发行、N2 与 N3 验收脚本的离线 Python 回归
 test-tooling:
     python3 -B scripts/n2/test_install_linux_tools.py
     python3 -B scripts/n2/test_native_acceptance.py
@@ -57,6 +57,7 @@ test-tooling:
     python3 -B scripts/release/test_verify_macos15.py
     python3 -B scripts/release/test_verify_linux.py
     python3 -B scripts/release/test_script_helpers.py
+    python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py'
 
 # 验证显式指定程序的 CLI、会话、审查回归和 TUI
 smoke binary:

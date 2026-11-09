@@ -1,0 +1,189 @@
+name: N3 native acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Complete source commit to build and validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      RUNNER_LABEL: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Witness the exact clean source and native platform
+        id: source
+        run: |
+          mkdir -p target/n3/acceptance
+          python3 scripts/n3/witness.py source --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --report target/n3/acceptance/source-platform.json 2>&1 | tee target/n3/acceptance/source-platform.log
+      - name: Install pinned Rust toolchain
+        id: toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy 2>&1 | tee target/n3/acceptance/toolchain.log
+      - name: Install native Linux isolation tools
+        id: linux_tools
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: ./scripts/n2/install-linux-tools.sh 2>&1 | tee target/n3/acceptance/linux-tools.log
+      - name: Check the workspace and build its optimized program
+        id: rust
+        run: ./scripts/check.sh 2>&1 | tee target/n3/acceptance/workspace-check.log
+      - name: Validate offline tooling and acceptance oracles
+        id: tooling
+        run: |
+          python3 scripts/n2/test_install_linux_tools.py -v 2>&1 | tee target/n3/acceptance/installer-oracles.log
+          python3 scripts/n2/test_native_acceptance.py -v 2>&1 | tee target/n3/acceptance/native-oracles.log
+          python3 scripts/n2/test_verify_performance.py -v 2>&1 | tee target/n3/acceptance/performance-oracles.log
+          python3 scripts/release/test_package.py -v 2>&1 | tee target/n3/acceptance/package-oracles.log
+          python3 scripts/release/test_verify_macos15.py -v 2>&1 | tee target/n3/acceptance/macos-oracles.log
+          python3 scripts/release/test_verify_linux.py -v 2>&1 | tee target/n3/acceptance/linux-oracles.log
+          python3 scripts/release/test_script_helpers.py -v 2>&1 | tee target/n3/acceptance/helper-oracles.log
+          python3 -m unittest discover -s scripts/n3 -p 'test_*.py' -v 2>&1 | tee target/n3/acceptance/n3-oracles.log
+      - name: Freeze one fixed-source candidate image
+        id: candidate
+        run: |
+          python3 scripts/n3/witness.py candidate --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --copy-from target/release/saya --binary target/n3/acceptance/program/saya \
+            --report target/n3/acceptance/candidate.json 2>&1 | tee target/n3/acceptance/candidate.log
+      - name: Verify candidate architecture and minimum platform
+        id: baseline
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          python3 scripts/n3/witness.py baseline --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --binary "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" \
+            --report target/n3/acceptance/baseline.json 2>&1 | tee target/n3/acceptance/baseline.log
+      - name: Native macOS isolation acceptance
+        id: native_macos
+        if: startsWith(matrix.os, 'macos-')
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          python3 scripts/n2/native_acceptance.py "$CANDIDATE" --output target/n3/acceptance/native-evidence.json \
+            2>&1 | tee target/n3/acceptance/native.log
+      - name: Native Linux isolation and delegated resource acceptance
+        id: native_linux
+        if: startsWith(matrix.os, 'ubuntu-')
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          sudo systemd-run --collect --wait --pipe \
+            --unit="saya-n3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --property='Delegate=cpu memory pids' \
+            --property=RuntimeMaxSec=1800 --property=KillMode=control-group \
+            --working-directory="$PWD" \
+            /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$CANDIDATE" \
+            --require-cgroup --output "$PWD/target/n3/acceptance/native-evidence.json" \
+            2>&1 | tee target/n3/acceptance/native.log
+      - name: Verify complete native performance evidence
+        id: performance
+        run: |
+          python3 scripts/n2/verify_performance.py target/n3/acceptance/native-evidence.json --samples 3 \
+            2>&1 | tee target/n3/acceptance/performance-verification.json
+      - name: Preserve MCP and OAuth regression acceptance
+        id: mcp
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: python3 scripts/n2/mcp_acceptance.py "$CANDIDATE" 2>&1 | tee target/n3/acceptance/mcp.log
+      - name: Preserve Markdown, TUI and recovery regression acceptance
+        id: legacy
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          python3 scripts/release/smoke.py "$CANDIDATE" 2>&1 | tee target/n3/acceptance/smoke.log
+          python3 scripts/release/journey.py "$CANDIDATE" 2>&1 | tee target/n3/acceptance/journey.log
+          python3 scripts/release/review_regressions.py "$CANDIDATE" 2>&1 | tee target/n3/acceptance/review-regressions.log
+          python3 scripts/release/tui_journey.py "$CANDIDATE" --report target/n3/acceptance/legacy-tui.json \
+            2>&1 | tee target/n3/acceptance/legacy-tui.log
+      - name: Exercise all eight real native plugin service fixtures
+        id: plugins
+        env:
+          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          cargo test -p saya-core --locked --test plugin_services -- --ignored --test-threads=1 \
+            2>&1 | tee target/n3/acceptance/native-plugin-services.log
+          python3 - <<'PY' | tee target/n3/acceptance/native-plugin-summary.json
+          import json
+          import pathlib
+          import re
+          text = pathlib.Path('target/n3/acceptance/native-plugin-services.log').read_text()
+          match = re.search(r'test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;', text)
+          evidence = {'status': 'passed' if match and tuple(map(int, match.groups())) == (8, 0, 0) else 'failed',
+                      'expected_real_native_fixtures': 8, 'actual_counts': list(map(int, match.groups())) if match else None}
+          print(json.dumps(evidence))
+          if evidence['status'] != 'passed':
+              raise SystemExit('Every native plugin fixture must actually execute successfully')
+          PY
+      - name: Exercise N3 normal CLI journeys through all three protocols
+        id: cli
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          python3 scripts/n3/acceptance.py "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" --source-commit "$SOURCE_SHA" \
+            --source-root "$PWD" --report target/n3/acceptance/cli-report.json --work-dir target/n3/acceptance/cli-work \
+            2>&1 | tee target/n3/acceptance/cli.log
+      - name: Exercise N3 real PTY TUI journeys through all three protocols
+        id: tui
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          python3 scripts/n3/tui_acceptance.py "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" --source-commit "$SOURCE_SHA" \
+            --source-root "$PWD" --report target/n3/acceptance/tui-report.json --work-dir target/n3/acceptance/tui-work \
+            2>&1 | tee target/n3/acceptance/tui.log
+      - name: Recheck the exact source and tested candidate image
+        id: final_witness
+        if: ${{ always() && steps.candidate.outcome == 'success' }}
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          python3 scripts/n3/witness.py final --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --binary "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" \
+            --report target/n3/acceptance/final-witness.json 2>&1 | tee target/n3/acceptance/final-witness.log
+      - name: Require all applicable native validation outcomes
+        id: outcomes
+        if: always()
+        env:
+          STEP_OUTCOMES: ${{ toJSON(steps) }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p target/n3/acceptance
+          python3 scripts/n3/witness.py outcomes --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --report target/n3/acceptance/workflow-outcomes.json
+      - name: Retain the tested candidate and success or failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: n3-acceptance-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/n3/acceptance/
+            target/n2/acceptance/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
