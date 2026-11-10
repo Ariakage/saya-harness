@@ -431,6 +431,105 @@ fn new_plan_rejects_each_overlapping_storage_root_without_workspace_changes() {
 }
 
 #[test]
+fn plan_rejects_home_workspace_and_symlink_overlap_without_creating_files() {
+    use std::os::unix::fs::symlink;
+    let workspace = TempDir::new().unwrap();
+    let alias_root = TempDir::new().unwrap();
+    let alias = alias_root.path().join("home");
+    symlink(workspace.path(), &alias).unwrap();
+    let cfg = config(workspace.path(), "http://127.0.0.1:1/v1", "auto");
+    let before: std::collections::BTreeSet<_> = fs::read_dir(workspace.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    for home in [workspace.path(), alias.as_path()] {
+        let result = command(workspace.path(), home)
+            .arg("--config")
+            .arg(&cfg)
+            .args(["--mode", "plan", "run", "inspect"])
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2), "{home:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("PLAN storage directories overlap")
+        );
+    }
+    let after: std::collections::BTreeSet<_> = fs::read_dir(workspace.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn home_workspace_with_external_xdg_runs_and_protects_existing_memory() {
+    let workspace = TempDir::new().unwrap();
+    let config_root = TempDir::new().unwrap();
+    let storage = TempDir::new().unwrap();
+    let memory_root = workspace.path().join(".saya");
+    fs::create_dir_all(memory_root.join("memory")).unwrap();
+    let memory = saya_core::global_memory::GlobalMemoryStore::open(
+        &memory_root,
+        saya_core::global_memory::WorkspaceIdentity::from_path(workspace.path()).unwrap(),
+        saya_core::global_memory::MemoryLimits::default(),
+        std::sync::Arc::new(saya_core::credentials::SecretRegistry::default()),
+    )
+    .unwrap();
+    fs::write(
+        memory_root.join("MEMORY.md"),
+        memory
+            .render_document(&saya_core::global_memory::MemoryDocument::default())
+            .unwrap(),
+    )
+    .unwrap();
+    fs::write(memory_root.join(".saya-memory.lock"), "").unwrap();
+    let read = tool_response(
+        "read-memory",
+        "read_file",
+        json!({"path":".saya/MEMORY.md","start_line":1,"line_count":10}),
+    );
+    let (url, requests) = fixture::server(vec![
+        ("application/json", read),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"done"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    let cfg = config(config_root.path(), &url, "bypass");
+    let result = command(workspace.path(), workspace.path())
+        .env("XDG_DATA_HOME", storage.path().join("data"))
+        .env("XDG_STATE_HOME", storage.path().join("state"))
+        .env("XDG_CACHE_HOME", storage.path().join("cache"))
+        .arg("--config")
+        .arg(cfg)
+        .args(["run", "inspect protected memory"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let requests = requests.try_iter().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 2);
+    let tool_messages = requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .collect::<Vec<_>>();
+    assert!(
+        tool_messages
+            .iter()
+            .filter_map(|message| message["content"].as_str())
+            .filter_map(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+            .any(|result| result["ok"] == false),
+        "{tool_messages:?}"
+    );
+}
+
+#[test]
 fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
     let temp = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
@@ -3275,6 +3374,66 @@ fn credentials_are_redacted_from_model_tool_results_session_and_text_output() {
             );
         }
     }
+}
+
+#[test]
+fn config_inside_workspace_is_protected_from_file_and_process_tools() {
+    let workspace = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let cfg = config(workspace.path(), "http://127.0.0.1:1/v1", "bypass");
+    let mut contents = fs::read_to_string(&cfg).unwrap();
+    contents.push_str("# PROTECTED_CONFIG_SENTINEL\n");
+    fs::write(&cfg, contents).unwrap();
+    let read = tool_response(
+        "read-config",
+        "read_file",
+        json!({"path":"config.toml","start_line":1,"line_count":100}),
+    );
+    let overwrite = tool_response(
+        "overwrite-config",
+        "exec",
+        json!({
+            "argv":["/bin/sh","-c","printf overwritten > config.toml"],
+            "cwd":null,
+            "timeout_seconds":null
+        }),
+    );
+    let (url, requests) = fixture::server(vec![
+        ("application/json", read),
+        ("application/json", overwrite),
+        (
+            "application/json",
+            response(json!({"role":"assistant","content":"done"}), "stop"),
+        ),
+    ])
+    .unwrap();
+    fs::write(
+        &cfg,
+        fs::read_to_string(&cfg)
+            .unwrap()
+            .replace("http://127.0.0.1:1/v1", &url),
+    )
+    .unwrap();
+    let original = fs::read(&cfg).unwrap();
+    let result = command(workspace.path(), home.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["run", "inspect protected config"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(fs::read(&cfg).unwrap(), original);
+    let requests = requests.try_iter().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.to_string().contains("PROTECTED_CONFIG_SENTINEL"))
+    );
 }
 
 #[test]

@@ -21,6 +21,7 @@ const RESTORE_WAIT: Duration = Duration::from_millis(100);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
 const FRAME_WRITE_WAIT: Duration = Duration::from_millis(250);
 const MOUSE_BYTES: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const RESYNC_BYTES: &[u8] = b"\x18\x1b\\\x1b[0m\x1b[2J\x1b[H\x1b[?25l";
 const RESTORE_BYTES: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l";
 const PUSH_TITLE: &[u8] = b"\x1b[22;2t";
 const POP_TITLE: &[u8] = b"\x1b[23;2t";
@@ -37,6 +38,7 @@ const MAX_TITLE_BYTES: usize = 512;
 pub struct TerminalGuard {
     terminal: Option<Terminal<CrosstermBackend<TerminalOutput>>>,
     output: Arc<Output>,
+    resync: bool,
     restored: bool,
 }
 
@@ -350,6 +352,7 @@ impl TerminalGuard {
         let mut guard = Self {
             terminal: None,
             output,
+            resync: false,
             restored: false,
         };
         enable_raw_mode()?;
@@ -426,12 +429,22 @@ impl TerminalGuard {
     }
 
     /// Draw a frame, tolerating transient backpressure for at most 100 ms per
-    /// write within a 250 ms frame-output budget. The synchronous render closure
-    /// completes before the frame's I/O budget starts.
+    /// write within a 250 ms frame-output budget. A failed draw marks the
+    /// Ratatui terminal state as indeterminate; the next draw cancels any
+    /// partial control sequence, clears the screen and starts with fresh
+    /// buffers. The synchronous render closure completes before the frame's
+    /// I/O budget starts.
     /// A stalled or closed terminal returns an I/O error so the
     /// application can cancel its owned run before leaving.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
         self.check_active()?;
+        if self.resync {
+            self.terminal = Some(Terminal::new(CrosstermBackend::new(TerminalOutput(
+                self.output.clone(),
+            )))?);
+        }
+        let resync = self.resync;
+        let output = self.output.clone();
         let terminal = self
             .terminal
             .as_mut()
@@ -439,11 +452,14 @@ impl TerminalGuard {
         let result = terminal
             .try_draw(|frame| -> io::Result<()> {
                 render(frame);
-                self.output
+                output
                     .state
                     .lock()
                     .map_err(|_| io::Error::other("terminal output state unavailable"))?
                     .write_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
+                if resync {
+                    TerminalOutput(output.clone()).write_all(RESYNC_BYTES)?;
+                }
                 Ok(())
             })
             .map(|_| ());
@@ -452,6 +468,7 @@ impl TerminalGuard {
             .lock()
             .map_err(|_| io::Error::other("terminal output state unavailable"))?
             .write_deadline = None;
+        self.resync = result.is_err();
         result
     }
     /// Read the current terminal size, including after a resize event.

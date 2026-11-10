@@ -973,3 +973,11 @@ CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提�
 同一固定优化程序在三协议可控模型中各完成9条记忆／权限CLI旅程，并完成15条真实PTY管理与Compact旅程。真实deepseek-flash三协议另各完成实际记忆写入、Compact和恢复后的PLAN读取，共9阶段，报告为 `target/n3/final-local-3/live-memory-report.json`。验收同时要求成功工具记录、实际落盘、摘要请求与原始历史保全。
 
 真实旧优化程序生成的v1检查点通过三协议迁移到新v2程序。旧检查点由当前宿主身份检查退出请求投影，原始User约束与工具历史保留，正常新调用成功且无重放／unknown。报告位于 `target/n3/final-local-3/migration-2/report.json`，两端程序执行前后哈希一致。最初短历史夹具的拒绝及debug模型未写入案例保留原报告，最终验收各自使用独立证据。本机记忆、迁移与四平台固定候选证据共同完成DEV-089验收。
+
+### 2026-11-10 审查整改：TUI 背压与清理证据
+
+修复[11月10日审查](review-2026-11-10.md)的R-01：TUI从首次持续背压起最多等待2秒，到期取消所属运行；部分帧失败后的下一位图先清除不确定终端状态并从空缓冲完整重绘，用户渲染闭包仍在帧I/O计时之前执行。真实PTY覆盖部分帧旧单元格不重放、stalled panic恢复，以及完整控制环取消后台命令、退出码1、termios与FD flags恢复。
+
+R-02的原生验收补充服务主进程、服务子进程和Hook子进程检查。Linux以`setsid`构造脱离组后代，macOS验证当前支持的同一进程组后代；两端记录存活进程的启动身份并与清理后的PID状态交叉核对，Hook子进程另以延迟survival marker的不存在证明没有遗留副作用。另补`HOME == workspace`、HOME符号链接别名、XDG外置、工作区内config的四项源码回归。
+
+本机macOS27.2 ARM执行`RUST_TEST_THREADS=1 just check`，格式、workspace全目标严格Clippy、1320项Rust测试（另8项native ignored）与优化构建通过；`just test-tooling`的75项Python回归通过。显式debug程序通过8项真实原生插件验收；固定release程序的smoke、文本journey、5项历史审查回归及26条TUI旅程全部通过。Linux脱离组分支本轮未在Linux执行；macOS主动脱离进程组的后代仍按[原生隔离](sandbox.md)的`best_effort`边界保留，不据此宣称任意后代树已硬清理。本轮未推送，也未运行远端CI。

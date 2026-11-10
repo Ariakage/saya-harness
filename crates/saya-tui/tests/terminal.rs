@@ -30,7 +30,10 @@ fn terminal_child_probe() -> io::Result<()> {
         );
         return Ok(());
     }
-    if matches!(mode.as_str(), "slow" | "slow-panic" | "closed" | "drip") {
+    if matches!(
+        mode.as_str(),
+        "slow" | "slow-panic" | "closed" | "drip" | "resync"
+    ) {
         return output_fault_child(&mode);
     }
     let original_flags = fd_flags(libc::STDOUT_FILENO)?;
@@ -485,6 +488,59 @@ fn output_fault_child(mode: &str) -> io::Result<()> {
     }
     let original_flags = fd_flags(libc::STDOUT_FILENO)?;
     let mut terminal = TerminalGuard::enter()?;
+    if mode == "resync" {
+        report(path, serde_json::json!({"phase":"ready"}))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.with_extension("start").exists() {
+            if Instant::now() > deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let mut stalled = false;
+        for index in 0..2048 {
+            let row = if index % 2 == 0 { "A" } else { "B" }.repeat(80) + "\n";
+            let text = row.repeat(24);
+            match terminal.draw(|frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new(text), frame.area())
+            }) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    stalled = true;
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        assert!(
+            stalled,
+            "resync probe never filled the terminal output queue"
+        );
+        report(path, serde_json::json!({"phase":"stalled"}))?;
+        while !path.with_extension("resume").exists() {
+            if Instant::now() > deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        terminal.draw(|frame| {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new("RESYNCED_FRAME"),
+                frame.area(),
+            )
+        })?;
+        let _ = terminal.restore();
+        report(
+            path,
+            serde_json::json!({"phase":"done",
+                "original_flags":original_flags,
+                "flags_restored":fd_flags(libc::STDOUT_FILENO)?==original_flags,
+                "raw_restored":!crossterm::terminal::is_raw_mode_enabled()?}),
+        )?;
+        let mut release = String::new();
+        std::io::stdin().read_line(&mut release)?;
+        return Ok(());
+    }
     if mode == "drip" {
         report(path, serde_json::json!({"phase":"ready"}))?;
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -698,6 +754,75 @@ fn disconnected_peer_returns_and_restores_original_descriptor_flags() -> io::Res
         }
         if Instant::now() > deadline {
             child.kill()?;
+            child.wait()?;
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
+#[test]
+fn partial_frame_backpressure_resynchronizes_without_replaying_old_cells() -> io::Result<()> {
+    let _serial = PTY_TESTS.lock().unwrap();
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("report.json");
+    let PtyProbe {
+        mut master,
+        slave,
+        mut child,
+        original,
+    } = spawn_probe("resync", Some(&path))?;
+    wait_for_report(&path, "ready", &mut child)?;
+    let size = libc::winsize {
+        ws_col: 200,
+        ws_row: 160,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: the live slave descriptor accepts a complete winsize value.
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &size) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    std::fs::write(path.with_extension("start"), b"start")?;
+    wait_for_report(&path, "stalled", &mut child)?;
+    let mut output = Vec::new();
+    drain_terminal(&mut master, &mut output)?;
+    std::fs::write(path.with_extension("resume"), b"resume")?;
+    let report = wait_for_report(&path, "done", &mut child)?;
+    drain_terminal(&mut master, &mut output)?;
+    assert_eq!(report["flags_restored"], true);
+    assert_eq!(report["raw_restored"], true);
+    let restored = terminal_attributes(&slave)?;
+    assert_eq!(restored.c_iflag, original.c_iflag);
+    assert_eq!(restored.c_oflag, original.c_oflag);
+    assert_eq!(restored.c_cflag, original.c_cflag);
+    assert_eq!(restored.c_lflag, original.c_lflag);
+    assert_eq!(restored.c_cc, original.c_cc);
+    let marker = b"\x18\x1b\\\x1b[0m\x1b[2J\x1b[H\x1b[?25l";
+    let offset = output
+        .windows(marker.len())
+        .rposition(|bytes| bytes == marker)
+        .ok_or_else(|| io::Error::other("resync control sequence was not written"))?;
+    let tail = &output[offset + marker.len()..];
+    assert!(
+        tail.windows(b"RESYNCED_FRAME".len())
+            .any(|bytes| bytes == b"RESYNCED_FRAME")
+    );
+    assert!(!tail.windows(4).any(|bytes| bytes == b"AAAA"));
+    assert!(!tail.windows(4).any(|bytes| bytes == b"BBBB"));
+    master.write_all(b"release\n")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        drain_terminal(&mut master, &mut output)?;
+        if let Some(status) = child.try_wait()? {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            // SAFETY: discard pending test output so Darwin can finish exit.
+            unsafe { libc::tcflush(slave.as_raw_fd(), libc::TCIOFLUSH) };
             child.wait()?;
             return Err(io::ErrorKind::TimedOut.into());
         }

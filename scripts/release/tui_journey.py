@@ -2608,30 +2608,67 @@ def high_frequency_stream(binary):
 
 def slow_terminal_consumer(binary):
     pieces = [('frame_%04d_' % index) + ('x' * 500) for index in range(240)]
-    fixture = Fixture('openai-chat-completions', [{'text': ''.join(pieces), 'pieces': pieces,
-                                               'stream_delay': 0.015}])
+    call = ('slow-background', 'background_start', {
+        'tool': 'exec',
+        'arguments': {
+            'argv': ['/bin/sh', '-c', 'echo $$ > child.pid; sleep 30 & echo $! > sleep.pid; wait'],
+            'cwd': None,
+            'timeout_seconds': 60,
+        },
+    })
+    fixture = Fixture('openai-chat-completions', [
+        {'call': call},
+        {'text': ''.join(pieces), 'pieces': pieces, 'stream_delay': 0.015},
+    ])
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-slow-consumer-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
-            config = configuration(root, fixture)
+            config = configuration(root, fixture, permission='bypass')
             terminal = invoke(binary, root, config)
             try:
                 terminal.title()
+                started = time.monotonic()
                 terminal.line('Stream until the terminal stops consuming')
-                terminal.wait(lambda: bool(fixture.requests), 'stream request')
-                # Deliberately leave the PTY output queue undrained.
-                time.sleep(1.5)
+                terminal.wait(lambda: len(fixture.requests) >= 2, 'stream request after background start')
+                child_pid_path = root / 'workspace' / 'child.pid'
+                sleep_pid_path = root / 'workspace' / 'sleep.pid'
+                child_deadline = time.monotonic() + 5
+                while (
+                    not child_pid_path.exists() or not sleep_pid_path.exists()
+                ) and time.monotonic() < child_deadline:
+                    time.sleep(0.02)
+                if not child_pid_path.exists() or not sleep_pid_path.exists():
+                    raise RuntimeError('slow consumer background command did not start')
+                child_pid = int(child_pid_path.read_text())
+                sleep_pid = int(sleep_pid_path.read_text())
+                # Deliberately leave the PTY output queue undrained. The total
+                # output deadline must cancel the run and exit without a signal.
+                deadline = time.monotonic() + 8
+                while terminal.process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
                 if terminal.process.poll() is None:
                     os.kill(terminal.process.pid, signal.SIGTERM)
                 try:
                     terminal.process.wait(timeout=8)
                 except subprocess.TimeoutExpired as error:
                     raise RuntimeError('slow terminal consumer blocked cancellation or output-error exit') from error
+                if terminal.process.returncode != 1:
+                    raise RuntimeError(f'expected slow consumer exit 1, found {terminal.process.returncode}')
                 if termios.tcgetattr(terminal.slave) != terminal.before:
                     raise RuntimeError('slow consumer exit left the terminal in raw mode')
                 if fcntl.fcntl(terminal.slave, fcntl.F_GETFL) != terminal.before_flags:
                     raise RuntimeError('slow consumer exit left modified terminal FD flags')
+                elapsed = time.monotonic() - started
+                if elapsed < 1.8:
+                    raise RuntimeError(f'slow consumer exited before the total output deadline: {elapsed:.3f}s')
+                for pid in (child_pid, sleep_pid):
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        raise RuntimeError(f'slow consumer exited before background cleanup of PID {pid}')
             finally:
                 terminal.close()
     finally:

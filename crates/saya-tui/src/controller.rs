@@ -880,6 +880,7 @@ pub async fn run(config: Config, options: Options) -> Result<u8> {
     let cleanup = app.shutdown().await;
     outcome.and_then(|code| cleanup.map(|()| code))
 }
+const DRAW_BACKPRESSURE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
     let mut input = TerminalInput::new()?;
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(33));
@@ -889,6 +890,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
     let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
     let mut dirty = true;
     let mut input_open = true;
+    let mut backpressure_since: Option<Instant> = None;
     loop {
         for _ in 0..64 {
             let event = app
@@ -1001,10 +1003,26 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 .set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))
                 .and_then(|()| terminal.draw(|frame| view::draw(frame, &mut app.state)));
             match rendered {
-                Ok(()) => dirty = false,
-                // Output backpressure is transient; retry this dirty frame on
-                // the next loop instead of terminating the TUI.
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Ok(()) => {
+                    backpressure_since = None;
+                    dirty = false;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let now = Instant::now();
+                    let started = *backpressure_since.get_or_insert(now);
+                    if now.duration_since(started) >= DRAW_BACKPRESSURE_WAIT {
+                        let error = std::io::Error::new(
+                            std::io::ErrorKind::WouldBlock,
+                            "terminal output remained blocked for two seconds",
+                        );
+                        if app.active.is_some() || app.ui_job.is_some() {
+                            app.exit_after_run.get_or_insert(1);
+                            app.cancel();
+                        } else {
+                            return Err(error.into());
+                        }
+                    }
+                }
                 Err(error) => {
                     if app.active.is_some() || app.ui_job.is_some() {
                         // A disconnected terminal can fail before its pending HUP

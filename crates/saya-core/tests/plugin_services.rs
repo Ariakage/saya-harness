@@ -47,13 +47,21 @@ printf '%s' "$$" > "$HOME/pid"
 case "$UNDECLARED_VALUE" in '') ;; *) exit 86 ;; esac
 /bin/cat "$1" >/dev/null 2>&1 && exit 87
 printf 'escaped' > "$2" 2>/dev/null && exit 88
+if [ "${3:-}" = detached ]; then
+    /usr/bin/setsid /bin/sh -c 'printf "%s" "$$" > "$HOME/server-child"; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+elif [ "${3:-}" = same-group ]; then
+    /bin/sh -c 'printf "%s" "$$" > "$HOME/server-child"; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+fi
 while IFS= read -r line; do
     id=$(printf '%s\n' "$line" | /usr/bin/sed -n 's/.*"id":[ ]*\([^,}]*\).*/\1/p')
     [ -n "$id" ] || continue
     case "$line" in
       *'server/discover'*) result='{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"ttlMs":0,"cacheScope":"private"}' ;;
       *'tools/list'*) result='{"resultType":"complete","tools":[{"name":"echo","description":"Native plugin echo","inputSchema":{"type":"object","properties":{}}}],"ttlMs":0,"cacheScope":"private"}' ;;
-      *'tools/call'*) printf 'called' > "$HOME/called"; result='{"resultType":"complete","content":[{"type":"text","text":"native plugin response"}],"isError":false}' ;;
+      *'tools/call'*)
+        case "${3:-}" in detached|same-group) /bin/sleep 0.5 ;; esac
+        printf 'called' > "$HOME/called"
+        result='{"resultType":"complete","content":[{"type":"text","text":"native plugin response"}],"isError":false}' ;;
       *) continue ;;
     esac
     printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$result"
@@ -61,6 +69,9 @@ done
 "#;
 const OBSERVER: &str = r#"#!/bin/sh
 IFS= read -r event || :
+if [ "${1:-}" = descendants ]; then
+    /bin/sh -c 'printf "%s" "$$" > "$HOME/hook-child"; sleep 0.2; printf escaped > "$HOME/hook-child-survived"; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+fi
 printf 'observed' > "$HOME/hook-ran"
 printf '{"annotations":[{"level":"info","message":"native hook observed"}]}'
 "#;
@@ -79,7 +90,42 @@ fn nested_host_pid(status: &str, guest: i32) -> Option<i32> {
         .ok()?;
     (values.len() > 1 && values[1..].contains(&guest)).then(|| values[0])
 }
-fn host_pid(guest: i32) -> Option<i32> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProcessIdentity {
+    pid: i32,
+    started: Option<u128>,
+}
+#[cfg(target_os = "linux")]
+fn process_started(pid: i32) -> Option<u128> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let started = stat.rsplit_once(')')?.1.split_whitespace().nth(19)?;
+    started.parse().ok()
+}
+#[cfg(target_os = "macos")]
+fn process_started(pid: i32) -> Option<u128> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: proc_pidinfo initializes the provided proc_bsdinfo buffer.
+    let size = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<libc::proc_bsdinfo>() as i32,
+        )
+    };
+    if size != std::mem::size_of::<libc::proc_bsdinfo>() as i32 {
+        return None;
+    }
+    // SAFETY: a complete buffer was initialized above.
+    let info = unsafe { info.assume_init() };
+    Some((u128::from(info.pbi_start_tvsec) << 64) | u128::from(info.pbi_start_tvusec))
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_started(_: i32) -> Option<u128> {
+    None
+}
+fn host_process(guest: i32) -> Option<ProcessIdentity> {
     #[cfg(target_os = "linux")]
     {
         for entry in std::fs::read_dir("/proc").ok()? {
@@ -92,14 +138,22 @@ fn host_pid(guest: i32) -> Option<i32> {
                 Err(_) => continue,
             };
             if let Some(pid) = nested_host_pid(&status, guest) {
-                return Some(pid);
+                let started = process_started(pid)?;
+                return Some(ProcessIdentity {
+                    pid,
+                    started: Some(started),
+                });
             }
         }
         None
     }
     #[cfg(not(target_os = "linux"))]
     {
-        Some(guest)
+        let started = process_started(guest)?;
+        Some(ProcessIdentity {
+            pid: guest,
+            started: Some(started),
+        })
     }
 }
 
@@ -141,8 +195,9 @@ struct FixtureModel {
     use_tool: bool,
     disable: Option<PluginStore>,
     pool: Arc<ViewPool>,
-    observed_pids: Mutex<Vec<i32>>,
+    observed_processes: Mutex<Vec<ProcessIdentity>>,
     observed_remote_call: Mutex<bool>,
+    escaped_hook_child: Mutex<bool>,
 }
 impl Model for FixtureModel {
     fn start<'a>(
@@ -154,14 +209,22 @@ impl Model for FixtureModel {
             self.requests.lock().unwrap().push(request.clone());
             let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
             for view in self.pool.inventory()? {
-                if let Ok(pid) = std::fs::read_to_string(view.identity.scratch.join("pid"))
-                    && let Ok(pid) = pid.parse()
-                    && let Some(pid) = host_pid(pid)
-                {
-                    self.observed_pids.lock().unwrap().push(pid);
+                for name in ["pid", "server-child", "hook-child"] {
+                    if let Ok(pid) = std::fs::read_to_string(view.identity.scratch.join(name))
+                        && let Ok(pid) = pid.parse()
+                        && let Some(process) = host_process(pid)
+                    {
+                        let mut observed = self.observed_processes.lock().unwrap();
+                        if !observed.contains(&process) {
+                            observed.push(process);
+                        }
+                    }
                 }
                 if view.identity.scratch.join("called").exists() {
                     *self.observed_remote_call.lock().unwrap() = true;
+                }
+                if view.identity.scratch.join("hook-child-survived").exists() {
+                    *self.escaped_hook_child.lock().unwrap() = true;
                 }
             }
             let item = if first && self.use_tool {
@@ -215,6 +278,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(check: bool, skill_only: bool) -> Self {
+        Self::with_descendants(check, skill_only, false)
+    }
+    fn with_descendants(check: bool, skill_only: bool, descendants: bool) -> Self {
         let image = std::env::var_os("SAYA_TEST_EXECUTABLE")
             .expect("explicit native acceptance requires SAYA_TEST_EXECUTABLE");
         execution::pin_launcher_image_from(Path::new(&image))
@@ -281,17 +347,32 @@ requested=[{}]
             std::fs::write(source.join("server.sh"), SERVER).unwrap();
             std::fs::write(source.join("observer.sh"), OBSERVER).unwrap();
             std::fs::write(source.join("check.sh"), CHECK_DENY).unwrap();
-            let arguments = vec![
+            let mut arguments = vec![
                 "@plugin/server.sh".to_string(),
                 workspace.join("secret.txt").to_string_lossy().into_owned(),
                 workspace.join("escaped.txt").to_string_lossy().into_owned(),
             ];
+            if descendants {
+                arguments.push(
+                    if cfg!(target_os = "linux") {
+                        "detached"
+                    } else {
+                        "same-group"
+                    }
+                    .into(),
+                );
+            }
             text.push_str(&format!(
                 "[[mcp]]\nid=\"local\"\ntransport=\"stdio\"\nprogram=\"shell\"\nargs={}\n",
                 serde_json::to_string(&arguments).unwrap()
             ));
             for (id, event) in [("started", "run.started"), ("finished", "run.finished")] {
-                text.push_str(&format!("[[hooks]]\nid=\"{id}\"\nevent=\"{event}\"\nkind=\"observer\"\nprogram=\"shell\"\nargs=[\"@plugin/observer.sh\"]\ntimeout_ms=5000\n"));
+                let arguments = if descendants {
+                    "[\"@plugin/observer.sh\",\"descendants\"]"
+                } else {
+                    "[\"@plugin/observer.sh\"]"
+                };
+                text.push_str(&format!("[[hooks]]\nid=\"{id}\"\nevent=\"{event}\"\nkind=\"observer\"\nprogram=\"shell\"\nargs={arguments}\ntimeout_ms=5000\n"));
             }
             if check {
                 text.push_str("[[hooks]]\nid=\"veto\"\nevent=\"tool.before_dispatch\"\nkind=\"check\"\nprogram=\"shell\"\nargs=[\"@plugin/check.sh\"]\ntimeout_ms=5000\n");
@@ -371,8 +452,9 @@ requested=[{}]
             use_tool: check,
             disable: disable.then(|| self.store.clone()),
             pool: self.pool.clone(),
-            observed_pids: Mutex::new(Vec::new()),
+            observed_processes: Mutex::new(Vec::new()),
             observed_remote_call: Mutex::new(false),
+            escaped_hook_child: Mutex::new(false),
         });
         let store = Arc::new(RecordedStore::default());
         let approval = Arc::new(Approve(AtomicUsize::new(0)));
@@ -456,7 +538,7 @@ requested=[{}]
 #[tokio::test]
 #[ignore = "requires a verified SAYA_TEST_EXECUTABLE and mandatory native backend"]
 async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
-    let fixture = Fixture::new(false, false);
+    let fixture = Fixture::with_descendants(false, false, true);
     let (mut runtime, mut session, model, store, _) =
         fixture.runtime(WorkMode::Work, PermissionMode::Bypass, true, false);
     let result = runtime.run(&mut session).await.unwrap();
@@ -488,9 +570,13 @@ async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
         assert_eq!(record.status, HookStatus::Succeeded);
         assert_eq!(record.cleanup, CleanupState::Cleaned);
     }
-    assert!(!model.observed_pids.lock().unwrap().is_empty());
-    for pid in model.observed_pids.lock().unwrap().iter() {
-        assert_eq!(unsafe { libc::kill(*pid, 0) }, -1);
+    let observed = model.observed_processes.lock().unwrap().clone();
+    assert!(observed.len() >= 2, "{observed:?}");
+    assert!(!*model.escaped_hook_child.lock().unwrap());
+    for process in observed {
+        let started = process.started.unwrap();
+        assert_ne!(process_started(process.pid), Some(started));
+        assert_eq!(unsafe { libc::kill(process.pid, 0) }, -1);
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH)
@@ -503,6 +589,10 @@ async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
 fn namespace_pid_mapping_requires_a_nested_guest_pid() {
     assert_eq!(
         nested_host_pid("Name:\tplugin\nNSpid:\t4242\t2\n", 2),
+        Some(4242)
+    );
+    assert_eq!(
+        nested_host_pid("Name:\tplugin\nNSpid:\t4242\t71\t2\n", 2),
         Some(4242)
     );
     assert_eq!(nested_host_pid("Name:\thost\nNSpid:\t2\n", 2), None);
@@ -527,7 +617,7 @@ async fn plan_never_starts_plugin_processes_even_with_bypass_permissions() {
         fixture.runtime(WorkMode::Plan, PermissionMode::Bypass, false, false);
     let result = runtime.run(&mut session).await.unwrap();
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
-    assert!(model.observed_pids.lock().unwrap().is_empty());
+    assert!(model.observed_processes.lock().unwrap().is_empty());
     assert!(
         !store
             .changes
