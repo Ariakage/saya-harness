@@ -6,6 +6,7 @@ use super::{
 use crate::{
     boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
     contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
+    media,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -89,7 +90,7 @@ impl AnthropicModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let messages = history(&request.history)?;
+        let messages = history(&request.history, self.settings.multimodal)?;
         let system = if self.prompt_cache
             && ((request.purpose == crate::contract::ModelPurpose::Execution
                 && request.dynamic_instructions.is_some())
@@ -449,7 +450,10 @@ fn append_message(messages: &mut Vec<Value>, role: &str, block: Value) {
     }
     messages.push(json!({"role":role,"content":[block]}));
 }
-fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
+fn history(
+    items: &[HistoryItem],
+    capabilities: crate::config::MediaCapabilities,
+) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = Vec::new();
     let mut pending = HashSet::new();
     let mut index = 0;
@@ -459,7 +463,37 @@ fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
-                append_message(&mut messages, "user", json!({"type":"text","text":text}));
+                for part in media::expand_user(text, capabilities)? {
+                    match part {
+                        media::ContentPart::Text(text) => {
+                            append_message(
+                                &mut messages,
+                                "user",
+                                json!({"type":"text","text":text}),
+                            );
+                        }
+                        media::ContentPart::Media(item) if item.kind == media::MediaKind::Image => {
+                            append_message(
+                                &mut messages,
+                                "user",
+                                json!({
+                                    "type":"image",
+                                    "source":{
+                                        "type":"base64",
+                                        "media_type":item.mime,
+                                        "data":item.data
+                                    }
+                                }),
+                            );
+                        }
+                        media::ContentPart::Media(_) => {
+                            return Err(failure(
+                                "unsupported_media",
+                                "Anthropic Messages supports image media only",
+                            ));
+                        }
+                    }
+                }
             }
             HistoryItem::AssistantText(text) | HistoryItem::AssistantPartial(text) => {
                 if !pending.is_empty()
@@ -944,5 +978,45 @@ impl ModelStream for AnthropicStream {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+
+    #[test]
+    fn user_images_map_to_base64_blocks_and_other_media_fail_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("image.png");
+        let audio = root.path().join("audio.mp3");
+        std::fs::write(&image, b"png").unwrap();
+        std::fs::write(&audio, b"mp3").unwrap();
+        let image_text = format!("[Image 1](<{}>)", image.display());
+        let messages = history(
+            &[HistoryItem::UserText(image_text)],
+            crate::config::MediaCapabilities {
+                image: true,
+                ..crate::config::MediaCapabilities::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(messages[0]["content"][1]["type"], "image");
+        assert_eq!(messages[0]["content"][1]["source"]["type"], "base64");
+
+        let audio_text = format!("[Audio 1](<{}>)", audio.display());
+        assert_eq!(
+            history(
+                &[HistoryItem::UserText(audio_text)],
+                crate::config::MediaCapabilities {
+                    audio: true,
+                    ..crate::config::MediaCapabilities::default()
+                }
+            )
+            .unwrap_err()
+            .0
+            .code,
+            "unsupported_media"
+        );
     }
 }

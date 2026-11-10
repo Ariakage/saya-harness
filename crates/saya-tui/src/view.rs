@@ -10,8 +10,8 @@ use crate::{
     rich_text::append_wrapped_line,
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
-        INPUT_BACKGROUND, INPUT_BORDER, INPUT_STRIPE, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
-        STRONG_FOREGROUND, mode_color,
+        HEADING, INPUT_BACKGROUND, INPUT_BORDER, INPUT_STRIPE, MUTED, RED, SIDEBAR_BACKGROUND,
+        SOFT_AMBER, STRONG_FOREGROUND, mode_color,
     },
     tool_summary::{ToolSummary, summarize},
 };
@@ -1730,6 +1730,8 @@ fn attachment_line(text: &str, base: Style) -> Line<'static> {
         }
         let style = match range.kind {
             attachments::Kind::Image => base.fg(BLUE).add_modifier(Modifier::BOLD),
+            attachments::Kind::Audio => base.fg(AMBER).add_modifier(Modifier::BOLD),
+            attachments::Kind::Video => base.fg(HEADING).add_modifier(Modifier::BOLD),
             attachments::Kind::File => base.fg(GREEN).add_modifier(Modifier::BOLD),
         };
         spans.push(Span::styled(text[range.start..range.end].to_owned(), style));
@@ -3537,14 +3539,23 @@ mod tests {
     #[test]
     fn pasted_image_and_file_tokens_are_highlighted_in_transcript_and_editor() {
         let mut state = State::default();
-        state.push_message(Role::User, "You", "[Image 1] File: [File 1]");
+        state.push_message(
+            Role::User,
+            "You",
+            "[Image 1] Audio: [Audio 1] Video: [Video 1] File: [File 1]",
+        );
         state
             .editor
-            .set_text("Inspect [Image 1] and File: [File 1]");
+            .set_text("Inspect [Image 1], Audio: [Audio 1], Video: [Video 1], and File: [File 1]");
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();
-        for (token, color) in [("[Image 1]", BLUE), ("[File 1]", GREEN)] {
+        for (token, color) in [
+            ("[Image 1]", BLUE),
+            ("[Audio 1]", AMBER),
+            ("[Video 1]", HEADING),
+            ("[File 1]", GREEN),
+        ] {
             let mut found = 0;
             for row in 0..30 {
                 let text = row_text(buffer, row);

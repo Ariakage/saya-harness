@@ -8,7 +8,7 @@ pub mod transport;
 
 use crate::{
     boundary::ModelRequest,
-    config::{MAX_OUTPUT_TOKENS, ThinkingEffort},
+    config::{MAX_OUTPUT_TOKENS, MediaCapabilities, ThinkingEffort},
     contract::{BoundaryError, ErrorInfo, ModelPurpose},
 };
 use serde_json::{Map, Value};
@@ -38,6 +38,7 @@ pub struct ModelSettings {
     /// Additional host-configured context reserve for every request purpose.
     pub extra_safety_tokens: u64,
     pub max_output_tokens: u32,
+    pub multimodal: MediaCapabilities,
     pub upstream_max_output_tokens: Arc<AtomicU32>,
     pub thinking_effort: Option<ThinkingEffort>,
     pub strict_tools: bool,
@@ -230,12 +231,14 @@ fn object(value: &Value) -> Result<&Map<String, Value>, BoundaryError> {
 }
 
 /// Version for the provider serializers used by local context accounting.
-pub const COUNTING_ADAPTER_VERSION: &str = "saya-provider-wire-v2";
+pub const COUNTING_ADAPTER_VERSION: &str = "saya-provider-wire-v3";
 
 // Model-independent heuristic, separate from provider usage and billed counts.
 // It is neither an exact tokenizer nor a guaranteed upper bound.
 fn wire_input_tokens(body: &Value) -> Result<u64, BoundaryError> {
-    let text = serde_json::to_string(body)
+    let mut media_tokens = 0u64;
+    let projected = project_media_for_counting(body, false, &mut media_tokens);
+    let text = serde_json::to_string(&projected)
         .map_err(|_| failure("context_counter", "Wire request cannot be counted"))?;
     if text.len() > 32 * 1024 * 1024 {
         return Err(failure(
@@ -252,7 +255,48 @@ fn wire_input_tokens(body: &Value) -> Result<u64, BoundaryError> {
             other += 1;
         }
     }
-    Ok(ascii.div_ceil(4).saturating_add(other))
+    Ok(ascii
+        .div_ceil(4)
+        .saturating_add(other)
+        .saturating_add(media_tokens))
+}
+
+fn project_media_for_counting(value: &Value, media: bool, tokens: &mut u64) -> Value {
+    match value {
+        Value::Object(object) => {
+            let kind = object.get("type").and_then(Value::as_str);
+            let is_media = matches!(
+                kind,
+                Some("image_url" | "input_image" | "image" | "input_audio" | "file" | "input_file")
+            );
+            if is_media {
+                *tokens = tokens.saturating_add(match kind {
+                    Some("input_audio") => 4096,
+                    Some("file" | "input_file") => 8192,
+                    _ => 2048,
+                });
+            }
+            Value::Object(
+                object
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            key.clone(),
+                            project_media_for_counting(value, media || is_media, tokens),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| project_media_for_counting(value, media, tokens))
+                .collect(),
+        ),
+        Value::String(text) if media && text.len() > 1024 => Value::String("[media]".into()),
+        value => value.clone(),
+    }
 }
 
 fn count_wire(
@@ -287,6 +331,7 @@ fn count_wire(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn settings(max_output_tokens: u32) -> ModelSettings {
         ModelSettings {
@@ -295,6 +340,7 @@ mod tests {
             context_window_tokens: 2_000_000,
             extra_safety_tokens: 0,
             max_output_tokens,
+            multimodal: MediaCapabilities::default(),
             upstream_max_output_tokens: Arc::new(AtomicU32::new(0)),
             thinking_effort: None,
             strict_tools: false,
@@ -313,6 +359,23 @@ mod tests {
             history: vec![],
             tools: vec![],
         }
+    }
+
+    #[test]
+    fn media_payloads_use_bounded_count_estimates() {
+        let body = json!({
+            "input":[{
+                "role":"user",
+                "content":[
+                    {"type":"input_text","text":"inspect"},
+                    {
+                        "type":"input_image",
+                        "image_url":format!("data:image/png;base64,{}", "A".repeat(2_000_000))
+                    }
+                ]
+            }]
+        });
+        assert!(wire_input_tokens(&body).unwrap() < 10_000);
     }
 
     #[test]

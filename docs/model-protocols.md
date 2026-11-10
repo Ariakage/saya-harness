@@ -8,6 +8,18 @@
 
 `crates/saya-core/tests/transport.rs` 启动临时本地 HTTP 服务并验证路径、鉴权、版本、环境变量引用、SSE 分片、格式错误、限额、状态映射、取消、空闲／总超时及不跟随重定向；系统代理使用单独进程验证。该自动测试不连接真实模型；其他平台的代理及 TLS 行为尚未验证。
 
+## 多模态内容
+
+profile 的显式模态能力决定用户媒体是否进入模型请求。适配器在发请求前读取有界本地文件并生成对应 content part；缺少能力、文件不可读、格式不支持或超限均返回明确错误，不丢弃附件后继续调用。同一个 `[Image N]`、`Audio: [Audio N]` 或 `Video: [Video N]` 引用在重放历史时重新读取文件。
+
+| 协议 | 图片 | 音频 | 视频 |
+| --- | --- | --- | --- |
+| OpenAI Chat Completions | `image_url` | `input_audio` | `file` + MIME data URL |
+| OpenAI Responses | `input_image` | `input_audio` | `input_file` + MIME data URL |
+| Anthropic Messages | base64 `image` block | 请求前失败 | 请求前失败 |
+
+OpenAI 当前没有统一的原生视频content type，因此视频使用带 `video/*` MIME 的文件输入。此映射仍要求目标模型和网关实际支持视频文件，成功解析请求不代表已完成视频理解；服务拒绝时沿正常协议错误返回。真实模型、时长、帧率、音轨和采样行为尚未互操作验收。
+
 ## Chat Completions
 
 `provider::chat::ChatModel` 使用明确的模型、profile、上下文窗口和输出上限。它以本地历史构造消息，显式发送 `store: false`，支持流式与完整 JSON、文本和多个工具调用，并在流完整结束后才返回完整调用；工具结果按原始 call ID 回传。usage 可用时保留 provider 数字。长度截断、拒绝、格式错误和缺少终止标志不会作为成功返回。收到非文本流事件后也不自动重试。

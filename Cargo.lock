@@ -2911,6 +2911,7 @@ name = "saya-core"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "cap-std",
  "diffy",

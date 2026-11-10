@@ -16,6 +16,8 @@ model = "YOUR_LOCAL_MODEL"
 auth = "none"
 context_window_tokens = 128000
 stream = true
+# Optional native model input. Enable only modalities accepted by this model.
+# multimodal = { image = true, audio = false, video = false }
 # Optional, only for models that support the requested effort level.
 # thinking_effort = "max"
 # Optional explicit request target. Omission uses limit.output, or 32000 when

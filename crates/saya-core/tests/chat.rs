@@ -47,6 +47,7 @@ fn settings(stream: bool) -> ModelSettings {
         context_window_tokens: 128_000,
         extra_safety_tokens: 0,
         max_output_tokens: 8192,
+        multimodal: Default::default(),
         upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         thinking_effort: None,
         strict_tools: false,
@@ -179,6 +180,73 @@ async fn streams_text_and_usage_with_explicit_storage_disabled()
     assert_eq!(request["messages"][0]["role"], "system");
     Ok(())
 }
+
+#[tokio::test]
+async fn enabled_media_is_sent_as_chat_content_parts() -> Result<(), Box<dyn std::error::Error>> {
+    let response = json!({
+        "choices":[{
+            "index":0,
+            "finish_reason":"stop",
+            "message":{"role":"assistant","content":"ok"}
+        }],
+        "usage":{"prompt_tokens":9,"completion_tokens":1}
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let root = tempfile::tempdir()?;
+    let image = root.path().join("image.png");
+    let audio = root.path().join("audio.wav");
+    let video = root.path().join("video.mp4");
+    std::fs::write(&image, b"png")?;
+    std::fs::write(&audio, b"wav")?;
+    std::fs::write(&video, b"mp4")?;
+    let mut cfg = settings(false);
+    cfg.multimodal = saya_core::config::MediaCapabilities {
+        image: true,
+        audio: true,
+        video: true,
+    };
+    let model = ChatModel::new(transport(url)?, cfg, ChatCompatibility::default());
+    let mut req = request();
+    req.history = vec![HistoryItem::UserText(format!(
+        "Inspect [Image 1](<{}>) [Audio 1](<{}>) [Video 1](<{}>)",
+        image.display(),
+        audio.display(),
+        video.display()
+    ))];
+    collect(&model, &req).await?;
+
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    let parts = body["messages"][1]["content"]
+        .as_array()
+        .ok_or("missing multimodal content")?;
+    let image = parts
+        .iter()
+        .find(|part| part["type"] == "image_url")
+        .ok_or("missing image part")?;
+    assert!(
+        image["image_url"]["url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:image/png;base64,"))
+    );
+    let audio = parts
+        .iter()
+        .find(|part| part["type"] == "input_audio")
+        .ok_or("missing audio part")?;
+    assert_eq!(audio["input_audio"]["format"], "wav");
+    let video = parts
+        .iter()
+        .find(|part| part["type"] == "file")
+        .ok_or("missing video part")?;
+    assert_eq!(video["file"]["filename"], "video.mp4");
+    assert!(
+        video["file"]["file_data"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:video/mp4;base64,"))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn interleaved_tool_fragments_round_trip_with_original_ids()
 -> Result<(), Box<dyn std::error::Error>> {

@@ -6,6 +6,7 @@ use super::{
 use crate::{
     boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
     contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
+    media,
 };
 use serde_json::{Value, json};
 use std::{
@@ -47,7 +48,7 @@ impl ResponsesModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let input = history(&request.history)?;
+        let input = history(&request.history, self.settings.multimodal)?;
         let mut body = json!({"model":self.settings.model,"instructions":request.combined_instructions(),"input":input,"store":false,"stream":self.settings.stream,"max_output_tokens":output});
         let map = body
             .as_object_mut()
@@ -344,7 +345,55 @@ fn parse_response(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bo
     }
     Ok((items, usage))
 }
-fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
+fn responses_user_content(
+    text: &str,
+    capabilities: crate::config::MediaCapabilities,
+) -> Result<Value, BoundaryError> {
+    let parts = media::expand_user(text, capabilities)?;
+    if !parts
+        .iter()
+        .any(|part| matches!(part, media::ContentPart::Media(_)))
+    {
+        return Ok(Value::String(text.to_owned()));
+    }
+    let content = parts
+        .into_iter()
+        .map(|part| -> Result<Value, BoundaryError> {
+            Ok(match part {
+                media::ContentPart::Text(text) => json!({"type":"input_text","text":text}),
+                media::ContentPart::Media(item) => match item.kind {
+                    media::MediaKind::Image => json!({
+                        "type":"input_image",
+                        "image_url":media::data_url(&item)
+                    }),
+                    media::MediaKind::Audio => {
+                        let format = media::audio_format(&item).ok_or_else(|| {
+                            failure(
+                                "unsupported_media",
+                                "audio format is not supported by Responses",
+                            )
+                        })?;
+                        json!({
+                            "type":"input_audio",
+                            "input_audio":{"data":item.data,"format":format}
+                        })
+                    }
+                    media::MediaKind::Video => json!({
+                        "type":"input_file",
+                        "filename":item.filename,
+                        "file_data":media::data_url(&item)
+                    }),
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Value::Array(content))
+}
+
+fn history(
+    items: &[HistoryItem],
+    capabilities: crate::config::MediaCapabilities,
+) -> Result<Vec<Value>, BoundaryError> {
     let mut input = Vec::new();
     let mut pending = HashSet::new();
     let mut index = 0;
@@ -354,7 +403,10 @@ fn history(items: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
-                input.push(json!({"role":"user","content":text}));
+                input.push(json!({
+                    "role":"user",
+                    "content":responses_user_content(text, capabilities)?
+                }));
             }
             HistoryItem::AssistantText(text) | HistoryItem::AssistantPartial(text) => {
                 if !pending.is_empty() {
@@ -890,5 +942,48 @@ impl ModelStream for ResponsesStream {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+
+    #[test]
+    fn user_media_maps_to_responses_content_parts() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("image.jpg");
+        let audio = root.path().join("audio.mp3");
+        let video = root.path().join("video.mp4");
+        std::fs::write(&image, b"jpg").unwrap();
+        std::fs::write(&audio, b"mp3").unwrap();
+        std::fs::write(&video, b"mp4").unwrap();
+        let text = format!(
+            "[Image 1](<{}>) [Audio 1](<{}>) [Video 1](<{}>)",
+            image.display(),
+            audio.display(),
+            video.display()
+        );
+        let content = responses_user_content(
+            &text,
+            crate::config::MediaCapabilities {
+                image: true,
+                audio: true,
+                video: true,
+            },
+        )
+        .unwrap();
+        let parts = content.as_array().unwrap();
+        assert!(parts.iter().any(|part| part["type"] == "input_image"));
+        let audio = parts
+            .iter()
+            .find(|part| part["type"] == "input_audio")
+            .unwrap();
+        assert_eq!(audio["input_audio"]["format"], "mp3");
+        let video = parts
+            .iter()
+            .find(|part| part["type"] == "input_file")
+            .unwrap();
+        assert_eq!(video["filename"], "video.mp4");
     }
 }

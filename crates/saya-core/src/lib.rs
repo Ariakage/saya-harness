@@ -27,6 +27,7 @@ pub mod input;
 pub mod logging;
 
 pub mod mcp;
+pub mod media;
 pub mod memory;
 pub mod memory_context;
 pub mod metrics;

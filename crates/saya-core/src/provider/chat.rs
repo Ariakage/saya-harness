@@ -8,6 +8,7 @@ use super::{
 use crate::{
     boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
     contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
+    media,
 };
 use serde_json::{Value, json};
 use std::{
@@ -56,7 +57,11 @@ impl ChatModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let messages = chat_history(&request.combined_instructions(), &request.history)?;
+        let messages = chat_history(
+            &request.combined_instructions(),
+            &request.history,
+            self.settings.multimodal,
+        )?;
         let mut body = json!({"model":self.settings.model, "messages":messages, "store":false, "stream":self.settings.stream});
         let map = body
             .as_object_mut()
@@ -91,7 +96,58 @@ impl ChatModel {
     }
 }
 
-fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value>, BoundaryError> {
+fn chat_user_content(
+    text: &str,
+    capabilities: crate::config::MediaCapabilities,
+) -> Result<Value, BoundaryError> {
+    let parts = media::expand_user(text, capabilities)?;
+    if !parts
+        .iter()
+        .any(|part| matches!(part, media::ContentPart::Media(_)))
+    {
+        return Ok(Value::String(text.to_owned()));
+    }
+    let content = parts
+        .into_iter()
+        .map(|part| -> Result<Value, BoundaryError> {
+            Ok(match part {
+                media::ContentPart::Text(text) => json!({"type":"text","text":text}),
+                media::ContentPart::Media(item) => match item.kind {
+                    media::MediaKind::Image => json!({
+                        "type":"image_url",
+                        "image_url":{"url":media::data_url(&item),"detail":"auto"}
+                    }),
+                    media::MediaKind::Audio => {
+                        let format = media::audio_format(&item).ok_or_else(|| {
+                            failure(
+                                "unsupported_media",
+                                "audio format is not supported by Chat Completions",
+                            )
+                        })?;
+                        json!({
+                            "type":"input_audio",
+                            "input_audio":{"data":item.data,"format":format}
+                        })
+                    }
+                    media::MediaKind::Video => json!({
+                        "type":"file",
+                        "file":{
+                            "filename":item.filename,
+                            "file_data":media::data_url(&item)
+                        }
+                    }),
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Value::Array(content))
+}
+
+fn chat_history(
+    instructions: &str,
+    history: &[HistoryItem],
+    capabilities: crate::config::MediaCapabilities,
+) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = vec![json!({"role":"system","content":instructions})];
     let mut text: Option<String> = None;
     let mut calls = Vec::new();
@@ -145,7 +201,10 @@ fn chat_history(instructions: &str, history: &[HistoryItem]) -> Result<Vec<Value
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
-                messages.push(json!({"role":"user","content":value}));
+                messages.push(json!({
+                    "role":"user",
+                    "content":chat_user_content(value, capabilities)?
+                }));
             }
             HistoryItem::AssistantPartial(value) if value.is_empty() => {}
             HistoryItem::AssistantText(value) | HistoryItem::AssistantPartial(value) => {
@@ -761,5 +820,40 @@ mod reasoning_tests {
                 HistoryItem::AssistantText("visible".into())
             ]
         );
+    }
+
+    #[test]
+    fn user_media_maps_to_chat_image_audio_and_file_parts() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("image.png");
+        let audio = root.path().join("audio.wav");
+        let video = root.path().join("video.mp4");
+        std::fs::write(&image, b"png").unwrap();
+        std::fs::write(&audio, b"wav").unwrap();
+        std::fs::write(&video, b"mp4").unwrap();
+        let text = format!(
+            "[Image 1](<{}>) [Audio 1](<{}>) [Video 1](<{}>)",
+            image.display(),
+            audio.display(),
+            video.display()
+        );
+        let content = chat_user_content(
+            &text,
+            crate::config::MediaCapabilities {
+                image: true,
+                audio: true,
+                video: true,
+            },
+        )
+        .unwrap();
+        let parts = content.as_array().unwrap();
+        assert!(parts.iter().any(|part| part["type"] == "image_url"));
+        let audio = parts
+            .iter()
+            .find(|part| part["type"] == "input_audio")
+            .unwrap();
+        assert_eq!(audio["input_audio"]["format"], "wav");
+        let video = parts.iter().find(|part| part["type"] == "file").unwrap();
+        assert_eq!(video["file"]["filename"], "video.mp4");
     }
 }

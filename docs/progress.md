@@ -14,6 +14,14 @@
 
 同日补充修正Thinking与Context呈现：工具调用展开改为字段和递归输出渲染，不再直接展示整段JSON，摘要仍由独立字段保存并保持折叠状态颜色；静态已知凭据下的Thinking使用增量安全预览，完整凭据及跨分片前缀显示为`[REDACTED]`，动态凭据轮换仍等待请求结束；会话恢复从最近RunMetrics恢复`Last run`输入计量，`/compact`与`/cd`保留此前计量直到下一次Execution，请求已开始但usage未返回时显示`Awaiting execution usage`。同类状态审计确认`/new`与`/profile`清空属于新会话语义。新增恢复、Compact、工具渲染、Thinking前缀脱敏、摘要折叠和状态回归。最终 `./scripts/check.sh` 通过格式、严格Clippy、1337项Rust测试、8项条件忽略和release构建，日志为 `target/final-check-4.log`；`just smoke` 正常入口PTY矩阵全部通过。
 
+## 多模态图片、音频与视频输入
+
+2026-11-11，按D-060为profile增加显式`multimodal.image/audio/video`能力。TUI将本地音频和视频分别显示为`Audio: [Audio N]`与`Video: [Video N]`原子token；发送时图片、音频和视频从有界本地文件读取并映射为Chat／Responses content parts，Messages当前发送base64图片。能力关闭、文件不可读、格式不受支持或超限均在HTTP请求前明确失败，普通File继续作为路径文本交给模型和工具。媒体载荷使用有界Token估算，能力开关进入profile身份指纹。
+
+本地忽略配置 `.saya/local/deepseek.toml` 的三个DeepSeek测试profile仅开启`image = true`，仍保持`max_output_tokens = 1000000`且未加入Git。`saya config check`通过；真实`deepseek-responses`单次图片请求正确识别本机生成的空白文档图标。临时图片、数据库和会话目录已清理。
+
+本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1368项Rust测试、8项条件忽略和release构建通过，日志为 `target/multimodal-check.log`。新增真实HTTP夹具覆盖Chat图片／音频／视频、Responses图片／音频／视频及Messages图片wire；`just test-tooling`的75项Python回归通过。本轮未推送、未运行远端CI。
+
 ## TUI 显示文本目录
 
 2026-11-11，按D-056将全部TUI用户可见显示文本集中到 `crates/saya-tui/src/i18n.rs`，覆盖命令说明、状态和角色、侧栏、MCP状态、选择器、工具展开、Memory、执行摘要、Markdown／数学／表格回退及终端错误。命令语法、协议字段、内部状态键和稳定错误码保持独立；CLI输出、运行时提示词和公开协议诊断不进入本次目录。窗口标题继续使用原有 `Saya | …` 契约。

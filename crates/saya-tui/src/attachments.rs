@@ -8,6 +8,8 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {
     Image,
+    Audio,
+    Video,
     File,
 }
 
@@ -28,6 +30,8 @@ impl Kind {
     fn token(self, number: u64) -> String {
         match self {
             Self::Image => crate::i18n::attachments::image(number),
+            Self::Audio => crate::i18n::attachments::audio(number),
+            Self::Video => crate::i18n::attachments::video(number),
             Self::File => crate::i18n::attachments::file(number),
         }
     }
@@ -42,36 +46,22 @@ pub(crate) fn image_attachment(path: &Path, number: u64) -> Option<Attachment> {
     })
 }
 
-pub(crate) fn parse_paste(
-    text: &str,
-    cwd: &Path,
-    next_image: u64,
-    next_file: u64,
-) -> Option<Insertion> {
+pub(crate) fn parse_paste(text: &str, cwd: &Path, current: &str) -> Option<Insertion> {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let paths = candidate_paths(&normalized)?;
-    let mut image = next_image;
-    let mut file = next_file;
+    let mut next = [
+        next_number(current, Kind::Image),
+        next_number(current, Kind::Audio),
+        next_number(current, Kind::Video),
+        next_number(current, Kind::File),
+    ];
     let mut attachments = Vec::with_capacity(paths.len());
     for raw in paths {
         let path = resolve_file(&raw, cwd)?;
-        let kind = if is_image(&path) {
-            Kind::Image
-        } else {
-            Kind::File
-        };
-        let number = match kind {
-            Kind::Image => {
-                let number = image;
-                image = image.saturating_add(1);
-                number
-            }
-            Kind::File => {
-                let number = file;
-                file = file.saturating_add(1);
-                number
-            }
-        };
+        let kind = classify(&path);
+        let index = kind as usize;
+        let number = next[index];
+        next[index] = next[index].saturating_add(1);
         attachments.push(Attachment {
             token: kind.token(number),
             path: path.to_string_lossy().into_owned(),
@@ -100,9 +90,14 @@ pub(crate) fn next_number(text: &str, kind: Kind) -> u64 {
 
 pub(crate) fn expand(text: &str, attachments: &[Attachment]) -> String {
     let mut expanded = text.to_owned();
-    for attachment in attachments {
-        let target = format!("{}(<{}>)", attachment.token, attachment.path);
-        expanded = expanded.replace(&attachment.token, &target);
+    for range in atomic_ranges(text).into_iter().rev() {
+        let token = &text[range.start..range.end];
+        if let Some(attachment) = attachments.iter().find(|item| item.token == token) {
+            expanded.replace_range(
+                range.start..range.end,
+                &format!("{}(<{}>)", attachment.token, attachment.path),
+            );
+        }
     }
     expanded
 }
@@ -139,6 +134,8 @@ pub(crate) fn token_ranges(text: &str) -> Vec<TokenRange> {
     let mut ranges = Vec::new();
     for (prefix, kind) in [
         (crate::i18n::attachments::IMAGE_PREFIX, Kind::Image),
+        (crate::i18n::attachments::AUDIO_PREFIX, Kind::Audio),
+        (crate::i18n::attachments::VIDEO_PREFIX, Kind::Video),
         (crate::i18n::attachments::FILE_PREFIX, Kind::File),
     ] {
         for (start, _) in text.match_indices(prefix) {
@@ -175,8 +172,13 @@ pub(crate) fn atomic_ranges(text: &str) -> Vec<AtomicRange> {
     token_ranges(text)
         .into_iter()
         .map(|range| {
-            let start = if range.kind == Kind::File {
-                let owner = crate::i18n::attachments::FILE_OWNER;
+            let owner = match range.kind {
+                Kind::Image => None,
+                Kind::Audio => Some(crate::i18n::attachments::AUDIO_OWNER),
+                Kind::Video => Some(crate::i18n::attachments::VIDEO_OWNER),
+                Kind::File => Some(crate::i18n::attachments::FILE_OWNER),
+            };
+            let start = if let Some(owner) = owner {
                 if text[..range.start].ends_with(owner) {
                     range.start - owner.len()
                 } else {
@@ -267,25 +269,16 @@ fn resolve_file(raw: &str, cwd: &Path) -> Option<PathBuf> {
     fs::metadata(&path).ok()?.is_file().then_some(path)
 }
 
-fn is_image(path: &Path) -> bool {
+fn classify(path: &Path) -> Kind {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "avif"
-                    | "bmp"
-                    | "gif"
-                    | "heic"
-                    | "heif"
-                    | "jpeg"
-                    | "jpg"
-                    | "png"
-                    | "svg"
-                    | "tif"
-                    | "tiff"
-                    | "webp"
-            )
+        .map(str::to_ascii_lowercase)
+        .map_or(Kind::File, |extension| match extension.as_str() {
+            "avif" | "bmp" | "gif" | "heic" | "heif" | "jpeg" | "jpg" | "png" | "svg" | "tif"
+            | "tiff" | "webp" => Kind::Image,
+            "aac" | "flac" | "m4a" | "mp3" | "ogg" | "opus" | "wav" => Kind::Audio,
+            "avi" | "m4v" | "mkv" | "mov" | "mp4" | "webm" => Kind::Video,
+            _ => Kind::File,
         })
 }
 
@@ -381,7 +374,7 @@ mod tests {
         fs::write(&image, b"png").unwrap();
         fs::write(&file, b"notes").unwrap();
         let pasted = format!("'{}' '{}'", image.display(), file.display());
-        let insertion = parse_paste(&pasted, root.path(), 1, 1).unwrap();
+        let insertion = parse_paste(&pasted, root.path(), "").unwrap();
         assert_eq!(insertion.text, "[Image 1] File: [File 1]");
         assert_eq!(insertion.attachments[0].path, image.to_string_lossy());
         assert_eq!(insertion.attachments[1].path, file.to_string_lossy());
@@ -400,12 +393,16 @@ mod tests {
         fs::write(&path, b"png").unwrap();
         let escaped = path.to_string_lossy().replace(' ', "\\ ");
         assert_eq!(
-            parse_paste(&escaped, root.path(), 2, 1).unwrap().text,
+            parse_paste(&escaped, root.path(), "[Image 1]")
+                .unwrap()
+                .text,
             "[Image 2]"
         );
         let uri = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
         assert_eq!(
-            parse_paste(&uri, root.path(), 3, 1).unwrap().text,
+            parse_paste(&uri, root.path(), "[Image 1] [Image 2]")
+                .unwrap()
+                .text,
             "[Image 3]"
         );
     }
@@ -413,8 +410,46 @@ mod tests {
     #[test]
     fn ordinary_text_and_missing_paths_remain_plain() {
         let root = tempfile::tempdir().unwrap();
-        assert!(parse_paste("please inspect this", root.path(), 1, 1).is_none());
-        assert!(parse_paste("/missing/file.png", root.path(), 1, 1).is_none());
+        assert!(parse_paste("please inspect this", root.path(), "").is_none());
+        assert!(parse_paste("/missing/file.png", root.path(), "").is_none());
+    }
+
+    #[test]
+    fn audio_and_video_files_use_distinct_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        let audio = root.path().join("audio.mp3");
+        let video = root.path().join("video.mp4");
+        fs::write(&audio, b"mp3").unwrap();
+        fs::write(&video, b"mp4").unwrap();
+        let insertion = parse_paste(
+            &format!("'{}' '{}'", audio.display(), video.display()),
+            root.path(),
+            "",
+        )
+        .unwrap();
+        assert_eq!(insertion.text, "Audio: [Audio 1] Video: [Video 1]");
+        assert_eq!(insertion.attachments[0].kind, Kind::Audio);
+        assert_eq!(insertion.attachments[1].kind, Kind::Video);
+    }
+
+    #[test]
+    fn expansion_does_not_replace_a_shorter_token_inside_a_longer_one() {
+        let attachments = vec![
+            Attachment {
+                token: "[Image 1]".into(),
+                path: "/one.png".into(),
+                kind: Kind::Image,
+            },
+            Attachment {
+                token: "[Image 10]".into(),
+                path: "/ten.png".into(),
+                kind: Kind::Image,
+            },
+        ];
+        assert_eq!(
+            expand("[Image 1] [Image 10]", &attachments),
+            "[Image 1](</one.png>) [Image 10](</ten.png>)"
+        );
     }
 
     #[test]

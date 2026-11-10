@@ -11,6 +11,7 @@ tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time", "test-
 
 [dependencies]
 async-trait = "0.1.89"
+base64 = "0.22.1"
 cap-std = "4.0.3"
 bytes = "1.12.1"
 diffy = "0.5.2"

@@ -35,6 +35,21 @@ limit = { output = 64000 }
 
 JSON正文、协议消息、工具结果与Run请求／时间的原有限额继续执行。Compact的64KiB结构化正文上限，以及独立核查64KiB正文与512字符原因上限分别约束实际内容。输出token目标变化保留这些边界及来源验证。[上下文预算与水位](context-management.md#完整请求预算)、[D-054](decisions.md)
 
+## 多模态输入
+
+profile 默认不接受原生媒体输入。只有用户确认所选模型与服务支持某类模态时，才在 profile 中显式开启；关闭的模态不会静默降级为文本。
+
+```toml
+[profiles.example.multimodal]
+image = true
+audio = true
+video = false
+```
+
+TUI 将拖入或粘贴的现有本地文件显示为蓝色 `[Image N]`、暖色 `Audio: [Audio N]`、标题色 `Video: [Video N]`，其他文件仍为绿色 `File: [File N]`。发送时前三类 token 展开为带路径的媒体引用，由适配器读取文件并生成协议内容；普通 File 仍作为路径文本交给模型和工具。当前图片支持 PNG、JPEG、GIF、WebP，单个上限8MiB；音频支持 WAV、MP3，单个上限32MiB；视频支持 MP4、M4V、MOV、WebM、MKV、AVI，单个上限32MiB。单条用户消息累计媒体上限64MiB。
+
+媒体文件不存在、超过上限、扩展名不受支持或 profile 未开启对应模态时，请求在本地返回明确错误，不发送部分媒体。媒体内容按数据量进入上下文估算，视频没有统一token计数，估算不等同供应商计费或视觉采样结果。能力开关进入profile身份指纹，修改后恢复既有会话需显式接受配置变化。[模型协议](model-protocols.md#多模态内容)、[D-060](decisions.md)
+
 ## Thinking effort
 
 当前开发线允许每个 profile 显式设置 `thinking_effort`，取值为 `low`、`medium`、`high`、`xhigh`、`max`。省略时，请求沿用服务端默认值，TUI 显示未知。可在自己的 profile 中添加一行。

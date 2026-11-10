@@ -562,6 +562,41 @@ fn omitted_thinking_effort_preserves_the_legacy_profile_fingerprint() {
 }
 
 #[test]
+fn multimodal_capabilities_are_explicit_and_bind_profile_identity() {
+    let temp = TempDir::new().unwrap();
+    let path = write(temp.path(), "config.toml", fixture());
+    let loaded = config::load(
+        Overrides {
+            config: Some(path.clone()),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    let original = loaded.profiles["chat"].fingerprint().unwrap();
+    assert!(!loaded.profiles["chat"].multimodal.image);
+
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str("\n[profiles.chat.multimodal]\nimage = true\naudio = true\nvideo = false\n");
+    fs::write(&path, text).unwrap();
+    let loaded = config::load(
+        Overrides {
+            config: Some(path),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    let profile = &loaded.profiles["chat"];
+    assert!(profile.multimodal.image);
+    assert!(profile.multimodal.audio);
+    assert!(!profile.multimodal.video);
+    assert_ne!(profile.fingerprint().unwrap(), original);
+}
+
+#[test]
 fn explicit_thinking_effort_accepts_five_levels_and_rejects_unknown_values() {
     let temp = TempDir::new().unwrap();
     let path = write(temp.path(), "config.toml", fixture());

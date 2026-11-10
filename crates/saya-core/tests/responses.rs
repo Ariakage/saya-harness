@@ -46,6 +46,7 @@ fn settings(stream: bool) -> ModelSettings {
         context_window_tokens: 128_000,
         extra_safety_tokens: 0,
         max_output_tokens: 8192,
+        multimodal: Default::default(),
         upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         thinking_effort: None,
         strict_tools: false,
@@ -163,6 +164,71 @@ async fn public_reasoning_deltas_exclude_encrypted_native_content()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn enabled_media_is_sent_as_responses_content_parts() -> Result<(), Box<dyn std::error::Error>>
+{
+    let response = json!({
+        "status":"completed",
+        "output":[message("ok")],
+        "usage":{"input_tokens":9,"output_tokens":1}
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let root = tempfile::tempdir()?;
+    let image = root.path().join("image.jpg");
+    let audio = root.path().join("audio.mp3");
+    let video = root.path().join("video.mov");
+    std::fs::write(&image, b"jpg")?;
+    std::fs::write(&audio, b"mp3")?;
+    std::fs::write(&video, b"mov")?;
+    let mut cfg = settings(false);
+    cfg.multimodal = saya_core::config::MediaCapabilities {
+        image: true,
+        audio: true,
+        video: true,
+    };
+    let model = ResponsesModel::new(transport(url)?, cfg, ResponsesCompatibility::default());
+    let mut req = request();
+    req.history = vec![HistoryItem::UserText(format!(
+        "Inspect [Image 1](<{}>) [Audio 1](<{}>) [Video 1](<{}>)",
+        image.display(),
+        audio.display(),
+        video.display()
+    ))];
+    collect(&model, &req).await?;
+
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    let parts = body["input"][0]["content"]
+        .as_array()
+        .ok_or("missing multimodal content")?;
+    let image = parts
+        .iter()
+        .find(|part| part["type"] == "input_image")
+        .ok_or("missing image part")?;
+    assert!(
+        image["image_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:image/jpeg;base64,"))
+    );
+    let audio = parts
+        .iter()
+        .find(|part| part["type"] == "input_audio")
+        .ok_or("missing audio part")?;
+    assert_eq!(audio["input_audio"]["format"], "mp3");
+    let video = parts
+        .iter()
+        .find(|part| part["type"] == "input_file")
+        .ok_or("missing video part")?;
+    assert_eq!(video["filename"], "video.mov");
+    assert!(
+        video["file_data"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:video/quicktime;base64,"))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn reasoning_events_must_match_their_indices_identity_and_final_plaintext()
 -> Result<(), Box<dyn std::error::Error>> {

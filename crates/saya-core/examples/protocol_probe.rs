@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         context_window_tokens: 128_000,
         extra_safety_tokens: 0,
         max_output_tokens: 128,
+        multimodal: Default::default(),
         upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         thinking_effort: None,
         strict_tools: false,

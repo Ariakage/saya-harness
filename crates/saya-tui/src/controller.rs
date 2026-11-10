@@ -184,11 +184,8 @@ impl App {
         value.as_str().unwrap_or(common::SENSITIVE_WITHHELD).into()
     }
     fn insert_paste(&mut self, text: &str) {
-        let next_image =
-            attachments::next_number(self.state.editor.text(), attachments::Kind::Image);
-        let next_file = attachments::next_number(self.state.editor.text(), attachments::Kind::File);
         if let Some(insertion) =
-            attachments::parse_paste(text, &self.config.cwd, next_image, next_file)
+            attachments::parse_paste(text, &self.config.cwd, self.state.editor.text())
         {
             self.state.editor.insert(&insertion.text);
             self.add_attachments(insertion.attachments);

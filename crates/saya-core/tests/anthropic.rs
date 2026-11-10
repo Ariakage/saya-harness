@@ -47,6 +47,7 @@ fn settings(stream: bool) -> ModelSettings {
         context_window_tokens: 128_000,
         extra_safety_tokens: 0,
         max_output_tokens: 8192,
+        multimodal: Default::default(),
         upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         thinking_effort: None,
         strict_tools: false,
@@ -153,6 +154,43 @@ async fn thinking_deltas_exclude_signatures_and_redacted_blocks()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn enabled_image_is_sent_as_anthropic_base64_block() -> Result<(), Box<dyn std::error::Error>>
+{
+    let response = json!({
+        "role":"assistant",
+        "stop_reason":"end_turn",
+        "content":[{"type":"text","text":"ok"}]
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let root = tempfile::tempdir()?;
+    let image = root.path().join("image.png");
+    std::fs::write(&image, b"png")?;
+    let mut cfg = settings(false);
+    cfg.multimodal = saya_core::config::MediaCapabilities {
+        image: true,
+        ..Default::default()
+    };
+    let model = AnthropicModel::new(transport(url)?, cfg, AnthropicVersion::default());
+    let mut req = request();
+    req.history = vec![HistoryItem::UserText(format!(
+        "Inspect [Image 1](<{}>)",
+        image.display()
+    ))];
+    collect(&model, &req).await?;
+
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    let image = body["messages"][0]["content"]
+        .as_array()
+        .and_then(|parts| parts.iter().find(|part| part["type"] == "image"))
+        .ok_or("missing image part")?;
+    assert_eq!(image["source"]["type"], "base64");
+    assert_eq!(image["source"]["media_type"], "image/png");
+    Ok(())
+}
+
 fn stop(reason: &str) -> Vec<Value> {
     vec![
         event(

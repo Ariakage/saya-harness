@@ -200,6 +200,8 @@ pub struct Profile {
     pub max_output_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<ProfileLimits>,
+    #[serde(default, skip_serializing_if = "MediaCapabilities::is_default")]
+    pub multimodal: MediaCapabilities,
     /// Passed unchanged to the selected protocol. Omitted settings retain the
     /// legacy serialized profile and leave provider defaults unspecified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +232,20 @@ pub struct Profile {
 pub struct ProfileLimits {
     pub output: u32,
 }
+/// Explicit provider/model media support. Enabled modalities become request
+/// content, never silently skipped.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MediaCapabilities {
+    pub image: bool,
+    pub audio: bool,
+    pub video: bool,
+}
+impl MediaCapabilities {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawProfile {
@@ -241,6 +257,8 @@ struct RawProfile {
     context_window_tokens: u64,
     max_output_tokens: Option<u32>,
     limit: Option<ProfileLimits>,
+    #[serde(default)]
+    multimodal: MediaCapabilities,
     thinking_effort: Option<ThinkingEffort>,
     #[serde(default)]
     allow_remote_http: bool,
@@ -287,6 +305,7 @@ impl TryFrom<RawProfile> for Profile {
             context_window_tokens: raw.context_window_tokens,
             max_output_tokens,
             limit: raw.limit,
+            multimodal: raw.multimodal,
             thinking_effort: raw.thinking_effort,
             allow_remote_http: raw.allow_remote_http,
             headers_env: raw.headers_env,
