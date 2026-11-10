@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具，CLI MVP 已发布 0.1.0。正式源码通过四平台 CI，四个包在原生最低环境完成验收，实际范围及下载复核见[开发进度](progress.md)和[发行记录](release-validation.md)。CLI 用法见[使用指南](usage.md)。
+仓库已有固定 Rust 1.99.1 workspace、core 运行循环、模型适配和本地工具，CLI MVP 已发布 0.1.0。N0／N1随0.2.0交付，N2与N3已分别完成四平台固定源码验收；N3最终程序、源码清单及联合矩阵见[N3验收记录](n3-validation.md#四平台最终验收)。CLI用法见[使用指南](usage.md)。
 
 ## 开发流程
 
@@ -137,7 +137,7 @@ python3 scripts/n2/test_verify_performance.py
 
 ## N3 固定候选验收
 
-先执行 `just check` 与 `just test-tooling`。正常CLI和TUI使用显式程序SHA及源码commit运行，脚本保留实际源文件摘要、模型请求／工具配对、SQLite和终端恢复结果。三协议均使用本地受控HTTP替身。
+先执行 `just check` 与 `just test-tooling`；本机测试并发较高时使用 `RUST_TEST_THREADS=4 just check` 控制文件系统争用。正常CLI和TUI使用显式程序SHA及源码commit运行，脚本保留实际源文件摘要、模型请求／工具配对、SQLite和终端恢复结果。三协议均使用本地受控HTTP替身。
 
 ```sh
 python3 -B scripts/n3/acceptance.py /absolute/path/to/saya --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/cli.json

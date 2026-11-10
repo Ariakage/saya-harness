@@ -1,6 +1,6 @@
 # 全局记忆与模型编辑
 
-**更新于2026-11-10。N3开发线已包含全局存储、运行时投影、专用模型工具及CLI／TUI管理入口。当前源码集成检查与联合验收继续进行，实际结果由[开发进度](progress.md)和[N3验收](n3-validation.md)维护。**
+**更新于2026-11-10。N3开发线已包含全局存储、运行时投影、专用模型工具及CLI／TUI管理入口，并由固定源码 `e1da373` 完成四平台集成与联合验收。实际结果由[开发进度](progress.md)和[N3验收](n3-validation.md#四平台最终验收)维护。**
 
 默认记忆根为 `~/.saya`，索引为 `~/.saya/MEMORY.md`，主题资料位于 `~/.saya/memory/`。宿主可以在显式运行配置中选择其他绝对根路径。读取缺失根或空索引保持只读，首次目录及索引发布沿已授权写入流程进行。
 
@@ -83,17 +83,17 @@ WAL意图、私有stage、原子索引替换与独立ledger共同维持提交状
 
 ## 实施与验收
 
-DEV-084至DEV-089覆盖存储、读取投影、模型写入、版本与遗忘、管理界面及跨会话联合矩阵。组件阶段已记录33项存储回归与严格Clippy证据，见 `target/n3/memory-component.log` 和 `target/n3/n3-components-clippy.log`。新增运行入口、证据目录、Compact、UI和当前源码的结果按[N3验收](n3-validation.md)继续维护。
+DEV-084至DEV-089覆盖存储、读取投影、模型写入、版本与遗忘、管理界面及跨会话联合矩阵。组件阶段已记录33项存储回归与严格Clippy证据，见 `target/n3/memory-component.log` 和 `target/n3/n3-components-clippy.log`；运行入口、证据目录、Compact、UI和四平台结果见[N3最终验收](n3-validation.md#四平台最终验收)。
 
 验收需要覆盖外部编辑、并发冲突、重试幂等、WAL故障、符号链接、凭据轮换、来源伪造、跨workspace、旧历史／摘要重注入及三协议正常入口。源码集成结果与原生四平台证据分别记录。[任务分解](post-mvp-plan.md)
 
 ## DEV-085 有界查询组件
 
-2026-11-10，查询与投影组件提供UTF-8原文分页、revision／filter绑定游标、当前workspace过滤、来源与alias检索、有限路由和事实预算。缺失根保持零创建，外部编辑、更正及遗忘立即改变后续投影身份。13项新增查询／投影回归与33项既有存储回归通过，全workspace全目标严格Clippy通过，日志分别为 `target/n3/integration-core-tests-3.log` 与 `target/n3/integration-clippy-3.log`。运行入口与最终平台矩阵按[N3验收](n3-validation.md)继续维护。
+2026-11-10，查询与投影组件提供UTF-8原文分页、revision／filter绑定游标、当前workspace过滤、来源与alias检索、有限路由和事实预算。缺失根保持零创建，外部编辑、更正及遗忘立即改变后续投影身份。13项新增查询／投影回归与33项既有存储回归通过，全workspace全目标严格Clippy通过，日志分别为 `target/n3/integration-core-tests-3.log` 与 `target/n3/integration-clippy-3.log`。运行入口与最终平台矩阵见[N3最终验收](n3-validation.md#四平台最终验收)。
 
 ## DEV-087 活动视图备份与恢复
 
-2026-11-10，新增带workspace、内容校验和、当前遗忘约束及主题引用的备份格式，恢复沿既有提案、锁、WAL、幂等receipt与原子发布链路执行。导入保留其他workspace内容和当前墓碑，旧备份无法恢复已遗忘事实，缺失或变化的主题拒绝发布。3项新增回归与既有查询／存储共49项通过，全workspace全目标严格Clippy通过。CLI／TUI管理及正常入口、平台证据继续按[N3验收](n3-validation.md)维护。
+2026-11-10，新增带workspace、内容校验和、当前遗忘约束及主题引用的备份格式，恢复沿既有提案、锁、WAL、幂等receipt与原子发布链路执行。导入保留其他workspace内容和当前墓碑，旧备份无法恢复已遗忘事实，缺失或变化的主题拒绝发布。3项新增回归与既有查询／存储共49项通过，全workspace全目标严格Clippy通过。CLI／TUI管理、正常入口及四平台证据见[N3最终验收](n3-validation.md#四平台最终验收)。
 
 ## DEV-086 受控记忆工具组件
 

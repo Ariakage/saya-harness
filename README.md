@@ -76,12 +76,12 @@ just tui-preview syntax
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规范](docs/saya-plugin.md) | manifest v1、结构 schema、本地管理、权限与运行生命周期 |
 | [后续能力路线图](docs/capability-roadmap.md) | 已有扩展基础、N3 实现范围与多 Agent 等后续规划 |
-| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 发行范围、当前 N3 与后续阶段，DEV-038 至 DEV-089 |
+| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 发行范围、已完成的 N3 与后续阶段，DEV-038 至 DEV-089 |
 | [全局记忆](docs/memory.md) | 可读 MEMORY.md、专用工具、审阅、更正／遗忘与回滚 |
 | [原生 Sandbox](docs/sandbox.md) | Seatbelt、Bubblewrap／Seccomp／socat、HTTP／CONNECT broker 和 CST 边界 |
 | [MCP 与凭据管理](docs/mcp.md) | stdio／HTTP 工具、服务生命周期、私有凭据与 OAuth |
 | [N2 验收](docs/n2-validation.md) | 固定源码、四平台原生／MCP／Markdown／TUI 和性能证据 |
-| [N3 验收](docs/n3-validation.md) | 上下文、插件／Hooks 与全局记忆的本机实现、候选及平台验收状态 |
+| [N3 验收](docs/n3-validation.md) | 上下文、插件／Hooks 与全局记忆的四平台固定源码验收 |
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
@@ -98,7 +98,7 @@ just tui-preview syntax
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口并通过本机门禁，固定候选正在联合验收，N3 四平台验收仍待执行。后续 Goal、Browser 和 GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md)
+0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。后续 Goal、Browser 和 GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)
 
 ## 许可证
 
