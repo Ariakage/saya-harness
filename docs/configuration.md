@@ -12,12 +12,13 @@ profile 可选 `strict_tools`、`stream`、`allow_remote_http`、`headers_env`�
 
 ## 模型输出 token 目标
 
-N3开发线按D-053为Execution、Review和Compaction统一选择输出目标desired，优先级如下。
+N3及当前开发线按D-053并由D-054更新默认，为Execution、Review和Compaction统一选择输出目标desired，优先级如下。
 
 1. 本次请求或用途的显式max_output_tokens。独立核查使用 `review.max_output_tokens`，摘要使用 `context.summary_max_output_tokens`。
 2. 实际所选profile的显式 `max_output_tokens`。
 3. 该profile的 `limit.output`声明值。
-4. 未声明时采用32000 tokens。
+4. 适配器在响应中返回的可识别output limit。
+5. 未声明时采用65536 tokens，且任何目标不得超过1000000。
 
 模型声明值当前由用户在显式配置中提供，可使用 `[profiles.NAME.limit]`下的output，或在已有profile内加入以下可选字段。数值由所用模型及服务能力确定。
 
@@ -28,11 +29,11 @@ limit = { output = 64000 }
 
 省略profile的max_output_tokens时，上例目标为64000。启用注释中的覆盖后，目标为48000。声明值承担默认选择，显式覆盖也可高于声明值，服务端对实际模型参数的校验继续生效。当前配置加载使用这些显式元数据，自动模型目录发现作为后续接入。
 
-核查与摘要的用途覆盖默认均省略，分别继承实际所选核查profile和执行profile。已显式配置的1024／4096等值继续生效。覆盖字段及limit.output要求正整数，省略与显式值分别处理。新增声明值进入profile身份指纹。未配置max_output_tokens且无limit.output的旧配置现在采用32000；已保存会话的指纹发生变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。
+核查与摘要的用途覆盖默认均省略，分别继承实际所选核查profile和执行profile。已显式配置的1024／4096等值继续生效。覆盖字段及limit.output要求1至1000000，省略与显式值分别处理。新增声明值进入profile身份指纹。未配置max_output_tokens且无limit.output的旧配置现在采用65536；已保存会话的指纹发生变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。
 
 每次派发以完整wire输入计数 `I_wire`、模型窗口 `C`及安全余量 `R`拟合实际输出上限，满足 `1 <= O <= min(desired, C - R - I_wire)`。最终请求体按实际O重新计数和验证，输入内容、协议封装及输出字段均进入校验。序列化数字宽度变化时可保留少量额外保守余量。输出值映射为Chat的max_completion_tokens或兼容max_tokens、Responses的max_output_tokens、Messages的max_tokens。计数保持estimated标记，服务端实际token与reasoning开销以响应为准。
 
-JSON正文、协议消息、工具结果与Run请求／时间的原有限额继续执行。Compact的64KiB结构化正文上限，以及独立核查64KiB正文与512字符原因上限分别约束实际内容。输出token目标变化保留这些边界及来源验证。[上下文预算与水位](context-management.md#完整请求预算)、[D-053](decisions.md)
+JSON正文、协议消息、工具结果与Run请求／时间的原有限额继续执行。Compact的64KiB结构化正文上限，以及独立核查64KiB正文与512字符原因上限分别约束实际内容。输出token目标变化保留这些边界及来源验证。[上下文预算与水位](context-management.md#完整请求预算)、[D-054](decisions.md)
 
 ## Thinking effort
 
@@ -184,15 +185,17 @@ max_search_matches = 200
 [context]
 auto_compact = true
 trigger_percent = 80
+# 可选精确输入token水位；存在时优先于 trigger_percent。
+# trigger_tokens = 950000
 target_percent = 55
 extra_safety_tokens = 0
 # 可选用途覆盖，省略时继承执行profile的输出目标。
-# summary_max_output_tokens = 32000
+# summary_max_output_tokens = 65536
 max_compaction_calls = 32
 compaction_timeout_seconds = 600
 ```
 
-默认在下一次Execution模型请求前达到80%稳定输入基准时触发Compact，成功投影必须降至55%以内。target要求大于0且小于trigger，trigger最多100%。摘要输出继承所选执行profile目标，显式summary_max_output_tokens优先，再依据每次摘要／合并请求的剩余空间收缩。单次压缩最多32次实际模型调用，可配置1至64。操作超时默认600秒，可配置1至3600秒，同时受当前Run剩余活跃时间约束。
+默认在下一次Execution模型请求前达到80%稳定输入基准时触发Compact；显式 `trigger_tokens` 使用精确输入token水位并受稳定输入容量上限约束。TUI `/autocompact TOKENS|auto|off` 可切换当前进程的后续请求，`950k`、`1m`等写法会被解析，`auto`恢复profile声明的百分比。成功投影必须降至55%以内。target要求大于0且小于trigger，trigger最多100%。摘要输出继承所选执行profile目标，显式summary_max_output_tokens优先，再依据每次摘要／合并请求的剩余空间收缩。单次压缩最多32次实际模型调用，可配置1至64。操作超时默认600秒，可配置1至3600秒，同时受当前Run剩余活跃时间约束。
 
 摘要使用执行profile和空工具集合。实际摘要请求、传输重试与运行活跃时间共用Run预算，默认最多16个完整组分块、4轮合并和每次请求2次允许的传输重试。失败不会切换为无限摘要循环。`auto_compact = false`保留手动入口及完整请求预算检查。
 

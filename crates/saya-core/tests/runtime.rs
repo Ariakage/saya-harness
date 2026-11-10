@@ -138,6 +138,95 @@ fn runtime(
     })
 }
 
+struct SteeringModel {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    calls: std::sync::atomic::AtomicUsize,
+    seen: Mutex<Vec<ModelRequest>>,
+}
+impl SteeringModel {
+    fn new() -> Self {
+        Self {
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+}
+impl Model for SteeringModel {
+    fn start<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        _: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            self.seen
+                .lock()
+                .map_err(|_| err("test"))?
+                .push(request.clone());
+            let turn = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if turn == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+                return Ok(Box::new(Stream(Some(vec![call(
+                    "steer-continuation",
+                    "todo_write",
+                    serde_json::json!({"todos":[{
+                        "id":"one",
+                        "content":"steering fixture",
+                        "status":"pending"
+                    }]}),
+                )]))) as Box<dyn ModelStream>);
+            }
+            if !request.history.iter().any(|item| {
+                matches!(item, HistoryItem::UserText(text) if text == "PRIORITIZE_SECURITY_TESTS")
+            }) {
+                return Err(err("missing_steering_message"));
+            }
+            Ok(Box::new(Stream(Some(vec![HistoryItem::AssistantText(
+                "steering observed".into(),
+            )]))) as Box<dyn ModelStream>)
+        })
+    }
+}
+
+#[tokio::test]
+async fn steering_is_persisted_at_the_next_model_boundary_and_rejects_late_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Bypass);
+    let model = Arc::new(SteeringModel::new());
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+    let mut runtime = runtime(temp.path(), run, model.clone(), store, Arc::new(NoCancel))?;
+    let handle = runtime.handle();
+    let result = {
+        let running = runtime.run(&mut session);
+        tokio::pin!(running);
+        tokio::select! {
+            ()=model.started.notified()=>{}
+            result=&mut running=>panic!("run ended before steering: {result:?}")
+        }
+        handle.steer("PRIORITIZE_SECURITY_TESTS")?;
+        model.release.notify_one();
+        running.await?
+    };
+    assert_eq!(result.status, RunStatus::Completed);
+    assert!(session.history.iter().any(|item| {
+        matches!(item, HistoryItem::UserText(text) if text == "PRIORITIZE_SECURITY_TESTS")
+    }));
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        handle
+            .steer("too late")
+            .expect_err("closed run accepted steering")
+            .0
+            .code,
+        "steer_closed"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn external_auth_input_and_unknown_outcomes_stop_before_following_side_effects()
 -> Result<(), Box<dyn std::error::Error>> {

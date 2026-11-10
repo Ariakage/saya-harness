@@ -34,6 +34,7 @@ use crate::{
     tools::{exec::ExecConfig, read::ReadTools},
 };
 use std::{
+    collections::VecDeque,
     future::Future,
     path::PathBuf,
     pin::Pin,
@@ -44,6 +45,9 @@ use std::{
     time::Duration,
 };
 use tokio::time::{Instant, sleep};
+
+const MAX_STEER_MESSAGES: usize = 16;
+const MAX_STEER_BYTES: usize = 256 * 1024;
 
 fn error(code: &str, message: &str) -> BoundaryError {
     BoundaryError(
@@ -253,6 +257,7 @@ pub struct AgentRuntime {
     summary: String,
     confirmation: Option<Arc<dyn ApprovalHandler>>,
     input: Option<Arc<dyn InputHandler>>,
+    steers: SteerQueue,
     project_context: Option<Arc<Mutex<ProjectState>>>,
     personal_context: PersonalContext,
     context_state: Option<Arc<context::ContextState>>,
@@ -265,6 +270,80 @@ pub struct AgentRuntime {
     started: AtomicBool,
     secret_source: secrets::SecretSource,
     services: Arc<services::RuntimeServices>,
+}
+
+#[derive(Default)]
+struct SteerState {
+    messages: VecDeque<String>,
+    bytes: usize,
+    closed: bool,
+}
+
+#[derive(Clone, Default)]
+struct SteerQueue(Arc<Mutex<SteerState>>);
+
+impl SteerQueue {
+    fn push(&self, text: String) -> Result<(), BoundaryError> {
+        if text.trim().is_empty() {
+            return Err(error("invalid_steer", "steering message is empty"));
+        }
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| error("steer_state", "steering queue lock failed"))?;
+        if state.closed {
+            return Err(error(
+                "steer_closed",
+                "run no longer accepts steering messages",
+            ));
+        }
+        if state.messages.len() >= MAX_STEER_MESSAGES
+            || state
+                .bytes
+                .checked_add(text.len())
+                .is_none_or(|bytes| bytes > MAX_STEER_BYTES)
+        {
+            return Err(error(
+                "steer_limit",
+                "queued steering messages exceed their limit",
+            ));
+        }
+        state.bytes += text.len();
+        state.messages.push_back(text);
+        Ok(())
+    }
+
+    fn drain(&self) -> Result<Vec<String>, BoundaryError> {
+        self.take(false)
+    }
+
+    fn finish_or_drain(&self) -> Result<Vec<String>, BoundaryError> {
+        self.take(true)
+    }
+
+    fn take(&self, close_if_empty: bool) -> Result<Vec<String>, BoundaryError> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| error("steer_state", "steering queue lock failed"))?;
+        if state.closed {
+            return Ok(Vec::new());
+        }
+        if close_if_empty && state.messages.is_empty() {
+            state.closed = true;
+            return Ok(Vec::new());
+        }
+        state.bytes = 0;
+        Ok(state.messages.drain(..).collect())
+    }
+
+    fn close(&self) {
+        if let Ok(mut state) = self.0.lock() {
+            state.closed = true;
+            state.messages.clear();
+            state.bytes = 0;
+        }
+    }
 }
 /// Explicitly supplied personal information, included as lower-trust request
 /// data. It is neither discovered automatically nor saved by the runtime.
@@ -335,8 +414,13 @@ pub struct RuntimeHandle {
     services: Arc<services::RuntimeServices>,
     context_state: Option<Arc<context::ContextState>>,
     skill_state: Option<std::sync::Weak<skills::SkillState>>,
+    steers: SteerQueue,
 }
 impl RuntimeHandle {
+    /// Queue a user guidance message for the next model boundary.
+    pub fn steer(&self, text: impl Into<String>) -> Result<(), BoundaryError> {
+        self.steers.push(text.into())
+    }
     /// A queued request may outlive the final execution response. Interfaces
     /// can honor it with a separate compact run after successful completion.
     pub fn compaction_pending(&self) -> bool {
@@ -518,6 +602,7 @@ impl AgentRuntime {
             summary: setup.summary,
             confirmation: setup.confirmation,
             input: None,
+            steers: SteerQueue::default(),
             project_context: None,
             personal_context: PersonalContext::default(),
             context_state: None,
@@ -540,6 +625,7 @@ impl AgentRuntime {
             services: self.services.clone(),
             context_state: self.context_state.clone(),
             skill_state: self.skill_state.as_ref().map(Arc::downgrade),
+            steers: self.steers.clone(),
         }
     }
     /// Apply explicitly configured rates to the two request categories.
@@ -1619,6 +1705,30 @@ impl AgentRuntime {
             }
         }
     }
+    async fn append_steering(
+        &self,
+        session: &mut Session,
+        messages: Vec<String>,
+    ) -> Result<bool, BoundaryError> {
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        let items = messages
+            .into_iter()
+            .map(HistoryItem::UserText)
+            .collect::<Vec<_>>();
+        let changes = items
+            .iter()
+            .cloned()
+            .map(|item| StoreChange::History {
+                session_id: session.id,
+                item,
+            })
+            .collect::<Vec<_>>();
+        self.store.commit(&changes).await?;
+        session.history.extend(items);
+        Ok(true)
+    }
     async fn run_inner(&self, session: &mut Session) -> Result<String, BoundaryError> {
         self.check()?;
         if session.id != self.run.session_id || session.work_mode != self.run.work_mode {
@@ -1671,6 +1781,8 @@ impl AgentRuntime {
         }
         let mut previous: Option<(String, serde_json::Value, u8)> = None;
         loop {
+            let steering = self.steers.drain()?;
+            self.append_steering(session, steering).await?;
             self.check()?;
             let items = self.model_turn(session).await?;
             self.check()?;
@@ -1742,6 +1854,10 @@ impl AgentRuntime {
                 })
                 .collect();
             if calls.is_empty() {
+                let late = self.steers.finish_or_drain()?;
+                if self.append_steering(session, late).await? {
+                    continue;
+                }
                 return Ok(items
                     .iter()
                     .filter_map(|item| {
@@ -1873,8 +1989,11 @@ impl AgentRuntime {
         self.metrics.start();
         self.used = true;
         let initial = session.history.len();
-        self.dispatcher.recover_outputs(session.id).await?;
-        let mut outcome = self.run_inner(session).await;
+        let mut outcome = match self.dispatcher.recover_outputs(session.id).await {
+            Ok(()) => self.run_inner(session).await,
+            Err(error) => Err(error),
+        };
+        self.steers.close();
         if self.started.load(Ordering::Acquire)
             && !self
                 .context_state

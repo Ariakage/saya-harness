@@ -142,6 +142,19 @@ async fn runtime_commands_change_sandbox_effort_and_model_without_reusing_approv
     app.command("/thinking default").await.unwrap();
     assert_eq!(app.config.profiles["fixture"].thinking_effort, None);
     assert_eq!(app.state.thinking_effort, None);
+    app.command("/autocompact 950k").await.unwrap();
+    assert!(app.config.context.auto_compact);
+    assert!(
+        app.config
+            .context
+            .trigger_tokens
+            .is_some_and(|tokens| tokens < 950_000)
+    );
+    app.command("/autocompact auto").await.unwrap();
+    assert_eq!(app.config.context.trigger_tokens, None);
+    assert!(app.config.context.auto_compact);
+    app.command("/autocompact off").await.unwrap();
+    assert!(!app.config.context.auto_compact);
     let mut other = app.config.profiles["fixture"].clone();
     other.model = "other-model".into();
     app.config.profiles.insert("other".into(), other);
@@ -193,6 +206,14 @@ async fn enter_executes_the_selected_completion_without_tab_or_right() {
             .messages
             .iter()
             .any(|message| message.text.contains("Sandbox —"))
+    );
+    app.state.editor.set_text("/thinking h");
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(
+        app.config.profiles["fixture"].thinking_effort,
+        Some(saya_core::config::ThinkingEffort::High)
     );
 }
 
@@ -1198,6 +1219,34 @@ async fn active_permission_change_is_refused_and_cancellation_reaches_owned_runt
     app.cancel();
     assert!(cancel.is_cancelled());
     assert!(receiver.await.is_err());
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
+async fn active_run_accepts_bounded_guidance_without_replacing_the_original_task() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.state
+        .editor
+        .set_text("Prioritize the security regression tests");
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert!(app.state.editor.text().is_empty());
+    assert!(
+        app.state
+            .messages
+            .iter()
+            .any(|message| message.role == Role::User
+                && message.text == "Prioritize the security regression tests")
+    );
+    assert!(
+        app.state
+            .messages
+            .iter()
+            .any(|message| message.text.contains("Guidance queued"))
+    );
+    assert!(app.active.is_some());
     stop_active_call(&mut app).await;
 }
 

@@ -39,7 +39,7 @@ pub const COMMANDS: &[Suggestion] = &[
     },
     Suggestion {
         text: "/sessions",
-        description: "List saved sessions; an optional page number follows",
+        description: "Open the saved session selector; an optional page number follows",
     },
     Suggestion {
         text: "/new",
@@ -158,6 +158,10 @@ pub const COMMANDS: &[Suggestion] = &[
         description: "Alias for /effort thinking effort selection",
     },
     Suggestion {
+        text: "/autocompact ",
+        description: "Add a token threshold, auto, or off for automatic compaction",
+    },
+    Suggestion {
         text: "/skills",
         description: "Open the discovered Skill selector",
     },
@@ -207,6 +211,53 @@ impl Completion {
                 .copied()
                 .filter(|suggestion| suggestion.text.starts_with(text)),
         );
+        for command in ["/effort ", "/thinking "] {
+            if text.starts_with(command) {
+                self.items.extend(
+                    ["low", "medium", "high", "xhigh", "max", "default"]
+                        .into_iter()
+                        .filter_map(|level| {
+                            let suggestion = Suggestion {
+                                text: match (command, level) {
+                                    ("/effort ", "low") => "/effort low",
+                                    ("/effort ", "medium") => "/effort medium",
+                                    ("/effort ", "high") => "/effort high",
+                                    ("/effort ", "xhigh") => "/effort xhigh",
+                                    ("/effort ", "max") => "/effort max",
+                                    ("/effort ", _) => "/effort default",
+                                    (_, "low") => "/thinking low",
+                                    (_, "medium") => "/thinking medium",
+                                    (_, "high") => "/thinking high",
+                                    (_, "xhigh") => "/thinking xhigh",
+                                    (_, "max") => "/thinking max",
+                                    _ => "/thinking default",
+                                },
+                                description: "Set thinking effort for subsequent requests",
+                            };
+                            suggestion.text.starts_with(text).then_some(suggestion)
+                        }),
+                );
+            }
+        }
+        if text.starts_with("/autocompact ") {
+            self.items.extend(
+                [
+                    Suggestion {
+                        text: "/autocompact auto",
+                        description: "Restore the configured percentage trigger",
+                    },
+                    Suggestion {
+                        text: "/autocompact off",
+                        description: "Disable automatic compaction",
+                    },
+                ]
+                .into_iter()
+                .filter(|suggestion| suggestion.text.starts_with(text)),
+            );
+        }
+        if matches!(text, "/effort " | "/thinking " | "/autocompact ") {
+            self.items.retain(|suggestion| suggestion.text != text);
+        }
         if self.items.len() == 1 && self.items[0].text == text {
             self.items.clear();
         }
@@ -270,7 +321,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 40);
+        assert_eq!(COMMANDS.len(), 41);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -309,6 +360,7 @@ mod tests {
             "/model ",
             "/effort ",
             "/thinking ",
+            "/autocompact ",
             "/skills",
             "/mcps",
             "/plugins",
@@ -362,6 +414,25 @@ mod tests {
         assert_eq!(texts(&completion), ["/resume ", "/resume-accept "]);
         completion.update("/markdown ", 10, true);
         assert_eq!(texts(&completion), ["/markdown render", "/markdown source"]);
+        completion.update("/thinking ", 10, true);
+        assert_eq!(
+            texts(&completion),
+            [
+                "/thinking low",
+                "/thinking medium",
+                "/thinking high",
+                "/thinking xhigh",
+                "/thinking max",
+                "/thinking default",
+            ]
+        );
+        completion.update("/effort h", 9, true);
+        assert_eq!(texts(&completion), ["/effort high"]);
+        completion.update("/autocompact ", 13, true);
+        assert_eq!(
+            texts(&completion),
+            ["/autocompact auto", "/autocompact off"]
+        );
         for text in ["/resume saved-id", "/export json result.json", "/MODE"] {
             completion.update(text, text.len(), true);
             assert!(!completion.visible(), "{text:?}");
@@ -371,10 +442,12 @@ mod tests {
     #[test]
     fn complete_commands_and_completed_scaffolds_hide_the_only_equal_match() {
         let mut completion = Completion::default();
-        for suggestion in COMMANDS
-            .iter()
-            .filter(|item| !matches!(item.text, "/cancel" | "/footnote "))
-        {
+        for suggestion in COMMANDS.iter().filter(|item| {
+            !matches!(
+                item.text,
+                "/cancel" | "/footnote " | "/effort " | "/thinking " | "/autocompact "
+            )
+        }) {
             completion.update(suggestion.text, suggestion.text.len(), true);
             assert!(completion.eligible());
             assert!(!completion.visible(), "{:?}", suggestion.text);

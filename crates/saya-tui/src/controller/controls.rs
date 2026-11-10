@@ -35,6 +35,19 @@ fn effort(value: &str) -> Option<Option<ThinkingEffort>> {
         _ => None,
     }
 }
+fn token_count(value: &str) -> Option<u64> {
+    let value = value.trim().to_ascii_lowercase();
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b'k') => (&value[..value.len() - 1], 1_000u64),
+        Some(b'm') => (&value[..value.len() - 1], 1_000_000u64),
+        _ => (value.as_str(), 1u64),
+    };
+    number
+        .parse::<u64>()
+        .ok()
+        .filter(|tokens| *tokens > 0)
+        .and_then(|tokens| tokens.checked_mul(multiplier))
+}
 pub(super) fn closed(request: &Request) -> bool {
     match request {
         Request::Approval(_, reply) => reply.is_closed(),
@@ -174,6 +187,60 @@ impl App {
                 );
             }
             _ => return Err("Use /sandbox on|off|status".into()),
+        }
+        Ok(())
+    }
+    fn set_autocompact(&mut self, argument: &str) -> Result<()> {
+        self.require_idle_configuration()?;
+        match argument.to_ascii_lowercase().as_str() {
+            "" => {
+                let value = if !self.config.context.auto_compact {
+                    "off".into()
+                } else if let Some(tokens) = self.config.context.trigger_tokens {
+                    format!("on at {tokens} input tokens")
+                } else {
+                    format!("on at {}%", self.config.context.trigger_percent)
+                };
+                self.notice(&format!("Automatic compaction — {value}"));
+            }
+            "auto" => {
+                self.config.context.auto_compact = true;
+                self.config.context.trigger_tokens = None;
+                self.notice(&format!(
+                    "Automatic compaction restored to {}%",
+                    self.config.context.trigger_percent
+                ));
+            }
+            "off" => {
+                self.config.context.auto_compact = false;
+                self.notice("Automatic compaction disabled for subsequent runs.");
+            }
+            value => {
+                let tokens = token_count(value)
+                    .ok_or("Use /autocompact TOKENS|auto|off, for example 950k or 1m")?;
+                let profile = self
+                    .config
+                    .profile
+                    .as_ref()
+                    .and_then(|name| self.config.profiles.get(name))
+                    .ok_or("Choose a configured model profile first")?;
+                let budget = self.config.context.budget(profile);
+                let capacity = budget.input_capacity()?;
+                let target = ((u128::from(capacity)
+                    * u128::from(self.config.context.target_percent))
+                    / 100) as u64;
+                let effective = tokens.min(capacity);
+                if effective <= target {
+                    return Err(
+                        "Automatic compaction trigger must be above the target threshold".into(),
+                    );
+                }
+                self.config.context.auto_compact = true;
+                self.config.context.trigger_tokens = Some(effective);
+                self.notice(&format!(
+                    "Automatic compaction trigger set to {effective} input tokens."
+                ));
+            }
         }
         Ok(())
     }
@@ -399,8 +466,35 @@ impl App {
                             self.state.status = "Running".into();
                         }
                         _ => {
-                            self.pending = Some(Request::Approval(request, reply));
-                            self.notice("Approve with y, deny with n, or enter a control command.");
+                            if self
+                                .active
+                                .as_ref()
+                                .is_some_and(|active| active.kind == RunKind::Execution)
+                                && !text.trim().is_empty()
+                            {
+                                let guidance = if text.starts_with("//") {
+                                    text[1..].to_owned()
+                                } else {
+                                    text
+                                };
+                                let display = self.safe(&guidance);
+                                self.active
+                                    .as_ref()
+                                    .ok_or("active run is unavailable")?
+                                    .handle
+                                    .steer(guidance)?;
+                                self.pending = Some(Request::Approval(request, reply));
+                                self.state.push_message(Role::User, "You", display);
+                                self.notice(
+                                    "Guidance queued for the next model boundary; the current approval remains pending.",
+                                );
+                                self.state.editor.clear();
+                            } else {
+                                self.pending = Some(Request::Approval(request, reply));
+                                self.notice(
+                                    "Approve with y, deny with n, or enter a control command.",
+                                );
+                            }
                         }
                     }
                 }
@@ -409,7 +503,23 @@ impl App {
             return Ok(false);
         }
         if self.active.is_some() {
-            self.notice("A run is active; your draft is retained. Ctrl+C cancels.");
+            let guidance = if text.starts_with("//") {
+                text[1..].to_owned()
+            } else {
+                text
+            };
+            if guidance.trim().is_empty() {
+                return Ok(false);
+            }
+            let display = self.safe(&guidance);
+            let active = self.active.as_ref().ok_or("active run is unavailable")?;
+            if active.kind != RunKind::Execution {
+                return Err("Guidance can be added only while an Agent run is active".into());
+            }
+            active.handle.steer(guidance)?;
+            self.state.push_message(Role::User, "You", display);
+            self.notice("Guidance queued for the next model boundary.");
+            self.state.editor.clear();
             return Ok(false);
         }
         if !text.trim().is_empty() {
@@ -462,6 +572,7 @@ impl App {
             "/cd" => self.change_workspace(argument).await?,
             "/sandbox" => self.set_sandbox(argument)?,
             "/effort" | "/thinking" => self.select_effort(argument).await?,
+            "/autocompact" => self.set_autocompact(argument)?,
             "/skills" | "/mcps" | "/plugins" => {
                 if !argument.is_empty() {
                     return Err(format!("Use {name} without arguments").into());
@@ -504,13 +615,20 @@ impl App {
                     .map(|prepared| prepared.session.id.0.to_string())
                     .unwrap_or_else(|| "No session".into());
                 self.notice(&format!(
-                    "{} · session {} · mode {} · pending {:?} · permissions {} · sandbox {} · Markdown {}",
+                    "{} · session {} · mode {} · pending {:?} · permissions {} · sandbox {} · autocompact {} · Markdown {}",
                     self.state.status,
                     session,
                     self.state.mode,
                     self.state.pending_mode,
                     self.state.permissions,
                     sandbox_label(self.config.sandbox.backend),
+                    if !self.config.context.auto_compact {
+                        "off".into()
+                    } else if let Some(tokens) = self.config.context.trigger_tokens {
+                        format!("{tokens} tokens")
+                    } else {
+                        format!("{}%", self.config.context.trigger_percent)
+                    },
                     self.state.markdown_display.as_str()
                 ));
             }
@@ -532,6 +650,7 @@ impl App {
                             "/markdown source|render selects the assistant presentation".into(),
                             "/cd PATH changes this session workspace; /sandbox on|off|status controls native isolation".into(),
                             "/effort|/thinking LEVEL changes reasoning effort; /model PROFILE changes model profile".into(),
+                            "/autocompact TOKENS|auto|off changes the next-run compaction trigger".into(),
                             "/skills, /mcps and /plugins open selectors · ↑↓ move · Enter selects · Esc closes".into(),
                             "/compact summarizes saved history, or queues at the next model boundary during a run".into(),
                             "/memory opens current memory, source/scope, review, forgetting, history and backup controls".into(),

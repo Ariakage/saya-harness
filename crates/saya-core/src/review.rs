@@ -244,7 +244,10 @@ pub async fn review_operation(
     if cancel.is_cancelled() {
         return Err(failure("cancelled", "review cancelled"));
     }
-    if config.max_output_tokens == Some(0) {
+    if config
+        .max_output_tokens
+        .is_some_and(|tokens| tokens == 0 || tokens > crate::config::MAX_OUTPUT_TOKENS)
+    {
         return Err(failure(
             "invalid_config",
             "review output token limit must be positive",

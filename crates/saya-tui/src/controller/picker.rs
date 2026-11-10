@@ -299,13 +299,13 @@ impl App {
                     panel.selected = panel.items.len().saturating_sub(1);
                 }
             }
-            KeyCode::Enter => self.select_picker_item()?,
+            KeyCode::Enter => self.select_picker_item().await?,
             _ => {}
         }
         Ok(false)
     }
 
-    fn select_picker_item(&mut self) -> Result<()> {
+    async fn select_picker_item(&mut self) -> Result<()> {
         let Some(panel) = &self.state.picker_panel else {
             return Ok(());
         };
@@ -323,6 +323,18 @@ impl App {
                 self.state.details_scroll = 0;
             }
             PickerKind::Mcps => self.toggle_mcp(&item)?,
+            PickerKind::Sessions => {
+                self.state.picker_panel = None;
+                if self
+                    .prepared
+                    .as_ref()
+                    .is_some_and(|prepared| prepared.session.id.0.to_string() == item.id)
+                {
+                    self.notice("Session is already open and waiting for input.");
+                } else {
+                    self.service("/resume", &item.id).await?;
+                }
+            }
         }
         Ok(())
     }

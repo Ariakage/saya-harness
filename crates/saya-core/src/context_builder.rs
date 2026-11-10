@@ -55,6 +55,8 @@ pub struct ContextBudget {
     pub output_reserve: u64,
     pub safety_margin: u64,
     pub trigger_per_mille: u16,
+    #[serde(default)]
+    pub trigger_tokens: Option<u64>,
     pub target_per_mille: u16,
 }
 impl ContextBudget {
@@ -64,6 +66,7 @@ impl ContextBudget {
             output_reserve,
             safety_margin,
             trigger_per_mille: 800,
+            trigger_tokens: None,
             target_per_mille: 550,
         }
     }
@@ -78,6 +81,7 @@ impl ContextBudget {
             || self.target_per_mille == 0
             || self.target_per_mille >= self.trigger_per_mille
             || self.trigger_per_mille > 1000
+            || self.trigger_tokens == Some(0)
         {
             return Err(error(
                 "context_budget",
@@ -94,6 +98,21 @@ impl ContextBudget {
 
     fn threshold(&self, capacity: u64, per_mille: u16) -> u64 {
         ((u128::from(capacity) * u128::from(per_mille)) / 1000) as u64
+    }
+
+    fn trigger_threshold(&self, capacity: u64) -> Result<u64, BoundaryError> {
+        let target = self.threshold(capacity, self.target_per_mille);
+        let trigger = self.trigger_tokens.map_or_else(
+            || self.threshold(capacity, self.trigger_per_mille),
+            |tokens| tokens.min(capacity),
+        );
+        if trigger <= target {
+            return Err(error(
+                "context_budget",
+                "Compaction trigger must be above the target threshold",
+            ));
+        }
+        Ok(trigger)
     }
 }
 
@@ -672,9 +691,7 @@ fn decide(
 ) -> Result<ContextDecision, BoundaryError> {
     let capacity = input.budget.input_capacity()?;
     let used = accounting.total.tokens;
-    let trigger = input
-        .budget
-        .threshold(capacity, input.budget.trigger_per_mille);
+    let trigger = input.budget.trigger_threshold(capacity)?;
     if used < trigger {
         return Ok(ContextDecision::Ready);
     }

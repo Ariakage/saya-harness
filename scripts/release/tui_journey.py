@@ -2169,7 +2169,7 @@ def command_palette_modal_journey(binary):
                     if width < 38:
                         if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
                             raise RuntimeError('compact command modal omitted its close instruction')
-                    elif f'{index + 1}/40' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                    elif f'{index + 1}/41' not in ''.join(terminal.screen.cells[top][left:left + width]):
                         raise RuntimeError('command modal did not report the actual catalog selection')
                     navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
                     expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
@@ -2226,20 +2226,22 @@ def command_palette_modal_journey(binary):
                 clear_draft()
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 39)
+                terminal.send(b'\x1b[B' * 40)
                 wait_selected('/plugins')
-                geometry(39)
+                geometry(40)
                 if '/mode plan' in terminal.screen.command_palette_text():
                     raise RuntimeError('long command catalog did not scroll to keep its last selection visible')
-                scaffold_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/cd '))
+                scaffold_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/skills'))
                 terminal.click(scaffold_row[0] + 4, scaffold_row[1])
-                wait_selected('/cd ')
+                wait_selected('/skills')
                 if terminal.screen.command_palette_selected()[1] != scaffold_row[1]:
                     raise RuntimeError('clicking a visible command moved its highlighted row')
                 terminal.send(b'\x1b[A')
-                wait_selected('/export-full markdown')
+                wait_selected('/autocompact ')
                 if terminal.screen.command_palette_selected()[1] != scaffold_row[1] - 1:
                     raise RuntimeError('Up moved the catalog viewport while its previous row was already visible')
+                terminal.send(b'\x1b[A' * 8)
+                wait_selected('/export-full markdown')
                 geometry(29)
                 for columns, rows in [(160, 45), (80, 24), (60, 18), (20, 6), (110, 32)]:
                     terminal.resize(columns, rows)
@@ -2433,10 +2435,10 @@ def session_restore_and_export(binary):
                 if first['snapshot']['scope'] != 'transcript' or first['snapshot']['include_tools']:
                     raise RuntimeError('default TUI export did not use transcript privacy defaults')
                 terminal.line('/sessions')
-                terminal.until('Sessions · UI')
+                terminal.until('Sessions · page 1')
                 terminal.until(identifier[:8])
                 terminal.send(b'\x1b')
-                terminal.wait(lambda: 'Sessions · UI' not in terminal.screen.text and
+                terminal.wait(lambda: 'Sessions · page 1' not in terminal.screen.text and
                               'SESSION_FIRST' in terminal.screen.body_text(), 'session list closed')
                 terminal.settle()
                 terminal.line('/new')

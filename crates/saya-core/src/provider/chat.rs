@@ -266,9 +266,11 @@ impl Model for ChatModel {
                     state: ChatState::default(),
                     ended: false,
                     pending: VecDeque::new(),
+                    settings: self.settings.clone(),
                 }) as Box<dyn ModelStream>)
             } else {
                 let value = response.json(cancel).await?;
+                self.settings.observe_output_limit(&value);
                 let (items, usage) = complete_json(&value)?;
                 Ok(
                     Box::new(ReadyStream(Some(ModelUpdate::Finished { items, usage })))
@@ -309,6 +311,7 @@ struct ChatStream {
     state: ChatState,
     ended: bool,
     pending: VecDeque<ModelUpdate>,
+    settings: ModelSettings,
 }
 impl ModelStream for ChatStream {
     fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
@@ -345,6 +348,7 @@ impl ModelStream for ChatStream {
                     "provider returned malformed event JSON",
                 )
             })?;
+            self.settings.observe_output_limit(&value);
             let delta = self.state.update(&value)?;
             if let Some(text) = value["choices"][0]["delta"]["reasoning_content"]
                 .as_str()

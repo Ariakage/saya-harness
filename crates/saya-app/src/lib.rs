@@ -69,6 +69,7 @@ fn model(
         model: p.model.clone(),
         context_window_tokens: p.context_window_tokens,
         max_output_tokens: p.max_output_tokens,
+        upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         extra_safety_tokens: config.context.extra_safety_tokens,
         thinking_effort: p.thinking_effort,
         strict_tools: p.strict_tools,

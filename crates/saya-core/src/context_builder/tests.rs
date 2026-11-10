@@ -697,6 +697,21 @@ fn rejects_exhausted_budget_and_bad_thresholds_while_accepting_output_overrides(
 }
 
 #[test]
+fn exact_token_trigger_is_capped_by_capacity_and_must_exceed_target() {
+    let mut budget = ContextBudget::new(1000, 100, 100);
+    let capacity = budget.input_capacity().unwrap();
+    budget.trigger_tokens = Some(850);
+    assert_eq!(budget.trigger_threshold(capacity).unwrap(), 850);
+    budget.trigger_tokens = Some(capacity + 1);
+    assert_eq!(budget.trigger_threshold(capacity).unwrap(), capacity);
+    budget.trigger_tokens = Some(1);
+    assert_eq!(
+        budget.trigger_threshold(capacity).unwrap_err().0.code,
+        "context_budget"
+    );
+}
+
+#[test]
 fn dynamic_output_fits_small_windows_with_stable_compaction_thresholds() {
     let id = identity(ModelProtocol::Responses);
     let mut request = request(vec![user("Keep this exact user requirement.")]);

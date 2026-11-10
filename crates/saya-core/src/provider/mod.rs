@@ -8,10 +8,14 @@ pub mod transport;
 
 use crate::{
     boundary::ModelRequest,
-    config::ThinkingEffort,
+    config::{MAX_OUTPUT_TOKENS, ThinkingEffort},
     contract::{BoundaryError, ErrorInfo, ModelPurpose},
 };
 use serde_json::{Map, Value};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 
 fn failure(code: &str, message: &str) -> BoundaryError {
     BoundaryError(
@@ -34,6 +38,7 @@ pub struct ModelSettings {
     /// Additional host-configured context reserve for every request purpose.
     pub extra_safety_tokens: u64,
     pub max_output_tokens: u32,
+    pub upstream_max_output_tokens: Arc<AtomicU32>,
     pub thinking_effort: Option<ThinkingEffort>,
     pub strict_tools: bool,
     pub stream: bool,
@@ -50,6 +55,7 @@ impl ModelSettings {
             || self.model.is_empty()
             || self.context_window_tokens == 0
             || self.max_output_tokens == 0
+            || self.max_output_tokens > MAX_OUTPUT_TOKENS
             || request.profile != self.profile
         {
             return Err(failure(
@@ -57,14 +63,44 @@ impl ModelSettings {
                 "model profile is invalid or does not match the request",
             ));
         }
-        let output = request.max_output_tokens.unwrap_or(self.max_output_tokens);
-        if output == 0 {
+        let requested = request.max_output_tokens.unwrap_or(self.max_output_tokens);
+        if requested == 0 || requested > MAX_OUTPUT_TOKENS {
             return Err(failure(
                 "invalid_config",
-                "output token limit must be positive",
+                "output token limit must be positive and at most one million",
             ));
         }
+        let observed = self
+            .upstream_max_output_tokens
+            .load(Ordering::Acquire)
+            .min(MAX_OUTPUT_TOKENS);
+        let output = if observed == 0 {
+            requested
+        } else {
+            requested.min(observed)
+        };
         Ok(output)
+    }
+
+    pub(crate) fn observe_output_limit(&self, value: &Value) {
+        for key in ["max_output_limit", "output_limit"] {
+            if let Some(limit) = value.get(key).and_then(Value::as_u64)
+                && let Ok(limit) = u32::try_from(limit)
+                && limit > 0
+            {
+                let limit = limit.min(MAX_OUTPUT_TOKENS);
+                let observed = self.upstream_max_output_tokens.load(Ordering::Acquire);
+                if observed == 0 || limit < observed {
+                    self.upstream_max_output_tokens
+                        .store(limit, Ordering::Release);
+                }
+            }
+        }
+        for key in ["response", "model", "capabilities", "limits"] {
+            if let Some(value) = value.get(key) {
+                self.observe_output_limit(value);
+            }
+        }
     }
 
     /// Fit the requested output ceiling after the complete wire input is known.
@@ -246,4 +282,63 @@ fn count_wire(
             version: "1".into(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(max_output_tokens: u32) -> ModelSettings {
+        ModelSettings {
+            profile: "fixture".into(),
+            model: "fixture".into(),
+            context_window_tokens: 2_000_000,
+            extra_safety_tokens: 0,
+            max_output_tokens,
+            upstream_max_output_tokens: Arc::new(AtomicU32::new(0)),
+            thinking_effort: None,
+            strict_tools: false,
+            stream: true,
+        }
+    }
+
+    fn request(max_output_tokens: Option<u32>) -> ModelRequest {
+        ModelRequest {
+            request_id: "request".into(),
+            purpose: ModelPurpose::Execution,
+            profile: "fixture".into(),
+            instructions: "fixture".into(),
+            dynamic_instructions: None,
+            max_output_tokens,
+            history: vec![],
+            tools: vec![],
+        }
+    }
+
+    #[test]
+    fn hard_limit_is_one_million_and_upstream_caps_future_output_targets() {
+        let model = settings(MAX_OUTPUT_TOKENS);
+        assert_eq!(model.validate(&request(None)).unwrap(), MAX_OUTPUT_TOKENS);
+        model.observe_output_limit(&serde_json::json!({
+            "limits": {"max_output_limit": 100_000}
+        }));
+        assert_eq!(model.validate(&request(None)).unwrap(), 100_000);
+        assert_eq!(model.validate(&request(Some(50_000))).unwrap(), 50_000);
+        assert_eq!(
+            model
+                .validate(&request(Some(MAX_OUTPUT_TOKENS + 1)))
+                .unwrap_err()
+                .0
+                .code,
+            "invalid_config"
+        );
+        assert_eq!(
+            settings(MAX_OUTPUT_TOKENS + 1)
+                .validate(&request(None))
+                .unwrap_err()
+                .0
+                .code,
+            "invalid_config"
+        );
+    }
 }

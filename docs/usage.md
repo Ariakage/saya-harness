@@ -23,7 +23,7 @@ cp examples/config.example.toml "$config_path"
 
 支持 `openai-chat-completions`、`openai-responses`、`anthropic-messages`。`base_url` 是 API 根地址，程序分别追加 `/chat/completions`、`/responses`、`/messages`；应核对服务商实际接口，兼容协议不代表支持全部参数。远程明文 HTTP 默认禁用。本机样例无需鉴权；远程服务可参考样例中注释的 profile，凭据只通过 `api_key_env` 指定**环境变量名**，值由使用者在启动前安全提供，不写入配置、提交或日志。配置校验会检查所有 profile 引用的环境变量，即使该 profile 未选中。具体鉴权和可选参数见[配置](configuration.md)。
 
-输出token目标省略时继承profile.limit.output声明值，未声明时采用32000。可用profile.max_output_tokens显式覆盖，审核／摘要还可设置用途覆盖。实际请求按剩余上下文动态收缩，既有显式1024／4096等配置继续生效。已保存会话的profile指纹变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。声明元数据及完整优先级见[输出目标配置](configuration.md#模型输出-token-目标)。
+输出token目标省略时继承profile.limit.output声明值，再采用适配器返回的可识别上游output limit，最后回退65536；单个目标上限为1000000。可用profile.max_output_tokens显式覆盖，审核／摘要还可设置用途覆盖。实际请求按剩余上下文动态收缩，既有显式1024／4096等配置继续生效。已保存会话的profile指纹变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。声明元数据及完整优先级见[输出目标配置](configuration.md#模型输出-token-目标)。
 
 ## 默认 TUI 与兼容入口
 
@@ -44,9 +44,11 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 `/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
 
-运行设置可在空闲界面调整：`/cd PATH` 将当前会话迁移到现有目录并持久保存工作区；相对路径按当前工作区解析。`/model PROFILE` 选择模型配置并建立新的空会话；`/effort low|medium|high|xhigh|max|default` 与 `/thinking` 等价，修改当前进程的思考强度。`/sandbox on|off|status` 分别选择平台原生后端、Host兼容后端或显示当前选择；该变更只影响后续运行，权限规则、显式deny和PLAN只读边界继续生效。
+运行设置可在空闲界面调整：`/cd PATH` 将当前会话迁移到现有目录并持久保存工作区；相对路径按当前工作区解析。`/model PROFILE` 选择模型配置并建立新的空会话；`/effort low|medium|high|xhigh|max|default` 与 `/thinking` 等价，修改当前进程的思考强度。`/autocompact 950k|1m|TOKENS|auto|off` 设置精确输入触发水位或恢复百分比／关闭自动压缩。`/sandbox on|off|status` 分别选择平台原生后端、Host兼容后端或显示当前选择；这些变更只影响后续运行，权限规则、显式deny和PLAN只读边界继续生效。
 
-`/skills`打开用户级与工作区发现的Skill选择器，`/mcps`打开MCP服务选择器，`/plugins`打开已安装插件选择器。选择器支持↑↓、PgUp／PgDn和Enter，Esc返回保留的草稿。MCP服务的Enter操作切换后续运行的启用状态；Skill与Plugin条目Enter打开只读详情。Skill正文激活仍经过运行时Skill工具与权限，Plugin启用／停用仍通过显式 `saya plugin enable|disable` 能力授权。
+`/sessions`打开已保存会话弹窗，展示会话标题、ID、模式、profile和最后状态，Enter恢复选中会话。`/skills`打开用户级与工作区发现的Skill选择器，`/mcps`打开MCP服务选择器，`/plugins`打开已安装插件选择器。选择器支持↑↓、PgUp／PgDn和Enter，Esc返回保留的草稿。MCP服务的Enter操作切换后续运行的启用状态；Skill与Plugin条目Enter打开只读详情。Skill正文激活仍经过运行时Skill工具与权限，Plugin启用／停用仍通过显式 `saya plugin enable|disable` 能力授权。
+
+Agent运行中继续输入普通消息会把内容作为引导补充，在下一个模型边界保存并加入上下文；当前流式响应和已展开工具调用不会被替换。引导队列上限为16条、累计256KiB。`/tools`按工具调用卡片渲染名称、状态、run／call关联、参数和结构化输出，不直接展示整段JSON。
 
 `/markdown source|render`切换Assistant正文的源码／排版视图，`/footnote NUMBER`跳到最近消息的对应脚注，`/footnote back`返回上一引用。debug构建的 `saya tui-preview [SCENE] [--source]`可打开独立的交互式预览，具体语法、公式／图表回退和场景见[Markdown说明](markdown-rendering.md)。
 

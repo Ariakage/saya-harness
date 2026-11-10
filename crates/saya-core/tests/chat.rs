@@ -47,6 +47,7 @@ fn settings(stream: bool) -> ModelSettings {
         context_window_tokens: 128_000,
         extra_safety_tokens: 0,
         max_output_tokens: 8192,
+        upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         thinking_effort: None,
         strict_tools: false,
         stream,

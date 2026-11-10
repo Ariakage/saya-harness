@@ -55,6 +55,107 @@ fn display_details(
     view::bound_details(&mut details);
     Ok(UiResult::Details(details))
 }
+
+fn scalar(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".into(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::String(value) => value.clone(),
+        _ => String::new(),
+    }
+}
+
+fn append_value(lines: &mut Vec<String>, label: &str, value: &serde_json::Value, indent: usize) {
+    let prefix = " ".repeat(indent);
+    match value {
+        serde_json::Value::Object(values) => {
+            lines.push(format!("{prefix}{label}:"));
+            for (key, value) in values {
+                append_value(lines, key, value, indent + 2);
+            }
+        }
+        serde_json::Value::Array(values)
+            if values
+                .iter()
+                .all(|value| !value.is_object() && !value.is_array()) =>
+        {
+            lines.push(format!(
+                "{prefix}{label}: {}",
+                values.iter().map(scalar).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        serde_json::Value::Array(values) => {
+            lines.push(format!("{prefix}{label}: {} items", values.len()));
+            for (index, value) in values.iter().enumerate() {
+                append_value(lines, &format!("[{index}]"), value, indent + 2);
+            }
+        }
+        value => lines.push(format!("{prefix}{label}: {}", scalar(value))),
+    }
+}
+
+fn tool_record_lines(records: &[serde_json::Value]) -> Vec<String> {
+    if records.is_empty() {
+        return vec!["No committed tool calls.".into()];
+    }
+    let mut lines = Vec::new();
+    for (index, record) in records.iter().enumerate() {
+        let call = record
+            .get("call")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<saya_core::contract::ToolCall>(value).ok());
+        let state = record
+            .get("state")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let name = call
+            .as_ref()
+            .map_or("unknown tool", |call| call.name.as_str());
+        lines.push(format!("#{} {name} · {state}", index + 1));
+        lines.push(format!(
+            "  run {} · call {}",
+            record
+                .get("run_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?"),
+            record
+                .get("call_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?")
+        ));
+        if let Some(call) = &call {
+            match serde_json::from_str::<serde_json::Value>(&call.arguments) {
+                Ok(arguments) => append_value(&mut lines, "arguments", &arguments, 2),
+                Err(_) => lines.push(format!("  arguments: {}", call.arguments)),
+            }
+        }
+        let result = record
+            .get("result")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .and_then(|value| {
+                serde_json::from_value::<saya_core::contract::ToolResult>(value).ok()
+            });
+        if let Some(result) = result {
+            lines.push(format!(
+                "  result: {}",
+                if result.ok { "ok" } else { "failed" }
+            ));
+            if result.truncated {
+                lines.push("  output truncated by configured limits".into());
+            }
+            if let Some(error) = result.error {
+                lines.push(format!("  error: {} · {}", error.code, error.message));
+            }
+            if let Some(data) = result.data {
+                append_value(&mut lines, "output", &data, 2);
+            }
+        }
+        lines.push(String::new());
+    }
+    lines
+}
 pub(super) async fn next_job(
     job: &mut Option<UiJob>,
 ) -> std::result::Result<UiResult, BoundaryError> {
@@ -233,9 +334,9 @@ impl App {
                     .and_then(|page| page.checked_mul(20))
                     .ok_or("Session page must be positive")?;
                 let config = self.config.clone();
+                let current_session = self.prepared.as_ref().map(|prepared| prepared.session.id);
                 let cancel = Arc::new(RunCancellation::new());
                 let checking = cancel.clone();
-                let secrets = self.secrets.clone();
                 let join = tokio::spawn(async move {
                     let store =
                         tokio::task::spawn_blocking(move || session::open(&config).map_err(error))
@@ -247,23 +348,48 @@ impl App {
                     if checking.is_cancelled() {
                         return Err(failure("cancelled", "Session list cancelled"));
                     }
-                    tokio::task::spawn_blocking(move || {
-                        let mut value = serde_json::to_value(&sessions)
-                            .map_err(|_| failure("ui_encode", "Cannot encode session records"))?;
-                        saya_core::redaction::redact(&mut value, &secrets)?;
-                        let mut lines =
-                            vec![format!("Page {page} · /resume ID opens a saved session")];
-                        if let Some(sessions) = value.as_array() {
-                            lines.extend(sessions.iter().map(serde_json::Value::to_string));
-                        }
-                        let details = Details {
-                            title: "Sessions · UI".into(),
-                            lines,
-                        };
-                        display_details(details, &secrets)
-                    })
-                    .await
-                    .map_err(|_| failure("ui_worker_failed", "Session display worker failed"))?
+                    let items = sessions
+                        .into_iter()
+                        .map(|session| {
+                            let title = session.title.unwrap_or_else(|| "Untitled session".into());
+                            let status = session
+                                .last_status
+                                .map(|status| format!("{status:?}"))
+                                .unwrap_or_else(|| "No completed run".into());
+                            let current = current_session == Some(session.id);
+                            crate::view::PickerItem {
+                                id: session.id.0.to_string(),
+                                label: title,
+                                description: format!(
+                                    "{} · {:?} · {} · {}",
+                                    session.id.0, session.work_mode, session.profile, status
+                                ),
+                                details: vec![
+                                    format!("Session {}", session.id.0),
+                                    format!("Workspace {}", session.workspace.display()),
+                                    format!("Mode {:?}", session.work_mode),
+                                    format!("Profile {}", session.profile),
+                                    format!("Last status {status}"),
+                                    format!("Updated at {}", session.updated_at),
+                                    if current {
+                                        "This is the currently open session.".into()
+                                    } else {
+                                        "Press Enter to resume this session.".into()
+                                    },
+                                ],
+                                active: current,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(UiResult::Picker(crate::view::PickerPanel {
+                        kind: crate::view::PickerKind::Sessions,
+                        title: format!("Sessions · page {page}"),
+                        items,
+                        selected: 0,
+                        scroll: 0,
+                        page_rows: 0,
+                        hint: "No sessions are saved on this page.".into(),
+                    }))
                 });
                 self.begin_ui(cancel, join);
             }
@@ -314,16 +440,20 @@ impl App {
                         } else {
                             &snapshot.background_jobs
                         };
-                        let mut value = serde_json::to_value(records)
-                            .map_err(|_| failure("ui_encode", "Cannot encode tool records"))?;
-                        saya_core::redaction::redact(&mut value, &secrets)?;
                         let mut lines=vec![format!("Session {} · committed change {} · event {}",id.0,snapshot.last_change_seq,snapshot.last_event_seq),"Read by the UI from stored records. Tool calls are identified by run_id and call_id.".into()];
-                        lines.extend(
-                            serde_json::to_string_pretty(&value)
-                                .map_err(|_| failure("ui_encode", "Cannot display tool records"))?
-                                .lines()
-                                .map(str::to_owned),
-                        );
+                        if operation == "/tools" {
+                            lines.extend(tool_record_lines(records));
+                        } else {
+                            let mut value = serde_json::to_value(records)
+                                .map_err(|_| failure("ui_encode", "Cannot encode background records"))?;
+                            saya_core::redaction::redact(&mut value, &secrets)?;
+                            lines.extend(
+                                serde_json::to_string_pretty(&value)
+                                    .map_err(|_| failure("ui_encode", "Cannot display background records"))?
+                                    .lines()
+                                    .map(str::to_owned),
+                            );
+                        }
                         let title = if operation == "/tools" {
                             "Tools · UI snapshot"
                         } else {

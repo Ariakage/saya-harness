@@ -107,6 +107,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
     };
     let action = match panel.kind {
         PickerKind::Mcps => "Enter toggle · ↑↓ select · Esc close",
+        PickerKind::Sessions => "Enter resume · ↑↓ select · Esc close",
         PickerKind::Skills | PickerKind::Plugins => "Enter details · ↑↓ select · Esc close",
     };
     frame.render_widget(

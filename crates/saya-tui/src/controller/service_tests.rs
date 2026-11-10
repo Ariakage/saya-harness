@@ -147,6 +147,39 @@ async fn new_and_resume_wait_for_input_and_hold_only_the_open_session_lock() {
 }
 
 #[tokio::test]
+async fn sessions_selector_renders_saved_metadata_and_resumes_the_selected_id() {
+    let (_root, mut app) = fixture();
+    create(&mut app).await;
+    let mut first = app.prepared.take().unwrap();
+    let first_id = first.session.id;
+    session::append(&mut first, "saved selector task".into())
+        .await
+        .unwrap();
+    drop(first);
+    create(&mut app).await;
+    app.service("/sessions", "").await.unwrap();
+    complete(&mut app).await;
+    let panel = app.state.picker_panel.as_mut().unwrap();
+    assert_eq!(panel.kind, crate::view::PickerKind::Sessions);
+    assert!(panel.items.iter().any(|item| {
+        item.id == first_id.0.to_string()
+            && item.label == "saved selector task"
+            && item.details.iter().any(|line| line.contains("Workspace"))
+    }));
+    panel.selected = panel
+        .items
+        .iter()
+        .position(|item| item.id == first_id.0.to_string())
+        .unwrap();
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .unwrap();
+    complete(&mut app).await;
+    assert_eq!(app.prepared.as_ref().unwrap().session.id, first_id);
+    assert_eq!(app.state.session_title, "saved selector task");
+}
+
+#[tokio::test]
 async fn empty_tab_cycles_from_the_latest_mode_deferred_behind_ui_cleanup() {
     let (_root, mut app) = fixture();
     let (sender, cancel) = controlled_job(&mut app);
@@ -389,15 +422,26 @@ async fn ui_queries_preserve_unknown_truncation_and_run_call_links_without_agent
         app.service(command, "").await.unwrap();
         complete(&mut app).await;
         assert!(app.pending.is_none());
-        assert!(app.state.details.as_ref().unwrap().title.contains("UI"));
-        if command == "/tools" {
+        if command == "/sessions" {
+            assert_eq!(
+                app.state.picker_panel.as_ref().unwrap().kind,
+                crate::view::PickerKind::Sessions
+            );
+            app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .await
+                .unwrap();
+        } else if command == "/tools" {
             let text = app.state.details.as_ref().unwrap().lines.join("\n");
             assert!(text.contains("unknown"));
-            assert!(text.contains("\"truncated\": true"));
+            assert!(text.contains("output truncated"));
+            assert!(text.contains("error: truncated_fixture · bounded output"));
+            assert!(text.contains("text: retained prefix"));
             assert!(text.contains("reused-call"));
             for run in &ids {
                 assert!(text.contains(&run.0.to_string()));
             }
+        } else {
+            assert!(app.state.details.as_ref().unwrap().title.contains("UI"));
         }
     }
     let after = snapshot(&app).await;
@@ -578,9 +622,19 @@ async fn query_metadata_is_redacted_before_entering_the_ui_cache() {
     for command in ["/tools", "/jobs", "/sessions"] {
         app.service(command, "").await.unwrap();
         complete(&mut app).await;
-        let details = app.state.details.as_ref().unwrap();
-        assert!(!details.title.contains(&id));
-        assert!(!details.lines.join("\n").contains(&id));
+        if let Some(panel) = &app.state.picker_panel {
+            assert!(!panel.title.contains(&id));
+            assert!(panel.items.iter().all(|item| {
+                !item.label.contains(&id)
+                    && !item.description.contains(&id)
+                    && !item.details.join("\n").contains(&id)
+            }));
+            app.state.picker_panel = None;
+        } else {
+            let details = app.state.details.as_ref().unwrap();
+            assert!(!details.title.contains(&id));
+            assert!(!details.lines.join("\n").contains(&id));
+        }
     }
 }
 

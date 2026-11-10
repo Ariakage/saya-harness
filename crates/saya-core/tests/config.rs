@@ -78,7 +78,7 @@ fn model_output_defaults_resolve_after_explicit_targets_for_all_protocols() {
         "anthropic-messages",
     ] {
         for (declared, explicit, expected) in [
-            (None, None, 32000),
+            (None, None, 65_536),
             (Some(64000), None, 64000),
             (None, Some(12000), 12000),
             (Some(64000), Some(12000), 12000),
@@ -178,7 +178,7 @@ fn purpose_output_overrides_are_optional_nonzero_and_have_no_legacy_small_cap() 
     .unwrap();
     assert_eq!(loaded.review.max_output_tokens, Some(48000));
     assert_eq!(loaded.context.summary_max_output_tokens, Some(64000));
-    assert_eq!(loaded.profiles["responses"].max_output_tokens, 32000);
+    assert_eq!(loaded.profiles["responses"].max_output_tokens, 65_536);
 }
 
 #[test]
@@ -187,16 +187,20 @@ fn output_configuration_rejects_zero_overflow_and_unknown_metadata_without_sourc
     let profile = "schema_version=1\n[profiles.selected]\nprotocol='openai-chat-completions'\nbase_url='https://example.invalid/v1'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=100000\n";
     for extra in [
         "max_output_tokens=0",
+        "max_output_tokens=1000001",
         "max_output_tokens=4294967296",
         "max_output_tokens=64000\n[profiles.selected.limit]\noutput=0",
         "[profiles.selected.limit]\noutput=0",
+        "[profiles.selected.limit]\noutput=1000001",
         "[profiles.selected.limit]\noutput=4294967296",
         "[profiles.selected.limit]\noutput=32000\nunknown='SYNTHETIC-PRIVATE-VALUE'",
         "[profiles.selected.limit]\nunknown='SYNTHETIC-PRIVATE-VALUE'",
         "unknown='SYNTHETIC-PRIVATE-VALUE'",
         "[review]\nmax_output_tokens=0",
+        "[review]\nmax_output_tokens=1000001",
         "[review]\nmax_output_tokens=4294967296",
         "[context]\nsummary_max_output_tokens=0",
+        "[context]\nsummary_max_output_tokens=1000001",
         "[context]\nsummary_max_output_tokens=4294967296",
     ] {
         let path = write(temp.path(), "config.toml", &format!("{profile}{extra}\n"));
@@ -250,7 +254,7 @@ fn loads_selected_file_and_resolves_precedence_without_implicit_project_config()
     assert_eq!(c.output, Output::Json);
     assert_eq!(c.data_dir, home.join(".local/share/saya"));
     assert_eq!(c.profiles["chat"].protocol, Protocol::ChatCompletions);
-    assert_eq!(c.profiles["chat"].max_output_tokens, 32000);
+    assert_eq!(c.profiles["chat"].max_output_tokens, 65_536);
     assert!(!c.profiles["chat"].strict_tools);
     assert_eq!(c.review.max_output_tokens, None);
     assert_eq!(c.limits.max_model_requests, 10);
@@ -865,7 +869,7 @@ fn n3_defaults_and_explicit_memory_switches_remain_host_selected_and_readonly() 
     assert!(config.context.auto_compact);
     let budget = config.context.budget(&config.profiles["chat"]);
     assert_eq!(budget.window_tokens, 100000);
-    assert_eq!(budget.output_reserve, 32000);
+    assert_eq!(budget.output_reserve, 65_536);
     assert_eq!(budget.safety_margin, 10001);
     assert_eq!(budget.trigger_per_mille, 800);
     assert_eq!(budget.target_per_mille, 550);

@@ -198,6 +198,7 @@ impl Model for AnthropicModel {
                     events: response.events()?,
                     state: StreamState::default(),
                     finished: false,
+                    settings: self.settings.clone(),
                 };
                 Ok(Box::new(WarmStream {
                     inner: stream,
@@ -205,6 +206,7 @@ impl Model for AnthropicModel {
                 }) as Box<dyn ModelStream>)
             } else {
                 let value = response.json(cancel).await?;
+                self.settings.observe_output_limit(&value);
                 let (items, usage) = parse_message(&value)?;
                 if let Some(mut guard) = warmup.take() {
                     *guard = Some(Instant::now());
@@ -889,6 +891,7 @@ struct AnthropicStream {
     events: EventStream,
     state: StreamState,
     finished: bool,
+    settings: ModelSettings,
 }
 impl ModelStream for AnthropicStream {
     fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
@@ -914,6 +917,7 @@ impl ModelStream for AnthropicStream {
                             "provider returned malformed event JSON",
                         )
                     })?;
+                    self.settings.observe_output_limit(&value);
                     let kind = value.get("type").and_then(Value::as_str).ok_or_else(|| {
                         failure("invalid_model_response", "provider event has no type")
                     })?;

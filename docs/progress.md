@@ -1,8 +1,16 @@
 # 开发进度
 
-**更新于2026-11-10。N3上下文、可执行扩展及全局记忆已完成四平台验收，固定源码为 `e1da373`。四端均通过完整Rust门禁、原生隔离、性能v2、MCP／OAuth、8项真实插件、34条CLI、15条TUI和历史入口回归，程序SHA、源码清单及执行前后身份一致。N2固定源码 `aaec8c5` 的四平台证据与已发布0.2.0历史证据继续按各自源码保留。**
+**更新于2026-11-11。N3上下文、可执行扩展及全局记忆已完成四平台验收，固定源码为 `e1da373`。四端均通过完整Rust门禁、原生隔离、性能v2、MCP／OAuth、8项真实插件、34条CLI、15条TUI和历史入口回归，程序SHA、源码清单及执行前后身份一致。N2固定源码 `aaec8c5` 的四平台证据与已发布0.2.0历史证据继续按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
+
+## TUI 运行控制、引导与输出边界
+
+2026-11-11，在运行时控制和扩展选择阶段后继续加入TUI运行中引导、`/cd`、`/sandbox`、`/model`、`/effort`／`/thinking`参数补全、`/autocompact`、`/skills`／`/mcps`／`/plugins`选择器、`/sessions`弹窗恢复和结构化`/tools`卡片。运行中普通输入最多16条／累计256KiB，排队到下一模型边界持久化；Run关闭后拒绝迟到输入。MCP切换只影响后续Run，Skill／Plugin选择不绕过原有工具和启用授权，`/sandbox off`仍保留权限、deny、PLAN、凭据存储拒绝和Host能力限制。
+
+模型输出目标改为1000000硬上限：优先显式请求／用途值、profile显式值、`limit.output`声明值和适配器可识别的上游output limit，未声明时回退65536；实际dispatch继续按完整wire输入和上下文安全余量收缩。本地忽略配置 `.saya/local/deepseek.toml` 的三个DeepSeek测试profile均设为 `max_output_tokens = 1000000`，未加入Git。
+
+本机macOS27.2 ARM执行 `./scripts/check.sh`，格式、workspace全目标严格Clippy、1333项Rust测试、8项条件忽略测试和release构建通过；其中TUI lib 263项、core lib 436项。日志为 `target/final-check.log`。`just smoke target/release/saya` 的离线smoke、文本journey、5项审查回归和完整正常入口PTY矩阵全部通过。证据为本轮本地运行；未推送、未运行远端CI，程序哈希和平台四端候选证据未另行更新。
 
 ## N3 上下文与可执行扩展
 

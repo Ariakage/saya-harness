@@ -126,9 +126,11 @@ impl Model for ResponsesModel {
                     events: response.events()?,
                     state: StreamState::default(),
                     finished: false,
+                    settings: self.settings.clone(),
                 }) as Box<dyn ModelStream>)
             } else {
                 let value = response.json(cancel).await?;
+                self.settings.observe_output_limit(&value);
                 let (items, usage) = parse_response(&value)?;
                 Ok(
                     Box::new(Ready(Some(ModelUpdate::Finished { items, usage })))
@@ -455,6 +457,7 @@ struct ResponsesStream {
     events: EventStream,
     state: StreamState,
     finished: bool,
+    settings: ModelSettings,
 }
 fn index(value: &Value, key: &str) -> Result<usize, BoundaryError> {
     value
@@ -866,6 +869,7 @@ impl ModelStream for ResponsesStream {
                             "provider returned malformed event JSON",
                         )
                     })?;
+                    self.settings.observe_output_limit(&value);
                     let kind = value.get("type").and_then(Value::as_str).ok_or_else(|| {
                         failure("invalid_model_response", "provider event has no type")
                     })?;

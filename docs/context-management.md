@@ -52,7 +52,7 @@ Run发布对象持有租约，历史引用遵循有界存储和回收策略。�
 
 定义模型窗口 `C`、安全余量 `R = ceil(C / 10) + 1 + context.extra_safety_tokens`，以及稳定输入基准 `B = C - R - 1`。所有静态／动态system段、工具schema、history、协议封装、opaque状态和缓存前缀都占用输入容量。80%触发与55%目标均按这个稳定B计算。
 
-输出目标desired依次取最具体请求／用途显式值、实际profile显式max_output_tokens、profile.limit.output声明值、32000缺省。ContextBudget保留output_reserve字段作为请求未给覆盖时的目标默认值，输入基准始终保留至少1 token空间。每次请求以完整wire计数 `I_wire`拟合输出，满足 `1 <= O <= min(desired, C - R - I_wire)`，重新序列化最终请求后复核 `I_wire + O <= C - R`。数字宽度变化后的重计允许保留少量额外保守余量。该约束继续满足模型请求严格90%安全保护，空间不足时先处理可压缩来源或返回明确限制。
+输出目标desired依次取最具体请求／用途显式值、实际profile显式max_output_tokens、profile.limit.output声明值、上游返回的可识别output limit及65536缺省，并统一受1000000上限约束。ContextBudget保留output_reserve字段作为请求未给覆盖时的目标默认值，输入基准始终保留至少1 token空间。每次请求以完整wire计数 `I_wire`拟合输出，满足 `1 <= O <= min(desired, C - R - I_wire)`，重新序列化最终请求后复核 `I_wire + O <= C - R`。数字宽度变化后的重计允许保留少量额外保守余量。该约束继续满足模型请求严格90%安全保护，空间不足时先处理可压缩来源或返回明确限制。
 
 动态输出空间与压缩水位分别计算。输入接近窗口时降低本次O，触发基准B保持稳定，避免因可用输出减少而把每轮输入占用误算为100%。较大的声明值或覆盖值可用于小窗口模型，请求仍受实际剩余空间限制。配置格式及用途继承见[输出目标](configuration.md#模型输出-token-目标)。
 

@@ -18,6 +18,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+pub const DEFAULT_OUTPUT_TOKENS: u32 = 65_536;
+pub const MAX_OUTPUT_TOKENS: u32 = 1_000_000;
+
 mod sandbox;
 pub use sandbox::{SandboxNetworkSettings, SandboxSettings};
 mod plugins;
@@ -173,7 +176,7 @@ impl ThinkingEffort {
     }
 }
 fn default_output_tokens() -> u32 {
-    32000
+    DEFAULT_OUTPUT_TOKENS
 }
 fn yes() -> bool {
     true
@@ -261,8 +264,13 @@ impl TryFrom<RawProfile> for Profile {
     type Error = &'static str;
 
     fn try_from(raw: RawProfile) -> Result<Self, Self::Error> {
-        if raw.max_output_tokens == Some(0)
-            || raw.limit.as_ref().is_some_and(|limit| limit.output == 0)
+        if raw
+            .max_output_tokens
+            .is_some_and(|tokens| tokens == 0 || tokens > MAX_OUTPUT_TOKENS)
+            || raw
+                .limit
+                .as_ref()
+                .is_some_and(|limit| limit.output == 0 || limit.output > MAX_OUTPUT_TOKENS)
         {
             return Err("profile output limits must be positive");
         }
@@ -437,6 +445,8 @@ impl Default for OutputCaptureSettings {
 pub struct ContextSettings {
     pub auto_compact: bool,
     pub trigger_percent: u16,
+    /// Optional exact input-token trigger; `None` uses `trigger_percent`.
+    pub trigger_tokens: Option<u64>,
     pub target_percent: u16,
     pub extra_safety_tokens: u64,
     /// Omission inherits the execution profile's resolved request target.
@@ -449,6 +459,7 @@ impl Default for ContextSettings {
         Self {
             auto_compact: true,
             trigger_percent: 80,
+            trigger_tokens: None,
             target_percent: 55,
             extra_safety_tokens: 0,
             summary_max_output_tokens: None,
@@ -462,7 +473,10 @@ impl ContextSettings {
         if self.target_percent == 0
             || self.target_percent >= self.trigger_percent
             || self.trigger_percent > 100
-            || self.summary_max_output_tokens == Some(0)
+            || self.trigger_tokens == Some(0)
+            || self
+                .summary_max_output_tokens
+                .is_some_and(|tokens| tokens == 0 || tokens > MAX_OUTPUT_TOKENS)
             || self.max_compaction_calls == 0
             || self.max_compaction_calls > 64
             || self.compaction_timeout_seconds == 0
@@ -484,6 +498,7 @@ impl ContextSettings {
                 .saturating_add(1)
                 .saturating_add(self.extra_safety_tokens),
             trigger_per_mille: self.trigger_percent * 10,
+            trigger_tokens: self.trigger_tokens,
             target_per_mille: self.target_percent * 10,
         }
     }
@@ -656,7 +671,11 @@ fn parse_env<T: for<'de> Deserialize<'de>>(
         .transpose()
 }
 fn validate_profile(p: &Profile, env: &Environment) -> Result<(), BoundaryError> {
-    if p.model.trim().is_empty() || p.context_window_tokens == 0 || p.max_output_tokens == 0 {
+    if p.model.trim().is_empty()
+        || p.context_window_tokens == 0
+        || p.max_output_tokens == 0
+        || p.max_output_tokens > MAX_OUTPUT_TOKENS
+    {
         return Err(invalid("profile model and token limits are required"));
     }
     if p.pricing.as_ref().is_some_and(|pricing| {
@@ -792,7 +811,11 @@ pub fn load(
     doc.output_capture.limits.validate()?;
     doc.context.validate()?;
     doc.plugins.validate()?;
-    if doc.review.max_output_tokens == Some(0) {
+    if doc
+        .review
+        .max_output_tokens
+        .is_some_and(|tokens| tokens == 0 || tokens > MAX_OUTPUT_TOKENS)
+    {
         return Err(invalid("review output limit must be positive"));
     }
     for (name, p) in &doc.profiles {
