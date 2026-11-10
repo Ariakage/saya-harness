@@ -22,6 +22,12 @@
 
 本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1368项Rust测试、8项条件忽略和release构建通过，日志为 `target/multimodal-check.log`。新增真实HTTP夹具覆盖Chat图片／音频／视频、Responses图片／音频／视频及Messages图片wire；`just test-tooling`的75项Python回归通过。本轮未推送、未运行远端CI。
 
+## 完整模型提示词预览
+
+2026-11-11，新增 `just prompt [work|plan|code|build|compact|memory|review|all]`，省略类型时输出 `all`。预览复用实际静态装配器、动态系统上下文、RuntimeContext、项目发现、Memory与Compact／Review提示词，并输出完整 `ModelRequest` 风格的 `instructions`、`dynamic_instructions`、有序 `history`、`combined_system`、指纹和provider工具schema。Code／Build／Work／Plan场景包含后台、Skill、Memory、MCP与Plugin工具层；当前工作区和HOME的项目上下文为实际发现，未启用扩展与已激活Skill正文使用带`fixture_notice`的明确样例，全程不调用模型或执行工具。
+
+`just prompt code`、`build`、`compact`、`memory`及默认`all`均以JSON解析和`jq`字段断言核对模式段、动态注入、项目／Skill／Memory数据、25个工具定义及独立用途。本机执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1369项Rust测试、8项条件忽略和release构建通过，日志为 `target/prompt-preview-check.log`。本轮未推送、未运行远端CI。
+
 ## TUI 显示文本目录
 
 2026-11-11，按D-056将全部TUI用户可见显示文本集中到 `crates/saya-tui/src/i18n.rs`，覆盖命令说明、状态和角色、侧栏、MCP状态、选择器、工具展开、Memory、执行摘要、Markdown／数学／表格回退及终端错误。命令语法、协议字段、内部状态键和稳定错误码保持独立；CLI输出、运行时提示词和公开协议诊断不进入本次目录。窗口标题继续使用原有 `Saya | …` 契约。

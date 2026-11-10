@@ -44,6 +44,10 @@ run *args:
 tui-preview *args:
     cargo run --locked -p saya-cli -- tui-preview "$@"
 
+# 输出离线完整模型提示词，可指定 work、plan、code、build、compact、memory、review 或 all
+prompt type="all":
+    cargo run --locked -p saya-core --example prompt_preview -- "$1"
+
 # 输出离线 TUI 快照，可指定宽、高、场景和 --json
 render-preview *args:
     cargo run --locked -p saya-tui --example render_preview -- "$@"

@@ -18,6 +18,52 @@ const TOOLS: &str = include_str!("../prompts/v1/tools.md");
 const BACKGROUND: &str = include_str!("../prompts/v1/background.md");
 const REVIEW: &str = include_str!("../prompts/v1/review.md");
 
+/// Offline prompt inspection scenarios exposed by the `prompt` recipe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewScenario {
+    Work,
+    Plan,
+    Code,
+    Build,
+    Compact,
+    Memory,
+    Review,
+    All,
+}
+
+impl PreviewScenario {
+    pub const NAMES: [&'static str; 8] = [
+        "work", "plan", "code", "build", "compact", "memory", "review", "all",
+    ];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "work" => Self::Work,
+            "plan" => Self::Plan,
+            "code" => Self::Code,
+            "build" => Self::Build,
+            "compact" => Self::Compact,
+            "memory" => Self::Memory,
+            "review" => Self::Review,
+            "all" => Self::All,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Plan => "plan",
+            Self::Code => "code",
+            Self::Build => "build",
+            Self::Compact => "compact",
+            Self::Memory => "memory",
+            Self::Review => "review",
+            Self::All => "all",
+        }
+    }
+}
+
 /// Inspectable assembly; the fingerprint identifies text, not model behavior.
 #[derive(Debug)]
 pub struct PromptBundle {
@@ -268,5 +314,20 @@ mod clock_tests {
         let before_epoch = clock_context(UNIX_EPOCH - std::time::Duration::from_secs(1));
         assert!(before_epoch["utc"].is_null());
         assert!(before_epoch["local"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::PreviewScenario;
+
+    #[test]
+    fn preview_scenarios_round_trip_and_reject_unknown_names() {
+        for name in PreviewScenario::NAMES {
+            let scenario = PreviewScenario::parse(name).unwrap();
+            assert_eq!(scenario.name(), name);
+        }
+        assert!(PreviewScenario::parse("../code").is_none());
+        assert!(PreviewScenario::parse("").is_none());
     }
 }

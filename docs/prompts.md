@@ -71,7 +71,7 @@ OpenAI 兼容协议保留相同的静态字节前缀并依赖服务端自动缓�
 | 大量设施专属 BLOCK／ALLOW 项和强制豁免 | 改为按效果检查与三个结果 | 不硬编码 main 分支绝对拒绝，不把工具链安装、工作分支推送等一概免检 |
 | 进入 auto 时摘除／恢复过宽 allow 规则 | 不移植 | 会改变已定案的规则优先级，需要独立产品决策；prompt 不暗改权限配置 |
 | 临时核查故障允许稍后重试的文案 | 按 Saya 改为有限内部重试后转人工；无交互则 needs_confirmation | 不让主 Agent 反复提交来刷出放行 |
-| 自动压缩、scratchpad、Hooks、MCP、记忆和会话外任务说明 | 当前不启用 | 不许诺未实现能力；只有后台控制按当前注册表条件追加 |
+| 自动压缩、scratchpad、Hooks、MCP、记忆和会话外任务说明 | 按实际启用条件分别注入 | Compact使用独立无工具请求；Hooks不提升为模型指令；MCP与Plugin工具来自实际注册表；Memory使用独立低信任上下文。离线预览用具名fixture展示完整装配，不表示每次运行都启用全部能力 |
 | 直接调用后台 shell、内部任务 ID 与 provider tool ID 混用的风险 | 新增 Saya 专属后台生命周期段 | 启动不等于完成，查询后验证内层结果，PLAN 前与结束时清理，避免协议重复结果 |
 
 ## 相比 session 中的 DSH 分析与 harness-kit
@@ -85,7 +85,7 @@ DSH 的具体实现信息在这里仅来自 session 第 842 行等记录，本�
 | in-history 追加高优先级 system 更新与 provider 缓存管理 | 不重写历史；静态指令与动态系统段分开，Anthropic 可选显式缓存断点，其他兼容协议保持自动缓存前缀 |
 | sandbox × approval 的两个旋钮 | 不替换 Saya 权限契约；保留四工作模式与三权限模式正交，并明确本地命令没有 OS 沙箱 |
 | risk／decision 分类器协议 | 改为 Saya 已有的 allow／ask／deny 与 reason，不宣称共享相同 classifier |
-| 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | D-033 的用户级／工作区约定指令与 Skill 元数据发现已由 DEV-021 接入，当前支持显式偏好／记忆文件。全局记忆维护按后续设计推进 |
+| 默认 global／project AGENTS、Skills、scratchpad、自动记忆注入 | D-033 的用户级／工作区约定指令与 Skill 元数据发现已接入；Skill正文仅在显式激活后进入低信任上下文。全局记忆读取、自动注入、维护和遗忘按全局记忆设计运行 |
 | 移植草案的计划文件、exit_plan、固定中文输出与来源工具占位符 | 移除或按 Saya 重写；所有 runtime prompt 为英文，沟通语言跟随用户而不固定中文 |
 | 将所有缺乏授权结果统称 denied 或建议改规则重试 | 区分拒绝、模式禁止、许可失效、需要确认、存储故障和未知结果，不指示 Agent 降权规避 |
 | 来源 session 外层的人设、无条件服从／放行、工具和环境指令 | 完全不进入 Saya prompt |
@@ -98,13 +98,23 @@ DSH 的具体实现信息在这里仅来自 session 第 842 行等记录，本�
 
 ## 预览与验证
 
-可离线预览实际装配文本；示例程序只构造 JSON，不运行工具或调用模型：
+可离线预览完整 `ModelRequest`；示例程序只构造 JSON，不运行工具、MCP Server、Plugin、Skill脚本或调用模型：
 
 ```sh
-cargo run -p saya-core --example prompt_preview -- work auto read_file search_text background_start background_status background_cancel
-cargo run -p saya-core --example prompt_preview -- plan bypass read_file search_text
-cargo run -p saya-core --example prompt_preview -- --review
+just prompt code
+just prompt build
+just prompt compact
+just prompt memory
+just prompt review
+just prompt all
+just prompt all | jq '.requests.code.request.combined_system'
 ```
+
+可用类型为 `work`、`plan`、`code`、`build`、`compact`、`memory`、`review` 和 `all`；省略类型等同 `all`。Code、Build、Work与Plan场景包含静态core／tools／mode／permission段、条件后台段、动态宿主与运行事实、项目上下文、显式偏好、Memory上下文、已激活Skill正文、当前任务，以及按provider schema输出的内置、Skill、Memory、MCP与Plugin工具定义。Compact场景使用实际Compact instructions与输出schema；Review场景使用实际独立审核instructions和样例操作数据。
+
+输出中的 `instructions`、`dynamic_instructions`、`history` 与 `tools` 对应运行时 `ModelRequest` 字段，`combined_system` 是组合后的系统文本，`instructions_fingerprint` 与 `system_fingerprint` 分别标识静态文本和本次组合文本，`tool_layers` 按builtin／Skill／Memory／MCP／Plugin归类工具名。项目上下文从当前工作区和HOME发现；Skill激活、Memory投影、MCP和Plugin条目是明确的离线fixture。`fixture_notice` 会保留在JSON中，不能把fixture工具名或已激活Skill误认为当前运行配置。
+
+预览输出包含实际工作区路径、项目指令和发现的Skill元数据。它只应在本地审阅，不应直接提交或粘贴到公开位置；需要分享时先人工脱敏。
 
 [装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台能力条件、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
 

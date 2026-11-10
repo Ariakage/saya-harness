@@ -38,6 +38,7 @@ cargo install just --locked
 | `just test` | 全workspace测试，可追加过滤条件和测试参数 |
 | `just build`／`just release` | 开发／优化构建，可追加Cargo构建参数 |
 | `just run` | 运行开发版Saya，可追加CLI参数 |
+| `just prompt code` | 输出指定场景的完整离线模型请求，可省略为 `all` |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
 | `just render-preview 140 60 syntax` | 输出离线场景快照，可追加 `--source` 或 `--json` |
 | `just test-tooling` | 执行CI使用的发行、N2与N3离线Python回归 |
@@ -46,6 +47,8 @@ cargo install just --locked
 ```sh
 just test restored_flags_are_observable_before_the_child_reads_its_release -- --exact
 just run --help
+just prompt code
+just prompt all | jq '.requests.compact.request.instructions'
 just tui-preview footnotes --source
 just render-preview 140 60 mermaid --json
 just release
@@ -113,7 +116,7 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 
 TUI的CommonMark／GFM使用pulldown-cmark与一致的Unicode脚注标签匹配，高亮使用内置Syntect语法，Mermaid使用同版本merman-core与mermansi。merman-core启用JSON对象顺序保留，并通过granit-parser约束smallvec小于1.16，实际版本由Cargo.lock记录。core规范化参数显式排序，以维持审批和拒绝记忆的稳定身份。
 
-默认开发构建可运行 `just tui-preview syntax`，离线单元格快照使用 `just render-preview 140 60 syntax --json`。场景与源码／渲染切换见[Markdown说明](markdown-rendering.md#debug-预览)。完整Rust检查使用 `just check`，各源码的四平台同步测试范围见[开发进度](progress.md)。
+默认开发构建可运行 `just tui-preview syntax`，离线单元格快照使用 `just render-preview 140 60 syntax --json`。场景与源码／渲染切换见[Markdown说明](markdown-rendering.md#debug-预览)。模型提示词使用 `just prompt code` 或 `just prompt all` 离线输出，场景和fixture边界见[提示词说明](prompts.md#预览与验证)。完整Rust检查使用 `just check`，各源码的四平台同步测试范围见[开发进度](progress.md)。
 
 ## N2 原生性能证据
 
