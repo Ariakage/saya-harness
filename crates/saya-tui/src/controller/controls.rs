@@ -281,20 +281,26 @@ impl App {
     pub(super) fn show_pending(&mut self) {
         let Some(request) = &self.pending else { return };
         let (title, lines) = match request {
-            Request::Approval(request, _) => (
-                crate::i18n::view::APPROVAL_REQUIRED,
-                vec![
+            Request::Approval(request, _) => {
+                let mut lines = vec![
                     text::approval_field(text::TOOL_LABEL, &request.tool),
                     text::approval_field(text::CALL_LABEL, &request.call_id),
                     text::approval_field(text::APPROVAL_LABEL, &request.approval_id),
                     text::approval_field(text::MODE_LABEL, format_args!("{:?}", request.work_mode)),
                     text::approval_field(text::WORKSPACE_LABEL, request.cwd.display()),
+                    String::new(),
                     request.operation_summary.clone(),
-                    serde_json::to_string_pretty(&request.arguments)
-                        .unwrap_or_else(|_| text::UNAVAILABLE_ARGUMENTS.into()),
-                    text::APPROVAL_HELP.into(),
-                ],
-            ),
+                    String::new(),
+                ];
+                lines.extend(
+                    crate::tool_render::call(&request.tool, &request.arguments, None)
+                        .lines()
+                        .map(str::to_owned),
+                );
+                lines.push(String::new());
+                lines.push(text::APPROVAL_HELP.into());
+                (crate::i18n::view::APPROVAL_REQUIRED, lines)
+            }
             Request::Input(request, _) => (
                 crate::i18n::view::QUESTION,
                 std::iter::once(request.question.clone())
@@ -619,6 +625,12 @@ impl App {
                 });
                 self.state.details_scroll = 0;
             }
+            "/ps" => {
+                if !argument.is_empty() {
+                    return Err(text::command_without_arguments(name).into());
+                }
+                self.show_processes()?;
+            }
             "/new" | "/profile" | "/model" | "/profiles" | "/resume" | "/resume-accept"
             | "/sessions" | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job" => {
                 self.service(name, argument).await?
@@ -627,6 +639,73 @@ impl App {
         }
         Ok(false)
     }
+
+    fn show_processes(&mut self) -> Result<()> {
+        let lines = if let Some(active) = &self.active {
+            background_lines(&active.handle.background_events()?)
+        } else {
+            vec![text::NO_ACTIVE_RUN.into()]
+        };
+        self.state.set_details(Details {
+            title: text::BACKGROUND_TITLE.into(),
+            lines: lines.into_iter().map(|line| self.safe(&line)).collect(),
+        });
+        self.state.details_scroll = 0;
+        Ok(())
+    }
+}
+
+pub(super) fn background_lines(events: &[saya_core::background::BackgroundEvent]) -> Vec<String> {
+    let mut jobs: Vec<(String, String, String, String)> = Vec::new();
+    for event in events {
+        match &event.kind {
+            saya_core::background::BackgroundEventKind::Accepted { call_id, tool } => {
+                if !jobs.iter().any(|(id, _, _, _)| id == &event.job_id) {
+                    jobs.push((
+                        event.job_id.clone(),
+                        tool.clone(),
+                        call_id.clone(),
+                        text::BACKGROUND_RUNNING.into(),
+                    ));
+                }
+            }
+            saya_core::background::BackgroundEventKind::CancellationRequested { .. } => {
+                if let Some(job) = jobs.iter_mut().find(|(id, _, _, _)| id == &event.job_id) {
+                    job.3 = text::BACKGROUND_CANCELLING.into();
+                }
+            }
+            saya_core::background::BackgroundEventKind::Finished { outcome } => {
+                if let Some(job) = jobs.iter_mut().find(|(id, _, _, _)| id == &event.job_id) {
+                    job.3 = match outcome {
+                        saya_core::background::BackgroundOutcome::Succeeded => {
+                            text::BACKGROUND_COMPLETED.into()
+                        }
+                        saya_core::background::BackgroundOutcome::Failed { code } => {
+                            format!("{} · {code}", text::BACKGROUND_FAILED)
+                        }
+                        saya_core::background::BackgroundOutcome::Cancelled => {
+                            text::BACKGROUND_CANCELLED.into()
+                        }
+                    };
+                }
+            }
+        }
+    }
+    if jobs.is_empty() {
+        return vec![text::NO_BACKGROUND_TASKS.into()];
+    }
+    let running = jobs
+        .iter()
+        .filter(|(_, _, _, state)| state == text::BACKGROUND_RUNNING)
+        .count();
+    let mut lines = vec![text::background_summary(running, jobs.len())];
+    for (id, tool, call_id, state) in jobs {
+        lines.push(String::new());
+        lines.push(id);
+        lines.push(format!("  {tool} · {call_id}"));
+        lines.push(format!("  {state}"));
+    }
+    lines
 }
 
 fn sandbox_label(backend: BackendKind) -> &'static str {

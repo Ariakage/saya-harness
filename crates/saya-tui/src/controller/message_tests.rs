@@ -172,8 +172,8 @@ async fn thinking_log_rounds_attach_in_event_order_without_empty_answers_or_revi
         .iter()
         .find(|message| message.id == tool_id)
         .unwrap();
-    assert!(tool.text.contains("Status: completed"));
-    assert!(tool.text.contains("Output:"));
+    assert!(tool.text.contains("Result · completed"));
+    assert!(tool.text.contains("Output"));
     assert!(!tool.text.contains('{'));
     started(&mut app, "two");
     event(
@@ -595,11 +595,78 @@ async fn mouse_and_ctrl_o_toggle_actual_cards_without_deciding_approval_or_editi
     render(&mut app, 160, 45);
     assert!(app.mouse(mouse(MouseEventKind::ScrollUp, 3, 3)));
     assert_eq!(app.state.scroll, 3);
-    assert!(app.mouse(mouse(MouseEventKind::ScrollDown, 82, 3)));
+    assert!(app.mouse(mouse(MouseEventKind::ScrollDown, 60, 15)));
     assert_eq!(app.state.details_scroll, 3);
     assert!(!app.mouse(mouse(MouseEventKind::ScrollUp, 3, 41)));
     app.reply_approval(false);
     assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
+}
+
+#[tokio::test]
+async fn requested_exec_arguments_render_before_completion_and_keep_a_readable_summary() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.secrets.push("private-command-argument".into());
+    let arguments = json!({
+        "argv": ["/usr/bin/swift", ".tmp_vision.swift", "private-command-argument"],
+        "cwd": "/path/to/project",
+        "timeout_seconds": 180,
+        "__saya_command_analysis": {"schema_version": 1}
+    });
+    event(
+        &mut app,
+        EventPayload::ToolRequested {
+            name: "exec".into(),
+            call_id: "vision".into(),
+            args: arguments,
+        },
+    );
+    let message = app.state.messages.back().unwrap();
+    assert!(message.text.contains("Command"));
+    assert!(message.text.contains("/usr/bin/swift"));
+    assert!(!message.text.contains("private-command-argument"));
+    assert!(message.text.contains("[REDACTED]"));
+    assert!(!message.text.contains("__saya_command_analysis"));
+    assert!(message.tool_summary.as_ref().unwrap().running);
+    assert!(
+        !message
+            .tool_summary
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("private-command-argument")
+    );
+    assert!(message.label.ends_with("running"));
+
+    event(
+        &mut app,
+        EventPayload::ToolFinished {
+            name: "exec".into(),
+            call_id: "vision".into(),
+            result: ToolResult {
+                ok: true,
+                data: Some(json!({
+                    "exit_code": 0,
+                    "stdout": "vision ok\n",
+                    "stderr": "",
+                    "stdout_truncated": false,
+                    "stderr_truncated": false,
+                    "timed_out": false,
+                    "cancelled": false
+                })),
+                error: None,
+                truncated: false,
+            },
+        },
+    );
+    let message = app.state.messages.back().unwrap();
+    assert!(message.text.contains("Observed duration"));
+    assert!(message.text.contains("Execution result"));
+    assert!(message.text.contains("vision ok"));
+    let summary = message.tool_summary.as_ref().unwrap();
+    assert!(!summary.running);
+    assert!(summary.text.contains("/usr/bin/swift"));
+    assert!(summary.text.contains("exit 0"));
 }
 
 #[tokio::test]

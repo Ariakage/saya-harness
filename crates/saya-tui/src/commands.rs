@@ -75,6 +75,10 @@ pub const COMMANDS: &[Suggestion] = &[
         description: text::EXIT,
     },
     Suggestion {
+        text: "/ps",
+        description: text::PS,
+    },
+    Suggestion {
         text: "/compact",
         description: text::COMPACT,
     },
@@ -322,7 +326,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 41);
+        assert_eq!(COMMANDS.len(), 42);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -340,6 +344,7 @@ mod tests {
             "/cancel",
             "/help",
             "/exit",
+            "/ps",
             "/compact",
             "/memory",
             "/profile ",

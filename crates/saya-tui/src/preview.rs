@@ -1,8 +1,14 @@
 //! Debug-only fixtures and an interactive view without runtime preparation.
 use crate::{
+    commands::COMMANDS,
+    i18n::{controller as controller_text, picker as picker_text},
     input::TerminalInput,
     terminal::TerminalGuard,
-    view::{self, ContextEntry, Details, MarkdownDisplay, Role, State},
+    tool_render,
+    view::{
+        self, ContextEntry, Details, MarkdownDisplay, MemoryPanel, PickerItem, PickerKind,
+        PickerPanel, Role, State,
+    },
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use saya_core::tools::todo::{TodoItem, TodoStatus};
@@ -12,9 +18,17 @@ use tokio::signal::unix::{SignalKind, signal};
 pub const SCENES: &[&str] = &[
     "chat",
     "approval",
+    "question",
+    "background",
     "tool",
+    "help",
     "commands",
     "completion",
+    "memory",
+    "skills",
+    "mcps",
+    "plugins",
+    "sessions",
     "idle",
     "working",
     "completed",
@@ -202,35 +216,124 @@ pub fn fixture(scene: &str) -> State {
         "approval" => {
             state.editor.clear();
             state.status = "Awaiting approval".into();
+            let arguments = serde_json::json!({
+                "argv": [
+                    "/usr/bin/swift",
+                    "/path/to/project/.tmp_vision.swift",
+                    "/path/to/project/reference.png"
+                ],
+                "cwd": "/path/to/project",
+                "timeout_seconds": 180,
+                "__saya_command_analysis": {
+                    "schema_version": 1,
+                    "limits": {"max_arguments": 1024}
+                }
+            });
+            let mut lines = vec![
+                controller_text::approval_field(controller_text::TOOL_LABEL, "exec"),
+                controller_text::approval_field(controller_text::CALL_LABEL, "call-demo-2"),
+                controller_text::approval_field(controller_text::APPROVAL_LABEL, "approval-demo-2"),
+                controller_text::approval_field(controller_text::MODE_LABEL, "Code"),
+                controller_text::approval_field(
+                    controller_text::WORKSPACE_LABEL,
+                    "/path/to/project",
+                ),
+                String::new(),
+                "Run a controlled image inspection command".into(),
+                String::new(),
+            ];
+            lines.extend(
+                tool_render::call("exec", &arguments, None)
+                    .lines()
+                    .map(str::to_owned),
+            );
+            lines.push(String::new());
+            lines.push("y approve · n / Esc deny · /mode MODE changes mode".into());
             state.set_details(Details {
-                title: "Approval required".into(),
+                title: crate::i18n::view::APPROVAL_REQUIRED.into(),
+                lines,
+            });
+        }
+        "question" => {
+            state.editor.clear();
+            state.status = "Awaiting input".into();
+            state.set_details(Details {
+                title: crate::i18n::view::QUESTION.into(),
                 lines: vec![
-                    "Tool read_file".into(),
-                    "Call call-demo-2".into(),
-                    "Approval approval-demo-2".into(),
-                    "Mode Code".into(),
-                    "Workspace /path/to/project".into(),
-                    "Read src/runtime.rs".into(),
-                    "{\n  \"path\": \"src/runtime.rs\",\n  \"start_line\": 1,\n  \"line_count\": 30\n}".into(),
-                    "y approve · n / Esc deny · /mode MODE changes mode".into(),
+                    "Which workspace should I verify before continuing?".into(),
+                    String::new(),
+                    "1. Current workspace".into(),
+                    "2. /path/to/other-project".into(),
+                    String::new(),
+                    "Type a reply and press Enter. Ctrl+C cancels.".into(),
+                ],
+            });
+        }
+        "background" => {
+            state.set_details(Details {
+                title: controller_text::BACKGROUND_TITLE.into(),
+                lines: vec![
+                    controller_text::background_summary(2, 3),
+                    String::new(),
+                    "background-demo-build-1".into(),
+                    "  exec · call-build".into(),
+                    "  running".into(),
+                    String::new(),
+                    "background-demo-test-2".into(),
+                    "  exec · call-test".into(),
+                    "  running".into(),
+                    String::new(),
+                    "background-demo-docs-3".into(),
+                    "  exec · call-docs".into(),
+                    "  completed".into(),
                 ],
             });
         }
         "tool" => {
+            let arguments = serde_json::json!({
+                "argv": ["/usr/bin/swift", ".tmp_vision.swift", "reference.png"],
+                "cwd": "/path/to/project",
+                "timeout_seconds": 180
+            });
+            let result = saya_core::contract::ToolResult {
+                ok: true,
+                data: Some(serde_json::json!({
+                    "exit_code": 0,
+                    "stdout": "image: 2732×2048\nvision: completed\n",
+                    "stderr": "",
+                    "stdout_truncated": false,
+                    "stderr_truncated": false,
+                    "timed_out": false,
+                    "cancelled": false
+                })),
+                error: None,
+                truncated: false,
+            };
             state.set_details(Details {
-                title: "Tools · UI snapshot".into(),
-                lines: vec![
-                    "Session session-demo-1 · committed change 12 · event 8".into(),
-                    "Read by the UI from stored records. Tool calls are identified by run_id and call_id.".into(),
-                    "[".into(),
-                    "  {".into(),
-                    "    \"run_id\": \"run-demo-1\",".into(),
-                    "    \"call_id\": \"call-demo-1\",".into(),
-                    "    \"tool\": \"exec\",".into(),
-                    "    \"state\": \"unknown\"".into(),
-                    "  }".into(),
-                    "]".into(),
-                ],
+                title: "Tool details".into(),
+                lines: tool_render::call_and_result(
+                    "exec",
+                    &arguments,
+                    &result,
+                    Some(Duration::from_millis(1240)),
+                )
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+            });
+        }
+        "help" => {
+            state.set_details(Details {
+                title: controller_text::HELP_TITLE.into(),
+                lines: COMMANDS
+                    .iter()
+                    .map(|command| format!("{} · {}", command.text, command.description))
+                    .chain(
+                        controller_text::HELP_LINES
+                            .iter()
+                            .map(|line| (*line).to_owned()),
+                    )
+                    .collect(),
             });
         }
         "commands" => {
@@ -242,6 +345,27 @@ pub fn fixture(scene: &str) -> State {
                 .completion
                 .update(state.editor.text(), state.editor.cursor(), true);
         }
+        "memory" => {
+            state.memory_panel = Some(MemoryPanel {
+                settings:
+                    "read true · inject true · write true · CODE · changes last for this process"
+                        .into(),
+                lines: vec![
+                    "Memory overview".into(),
+                    "  workspace · /path/to/project".into(),
+                    "  facts · 12 current".into(),
+                    String::new(),
+                    "Recent changes".into(),
+                    "  user preference · concise verification reports".into(),
+                    "  project decision · native sandbox default".into(),
+                ],
+                ..Default::default()
+            });
+        }
+        "skills" => state.picker_panel = Some(picker_fixture(PickerKind::Skills)),
+        "mcps" => state.picker_panel = Some(picker_fixture(PickerKind::Mcps)),
+        "plugins" => state.picker_panel = Some(picker_fixture(PickerKind::Plugins)),
+        "sessions" => state.picker_panel = Some(picker_fixture(PickerKind::Sessions)),
         "idle" => {
             state.clear_messages();
             state.editor.clear();
@@ -319,6 +443,18 @@ pub fn fixture(scene: &str) -> State {
             })
             .collect();
             state.skills_count = Some(3);
+            state.todos = vec![
+                TodoItem {
+                    id: "context".into(),
+                    content: "Verify Context accounting".into(),
+                    status: TodoStatus::Completed,
+                },
+                TodoItem {
+                    id: "tools".into(),
+                    content: "Review tool rendering".into(),
+                    status: TodoStatus::InProgress,
+                },
+            ];
         }
         "markdown" => {
             state.clear_messages();
@@ -490,6 +626,88 @@ pub fn fixture(scene: &str) -> State {
         _ => {}
     }
     state
+}
+
+fn picker_fixture(kind: PickerKind) -> PickerPanel {
+    let (title, items) = match kind {
+        PickerKind::Skills => (
+            picker_text::SKILLS_TITLE,
+            vec![
+                picker_item(
+                    "review",
+                    "review",
+                    "Review changes with reproducible evidence",
+                    true,
+                ),
+                picker_item(
+                    "testing",
+                    "testing",
+                    "Run targeted local regression checks",
+                    false,
+                ),
+            ],
+        ),
+        PickerKind::Mcps => (
+            picker_text::MCPS_TITLE,
+            vec![
+                picker_item(
+                    "filesystem",
+                    "filesystem",
+                    "stdio · 12 tools · enabled",
+                    true,
+                ),
+                picker_item("github", "github", "HTTP · disabled", false),
+            ],
+        ),
+        PickerKind::Plugins => (
+            picker_text::PLUGINS_TITLE,
+            vec![
+                picker_item(
+                    "saya-review",
+                    "saya-review",
+                    "v1.2.0 · enabled · workspace",
+                    true,
+                ),
+                picker_item("saya-ci", "saya-ci", "v0.8.1 · disabled", false),
+            ],
+        ),
+        PickerKind::Sessions => (
+            picker_text::SESSIONS_TITLE,
+            vec![
+                picker_item(
+                    "session-current",
+                    "Verify approval modal",
+                    "session-current · CODE · default · Ready",
+                    true,
+                ),
+                picker_item(
+                    "session-previous",
+                    "Implement background processes",
+                    "session-previous · WORK · default · Completed",
+                    false,
+                ),
+            ],
+        ),
+    };
+    PickerPanel {
+        kind,
+        title: title.into(),
+        items,
+        selected: 0,
+        scroll: 0,
+        page_rows: 0,
+        hint: picker_text::DRAFT_RETAINED.into(),
+    }
+}
+
+fn picker_item(id: &str, label: &str, description: &str, active: bool) -> PickerItem {
+    PickerItem {
+        id: id.into(),
+        label: label.into(),
+        description: description.into(),
+        details: vec![description.into()],
+        active,
+    }
 }
 
 fn markdown_fixture(scene: &str) -> Option<(&'static str, &'static str)> {
@@ -811,6 +1029,44 @@ mod tests {
                 assert_eq!(summary.role, Role::RunSummary);
                 assert_eq!(summary.label, "CODE");
                 assert!(summary.text.contains("1m 19s · 143.5 tok/s · 12.3k tokens"));
+            }
+        }
+    }
+
+    #[test]
+    fn every_modal_and_sidebar_has_a_preview_scene() {
+        for scene in [
+            "approval",
+            "question",
+            "background",
+            "help",
+            "commands",
+            "completion",
+            "memory",
+            "skills",
+            "mcps",
+            "plugins",
+            "sessions",
+            "tool",
+            "sidebar",
+        ] {
+            assert!(SCENES.contains(&scene), "missing preview scene {scene}");
+            let state = fixture(scene);
+            match scene {
+                "approval" | "question" | "background" | "help" | "tool" => {
+                    assert!(state.details.is_some(), "{scene}");
+                }
+                "commands" => assert!(state.command_palette.is_some()),
+                "completion" => assert!(state.completion.visible()),
+                "memory" => assert!(state.memory_panel.is_some()),
+                "skills" | "mcps" | "plugins" | "sessions" => {
+                    assert!(state.picker_panel.is_some(), "{scene}");
+                }
+                "sidebar" => {
+                    assert!(!state.todos.is_empty());
+                    assert!(!state.context_breakdown.is_empty());
+                }
+                _ => unreachable!(),
             }
         }
     }

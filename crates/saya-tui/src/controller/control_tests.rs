@@ -167,6 +167,95 @@ async fn runtime_commands_change_sandbox_effort_and_model_without_reusing_approv
 }
 
 #[tokio::test]
+async fn ps_opens_a_current_run_process_panel_and_rejects_arguments() {
+    let (_root, mut app) = fixture();
+    assert!(!app.command("/ps").await.unwrap());
+    let details = app.state.details.as_ref().unwrap();
+    assert_eq!(details.title, crate::i18n::controller::BACKGROUND_TITLE);
+    assert!(
+        details
+            .lines
+            .iter()
+            .any(|line| line == crate::i18n::controller::NO_ACTIVE_RUN)
+    );
+    let error = app.command("/ps now").await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        crate::i18n::controller::command_without_arguments("/ps")
+    );
+    attach_active_call(&mut app).await;
+    assert!(!app.command("/ps").await.unwrap());
+    assert!(
+        app.state
+            .details
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line == crate::i18n::controller::NO_BACKGROUND_TASKS)
+    );
+}
+
+#[test]
+fn process_rows_reconstruct_running_cancelling_and_finished_background_jobs() {
+    use saya_core::background::{
+        BackgroundCancelReason, BackgroundEvent, BackgroundEventKind, BackgroundOutcome,
+    };
+    let events = vec![
+        BackgroundEvent {
+            sequence: 1,
+            job_id: "job-run".into(),
+            kind: BackgroundEventKind::Accepted {
+                call_id: "call-run".into(),
+                tool: "exec".into(),
+            },
+        },
+        BackgroundEvent {
+            sequence: 2,
+            job_id: "job-finish".into(),
+            kind: BackgroundEventKind::Accepted {
+                call_id: "call-finish".into(),
+                tool: "read_file".into(),
+            },
+        },
+        BackgroundEvent {
+            sequence: 3,
+            job_id: "job-cancel".into(),
+            kind: BackgroundEventKind::Accepted {
+                call_id: "call-cancel".into(),
+                tool: "exec".into(),
+            },
+        },
+        BackgroundEvent {
+            sequence: 4,
+            job_id: "job-cancel".into(),
+            kind: BackgroundEventKind::CancellationRequested {
+                reason: BackgroundCancelReason::User,
+            },
+        },
+        BackgroundEvent {
+            sequence: 5,
+            job_id: "job-finish".into(),
+            kind: BackgroundEventKind::Finished {
+                outcome: BackgroundOutcome::Failed {
+                    code: "command_failed".into(),
+                },
+            },
+        },
+    ];
+    let lines = super::controls::background_lines(&events);
+    assert!(lines[0].contains("1 running"));
+    assert!(lines[0].contains("3 jobs"));
+    assert!(lines.iter().any(|line| line.contains("job-run")));
+    assert!(lines.iter().any(|line| line.contains("cancelling")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("failed · command_failed"))
+    );
+}
+
+#[tokio::test]
 async fn cd_uses_an_absolute_or_relative_directory_and_stays_idle_only() {
     let (root, mut app) = fixture();
     app.record_context_input(Some(Usage {
@@ -1379,6 +1468,101 @@ impl Model for BackgroundThenPanic {
             panic!("fixture runtime panic with an active background process");
         })
     }
+}
+
+struct BackgroundHolding {
+    requests: std::sync::atomic::AtomicUsize,
+    started: Arc<Notify>,
+}
+
+impl Model for BackgroundHolding {
+    fn start<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            if self
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                self.started.notify_one();
+                return Ok(Box::new(BackgroundLaunch(Some(vec![HistoryItem::ToolCall(
+                    saya_core::contract::ToolCall {
+                        call_id: "ps-background-start".into(),
+                        name: "background_start".into(),
+                        arguments: serde_json::json!({
+                            "tool": "exec",
+                            "arguments": {
+                                "argv": ["/bin/sleep", "30"],
+                                "timeout_seconds": 30
+                            }
+                        })
+                        .to_string(),
+                    },
+                )]))) as Box<dyn ModelStream>);
+            }
+            cancel.cancelled().await;
+            Err(BoundaryError(
+                ErrorInfo {
+                    code: "cancelled".into(),
+                    message: "fixture cancelled".into(),
+                },
+                None,
+                None,
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn ps_lists_a_live_background_job_from_the_current_run() {
+    let (_root, mut app) = fixture();
+    app.config.permissions_mode = PermissionMode::Bypass;
+    let model = Arc::new(BackgroundHolding {
+        requests: std::sync::atomic::AtomicUsize::new(0),
+        started: Arc::new(Notify::new()),
+    });
+    attach_model(&mut app, model.clone()).await;
+    tokio::time::timeout(Duration::from_secs(5), model.started.notified())
+        .await
+        .unwrap();
+    let job_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(id) = app
+                .active
+                .as_ref()
+                .unwrap()
+                .handle
+                .background_events()
+                .unwrap()
+                .into_iter()
+                .find_map(|event| {
+                    matches!(
+                        event.kind,
+                        saya_core::background::BackgroundEventKind::Accepted { .. }
+                    )
+                    .then_some(event.job_id)
+                })
+            {
+                break id;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!app.command("/ps").await.unwrap());
+    let lines = &app.state.details.as_ref().unwrap().lines;
+    assert!(lines.iter().any(|line| line == &job_id));
+    assert!(lines.iter().any(|line| line.trim() == "running"));
+    app.cancel();
+    let active = app.active.as_mut().unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), &mut active.join)
+        .await
+        .unwrap();
+    app.finish(outcome).await.unwrap();
 }
 
 #[tokio::test]

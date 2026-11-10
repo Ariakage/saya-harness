@@ -42,13 +42,13 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 输入框为空时，Tab按WORK→CODE→PLAN→BUILD→WORK循环模式。运行中会显示待生效选择，并在core调用边界应用。已有草稿时继续用于编辑或补全，Ctrl+P命令面板打开时按面板交互处理。
 
-`/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
+`/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/ps` 查看当前Run已接收的后台任务，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
 
 运行设置可在空闲界面调整：`/cd PATH` 将当前会话迁移到现有目录并持久保存工作区；相对路径按当前工作区解析。`/model PROFILE` 选择模型配置并建立新的空会话；`/effort low|medium|high|xhigh|max|default` 与 `/thinking` 等价，修改当前进程的思考强度。`/autocompact 950k|1m|TOKENS|auto|off` 设置精确输入触发水位或恢复百分比／关闭自动压缩。`/sandbox on|off|status` 中`status`可随时只读查看，`on/off`仅空闲可切换；这些变更只影响后续运行，权限规则、显式deny和PLAN只读边界继续生效。
 
 `/sessions`打开已保存会话弹窗，展示会话标题、ID、模式、profile和最后状态，Enter恢复选中会话。`/skills`打开用户级与工作区发现的Skill选择器，`/mcps`打开MCP服务选择器，`/plugins`打开已安装插件选择器。选择器支持↑↓、PgUp／PgDn和Enter，Esc返回保留的草稿。MCP服务的Enter操作切换后续运行的启用状态；Skill与Plugin条目Enter打开只读详情。Skill正文激活仍经过运行时Skill工具与权限，Plugin启用／停用仍通过显式 `saya plugin enable|disable` 能力授权。
 
-Agent运行中继续输入普通消息会把内容作为引导补充，在下一个模型边界保存并加入上下文；当前流式响应和已展开工具调用不会被替换。引导队列上限为16条、累计256KiB。`/tools`按工具调用卡片渲染名称、状态、run／call关联、参数和结构化输出，不直接展示整段JSON。
+Agent运行中继续输入普通消息会把内容作为引导补充，在下一个模型边界保存并加入上下文；当前流式响应和已展开工具调用不会被替换。引导队列上限为16条、累计256KiB。`/tools`按工具调用卡片渲染名称、状态、run／call关联、参数和结构化输出，不直接展示整段JSON。`exec`卡片显示实际命令、工作目录、超时、观测耗时与退出码；审批与澄清使用居中弹窗，不占用普通详情侧栏。
 
 `/markdown source|render`切换Assistant正文的源码／排版视图，`/footnote NUMBER`跳到最近消息的对应脚注，`/footnote back`返回上一引用。debug构建的 `saya tui-preview [SCENE] [--source]`可打开独立的交互式预览，具体语法、公式／图表回退和场景见[Markdown说明](markdown-rendering.md)。
 

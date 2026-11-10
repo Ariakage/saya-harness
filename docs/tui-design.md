@@ -18,7 +18,7 @@ Saya 的终端界面以持续对话为主。用户在主区查看回答与工具
 | 外框底边 | 模式、模型、effort和输入占比 | 1行 |
 | 宽屏侧栏 | 会话名、上下文分项、扩展状态和其他元数据 | 达到120列×24行时显示，宽度为窗口四分之一，限制28至40列 |
 
-主区没有详情时，对话使用全部主区宽度。主区宽度达到100列时，详情与对话并列，详情宽度取主区的三分之一，并限制在32至48列。较窄时详情占据主区。侧栏与按需详情分别处理，所有尺寸保留同一主区外框。低于20列或6行时提示放大终端。
+主区没有详情时，对话使用全部主区宽度。主区宽度达到100列时普通详情与对话并列，详情宽度取主区的三分之一，并限制在32至48列；较窄时普通详情占据主区。审批、澄清和`/ps`当前Run后台任务使用对话主体内的居中圆角弹窗，保留底部草稿输入且不覆盖会话外框。所有尺寸保留同一主区外框，低于20列或6行时提示放大终端。
 
 长模型名先截短，为effort与用量留空间，极窄窗口优先模式和用量。有详情且高度很小时，至少保留一行可滚动的实际详情，压缩输入为无标题的单行草稿。翻页步长依据实际详情高度，便于逐行查看工具、调用ID和参数。
 
@@ -185,7 +185,7 @@ Thinking与工具长输出使用可折叠卡片，命中区域按本帧实际可
 
 Tasks使用core的TodoItem类型，最多64条。侧栏用○／◐／✓标记pending／in_progress／completed，任务正文保留为安全单行，长项按可用宽度截短，条目超出可见区时显示余项数量。列表来自成功工具结果，恢复时从历史重建。
 
-完整结构化工具结果经严格的本地投影生成标题摘要。任务列表显示总数、完成数和进行中数，文件读取显示行范围与字节数，搜索／目录显示项数，命令显示退出码及取消／超时状态。错误摘要取实际code与message，截断以暖色标记。正文、stdout与命中内容通过展开查看。摘要输入和单行输出均有界，未知或不完整结构沿安全原文显示。
+完整结构化工具结果经严格的本地投影生成标题摘要。任务列表显示总数、完成数和进行中数，文件读取显示行范围与字节数，搜索／目录显示项数，命令显示实际argv、观测耗时、退出码及取消／超时状态。错误摘要取实际code与message，截断以暖色标记。正文、stdout与命中内容通过展开查看，分组标题使用强调色，值按层级缩进；内部命令分析字段不显示。摘要输入和单行输出均有界，未知或不完整结构沿安全原文显示。
 
 ## 显示预算与安全呈现
 
@@ -273,9 +273,17 @@ flowchart LR
 ```sh
 cargo run --locked -p saya-tui --example render_preview -- 120 30
 cargo run --locked -p saya-tui --example render_preview -- 120 30 approval
+cargo run --locked -p saya-tui --example render_preview -- 120 30 question
+cargo run --locked -p saya-tui --example render_preview -- 120 30 background
 cargo run --locked -p saya-tui --example render_preview -- 60 24 approval
 cargo run --locked -p saya-tui --example render_preview -- 120 30 tool
+cargo run --locked -p saya-tui --example render_preview -- 120 30 help
 cargo run --locked -p saya-tui --example render_preview -- 120 30 commands
+cargo run --locked -p saya-tui --example render_preview -- 120 30 memory
+cargo run --locked -p saya-tui --example render_preview -- 120 30 skills
+cargo run --locked -p saya-tui --example render_preview -- 120 30 mcps
+cargo run --locked -p saya-tui --example render_preview -- 120 30 plugins
+cargo run --locked -p saya-tui --example render_preview -- 120 30 sessions
 cargo run --locked -p saya-tui --example render_preview -- 80 24 idle
 cargo run --locked -p saya-tui --example render_preview -- 80 24 effort
 cargo run --locked -p saya-tui --example render_preview -- 60 18 compact

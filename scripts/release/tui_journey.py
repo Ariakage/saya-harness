@@ -279,6 +279,9 @@ class Screen:
         return None
 
     def details_text(self):
+        modal = self.modal_details_text()
+        if modal:
+            return modal
         end = self.status_row()
         width = self.main_width()
         if width is None:
@@ -289,6 +292,25 @@ class Screen:
             column = width - 1 - details_width
         return '\n'.join(''.join(self.cells[index][column:width - 1]).rstrip()
                          for index in range(2, max(2, end or 2)))
+
+    def modal_details_text(self):
+        end = self.status_row() or self.rows
+        markers = ('Approval', 'Question', 'Background')
+        for row in range(1, end):
+            text = self.row_text(row)
+            if '╭' not in text or not any(marker in text for marker in markers):
+                continue
+            left = text.index('╭')
+            right = text.rfind('╮')
+            if right <= left:
+                continue
+            for bottom in range(row + 1, min(self.rows, end + 4)):
+                if self.cells[bottom][left] == '╰' and self.cells[bottom][right] == '╯':
+                    return '\n'.join(
+                        ''.join(self.cells[index][left:right + 1]).rstrip()
+                        for index in range(row, bottom + 1)
+                    )
+        return ''
 
     def body_text(self):
         width = self.main_width()
@@ -1537,12 +1559,20 @@ def reference_layout_and_title_journey(binary):
                                   call[0] in terminal.screen.details_text(), 'reference approval in its actual details region')
                     if terminal.screen.status() != 'Awaiting approval' or len(fixture.requests) != 2:
                         raise RuntimeError('resizing replied to a pending reference tool approval')
-                reference_ready(20, 6, None)
-                reveal_details(terminal, lambda: call[0] in terminal.screen.details_text(), 'tiny approval call ID')
-                for _ in range(10):
-                    terminal.send(b'\x1b[5~')
-                terminal.wait(lambda: 'Tool read_file' in terminal.screen.details_text() and
-                              terminal.screen.status() == 'Awaiting approval', 'tiny approval tool metadata')
+                terminal.resize(20, 6)
+                terminal.title()
+                terminal.wait(lambda: terminal.screen.rows == 6 and
+                              'Approval required' in terminal.screen.details_text() and
+                              'input' in footer(), 'tiny approval modal')
+                terminal.settle()
+                if terminal.screen.colors[0][0][1] != (9, 9, 11):
+                    raise RuntimeError('tiny approval modal lost the main background')
+                reveal_details(terminal, lambda: 'Tool' in terminal.screen.details_text(),
+                               'tiny approval tool metadata')
+                tiny_details = terminal.screen.details_text()
+                terminal.send(b'\x1b[6~')
+                terminal.wait(lambda: terminal.screen.details_text() != tiny_details,
+                              'tiny approval details scrolling')
                 reference_ready(80, 24, 19)
                 terminal.send('y')
                 wait_idle(terminal, root, count=2)
@@ -2100,7 +2130,7 @@ def summary_tool_cards_journey(binary):
                     for row in range(item[1] + 1, terminal.screen.status_row()):
                         content += ''.join(terminal.screen.cells[row][item[0]:terminal.screen.main_width() - 2])
                     expected = results[call[0]]
-                    if f"Status: {'completed' if expected.get('ok') else 'failed'}" not in content:
+                    if f"Result · {'completed' if expected.get('ok') else 'failed'}" not in content:
                         raise RuntimeError('expanded card omitted its structured status for ' + call[0] + '\n' + content)
                     if '{"ok"' in content or '"data"' in content:
                         raise RuntimeError('expanded card exposed raw result JSON for ' + call[0])
@@ -2173,7 +2203,7 @@ def command_palette_modal_journey(binary):
                     if width < 38:
                         if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
                             raise RuntimeError('compact command modal omitted its close instruction')
-                    elif f'{index + 1}/41' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                    elif f'{index + 1}/42' not in ''.join(terminal.screen.cells[top][left:left + width]):
                         raise RuntimeError('command modal did not report the actual catalog selection')
                     navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
                     expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
@@ -2221,7 +2251,7 @@ def command_palette_modal_journey(binary):
                 assert_mode_colors(terminal, 'PLAN')
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 29)
+                terminal.send(b'\x1b[B' * 30)
                 wait_selected('/export-full markdown')
                 terminal.send(b'\r')
                 terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'scaffold modal closed with existing draft')
@@ -2230,9 +2260,9 @@ def command_palette_modal_journey(binary):
                 clear_draft()
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 40)
+                terminal.send(b'\x1b[B' * 41)
                 wait_selected('/plugins')
-                geometry(40)
+                geometry(41)
                 if '/mode plan' in terminal.screen.command_palette_text():
                     raise RuntimeError('long command catalog did not scroll to keep its last selection visible')
                 scaffold_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/skills'))
@@ -2246,11 +2276,11 @@ def command_palette_modal_journey(binary):
                     raise RuntimeError('Up moved the catalog viewport while its previous row was already visible')
                 terminal.send(b'\x1b[A' * 8)
                 wait_selected('/export-full markdown')
-                geometry(29)
+                geometry(30)
                 for columns, rows in [(160, 45), (80, 24), (60, 18), (20, 6), (110, 32)]:
                     terminal.resize(columns, rows)
                     wait_selected('/export-full markdown')
-                    geometry(29)
+                    geometry(30)
                     if (columns, rows) == (160, 45):
                         save_interactive_screen(terminal, 'wide-160x45')
                     if (columns, rows) == (20, 6):
@@ -2545,6 +2575,15 @@ def background_control_and_unknown_records(binary):
                 terminal.title()
                 terminal.line('Start the background fixture')
                 terminal.wait(lambda: 'id' in job and lease.ready(), 'live background writer')
+                terminal.send('/ps')
+                terminal.wait(lambda: terminal.editor_text() == '/ps', 'typed current process command')
+                terminal.send(b'\r')
+                terminal.wait(lambda: 'Background tasks · current run' in terminal.screen.text and
+                              job['id'][:32] in terminal.screen.details_text() and
+                              'running' in terminal.screen.details_text(), 'current background process panel')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: 'Background tasks · current run' not in terminal.screen.text,
+                              'background process panel closed')
                 terminal.line('/jobs')
                 terminal.until('Background jobs · UI snapshot')
                 terminal.send(b'\x1b')

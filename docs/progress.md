@@ -20,6 +20,14 @@
 
 最终 `./scripts/check.sh` 通过格式、workspace全目标严格Clippy、1337项Rust测试、8项条件忽略和release构建，日志为 `target/i18n-check.log`。同一release程序的 `just smoke target/release/saya` 通过离线smoke、文本journey、5项审查回归及26组TUI PTY旅程。本轮未推送、未运行远端CI。
 
+## TUI 审批弹窗、工具呈现与 `/ps`
+
+2026-11-11，按D-057把审批与澄清详情从普通侧栏改为对话主体内的居中圆角弹窗，保留底部草稿输入和命令补全优先级。审批参数复用工具呈现器，`exec`显示argv、工作目录、环境变量名与超时，并隐藏内部`__saya_*`分析字段；完成结果展示观测耗时、退出码、stdout、stderr、超时与取消状态。`/ps`从当前Run的后台事件重建任务列表并区分running、cancelling、completed、failed和cancelled，持久历史仍由`/jobs`提供。
+
+`tui-preview`新增question、background、help、memory及Skills／MCP／Plugins／Sessions场景，原有approval与tool场景同步采用弹窗和结构化字段。实际生成并检查了全部弹窗／侧栏场景；新增Rust回归覆盖exec参数、实时摘要、弹窗边界、预览覆盖和当前Run后台任务状态。
+
+最终 `./scripts/check.sh` 通过格式、workspace全目标严格Clippy、1345项Rust测试、8项条件忽略和release构建，日志为 `target/ui-review-final-2.log`。`just test-tooling`的75项Python回归通过；同一release程序的 `just smoke target/release/saya` 通过离线smoke、文本journey、5项审查回归及26组TUI PTY旅程，其中`/ps`在真实后台任务运行期间完成弹窗读取与关闭验证。本轮未推送、未运行远端CI。
+
 ## N3 上下文与可执行扩展
 
 2026-11-09，项目负责人启动完成N3及验证验收的持续目标，起点为 `7064bb7`，启动时工作区干净。范围包含DEV-062至DEV-068、DEV-076至DEV-078、DEV-084至DEV-089共16项；2026-11-10，16项均由固定源码 `e1da373` 的四平台验收完成。[逐项验收记录](n3-validation.md#四平台最终验收)

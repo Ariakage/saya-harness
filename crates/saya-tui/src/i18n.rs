@@ -16,6 +16,7 @@ pub(crate) mod command {
     pub const PROFILES: &str = "List configured model profiles";
     pub const TOOLS: &str = "Inspect committed tool records for this session";
     pub const JOBS: &str = "Inspect background-job records for this session";
+    pub const PS: &str = "Inspect background tasks owned by the current Agent run";
     pub const STATUS: &str = "Show the current runtime and permission state";
     pub const CANCEL: &str = "Cancel the active run or UI operation";
     pub const HELP: &str = "Show commands and keyboard controls";
@@ -326,7 +327,6 @@ pub(crate) mod tool {
     pub const NULL: &str = "null";
     pub const UNKNOWN: &str = "unknown";
     pub const UNKNOWN_TOOL: &str = "unknown tool";
-    pub const STATUS: &str = "Status";
     pub const COMPLETED: &str = "completed";
     pub const FAILED: &str = "failed";
     pub const OUTPUT: &str = "Output";
@@ -354,8 +354,22 @@ pub(crate) mod tool {
     pub const ENTRY: &str = "entry";
     pub const ENTRIES: &str = "entries";
     pub const EXIT: &str = "exit";
+    pub const RUNNING: &str = "running";
     pub const TIMEOUT: &str = "timeout";
     pub const CANCELLED: &str = "cancelled";
+    pub const COMMAND: &str = "Command";
+    pub const WORKING_DIRECTORY: &str = "Working directory";
+    pub const SESSION_WORKSPACE: &str = "(session workspace)";
+    pub const TIMEOUT_LABEL: &str = "Timeout";
+    pub const ENVIRONMENT: &str = "Environment";
+    pub const OBSERVED_DURATION: &str = "Observed duration";
+    pub const EXECUTION_RESULT: &str = "Execution result";
+    pub const RESULT: &str = "Result";
+    pub const EXIT_CODE: &str = "Exit code";
+    pub const STDOUT: &str = "stdout";
+    pub const STDERR: &str = "stderr";
+    pub const EMPTY: &str = "(empty)";
+    pub const UNAVAILABLE: &str = "unavailable";
 }
 
 pub(crate) mod controller {
@@ -381,7 +395,6 @@ pub(crate) mod controller {
     pub const GUIDANCE_APPROVAL_PENDING: &str =
         "Guidance queued for the next model boundary; the current approval remains pending.";
     pub const MODE_CHANGE_UI: &str = "Mode change waits for the UI operation to stop.";
-    pub const UNAVAILABLE_ARGUMENTS: &str = "Unavailable arguments";
     pub const TOOL_LABEL: &str = "Tool";
     pub const CALL_LABEL: &str = "Call";
     pub const APPROVAL_LABEL: &str = "Approval";
@@ -418,6 +431,16 @@ pub(crate) mod controller {
     pub const STATUS_SANDBOX: &str = "sandbox";
     pub const STATUS_AUTOCOMPACT: &str = "autocompact";
     pub const STATUS_MARKDOWN: &str = "Markdown";
+    pub const BACKGROUND_TITLE: &str = "Background tasks · current run";
+    pub const NO_ACTIVE_RUN: &str = "No Agent run is active.";
+    pub const NO_BACKGROUND_TASKS: &str =
+        "No background tasks have been accepted by the current Agent run.";
+    pub const BACKGROUND_SUMMARY: &str = "jobs";
+    pub const BACKGROUND_RUNNING: &str = "running";
+    pub const BACKGROUND_CANCELLING: &str = "cancelling";
+    pub const BACKGROUND_COMPLETED: &str = "completed";
+    pub const BACKGROUND_CANCELLED: &str = "cancelled";
+    pub const BACKGROUND_FAILED: &str = "failed";
     pub const FOOTNOTE_USAGE: &str = "Use /footnote NUMBER or /footnote back";
     pub const FOOTNOTE_UNAVAILABLE: &str =
         "Footnote target is unavailable in the retained rendered transcript";
@@ -461,6 +484,7 @@ pub(crate) mod controller {
         "/effort|/thinking LEVEL changes reasoning effort; /model PROFILE changes model profile",
         "/autocompact TOKENS|auto|off changes the next-run compaction trigger",
         "/skills, /mcps and /plugins open selectors · ↑↓ move · Enter selects · Esc closes",
+        "/ps opens the background tasks accepted by the current Agent run",
         "/compact summarizes saved history, or queues at the next model boundary during a run",
         "/memory opens current memory, source/scope, review, forgetting, history and backup controls",
         "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss",
@@ -491,7 +515,7 @@ pub(crate) mod controller {
         format!("Mode requested — {mode}")
     }
     pub fn approval_field(label: &str, value: impl std::fmt::Display) -> String {
-        format!("{label} {value}")
+        format!("{label:<9} {value}")
     }
     pub fn status_line(status: &str, fields: &[(&str, &str)]) -> String {
         std::iter::once(status.to_owned())
@@ -526,6 +550,9 @@ pub(crate) mod controller {
     }
     pub fn status_autocompact_tokens(tokens: u64) -> String {
         format!("{tokens} {AUTOCOMPACT_TOKENS_SUFFIX}")
+    }
+    pub fn background_summary(running: usize, total: usize) -> String {
+        format!("{running} {BACKGROUND_RUNNING} · {total} {BACKGROUND_SUMMARY}")
     }
 }
 

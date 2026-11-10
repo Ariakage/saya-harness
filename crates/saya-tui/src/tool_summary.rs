@@ -1,5 +1,9 @@
 //! Short labels derived from canonical tool result payloads.
-use crate::{editor::safe_text, i18n::tool as text, view::MAX_MESSAGE_BYTES};
+use crate::{
+    editor::safe_text,
+    i18n::{summary, tool as text},
+    view::MAX_MESSAGE_BYTES,
+};
 use saya_core::{
     contract::ToolResult,
     tools::todo::{TodoStatus, result_todos},
@@ -14,6 +18,7 @@ pub(crate) struct ToolSummary {
     pub text: String,
     pub ok: bool,
     pub truncated: bool,
+    pub running: bool,
 }
 
 /// Summarize supported, already-redacted ToolResult JSON for local display.
@@ -53,6 +58,65 @@ pub(crate) fn summarize(text: &str) -> Option<ToolSummary> {
         text: one_line(&text, 120),
         ok,
         truncated: truncated || nested_truncated,
+        running: false,
+    })
+}
+
+pub(crate) fn summarize_call(
+    name: &str,
+    arguments: &Value,
+    result: Option<&ToolResult>,
+    elapsed: Option<std::time::Duration>,
+) -> Option<ToolSummary> {
+    if name != "exec" {
+        return result.and_then(|result| {
+            serde_json::to_string(result)
+                .ok()
+                .as_deref()
+                .and_then(summarize)
+        });
+    }
+    let command = crate::tool_render::command_text(arguments)?;
+    let mut parts = vec![one_line(&command, 80)];
+    let running = result.is_none();
+    let mut ok = true;
+    let mut truncated = false;
+    if let Some(elapsed) = elapsed {
+        parts.push(summary::duration(elapsed));
+    }
+    if let Some(result) = result {
+        truncated = result.truncated;
+        if let Some(data) = result.data.as_ref() {
+            let exit = data.get("exit_code").and_then(Value::as_i64);
+            if let Some(exit) = exit {
+                parts.push(format!("{} {exit}", text::EXIT));
+                ok &= exit == 0;
+            }
+            if data.get("timed_out").and_then(Value::as_bool) == Some(true) {
+                parts.push(text::TIMEOUT.into());
+                ok = false;
+            }
+            if data.get("cancelled").and_then(Value::as_bool) == Some(true) {
+                parts.push(text::CANCELLED.into());
+                ok = false;
+            }
+            truncated |= data.get("stdout_truncated").and_then(Value::as_bool) == Some(true)
+                || data.get("stderr_truncated").and_then(Value::as_bool) == Some(true);
+        }
+        if !result.ok {
+            ok = false;
+            if let Some(error) = &result.error {
+                parts.push(one_line(&error.code, 32));
+            }
+        }
+    } else {
+        parts.push(text::RUNNING.into());
+    }
+    Some(ToolSummary {
+        text: one_line(&parts.join(" · "), 120),
+        ok,
+        truncated,
+        running,
     })
 }
 
@@ -257,7 +321,8 @@ mod tests {
             Some(ToolSummary {
                 text: "2 tasks · 1 done/1 active".into(),
                 ok: true,
-                truncated: false
+                truncated: false,
+                running: false,
             })
         );
         assert_eq!(text, original);
@@ -296,6 +361,37 @@ mod tests {
         assert!(summarize(&record(exec(json!(1), false, false))).is_none());
         assert!(summarize(&record(exec(json!(0), true, false))).is_none());
         assert!(summarize(&record(exec(json!(0), false, true))).is_none());
+    }
+
+    #[test]
+    fn exec_call_summary_keeps_the_command_timing_and_exit_status() {
+        let arguments = json!({
+            "argv": ["/usr/bin/swift", ".tmp_vision.swift", "reference.png"],
+            "cwd": "/path/to/project"
+        });
+        let running = summarize_call("exec", &arguments, None, None).unwrap();
+        assert!(running.running);
+        assert!(running.text.contains("/usr/bin/swift"));
+        assert!(running.text.ends_with("running"));
+
+        let result = ToolResult {
+            ok: true,
+            data: Some(exec(json!(0), false, false)),
+            error: None,
+            truncated: false,
+        };
+        let finished = summarize_call(
+            "exec",
+            &arguments,
+            Some(&result),
+            Some(std::time::Duration::from_millis(1240)),
+        )
+        .unwrap();
+        assert!(!finished.running);
+        assert!(finished.text.contains("/usr/bin/swift"));
+        assert!(finished.text.contains("1.2s"));
+        assert!(finished.text.contains("exit 0"));
+        assert!(!finished.text.contains("PRIVATE"));
     }
 
     #[test]

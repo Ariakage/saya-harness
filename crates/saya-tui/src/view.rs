@@ -3,8 +3,8 @@ use crate::{
     commands::{COMMANDS, Completion},
     editor::{Editor, MAX_VISUAL_LINE_BYTES, display_grapheme, prefix_boundary, safe_text},
     i18n::{
-        command, common, mode as mode_text, permissions as permission_text, status as status_text,
-        view as ui_text,
+        command, common, controller as controller_text, mode as mode_text,
+        permissions as permission_text, status as status_text, tool as tool_text, view as ui_text,
     },
     rich_text::append_wrapped_line,
     theme::{
@@ -902,6 +902,14 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     } else {
         draw_session(frame, state, area);
     }
+    draw_modal_details(frame, state);
+    if state.command_palette.is_none()
+        && state.completion.visible()
+        && state.details.as_ref().is_some_and(details_modal)
+        && let Some(body) = state.transcript_viewport
+    {
+        draw_completion(frame, state, body);
+    }
     draw_command_palette(frame, state);
     memory::draw(frame, state);
     picker::draw(frame, state);
@@ -917,8 +925,66 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     state.selection.render(frame.buffer_mut(), areas);
 }
 
+fn details_modal(details: &Details) -> bool {
+    matches!(
+        details.title.as_str(),
+        ui_text::APPROVAL_REQUIRED | ui_text::QUESTION | controller_text::BACKGROUND_TITLE
+    )
+}
+
+fn draw_modal_details(frame: &mut Frame<'_>, state: &mut State) {
+    let Some(details) = &state.details else {
+        return;
+    };
+    if !details_modal(details) {
+        return;
+    }
+    let outer = state
+        .transcript_viewport
+        .filter(|area| area.height >= 3)
+        .unwrap_or_else(|| frame.area());
+    if outer.width < 8 || outer.height < 3 {
+        state.details_page_rows = 1;
+        return;
+    }
+    let width = outer
+        .width
+        .saturating_sub(4)
+        .clamp(32, 104)
+        .min(outer.width.max(1));
+    let natural = details
+        .lines
+        .iter()
+        .map(|line| line.lines().count().max(1))
+        .sum::<usize>()
+        .saturating_add(3);
+    let maximum_height = outer.height.saturating_sub(2).max(1);
+    let minimum_height = maximum_height.min(6);
+    let height = u16::try_from(natural)
+        .unwrap_or(u16::MAX)
+        .clamp(minimum_height, maximum_height);
+    let area = Rect::new(
+        outer.x + (outer.width.saturating_sub(width)) / 2,
+        outer.y + (outer.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, area);
+    state.details_viewport = Some(area);
+    draw_details(
+        frame,
+        details,
+        &mut state.details_scroll,
+        &mut state.details_page_rows,
+        area,
+        true,
+    );
+}
+
 fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
-    if state.details.is_some() && body.width >= 98 {
+    if state.details.as_ref().is_some_and(details_modal) {
+        draw_transcript(frame, state, body);
+    } else if state.details.is_some() && body.width >= 98 {
         let columns = Layout::horizontal([
             Constraint::Min(50),
             Constraint::Length((body.width / 3).clamp(32, 48)),
@@ -933,6 +999,7 @@ fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
                 &mut state.details_scroll,
                 &mut state.details_page_rows,
                 columns[1],
+                false,
             );
         }
     } else if let Some(details) = &state.details {
@@ -943,6 +1010,7 @@ fn draw_body(frame: &mut Frame<'_>, state: &mut State, body: Rect) {
             &mut state.details_scroll,
             &mut state.details_page_rows,
             body,
+            false,
         );
     } else {
         state.details_page_rows = 10;
@@ -1010,9 +1078,17 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
         .count()
         + 1;
     let input_height = (input_lines + 3).clamp(4, 6).min(usize::from(
-        inner
-            .height
-            .saturating_sub(if state.details.is_some() { 2 } else { 1 }),
+        inner.height.saturating_sub(
+            if state
+                .details
+                .as_ref()
+                .is_some_and(|details| !details_modal(details))
+            {
+                2
+            } else {
+                1
+            },
+        ),
     )) as u16;
     let rows = Layout::vertical([
         Constraint::Min(0),
@@ -1759,13 +1835,23 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
                     Style::default().fg(AMBER),
                 ));
             }
-            heading.spans.push(Span::styled(
-                if summary.ok { " · ✓ " } else { " · ✕ " },
-                Style::default().fg(if summary.ok { GREEN } else { RED }),
-            ));
+            let (marker, color) = if summary.running {
+                (" · ● ", BLUE)
+            } else if summary.ok {
+                (" · ✓ ", GREEN)
+            } else {
+                (" · ✕ ", RED)
+            };
+            heading
+                .spans
+                .push(Span::styled(marker, Style::default().fg(color)));
             heading.spans.push(Span::styled(
                 summary.text.clone(),
-                Style::default().fg(if summary.ok { FOREGROUND } else { RED }),
+                Style::default().fg(if summary.running || summary.ok {
+                    FOREGROUND
+                } else {
+                    RED
+                }),
             ));
             if !source.is_empty() {
                 heading.spans.push(Span::styled(
@@ -1973,6 +2059,7 @@ fn draw_details(
     scroll: &mut usize,
     page_rows: &mut usize,
     area: Rect,
+    modal: bool,
 ) {
     let title = safe_line(&details.title[..prefix_boundary(&details.title, 256)]);
     let title_style = Style::default()
@@ -1984,14 +2071,27 @@ fn draw_details(
             },
         )
         .add_modifier(Modifier::BOLD);
-    let mut block = Block::default().border_style(Style::default().fg(BORDER));
+    let mut block = if modal {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(Style::default().bg(SIDEBAR_BACKGROUND))
+            .border_style(Style::default().fg(if title_style.fg == Some(AMBER) {
+                AMBER
+            } else {
+                BLUE
+            }))
+    } else {
+        Block::default().border_style(Style::default().fg(BORDER))
+    };
     if area.height > 1 {
-        block = block
-            .borders(Borders::TOP)
-            .title(Line::styled(format!(" {title} "), title_style));
+        if !modal {
+            block = block.borders(Borders::TOP);
+        }
+        block = block.title(Line::styled(format!(" {title} "), title_style));
     }
     let inner = block.inner(area);
-    *page_rows = usize::from(inner.height).clamp(1, 10);
+    *page_rows = usize::from(inner.height).clamp(1, if modal { 64 } else { 10 });
     if inner.width == 0 || inner.height == 0 {
         frame.render_widget(block, area);
         return;
@@ -2024,11 +2124,7 @@ fn draw_details(
             append_wrapped(
                 &prefix,
                 usize::from(inner.width),
-                Style::default().fg(if line == ui_text::DETAIL_TRUNCATION_NOTICE {
-                    AMBER
-                } else {
-                    FOREGROUND
-                }),
+                detail_content_style(line),
                 &mut lines,
                 &mut count,
             );
@@ -2068,6 +2164,35 @@ fn draw_details(
         .collect::<Vec<_>>();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(visible), inner);
+}
+
+fn detail_content_style(line: &str) -> Style {
+    if line == ui_text::DETAIL_TRUNCATION_NOTICE {
+        return Style::default().fg(AMBER);
+    }
+    if line.starts_with(tool_text::EXECUTION_RESULT) || line.starts_with(tool_text::RESULT) {
+        let color = if line.ends_with(tool_text::COMPLETED) {
+            GREEN
+        } else if line.ends_with(tool_text::FAILED) {
+            RED
+        } else {
+            BLUE
+        };
+        return Style::default().fg(color).add_modifier(Modifier::BOLD);
+    }
+    if [
+        tool_text::COMMAND,
+        tool_text::WORKING_DIRECTORY,
+        tool_text::TIMEOUT_LABEL,
+        tool_text::ENVIRONMENT,
+        tool_text::OBSERVED_DURATION,
+        tool_text::OUTPUT,
+    ]
+    .contains(&line)
+    {
+        return Style::default().fg(BLUE).add_modifier(Modifier::BOLD);
+    }
+    Style::default().fg(FOREGROUND)
 }
 
 fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
@@ -3094,7 +3219,7 @@ mod tests {
         let mut state = State::default();
         state.push_message(Role::User, "You", "conversation marker");
         state.set_details(Details {
-            title: "Approval required".into(),
+            title: "Help".into(),
             lines: vec!["operation marker".into()],
         });
         state.editor.set_text("/per");
@@ -3114,7 +3239,7 @@ mod tests {
             let heading = (details_x..main_width - 1)
                 .map(|column| buffer[(column, 2)].symbol())
                 .collect::<String>();
-            assert!(heading.contains("Approval required"));
+            assert!(heading.contains("Help"));
             assert!(row_text(buffer, 3).contains("operation marker"));
             if main_width >= 100 {
                 assert!(row_text(buffer, 2).contains("You"));
@@ -3131,7 +3256,48 @@ mod tests {
             assert_eq!(buffer[(cursor.x, cursor.y)].symbol(), "m");
             assert_eq!(buffer[(cursor.x, cursor.y)].bg, INPUT_BACKGROUND);
             assert_eq!(state.editor.text(), "/per");
-            assert_eq!(state.details.as_ref().unwrap().title, "Approval required");
+            assert_eq!(state.details.as_ref().unwrap().title, "Help");
+        }
+    }
+
+    #[test]
+    fn approval_and_question_details_use_centered_modals_inside_the_transcript() {
+        for (title, marker) in [
+            ("Approval required", "y approve · n / Esc deny"),
+            ("Question", "Type a reply and press Enter"),
+        ] {
+            let mut state = State {
+                status: if title == "Question" {
+                    "Awaiting input".into()
+                } else {
+                    "Awaiting approval".into()
+                },
+                ..State::default()
+            };
+            state.push_message(Role::System, "System", "transcript marker");
+            state.editor.set_text("retained draft");
+            state.set_details(Details {
+                title: title.into(),
+                lines: vec![
+                    "Command".into(),
+                    "  /usr/bin/swift .tmp_vision.swift".into(),
+                    String::new(),
+                    marker.into(),
+                ],
+            });
+            let image = render(&mut state, 120, 36);
+            let transcript = state.transcript_viewport.unwrap();
+            let modal = state.details_viewport.unwrap();
+            assert!(image.contains(title));
+            assert!(image.contains(marker));
+            assert!(modal.x >= transcript.x && modal.y >= transcript.y);
+            assert!(modal.right() <= transcript.right());
+            assert!(modal.bottom() <= transcript.bottom());
+            assert!(modal.x > transcript.x);
+            assert!(modal.y > transcript.y);
+            assert!(modal.right() < transcript.right());
+            assert!(modal.bottom() < transcript.bottom());
+            assert_eq!(state.editor.text(), "retained draft");
         }
     }
 
@@ -3277,7 +3443,7 @@ mod tests {
         };
         state.editor.set_text("yes");
         state.set_details(Details {
-            title: "Approval required".into(),
+            title: "Help".into(),
             lines: vec![
                 "Tool read_file".into(),
                 "Call c1".into(),
@@ -3293,7 +3459,6 @@ mod tests {
                 assert_eq!((cursor.x, cursor.y), (6, height - 2));
                 let buffer = terminal.backend().buffer();
                 assert!(row_text(buffer, 2).contains(expected));
-                assert!(row_text(buffer, 3).contains("Approval"));
                 assert_eq!(buffer[(3, height - 2)].symbol(), "y");
                 assert_eq!(buffer[(3, height - 2)].bg, INPUT_BACKGROUND);
                 assert_eq!(state.details_page_rows, 1);
@@ -4049,7 +4214,7 @@ mod tests {
         let mut state = State::default();
         state.push_message(Role::Assistant, "Saya", "line\n".repeat(200));
         state.set_details(Details {
-            title: "Approval required".into(),
+            title: "Help".into(),
             lines: (0..100).map(|index| format!("line {index}")).collect(),
         });
         render(&mut state, 160, 45);
@@ -4475,7 +4640,7 @@ mod tests {
         assert!(!row_text(terminal.backend().buffer(), 3).contains("Enter"));
         assert!(!render(&mut state, 20, 6).contains("Describe a task…"));
         state.set_details(Details {
-            title: "Approval required".into(),
+            title: "Help".into(),
             lines: vec!["Tool exec".into()],
         });
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -4564,7 +4729,7 @@ mod tests {
                 assert!(state.editor.text().is_empty());
                 if width == 20 {
                     state.set_details(Details {
-                        title: "Approval required".into(),
+                        title: "Help".into(),
                         lines: vec!["Review this operation".into()],
                     });
                     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -4592,7 +4757,7 @@ mod tests {
             for with_details in [false, true] {
                 if with_details {
                     state.set_details(Details {
-                        title: "Approval required".into(),
+                        title: "Help".into(),
                         lines: vec!["Read the proposed operation".into()],
                     });
                 }
