@@ -9,7 +9,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_SUMMARY_BYTES: usize = 512;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolSummary {
     pub text: String,
     pub ok: bool,

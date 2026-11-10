@@ -2097,16 +2097,20 @@ def summary_tool_cards_journey(binary):
                     terminal.settle()
                     item = header(call[0])
                     content = ''
-                    decoded = None
                     for row in range(item[1] + 1, terminal.screen.status_row()):
                         content += ''.join(terminal.screen.cells[row][item[0]:terminal.screen.main_width() - 2])
-                        try:
-                            decoded, _ = json.JSONDecoder().raw_decode(content)
-                            break
-                        except json.JSONDecodeError:
-                            continue
-                    if decoded != results[call[0]]:
-                        raise RuntimeError('expanded card changed or omitted original tool JSON for ' + call[0] + '\n' + content)
+                    expected = results[call[0]]
+                    if f"Status: {'completed' if expected.get('ok') else 'failed'}" not in content:
+                        raise RuntimeError('expanded card omitted its structured status for ' + call[0] + '\n' + content)
+                    if '{"ok"' in content or '"data"' in content:
+                        raise RuntimeError('expanded card exposed raw result JSON for ' + call[0])
+                    if call == todo and ('todos: 1 items' not in content or 'SHORT_TODO_BODY_FIXTURE' not in content):
+                        raise RuntimeError('expanded todo result omitted structured task data')
+                    if call == missing and ('Error: io_error' not in content or 'Message:' not in content):
+                        raise RuntimeError('expanded failed result omitted structured error fields')
+                    if call == truncated and ('Output truncated by configured limits.' not in content or
+                                              'TRUNCATED_BODY_FIXTURE' not in content):
+                        raise RuntimeError('expanded truncated result omitted structured output')
                     terminal.click(item[0] + 3, item[1])
                     terminal.wait(lambda: header(call[0]) is not None and header(call[0])[2].startswith('▶ '),
                                   'collapsed short tool result ' + call[0])

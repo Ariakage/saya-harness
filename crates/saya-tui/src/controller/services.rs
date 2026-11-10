@@ -10,7 +10,11 @@ use saya_core::{
 
 pub(super) enum UiResult {
     Details(Details),
-    Session { prepared: Prepared, resumed: bool },
+    Session {
+        prepared: Prepared,
+        resumed: bool,
+        usage: Option<saya_core::contract::Usage>,
+    },
     Export(serde_json::Value),
     Memory(super::memory::MemoryUiResult),
     Picker(crate::view::PickerPanel),
@@ -56,106 +60,6 @@ fn display_details(
     Ok(UiResult::Details(details))
 }
 
-fn scalar(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null => "null".into(),
-        serde_json::Value::Bool(value) => value.to_string(),
-        serde_json::Value::Number(value) => value.to_string(),
-        serde_json::Value::String(value) => value.clone(),
-        _ => String::new(),
-    }
-}
-
-fn append_value(lines: &mut Vec<String>, label: &str, value: &serde_json::Value, indent: usize) {
-    let prefix = " ".repeat(indent);
-    match value {
-        serde_json::Value::Object(values) => {
-            lines.push(format!("{prefix}{label}:"));
-            for (key, value) in values {
-                append_value(lines, key, value, indent + 2);
-            }
-        }
-        serde_json::Value::Array(values)
-            if values
-                .iter()
-                .all(|value| !value.is_object() && !value.is_array()) =>
-        {
-            lines.push(format!(
-                "{prefix}{label}: {}",
-                values.iter().map(scalar).collect::<Vec<_>>().join(", ")
-            ));
-        }
-        serde_json::Value::Array(values) => {
-            lines.push(format!("{prefix}{label}: {} items", values.len()));
-            for (index, value) in values.iter().enumerate() {
-                append_value(lines, &format!("[{index}]"), value, indent + 2);
-            }
-        }
-        value => lines.push(format!("{prefix}{label}: {}", scalar(value))),
-    }
-}
-
-fn tool_record_lines(records: &[serde_json::Value]) -> Vec<String> {
-    if records.is_empty() {
-        return vec!["No committed tool calls.".into()];
-    }
-    let mut lines = Vec::new();
-    for (index, record) in records.iter().enumerate() {
-        let call = record
-            .get("call")
-            .cloned()
-            .and_then(|value| serde_json::from_value::<saya_core::contract::ToolCall>(value).ok());
-        let state = record
-            .get("state")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown");
-        let name = call
-            .as_ref()
-            .map_or("unknown tool", |call| call.name.as_str());
-        lines.push(format!("#{} {name} · {state}", index + 1));
-        lines.push(format!(
-            "  run {} · call {}",
-            record
-                .get("run_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("?"),
-            record
-                .get("call_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("?")
-        ));
-        if let Some(call) = &call {
-            match serde_json::from_str::<serde_json::Value>(&call.arguments) {
-                Ok(arguments) => append_value(&mut lines, "arguments", &arguments, 2),
-                Err(_) => lines.push(format!("  arguments: {}", call.arguments)),
-            }
-        }
-        let result = record
-            .get("result")
-            .filter(|value| !value.is_null())
-            .cloned()
-            .and_then(|value| {
-                serde_json::from_value::<saya_core::contract::ToolResult>(value).ok()
-            });
-        if let Some(result) = result {
-            lines.push(format!(
-                "  result: {}",
-                if result.ok { "ok" } else { "failed" }
-            ));
-            if result.truncated {
-                lines.push("  output truncated by configured limits".into());
-            }
-            if let Some(error) = result.error {
-                lines.push(format!("  error: {} · {}", error.code, error.message));
-            }
-            if let Some(data) = result.data {
-                append_value(&mut lines, "output", &data, 2);
-            }
-        }
-        lines.push(String::new());
-    }
-    lines
-}
 pub(super) async fn next_job(
     job: &mut Option<UiJob>,
 ) -> std::result::Result<UiResult, BoundaryError> {
@@ -210,6 +114,14 @@ impl App {
                     runtime.block_on(async move {
                         let session = saya_app::new_session(&config).map_err(error)?;
                         let prepared = session::create(&config, session).await.map_err(error)?;
+                        let usage = prepared
+                            .store
+                            .run_metrics(prepared.session.id)
+                            .await
+                            .map_err(|failure| error(Box::new(failure)))?
+                            .into_iter()
+                            .rev()
+                            .find_map(|record| record.metrics.execution_usage);
                         if checking.is_cancelled() {
                             return Err(failure(
                                 "cancelled",
@@ -219,6 +131,7 @@ impl App {
                         Ok(UiResult::Session {
                             prepared,
                             resumed: false,
+                            usage,
                         })
                     })
                 });
@@ -308,6 +221,14 @@ impl App {
                         let prepared = session::resume(&config, &id, options)
                             .await
                             .map_err(error)?;
+                        let usage = prepared
+                            .store
+                            .run_metrics(prepared.session.id)
+                            .await
+                            .map_err(|failure| error(Box::new(failure)))?
+                            .into_iter()
+                            .rev()
+                            .find_map(|record| record.metrics.execution_usage);
                         if checking.is_cancelled() {
                             return Err(failure(
                                 "cancelled",
@@ -317,6 +238,7 @@ impl App {
                         Ok(UiResult::Session {
                             prepared,
                             resumed: true,
+                            usage,
                         })
                     })
                 });
@@ -442,7 +364,7 @@ impl App {
                         };
                         let mut lines=vec![format!("Session {} · committed change {} · event {}",id.0,snapshot.last_change_seq,snapshot.last_event_seq),"Read by the UI from stored records. Tool calls are identified by run_id and call_id.".into()];
                         if operation == "/tools" {
-                            lines.extend(tool_record_lines(records));
+                            lines.extend(crate::tool_render::record_lines(records));
                         } else {
                             let mut value = serde_json::to_value(records)
                                 .map_err(|_| failure("ui_encode", "Cannot encode background records"))?;
@@ -566,13 +488,27 @@ impl App {
                 self.state.set_details(details);
                 self.state.details_scroll = 0;
             }
-            Ok(UiResult::Session { prepared, resumed }) => {
+            Ok(UiResult::Session {
+                prepared,
+                resumed,
+                usage,
+            }) => {
                 self.config.cwd = prepared.session.workspace.clone();
                 self.config.profile = Some(prepared.session.profile.clone());
                 self.config.mode = prepared.session.work_mode;
                 self.state.clear_messages();
                 self.state.usage.clear();
                 self.reset_context();
+                if let Some(usage) = usage {
+                    self.record_context_input(Some(usage.clone()));
+                    if let Some(tokens) = usage.input_tokens {
+                        self.state.context_breakdown = vec![crate::view::ContextEntry {
+                            label: "Last run".into(),
+                            tokens,
+                        }];
+                        self.state.context_breakdown_estimated = usage.estimated;
+                    }
+                }
                 self.state.details = None;
                 self.state.pending_mode = None;
                 self.prepared = None;

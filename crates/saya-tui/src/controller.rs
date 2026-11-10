@@ -448,8 +448,8 @@ impl App {
         }
         let mut current = prepared.session.clone();
         self.refresh_header();
-        self.reset_context();
         if kind == RunKind::Execution {
+            self.reset_context();
             self.state.push_message(Role::User, "You", display);
         }
         let handle = runtime.handle();

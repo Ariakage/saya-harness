@@ -109,9 +109,10 @@ impl App {
         self.state.details = None;
         self.state.details_scroll = 0;
         self.state.skills_count = None;
-        self.reset_context();
         self.refresh_header();
-        self.notice("Workspace changed for subsequent runs in this session.");
+        self.notice(
+            "Workspace changed for subsequent runs; Context will refresh on the next execution.",
+        );
         Ok(())
     }
     async fn select_effort(&mut self, argument: &str) -> Result<()> {

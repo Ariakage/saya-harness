@@ -180,6 +180,56 @@ async fn sessions_selector_renders_saved_metadata_and_resumes_the_selected_id() 
 }
 
 #[tokio::test]
+async fn resumed_session_restores_context_usage_from_run_metrics() {
+    let (_root, mut app) = fixture();
+    let prepared = session::create(&app.config, saya_app::new_session(&app.config).unwrap())
+        .await
+        .unwrap();
+    let id = prepared.session.id;
+    let run = Run {
+        id: RunId::new(),
+        session_id: id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    prepared
+        .store
+        .commit(&[
+            StoreChange::RunStarted(run.clone()),
+            StoreChange::RunMetrics {
+                run_id: run.id,
+                metrics: saya_core::metrics::RunMetrics {
+                    execution_requests: 1,
+                    review_requests: 0,
+                    compaction_requests: 0,
+                    tool_calls: 0,
+                    tool_executions: 0,
+                    duration_ms: 1,
+                    execution_usage: Some(Usage {
+                        input_tokens: Some(42_000),
+                        output_tokens: Some(1_000),
+                        estimated: false,
+                    }),
+                    review_usage: None,
+                    compaction_usage: None,
+                    execution_cost: None,
+                    review_cost: None,
+                    compaction_cost: None,
+                },
+            },
+        ])
+        .await
+        .unwrap();
+    drop(prepared);
+    app.service("/resume", &id.0.to_string()).await.unwrap();
+    complete(&mut app).await;
+    assert_eq!(app.state.context_input_tokens, Some(42_000));
+    assert_eq!(app.state.context_breakdown.len(), 1);
+    assert_eq!(app.state.context_breakdown[0].label, "Last run");
+    assert_eq!(app.state.context_breakdown[0].tokens, 42_000);
+}
+
+#[tokio::test]
 async fn empty_tab_cycles_from_the_latest_mode_deferred_behind_ui_cleanup() {
     let (_root, mut app) = fixture();
     let (sender, cancel) = controlled_job(&mut app);
@@ -433,8 +483,9 @@ async fn ui_queries_preserve_unknown_truncation_and_run_call_links_without_agent
         } else if command == "/tools" {
             let text = app.state.details.as_ref().unwrap().lines.join("\n");
             assert!(text.contains("unknown"));
-            assert!(text.contains("output truncated"));
-            assert!(text.contains("error: truncated_fixture · bounded output"));
+            assert!(text.contains("Output truncated by configured limits."));
+            assert!(text.contains("Error: truncated_fixture"));
+            assert!(text.contains("Message: bounded output"));
             assert!(text.contains("text: retained prefix"));
             assert!(text.contains("reused-call"));
             for run in &ids {
@@ -521,7 +572,8 @@ async fn cancelled_session_activation_keeps_current_session_and_releases_candida
         sender
             .send(UiResult::Session {
                 prepared: candidate,
-                resumed: false
+                resumed: false,
+                usage: None,
             })
             .is_ok()
     );
@@ -656,6 +708,7 @@ async fn restored_tool_ids_use_current_redaction_and_partial_replies_remain_iden
     app.finish_ui(Ok(UiResult::Session {
         prepared,
         resumed: true,
+        usage: None,
     }))
     .await
     .unwrap();

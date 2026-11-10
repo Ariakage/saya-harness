@@ -279,9 +279,9 @@ async fn thinking_is_progress_and_completed_json_uses_native_plaintext() {
 }
 
 #[tokio::test]
-async fn known_secrets_are_redacted_before_the_display_boundary_and_never_published_live() {
+async fn known_secret_prefixes_are_redacted_in_live_preview() {
     let secret = "fixture-secret-tail";
-    let prefix = "x".repeat(256 * 1024 - 5);
+    let prefix = "safe thinking prefix ".repeat(16);
     let (model, mut log) = observe(
         vec![
             Ok(thought(format!("{prefix}fixture-"))),
@@ -293,17 +293,23 @@ async fn known_secrets_are_redacted_before_the_display_boundary_and_never_publis
     let request = request("secret");
     let mut stream = model.start(&request, &Cancel(false)).await.unwrap();
     log.borrow_and_update();
+    tokio::time::sleep(Duration::from_millis(35)).await;
     stream.next(&Cancel(false)).await.unwrap();
-    assert!(log.borrow().entries[0].text.is_empty());
+    let live = log.borrow().entries[0].text.clone();
+    assert!(!live.is_empty());
+    assert!(!live.contains("fixture-"));
+    assert!(live.contains("REDA"));
     tokio::time::sleep(Duration::from_millis(35)).await;
     stream.next(&Cancel(false)).await.unwrap();
     assert!(log.has_changed().unwrap());
-    assert!(log.borrow().entries[0].text.is_empty());
+    let live = log.borrow().entries[0].text.clone();
+    assert!(!live.contains(secret));
+    assert!(!live.contains("fixture-"));
     stream.next(&Cancel(false)).await.unwrap();
     let snapshot = &log.borrow().entries[0];
-    assert!(snapshot.text.ends_with("[REDA"));
+    assert!(snapshot.text.contains("[REDACTED]"));
     assert!(!snapshot.text.contains(secret));
-    assert!(snapshot.truncated && !snapshot.active);
+    assert!(!snapshot.active);
 }
 
 #[tokio::test]

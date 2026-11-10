@@ -1,5 +1,6 @@
 //! Live message identity and interface-only thinking snapshots.
 use super::*;
+use crate::tool_summary::summarize;
 use saya_app::thinking::{ThinkingLog, extract_reasoning};
 use saya_core::{
     contract::ToolResult,
@@ -96,6 +97,14 @@ impl App {
                     let id =
                         self.state
                             .push_message(Role::Tool, label, "Tool execution is running.");
+                    if let Some(message) = self
+                        .state
+                        .messages
+                        .iter_mut()
+                        .find(|message| message.id == id)
+                    {
+                        message.tool_card = true;
+                    }
                     self.state.append_message(id, "");
                     active.tool_cards.insert(
                         call_id,
@@ -195,10 +204,11 @@ impl App {
             "{name} · {call_id} · {}",
             if result.ok { "completed" } else { "failed" }
         ));
-        let text = self.safe(
-            &serde_json::to_string(&result)
-                .unwrap_or_else(|_| "Tool result could not be displayed".into()),
-        );
+        let tool_summary = serde_json::to_string(&result)
+            .ok()
+            .as_deref()
+            .and_then(summarize);
+        let text = self.safe(&crate::tool_render::result(&result));
         let existing = self
             .active
             .as_ref()
@@ -215,6 +225,8 @@ impl App {
             {
                 message.label = label;
                 message.truncated |= result.truncated;
+                message.tool_summary = tool_summary;
+                message.tool_card = true;
             }
             id
         } else {
@@ -226,6 +238,8 @@ impl App {
                 .find(|message| message.id == id)
             {
                 message.truncated |= result.truncated;
+                message.tool_summary = tool_summary;
+                message.tool_card = true;
             }
             id
         };
@@ -309,7 +323,7 @@ impl App {
             } else if entry.truncated {
                 "Thinking text exceeded the display limit or was withheld.".into()
             } else if entry.available && entry.active {
-                "Thinking text is withheld until this model request finishes.".into()
+                "Receiving provider thinking text.".into()
             } else if entry.active {
                 "Waiting for provider thinking text.".into()
             } else {
@@ -374,7 +388,7 @@ impl App {
             .find(|message| message.id == id)
         {
             if message.label.starts_with("waiting")
-                || message.text == "Thinking text is withheld until this model request finishes."
+                || message.text == "Receiving provider thinking text."
             {
                 message.label = "unavailable".into();
                 message.text = "Thinking text is unavailable in the retained display log.".into();
@@ -461,6 +475,14 @@ impl App {
                     call.call_id
                 ));
                 let id = self.state.push_message(Role::Tool, label, text);
+                if let Some(message) = self
+                    .state
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id == id)
+                {
+                    message.tool_card = true;
+                }
                 tools.insert(call.call_id.clone(), (id, call.name.clone()));
             }
             HistoryItem::ToolResult { call_id, result } => {
@@ -469,7 +491,11 @@ impl App {
                 } else {
                     "stored failed"
                 };
-                let text = self.safe(&serde_json::to_string(result).unwrap_or_default());
+                let text = self.safe(&crate::tool_render::result(result));
+                let tool_summary = serde_json::to_string(result)
+                    .ok()
+                    .as_deref()
+                    .and_then(summarize);
                 if let Some((id, name)) = tools.remove(call_id) {
                     self.state.replace_message(id, &text);
                     let label = self.safe(&format!("{name} · {call_id} · {status}"));
@@ -481,6 +507,8 @@ impl App {
                     {
                         message.label = label;
                         message.truncated |= result.truncated;
+                        message.tool_summary = tool_summary;
+                        message.tool_card = true;
                     }
                 } else {
                     let id = self.state.push_message(
@@ -495,6 +523,8 @@ impl App {
                         .find(|message| message.id == id)
                     {
                         message.truncated |= result.truncated;
+                        message.tool_summary = tool_summary;
+                        message.tool_card = true;
                     }
                 }
             }

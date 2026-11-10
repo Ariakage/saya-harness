@@ -91,6 +91,15 @@ async fn idle_compact_uses_the_real_controller_without_a_user_message_or_executi
         http::server_dynamic(1, |_, request| ("application/json", summary(request))).unwrap();
     app.config.profiles.get_mut("fixture").unwrap().base_url = url;
     prepared(&mut app).await;
+    app.record_context_input(Some(saya_core::contract::Usage {
+        input_tokens: Some(42_000),
+        output_tokens: Some(1_000),
+        estimated: false,
+    }));
+    app.state.context_breakdown = vec![crate::view::ContextEntry {
+        label: "Last request".into(),
+        tokens: 42_000,
+    }];
     let raw = app.prepared.as_ref().unwrap().session.history.clone();
     app.state.editor.set_text("/compact");
     app.submit().await.unwrap();
@@ -101,8 +110,11 @@ async fn idle_compact_uses_the_real_controller_without_a_user_message_or_executi
             .is_some_and(|active| active.kind == RunKind::Compaction)
     );
     assert_eq!(app.state.status, "Compacting");
+    assert_eq!(app.state.context_input_tokens, Some(42_000));
+    assert_eq!(app.state.context_breakdown[0].label, "Last request");
     finish(&mut app).await;
     assert!(app.active.is_none());
+    assert_eq!(app.state.context_input_tokens, Some(42_000));
     let current = app.prepared.as_ref().unwrap();
     assert_eq!(current.session.history, raw);
     assert_eq!(

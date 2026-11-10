@@ -169,10 +169,16 @@ async fn runtime_commands_change_sandbox_effort_and_model_without_reusing_approv
 #[tokio::test]
 async fn cd_uses_an_absolute_or_relative_directory_and_stays_idle_only() {
     let (root, mut app) = fixture();
+    app.record_context_input(Some(Usage {
+        input_tokens: Some(1_024),
+        output_tokens: Some(64),
+        estimated: false,
+    }));
     let nested = app.config.cwd.join("nested");
     std::fs::create_dir(&nested).unwrap();
     app.command("/cd nested").await.unwrap();
     assert_eq!(app.config.cwd, nested.canonicalize().unwrap());
+    assert_eq!(app.state.context_input_tokens, Some(1_024));
     assert_eq!(
         app.state.workspace,
         nested.canonicalize().unwrap().to_string_lossy()

@@ -166,6 +166,15 @@ async fn thinking_log_rounds_attach_in_event_order_without_empty_answers_or_revi
         },
     );
     assert_eq!(app.state.messages.back().unwrap().id, tool_id);
+    let tool = app
+        .state
+        .messages
+        .iter()
+        .find(|message| message.id == tool_id)
+        .unwrap();
+    assert!(tool.text.contains("Status: completed"));
+    assert!(tool.text.contains("Output:"));
+    assert!(!tool.text.contains('{'));
     started(&mut app, "two");
     event(
         &mut app,
@@ -624,6 +633,7 @@ async fn restore_uses_current_profile_and_redacts_native_reasoning_before_its_di
     app.finish_ui(Ok(services::UiResult::Session {
         prepared,
         resumed: true,
+        usage: None,
     }))
     .await
     .unwrap();

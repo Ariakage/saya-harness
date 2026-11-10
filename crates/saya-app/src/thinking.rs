@@ -17,6 +17,8 @@ const MAX_RAW_BYTES: usize = 16 * 1024 * 1024;
 const RECOVERY_TRUNCATION_NOTICE: &str =
     "[Thinking text truncated: retained plaintext exceeds 16 MiB and was withheld.]";
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(33);
+const LIVE_PARTIAL_PREFIX_BYTES: usize = 6;
+const LIVE_HOLDBACK_BYTES: usize = LIVE_PARTIAL_PREFIX_BYTES - 1;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ThinkingLog {
@@ -211,8 +213,8 @@ impl Capture {
     fn publish(&mut self, active: bool) {
         let mut text = String::new();
         let mut truncated = self.withheld;
-        // An incomplete secret can cross any delta or the display truncation
-        // boundary. Keep the original complete buffer until terminal outcome.
+        // Dynamic credentials can be learned after text was already visible.
+        // Keep those turns withheld; static credentials use a safe live preview.
         let secrets = match &self.secret_registry {
             Some(registry) => registry.snapshot(),
             None => Ok(self.secrets.as_ref().clone()),
@@ -222,11 +224,16 @@ impl Capture {
         }
         if let Ok(secrets) = secrets
             && !self.withheld
-            && (!active || (self.secret_registry.is_none() && secrets.iter().all(String::is_empty)))
+            && (!active || self.secret_registry.is_none())
         {
             let mut value = Value::String(self.raw.clone());
             if saya_core::redaction::redact(&mut value, &secrets).is_ok() {
                 if let Value::String(safe) = value {
+                    let safe = if active {
+                        live_preview(&safe, &secrets)
+                    } else {
+                        safe
+                    };
                     let end = boundary(&safe, MAX_ENTRY_BYTES);
                     truncated |= end < safe.len();
                     text = safe[..end].to_owned();
@@ -251,6 +258,59 @@ impl Capture {
         self.last_publish = Instant::now();
     }
 }
+
+fn live_preview(safe: &str, secrets: &[String]) -> String {
+    if secrets.is_empty() {
+        return safe.to_owned();
+    }
+    let mut text = safe.to_owned();
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        for variant in encoded_variants(secret) {
+            redact_partial_prefixes(&mut text, &variant);
+        }
+    }
+    let end = text.len().saturating_sub(LIVE_HOLDBACK_BYTES);
+    let end = boundary(&text, end);
+    text.truncate(end);
+    text
+}
+
+fn encoded_variants(secret: &str) -> Vec<String> {
+    let mut variants = vec![secret.to_owned()];
+    if let Ok(encoded) = serde_json::to_string(secret) {
+        let encoded = encoded.trim_matches('"').to_owned();
+        if !encoded.is_empty() && encoded != secret {
+            if let Ok(nested) = serde_json::to_string(&encoded) {
+                variants.push(nested.trim_matches('"').to_owned());
+            }
+            variants.push(encoded);
+        }
+    }
+    let unicode = secret
+        .chars()
+        .map(|character| format!("\\u{:04x}", character as u32))
+        .collect::<String>();
+    if unicode != secret {
+        variants.push(unicode);
+    }
+    variants
+}
+
+fn redact_partial_prefixes(text: &mut String, secret: &str) {
+    let mut lengths = secret
+        .char_indices()
+        .map(|(index, character)| index + character.len_utf8())
+        .filter(|length| *length >= LIVE_PARTIAL_PREFIX_BYTES && *length < secret.len())
+        .collect::<Vec<_>>();
+    lengths.reverse();
+    for length in lengths {
+        let prefix = &secret[..length];
+        if text.contains(prefix) {
+            *text = text.replace(prefix, "[REDACTED]");
+        }
+    }
+}
+
 impl Drop for Capture {
     fn drop(&mut self) {
         self.finish(None);

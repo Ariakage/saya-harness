@@ -8,7 +8,7 @@ use crate::{
         INPUT_BACKGROUND, INPUT_BORDER, INPUT_STRIPE, MUTED, RED, SIDEBAR_BACKGROUND, SOFT_AMBER,
         STRONG_FOREGROUND, mode_color,
     },
-    tool_summary::summarize,
+    tool_summary::{ToolSummary, summarize},
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
@@ -36,8 +36,6 @@ const TRUNCATED_DETAIL_PREFIX: &str = "Truncated · ";
 const DETAIL_TRUNCATION_NOTICE: &str = "[details display truncated]";
 const MAX_COMPLETION_ROWS: usize = 6;
 const MAX_CONTEXT_ENTRIES: usize = 9;
-const TOOL_COLLAPSE_BYTES: usize = 512;
-const TOOL_COLLAPSE_LINES: usize = 6;
 const MAX_TODOS: usize = 64;
 const WHEEL_LINES: usize = 3;
 const MAX_FOOTNOTE_ANCHORS: usize = 2048;
@@ -85,6 +83,8 @@ pub struct Message {
     pub text: String,
     pub streaming: bool,
     pub truncated: bool,
+    pub(crate) tool_summary: Option<ToolSummary>,
+    pub(crate) tool_card: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -402,6 +402,8 @@ impl State {
             text: source[..end].to_owned(),
             streaming: false,
             truncated: end < source.len(),
+            tool_summary: None,
+            tool_card: false,
         });
         self.enforce_limits();
         id
@@ -433,6 +435,7 @@ impl State {
         message.text = source[..end].to_owned();
         message.truncated = end < source.len();
         message.streaming = false;
+        message.tool_summary = None;
         self.render_cache.remove_message(id);
         self.enforce_limits();
         true
@@ -785,13 +788,9 @@ fn contains(area: Option<Rect>, x: u16, y: u16) -> bool {
 fn foldable(message: &Message) -> bool {
     message.role == Role::Thinking
         || (message.role == Role::Tool
-            && (message.text.len() > TOOL_COLLAPSE_BYTES
-                || message
-                    .text
-                    .split('\n')
-                    .take(TOOL_COLLAPSE_LINES + 1)
-                    .count()
-                    > TOOL_COLLAPSE_LINES
+            && (message.tool_card
+                || message.text.len() > 512
+                || message.text.split('\n').take(7).count() > 6
                 || summarize(&message.text).is_some()))
 }
 
@@ -1100,7 +1099,12 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         Style::default().fg(MUTED),
     );
     if state.context_breakdown.is_empty() {
-        lines[4] = Line::styled("Unknown before request", Style::default().fg(MUTED));
+        let text = if matches!(state.status.as_str(), "Thinking" | "Responding") {
+            "Awaiting execution usage"
+        } else {
+            "Unknown before request"
+        };
+        lines[4] = Line::styled(text, Style::default().fg(MUTED));
     } else {
         for (index, line) in context_rows(state, usize::from(content.width))
             .into_iter()
@@ -1711,11 +1715,11 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         };
         let can_fold = foldable(message);
         let expanded = state.expanded_messages.contains(&message.id);
-        let summary = if message.role == Role::Tool {
-            summarize(&message.text)
-        } else {
-            None
-        };
+        let summary = message.tool_summary.clone().or_else(|| {
+            (message.role == Role::Tool)
+                .then(|| summarize(&message.text))
+                .flatten()
+        });
         let mut heading = Line::from(vec![
             Span::styled(
                 if can_fold {
@@ -3007,6 +3011,14 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_distinguishes_pending_execution_usage_from_pre_request_unknown() {
+        let mut state = State::default();
+        assert!(render(&mut state, 120, 30).contains("Unknown before request"));
+        state.status = "Thinking".into();
+        assert!(render(&mut state, 120, 30).contains("Awaiting execution usage"));
+    }
+
+    #[test]
     fn multiline_editor_scrolls_within_its_gray_input_and_keeps_safety_markers() {
         let mut state = State {
             status: "Awaiting approval".into(),
@@ -4169,7 +4181,7 @@ mod tests {
             "error": null,
             "truncated": false,
         }).to_string();
-        assert!(source.len() < TOOL_COLLAPSE_BYTES);
+        assert!(source.len() < 512);
         let mut state = State::default();
         let id = state.push_message(Role::Tool, "todo_write · call-summary · completed", &source);
         let mut terminal = Terminal::new(TestBackend::new(200, 8)).unwrap();

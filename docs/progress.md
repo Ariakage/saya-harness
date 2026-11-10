@@ -12,6 +12,8 @@
 
 本机macOS27.2 ARM执行 `./scripts/check.sh`，格式、workspace全目标严格Clippy、1333项Rust测试、8项条件忽略测试和release构建通过；其中TUI lib 263项、core lib 436项。日志为 `target/final-check.log`。`just smoke target/release/saya` 的离线smoke、文本journey、5项审查回归和完整正常入口PTY矩阵全部通过。证据为本轮本地运行；未推送、未运行远端CI，程序哈希和平台四端候选证据未另行更新。
 
+同日补充修正Thinking与Context呈现：工具调用展开改为字段和递归输出渲染，不再直接展示整段JSON，摘要仍由独立字段保存并保持折叠状态颜色；静态已知凭据下的Thinking使用增量安全预览，完整凭据及跨分片前缀显示为`[REDACTED]`，动态凭据轮换仍等待请求结束；会话恢复从最近RunMetrics恢复`Last run`输入计量，`/compact`与`/cd`保留此前计量直到下一次Execution，请求已开始但usage未返回时显示`Awaiting execution usage`。同类状态审计确认`/new`与`/profile`清空属于新会话语义。新增恢复、Compact、工具渲染、Thinking前缀脱敏、摘要折叠和状态回归。最终 `./scripts/check.sh` 通过格式、严格Clippy、1337项Rust测试、8项条件忽略和release构建，日志为 `target/final-check-4.log`；`just smoke` 正常入口PTY矩阵全部通过。
+
 ## N3 上下文与可执行扩展
 
 2026-11-09，项目负责人启动完成N3及验证验收的持续目标，起点为 `7064bb7`，启动时工作区干净。范围包含DEV-062至DEV-068、DEV-076至DEV-078、DEV-084至DEV-089共16项；2026-11-10，16项均由固定源码 `e1da373` 的四平台验收完成。[逐项验收记录](n3-validation.md#四平台最终验收)
