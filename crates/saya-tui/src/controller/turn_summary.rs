@@ -1,4 +1,5 @@
 //! Interface-only turn measurements taken before events enter the UI queue.
+use crate::i18n::summary as text;
 use saya_app::events::{ChannelSink, EventSink};
 use saya_core::{
     boundary::Operation,
@@ -123,61 +124,24 @@ impl TurnSummary {
     }
 
     fn text_at(&self, usage: Option<&Usage>, now: Instant) -> String {
-        let elapsed = duration_label(self.elapsed_at(now));
+        let elapsed = text::duration(self.elapsed_at(now));
         let rate = self
             .measurements
             .lock()
             .ok()
             .and_then(|measurements| measurements.rate())
-            .map(|(rate, estimated)| format!("{}{rate:.1} tok/s", if estimated { "~" } else { "" }))
-            .unwrap_or_else(|| "— tok/s".into());
+            .map(|(rate, estimated)| text::rate(rate, estimated))
+            .unwrap_or_else(text::no_rate);
         let tokens = usage
             .and_then(|usage| {
                 usage
                     .input_tokens?
                     .checked_add(usage.output_tokens?)
-                    .map(|total| {
-                        format!(
-                            "{}{} tokens",
-                            if usage.estimated { "~" } else { "" },
-                            token_label(total)
-                        )
-                    })
+                    .map(|total| text::tokens(total, usage.estimated))
             })
-            .unwrap_or_else(|| "— tokens".into());
+            .unwrap_or_else(text::no_tokens);
         format!("{} · {elapsed} · {rate} · {tokens}", self.model)
     }
-}
-
-fn duration_label(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    if seconds >= 3600 {
-        format!(
-            "{}h {}m {}s",
-            seconds / 3600,
-            seconds / 60 % 60,
-            seconds % 60
-        )
-    } else if seconds >= 60 {
-        format!("{}m {}s", seconds / 60, seconds % 60)
-    } else {
-        format!("{:.1}s", duration.as_secs_f64())
-    }
-}
-
-fn token_label(tokens: u64) -> String {
-    for (divisor, suffix) in [(1_000_000_000, "G"), (1_000_000, "M"), (1_000, "k")] {
-        if tokens >= divisor {
-            let whole = tokens / divisor;
-            let decimal = tokens % divisor / (divisor / 10);
-            return if decimal == 0 {
-                format!("{whole}{suffix}")
-            } else {
-                format!("{whole}.{decimal}{suffix}")
-            };
-        }
-    }
-    tokens.to_string()
 }
 
 #[cfg(test)]

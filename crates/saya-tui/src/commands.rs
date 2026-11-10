@@ -1,4 +1,5 @@
 //! Static slash-command discovery and completion without runtime side effects.
+use crate::i18n::command as text;
 
 /// A command or argument scaffold the user can insert into the editor.
 #[derive(Debug, Clone, Copy)]
@@ -11,167 +12,167 @@ pub struct Suggestion {
 pub const COMMANDS: &[Suggestion] = &[
     Suggestion {
         text: "/mode plan",
-        description: "Read-only investigation and planning",
+        description: text::MODE_PLAN,
     },
     Suggestion {
         text: "/mode build",
-        description: "End-to-end implementation and delivery",
+        description: text::MODE_BUILD,
     },
     Suggestion {
         text: "/mode code",
-        description: "Write, modify, and debug code",
+        description: text::MODE_CODE,
     },
     Suggestion {
         text: "/mode work",
-        description: "General task execution",
+        description: text::MODE_WORK,
     },
     Suggestion {
         text: "/permissions auto",
-        description: "Evaluate tool calls with the configured policy",
+        description: text::PERMISSIONS_AUTO,
     },
     Suggestion {
         text: "/permissions manual",
-        description: "Require approval before every Agent tool call",
+        description: text::PERMISSIONS_MANUAL,
     },
     Suggestion {
         text: "/permissions bypass",
-        description: "Skip confirmations within explicit deny and mode rules",
+        description: text::PERMISSIONS_BYPASS,
     },
     Suggestion {
         text: "/sessions",
-        description: "Open the saved session selector; an optional page number follows",
+        description: text::SESSIONS,
     },
     Suggestion {
         text: "/new",
-        description: "Create a session and wait for your message",
+        description: text::NEW,
     },
     Suggestion {
         text: "/profiles",
-        description: "List configured model profiles",
+        description: text::PROFILES,
     },
     Suggestion {
         text: "/tools",
-        description: "Inspect committed tool records for this session",
+        description: text::TOOLS,
     },
     Suggestion {
         text: "/jobs",
-        description: "Inspect background-job records for this session",
+        description: text::JOBS,
     },
     Suggestion {
         text: "/status",
-        description: "Show the current runtime and permission state",
+        description: text::STATUS,
     },
     Suggestion {
         text: "/cancel",
-        description: "Cancel the active run or UI operation",
+        description: text::CANCEL,
     },
     Suggestion {
         text: "/help",
-        description: "Show commands and keyboard controls",
+        description: text::HELP,
     },
     Suggestion {
         text: "/exit",
-        description: "Cancel owned work and leave the terminal interface",
+        description: text::EXIT,
     },
     Suggestion {
         text: "/compact",
-        description: "Compact saved context now, or queue it during the active run",
+        description: text::COMPACT,
     },
     Suggestion {
         text: "/memory",
-        description: "Browse current memory, review changes and manage backups",
+        description: text::MEMORY,
     },
     Suggestion {
         text: "/profile ",
-        description: "Add a configured profile name to select while idle",
+        description: text::PROFILE,
     },
     Suggestion {
         text: "/resume ",
-        description: "Add a saved session ID to restore and wait for input",
+        description: text::RESUME,
     },
     Suggestion {
         text: "/resume-accept ",
-        description: "Add a session ID and explicitly accept configuration changes",
+        description: text::RESUME_ACCEPT,
     },
     Suggestion {
         text: "/cancel-job ",
-        description: "Add the background job ID owned by the active run",
+        description: text::CANCEL_JOB,
     },
     Suggestion {
         text: "/markdown render",
-        description: "Render assistant Markdown, math, diagrams and footnotes",
+        description: text::MARKDOWN_RENDER,
     },
     Suggestion {
         text: "/markdown source",
-        description: "Display the original assistant Markdown source",
+        description: text::MARKDOWN_SOURCE,
     },
     Suggestion {
         text: "/footnote ",
-        description: "Add a footnote number to jump to its definition",
+        description: text::FOOTNOTE,
     },
     Suggestion {
         text: "/footnote back",
-        description: "Return to the previous footnote reference",
+        description: text::FOOTNOTE_BACK,
     },
     Suggestion {
         text: "/export json ",
-        description: "Add a new target path for a JSON transcript export",
+        description: text::EXPORT_JSON,
     },
     Suggestion {
         text: "/export markdown ",
-        description: "Add a new target path for a Markdown transcript export",
+        description: text::EXPORT_MARKDOWN,
     },
     Suggestion {
         text: "/export-full json ",
-        description: "Add a new target path for a full JSON export with tool records",
+        description: text::EXPORT_FULL_JSON,
     },
     Suggestion {
         text: "/export-full markdown ",
-        description: "Add a new target path for a full Markdown export with tool records",
+        description: text::EXPORT_FULL_MARKDOWN,
     },
     Suggestion {
         text: "/cd ",
-        description: "Add a directory to use as the workspace",
+        description: text::CD,
     },
     Suggestion {
         text: "/sandbox status",
-        description: "Show whether native sandbox execution is enabled",
+        description: text::SANDBOX_STATUS,
     },
     Suggestion {
         text: "/sandbox on",
-        description: "Use the platform native sandbox for subsequent runs",
+        description: text::SANDBOX_ON,
     },
     Suggestion {
         text: "/sandbox off",
-        description: "Use host execution without native isolation for subsequent runs",
+        description: text::SANDBOX_OFF,
     },
     Suggestion {
         text: "/model ",
-        description: "Add a configured model profile name to select while idle",
+        description: text::MODEL,
     },
     Suggestion {
         text: "/effort ",
-        description: "Add low, medium, high, xhigh, max, or default for thinking effort",
+        description: text::EFFORT,
     },
     Suggestion {
         text: "/thinking ",
-        description: "Alias for /effort thinking effort selection",
+        description: text::THINKING,
     },
     Suggestion {
         text: "/autocompact ",
-        description: "Add a token threshold, auto, or off for automatic compaction",
+        description: text::AUTOCOMPACT,
     },
     Suggestion {
         text: "/skills",
-        description: "Open the discovered Skill selector",
+        description: text::SKILLS,
     },
     Suggestion {
         text: "/mcps",
-        description: "Open the configured MCP server selector",
+        description: text::MCPS,
     },
     Suggestion {
         text: "/plugins",
-        description: "Open the installed Plugin selector",
+        description: text::PLUGINS,
     },
 ];
 
@@ -232,7 +233,7 @@ impl Completion {
                                     (_, "max") => "/thinking max",
                                     _ => "/thinking default",
                                 },
-                                description: "Set thinking effort for subsequent requests",
+                                description: text::THINKING_LEVEL,
                             };
                             suggestion.text.starts_with(text).then_some(suggestion)
                         }),
@@ -244,11 +245,11 @@ impl Completion {
                 [
                     Suggestion {
                         text: "/autocompact auto",
-                        description: "Restore the configured percentage trigger",
+                        description: text::AUTOCOMPACT_AUTO,
                     },
                     Suggestion {
                         text: "/autocompact off",
-                        description: "Disable automatic compaction",
+                        description: text::AUTOCOMPACT_OFF,
                     },
                 ]
                 .into_iter()

@@ -2,6 +2,7 @@
 use super::document::{RichLine, wrap_line};
 use crate::{
     editor::MAX_GRAPHEME_BYTES,
+    i18n::rich_text as text,
     theme::{BORDER, CODE_BACKGROUND, FOREGROUND, MUTED},
 };
 use pulldown_cmark::Alignment;
@@ -218,7 +219,7 @@ fn wrapped(line: RichLine, width: usize) -> Vec<RichLine> {
         rows.remove(0);
         rows[0] = plain(
             if width >= 24 {
-                "[cell display truncated]"
+                text::CELL_TRUNCATED
             } else {
                 "…"
             },
@@ -287,7 +288,7 @@ fn border(widths: &[usize], left: char, middle: char, right: char) -> RichLine {
 fn push(output: &mut Vec<RichLine>, line: RichLine) -> bool {
     if output.len() == MAX_TABLE_LINES - 1 {
         let marker = if output.last().is_some_and(|line| line.line.width() >= 24) {
-            "[table display truncated]"
+            text::TABLE_TRUNCATED
         } else {
             "…"
         };

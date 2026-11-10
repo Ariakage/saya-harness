@@ -1,5 +1,6 @@
 //! Keyboard-first selector for discovered Skills, MCP servers and installed Plugins.
 use super::*;
+use crate::i18n::picker as text;
 
 pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
     let Some(panel) = &mut state.picker_panel else {
@@ -101,22 +102,21 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
         }
     }
     let count = if panel.items.is_empty() {
-        "0 items".into()
+        text::ZERO_ITEMS.into()
     } else {
         format!("{}/{}", panel.selected + 1, panel.items.len())
     };
     let action = match panel.kind {
-        PickerKind::Mcps => "Enter toggle · ↑↓ select · Esc close",
-        PickerKind::Sessions => "Enter resume · ↑↓ select · Esc close",
-        PickerKind::Skills | PickerKind::Plugins => "Enter details · ↑↓ select · Esc close",
+        PickerKind::Mcps => text::ENTER_TOGGLE,
+        PickerKind::Sessions => text::ENTER_RESUME,
+        PickerKind::Skills | PickerKind::Plugins => text::ENTER_DETAILS,
     };
     frame.render_widget(
         Paragraph::new(format!("{count} · {action}")).style(Style::default().fg(MUTED)),
         rows[1],
     );
     frame.render_widget(
-        Paragraph::new("Selection is explicit; the unsubmitted chat draft is retained.")
-            .style(Style::default().fg(MUTED)),
+        Paragraph::new(text::DRAFT_RETAINED).style(Style::default().fg(MUTED)),
         rows[2],
     );
     state.transcript_viewport = None;

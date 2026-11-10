@@ -1,10 +1,10 @@
 //! CommonMark/GFM events projected into bounded terminal lines and semantic anchors.
 use super::{append_span, append_wrapped_line_observed, math, mermaid, syntax, table};
-use crate::editor::safe_text;
 use crate::theme::{
     AMBER, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN, HEADING, INLINE_CODE,
     MUTED,
 };
+use crate::{editor::safe_text, i18n::rich_text as ui_text};
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -56,14 +56,14 @@ pub(crate) struct RenderedDocument {
 
 pub(crate) fn render_document(text: &str, width: usize) -> RenderedDocument {
     if text.len() > MAX_SOURCE_BYTES {
-        return source_fallback(text, width, "[Markdown source budget exceeded]");
+        return source_fallback(text, width, ui_text::MARKDOWN_SOURCE_BUDGET);
     }
     let normalized = normalize(text);
     if normalized.incomplete_math {
-        return source_fallback(text, width, "[math source fallback]");
+        return source_fallback(text, width, ui_text::MATH_SOURCE_FALLBACK);
     }
     if normalized.structure_exceeded {
-        return source_fallback(text, width, "[Markdown structure budget exceeded]");
+        return source_fallback(text, width, ui_text::MARKDOWN_STRUCTURE_BUDGET);
     }
     let events = Parser::new_ext(&normalized.text, options())
         .into_offset_iter()
@@ -80,7 +80,7 @@ pub(crate) fn render_document(text: &str, width: usize) -> RenderedDocument {
             depth > MAX_DEPTH
         })
     {
-        return source_fallback(text, width, "[Markdown structure budget exceeded]");
+        return source_fallback(text, width, ui_text::MARKDOWN_STRUCTURE_BUDGET);
     }
     let definitions = events
         .iter()
@@ -534,7 +534,7 @@ impl<'a> Renderer<'a> {
                         fenced_language(self.input.text.get(range.clone()).unwrap_or("")),
                         true,
                     ),
-                    CodeBlockKind::Indented => ("code".into(), false),
+                    CodeBlockKind::Indented => (ui_text::CODE_LABEL.into(), false),
                 };
                 self.code = Some(CodeBlock {
                     language,
@@ -569,7 +569,7 @@ impl<'a> Renderer<'a> {
                         .get(&range.start)
                         .cloned()
                         .unwrap_or_else(|| self.input.text[range.clone()].to_owned());
-                    self.code_card(&raw, "math", true);
+                    self.code_card(&raw, ui_text::MATH_LABEL, true);
                 }
             }
             Event::Start(Tag::Table(alignments)) => {
@@ -655,7 +655,7 @@ impl<'a> Renderer<'a> {
     }
     fn start_link(&mut self, destination: &str, image: bool) {
         if image {
-            self.append("Image · ", self.style.fg(MUTED));
+            self.append(ui_text::IMAGE_LABEL, self.style.fg(MUTED));
         }
         self.links
             .push((safe_text(destination), self.current.byte_len(), image));
@@ -816,7 +816,7 @@ impl<'a> Renderer<'a> {
                     .get(table.raw_range)
                     .unwrap_or("")
                     .to_owned();
-                self.code_card(&raw, "table", true);
+                self.code_card(&raw, ui_text::TABLE_LABEL, true);
             }
         }
     }
@@ -837,7 +837,7 @@ impl<'a> Renderer<'a> {
             && language == "mermaid"
             && let Some(lines) = mermaid::render(source, self.content_width())
         {
-            self.card_header("mermaid");
+            self.card_header(ui_text::MERMAID_LABEL);
             for line in lines {
                 self.emit(RichLine::plain(
                     line,
@@ -860,7 +860,11 @@ impl<'a> Renderer<'a> {
         let label = language.chars().take(80).collect::<String>();
         self.card_header(&format!(
             "{label}{}",
-            if fallback { " · source fallback" } else { "" }
+            if fallback {
+                ui_text::SOURCE_FALLBACK_SUFFIX
+            } else {
+                ""
+            }
         ));
         for line in syntax::highlight(source, language) {
             self.emit(RichLine {
@@ -874,7 +878,7 @@ impl<'a> Renderer<'a> {
         ));
     }
     fn math_card(&mut self, rendered: &str) {
-        self.card_header("math");
+        self.card_header(ui_text::MATH_LABEL);
         for line in rendered.split('\n') {
             self.emit(RichLine::plain(
                 line.to_owned(),
@@ -904,10 +908,8 @@ impl<'a> Renderer<'a> {
         let mut lines = Vec::new();
         let mut footnotes = Vec::new();
         if self.omitted {
-            let marker = RichLine::plain(
-                "[earlier Markdown display lines omitted]",
-                Style::default().fg(MUTED),
-            );
+            let marker =
+                RichLine::plain(ui_text::EARLIER_LINES_OMITTED, Style::default().fg(MUTED));
             lines.extend(
                 wrap_line(marker, self.width, MAX_LINES)
                     .into_iter()
@@ -1057,7 +1059,7 @@ fn closed_fence(source: &str) -> bool {
 fn fenced_language(source: &str) -> String {
     let first = source.lines().next().unwrap_or("");
     let Some(start) = first.bytes().position(|byte| matches!(byte, 96 | 126)) else {
-        return "code".into();
+        return ui_text::CODE_LABEL.into();
     };
     let marker = first.as_bytes()[start];
     let length = first[start..]
@@ -1067,7 +1069,7 @@ fn fenced_language(source: &str) -> String {
     first[start + length..]
         .split_whitespace()
         .next()
-        .unwrap_or("code")
+        .unwrap_or(ui_text::CODE_LABEL)
         .to_owned()
 }
 fn source_fallback(text: &str, width: usize, message: &str) -> RenderedDocument {

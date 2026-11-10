@@ -7,6 +7,7 @@ pub mod terminal;
 
 mod controller;
 pub mod editor;
+pub(crate) mod i18n;
 mod rich_text;
 mod theme;
 pub(crate) mod tool_render;

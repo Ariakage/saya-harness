@@ -1,5 +1,5 @@
 //! Short labels derived from canonical tool result payloads.
-use crate::{editor::safe_text, view::MAX_MESSAGE_BYTES};
+use crate::{editor::safe_text, i18n::tool as text, view::MAX_MESSAGE_BYTES};
 use saya_core::{
     contract::ToolResult,
     tools::todo::{TodoStatus, result_todos},
@@ -72,9 +72,18 @@ fn data_summary(data: &Value, truncated: bool) -> Option<(String, bool)> {
             .iter()
             .filter(|todo| todo.status == TodoStatus::InProgress)
             .count();
-        let kind = if todos.len() == 1 { "task" } else { "tasks" };
+        let kind = if todos.len() == 1 {
+            text::TASK
+        } else {
+            text::TASKS
+        };
         return Some((
-            format!("{} {kind} · {done} done/{active} active", todos.len()),
+            format!(
+                "{} {kind} · {done} {}/{active} {}",
+                todos.len(),
+                text::DONE,
+                text::ACTIVE
+            ),
             false,
         ));
     }
@@ -101,19 +110,19 @@ fn data_summary(data: &Value, truncated: bool) -> Option<(String, bool)> {
             return None;
         }
         let range = if end < start {
-            "0 lines".into()
+            format!("0 {}", text::LINES)
         } else {
-            format!("lines {start}–{end}")
+            format!("{} {start}–{end}", text::LINES)
         };
-        return Some((format!("{range} · {} bytes", content.len()), cut));
+        return Some((format!("{range} · {} {}", content.len(), text::BYTES), cut));
     }
     if fields(data, &["path", "version", "created"]) {
         let path = one_line(data["path"].as_str()?, 80);
         data["version"].as_str()?;
         let action = if data["created"].as_bool()? {
-            "created"
+            text::CREATED
         } else {
-            "updated"
+            text::UPDATED
         };
         return Some((format!("{action} {path}"), false));
     }
@@ -121,16 +130,16 @@ fn data_summary(data: &Value, truncated: bool) -> Option<(String, bool)> {
         let items = data["items"].as_array()?;
         let cut = data["truncated"].as_bool()?;
         let (singular, plural) = if items.is_empty() {
-            ("item", "items")
+            (text::ITEM, text::ITEMS)
         } else if items.iter().all(Value::is_string) {
-            ("file", "files")
+            (text::FILE, text::FILES)
         } else if items.iter().all(|item| {
             fields(item, &["path", "line", "text"])
                 && item["path"].is_string()
                 && item["line"].as_u64().is_some_and(|line| line > 0)
                 && item["text"].is_string()
         }) {
-            ("match", "matches")
+            (text::MATCH, text::MATCHES)
         } else if items.iter().all(|item| {
             fields(item, &["name", "kind"])
                 && item["name"].is_string()
@@ -139,7 +148,7 @@ fn data_summary(data: &Value, truncated: bool) -> Option<(String, bool)> {
                     Some("file" | "directory" | "symlink" | "other")
                 )
         }) {
-            ("entry", "entries")
+            (text::ENTRY, text::ENTRIES)
         } else {
             return None;
         };
@@ -174,14 +183,14 @@ fn exec_summary(data: &Value) -> Option<(String, bool)> {
     let cut = data["stdout_truncated"].as_bool()? | data["stderr_truncated"].as_bool()?;
     let timed_out = data["timed_out"].as_bool()?;
     let cancelled = data["cancelled"].as_bool()?;
-    let mut text = format!("exit {exit}");
+    let mut summary = format!("{} {exit}", text::EXIT);
     if timed_out {
-        text.push_str(" · timeout");
+        summary.push_str(&format!(" · {}", text::TIMEOUT));
     }
     if cancelled {
-        text.push_str(" · cancelled");
+        summary.push_str(&format!(" · {}", text::CANCELLED));
     }
-    Some((text, cut))
+    Some((summary, cut))
 }
 
 fn fields(value: &Value, keys: &[&str]) -> bool {

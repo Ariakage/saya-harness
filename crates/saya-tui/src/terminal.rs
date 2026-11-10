@@ -1,4 +1,5 @@
 //! Owns terminal presentation state for one frontend invocation.
+use crate::i18n::terminal as text;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::{
     cursor::Hide,
@@ -88,7 +89,7 @@ fn write_until(fd: i32, mut remaining: &[u8], deadline: Instant) -> io::Result<(
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                "terminal control write budget exceeded",
+                text::CONTROL_WRITE_BUDGET,
             ));
         }
         match write_descriptor(fd, remaining) {
@@ -172,7 +173,7 @@ impl Output {
             let mut state = self
                 .state
                 .lock()
-                .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+                .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?;
             if state.ended {
                 return Err(io::ErrorKind::BrokenPipe.into());
             }
@@ -182,7 +183,7 @@ impl Output {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?;
         state.write_deadline = None;
         result?;
         if state.ended {
@@ -194,7 +195,7 @@ impl Output {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?;
         if state.ended {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
@@ -216,10 +217,7 @@ impl Output {
         };
         if state.ended {
             return match state.restoration_error {
-                Some(kind) => Err(io::Error::new(
-                    kind,
-                    "terminal restoration previously failed",
-                )),
+                Some(kind) => Err(io::Error::new(kind, text::RESTORATION_FAILED)),
                 None => Ok(()),
             };
         }
@@ -244,7 +242,7 @@ impl Write for TerminalOutput {
             .0
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?;
         if state.ended {
             // Saya has already attempted bounded cursor/screen restoration.
             // Ratatui's destructor writes another ShowCursor and otherwise
@@ -263,7 +261,7 @@ impl Write for TerminalOutput {
             {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "terminal output write budget exceeded",
+                    text::OUTPUT_WRITE_BUDGET,
                 ));
             }
             match write_descriptor(self.0.file.as_raw_fd(), bytes) {
@@ -320,29 +318,29 @@ impl TerminalGuard {
     /// raw state and descriptor flags before they are returned.
     pub fn enter() -> io::Result<Self> {
         if std::thread::panicking() {
-            return Err(io::Error::other("cannot enter terminal during unwinding"));
+            return Err(io::Error::other(text::ENTER_DURING_UNWINDING));
         }
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "TUI requires terminal stdin and stdout",
+                text::REQUIRES_TTY,
             ));
         }
         if is_raw_mode_enabled()? {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "terminal presentation is already active",
+                text::PRESENTATION_ACTIVE,
             ));
         }
         install_panic_hook();
         let output = {
             let mut slot = OUTPUT
                 .lock()
-                .map_err(|_| io::Error::other("terminal ownership unavailable"))?;
+                .map_err(|_| io::Error::other(text::OWNERSHIP_UNAVAILABLE))?;
             if slot.as_ref().and_then(Weak::upgrade).is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
-                    "terminal presentation is already active",
+                    text::PRESENTATION_ACTIVE,
                 ));
             }
             let output = Arc::new(Output::new()?);
@@ -360,7 +358,7 @@ impl TerminalGuard {
             .output
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?
             .presentation_started = true;
         execute!(
             TerminalOutput(guard.output.clone()),
@@ -392,7 +390,7 @@ impl TerminalGuard {
             .output
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?
             .title
             .as_deref()
             == Some(title.as_str())
@@ -404,7 +402,7 @@ impl TerminalGuard {
         self.output
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?
             .title = Some(title);
         Ok(())
     }
@@ -418,7 +416,7 @@ impl TerminalGuard {
         if text.len() > crate::view::MAX_COPY_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "selection exceeds the 64 KiB clipboard limit",
+                text::CLIPBOARD_LIMIT,
             ));
         }
         if text.is_empty() {
@@ -448,14 +446,14 @@ impl TerminalGuard {
         let terminal = self
             .terminal
             .as_mut()
-            .ok_or_else(|| io::Error::other("terminal initialization is incomplete"))?;
+            .ok_or_else(|| io::Error::other(text::INITIALIZATION_INCOMPLETE))?;
         let result = terminal
             .try_draw(|frame| -> io::Result<()> {
                 render(frame);
                 output
                     .state
                     .lock()
-                    .map_err(|_| io::Error::other("terminal output state unavailable"))?
+                    .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?
                     .write_deadline = Some(Instant::now() + FRAME_WRITE_WAIT);
                 if resync {
                     TerminalOutput(output.clone()).write_all(RESYNC_BYTES)?;
@@ -466,7 +464,7 @@ impl TerminalGuard {
         self.output
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?
             .write_deadline = None;
         self.resync = result.is_err();
         result
@@ -476,7 +474,7 @@ impl TerminalGuard {
         self.check_active()?;
         self.terminal
             .as_ref()
-            .ok_or_else(|| io::Error::other("terminal initialization is incomplete"))?
+            .ok_or_else(|| io::Error::other(text::INITIALIZATION_INCOMPLETE))?
             .size()
     }
     fn check_active(&self) -> io::Result<()> {
@@ -484,11 +482,11 @@ impl TerminalGuard {
             .output
             .state
             .lock()
-            .map_err(|_| io::Error::other("terminal output state unavailable"))?;
+            .map_err(|_| io::Error::other(text::OUTPUT_STATE_UNAVAILABLE))?;
         if self.restored || state.ended {
             Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "terminal presentation has ended",
+                text::PRESENTATION_ENDED,
             ))
         } else {
             Ok(())

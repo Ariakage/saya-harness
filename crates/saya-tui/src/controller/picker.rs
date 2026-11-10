@@ -1,5 +1,6 @@
 //! Explicit selectors for discovered Skills, MCP servers and installed Plugins.
 use super::*;
+use crate::i18n::{common, picker as text, services as service_text};
 use crate::view::{Details, PickerItem, PickerKind, PickerPanel};
 use saya_app::interaction::RunCancellation;
 use saya_core::{
@@ -49,27 +50,21 @@ fn load_skills(
             label: skill.name,
             description: skill.description,
             details: vec![
-                format!("Source {}", skill.path.display()),
-                format!("Scope {}", skill.scope),
-                format!("SHA-256 {}", skill.sha256),
-                "Selection opens details. Use the Agent Skill tools to activate context; selection grants no tools or permissions.".into(),
+                format!("{} {}", text::SOURCE, skill.path.display()),
+                format!("{} {}", text::SCOPE, skill.scope),
+                format!("{} {}", text::SHA256, skill.sha256),
+                text::SKILL_DETAIL_HINT.into(),
             ],
             active: false,
         })
         .collect::<Vec<_>>();
     let plugin_root = config.data_dir.join("plugins");
-    if plugin_root.try_exists().map_err(|_| {
-        failure(
-            "plugin_io",
-            "Plugin store availability could not be checked",
-        )
-    })? {
-        saya_app::session::check_roots(config, &config.cwd, config.mode).map_err(|_| {
-            failure(
-                "plan_read_only",
-                "PLAN plugin storage must be outside the workspace",
-            )
-        })?;
+    if plugin_root
+        .try_exists()
+        .map_err(|_| failure("plugin_io", text::PLUGIN_STORE_CHECK))?
+    {
+        saya_app::session::check_roots(config, &config.cwd, config.mode)
+            .map_err(|_| failure("plan_read_only", text::PLAN_PLUGIN_STORAGE))?;
         let store = PluginStore::open(&plugin_root, secrets, StoreLimits::default())?;
         for summary in store.list()?.into_iter().filter(|summary| summary.selected) {
             let inspection = store.inspect(&summary.digest)?;
@@ -80,19 +75,19 @@ fn load_skills(
                     label,
                     description: inspection.manifest.plugin.description.clone(),
                     details: vec![
-                        format!("Plugin {}", summary.plugin_id),
-                        format!("Version {}", summary.version),
-                        format!("Package SHA-256 {}", summary.digest),
+                        format!("{} {}", text::PLUGIN, summary.plugin_id),
+                        format!("{} {}", text::VERSION, summary.version),
+                        format!("{} {}", text::PACKAGE_SHA256, summary.digest),
                         format!(
-                            "Enabled scopes {}",
+                            "{} {}",
+                            text::ENABLED_SCOPES,
                             summary
                                 .enabled_scopes
                                 .iter()
                                 .filter(|record| record.enabled)
                                 .count()
                         ),
-                        "Selection opens details. Plugin enablement and current permissions remain authoritative."
-                            .into(),
+                        text::PLUGIN_DETAIL_HINT.into(),
                     ],
                     active: summary.enabled_scopes.iter().any(|record| record.enabled),
                 });
@@ -102,9 +97,9 @@ fn load_skills(
     items.sort_by(|left, right| left.label.cmp(&right.label));
     Ok(panel(
         PickerKind::Skills,
-        "Skills",
+        text::SKILLS_TITLE,
         items,
-        "No applicable Skills were discovered.",
+        text::NO_SKILLS,
     ))
 }
 
@@ -112,24 +107,18 @@ fn load_plugins(
     config: &Config,
     secrets: Arc<SecretRegistry>,
 ) -> std::result::Result<PickerPanel, BoundaryError> {
-    saya_app::session::check_roots(config, &config.cwd, config.mode).map_err(|_| {
-        failure(
-            "plan_read_only",
-            "PLAN plugin storage must be outside the workspace",
-        )
-    })?;
+    saya_app::session::check_roots(config, &config.cwd, config.mode)
+        .map_err(|_| failure("plan_read_only", text::PLAN_PLUGIN_STORAGE))?;
     let root = config.data_dir.join("plugins");
-    if !root.try_exists().map_err(|_| {
-        failure(
-            "plugin_io",
-            "Plugin store availability could not be checked",
-        )
-    })? {
+    if !root
+        .try_exists()
+        .map_err(|_| failure("plugin_io", text::PLUGIN_STORE_CHECK))?
+    {
         return Ok(panel(
             PickerKind::Plugins,
-            "Plugins",
+            text::PLUGINS_TITLE,
             vec![],
-            "No Plugin store exists. Install a local package with `saya plugin install`.",
+            text::PLUGIN_STORE_MISSING,
         ));
     }
     let store = PluginStore::open(root, secrets, StoreLimits::default())?;
@@ -145,23 +134,29 @@ fn load_plugins(
                     "v{} · {:?}{}",
                     summary.version,
                     summary.state,
-                    if summary.selected { " · selected" } else { "" }
+                    if summary.selected {
+                        format!(" · {}", text::SELECTED)
+                    } else {
+                        String::new()
+                    }
                 ),
                 details: vec![
-                    format!("Plugin {}", summary.plugin_id),
-                    format!("Version {}", summary.version),
-                    format!("State {:?}", summary.state),
-                    format!("Selected {}", summary.selected),
-                    format!("SHA-256 {}", summary.digest),
-                    format!("Enabled scopes {}", summary.enabled_scopes.len()),
+                    format!("{} {}", text::PLUGIN, summary.plugin_id),
+                    format!("{} {}", text::VERSION, summary.version),
+                    format!("{} {:?}", text::STATE, summary.state),
+                    format!("{} {}", text::SELECTED, summary.selected),
+                    format!("{} {}", text::SHA256, summary.digest),
+                    format!("{} {}", text::ENABLED_SCOPES, summary.enabled_scopes.len()),
                     format!(
-                        "Requested capabilities {} · network origins {} · credential slots {}",
+                        "{} {} · {} {} · {} {}",
+                        text::REQUESTED_CAPABILITIES,
                         summary.requested_capabilities.requested.len(),
+                        text::NETWORK_ORIGINS,
                         summary.requested_capabilities.network_origins.len(),
+                        text::CREDENTIAL_SLOTS,
                         summary.requested_capabilities.credential_slots.len()
                     ),
-                    "Selection opens details. Use `saya plugin enable|disable` for explicit capability grants."
-                        .into(),
+                    text::PLUGIN_CLI_HINT.into(),
                 ],
                 active: enabled,
             }
@@ -170,9 +165,9 @@ fn load_plugins(
     items.sort_by(|left, right| left.label.cmp(&right.label));
     Ok(panel(
         PickerKind::Plugins,
-        "Plugins",
+        text::PLUGINS_TITLE,
         items,
-        "No installed Plugins are available.",
+        text::NO_PLUGINS,
     ))
 }
 
@@ -184,35 +179,42 @@ fn mcp_panel(config: &Config) -> PickerPanel {
         .map(|(name, server)| {
             let transport = match &server.transport {
                 McpTransportSettings::Stdio(settings) => {
-                    format!("stdio · {} argv", settings.argv.len())
+                    format!(
+                        "{} · {} {}",
+                        common::TRANSPORT_STDIO,
+                        settings.argv.len(),
+                        text::ARGV
+                    )
                 }
-                McpTransportSettings::Http(_) => "HTTP".into(),
+                McpTransportSettings::Http(_) => common::TRANSPORT_HTTP.into(),
             };
             PickerItem {
                 id: name.clone(),
                 label: name.clone(),
                 description: format!(
                     "{} · {}",
-                    if server.enabled { "enabled" } else { "disabled" },
+                    if server.enabled {
+                        text::ENABLED
+                    } else {
+                        text::DISABLED
+                    },
                     transport
                 ),
                 details: vec![
-                    format!("Server {name}"),
-                    format!("Transport {transport}"),
-                    format!("Read-only declarations {}", server.read_only_tools.len()),
-                    "Enter toggles enablement for subsequent runs. Existing approvals and permissions are not reused."
-                        .into(),
+                    format!("{} {name}", text::SERVER),
+                    format!("{} {transport}", text::TRANSPORT),
+                    format!(
+                        "{} {}",
+                        text::READ_ONLY_DECLARATIONS,
+                        server.read_only_tools.len()
+                    ),
+                    text::MCP_DETAIL_HINT.into(),
                 ],
                 active: server.enabled,
             }
         })
         .collect();
-    panel(
-        PickerKind::Mcps,
-        "MCP servers",
-        items,
-        "No MCP servers are configured.",
-    )
+    panel(PickerKind::Mcps, text::MCPS_TITLE, items, text::NO_MCPS)
 }
 
 impl App {
@@ -232,7 +234,7 @@ impl App {
                 let checking = cancel.clone();
                 let join = tokio::task::spawn_blocking(move || {
                     if checking.is_cancelled() {
-                        return Err(failure("cancelled", "Selector loading cancelled"));
+                        return Err(failure("cancelled", service_text::SELECTOR_CANCELLED));
                     }
                     let panel = if plugin {
                         load_plugins(&config, secrets)?
@@ -243,7 +245,7 @@ impl App {
                 });
                 self.begin_ui(cancel, join);
             }
-            _ => return Err("Unknown selector".into()),
+            _ => return Err(text::UNKNOWN_SELECTOR.into()),
         }
         Ok(())
     }
@@ -317,7 +319,7 @@ impl App {
                 let title = item.label.clone();
                 self.state.picker_panel = None;
                 self.state.set_details(Details {
-                    title: format!("{title} · selected"),
+                    title: text::selected_title(&title),
                     lines: item.details,
                 });
                 self.state.details_scroll = 0;
@@ -330,7 +332,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|prepared| prepared.session.id.0.to_string() == item.id)
                 {
-                    self.notice("Session is already open and waiting for input.");
+                    self.notice(service_text::SESSION_ALREADY_OPEN);
                 } else {
                     self.service("/resume", &item.id).await?;
                 }
@@ -345,7 +347,7 @@ impl App {
             .mcp
             .servers
             .get_mut(&item.id)
-            .ok_or("Selected MCP server is unavailable")?;
+            .ok_or(text::MCP_UNAVAILABLE)?;
         let previous = server.enabled;
         server.enabled = !previous;
         if let Err(error) = self.refresh_secret_inputs() {
@@ -361,16 +363,20 @@ impl App {
         {
             item.active = enabled;
             item.description = item.description.replacen(
-                if previous { "enabled" } else { "disabled" },
-                if enabled { "enabled" } else { "disabled" },
+                if previous {
+                    text::ENABLED
+                } else {
+                    text::DISABLED
+                },
+                if enabled {
+                    text::ENABLED
+                } else {
+                    text::DISABLED
+                },
                 1,
             );
         }
-        self.notice(&format!(
-            "MCP server {} {} for subsequent runs.",
-            self.safe(&item.id),
-            if enabled { "enabled" } else { "disabled" }
-        ));
+        self.notice(&text::mcp_changed(&self.safe(&item.id), enabled));
         Ok(())
     }
 }

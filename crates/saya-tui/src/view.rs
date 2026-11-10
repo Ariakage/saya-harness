@@ -2,6 +2,10 @@
 use crate::{
     commands::{COMMANDS, Completion},
     editor::{Editor, MAX_VISUAL_LINE_BYTES, display_grapheme, prefix_boundary, safe_text},
+    i18n::{
+        command, common, mode as mode_text, permissions as permission_text, status as status_text,
+        view as ui_text,
+    },
     rich_text::append_wrapped_line,
     theme::{
         AMBER, BACKGROUND, BLUE, BORDER, CODE_BACKGROUND, CODE_FOREGROUND, FOREGROUND, GREEN,
@@ -32,8 +36,6 @@ pub const MAX_MESSAGES: usize = 512;
 const MAX_RENDER_LINES: usize = 10_000;
 const MAX_DETAIL_LINES: usize = 10_000;
 const MAX_DETAIL_TITLE_BYTES: usize = 256;
-const TRUNCATED_DETAIL_PREFIX: &str = "Truncated · ";
-const DETAIL_TRUNCATION_NOTICE: &str = "[details display truncated]";
 const MAX_COMPLETION_ROWS: usize = 6;
 const MAX_CONTEXT_ENTRIES: usize = 9;
 const MAX_TODOS: usize = 64;
@@ -59,8 +61,8 @@ pub enum MarkdownDisplay {
 impl MarkdownDisplay {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Source => "source",
-            Self::Render => "render",
+            Self::Source => command::MARKDOWN_SOURCE_VALUE,
+            Self::Render => command::MARKDOWN_RENDER_VALUE,
         }
     }
 }
@@ -228,13 +230,13 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            session_title: "New session".into(),
+            session_title: common::NEW_SESSION.into(),
             workspace: ".".into(),
-            profile: "unconfigured".into(),
+            profile: common::UNCONFIGURED.into(),
             model: String::new(),
-            mode: "WORK".into(),
-            permissions: "auto".into(),
-            status: "Ready".into(),
+            mode: mode_text::display("Work"),
+            permissions: permission_text::AUTO.into(),
+            status: common::READY.into(),
             activity_active: false,
             activity_frame: 0,
             pending_mode: None,
@@ -371,13 +373,13 @@ impl State {
         self.activity_active
             && matches!(
                 self.status.as_str(),
-                "Ready"
-                    | "Running"
-                    | "Thinking"
-                    | "Responding"
-                    | "Reviewing"
-                    | "Compacting"
-                    | "Cancelling"
+                common::READY
+                    | common::RUNNING
+                    | common::THINKING
+                    | common::RESPONDING
+                    | common::REVIEWING
+                    | common::COMPACTING
+                    | common::CANCELLING
             )
     }
 
@@ -842,19 +844,19 @@ pub(crate) fn bound_details(details: &mut Details) {
     }
     if truncated {
         while bounded.len() >= MAX_DETAIL_LINES
-            || retained + DETAIL_TRUNCATION_NOTICE.len() > MAX_TRANSCRIPT_BYTES
+            || retained + ui_text::DETAIL_TRUNCATION_NOTICE.len() > MAX_TRANSCRIPT_BYTES
         {
             let Some(tail) = bounded.pop() else { break };
             retained -= tail.len();
-            let remaining =
-                MAX_TRANSCRIPT_BYTES.saturating_sub(retained + DETAIL_TRUNCATION_NOTICE.len());
+            let remaining = MAX_TRANSCRIPT_BYTES
+                .saturating_sub(retained + ui_text::DETAIL_TRUNCATION_NOTICE.len());
             if bounded.len() < MAX_DETAIL_LINES - 1 && remaining > 0 {
                 let end = prefix_boundary(&tail, remaining.min(tail.len()));
                 retained += end;
                 bounded.push(tail[..end].to_owned());
             }
         }
-        bounded.push(DETAIL_TRUNCATION_NOTICE.to_owned());
+        bounded.push(ui_text::DETAIL_TRUNCATION_NOTICE.to_owned());
     }
     bounded.shrink_to_fit();
     details.lines = bounded;
@@ -881,10 +883,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     );
     if area.width < 20 || area.height < 6 {
         state.selection.reset();
-        frame.render_widget(
-            Paragraph::new("Saya: enlarge terminal to at least 20 x 6"),
-            area,
-        );
+        frame.render_widget(Paragraph::new(ui_text::TERMINAL_TOO_SMALL), area);
         return;
     }
     if area.width >= 120 && area.height >= 24 {
@@ -956,10 +955,11 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
         .fg(STRONG_FOREGROUND)
         .add_modifier(Modifier::BOLD);
     let title = if area.width < 44 {
-        Line::styled("Saya Harness", brand)
+        Line::styled(common::APP_NAME, brand)
     } else {
         Line::from(vec![
-            Span::styled("Saya Harness ", brand),
+            Span::styled(common::APP_NAME, brand),
+            Span::raw(" "),
             Span::styled(
                 format!("(v{})", env!("CARGO_PKG_VERSION")),
                 Style::default().fg(MUTED),
@@ -968,22 +968,22 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     };
     let hint = if state.completion.visible() {
         if area.width < 28 {
-            "Tab/→"
+            ui_text::COMPLETION_SHORT
         } else {
-            "↑↓ Tab/→ Esc"
+            ui_text::COMPLETION_KEYS
         }
     } else if state.editor.text().is_empty() && state.command_palette.is_none() {
         if area.width >= 70 {
-            "Tab mode · Ctrl+P commands"
+            ui_text::TAB_MODE
         } else if area.width >= 44 {
-            "Tab mode · Ctrl+P"
+            ui_text::TAB_MODE_SHORT
         } else {
-            "Ctrl+P"
+            ui_text::CTRL_P
         }
     } else if area.width < 44 {
-        "Ctrl+P"
+        ui_text::CTRL_P
     } else {
-        "Ctrl+P commands"
+        ui_text::COMMANDS_HINT
     };
     draw_split_line(
         frame,
@@ -1075,12 +1075,12 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         heading,
     );
     lines[2] = Line::from(vec![
-        Span::styled("Context", heading),
+        Span::styled(ui_text::CONTEXT, heading),
         Span::styled(
             if state.context_breakdown.is_empty() {
-                " · Unknown"
+                ui_text::CONTEXT_UNKNOWN
             } else if state.context_breakdown_estimated {
-                " · Estimated"
+                ui_text::CONTEXT_ESTIMATED
             } else {
                 ""
             },
@@ -1089,20 +1089,21 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
     ]);
     lines[3] = Line::styled(
         format!(
-            "Window {}",
+            "{} {}",
+            ui_text::CONTEXT_WINDOW,
             state
                 .context_window_tokens
                 .filter(|tokens| *tokens > 0)
-                .map(token_label)
+                .map(common::token_label)
                 .unwrap_or_else(|| "—".into())
         ),
         Style::default().fg(MUTED),
     );
     if state.context_breakdown.is_empty() {
-        let text = if matches!(state.status.as_str(), "Thinking" | "Responding") {
-            "Awaiting execution usage"
+        let text = if matches!(state.status.as_str(), common::THINKING | common::RESPONDING) {
+            ui_text::CONTEXT_AWAITING_USAGE
         } else {
-            "Unknown before request"
+            ui_text::CONTEXT_UNKNOWN_BEFORE_REQUEST
         };
         lines[4] = Line::styled(text, Style::default().fg(MUTED));
     } else {
@@ -1114,8 +1115,7 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
             lines[index + 4] = line;
         }
         if state.context_breakdown.len() > context_limit {
-            lines[total_row] =
-                Line::styled("Additional entries omitted", Style::default().fg(MUTED));
+            lines[total_row] = Line::styled(ui_text::CONTEXT_MORE, Style::default().fg(MUTED));
         } else {
             let total = state
                 .context_breakdown
@@ -1124,37 +1124,42 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
                 .sum::<u128>();
             let summary = match u64::try_from(total) {
                 Ok(total) => format!(
-                    "Total {}{} {}",
+                    "{} {}{} {}",
+                    ui_text::CONTEXT_TOTAL,
                     if state.context_breakdown_estimated {
                         "~"
                     } else {
                         ""
                     },
-                    token_label(total),
+                    common::token_label(total),
                     sidebar_percentage(total, state.context_window_tokens)
                 ),
-                Err(_) => "Total estimate exceeds range".into(),
+                Err(_) => format!(
+                    "{} {}",
+                    ui_text::CONTEXT_TOTAL,
+                    ui_text::CONTEXT_ESTIMATE_OVERFLOW
+                ),
             };
             lines[total_row] = Line::styled(summary, Style::default().fg(MUTED));
         }
     }
-    lines[extensions_row] = Line::styled("Extensions", heading);
+    lines[extensions_row] = Line::styled(ui_text::EXTENSIONS, heading);
     lines[extensions_row + 1] = mcp_summary(state, server_rows);
     for (index, server) in state.mcp_servers.iter().take(server_rows).enumerate() {
         lines[extensions_row + 2 + index] = mcp_server_line(server, usize::from(content.width));
     }
     lines[extensions_row + 2 + server_rows] = Line::styled(
         match state.plugins_enabled {
-            Some(true) => "Plugins  Enabled in config",
-            Some(false) => "Plugins  Disabled in config",
-            None => "Plugins  Not inspected",
+            Some(true) => ui_text::PLUGINS_ENABLED,
+            Some(false) => ui_text::PLUGINS_DISABLED,
+            None => ui_text::PLUGINS_UNKNOWN,
         },
         Style::default().fg(MUTED),
     );
     lines[extensions_row + 3 + server_rows] = Line::styled(
         match state.skills_count {
-            Some(count) => format!("Skills {count} discovered"),
-            None => "Skills —".into(),
+            Some(count) => format!("{} {count} {}", ui_text::SKILLS, ui_text::SKILLS_DISCOVERED),
+            None => format!("{} —", ui_text::SKILLS),
         },
         Style::default().fg(MUTED),
     );
@@ -1164,7 +1169,7 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         .filter(|todo| todo.status == TodoStatus::Completed)
         .count();
     lines[tasks_row] = Line::from(vec![
-        Span::styled("Tasks", heading),
+        Span::styled(ui_text::TASKS, heading),
         Span::styled(
             format!(" · {completed}/{}", state.todos.len()),
             Style::default().fg(MUTED),
@@ -1179,7 +1184,7 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
     };
     let mut task_end = tasks_row + 1;
     if state.todos.is_empty() {
-        lines[task_end] = Line::styled("No tasks", Style::default().fg(MUTED));
+        lines[task_end] = Line::styled(ui_text::NO_TASKS, Style::default().fg(MUTED));
         task_end += 1;
     } else {
         let visible = state
@@ -1217,7 +1222,7 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
         }
         if visible < state.todos.len() {
             lines[task_end] = Line::styled(
-                format!("+{} more tasks", state.todos.len() - visible),
+                ui_text::more_tasks(state.todos.len() - visible),
                 Style::default().fg(MUTED),
             );
             task_end += 1;
@@ -1229,15 +1234,18 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
             "─".repeat(usize::from(content.width)),
             Style::default().fg(BORDER),
         );
-        lines[details_row] = Line::styled("Details", heading);
+        lines[details_row] = Line::styled(ui_text::DETAILS, heading);
     }
     for (index, (label, value)) in [
-        ("Profile", state.profile.as_str()),
-        ("Model", state.model.as_str()),
-        ("Mode", state.mode.as_str()),
-        ("Permissions", state.permissions.as_str()),
-        ("Effort", state.thinking_effort.as_deref().unwrap_or("—")),
-        ("Status", state.status.as_str()),
+        (ui_text::PROFILE, state.profile.as_str()),
+        (ui_text::MODEL, state.model.as_str()),
+        (ui_text::MODE, state.mode.as_str()),
+        (ui_text::PERMISSIONS, state.permissions.as_str()),
+        (
+            ui_text::EFFORT,
+            state.thinking_effort.as_deref().unwrap_or("—"),
+        ),
+        (ui_text::STATUS, state.status.as_str()),
     ]
     .into_iter()
     .enumerate()
@@ -1259,25 +1267,26 @@ fn draw_sidebar(frame: &mut Frame<'_>, state: &State, area: Rect) {
 
 fn mcp_state(state: McpServerState) -> (&'static str, &'static str, ratatui::style::Color) {
     match state {
-        McpServerState::Configured => ("○", "Configured", MUTED),
-        McpServerState::Connecting => ("◐", "Connecting", AMBER),
-        McpServerState::Connected => ("●", "Connected", GREEN),
-        McpServerState::Stopped => ("○", "Stopped", MUTED),
-        McpServerState::NeedsAuth => ("!", "Needs auth", AMBER),
-        McpServerState::Failed => ("×", "Failed", RED),
+        McpServerState::Configured => ("○", ui_text::MCP_CONFIGURED, MUTED),
+        McpServerState::Connecting => ("◐", ui_text::MCP_CONNECTING, AMBER),
+        McpServerState::Connected => ("●", ui_text::MCP_CONNECTED, GREEN),
+        McpServerState::Stopped => ("○", ui_text::MCP_STOPPED, MUTED),
+        McpServerState::NeedsAuth => ("!", ui_text::MCP_NEEDS_AUTH, AMBER),
+        McpServerState::Failed => ("×", ui_text::MCP_FAILED, RED),
     }
 }
 fn mcp_server_line(server: &McpServerStatus, width: usize) -> Line<'static> {
     let (icon, status, color) = mcp_state(server.state);
     let name = safe_line(&server.server[..prefix_boundary(&server.server, 128)]);
     let transport = match server.transport {
-        McpTransport::Stdio => "stdio",
-        McpTransport::Http => "HTTP",
+        McpTransport::Stdio => common::TRANSPORT_STDIO,
+        McpTransport::Http => common::TRANSPORT_HTTP,
     };
+    let tools = ui_text::tool_count(server.tools);
     let detail = if width >= 36 {
-        format!("{status} · {transport} · {}t", server.tools)
+        format!("{status} · {transport} · {tools}")
     } else {
-        format!("{status} · {}t", server.tools)
+        format!("{status} · {tools}")
     };
     let name_width = width.saturating_sub(detail.width() + 3);
     let name = crop_display(&name, 0, name_width);
@@ -1291,30 +1300,24 @@ fn mcp_server_line(server: &McpServerStatus, width: usize) -> Line<'static> {
 fn mcp_summary(state: &State, visible: usize) -> Line<'static> {
     let count = state.mcp_servers.len().min(MAX_MCP_STATUS_SERVERS);
     if count == 0 {
-        return Line::styled("MCP  No servers", Style::default().fg(MUTED));
+        return Line::styled(ui_text::MCP_NO_SERVERS, Style::default().fg(MUTED));
     }
     if visible == 0 {
         let first = &state.mcp_servers[0];
         let (_, status, color) = mcp_state(first.state);
-        let suffix = if count > 1 {
-            format!(" +{} more", count - 1)
-        } else {
-            String::new()
-        };
         return Line::styled(
-            format!(
-                "MCP {status}{suffix} · {}",
-                safe_line(&first.server[..prefix_boundary(&first.server, 128)])
+            ui_text::mcp_summary(
+                status,
+                count,
+                &safe_line(&first.server[..prefix_boundary(&first.server, 128)]),
             ),
             Style::default().fg(color),
         );
     }
-    let suffix = if visible < count {
-        format!(" · +{} more", count - visible)
-    } else {
-        String::new()
-    };
-    Line::styled(format!("MCP {count}{suffix}"), Style::default().fg(MUTED))
+    Line::styled(
+        ui_text::mcp_count(count, visible),
+        Style::default().fg(MUTED),
+    )
 }
 
 fn context_rows(state: &State, width: usize) -> Vec<Line<'static>> {
@@ -1325,7 +1328,7 @@ fn context_rows(state: &State, width: usize) -> Vec<Line<'static>> {
         .map(|entry| {
             let metric = format!(
                 "{} {}",
-                token_label(entry.tokens),
+                common::token_label(entry.tokens),
                 sidebar_percentage(entry.tokens, state.context_window_tokens)
             );
             (entry, metric)
@@ -1377,11 +1380,11 @@ fn sidebar_percentage(input: u64, window: Option<u64>) -> String {
         return "—".into();
     };
     if input > window {
-        return ">100%".into();
+        return ui_text::OVER_100_PERCENT.into();
     }
     let tenths = u128::from(input) * 1000 / u128::from(window);
     if input > 0 && tenths == 0 {
-        "<0.1%".into()
+        ui_text::LESS_THAN_POINT_ONE_PERCENT.into()
     } else if tenths % 10 == 0 {
         format!("{}%", tenths / 10)
     } else {
@@ -1422,7 +1425,7 @@ fn context_percentage(input: u64, window: Option<u64>) -> Option<u64> {
 
 fn percentage_label(percent: Option<u64>) -> String {
     match percent {
-        Some(101) => ">100%".into(),
+        Some(101) => ui_text::OVER_100_PERCENT.into(),
         Some(value) => format!("{value}%"),
         None => "—".into(),
     }
@@ -1452,33 +1455,37 @@ fn draw_split_line(
 }
 
 fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let status_value = status_text::display(&state.status);
     let status = if area.width < 40 {
-        match state.status.as_str() {
-            "Awaiting approval" => "Approval",
-            "Awaiting input" => "Input",
-            "Cancelling" => "Cancel",
-            "Completed" => "Done",
-            _ => &state.status,
+        match status_value.as_str() {
+            common::AWAITING_APPROVAL => ui_text::APPROVAL_SHORT,
+            common::AWAITING_INPUT => ui_text::STATUS_INPUT,
+            common::CANCELLING => ui_text::STATUS_CANCEL,
+            common::COMPLETED => ui_text::STATUS_DONE,
+            _ => status_value.as_str(),
         }
     } else {
-        &state.status
+        status_value.as_str()
     };
     let permissions = if area.width < 48 {
-        match state.permissions.as_str() {
-            "Manual Approval" => "manual",
-            "bypass permissions" => "bypass",
-            _ => &state.permissions,
-        }
+        permission_text::short(&state.permissions)
     } else {
-        &state.permissions
+        state.permissions.as_str()
     };
-    let ready = matches!(state.status.as_str(), "Ready" | "Completed");
-    let status_color = match state.status.as_str() {
-        "Ready" | "Completed" => GREEN,
-        "Failed" => RED,
-        "Awaiting approval" | "Awaiting input" | "NeedsConfirmation" | "NeedsInput"
+    let ready = matches!(state.status.as_str(), common::READY | common::COMPLETED);
+    let status_color = match status_value.as_str() {
+        common::READY | common::COMPLETED => GREEN,
+        common::FAILED => RED,
+        common::AWAITING_APPROVAL
+        | common::AWAITING_INPUT
+        | "NeedsConfirmation"
+        | "NeedsInput"
         | "LimitReached" => AMBER,
-        "Running" | "Reviewing" | "Thinking" | "Responding" | "Compacting" => BLUE,
+        common::RUNNING
+        | common::REVIEWING
+        | common::THINKING
+        | common::RESPONDING
+        | common::COMPACTING => BLUE,
         _ => MUTED,
     };
     let mut label = Line::from(vec![
@@ -1490,7 +1497,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &State, area: Rect) {
     ]);
     let permissions = Line::styled(
         safe_line(permissions),
-        Style::default().fg(if state.permissions == "auto" {
+        Style::default().fg(if state.permissions == permission_text::AUTO {
             MUTED
         } else {
             SOFT_AMBER
@@ -1600,34 +1607,19 @@ fn context_meter(state: &State, short: bool) -> String {
         ""
     };
     if short {
-        return format!("{ring} input {estimated}{percentage}");
+        return format!("{ring} {} {estimated}{percentage}", ui_text::METER_INPUT);
     }
     let input = state
         .context_input_tokens
-        .map(token_label)
+        .map(common::token_label)
         .unwrap_or_else(|| "—".into());
-    let window = window.map(token_label).unwrap_or_else(|| "—".into());
-    format!("{ring} input {estimated}{input}/{window} ({percentage})")
-}
-
-fn token_label(value: u64) -> String {
-    for (divisor, suffix) in [
-        (1_000_000_000_000, "T"),
-        (1_000_000_000, "G"),
-        (1_000_000, "M"),
-        (1_000, "k"),
-    ] {
-        if value >= divisor {
-            let whole = value / divisor;
-            let decimal = value % divisor / (divisor / 10);
-            return if decimal == 0 {
-                format!("{whole}{suffix}")
-            } else {
-                format!("{whole}.{decimal}{suffix}")
-            };
-        }
-    }
-    value.to_string()
+    let window = window
+        .map(common::token_label)
+        .unwrap_or_else(|| "—".into());
+    format!(
+        "{ring} {} {estimated}{input}/{window} ({percentage})",
+        ui_text::METER_INPUT
+    )
 }
 
 fn safe_line(text: &str) -> String {
@@ -1668,10 +1660,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     state.render_cache.retain(&render_candidates);
     if state.dropped_messages > 0 {
         append_wrapped(
-            &format!(
-                "[{} earlier viewport messages omitted]",
-                state.dropped_messages
-            ),
+            &ui_text::earlier_viewport_messages(state.dropped_messages),
             width,
             Style::default().fg(MUTED),
             &mut lines,
@@ -1691,9 +1680,10 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
                 ),
             ]);
             if message.truncated {
-                summary
-                    .spans
-                    .push(Span::styled(" · truncated", Style::default().fg(MUTED)));
+                summary.spans.push(Span::styled(
+                    common::TRUNCATED_SUFFIX,
+                    Style::default().fg(MUTED),
+                ));
             }
             append_wrapped_line(
                 summary,
@@ -1706,11 +1696,11 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
             continue;
         }
         let role_label = match message.role {
-            Role::User => "You",
-            Role::Assistant => "Saya",
-            Role::Tool => "Tool",
-            Role::Thinking => "Thinking",
-            Role::System => "System",
+            Role::User => ui_text::YOU,
+            Role::Assistant => ui_text::SAYA,
+            Role::Tool => ui_text::TOOL,
+            Role::Thinking => ui_text::THINKING,
+            Role::System => ui_text::SYSTEM,
             Role::RunSummary => "",
         };
         let can_fold = foldable(message);
@@ -1736,20 +1726,21 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         ]);
         if message.role == Role::Thinking {
             let status = if message.streaming {
-                "running"
-            } else if message.label == "unavailable" {
-                "unavailable"
+                ui_text::RUNNING
+            } else if message.label == common::UNAVAILABLE {
+                common::UNAVAILABLE
             } else {
-                "done"
+                ui_text::DONE
             };
             heading.spans.push(Span::styled(
                 format!(" · {status}"),
                 Style::default().fg(if message.streaming { BLUE } else { MUTED }),
             ));
             if message.truncated {
-                heading
-                    .spans
-                    .push(Span::styled(" · truncated", Style::default().fg(AMBER)));
+                heading.spans.push(Span::styled(
+                    common::TRUNCATED_SUFFIX,
+                    Style::default().fg(AMBER),
+                ));
             }
         } else if let Some(summary) = &summary {
             let label = safe_line(&message.label);
@@ -1763,9 +1754,10 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
                 ));
             }
             if message.truncated || summary.truncated {
-                heading
-                    .spans
-                    .push(Span::styled(" · truncated", Style::default().fg(AMBER)));
+                heading.spans.push(Span::styled(
+                    common::TRUNCATED_SUFFIX,
+                    Style::default().fg(AMBER),
+                ));
             }
             heading.spans.push(Span::styled(
                 if summary.ok { " · ✓ " } else { " · ✕ " },
@@ -1783,14 +1775,16 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
             }
         } else {
             if message.streaming {
-                heading
-                    .spans
-                    .push(Span::styled(" · streaming", Style::default().fg(MUTED)));
+                heading.spans.push(Span::styled(
+                    format!(" · {}", common::STREAMING),
+                    Style::default().fg(MUTED),
+                ));
             }
             if message.truncated {
-                heading
-                    .spans
-                    .push(Span::styled(" · truncated", Style::default().fg(AMBER)));
+                heading.spans.push(Span::styled(
+                    format!(" · {}", common::TRUNCATED),
+                    Style::default().fg(AMBER),
+                ));
             }
             if !message.label.is_empty() && message.label != role_label {
                 heading.spans.push(Span::styled(
@@ -1879,7 +1873,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
         }
         if message.truncated {
             append_wrapped(
-                "[display truncated]",
+                ui_text::TRUNCATED_DISPLAY,
                 width,
                 Style::default().fg(AMBER),
                 &mut lines,
@@ -1894,7 +1888,7 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     state.footnote_positions = footnotes;
     if omitted > 0 {
         lines.push_front(Line::styled(
-            "[earlier display lines omitted]",
+            ui_text::EARLIER_LINES_OMITTED,
             Style::default().fg(MUTED),
         ));
     }
@@ -1983,7 +1977,7 @@ fn draw_details(
     let title = safe_line(&details.title[..prefix_boundary(&details.title, 256)]);
     let title_style = Style::default()
         .fg(
-            if title.contains("Approval") || title.contains("Question") {
+            if title.contains(ui_text::APPROVAL_REQUIRED) || title.contains(ui_text::QUESTION) {
                 AMBER
             } else {
                 FOREGROUND
@@ -2008,7 +2002,7 @@ fn draw_details(
     let cached_truncated = details
         .lines
         .last()
-        .is_some_and(|line| line == DETAIL_TRUNCATION_NOTICE);
+        .is_some_and(|line| line == ui_text::DETAIL_TRUNCATION_NOTICE);
     let mut truncated = false;
     'sources: for source in &details.lines {
         let end = prefix_boundary(source, remaining);
@@ -2030,7 +2024,7 @@ fn draw_details(
             append_wrapped(
                 &prefix,
                 usize::from(inner.width),
-                Style::default().fg(if line == DETAIL_TRUNCATION_NOTICE {
+                Style::default().fg(if line == ui_text::DETAIL_TRUNCATION_NOTICE {
                     AMBER
                 } else {
                     FOREGROUND
@@ -2050,10 +2044,10 @@ fn draw_details(
     }
     if area.height > 1
         && (truncated || cached_truncated)
-        && !title.starts_with(TRUNCATED_DETAIL_PREFIX)
+        && !title.starts_with(ui_text::TRUNCATED_DETAIL_PREFIX)
     {
         block = block.title(Line::styled(
-            format!(" {TRUNCATED_DETAIL_PREFIX}{title} "),
+            format!(" {}{title} ", ui_text::TRUNCATED_DETAIL_PREFIX),
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         ));
     }
@@ -2062,7 +2056,7 @@ fn draw_details(
             lines.pop_back();
         }
         lines.push_back(Line::styled(
-            "[details display truncated]",
+            ui_text::DETAIL_TRUNCATION_NOTICE,
             Style::default().fg(AMBER),
         ));
     }
@@ -2117,9 +2111,9 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
     }
     if inner.height > 1 {
         let label = if state.editor.truncated {
-            "Message · paste truncated at 64 KiB"
+            ui_text::PASTE_TRUNCATED
         } else {
-            "Message"
+            ui_text::MESSAGE
         };
         let hint = if state.editor.truncated || area.height <= 2 {
             Line::default()
@@ -2188,12 +2182,16 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
         && !state.completion.visible()
         && !matches!(
             state.status.as_str(),
-            "Awaiting input" | "NeedsInput" | "Awaiting approval" | "NeedsConfirmation"
+            common::AWAITING_INPUT | common::AWAITING_APPROVAL | "NeedsInput" | "NeedsConfirmation"
         )
     {
         frame.render_widget(
             Line::styled(
-                crop_display("Describe a task…", 0, usize::from(inner.width)),
+                crop_display(
+                    ui_text::DESCRIPTION_PLACEHOLDER,
+                    0,
+                    usize::from(inner.width),
+                ),
                 Style::default().fg(MUTED).add_modifier(Modifier::ITALIC),
             ),
             Rect::new(inner.x, inner.y, inner.width, 1),
@@ -2219,13 +2217,16 @@ fn editor_hint(width: u16) -> Line<'static> {
         .bg(CODE_BACKGROUND)
         .add_modifier(Modifier::BOLD);
     let action = Style::default().fg(MUTED);
-    let mut spans = vec![Span::styled("Enter", key), Span::styled(" send · ", action)];
+    let mut spans = vec![
+        Span::styled(ui_text::ENTER_SEND, key),
+        Span::styled(ui_text::ENTER_ACTION, action),
+    ];
     if width >= 64 {
-        spans.push(Span::styled("Alt+Enter", key));
-        spans.push(Span::styled(" newline · ", action));
+        spans.push(Span::styled(ui_text::NEWLINE_KEY, key));
+        spans.push(Span::styled(ui_text::NEWLINE_ACTION, action));
     }
-    spans.push(Span::styled("Ctrl+O", key));
-    spans.push(Span::styled(" fold", action));
+    spans.push(Span::styled(ui_text::FOLD_KEY, key));
+    spans.push(Span::styled(ui_text::FOLD_ACTION, action));
     Line::from(spans)
 }
 
@@ -2253,13 +2254,13 @@ fn draw_command_palette(frame: &mut Frame<'_>, state: &mut State) {
         .border_style(Style::default().fg(BORDER))
         .style(Style::default().fg(FOREGROUND).bg(SIDEBAR_BACKGROUND))
         .title(Line::styled(
-            " Commands ",
+            format!(" {} ", ui_text::COMMANDS),
             Style::default()
                 .fg(STRONG_FOREGROUND)
                 .add_modifier(Modifier::BOLD),
         ));
     if compact {
-        block = block.title_bottom(Line::styled(" Esc close ", Style::default().fg(MUTED)));
+        block = block.title_bottom(Line::styled(ui_text::ESC_CLOSE, Style::default().fg(MUTED)));
     } else {
         block = block.title(
             Line::styled(
@@ -2327,9 +2328,9 @@ fn draw_command_palette(frame: &mut Frame<'_>, state: &mut State) {
     frame.render_widget(
         Line::styled(
             if compact {
-                "↑↓ · Enter"
+                ui_text::PALETTE_NAV
             } else {
-                "↑↓ select · Enter run · Esc close"
+                ui_text::PALETTE_FULL_NAV
             },
             Style::default().fg(MUTED),
         ),
@@ -2367,8 +2368,8 @@ fn draw_completion(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     state.completion_viewport = Some(popup);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Command suggestions ")
-        .title_bottom(" ↑↓ Tab/→ Esc ")
+        .title(format!(" {} ", ui_text::COMMAND_SUGGESTIONS))
+        .title_bottom(ui_text::PALETTE_COMPLETION_NAV)
         .border_style(Style::default().fg(BORDER))
         .style(Style::default().bg(SIDEBAR_BACKGROUND));
     let inner = block.inner(popup);
@@ -2666,7 +2667,10 @@ mod tests {
         });
         let details = state.details.as_ref().unwrap();
         assert_eq!(details.title, "Parameters");
-        assert_eq!(details.lines.last().unwrap(), DETAIL_TRUNCATION_NOTICE);
+        assert_eq!(
+            details.lines.last().unwrap(),
+            ui_text::DETAIL_TRUNCATION_NOTICE
+        );
         assert!(details.lines.iter().map(String::len).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
         assert!(details.lines.iter().map(String::capacity).sum::<usize>() <= MAX_TRANSCRIPT_BYTES);
         assert!(details.lines.len() <= MAX_DETAIL_LINES);
@@ -2678,7 +2682,10 @@ mod tests {
         });
         let details = state.details.as_ref().unwrap();
         assert_eq!(details.lines.len(), MAX_DETAIL_LINES);
-        assert_eq!(details.lines.last().unwrap(), DETAIL_TRUNCATION_NOTICE);
+        assert_eq!(
+            details.lines.last().unwrap(),
+            ui_text::DETAIL_TRUNCATION_NOTICE
+        );
         assert!(details.lines.capacity() <= MAX_DETAIL_LINES);
     }
 

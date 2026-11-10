@@ -1,6 +1,11 @@
 //! Explicit user-side session browsing and publication on bounded background jobs.
 use super::*;
-use crate::view::Details;
+use crate::{
+    i18n::{
+        common, messages as message_text, picker as picker_text, services as text, view as ui_text,
+    },
+    view::Details,
+};
 use saya_core::{
     boundary::Cancellation,
     contract::ErrorInfo,
@@ -51,10 +56,7 @@ fn display_details(
     for line in std::iter::once(&mut details.title).chain(details.lines.iter_mut()) {
         let mut value = serde_json::Value::String(std::mem::take(line));
         saya_core::redaction::redact(&mut value, secrets)?;
-        *line = value
-            .as_str()
-            .unwrap_or("Sensitive details withheld")
-            .into();
+        *line = value.as_str().unwrap_or(common::SENSITIVE_WITHHELD).into();
     }
     view::bound_details(&mut details);
     Ok(UiResult::Details(details))
@@ -66,7 +68,7 @@ pub(super) async fn next_job(
     match job {
         Some(job) => (&mut job.join)
             .await
-            .map_err(|_| failure("ui_worker_failed", "UI operation worker failed"))?,
+            .map_err(|_| failure("ui_worker_failed", text::UI_OPERATION_WORKER_FAILED))?,
         None => std::future::pending().await,
     }
 }
@@ -76,18 +78,16 @@ impl App {
             self.state.editor.set_text(prompt);
         } else {
             self.state
-                .push_message(Role::System, "Unsent draft", self.safe(&prompt));
-            self.notice(
-                "The earlier unsent prompt is retained above. Your current draft is preserved.",
-            );
+                .push_message(Role::System, text::UNSENT_DRAFT, self.safe(&prompt));
+            self.notice(text::UNSENT_DRAFT_RETAINED);
         }
     }
     fn require_idle(&self) -> Result<()> {
         if self.active.is_some() {
-            return Err("Cancel the current run before changing sessions".into());
+            return Err(text::CANCEL_BEFORE_SESSION.into());
         }
         if self.ui_job.is_some() {
-            return Err("A UI operation is active; Ctrl+C cancels it".into());
+            return Err(text::UI_ACTIVE.into());
         }
         Ok(())
     }
@@ -97,11 +97,11 @@ impl App {
         join: tokio::task::JoinHandle<std::result::Result<UiResult, BoundaryError>>,
     ) {
         self.ui_job = Some(UiJob { cancel, join });
-        self.notice("Loading UI data. Ctrl+C cancels the operation.");
+        self.notice(text::LOADING_UI);
     }
     pub(super) async fn service(&mut self, name: &str, argument: &str) -> Result<()> {
         if self.ui_job.is_some() {
-            return Err("A UI operation is active; Ctrl+C cancels it".into());
+            return Err(text::UI_ACTIVE.into());
         }
         match name {
             "/new" => {
@@ -123,10 +123,7 @@ impl App {
                             .rev()
                             .find_map(|record| record.metrics.execution_usage);
                         if checking.is_cancelled() {
-                            return Err(failure(
-                                "cancelled",
-                                "Session metadata prepared; view activation cancelled",
-                            ));
+                            return Err(failure("cancelled", text::SESSION_PREPARED_CANCELLED));
                         }
                         Ok(UiResult::Session {
                             prepared,
@@ -139,7 +136,7 @@ impl App {
             }
             "/model" if argument.is_empty() => {
                 self.state.set_details(Details {
-                    title: "Configured models · UI".into(),
+                    title: text::CONFIGURED_MODELS_TITLE.into(),
                     lines: self
                         .config
                         .profiles
@@ -150,9 +147,7 @@ impl App {
                                 profile.model, profile.protocol
                             ))
                         })
-                        .chain(std::iter::once(
-                            "Select with /model PROFILE while idle".into(),
-                        ))
+                        .chain(std::iter::once(text::SELECT_MODEL.into()))
                         .collect(),
                 });
                 self.state.details_scroll = 0;
@@ -160,9 +155,7 @@ impl App {
             "/profile" | "/model" => {
                 self.require_idle()?;
                 if !self.config.profiles.contains_key(argument) {
-                    return Err(
-                        "Unknown configured model profile; use /profiles or /model PROFILE".into(),
-                    );
+                    return Err(text::UNKNOWN_PROFILE.into());
                 }
                 self.config.profile = Some(argument.into());
                 self.prepared = None;
@@ -170,13 +163,13 @@ impl App {
                 self.state.details = None;
                 self.state.usage.clear();
                 self.reset_context();
-                self.state.status = "Ready".into();
+                self.state.status = common::READY.into();
                 self.refresh_header();
-                self.notice("Model profile selected. New session is waiting for your message.");
+                self.notice(text::MODEL_SELECTED);
             }
             "/profiles" => {
                 self.state.set_details(Details {
-                    title: "Configured profiles · UI".into(),
+                    title: text::CONFIGURED_PROFILES_TITLE.into(),
                     lines: self
                         .config
                         .profiles
@@ -187,9 +180,7 @@ impl App {
                                 profile.model, profile.protocol
                             ))
                         })
-                        .chain(std::iter::once(
-                            "Select with /model PROFILE or /profile PROFILE while idle".into(),
-                        ))
+                        .chain(std::iter::once(text::SELECT_PROFILE.into()))
                         .collect(),
                 });
                 self.state.details_scroll = 0;
@@ -202,7 +193,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|prepared| prepared.session.id == parsed)
                 {
-                    self.notice("Session is already open and waiting for input.");
+                    self.notice(text::SESSION_ALREADY_OPEN);
                     return Ok(());
                 }
                 let config = self.config.clone();
@@ -230,10 +221,7 @@ impl App {
                             .rev()
                             .find_map(|record| record.metrics.execution_usage);
                         if checking.is_cancelled() {
-                            return Err(failure(
-                                "cancelled",
-                                "Session metadata prepared; view activation cancelled",
-                            ));
+                            return Err(failure("cancelled", text::SESSION_PREPARED_CANCELLED));
                         }
                         Ok(UiResult::Session {
                             prepared,
@@ -254,7 +242,7 @@ impl App {
                 let offset = page
                     .checked_sub(1)
                     .and_then(|page| page.checked_mul(20))
-                    .ok_or("Session page must be positive")?;
+                    .ok_or(text::SESSION_PAGE_POSITIVE)?;
                 let config = self.config.clone();
                 let current_session = self.prepared.as_ref().map(|prepared| prepared.session.id);
                 let cancel = Arc::new(RunCancellation::new());
@@ -264,20 +252,22 @@ impl App {
                         tokio::task::spawn_blocking(move || session::open(&config).map_err(error))
                             .await
                             .map_err(|_| {
-                                failure("ui_worker_failed", "Session list worker failed")
+                                failure("ui_worker_failed", text::SESSION_LIST_WORKER_FAILED)
                             })??;
                     let sessions = store.list_sessions(offset, 20).await?;
                     if checking.is_cancelled() {
-                        return Err(failure("cancelled", "Session list cancelled"));
+                        return Err(failure("cancelled", text::SESSION_LIST_CANCELLED));
                     }
                     let items = sessions
                         .into_iter()
                         .map(|session| {
-                            let title = session.title.unwrap_or_else(|| "Untitled session".into());
+                            let title = session
+                                .title
+                                .unwrap_or_else(|| text::UNTITLED_SESSION.into());
                             let status = session
                                 .last_status
                                 .map(|status| format!("{status:?}"))
-                                .unwrap_or_else(|| "No completed run".into());
+                                .unwrap_or_else(|| text::NO_COMPLETED_RUN.into());
                             let current = current_session == Some(session.id);
                             crate::view::PickerItem {
                                 id: session.id.0.to_string(),
@@ -287,16 +277,20 @@ impl App {
                                     session.id.0, session.work_mode, session.profile, status
                                 ),
                                 details: vec![
-                                    format!("Session {}", session.id.0),
-                                    format!("Workspace {}", session.workspace.display()),
-                                    format!("Mode {:?}", session.work_mode),
-                                    format!("Profile {}", session.profile),
-                                    format!("Last status {status}"),
-                                    format!("Updated at {}", session.updated_at),
+                                    format!("{} {}", text::SESSION_LABEL, session.id.0),
+                                    format!(
+                                        "{} {}",
+                                        text::WORKSPACE_LABEL,
+                                        session.workspace.display()
+                                    ),
+                                    format!("{} {:?}", ui_text::MODE, session.work_mode),
+                                    format!("{} {}", ui_text::PROFILE, session.profile),
+                                    format!("{} {status}", text::LAST_STATUS_LABEL),
+                                    format!("{} {}", text::UPDATED_AT_LABEL, session.updated_at),
                                     if current {
-                                        "This is the currently open session.".into()
+                                        picker_text::SESSION_CURRENT.into()
                                     } else {
-                                        "Press Enter to resume this session.".into()
+                                        picker_text::SESSION_RESUME.into()
                                     },
                                 ],
                                 active: current,
@@ -305,12 +299,12 @@ impl App {
                         .collect::<Vec<_>>();
                     Ok(UiResult::Picker(crate::view::PickerPanel {
                         kind: crate::view::PickerKind::Sessions,
-                        title: format!("Sessions · page {page}"),
+                        title: text::sessions_title(page),
                         items,
                         selected: 0,
                         scroll: 0,
                         page_rows: 0,
-                        hint: "No sessions are saved on this page.".into(),
+                        hint: picker_text::SESSION_EMPTY.into(),
                     }))
                 });
                 self.begin_ui(cancel, join);
@@ -320,25 +314,20 @@ impl App {
                     && let Some(active) = &self.active
                     && active.handle.mode()?.pending.is_some()
                 {
-                    return Err("Wait for the pending mode change before exporting".into());
+                    return Err(text::WAIT_MODE_EXPORT.into());
                 }
                 let export = if matches!(name, "/export" | "/export-full") {
-                    let (format, path) = argument.split_once(' ').ok_or_else(|| {
-                        failure("invalid_input", "Use /export json|markdown PATH")
-                    })?;
+                    let (format, path) = argument
+                        .split_once(' ')
+                        .ok_or_else(|| failure("invalid_input", text::EXPORT_USAGE))?;
                     if !matches!(format, "json" | "markdown") || path.trim().is_empty() {
-                        return Err(
-                            failure("invalid_input", "Use /export json|markdown PATH").into()
-                        );
+                        return Err(failure("invalid_input", text::EXPORT_USAGE).into());
                     }
                     Some((format.to_owned(), std::path::PathBuf::from(path.trim())))
                 } else {
                     None
                 };
-                let prepared = self
-                    .prepared
-                    .as_ref()
-                    .ok_or("Create or resume a session first")?;
+                let prepared = self.prepared.as_ref().ok_or(text::SESSION_REQUIRED)?;
                 let id = prepared.session.id;
                 let root = self.config.data_dir.clone();
                 let secrets = self.secrets.clone();
@@ -357,41 +346,54 @@ impl App {
                     .await?;
                     if operation == "/tools" || operation == "/jobs" {
                         return tokio::task::spawn_blocking(move || {
-                        let records = if operation == "/tools" {
-                            &snapshot.tool_calls
-                        } else {
-                            &snapshot.background_jobs
-                        };
-                        let mut lines=vec![format!("Session {} · committed change {} · event {}",id.0,snapshot.last_change_seq,snapshot.last_event_seq),"Read by the UI from stored records. Tool calls are identified by run_id and call_id.".into()];
-                        if operation == "/tools" {
-                            lines.extend(crate::tool_render::record_lines(records));
-                        } else {
-                            let mut value = serde_json::to_value(records)
-                                .map_err(|_| failure("ui_encode", "Cannot encode background records"))?;
-                            saya_core::redaction::redact(&mut value, &secrets)?;
-                            lines.extend(
-                                serde_json::to_string_pretty(&value)
-                                    .map_err(|_| failure("ui_encode", "Cannot display background records"))?
-                                    .lines()
-                                    .map(str::to_owned),
-                            );
-                        }
-                        let title = if operation == "/tools" {
-                            "Tools · UI snapshot"
-                        } else {
-                            "Background jobs · UI snapshot"
-                        };
+                            let records = if operation == "/tools" {
+                                &snapshot.tool_calls
+                            } else {
+                                &snapshot.background_jobs
+                            };
+                            let mut lines = vec![
+                                text::stored_records_header(
+                                    &id.0.to_string(),
+                                    snapshot.last_change_seq,
+                                    snapshot.last_event_seq,
+                                ),
+                                message_text::STORED_RECORDS_HINT.into(),
+                            ];
+                            if operation == "/tools" {
+                                lines.extend(crate::tool_render::record_lines(records));
+                            } else {
+                                let mut value = serde_json::to_value(records).map_err(|_| {
+                                    failure("ui_encode", text::CANNOT_ENCODE_BACKGROUND)
+                                })?;
+                                saya_core::redaction::redact(&mut value, &secrets)?;
+                                lines.extend(
+                                    serde_json::to_string_pretty(&value)
+                                        .map_err(|_| {
+                                            failure("ui_encode", text::CANNOT_DISPLAY_BACKGROUND)
+                                        })?
+                                        .lines()
+                                        .map(str::to_owned),
+                                );
+                            }
+                            let title = if operation == "/tools" {
+                                text::TOOLS_TITLE
+                            } else {
+                                text::RUNS_TITLE
+                            };
                             let details = Details {
-                            title: title.into(),
-                            lines,
-                        };
+                                title: title.into(),
+                                lines,
+                            };
                             display_details(details, &secrets)
                         })
                         .await
-                        .map_err(|_| failure("ui_worker_failed", "Tool display worker failed"))?;
+                        .map_err(|_| {
+                            failure("ui_worker_failed", text::TOOL_DISPLAY_WORKER_FAILED)
+                        })?;
                     }
-                    let (format, target) = export
-                        .ok_or_else(|| failure("invalid_input", "Export arguments unavailable"))?;
+                    let (format, target) = export.ok_or_else(|| {
+                        failure("invalid_input", text::EXPORT_ARGUMENTS_UNAVAILABLE)
+                    })?;
                     let target = if target.is_absolute() {
                         target
                     } else {
@@ -430,23 +432,20 @@ impl App {
                         Ok(UiResult::Export(receipt))
                     })
                     .await
-                    .map_err(|_| failure("ui_worker_failed", "Export worker failed"))?
+                    .map_err(|_| failure("ui_worker_failed", text::EXPORT_WORKER_FAILED))?
                 });
                 self.begin_ui(cancel, join);
             }
             "/cancel-job" => {
-                let active = self
-                    .active
-                    .as_ref()
-                    .ok_or("No active run owns a background job")?;
+                let active = self.active.as_ref().ok_or(text::NO_ACTIVE_BACKGROUND)?;
                 let cancelled = active.handle.cancel_background(argument)?;
                 self.notice(if cancelled {
-                    "Background cancellation requested"
+                    text::BACKGROUND_CANCEL_REQUESTED
                 } else {
-                    "Background job was not found"
+                    text::BACKGROUND_NOT_FOUND
                 });
             }
-            _ => return Err("Unknown UI command".into()),
+            _ => return Err(text::UNKNOWN_UI.into()),
         }
         Ok(())
     }
@@ -474,15 +473,15 @@ impl App {
             Ok(UiResult::Memory(result)) => self.finish_memory(result, cancelled)?,
             Ok(UiResult::Picker(panel)) => {
                 if cancelled {
-                    self.notice("Selector loading cancelled");
+                    self.notice(text::SELECTOR_CANCELLED);
                 } else {
                     self.state.picker_panel = Some(self.safe_picker(panel));
                     self.state.details = None;
                 }
             }
-            Ok(UiResult::Details(_)) if cancelled => self.notice("UI query cancelled"),
+            Ok(UiResult::Details(_)) if cancelled => self.notice(text::UI_QUERY_CANCELLED),
             Ok(UiResult::Session { .. }) if cancelled => {
-                self.notice("Session metadata prepared; view activation cancelled")
+                self.notice(text::SESSION_PREPARED_CANCELLED)
             }
             Ok(UiResult::Details(details)) => {
                 self.state.set_details(details);
@@ -503,7 +502,7 @@ impl App {
                     self.record_context_input(Some(usage.clone()));
                     if let Some(tokens) = usage.input_tokens {
                         self.state.context_breakdown = vec![crate::view::ContextEntry {
-                            label: "Last run".into(),
+                            label: text::LAST_RUN.into(),
                             tokens,
                         }];
                         self.state.context_breakdown_estimated = usage.estimated;
@@ -516,31 +515,32 @@ impl App {
                 let history = &prepared.session.history;
                 self.restore_messages(history);
                 if history.len() > 512 {
-                    self.notice("Earlier stored history is omitted from this view. Use session export to inspect the full history.");
+                    self.notice(text::HISTORY_OMITTED);
                 }
                 self.prepared = Some(prepared);
                 self.refresh_header();
-                self.state.status = "Ready".into();
+                self.state.status = common::READY.into();
                 self.notice(if resumed {
-                    "Session restored. Waiting for new input."
+                    text::SESSION_RESTORED
                 } else {
-                    "New session ready. Waiting for your message."
+                    text::NEW_SESSION_READY
                 });
             }
             Ok(UiResult::Export(receipt)) => {
-                self.notice(&format!("Exported {}", self.safe(&receipt.to_string())))
+                self.notice(&text::exported(&self.safe(&receipt.to_string())))
             }
             Err(error) => {
                 let message = self.safe(&format!("{} — {}", error.0.code, error.0.message));
-                let operation = self.memory_last_operation.as_ref().map(|id| {
-                    format!(
-                        "Last explicitly confirmed memory operation {}",
-                        self.safe(id)
-                    )
-                });
+                let operation = self
+                    .memory_last_operation
+                    .as_ref()
+                    .map(|id| text::last_memory_operation(&self.safe(id)));
                 if let Some(panel) = &mut self.state.memory_panel {
                     panel.busy = false;
-                    panel.lines=vec![format!("Memory operation failed · {message}"),"The pending input was not retried. Retain its operation ID; unfinished WAL recovery uses the explicit saya memory recover CLI command.".into()];
+                    panel.lines = vec![
+                        text::memory_failed(&message),
+                        text::MEMORY_RECOVERY_HINT.into(),
+                    ];
                     panel.scroll = 0;
                     if let Some(operation) = operation {
                         panel.lines.push(operation);

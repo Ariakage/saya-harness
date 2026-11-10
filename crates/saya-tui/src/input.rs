@@ -1,5 +1,8 @@
 //! Bounded terminal input isolated from the asynchronous application executor.
-use crate::terminal::{descriptor_flags, set_descriptor_flags};
+use crate::{
+    i18n::terminal as text,
+    terminal::{descriptor_flags, set_descriptor_flags},
+};
 use crossterm::event::{self, Event};
 use std::{
     fs::File,
@@ -100,17 +103,15 @@ impl TerminalInput {
     /// Start terminal input. Thread creation errors are returned synchronously.
     pub fn new() -> io::Result<Self> {
         if thread::panicking() {
-            return Err(io::Error::other(
-                "cannot start terminal input during unwinding",
-            ));
+            return Err(io::Error::other(text::INPUT_DURING_UNWINDING));
         }
         let mut slot = READER
             .lock()
-            .map_err(|_| io::Error::other("terminal input ownership unavailable"))?;
+            .map_err(|_| io::Error::other(text::INPUT_OWNERSHIP_UNAVAILABLE))?;
         if slot.as_ref().and_then(Weak::upgrade).is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                "terminal input is already active",
+                text::INPUT_ACTIVE,
             ));
         }
         let flags = InputFlags::enter()?;

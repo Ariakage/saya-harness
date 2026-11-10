@@ -21,6 +21,7 @@ mod services;
 mod turn_summary;
 use crate::{
     commands::COMMANDS,
+    i18n::{common, controller as text, permissions as permission_text, view as ui_text},
     input::TerminalInput,
     terminal::TerminalGuard,
     view::{self, Role, State},
@@ -147,7 +148,7 @@ impl App {
         app.refresh_header();
         app.reset_mcp_statuses();
         if app.config.profile.is_none() {
-            app.notice("Choose a configured model profile before sending a message.");
+            app.notice(text::PROFILE_FIRST_NOTICE);
         }
         Ok(app)
     }
@@ -170,15 +171,12 @@ impl App {
     fn safe(&self, text: &str) -> String {
         let mut value = serde_json::Value::String(text.into());
         let Ok(secrets) = self.current_secrets() else {
-            return "Sensitive details withheld".into();
+            return common::SENSITIVE_WITHHELD.into();
         };
         if saya_core::redaction::redact(&mut value, &secrets).is_err() {
-            return "Sensitive details withheld".into();
+            return common::SENSITIVE_WITHHELD.into();
         }
-        value
-            .as_str()
-            .unwrap_or("Sensitive details withheld")
-            .into()
+        value.as_str().unwrap_or(common::SENSITIVE_WITHHELD).into()
     }
     fn safe_picker(&self, mut panel: view::PickerPanel) -> view::PickerPanel {
         panel.title = self.safe(&panel.title);
@@ -192,7 +190,7 @@ impl App {
     }
     fn notice(&mut self, text: &str) {
         self.state
-            .push_message(Role::System, "Saya", self.safe(text));
+            .push_message(Role::System, ui_text::SAYA, self.safe(text));
     }
     fn report_error(&mut self, error: Box<dyn std::error::Error>) -> Result<()> {
         if error
@@ -209,7 +207,7 @@ impl App {
         if self.current_secrets().map_or(true, |secrets| {
             saya_core::redaction::contains_secret(&title, &secrets)
         }) {
-            "Sensitive details withheld".into()
+            common::SENSITIVE_WITHHELD.into()
         } else {
             title
         }
@@ -217,14 +215,15 @@ impl App {
     fn refresh_header(&mut self) {
         self.state.plugins_enabled = Some(self.config.plugins.enabled);
         self.state.workspace = self.safe(&self.config.cwd.to_string_lossy());
-        self.state.profile = self.safe(self.config.profile.as_deref().unwrap_or("No profile"));
+        self.state.profile =
+            self.safe(self.config.profile.as_deref().unwrap_or(common::NO_PROFILE));
         self.state.model = self
             .config
             .profile
             .as_ref()
             .and_then(|name| self.config.profiles.get(name))
             .map(|p| p.model.clone())
-            .unwrap_or_else(|| "Unconfigured".into());
+            .unwrap_or_else(|| common::UNCONFIGURED.into());
         self.state.model = self.safe(&self.state.model);
         self.state.context_window_tokens = self
             .config
@@ -250,12 +249,12 @@ impl App {
             })
             .map(|text| self.safe_title(text).chars().take(80).collect::<String>())
             .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "New session".into());
+            .unwrap_or_else(|| common::NEW_SESSION.into());
         self.state.mode = format!("{:?}", self.config.mode).to_uppercase();
         self.state.permissions = match self.config.permissions_mode {
-            saya_core::contract::PermissionMode::Auto => "auto",
-            saya_core::contract::PermissionMode::Manual => "Manual Approval",
-            saya_core::contract::PermissionMode::Bypass => "bypass permissions",
+            saya_core::contract::PermissionMode::Auto => permission_text::AUTO,
+            saya_core::contract::PermissionMode::Manual => permission_text::MANUAL,
+            saya_core::contract::PermissionMode::Bypass => permission_text::BYPASS,
         }
         .into();
     }
@@ -325,50 +324,47 @@ impl App {
     async fn compact(&mut self) -> Result<()> {
         if let Some(active) = &self.active {
             if active.cancel.is_cancelled() {
-                return Err("Wait for cancellation cleanup before compacting".into());
+                return Err(text::COMPACT_CLEANUP_WAIT.into());
             }
             if active.kind == RunKind::Compaction {
-                self.notice("Compaction is already running.");
+                self.notice(text::COMPACT_RUNNING);
                 return Ok(());
             }
             active.handle.request_compaction()?;
-            self.notice("Compaction requested for the next model boundary.");
+            self.notice(text::COMPACT_REQUESTED);
             return Ok(());
         }
         if self.prepared.is_none() {
-            return Err("Create or resume a session before using /compact".into());
+            return Err(text::COMPACT_SESSION_REQUIRED.into());
         }
         if self.ui_job.is_some() {
             self.queued_compaction = true;
-            self.notice("Compaction waits for the UI operation to finish.");
+            self.notice(text::COMPACT_UI_WAIT);
             return Ok(());
         }
-        self.start_run(
-            "Compact the saved session context".into(),
-            RunKind::Compaction,
-        )
-        .await
+        self.start_run(text::COMPACT_SUMMARY.into(), RunKind::Compaction)
+            .await
     }
 
     async fn start_run(&mut self, text: String, kind: RunKind) -> Result<()> {
         if self.active.is_some() {
-            self.notice("A run is active. Ctrl+C cancels it.");
+            self.notice(text::RUN_ACTIVE);
             return Ok(());
         }
         if self.ui_job.is_some() {
-            return Err("Wait for the UI operation or cancel it before sending a message".into());
+            return Err(text::UI_WAIT_MESSAGE.into());
         }
         let display = self.safe(&text);
         if self.prepared.is_none() {
             if self.config.profile.is_none() {
-                return Err("Choose a configured profile with /profiles and /profile NAME".into());
+                return Err(text::PROFILE_SELECT_MESSAGE.into());
             }
             self.service("/new", "").await?;
             self.queued_prompt = Some(text);
             return Ok(());
         }
         self.reset_mcp_statuses();
-        let prepared = self.prepared.as_mut().ok_or("session is unavailable")?;
+        let prepared = self.prepared.as_mut().ok_or(text::SESSION_UNAVAILABLE)?;
         let run_id = RunId::new();
         let (sender, events) = mpsc::channel(256);
         let (context_sender, context) = watch::channel(None);
@@ -439,7 +435,7 @@ impl App {
                 BoundaryError(
                     saya_core::contract::ErrorInfo {
                         code: "storage_error".into(),
-                        message: "conversation could not be saved or reloaded".into(),
+                        message: text::CONVERSATION_SAVE_FAILED.into(),
                     },
                     None,
                     None,
@@ -450,7 +446,7 @@ impl App {
         self.refresh_header();
         if kind == RunKind::Execution {
             self.reset_context();
-            self.state.push_message(Role::User, "You", display);
+            self.state.push_message(Role::User, ui_text::YOU, display);
         }
         let handle = runtime.handle();
         summary.start(Instant::now());
@@ -479,9 +475,9 @@ impl App {
             summary,
         });
         self.state.status = if kind == RunKind::Compaction {
-            "Compacting"
+            common::COMPACTING
         } else {
-            "Running"
+            common::RUNNING
         }
         .into();
         self.refresh_activity(Instant::now());
@@ -530,7 +526,7 @@ impl App {
         self.state.command_palette = None;
         if let Some(active) = &self.active {
             active.cancel.cancel();
-            self.state.status = "Cancelling".into();
+            self.state.status = common::CANCELLING.into();
         } else if self.ui_job.is_none() && !restored_prompt {
             self.state.editor.take();
         }
@@ -556,7 +552,7 @@ impl App {
         result: std::result::Result<RunOutcome, tokio::task::JoinError>,
     ) -> Result<()> {
         if self.active.is_none() {
-            return Err("run is unavailable".into());
+            return Err(text::RUN_UNAVAILABLE.into());
         }
         self.invalidate_pending();
         self.state.pending_mode = None;
@@ -619,7 +615,7 @@ impl App {
                             .unwrap_or_default();
                     }
                     Err(error) => {
-                        self.state.status = "Failed".into();
+                        self.state.status = common::FAILED.into();
                         self.notice(&error.to_string());
                         if error.0.code.starts_with("storage_") || error.2.is_some() {
                             failure = Some(Box::new(error) as Box<dyn std::error::Error>);
@@ -628,29 +624,29 @@ impl App {
                 }
             }
             Err(_) => {
-                let mut active = self.active.take().ok_or("run is unavailable")?;
+                let mut active = self.active.take().ok_or(text::RUN_UNAVAILABLE)?;
                 active.cancel.cancel();
                 active.events.close();
                 active.requests.close();
                 let cleanup = active.handle.shutdown_background().await;
                 self.close_run_messages(&active);
-                self.state.status = "Failed".into();
-                self.notice("Run task failed. Inspect stored tool records before retrying.");
+                self.state.status = common::FAILED.into();
+                self.notice(text::RUN_TASK_FAILED_NOTICE);
                 if let Ok(mode) = active.handle.mode() {
                     self.config.mode = mode.current;
                 }
                 self.refresh_header();
                 self.refresh_activity(Instant::now());
                 if let Err(error) = cleanup {
-                    self.notice(&format!("Background cleanup failed — {error}"));
+                    self.notice(&text::background_cleanup_failed(&error));
                     self.append_run_summary(&active.summary, None);
                     return Err(Box::new(error));
                 }
                 self.append_run_summary(&active.summary, None);
-                return Err("run task failed".into());
+                return Err(text::RUN_TASK_FAILED.into());
             }
         }
-        let active = self.active.take().ok_or("run is unavailable")?;
+        let active = self.active.take().ok_or(text::RUN_UNAVAILABLE)?;
         self.close_run_messages(&active);
         self.refresh_header();
         self.refresh_activity(Instant::now());
@@ -663,7 +659,7 @@ impl App {
             && self.exit_after_run.is_none()
             && let Err(error) = self.compact().await
         {
-            self.notice(&format!("Compaction could not start — {error}"));
+            self.notice(&text::compact_start_failed(&error));
         }
         Ok(())
     }
@@ -777,9 +773,7 @@ impl App {
                     self.state.command_palette = None;
                     if command.ends_with(' ') {
                         if !self.state.editor.text().is_empty() {
-                            self.notice(
-                                "Clear the current draft before entering command arguments.",
-                            );
+                            self.notice(text::CLEAR_DRAFT_FIRST);
                         } else {
                             self.state.editor.set_text(command);
                         }
@@ -855,7 +849,7 @@ impl App {
                 .state
                 .details
                 .as_ref()
-                .is_some_and(|details| details.title == "Approval required");
+                .is_some_and(|details| details.title == ui_text::APPROVAL_REQUIRED);
         if approval_visible && key.kind == KeyEventKind::Press {
             if key.code == KeyCode::Esc {
                 self.reply_approval(false);
@@ -915,7 +909,7 @@ impl App {
 /// Cancellation completes owned runs before the terminal guard is released.
 pub async fn run(config: Config, options: Options) -> Result<u8> {
     if config.output != saya_core::config::Output::Text {
-        return Err("TUI requires text output".into());
+        return Err(text::TUI_TEXT_OUTPUT.into());
     }
     let mut app = App::new(config, options)?;
     let mut terminal = TerminalGuard::enter()?;
@@ -1040,12 +1034,12 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
             if error.kind() != std::io::ErrorKind::InvalidInput {
                 return Err(error.into());
             }
-            app.notice(&format!("Clipboard request failed — {error}"));
+            app.notice(&text::clipboard_failed(&error));
             dirty = true;
         }
         if redraw && dirty && app.exit_after_run.is_none() {
             let rendered = terminal
-                .set_title(&app.safe_title(&format!("Saya | {}", app.state.session_title)))
+                .set_title(&app.safe_title(&common::window_title(&app.state.session_title)))
                 .and_then(|()| terminal.draw(|frame| view::draw(frame, &mut app.state)));
             match rendered {
                 Ok(()) => {
@@ -1058,7 +1052,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                     if now.duration_since(started) >= DRAW_BACKPRESSURE_WAIT {
                         let error = std::io::Error::new(
                             std::io::ErrorKind::WouldBlock,
-                            "terminal output remained blocked for two seconds",
+                            text::TERMINAL_BLOCKED,
                         );
                         if app.active.is_some() || app.ui_job.is_some() {
                             app.exit_after_run.get_or_insert(1);

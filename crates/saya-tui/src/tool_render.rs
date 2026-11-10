@@ -1,10 +1,11 @@
 //! Human-readable projections of canonical tool records and results.
+use crate::i18n::tool as text;
 use saya_core::contract::{ToolCall, ToolResult};
 use serde_json::Value;
 
 fn scalar(value: &Value) -> String {
     match value {
-        Value::Null => "null".into(),
+        Value::Null => text::NULL.into(),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
         Value::String(value) => value.clone(),
@@ -32,7 +33,7 @@ fn append_value(lines: &mut Vec<String>, label: &str, value: &Value, indent: usi
             ));
         }
         Value::Array(values) => {
-            lines.push(format!("{prefix}{label}: {} items", values.len()));
+            lines.push(format!("{prefix}{label}: {} {}", values.len(), text::ITEMS));
             for (index, value) in values.iter().enumerate() {
                 append_value(lines, &format!("[{index}]"), value, indent + 2);
             }
@@ -43,25 +44,30 @@ fn append_value(lines: &mut Vec<String>, label: &str, value: &Value, indent: usi
 
 pub(crate) fn result(result: &ToolResult) -> String {
     let mut lines = vec![format!(
-        "Status: {}",
-        if result.ok { "completed" } else { "failed" }
+        "{}: {}",
+        text::STATUS,
+        if result.ok {
+            text::COMPLETED
+        } else {
+            text::FAILED
+        }
     )];
     if result.truncated {
-        lines.push("Output truncated by configured limits.".into());
+        lines.push(text::OUTPUT_TRUNCATED.into());
     }
     if let Some(error) = &result.error {
-        lines.push(format!("Error: {}", error.code));
-        lines.push(format!("Message: {}", error.message));
+        lines.push(format!("{}: {}", text::ERROR, error.code));
+        lines.push(format!("{}: {}", text::MESSAGE, error.message));
     }
     if let Some(data) = &result.data {
-        append_value(&mut lines, "Output", data, 0);
+        append_value(&mut lines, text::OUTPUT, data, 0);
     }
     lines.join("\n")
 }
 
 pub(crate) fn record_lines(records: &[Value]) -> Vec<String> {
     if records.is_empty() {
-        return vec!["No committed tool calls.".into()];
+        return vec![text::NO_CALLS.into()];
     }
     let mut lines = Vec::new();
     for (index, record) in records.iter().enumerate() {
@@ -72,20 +78,22 @@ pub(crate) fn record_lines(records: &[Value]) -> Vec<String> {
         let state = record
             .get("state")
             .and_then(Value::as_str)
-            .unwrap_or("unknown");
+            .unwrap_or(text::UNKNOWN);
         let name = call
             .as_ref()
-            .map_or("unknown tool", |call| call.name.as_str());
+            .map_or(text::UNKNOWN_TOOL, |call| call.name.as_str());
         lines.push(format!("#{} {name} · {state}", index + 1));
         lines.push(format!(
-            "  run {} · call {}",
+            "  {} {} · {} {}",
+            text::RUN,
             record.get("run_id").and_then(Value::as_str).unwrap_or("?"),
+            text::CALL,
             record.get("call_id").and_then(Value::as_str).unwrap_or("?")
         ));
         if let Some(call) = &call {
             match serde_json::from_str::<Value>(&call.arguments) {
-                Ok(arguments) => append_value(&mut lines, "arguments", &arguments, 2),
-                Err(_) => lines.push(format!("  arguments: {}", call.arguments)),
+                Ok(arguments) => append_value(&mut lines, text::ARGUMENTS, &arguments, 2),
+                Err(_) => lines.push(format!("  {}: {}", text::ARGUMENTS, call.arguments)),
             }
         }
         let parsed_result = record

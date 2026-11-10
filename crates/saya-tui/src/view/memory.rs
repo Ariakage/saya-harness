@@ -1,6 +1,7 @@
 //! Presentation-only memory administration modal. Input belongs to this pane,
 //! so browsing and confirmation never alter the unsent chat message.
 use super::*;
+use crate::i18n::memory as text;
 
 pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
     let Some(panel) = &mut state.memory_panel else {
@@ -19,7 +20,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Memory · explicit user administration ")
+        .title(text::TITLE)
         .style(Style::default().bg(SIDEBAR_BACKGROUND).fg(FOREGROUND))
         .border_style(Style::default().fg(if panel.confirmation.is_some() {
             AMBER
@@ -41,7 +42,10 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
         Paragraph::new(safe_line(&panel.settings)).style(Style::default().fg(AMBER)),
         rows[0],
     );
-    frame.render_widget(Paragraph::new("list · search · show · sources · correct · forget · history · rollback · export · restore").style(Style::default().fg(MUTED)),rows[1]);
+    frame.render_widget(
+        Paragraph::new(text::HELP).style(Style::default().fg(MUTED)),
+        rows[1],
+    );
     let mut lines = VecDeque::new();
     let mut count = 0;
     for line in &panel.lines {
@@ -53,7 +57,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
             10_000,
         );
         if count > 10_000 {
-            lines.push_back(Line::raw("[memory view display truncated]"));
+            lines.push_back(Line::raw(text::VIEW_TRUNCATED));
             break;
         }
     }
@@ -72,11 +76,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
         rows[2],
     );
     let hint = if panel.busy {
-        "Working · Ctrl+C cancels; waits for publication outcome"
+        text::BUSY
     } else if panel.confirmation.is_some() {
-        "Review the complete diff · confirm OP_ID REVISION · reject discards"
+        text::CONFIRM
     } else {
-        "Enter command · PgUp/PgDn scroll · next continues query · Esc closes · help"
+        text::COMMANDS
     };
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(if panel.confirmation.is_some() {
@@ -88,10 +92,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
     );
     draw_input(frame, &panel.input, rows[4]);
     frame.render_widget(
-        Paragraph::new(
-            "Memory edits are separate from Agent tool approvals. Message draft is retained.",
-        )
-        .style(Style::default().fg(MUTED)),
+        Paragraph::new(text::DRAFT_RETAINED).style(Style::default().fg(MUTED)),
         rows[5],
     );
     state.transcript_viewport = None;

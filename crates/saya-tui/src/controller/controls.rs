@@ -1,6 +1,9 @@
 //! User controls and pending human input. Authorization remains in core.
 use super::*;
-use crate::view::{Details, MarkdownDisplay};
+use crate::{
+    i18n::{common, controller as text, view as ui_text},
+    view::{Details, MarkdownDisplay},
+};
 use saya_app::interaction::Request;
 use saya_core::{
     boundary::StoreChange, config::ThinkingEffort, contract::PermissionMode, execution::BackendKind,
@@ -57,20 +60,17 @@ pub(super) fn closed(request: &Request) -> bool {
 impl App {
     pub(super) fn require_idle_configuration(&self) -> Result<()> {
         if self.active.is_some() || self.ui_job.is_some() {
-            return Err("Runtime settings can be changed while idle".into());
+            return Err(text::IDLE_ONLY.into());
         }
         if self.pending.is_some() {
-            return Err("Answer or dismiss the current Agent request first".into());
+            return Err(text::PENDING_REQUEST.into());
         }
         Ok(())
     }
     async fn change_workspace(&mut self, argument: &str) -> Result<()> {
         self.require_idle_configuration()?;
         if argument.is_empty() {
-            self.notice(&format!(
-                "Workspace — {}",
-                self.config.cwd.to_string_lossy()
-            ));
+            self.notice(&text::workspace(&self.config.cwd.to_string_lossy()));
             return Ok(());
         }
         let requested = Path::new(argument);
@@ -79,10 +79,9 @@ impl App {
         } else {
             self.config.cwd.join(requested)
         };
-        let workspace = std::fs::canonicalize(path)
-            .map_err(|_| "Workspace directory does not exist or is unavailable")?;
+        let workspace = std::fs::canonicalize(path).map_err(|_| text::WORKSPACE_MISSING)?;
         if !workspace.is_dir() {
-            return Err("Workspace must be a directory".into());
+            return Err(text::WORKSPACE_NOT_DIRECTORY.into());
         }
         session::check_roots(&self.config, &workspace, self.current_mode()?)?;
         let previous = self.config.cwd.clone();
@@ -94,7 +93,7 @@ impl App {
                 .config
                 .profiles
                 .get(&updated.profile)
-                .ok_or("session profile not found")?
+                .ok_or(text::SESSION_PROFILE_NOT_FOUND)?
                 .fingerprint()?;
             if let Err(error) = prepared
                 .store
@@ -110,18 +109,12 @@ impl App {
         self.state.details_scroll = 0;
         self.state.skills_count = None;
         self.refresh_header();
-        self.notice(
-            "Workspace changed for subsequent runs; Context will refresh on the next execution.",
-        );
+        self.notice(text::WORKSPACE_CHANGED);
         Ok(())
     }
     async fn select_effort(&mut self, argument: &str) -> Result<()> {
         self.require_idle_configuration()?;
-        let name = self
-            .config
-            .profile
-            .clone()
-            .ok_or("Choose a configured model profile first")?;
+        let name = self.config.profile.clone().ok_or(text::PROFILE_REQUIRED)?;
         let current = self
             .config
             .profiles
@@ -129,24 +122,22 @@ impl App {
             .and_then(|profile| profile.thinking_effort)
             .map_or("default", ThinkingEffort::as_str);
         if argument.is_empty() {
-            self.notice(&format!(
-                "Thinking effort — {current} · use low|medium|high|xhigh|max|default"
-            ));
+            self.notice(&text::thinking_effort(current));
             return Ok(());
         }
-        let selected = effort(argument).ok_or("Use /effort low|medium|high|xhigh|max|default")?;
+        let selected = effort(argument).ok_or(text::EFFORT_USAGE)?;
         let previous = self
             .config
             .profiles
             .get(&name)
-            .ok_or("Selected profile is unavailable")?
+            .ok_or(text::PROFILE_UNAVAILABLE)?
             .thinking_effort;
         let fingerprint = {
             let profile = self
                 .config
                 .profiles
                 .get_mut(&name)
-                .ok_or("Selected profile is unavailable")?;
+                .ok_or(text::PROFILE_UNAVAILABLE)?;
             profile.thinking_effort = selected;
             profile.fingerprint()?
         };
@@ -163,32 +154,25 @@ impl App {
         }
         self.refresh_header();
         let value = selected.map_or("default", ThinkingEffort::as_str);
-        self.notice(&format!(
-            "Thinking effort set to {value} for subsequent requests."
-        ));
+        self.notice(&text::thinking_effort_set(value));
         Ok(())
     }
     fn set_sandbox(&mut self, argument: &str) -> Result<()> {
         match argument.to_ascii_lowercase().as_str() {
             "" | "status" => {
-                self.notice(&format!(
-                    "Sandbox — {}",
-                    sandbox_label(self.config.sandbox.backend)
-                ));
+                self.notice(&text::sandbox(sandbox_label(self.config.sandbox.backend)));
             }
             "on" => {
                 self.require_idle_configuration()?;
                 self.config.sandbox.backend = BackendKind::Auto;
-                self.notice("Sandbox enabled for subsequent runs: platform native backend.");
+                self.notice(text::SANDBOX_ON);
             }
             "off" => {
                 self.require_idle_configuration()?;
                 self.config.sandbox.backend = BackendKind::Host;
-                self.notice(
-                    "Sandbox disabled for subsequent runs. Host execution has no filesystem, network, or syscall isolation.",
-                );
+                self.notice(text::SANDBOX_OFF);
             }
-            _ => return Err("Use /sandbox on|off|status".into()),
+            _ => return Err(text::SANDBOX_USAGE.into()),
         }
         Ok(())
     }
@@ -197,35 +181,31 @@ impl App {
         match argument.to_ascii_lowercase().as_str() {
             "" => {
                 let value = if !self.config.context.auto_compact {
-                    "off".into()
+                    text::AUTOCOMPACT_STATUS_OFF.into()
                 } else if let Some(tokens) = self.config.context.trigger_tokens {
-                    format!("on at {tokens} input tokens")
+                    text::autocompact_on_tokens(tokens)
                 } else {
-                    format!("on at {}%", self.config.context.trigger_percent)
+                    text::autocompact_on_percent(self.config.context.trigger_percent)
                 };
-                self.notice(&format!("Automatic compaction — {value}"));
+                self.notice(&text::autocompact(&value));
             }
             "auto" => {
                 self.config.context.auto_compact = true;
                 self.config.context.trigger_tokens = None;
-                self.notice(&format!(
-                    "Automatic compaction restored to {}%",
-                    self.config.context.trigger_percent
-                ));
+                self.notice(&text::autocompact_auto(self.config.context.trigger_percent));
             }
             "off" => {
                 self.config.context.auto_compact = false;
-                self.notice("Automatic compaction disabled for subsequent runs.");
+                self.notice(text::AUTOCOMPACT_OFF);
             }
             value => {
-                let tokens = token_count(value)
-                    .ok_or("Use /autocompact TOKENS|auto|off, for example 950k or 1m")?;
+                let tokens = token_count(value).ok_or(text::AUTOCOMPACT_USAGE)?;
                 let profile = self
                     .config
                     .profile
                     .as_ref()
                     .and_then(|name| self.config.profiles.get(name))
-                    .ok_or("Choose a configured model profile first")?;
+                    .ok_or(text::PROFILE_REQUIRED)?;
                 let budget = self.config.context.budget(profile);
                 let capacity = budget.input_capacity()?;
                 let target = ((u128::from(capacity)
@@ -233,15 +213,11 @@ impl App {
                     / 100) as u64;
                 let effective = tokens.min(capacity);
                 if effective <= target {
-                    return Err(
-                        "Automatic compaction trigger must be above the target threshold".into(),
-                    );
+                    return Err(text::AUTOCOMPACT_TARGET_THRESHOLD.into());
                 }
                 self.config.context.auto_compact = true;
                 self.config.context.trigger_tokens = Some(effective);
-                self.notice(&format!(
-                    "Automatic compaction trigger set to {effective} input tokens."
-                ));
+                self.notice(&text::autocompact_set(effective));
             }
         }
         Ok(())
@@ -276,7 +252,7 @@ impl App {
             self.deferred_mode = Some(target);
             self.state.pending_mode = Some(format!("{target:?}").to_uppercase());
             self.state.details = None;
-            self.notice("Mode change waits for the UI operation to stop.");
+            self.notice(text::MODE_CHANGE_UI);
             return Ok(());
         }
         if let Some(active) = &self.active {
@@ -298,7 +274,7 @@ impl App {
             self.refresh_header();
         }
         if announce {
-            self.notice(&format!("Mode requested — {target:?}"));
+            self.notice(&text::mode_requested(&format!("{target:?}")));
         }
         Ok(())
     }
@@ -306,21 +282,21 @@ impl App {
         let Some(request) = &self.pending else { return };
         let (title, lines) = match request {
             Request::Approval(request, _) => (
-                "Approval required",
+                crate::i18n::view::APPROVAL_REQUIRED,
                 vec![
-                    format!("Tool {}", request.tool),
-                    format!("Call {}", request.call_id),
-                    format!("Approval {}", request.approval_id),
-                    format!("Mode {:?}", request.work_mode),
-                    format!("Workspace {}", request.cwd.display()),
+                    text::approval_field(text::TOOL_LABEL, &request.tool),
+                    text::approval_field(text::CALL_LABEL, &request.call_id),
+                    text::approval_field(text::APPROVAL_LABEL, &request.approval_id),
+                    text::approval_field(text::MODE_LABEL, format_args!("{:?}", request.work_mode)),
+                    text::approval_field(text::WORKSPACE_LABEL, request.cwd.display()),
                     request.operation_summary.clone(),
                     serde_json::to_string_pretty(&request.arguments)
-                        .unwrap_or_else(|_| "Unavailable arguments".into()),
-                    "y approve · n / Esc deny · /mode MODE changes mode".into(),
+                        .unwrap_or_else(|_| text::UNAVAILABLE_ARGUMENTS.into()),
+                    text::APPROVAL_HELP.into(),
                 ],
             ),
             Request::Input(request, _) => (
-                "Question",
+                crate::i18n::view::QUESTION,
                 std::iter::once(request.question.clone())
                     .chain(
                         request
@@ -329,9 +305,7 @@ impl App {
                             .enumerate()
                             .map(|(i, text)| format!("{}. {text}", i + 1)),
                     )
-                    .chain(std::iter::once(
-                        "Type a reply and press Enter. Ctrl+C cancels.".into(),
-                    ))
+                    .chain(std::iter::once(text::INPUT_HELP.into()))
                     .collect(),
             ),
         };
@@ -341,9 +315,9 @@ impl App {
         });
         self.state.details_scroll = 0;
         self.state.status = if matches!(request, Request::Approval(..)) {
-            "Awaiting approval"
+            common::AWAITING_APPROVAL
         } else {
-            "Awaiting input"
+            common::AWAITING_INPUT
         }
         .into();
     }
@@ -365,7 +339,7 @@ impl App {
                 let _ = reply.send(Err(BoundaryError(
                     saya_core::contract::ErrorInfo {
                         code: "stale_approval".into(),
-                        message: "work mode changed".into(),
+                        message: text::WORK_MODE_CHANGED.into(),
                     },
                     None,
                     None,
@@ -380,7 +354,7 @@ impl App {
         if let Some(Request::Approval(_, reply)) = self.pending.take() {
             let _ = reply.send(Ok(Some(approved)));
             self.state.details = None;
-            self.state.status = "Running".into();
+            self.state.status = common::RUNNING.into();
         }
     }
     pub(super) fn refresh_mode(&mut self) -> Result<bool> {
@@ -408,7 +382,7 @@ impl App {
         }
         if self.pending.as_ref().is_some_and(closed) {
             self.invalidate_pending();
-            self.notice("The pending question or approval expired.");
+            self.notice(text::PENDING_EXPIRED);
             changed = true;
         }
         Ok(changed)
@@ -421,12 +395,12 @@ impl App {
             return Ok(exit);
         }
         if self.pending.is_some() && self.deferred_mode.is_some() {
-            self.notice("Wait for the pending mode change before answering the current request.");
+            self.notice(text::PENDING_MODE);
             return Ok(false);
         }
         let prompt_title = match &self.pending {
-            Some(Request::Approval(..)) => Some("Approval required"),
-            Some(Request::Input(..)) => Some("Question"),
+            Some(Request::Approval(..)) => Some(crate::i18n::view::APPROVAL_REQUIRED),
+            Some(Request::Input(..)) => Some(crate::i18n::view::QUESTION),
             None => None,
         };
         if let Some(title) = prompt_title
@@ -437,7 +411,7 @@ impl App {
                 .is_some_and(|details| details.title == title)
         {
             self.show_pending();
-            self.notice("Review the current request details before replying.");
+            self.notice(text::REVIEW_REQUEST);
             return Ok(false);
         }
         if let Some(request) = self.pending.take() {
@@ -451,7 +425,7 @@ impl App {
                     let _ = reply.send(Ok(Some(answer)));
                     self.state.editor.clear();
                     self.state.details = None;
-                    self.state.status = "Running".into();
+                    self.state.status = common::RUNNING.into();
                 }
                 Request::Approval(request, reply) => {
                     match text.trim().to_ascii_lowercase().as_str() {
@@ -459,13 +433,13 @@ impl App {
                             let _ = reply.send(Ok(Some(true)));
                             self.state.editor.clear();
                             self.state.details = None;
-                            self.state.status = "Running".into();
+                            self.state.status = common::RUNNING.into();
                         }
                         "n" | "no" => {
                             let _ = reply.send(Ok(Some(false)));
                             self.state.editor.clear();
                             self.state.details = None;
-                            self.state.status = "Running".into();
+                            self.state.status = common::RUNNING.into();
                         }
                         _ => {
                             if self
@@ -482,20 +456,16 @@ impl App {
                                 let display = self.safe(&guidance);
                                 self.active
                                     .as_ref()
-                                    .ok_or("active run is unavailable")?
+                                    .ok_or(text::ACTIVE_RUN_REQUIRED)?
                                     .handle
                                     .steer(guidance)?;
                                 self.pending = Some(Request::Approval(request, reply));
-                                self.state.push_message(Role::User, "You", display);
-                                self.notice(
-                                    "Guidance queued for the next model boundary; the current approval remains pending.",
-                                );
+                                self.state.push_message(Role::User, ui_text::YOU, display);
+                                self.notice(text::GUIDANCE_APPROVAL_PENDING);
                                 self.state.editor.clear();
                             } else {
                                 self.pending = Some(Request::Approval(request, reply));
-                                self.notice(
-                                    "Approve with y, deny with n, or enter a control command.",
-                                );
+                                self.notice(text::APPROVE_OR_CONTROL);
                             }
                         }
                     }
@@ -514,13 +484,13 @@ impl App {
                 return Ok(false);
             }
             let display = self.safe(&guidance);
-            let active = self.active.as_ref().ok_or("active run is unavailable")?;
+            let active = self.active.as_ref().ok_or(text::ACTIVE_RUN_REQUIRED)?;
             if active.kind != RunKind::Execution {
-                return Err("Guidance can be added only while an Agent run is active".into());
+                return Err(text::GUIDANCE_ACTIVE_ONLY.into());
             }
             active.handle.steer(guidance)?;
-            self.state.push_message(Role::User, "You", display);
-            self.notice("Guidance queued for the next model boundary.");
+            self.state.push_message(Role::User, ui_text::YOU, display);
+            self.notice(text::GUIDANCE_QUEUED);
             self.state.editor.clear();
             return Ok(false);
         }
@@ -553,23 +523,23 @@ impl App {
             "/cancel" => self.cancel(),
             "/compact" => {
                 if !argument.is_empty() {
-                    return Err("Use /compact without arguments".into());
+                    return Err(text::COMPACT_NO_ARGS.into());
                 }
                 self.compact().await?;
             }
             "/memory" => self.open_memory(argument).await?,
             "/mode" => {
-                let target = mode(argument).ok_or("Use /mode plan|build|code|work")?;
+                let target = mode(argument).ok_or(text::MODE_USAGE)?;
                 self.request_mode(target, true).await?;
             }
             "/permissions" => {
                 if self.active.is_some() || self.ui_job.is_some() {
-                    return Err("Permissions can be changed while idle".into());
+                    return Err(text::PERMISSIONS_IDLE.into());
                 }
                 self.config.permissions_mode =
-                    permission(argument).ok_or("Use /permissions auto|manual|bypass")?;
+                    permission(argument).ok_or(text::PERMISSIONS_USAGE)?;
                 self.refresh_header();
-                self.notice("Permissions updated for subsequent tool calls.");
+                self.notice(text::PERMISSIONS_UPDATED);
             }
             "/cd" => self.change_workspace(argument).await?,
             "/sandbox" => self.set_sandbox(argument)?,
@@ -577,7 +547,7 @@ impl App {
             "/autocompact" => self.set_autocompact(argument)?,
             "/skills" | "/mcps" | "/plugins" => {
                 if !argument.is_empty() {
-                    return Err(format!("Use {name} without arguments").into());
+                    return Err(text::command_without_arguments(name).into());
                 }
                 self.open_picker(&name[1..]).await?
             }
@@ -585,10 +555,10 @@ impl App {
                 let display = match argument {
                     "source" => MarkdownDisplay::Source,
                     "render" => MarkdownDisplay::Render,
-                    _ => return Err("Use /markdown source|render".into()),
+                    _ => return Err(text::MARKDOWN_USAGE.into()),
                 };
                 self.state.set_markdown_display(display);
-                self.notice(&format!("Markdown display — {}", display.as_str()));
+                self.notice(&text::markdown_display(display.as_str()));
             }
             "/footnote" => {
                 let jumped = if argument == "back" {
@@ -598,13 +568,11 @@ impl App {
                         .parse::<usize>()
                         .ok()
                         .filter(|number| *number > 0)
-                        .ok_or("Use /footnote NUMBER or /footnote back")?;
+                        .ok_or(text::FOOTNOTE_USAGE)?;
                     self.state.jump_footnote(number)
                 };
                 if !jumped {
-                    return Err(
-                        "Footnote target is unavailable in the retained rendered transcript".into(),
-                    );
+                    return Err(text::FOOTNOTE_UNAVAILABLE.into());
                 }
                 self.state.details = None;
                 self.state.details_scroll = 0;
@@ -615,50 +583,38 @@ impl App {
                     .prepared
                     .as_ref()
                     .map(|prepared| prepared.session.id.0.to_string())
-                    .unwrap_or_else(|| "No session".into());
-                self.notice(&format!(
-                    "{} · session {} · mode {} · pending {:?} · permissions {} · sandbox {} · autocompact {} · Markdown {}",
-                    self.state.status,
-                    session,
-                    self.state.mode,
-                    self.state.pending_mode,
-                    self.state.permissions,
-                    sandbox_label(self.config.sandbox.backend),
-                    if !self.config.context.auto_compact {
-                        "off".into()
-                    } else if let Some(tokens) = self.config.context.trigger_tokens {
-                        format!("{tokens} tokens")
-                    } else {
-                        format!("{}%", self.config.context.trigger_percent)
-                    },
-                    self.state.markdown_display.as_str()
+                    .unwrap_or_else(|| text::NO_SESSION.into());
+                let pending = format!("{:?}", self.state.pending_mode);
+                let autocompact = if !self.config.context.auto_compact {
+                    text::AUTOCOMPACT_STATUS_OFF.into()
+                } else if let Some(tokens) = self.config.context.trigger_tokens {
+                    text::status_autocompact_tokens(tokens)
+                } else {
+                    format!("{}%", self.config.context.trigger_percent)
+                };
+                self.notice(&text::status_line(
+                    &self.state.status,
+                    &[
+                        (text::STATUS_SESSION, &session),
+                        (text::STATUS_MODE, &self.state.mode),
+                        (text::STATUS_PENDING, &pending),
+                        (text::STATUS_PERMISSIONS, &self.state.permissions),
+                        (
+                            text::STATUS_SANDBOX,
+                            sandbox_label(self.config.sandbox.backend),
+                        ),
+                        (text::STATUS_AUTOCOMPACT, &autocompact),
+                        (text::STATUS_MARKDOWN, self.state.markdown_display.as_str()),
+                    ],
                 ));
             }
             "/help" => {
                 self.state.set_details(Details {
-                    title: "Help".into(),
+                    title: text::HELP_TITLE.into(),
                     lines: COMMANDS
                         .iter()
                         .map(|command| format!("{} · {}", command.text, command.description))
-                        .chain([
-                            "Enter send · Alt+Enter / Ctrl+J newline".into(),
-                            "Empty draft · Tab cycles WORK → CODE → PLAN → BUILD".into(),
-                            "Ctrl+P commands · Ctrl+C cancel · Ctrl+D exit".into(),
-                            "PgUp/PgDn scroll · End follow output".into(),
-                            "Click thinking / long tool headers to expand or collapse".into(),
-                            "Ctrl+O toggles the latest foldable card · wheel scrolls the pane under the pointer".into(),
-                            "Click a footnote number to jump to its definition; click its definition marker to return".into(),
-                            "/footnote NUMBER jumps in the newest matching assistant message; /footnote back returns".into(),
-                            "/markdown source|render selects the assistant presentation".into(),
-                            "/cd PATH changes this session workspace; /sandbox on|off|status controls native isolation".into(),
-                            "/effort|/thinking LEVEL changes reasoning effort; /model PROFILE changes model profile".into(),
-                            "/autocompact TOKENS|auto|off changes the next-run compaction trigger".into(),
-                            "/skills, /mcps and /plugins open selectors · ↑↓ move · Enter selects · Esc closes".into(),
-                            "/compact summarizes saved history, or queues at the next model boundary during a run".into(),
-                            "/memory opens current memory, source/scope, review, forgetting, history and backup controls".into(),
-                            "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"
-                                .into(),
-                        ])
+                        .chain(text::HELP_LINES.iter().copied().map(str::to_owned))
                         .collect(),
                 });
                 self.state.details_scroll = 0;
@@ -667,7 +623,7 @@ impl App {
             | "/sessions" | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job" => {
                 self.service(name, argument).await?
             }
-            _ => return Err("Unknown command. Ctrl+P shows available commands.".into()),
+            _ => return Err(text::UNKNOWN_COMMAND.into()),
         }
         Ok(false)
     }
@@ -675,9 +631,9 @@ impl App {
 
 fn sandbox_label(backend: BackendKind) -> &'static str {
     match backend {
-        BackendKind::Auto => "on (native at run start)",
-        BackendKind::Seatbelt => "on (Seatbelt)",
-        BackendKind::Bubblewrap => "on (Bubblewrap)",
-        BackendKind::Host => "off (host compatibility)",
+        BackendKind::Auto => text::SANDBOX_NATIVE,
+        BackendKind::Seatbelt => text::SANDBOX_SEATBELT,
+        BackendKind::Bubblewrap => text::SANDBOX_BUBBLEWRAP,
+        BackendKind::Host => text::SANDBOX_HOST,
     }
 }

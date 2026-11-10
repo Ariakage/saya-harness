@@ -1,5 +1,6 @@
 //! Live message identity and interface-only thinking snapshots.
 use super::*;
+use crate::i18n::{common, messages as text, tool as tool_text, view as ui_text};
 use crate::tool_summary::summarize;
 use saya_app::thinking::{ThinkingLog, extract_reasoning};
 use saya_core::{
@@ -31,8 +32,8 @@ impl App {
                         active.execution_request = Some(request_id.clone());
                         let id = self.state.push_message(
                             Role::Thinking,
-                            "waiting for provider thought text",
-                            "Waiting for provider thinking text.",
+                            text::WAITING_PROVIDER,
+                            text::WAITING_PROVIDER_TEXT,
                         );
                         self.state.append_message(id, "");
                         active.thinking_ids.insert(request_id.clone(), id);
@@ -41,9 +42,9 @@ impl App {
                 }
                 if self.pending.is_none() {
                     self.state.status = match purpose {
-                        ModelPurpose::Review => "Reviewing",
-                        ModelPurpose::Compaction => "Compacting",
-                        ModelPurpose::Execution => "Thinking",
+                        ModelPurpose::Review => common::REVIEWING,
+                        ModelPurpose::Compaction => common::COMPACTING,
+                        ModelPurpose::Execution => common::THINKING,
                     }
                     .into();
                 }
@@ -59,7 +60,7 @@ impl App {
                         let id = self.assistant_message();
                         self.state.append_message(id, &text);
                         if self.pending.is_none() {
-                            self.state.status = "Responding".into();
+                            self.state.status = common::RESPONDING.into();
                         }
                     }
                 }
@@ -90,13 +91,13 @@ impl App {
                 }
             }
             EventPayload::ToolStarted { name, call_id } => {
-                let label = self.safe(&format!("{name} · {call_id} · running"));
+                let label = self.safe(&format!("{name} · {call_id} · {}", ui_text::RUNNING));
                 if let Some(active) = &mut self.active
                     && !active.tool_cards.contains_key(&call_id)
                 {
-                    let id =
-                        self.state
-                            .push_message(Role::Tool, label, "Tool execution is running.");
+                    let id = self
+                        .state
+                        .push_message(Role::Tool, label, text::TOOL_RUNNING);
                     if let Some(message) = self
                         .state
                         .messages
@@ -116,7 +117,7 @@ impl App {
                     );
                 }
                 if self.pending.is_none() {
-                    self.state.status = "Running".into();
+                    self.state.status = common::RUNNING.into();
                 }
             }
             EventPayload::McpStatus { servers } => {
@@ -202,7 +203,11 @@ impl App {
         }
         let label = self.safe(&format!(
             "{name} · {call_id} · {}",
-            if result.ok { "completed" } else { "failed" }
+            if result.ok {
+                tool_text::COMPLETED
+            } else {
+                tool_text::FAILED
+            }
         ));
         let tool_summary = serde_json::to_string(&result)
             .ok()
@@ -312,22 +317,22 @@ impl App {
                 continue;
             };
             let label = if entry.available {
-                "provider thought text"
+                text::PROVIDER_THOUGHT
             } else if entry.active {
-                "waiting for provider thought text"
+                text::WAITING_PROVIDER
             } else {
-                "unavailable"
+                text::UNAVAILABLE
             };
             let text = if !entry.text.is_empty() {
                 self.safe(&entry.text)
             } else if entry.truncated {
-                "Thinking text exceeded the display limit or was withheld.".into()
+                text::THINKING_LIMIT.into()
             } else if entry.available && entry.active {
-                "Receiving provider thinking text.".into()
+                text::RECEIVING_THOUGHT.into()
             } else if entry.active {
-                "Waiting for provider thinking text.".into()
+                text::WAITING_PROVIDER_TEXT.into()
             } else {
-                "This provider did not return displayable thinking text.".into()
+                text::THINKING_NOT_RETURNED.into()
             };
             self.state.replace_message(id, text);
             if let Some(message) = self
@@ -365,9 +370,13 @@ impl App {
         }
         for (call_id, card) in &active.tool_cards {
             if !card.finished {
-                self.state.replace_message(card.id,
-                    "The run ended before a completion record was displayed. Inspect /tools before retrying.");
-                let label = self.safe(&format!("{} · {call_id} · unknown", card.name));
+                self.state
+                    .replace_message(card.id, text::TOOL_ENDED_UNKNOWN);
+                let label = self.safe(&format!(
+                    "{} · {call_id} · {}",
+                    card.name,
+                    tool_text::UNKNOWN
+                ));
                 if let Some(message) = self
                     .state
                     .messages
@@ -387,13 +396,13 @@ impl App {
             .iter_mut()
             .find(|message| message.id == id)
         {
-            if message.label.starts_with("waiting")
-                || message.text == "Receiving provider thinking text."
+            if message.label.starts_with(text::WAITING_PROVIDER)
+                || message.text == text::RECEIVING_THOUGHT
             {
-                message.label = "unavailable".into();
-                message.text = "Thinking text is unavailable in the retained display log.".into();
-            } else if message.streaming && message.label == "provider thought text" {
-                message.label = "provider thought text · retained partial".into();
+                message.label = text::UNAVAILABLE.into();
+                message.text = text::THINKING_UNAVAILABLE_LOG.into();
+            } else if message.streaming && message.label == text::PROVIDER_THOUGHT {
+                message.label = text::PARTIAL_THOUGHT.into();
                 message.truncated = true;
             }
             message.streaming = false;
@@ -430,7 +439,7 @@ impl App {
                 if !thought.is_empty() {
                     self.state.push_message(
                         Role::Thinking,
-                        "stored provider thought text",
+                        text::STORED_THOUGHT,
                         self.safe(&thought),
                     );
                 }
@@ -445,7 +454,8 @@ impl App {
     fn restore_item(&mut self, item: &HistoryItem, tools: &mut HashMap<String, (u64, String)>) {
         match item {
             HistoryItem::UserText(text) => {
-                self.state.push_message(Role::User, "You", self.safe(text));
+                self.state
+                    .push_message(Role::User, ui_text::YOU, self.safe(text));
             }
             HistoryItem::AssistantText(text) => {
                 if !text.is_empty() {
@@ -460,20 +470,19 @@ impl App {
                 if !text.is_empty() {
                     self.state.push_message(
                         Role::Assistant,
-                        "Assistant · interrupted partial",
+                        text::INTERRUPTED_PARTIAL,
                         self.safe(text),
                     );
                 }
             }
             HistoryItem::ToolCall(call) => {
                 let label = self.safe(&format!(
-                    "{} · {} · stored request",
-                    call.name, call.call_id
+                    "{} · {} · {}",
+                    call.name,
+                    call.call_id,
+                    text::STORED_REQUEST
                 ));
-                let text = self.safe(&format!(
-                    "Stored request {} · /tools shows linked records",
-                    call.call_id
-                ));
+                let text = self.safe(&text::stored_request(&call.call_id));
                 let id = self.state.push_message(Role::Tool, label, text);
                 if let Some(message) = self
                     .state
@@ -487,9 +496,9 @@ impl App {
             }
             HistoryItem::ToolResult { call_id, result } => {
                 let status = if result.ok {
-                    "stored completed"
+                    text::STORED_COMPLETED
                 } else {
-                    "stored failed"
+                    text::STORED_FAILED
                 };
                 let text = self.safe(&crate::tool_render::result(result));
                 let tool_summary = serde_json::to_string(result)
@@ -513,7 +522,7 @@ impl App {
                 } else {
                     let id = self.state.push_message(
                         Role::Tool,
-                        self.safe(&format!("Stored result · {call_id} · {status}")),
+                        self.safe(&format!("{} · {call_id} · {status}", text::STORED_RESULT)),
                         text,
                     );
                     if let Some(message) = self
