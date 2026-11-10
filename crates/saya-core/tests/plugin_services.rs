@@ -48,9 +48,9 @@ case "$UNDECLARED_VALUE" in '') ;; *) exit 86 ;; esac
 /bin/cat "$1" >/dev/null 2>&1 && exit 87
 printf 'escaped' > "$2" 2>/dev/null && exit 88
 if [ "${3:-}" = detached ]; then
-    /usr/bin/setsid /bin/sh -c 'printf "%s" "$$" > "$HOME/server-child"; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+    /usr/bin/setsid /bin/sh -c 'printf "%s" "$$" > "$HOME/server-child"; while :; do sleep 1; done' sh "$5" </dev/null >/dev/null 2>&1 &
 elif [ "${3:-}" = same-group ]; then
-    /bin/sh -c 'printf "%s" "$$" > "$HOME/server-child"; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+    /bin/sh -c 'printf "%s" "$$" > "$HOME/server-child"; while :; do sleep 1; done' sh "$5" </dev/null >/dev/null 2>&1 &
 fi
 while IFS= read -r line; do
     id=$(printf '%s\n' "$line" | /usr/bin/sed -n 's/.*"id":[ ]*\([^,}]*\).*/\1/p')
@@ -71,7 +71,7 @@ const OBSERVER: &str = r#"#!/bin/sh
 IFS= read -r event || :
 role="${1:-}"
 if [ -n "$role" ]; then
-    /bin/sh -c 'printf "%s" "$$" > "$HOME/hook-child-$1"; while :; do sleep 1; done' sh "$role" </dev/null >/dev/null 2>&1 &
+    /bin/sh -c 'printf "%s" "$$" > "$HOME/hook-child-$1"; while :; do sleep 1; done' sh "$role" "$2" </dev/null >/dev/null 2>&1 &
     while [ ! -e "$HOME/release-$role" ]; do sleep 0.02; done
 fi
 printf 'observed' > "$HOME/hook-ran"
@@ -90,21 +90,27 @@ fn nested_host_pid(status: &str, guest: i32) -> Option<i32> {
         .map(str::parse::<i32>)
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
-    (values.len() > 1 && values[1..].contains(&guest)).then(|| values[0])
+    (values.len() > 1 && values.last() == Some(&guest)).then(|| values[0])
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProcessIdentity {
     pid: i32,
     started: u128,
+    group: i32,
+    group_started: Option<u128>,
 }
 #[cfg(target_os = "linux")]
-fn process_started(pid: i32) -> Option<u128> {
+fn process_details(pid: i32) -> Option<(u128, i32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let started = stat.rsplit_once(')')?.1.split_whitespace().nth(19)?;
-    started.parse().ok()
+    let fields = stat
+        .rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    Some((fields.get(19)?.parse().ok()?, fields.get(2)?.parse().ok()?))
 }
 #[cfg(target_os = "macos")]
-fn process_started(pid: i32) -> Option<u128> {
+fn process_details(pid: i32) -> Option<(u128, i32)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     // SAFETY: proc_pidinfo initializes the provided proc_bsdinfo buffer.
     let size = unsafe {
@@ -121,38 +127,70 @@ fn process_started(pid: i32) -> Option<u128> {
     }
     // SAFETY: a complete buffer was initialized above.
     let info = unsafe { info.assume_init() };
-    Some((u128::from(info.pbi_start_tvsec) << 64) | u128::from(info.pbi_start_tvusec))
+    Some((
+        (u128::from(info.pbi_start_tvsec) << 64) | u128::from(info.pbi_start_tvusec),
+        i32::try_from(info.pbi_pgid).ok()?,
+    ))
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn process_started(_: i32) -> Option<u128> {
+fn process_details(_: i32) -> Option<(u128, i32)> {
     None
 }
-fn host_process(guest: i32) -> Option<ProcessIdentity> {
+fn process_started(pid: i32) -> Option<u128> {
+    process_details(pid).map(|details| details.0)
+}
+fn process_identity(pid: i32) -> Option<ProcessIdentity> {
+    let (started, group) = process_details(pid)?;
+    Some(ProcessIdentity {
+        pid,
+        started,
+        group,
+        group_started: process_started(group),
+    })
+}
+#[cfg(target_os = "linux")]
+fn process_marker_matches(pid: i32, marker: &str) -> bool {
+    std::fs::read(format!("/proc/{pid}/cmdline"))
+        .ok()
+        .is_some_and(|arguments| {
+            arguments
+                .split(|byte| *byte == 0)
+                .any(|argument| argument == marker.as_bytes())
+        })
+}
+fn host_process(guest: i32, marker: Option<&str>) -> Option<ProcessIdentity> {
     #[cfg(target_os = "linux")]
     {
+        let marker = marker?;
+        let mut candidates = Vec::new();
         for entry in std::fs::read_dir("/proc").ok()? {
             let Some(entry) = entry.ok() else { continue };
-            if entry.file_name().to_str()?.parse::<i32>().is_err() {
+            if entry
+                .file_name()
+                .to_str()
+                .and_then(|pid| pid.parse::<i32>().ok())
+                .is_none()
+            {
                 continue;
             }
             let status = match std::fs::read_to_string(entry.path().join("status")) {
                 Ok(status) => status,
                 Err(_) => continue,
             };
-            if let Some(pid) = nested_host_pid(&status, guest) {
-                let started = process_started(pid)?;
-                return Some(ProcessIdentity { pid, started });
+            if let Some(pid) = nested_host_pid(&status, guest)
+                && process_marker_matches(pid, marker)
+            {
+                candidates.push(pid);
             }
         }
-        None
+        (candidates.len() == 1)
+            .then(|| process_identity(candidates[0]))
+            .flatten()
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let started = process_started(guest)?;
-        Some(ProcessIdentity {
-            pid: guest,
-            started,
-        })
+        let _ = marker;
+        process_identity(guest)
     }
 }
 
@@ -163,12 +201,23 @@ enum ProcessRole {
     HookStartedChild,
     HookFinishedChild,
 }
-const PROCESS_FILES: [(ProcessRole, &str); 4] = [
-    (ProcessRole::ServerMain, "pid"),
-    (ProcessRole::ServerChild, "server-child"),
-    (ProcessRole::HookStartedChild, "hook-child-started"),
-    (ProcessRole::HookFinishedChild, "hook-child-finished"),
+const PROCESS_FILES: [(ProcessRole, &str, &str); 4] = [
+    (ProcessRole::ServerMain, "pid", "server-main"),
+    (ProcessRole::ServerChild, "server-child", "server-child"),
+    (
+        ProcessRole::HookStartedChild,
+        "hook-child-started",
+        "hook-started-child",
+    ),
+    (
+        ProcessRole::HookFinishedChild,
+        "hook-child-finished",
+        "hook-finished-child",
+    ),
 ];
+fn process_marker(token: &str, suffix: &str) -> String {
+    format!("{token}-{suffix}")
+}
 const HOOK_RELEASES: [(ProcessRole, &str); 2] = [
     (ProcessRole::HookStartedChild, "started"),
     (ProcessRole::HookFinishedChild, "finished"),
@@ -177,12 +226,44 @@ const HOOK_RELEASES: [(ProcessRole, &str); 2] = [
 fn process_has_identity(process: ProcessIdentity) -> bool {
     process_started(process.pid) == Some(process.started)
 }
+fn group_has_identity(process: ProcessIdentity) -> bool {
+    process
+        .group_started
+        .is_some_and(|started| process_started(process.group) == Some(started))
+}
+fn process_group_exists(group: i32) -> bool {
+    // SAFETY: signal 0 performs an existence check without signaling a process.
+    match unsafe { libc::kill(-group, 0) } {
+        0 => true,
+        _ => matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        ),
+    }
+}
 fn cleanup_processes(processes: &[ProcessIdentity]) {
     let live = processes
         .iter()
         .copied()
         .filter(|process| process_has_identity(*process))
         .collect::<Vec<_>>();
+    let groups = processes
+        .iter()
+        .filter_map(|process| {
+            process
+                .group_started
+                .map(|started| (process.group, started))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (group, started) in &groups {
+        if process_started(*group) != Some(*started) {
+            continue;
+        }
+        // SAFETY: the process-group leader's recorded start identity still matches.
+        unsafe {
+            libc::kill(-*group, libc::SIGKILL);
+        }
+    }
     for process in &live {
         // SAFETY: only a process whose recorded start identity still matches is signaled.
         unsafe {
@@ -190,41 +271,58 @@ fn cleanup_processes(processes: &[ProcessIdentity]) {
         }
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while live.iter().any(|process| process_has_identity(*process))
+    while (live.iter().any(|process| process_has_identity(*process))
+        || groups.iter().any(|(group, _)| process_group_exists(*group)))
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
+#[derive(Clone, Debug)]
+struct GuestProcess {
+    pid: i32,
+    marker: String,
+}
+
 struct ProcessSampler {
+    pool: Arc<ViewPool>,
     processes: Arc<Mutex<BTreeMap<ProcessRole, ProcessIdentity>>>,
-    pending: Arc<Mutex<BTreeMap<ProcessRole, i32>>>,
+    pending: Arc<Mutex<BTreeMap<ProcessRole, GuestProcess>>>,
     stopping: Arc<AtomicBool>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<std::thread::JoinHandle<()>>,
 }
 impl ProcessSampler {
-    fn start(pool: Arc<ViewPool>) -> Self {
+    fn start(pool: Arc<ViewPool>, process_token: &str) -> Self {
         let processes = Arc::new(Mutex::new(BTreeMap::new()));
         let pending = Arc::new(Mutex::new(BTreeMap::new()));
         let stopping = Arc::new(AtomicBool::new(false));
         let task_processes = processes.clone();
         let task_pending = pending.clone();
         let task_stopping = stopping.clone();
-        let task = tokio::spawn(async move {
+        let task_pool = pool.clone();
+        let task_token = process_token.to_owned();
+        let task = std::thread::spawn(move || {
             loop {
-                if let Ok(views) = pool.inventory() {
+                if let Ok(views) = task_pool.inventory() {
                     for view in views {
-                        for &(role, name) in &PROCESS_FILES {
+                        for &(role, pid_file, marker_suffix) in &PROCESS_FILES {
                             if task_processes.lock().unwrap().contains_key(&role) {
                                 continue;
                             }
                             if let Ok(pid) =
-                                std::fs::read_to_string(view.identity.scratch.join(name))
+                                std::fs::read_to_string(view.identity.scratch.join(pid_file))
                                 && let Ok(pid) = pid.parse()
                             {
-                                task_pending.lock().unwrap().entry(role).or_insert(pid);
-                                if let Some(process) = host_process(pid) {
+                                let marker = process_marker(&task_token, marker_suffix);
+                                task_pending
+                                    .lock()
+                                    .unwrap()
+                                    .insert(role, GuestProcess { pid, marker });
+                                let guest =
+                                    task_pending.lock().unwrap().get(&role).cloned().unwrap();
+                                if let Some(process) = host_process(guest.pid, Some(&guest.marker))
+                                {
                                     task_processes.lock().unwrap().insert(role, process);
                                 }
                             }
@@ -242,20 +340,34 @@ impl ProcessSampler {
                 if task_stopping.load(Ordering::Acquire) {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
         });
         Self {
+            pool,
             processes,
             pending,
             stopping,
             task: Some(task),
         }
     }
-    async fn stop(&mut self) {
+    fn stop(&mut self) {
         self.stopping.store(true, Ordering::Release);
         if let Some(task) = self.task.take() {
-            let _ = task.await;
+            let _ = task.join();
+        }
+    }
+    fn release_hooks(&self) {
+        let Ok(views) = self.pool.inventory() else {
+            return;
+        };
+        for view in views {
+            for &(_, release) in &HOOK_RELEASES {
+                let _ = std::fs::write(
+                    view.identity.scratch.join(format!("release-{release}")),
+                    b"release",
+                );
+            }
         }
     }
     fn snapshot(&self) -> BTreeMap<ProcessRole, ProcessIdentity> {
@@ -265,8 +377,9 @@ impl ProcessSampler {
 impl Drop for ProcessSampler {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
+        self.release_hooks();
         if let Some(task) = self.task.take() {
-            task.abort();
+            let _ = task.join();
         }
         let recorded = self
             .processes
@@ -280,7 +393,7 @@ impl Drop for ProcessSampler {
                 pending
                     .iter()
                     .filter(|(role, _)| !recorded_roles.contains(role))
-                    .filter_map(|(_, pid)| host_process(*pid)),
+                    .filter_map(|(_, guest)| host_process(guest.pid, Some(&guest.marker))),
             );
         }
         cleanup_processes(&processes);
@@ -392,6 +505,7 @@ struct Fixture {
     journal: Arc<HookStore>,
     secrets: Arc<SecretRegistry>,
     bindings: PluginHostBindings,
+    process_token: String,
 }
 impl Fixture {
     fn new(check: bool, skill_only: bool) -> Self {
@@ -406,6 +520,7 @@ impl Fixture {
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
         let workspace = std::fs::canonicalize(workspace).unwrap();
+        let process_token = format!("saya-process-{}", uuid::Uuid::now_v7());
         std::fs::write(
             workspace.join("secret.txt"),
             "workspace read must be denied to this plugin",
@@ -469,23 +584,32 @@ requested=[{}]
                 workspace.join("secret.txt").to_string_lossy().into_owned(),
                 workspace.join("escaped.txt").to_string_lossy().into_owned(),
             ];
-            if descendants {
-                arguments.push(
+            arguments.push(
+                if descendants {
                     if cfg!(target_os = "linux") {
                         "detached"
                     } else {
                         "same-group"
                     }
-                    .into(),
-                );
-            }
+                } else {
+                    ""
+                }
+                .into(),
+            );
+            arguments.push(process_marker(&process_token, "server-main"));
+            arguments.push(process_marker(&process_token, "server-child"));
             text.push_str(&format!(
                 "[[mcp]]\nid=\"local\"\ntransport=\"stdio\"\nprogram=\"shell\"\nargs={}\n",
                 serde_json::to_string(&arguments).unwrap()
             ));
             for (id, event) in [("started", "run.started"), ("finished", "run.finished")] {
                 let arguments = if descendants {
-                    format!("[\"@plugin/observer.sh\",\"{id}\"]")
+                    serde_json::json!([
+                        "@plugin/observer.sh",
+                        id,
+                        process_marker(&process_token, &format!("hook-{id}-child"))
+                    ])
+                    .to_string()
                 } else {
                     "[\"@plugin/observer.sh\"]".to_string()
                 };
@@ -537,6 +661,7 @@ requested=[{}]
             journal,
             secrets,
             bindings,
+            process_token,
         }
     }
     fn runtime(
@@ -656,9 +781,9 @@ async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
     let fixture = Fixture::with_descendants(false, false, true);
     let (mut runtime, mut session, model, store, _) =
         fixture.runtime(WorkMode::Work, PermissionMode::Bypass, true, false);
-    let mut sampler = ProcessSampler::start(fixture.pool.clone());
+    let mut sampler = ProcessSampler::start(fixture.pool.clone(), &fixture.process_token);
     let result = runtime.run(&mut session).await.unwrap();
-    sampler.stop().await;
+    sampler.stop();
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
     assert!(*model.observed_remote_call.lock().unwrap());
     assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult {call_id,result} if call_id=="native-remote-call" && result.ok)));
@@ -719,25 +844,35 @@ fn namespace_pid_mapping_requires_a_nested_guest_pid() {
         Some(4242)
     );
     assert_eq!(nested_host_pid("Name:\thost\nNSpid:\t2\n", 2), None);
+    assert_eq!(
+        nested_host_pid("Name:\tother\nNSpid:\t4242\t2\t71\n", 2),
+        None
+    );
 }
 
 #[test]
 fn process_cleanup_guard_is_bounded_and_identity_bound() {
+    use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new("/bin/sh")
         .args(["-c", "while :; do sleep 1; done"])
+        .process_group(0)
         .spawn()
         .unwrap();
     let pid = i32::try_from(child.id()).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    let started = loop {
-        if let Some(started) = process_started(pid) {
-            break started;
+    let process = loop {
+        if let Some(process) = process_identity(pid)
+            && process.group_started.is_some()
+        {
+            break process;
         }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
-    let process = ProcessIdentity { pid, started };
+    let root = tempfile::tempdir().unwrap();
+    let pool = Arc::new(ViewPool::open(&root.path().join("views"), ViewLimits::default()).unwrap());
     let sampler = ProcessSampler {
+        pool,
         processes: Arc::new(Mutex::new(BTreeMap::from([(
             ProcessRole::ServerMain,
             process,
@@ -750,6 +885,12 @@ fn process_cleanup_guard_is_bounded_and_identity_bound() {
     drop(sampler);
     assert!(!waiter.join().unwrap().success());
     assert!(!process_has_identity(process));
+    assert!(!group_has_identity(process));
+    assert_eq!(unsafe { libc::kill(-process.group, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
 }
 
 #[tokio::test]
@@ -769,9 +910,9 @@ async fn plan_never_starts_plugin_processes_even_with_bypass_permissions() {
     let fixture = Fixture::new(false, false);
     let (mut runtime, mut session, _, store, _) =
         fixture.runtime(WorkMode::Plan, PermissionMode::Bypass, false, false);
-    let mut sampler = ProcessSampler::start(fixture.pool.clone());
+    let mut sampler = ProcessSampler::start(fixture.pool.clone(), &fixture.process_token);
     let result = runtime.run(&mut session).await.unwrap();
-    sampler.stop().await;
+    sampler.stop();
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
     assert!(sampler.snapshot().is_empty());
     assert!(

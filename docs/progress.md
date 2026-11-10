@@ -987,3 +987,9 @@ R-02的原生验收补充服务主进程、服务子进程和Hook子进程检查
 按[第二轮复审](review-2026-11-10_02.md)修复F-01至F-03。原生后代验收改为宿主侧独立采样，分别记录服务主进程、服务子进程、`run.started`Hook后代和`run.finished`Hook后代；两个Hook后代等待宿主取得PID与启动身份后退出，因此最后一次模型调用之后的事件也进入证据范围。测试守卫保留原始guest PID，在失败展开路径重新映射并对身份匹配的遗留进程执行bounded kill。
 
 resync PTY探针的填队与resume阶段改用独立五秒期限。本机`RUST_TEST_THREADS=1 just check`通过1321项Rust测试（另8项native ignored）、格式、严格Clippy与优化构建，`just test-tooling`75项通过；真实原生插件8项、固定release的smoke、文本journey、5项历史审查回归及26项TUI旅程全部通过。本轮仍不推送、不运行远端CI，Linux脱离组分支与macOS主动脱离组限制保持原边界。
+
+### 2026-11-11 第三轮复审与 Linux Colima 验收
+
+按[第三轮复审](review-2026-11-10_03.md)修复F-04、F-05。失败路径守卫记录并用启动身份验证进程组leader，Drop先释放Hook、join采样线程，再执行bounded组清理并等待组`ESRCH`。原生验收为每个角色生成随机argv marker，Linux仅在`NSpid`末端等于guest PID且`/proc/<host>/cmdline`含完整角色marker时接受唯一宿主映射，不再依赖sandbox内`readlink`。
+
+本机macOS27.2 ARM的`RUST_TEST_THREADS=1 just check`通过1321项Rust测试（另8项native ignored）、格式、严格Clippy与release构建，真实原生插件8/8通过；`just test-tooling`75项和固定release的26条TUI旅程通过。Linux ARM64使用工作区内本地Colima `review3` profile验收，VM为Ubuntu24.04／kernel6.8，容器为Ubuntu22.04，使用Rust1.99.1、Bubblewrap0.13.1和socat1.7.4.1。Colima内`scripts/check.sh`完整通过；真实原生插件8/8通过，`native_acceptance.py --skip-benchmarks`报告19项中18项通过、1项因未提供delegated cgroup记为`not_run`，证据为`target/n3/review-3-colima-native-evidence.json`（SHA-256 `2eab2e91fe48e1a3f338f78562671ba7dc690dcb94bb47403fcd27ce8f867877`）；Linux release的smoke、文本journey、5项历史审查回归及26条TUI旅程全部通过。本轮未推送、未运行远端CI。
