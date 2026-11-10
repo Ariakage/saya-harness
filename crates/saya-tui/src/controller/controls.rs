@@ -168,7 +168,6 @@ impl App {
         Ok(())
     }
     fn set_sandbox(&mut self, argument: &str) -> Result<()> {
-        self.require_idle_configuration()?;
         match argument.to_ascii_lowercase().as_str() {
             "" | "status" => {
                 self.notice(&format!(
@@ -177,10 +176,12 @@ impl App {
                 ));
             }
             "on" => {
+                self.require_idle_configuration()?;
                 self.config.sandbox.backend = BackendKind::Auto;
                 self.notice("Sandbox enabled for subsequent runs: platform native backend.");
             }
             "off" => {
+                self.require_idle_configuration()?;
                 self.config.sandbox.backend = BackendKind::Host;
                 self.notice(
                     "Sandbox disabled for subsequent runs. Host execution has no filesystem, network, or syscall isolation.",

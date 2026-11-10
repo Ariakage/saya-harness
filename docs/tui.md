@@ -24,7 +24,7 @@
 - `/model PROFILE`：选择已配置模型 profile，并清空当前视图建立新的空会话；裸 `/model` 列出 profile、模型与协议。
 - `/effort LEVEL`、`/thinking LEVEL`：接受 `low`、`medium`、`high`、`xhigh`、`max`、`default`，更新后续请求并持久会话指纹；不修改磁盘配置文件。
 - `/autocompact TOKENS|auto|off`：设置精确输入token触发水位、恢复配置百分比或关闭自动压缩；支持 `950k`、`1m` 等输入，只影响后续运行。
-- `/sandbox on|off|status`：`on`选择平台原生Auto后端，`off`选择Host兼容后端，裸命令或`status`显示当前设置。切换只影响后续Run，权限、显式deny与PLAN边界不变。
+- `/sandbox on|off|status`：`status`可随时只读查看；`on`选择平台原生Auto后端，`off`选择Host兼容后端，切换仅允许空闲时执行并影响后续Run，权限、显式deny与PLAN边界不变。
 - `/skills`、`/mcps`、`/plugins`：打开键盘选择器。↑↓或PgUp／PgDn移动，Enter选择，Esc关闭且保留聊天草稿。MCP服务Enter切换后续Run启用状态；Skill与Plugin Enter显示只读来源、状态和能力信息，不授予工具或执行权限。
 
 命令补全可见时，Enter直接执行选中的完整无参数命令。以空格结尾的参数脚手架只填入编辑器，仍需用户提供参数。`/resume ID` 继续从TUI恢复保存会话；CLI `saya resume ID` 继续进入文本聊天恢复入口。

@@ -1251,6 +1251,25 @@ async fn active_run_accepts_bounded_guidance_without_replacing_the_original_task
 }
 
 #[tokio::test]
+async fn sandbox_status_is_read_only_during_an_active_run_but_switches_are_idle_only() {
+    let (_root, mut app) = fixture();
+    attach_active_call(&mut app).await;
+    app.command("/sandbox status").await.unwrap();
+    assert!(
+        app.state
+            .messages
+            .iter()
+            .any(|message| message.text.contains("Sandbox —"))
+    );
+    assert!(app.command("/sandbox off").await.is_err());
+    assert_eq!(
+        app.config.sandbox.backend,
+        saya_core::execution::BackendKind::Auto
+    );
+    stop_active_call(&mut app).await;
+}
+
+#[tokio::test]
 async fn plan_storage_checks_apply_to_every_permission_mode_before_creating_files() {
     for permissions in [
         PermissionMode::Auto,
