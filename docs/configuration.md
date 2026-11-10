@@ -38,6 +38,8 @@ JSON正文、协议消息、工具结果与Run请求／时间的原有限额继�
 
 当前开发线允许每个 profile 显式设置 `thinking_effort`，取值为 `low`、`medium`、`high`、`xhigh`、`max`。省略时，请求沿用服务端默认值，TUI 显示未知。可在自己的 profile 中添加一行。
 
+TUI空闲时可用 `/effort LEVEL` 或等价的 `/thinking LEVEL` 修改当前进程的选择，`default`恢复为省略状态。修改不写回配置文件；已打开会话的配置指纹会随显式选择更新，之后使用原配置文件恢复时若指纹不同，仍需显式接受配置变化。`/model PROFILE` 只选择已有profile并建立新会话，不会修改profile的模型字段。
+
 ```toml
 thinking_effort = "max"
 ```

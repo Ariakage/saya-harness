@@ -143,6 +143,7 @@ enum Command {
         accept_config_change: bool,
     },
     Chat,
+    /// Resume a saved session in the text chat.
     Resume {
         session_id: String,
         #[arg(long)]

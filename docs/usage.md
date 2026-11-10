@@ -38,9 +38,15 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 在单行输入的开头键入 `/`，光标位于末尾时显示命令建议与灰色补全后缀。↑／↓选择，Tab或→填入草稿，Enter执行。Esc先隐藏建议并保留草稿。支持工作模式、权限和导出格式等固定参数，profile名、会话／任务ID与目标路径由用户补齐。`//`可输入字面量斜杠，多行文本继续使用常规编辑。
 
+补全候选显示时，Enter直接执行当前无参数命令或完整的 `/sandbox on|off` 等命令；以空格结尾、仍需用户填写参数的候选只填入编辑器，不会立即执行。
+
 输入框为空时，Tab按WORK→CODE→PLAN→BUILD→WORK循环模式。运行中会显示待生效选择，并在core调用边界应用。已有草稿时继续用于编辑或补全，Ctrl+P命令面板打开时按面板交互处理。
 
 `/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
+
+运行设置可在空闲界面调整：`/cd PATH` 将当前会话迁移到现有目录并持久保存工作区；相对路径按当前工作区解析。`/model PROFILE` 选择模型配置并建立新的空会话；`/effort low|medium|high|xhigh|max|default` 与 `/thinking` 等价，修改当前进程的思考强度。`/sandbox on|off|status` 分别选择平台原生后端、Host兼容后端或显示当前选择；该变更只影响后续运行，权限规则、显式deny和PLAN只读边界继续生效。
+
+`/skills`打开用户级与工作区发现的Skill选择器，`/mcps`打开MCP服务选择器，`/plugins`打开已安装插件选择器。选择器支持↑↓、PgUp／PgDn和Enter，Esc返回保留的草稿。MCP服务的Enter操作切换后续运行的启用状态；Skill与Plugin条目Enter打开只读详情。Skill正文激活仍经过运行时Skill工具与权限，Plugin启用／停用仍通过显式 `saya plugin enable|disable` 能力授权。
 
 `/markdown source|render`切换Assistant正文的源码／排版视图，`/footnote NUMBER`跳到最近消息的对应脚注，`/footnote back`返回上一引用。debug构建的 `saya tui-preview [SCENE] [--source]`可打开独立的交互式预览，具体语法、公式／图表回退和场景见[Markdown说明](markdown-rendering.md)。
 

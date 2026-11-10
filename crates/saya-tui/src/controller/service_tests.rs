@@ -255,6 +255,39 @@ async fn profile_selection_clears_the_title_and_previous_context_usage() {
 }
 
 #[tokio::test]
+async fn workspace_and_effort_changes_are_persisted_with_the_open_session() {
+    let (root, mut app) = fixture();
+    create(&mut app).await;
+    let migrated = root.path().join("migrated");
+    std::fs::create_dir(&migrated).unwrap();
+    app.command(&format!("/cd {}", migrated.display()))
+        .await
+        .unwrap();
+    app.command("/effort max").await.unwrap();
+    let prepared = app.prepared.as_ref().unwrap();
+    let stored = prepared
+        .store
+        .load_session(prepared.session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.workspace, migrated.canonicalize().unwrap());
+    assert_eq!(
+        prepared
+            .store
+            .fingerprint(prepared.session.id)
+            .await
+            .unwrap(),
+        app.config.profiles["fixture"].fingerprint().unwrap()
+    );
+    assert_eq!(app.state.thinking_effort.as_deref(), Some("max"));
+    let data_dir = app.config.data_dir.clone();
+    let session_id = prepared.session.id;
+    drop(app);
+    let _lock = SqliteStore::lock_existing(&data_dir, session_id).unwrap();
+}
+
+#[tokio::test]
 async fn configuration_changes_need_explicit_resume_accept_and_failed_resume_releases_lock() {
     let (_root, mut app) = fixture();
     create(&mut app).await;

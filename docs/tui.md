@@ -16,6 +16,18 @@
 | 无子命令且无 TTY，或 stdin 来自管道 | 用法错误／2，stderr 提示显式使用 `saya run --stdin` 等入口 |
 | 无子命令且选择 `--output json` 或 `jsonl` | 用法错误／2，提示选择具体 CLI 子命令 |
 
+## 运行设置与扩展选择器
+
+空闲界面提供以下进程内控制，运行开始后只允许查看：
+
+- `/cd PATH`：规范化和验证目录，检查当前模式的数据目录边界，再将当前会话工作区持久迁移。相对路径以当前工作区为基准。
+- `/model PROFILE`：选择已配置模型 profile，并清空当前视图建立新的空会话；裸 `/model` 列出 profile、模型与协议。
+- `/effort LEVEL`、`/thinking LEVEL`：接受 `low`、`medium`、`high`、`xhigh`、`max`、`default`，更新后续请求并持久会话指纹；不修改磁盘配置文件。
+- `/sandbox on|off|status`：`on`选择平台原生Auto后端，`off`选择Host兼容后端，裸命令或`status`显示当前设置。切换只影响后续Run，权限、显式deny与PLAN边界不变。
+- `/skills`、`/mcps`、`/plugins`：打开键盘选择器。↑↓或PgUp／PgDn移动，Enter选择，Esc关闭且保留聊天草稿。MCP服务Enter切换后续Run启用状态；Skill与Plugin Enter显示只读来源、状态和能力信息，不授予工具或执行权限。
+
+命令补全可见时，Enter直接执行选中的完整无参数命令。以空格结尾的参数脚手架只填入编辑器，仍需用户提供参数。`/resume ID` 继续从TUI恢复保存会话；CLI `saya resume ID` 继续进入文本聊天恢复入口。
+
 顶层 `Option<Command>` 已存在，实施重点为路由、TTY 判断、参数兼容和终端生命周期。位置路径简写与顶层 `--session` 属于后续易用性候选。首版通过 `--cwd` 选择工作区，通过 TUI 会话浏览器恢复。
 
 路由和 TTY 校验先于运行准备、数据库打开及终端切换。用法错误路径的模型请求与工具调用均为零。

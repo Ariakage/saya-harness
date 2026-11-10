@@ -162,14 +162,18 @@ async fn enter_executes_the_highlighted_command_and_repeated_enter_cannot_submit
 #[tokio::test]
 async fn argument_scaffolds_preserve_existing_slash_drafts_and_extreme_selection_is_bounded() {
     let (_root, mut app) = fixture();
+    let scaffold = COMMANDS
+        .iter()
+        .rposition(|command| command.text == "/export-full markdown ")
+        .unwrap();
     app.state.editor.set_text("/mode build");
-    app.state.command_palette = Some(COMMANDS.len() - 1);
+    app.state.command_palette = Some(scaffold);
     app.key(press(KeyCode::Enter)).await.unwrap();
     assert_eq!(app.state.editor.text(), "/mode build");
     assert_eq!(app.config.mode, WorkMode::Work);
     assert!(app.ui_job.is_none());
     app.state.editor.clear();
-    app.state.command_palette = Some(usize::MAX);
+    app.state.command_palette = Some(scaffold);
     app.key(press(KeyCode::Enter)).await.unwrap();
     assert_eq!(app.state.editor.text(), "/export-full markdown ");
     assert!(app.state.command_palette.is_none());

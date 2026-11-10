@@ -129,6 +129,46 @@ pub const COMMANDS: &[Suggestion] = &[
         text: "/export-full markdown ",
         description: "Add a new target path for a full Markdown export with tool records",
     },
+    Suggestion {
+        text: "/cd ",
+        description: "Add a directory to use as the workspace",
+    },
+    Suggestion {
+        text: "/sandbox status",
+        description: "Show whether native sandbox execution is enabled",
+    },
+    Suggestion {
+        text: "/sandbox on",
+        description: "Use the platform native sandbox for subsequent runs",
+    },
+    Suggestion {
+        text: "/sandbox off",
+        description: "Use host execution without native isolation for subsequent runs",
+    },
+    Suggestion {
+        text: "/model ",
+        description: "Add a configured model profile name to select while idle",
+    },
+    Suggestion {
+        text: "/effort ",
+        description: "Add low, medium, high, xhigh, max, or default for thinking effort",
+    },
+    Suggestion {
+        text: "/thinking ",
+        description: "Alias for /effort thinking effort selection",
+    },
+    Suggestion {
+        text: "/skills",
+        description: "Open the discovered Skill selector",
+    },
+    Suggestion {
+        text: "/mcps",
+        description: "Open the configured MCP server selector",
+    },
+    Suggestion {
+        text: "/plugins",
+        description: "Open the installed Plugin selector",
+    },
 ];
 
 /// Completion state for a single editor prefix. Updates perform no I/O.
@@ -230,7 +270,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 30);
+        assert_eq!(COMMANDS.len(), 40);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -262,6 +302,16 @@ mod tests {
             "/export markdown ",
             "/export-full json ",
             "/export-full markdown ",
+            "/cd ",
+            "/sandbox status",
+            "/sandbox on",
+            "/sandbox off",
+            "/model ",
+            "/effort ",
+            "/thinking ",
+            "/skills",
+            "/mcps",
+            "/plugins",
         ];
         assert_eq!(
             COMMANDS.iter().map(|item| item.text).collect::<Vec<_>>(),
@@ -342,7 +392,7 @@ mod tests {
         let mut completion = Completion::default();
         completion.update("/m", 2, true);
         completion.previous();
-        assert_eq!(completion.current().unwrap().text, "/markdown source");
+        assert_eq!(completion.current().unwrap().text, "/mcps");
         completion.next();
         assert_eq!(completion.selected, 0);
         completion.next();

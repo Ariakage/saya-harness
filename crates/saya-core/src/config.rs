@@ -562,12 +562,15 @@ pub struct Config {
     env: Environment,
 }
 impl Config {
+    /// Captured HOME used for user-level discovery and default storage roots.
+    pub fn home(&self) -> Option<PathBuf> {
+        self.env.path("HOME")
+    }
     pub fn memory_root(&self) -> Result<PathBuf, BoundaryError> {
         let root = match &self.memory.root {
             Some(root) => root.clone(),
             None => self
-                .env
-                .path("HOME")
+                .home()
                 .ok_or_else(|| invalid("HOME is required for the default memory root"))?
                 .join(".saya"),
         };

@@ -44,6 +44,7 @@ const MAX_FOOTNOTE_ANCHORS: usize = 2048;
 const MAX_FOOTNOTE_HISTORY: usize = 64;
 
 mod memory;
+mod picker;
 mod render_cache;
 use render_cache::RenderCache;
 mod selection;
@@ -101,6 +102,33 @@ pub struct MemoryPanel {
     pub page_rows: usize,
     pub busy: bool,
     pub confirmation: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerKind {
+    Skills,
+    Mcps,
+    Plugins,
+}
+
+#[derive(Debug, Clone)]
+pub struct PickerItem {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub details: Vec<String>,
+    pub active: bool,
+}
+
+#[derive(Debug)]
+pub struct PickerPanel {
+    pub kind: PickerKind,
+    pub title: String,
+    pub items: Vec<PickerItem>,
+    pub selected: usize,
+    pub scroll: usize,
+    pub page_rows: usize,
+    pub hint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +194,7 @@ pub struct State {
     /// Selected catalog index while the command modal is open.
     pub command_palette: Option<usize>,
     pub memory_panel: Option<MemoryPanel>,
+    pub picker_panel: Option<PickerPanel>,
     pub markdown_display: MarkdownDisplay,
     pub messages: VecDeque<Message>,
     pub details: Option<Details>,
@@ -223,6 +252,7 @@ impl Default for State {
             completion: Completion::default(),
             command_palette: None,
             memory_panel: None,
+            picker_panel: None,
             markdown_display: MarkdownDisplay::default(),
             messages: VecDeque::new(),
             details: None,
@@ -254,6 +284,16 @@ impl Default for State {
 impl State {
     /// Handle presentation-only mouse gestures, including selection and clicks.
     pub fn mouse(&mut self, event: MouseEvent) -> bool {
+        if let Some(panel) = &mut self.picker_panel {
+            match event.kind {
+                MouseEventKind::ScrollUp => panel.selected = panel.selected.saturating_sub(1),
+                MouseEventKind::ScrollDown if !panel.items.is_empty() => {
+                    panel.selected = panel.selected.saturating_add(1).min(panel.items.len() - 1)
+                }
+                _ => return false,
+            }
+            return true;
+        }
         if let Some(panel) = &mut self.memory_panel {
             if contains(self.details_viewport, event.column, event.row) {
                 match event.kind {
@@ -312,7 +352,10 @@ impl State {
 
     /// Queue a clipboard request for selected visible text. No terminal I/O occurs here.
     pub fn copy_text_selection(&mut self) -> bool {
-        if self.command_palette.is_some() || self.completion_viewport.is_some() {
+        if self.command_palette.is_some()
+            || self.picker_panel.is_some()
+            || self.completion_viewport.is_some()
+        {
             self.selection.reset();
             return false;
         }
@@ -411,6 +454,7 @@ impl State {
         self.details_viewport = None;
         self.completion_viewport = None;
         self.command_palette = None;
+        self.picker_panel = None;
         self.palette_hits.clear();
         self.palette_first = 0;
         self.fold_anchor = None;
@@ -861,7 +905,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     }
     draw_command_palette(frame, state);
     memory::draw(frame, state);
+    picker::draw(frame, state);
     let areas = if state.memory_panel.is_some()
+        || state.picker_panel.is_some()
         || state.command_palette.is_some()
         || state.completion_viewport.is_some()
     {
@@ -2148,7 +2194,10 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
     }
-    if state.command_palette.is_none() {
+    if state.command_palette.is_none()
+        && state.picker_panel.is_none()
+        && state.memory_panel.is_none()
+    {
         frame.set_cursor_position((
             inner.x + (cursor_column - first_column) as u16,
             inner.y + (cursor_row - first_row) as u16,
@@ -2285,6 +2334,8 @@ fn draw_command_palette(frame: &mut Frame<'_>, state: &mut State) {
 
 fn draw_completion(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     if state.command_palette.is_some()
+        || state.memory_panel.is_some()
+        || state.picker_panel.is_some()
         || !state.completion.visible()
         || area.height < 3
         || area.width < 4
@@ -2747,7 +2798,12 @@ mod tests {
         state.editor.set_text("/");
         state.completion.update("/", 1, true);
         assert!(state.completion.items.len() > MAX_COMPLETION_ROWS);
-        state.completion.selected = state.completion.items.len() - 1;
+        state.completion.selected = state
+            .completion
+            .items
+            .iter()
+            .rposition(|item| item.text == "/export-full markdown ")
+            .unwrap();
         let selected = state.completion.current().unwrap().text;
         let mut terminal = Terminal::new(TestBackend::new(26, 16)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();

@@ -15,6 +15,8 @@ core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独
 
 默认 `backend = "auto"` 在 macOS 选择 Seatbelt，在 Linux 选择 Bubblewrap。运行开始时实际探测后端，必需约束缺失时返回 `sandbox_capability_unavailable` 等明确错误。后续容器／VM 实现可沿用该接口，并提供实际 guest OS、架构、路径映射、凭据传递和资源语义。配置语法和实际准备分别处理，见[原生隔离配置](configuration.md#n2-原生隔离配置)。
 
+TUI 空闲时可使用 `/sandbox on` 将当前进程的后续 Run 切换为原生 Auto 后端，`/sandbox off` 切换为显式 Host 兼容后端，`/sandbox status` 显示当前选择。该命令不写回配置文件，运行活跃或 UI 操作进行中拒绝执行。关闭沙箱只移除原生文件、网络和 syscall 隔离；权限模式、显式 deny、PLAN 只读边界、凭据存储拒绝及 Host 能力限制继续由原执行链处理。
+
 `host` 是显式选择的兼容后端，文件系统、网络和 syscall 隔离能力报告为 `unsupported`，进程监督按实际能力报告。Host 支持现有单进程 rlimit，聚合资源能力为 `unsupported`。显式提供 `cgroup_root` 或请求任一聚合限制时，准备返回 `sandbox_capability_unavailable`。Host 缺少文件系统边界，同 UID 进程仍可访问其有权写入的其他 cgroup，聚合硬约束要求原生隔离。
 
 底层准备继续拒绝要求保护路径或代理隔离的 Host 策略。共享应用在启用凭据引用或已有私有凭据存储时拒绝 Host 启动，私有存储和默认保护路径见[MCP 与凭据管理](mcp.md#私有存储与执行边界)。权限模式和后端选择分别生效。

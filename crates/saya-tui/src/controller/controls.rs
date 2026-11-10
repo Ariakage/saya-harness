@@ -2,7 +2,10 @@
 use super::*;
 use crate::view::{Details, MarkdownDisplay};
 use saya_app::interaction::Request;
-use saya_core::{boundary::StoreChange, contract::PermissionMode};
+use saya_core::{
+    boundary::StoreChange, config::ThinkingEffort, contract::PermissionMode, execution::BackendKind,
+};
+use std::path::Path;
 
 fn mode(value: &str) -> Option<WorkMode> {
     match value.to_ascii_lowercase().as_str() {
@@ -21,6 +24,17 @@ fn permission(value: &str) -> Option<PermissionMode> {
         _ => None,
     }
 }
+fn effort(value: &str) -> Option<Option<ThinkingEffort>> {
+    match value.to_ascii_lowercase().as_str() {
+        "low" => Some(Some(ThinkingEffort::Low)),
+        "medium" => Some(Some(ThinkingEffort::Medium)),
+        "high" => Some(Some(ThinkingEffort::High)),
+        "xhigh" => Some(Some(ThinkingEffort::XHigh)),
+        "max" => Some(Some(ThinkingEffort::Max)),
+        "default" => Some(None),
+        _ => None,
+    }
+}
 pub(super) fn closed(request: &Request) -> bool {
     match request {
         Request::Approval(_, reply) => reply.is_closed(),
@@ -28,6 +42,141 @@ pub(super) fn closed(request: &Request) -> bool {
     }
 }
 impl App {
+    pub(super) fn require_idle_configuration(&self) -> Result<()> {
+        if self.active.is_some() || self.ui_job.is_some() {
+            return Err("Runtime settings can be changed while idle".into());
+        }
+        if self.pending.is_some() {
+            return Err("Answer or dismiss the current Agent request first".into());
+        }
+        Ok(())
+    }
+    async fn change_workspace(&mut self, argument: &str) -> Result<()> {
+        self.require_idle_configuration()?;
+        if argument.is_empty() {
+            self.notice(&format!(
+                "Workspace — {}",
+                self.config.cwd.to_string_lossy()
+            ));
+            return Ok(());
+        }
+        let requested = Path::new(argument);
+        let path = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            self.config.cwd.join(requested)
+        };
+        let workspace = std::fs::canonicalize(path)
+            .map_err(|_| "Workspace directory does not exist or is unavailable")?;
+        if !workspace.is_dir() {
+            return Err("Workspace must be a directory".into());
+        }
+        session::check_roots(&self.config, &workspace, self.current_mode()?)?;
+        let previous = self.config.cwd.clone();
+        self.config.cwd = workspace.clone();
+        if let Some(prepared) = &mut self.prepared {
+            let mut updated = prepared.session.clone();
+            updated.workspace = workspace;
+            let fingerprint = self
+                .config
+                .profiles
+                .get(&updated.profile)
+                .ok_or("session profile not found")?
+                .fingerprint()?;
+            if let Err(error) = prepared
+                .store
+                .update_session_config(&updated, &fingerprint)
+                .await
+            {
+                self.config.cwd = previous;
+                return Err(Box::new(error));
+            }
+            prepared.session = updated;
+        }
+        self.state.details = None;
+        self.state.details_scroll = 0;
+        self.state.skills_count = None;
+        self.reset_context();
+        self.refresh_header();
+        self.notice("Workspace changed for subsequent runs in this session.");
+        Ok(())
+    }
+    async fn select_effort(&mut self, argument: &str) -> Result<()> {
+        self.require_idle_configuration()?;
+        let name = self
+            .config
+            .profile
+            .clone()
+            .ok_or("Choose a configured model profile first")?;
+        let current = self
+            .config
+            .profiles
+            .get(&name)
+            .and_then(|profile| profile.thinking_effort)
+            .map_or("default", ThinkingEffort::as_str);
+        if argument.is_empty() {
+            self.notice(&format!(
+                "Thinking effort — {current} · use low|medium|high|xhigh|max|default"
+            ));
+            return Ok(());
+        }
+        let selected = effort(argument).ok_or("Use /effort low|medium|high|xhigh|max|default")?;
+        let previous = self
+            .config
+            .profiles
+            .get(&name)
+            .ok_or("Selected profile is unavailable")?
+            .thinking_effort;
+        let fingerprint = {
+            let profile = self
+                .config
+                .profiles
+                .get_mut(&name)
+                .ok_or("Selected profile is unavailable")?;
+            profile.thinking_effort = selected;
+            profile.fingerprint()?
+        };
+        if let Some(prepared) = &self.prepared
+            && let Err(error) = prepared
+                .store
+                .update_session_config(&prepared.session, &fingerprint)
+                .await
+        {
+            if let Some(profile) = self.config.profiles.get_mut(&name) {
+                profile.thinking_effort = previous;
+            }
+            return Err(Box::new(error));
+        }
+        self.refresh_header();
+        let value = selected.map_or("default", ThinkingEffort::as_str);
+        self.notice(&format!(
+            "Thinking effort set to {value} for subsequent requests."
+        ));
+        Ok(())
+    }
+    fn set_sandbox(&mut self, argument: &str) -> Result<()> {
+        self.require_idle_configuration()?;
+        match argument.to_ascii_lowercase().as_str() {
+            "" | "status" => {
+                self.notice(&format!(
+                    "Sandbox — {}",
+                    sandbox_label(self.config.sandbox.backend)
+                ));
+            }
+            "on" => {
+                self.config.sandbox.backend = BackendKind::Auto;
+                self.notice("Sandbox enabled for subsequent runs: platform native backend.");
+            }
+            "off" => {
+                self.config.sandbox.backend = BackendKind::Host;
+                self.notice(
+                    "Sandbox disabled for subsequent runs. Host execution has no filesystem, network, or syscall isolation.",
+                );
+            }
+            _ => return Err("Use /sandbox on|off|status".into()),
+        }
+        Ok(())
+    }
     pub(super) async fn cycle_mode(&mut self) -> Result<()> {
         let selected = if let Some(mode) = self.deferred_mode {
             mode
@@ -310,6 +459,15 @@ impl App {
                 self.refresh_header();
                 self.notice("Permissions updated for subsequent tool calls.");
             }
+            "/cd" => self.change_workspace(argument).await?,
+            "/sandbox" => self.set_sandbox(argument)?,
+            "/effort" | "/thinking" => self.select_effort(argument).await?,
+            "/skills" | "/mcps" | "/plugins" => {
+                if !argument.is_empty() {
+                    return Err(format!("Use {name} without arguments").into());
+                }
+                self.open_picker(&name[1..]).await?
+            }
             "/markdown" => {
                 let display = match argument {
                     "source" => MarkdownDisplay::Source,
@@ -346,12 +504,13 @@ impl App {
                     .map(|prepared| prepared.session.id.0.to_string())
                     .unwrap_or_else(|| "No session".into());
                 self.notice(&format!(
-                    "{} · session {} · mode {} · pending {:?} · permissions {} · Markdown {}",
+                    "{} · session {} · mode {} · pending {:?} · permissions {} · sandbox {} · Markdown {}",
                     self.state.status,
                     session,
                     self.state.mode,
                     self.state.pending_mode,
                     self.state.permissions,
+                    sandbox_label(self.config.sandbox.backend),
                     self.state.markdown_display.as_str()
                 ));
             }
@@ -371,6 +530,9 @@ impl App {
                             "Click a footnote number to jump to its definition; click its definition marker to return".into(),
                             "/footnote NUMBER jumps in the newest matching assistant message; /footnote back returns".into(),
                             "/markdown source|render selects the assistant presentation".into(),
+                            "/cd PATH changes this session workspace; /sandbox on|off|status controls native isolation".into(),
+                            "/effort|/thinking LEVEL changes reasoning effort; /model PROFILE changes model profile".into(),
+                            "/skills, /mcps and /plugins open selectors · ↑↓ move · Enter selects · Esc closes".into(),
                             "/compact summarizes saved history, or queues at the next model boundary during a run".into(),
                             "/memory opens current memory, source/scope, review, forgetting, history and backup controls".into(),
                             "Type / for suggestions · ↑/↓ select · Tab/→ complete · Esc dismiss"
@@ -380,12 +542,21 @@ impl App {
                 });
                 self.state.details_scroll = 0;
             }
-            "/new" | "/profile" | "/profiles" | "/resume" | "/resume-accept" | "/sessions"
-            | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job" => {
+            "/new" | "/profile" | "/model" | "/profiles" | "/resume" | "/resume-accept"
+            | "/sessions" | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job" => {
                 self.service(name, argument).await?
             }
             _ => return Err("Unknown command. Ctrl+P shows available commands.".into()),
         }
         Ok(false)
+    }
+}
+
+fn sandbox_label(backend: BackendKind) -> &'static str {
+    match backend {
+        BackendKind::Auto => "on (native at run start)",
+        BackendKind::Seatbelt => "on (Seatbelt)",
+        BackendKind::Bubblewrap => "on (Bubblewrap)",
+        BackendKind::Host => "off (host compatibility)",
     }
 }

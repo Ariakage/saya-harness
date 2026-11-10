@@ -13,6 +13,7 @@ pub(super) enum UiResult {
     Session { prepared: Prepared, resumed: bool },
     Export(serde_json::Value),
     Memory(super::memory::MemoryUiResult),
+    Picker(crate::view::PickerPanel),
 }
 pub(super) struct UiJob {
     pub cancel: Arc<RunCancellation>,
@@ -122,10 +123,32 @@ impl App {
                 });
                 self.begin_ui(cancel, join);
             }
-            "/profile" => {
+            "/model" if argument.is_empty() => {
+                self.state.set_details(Details {
+                    title: "Configured models · UI".into(),
+                    lines: self
+                        .config
+                        .profiles
+                        .iter()
+                        .map(|(name, profile)| {
+                            self.safe(&format!(
+                                "{name} · {} · {:?}",
+                                profile.model, profile.protocol
+                            ))
+                        })
+                        .chain(std::iter::once(
+                            "Select with /model PROFILE while idle".into(),
+                        ))
+                        .collect(),
+                });
+                self.state.details_scroll = 0;
+            }
+            "/profile" | "/model" => {
                 self.require_idle()?;
                 if !self.config.profiles.contains_key(argument) {
-                    return Err("Unknown configured profile; use /profiles".into());
+                    return Err(
+                        "Unknown configured model profile; use /profiles or /model PROFILE".into(),
+                    );
                 }
                 self.config.profile = Some(argument.into());
                 self.prepared = None;
@@ -135,7 +158,7 @@ impl App {
                 self.reset_context();
                 self.state.status = "Ready".into();
                 self.refresh_header();
-                self.notice("Profile selected. New session is waiting for your message.");
+                self.notice("Model profile selected. New session is waiting for your message.");
             }
             "/profiles" => {
                 self.state.set_details(Details {
@@ -151,7 +174,7 @@ impl App {
                             ))
                         })
                         .chain(std::iter::once(
-                            "Select with /profile NAME while idle".into(),
+                            "Select with /model PROFILE or /profile PROFILE while idle".into(),
                         ))
                         .collect(),
                 });
@@ -397,6 +420,14 @@ impl App {
         }
         match result {
             Ok(UiResult::Memory(result)) => self.finish_memory(result, cancelled)?,
+            Ok(UiResult::Picker(panel)) => {
+                if cancelled {
+                    self.notice("Selector loading cancelled");
+                } else {
+                    self.state.picker_panel = Some(self.safe_picker(panel));
+                    self.state.details = None;
+                }
+            }
             Ok(UiResult::Details(_)) if cancelled => self.notice("UI query cancelled"),
             Ok(UiResult::Session { .. }) if cancelled => {
                 self.notice("Session metadata prepared; view activation cancelled")

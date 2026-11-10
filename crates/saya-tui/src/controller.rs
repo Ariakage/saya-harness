@@ -12,6 +12,9 @@ mod message_tests;
 mod messages;
 #[cfg(test)]
 mod palette_tests;
+mod picker;
+#[cfg(test)]
+mod picker_tests;
 #[cfg(test)]
 mod service_tests;
 mod services;
@@ -153,6 +156,17 @@ impl App {
         secrets.extend(self.secrets.iter().cloned());
         Ok(secrets)
     }
+    fn refresh_secret_inputs(&mut self) -> std::result::Result<(), BoundaryError> {
+        let secrets = self
+            .config
+            .secret_env_names()
+            .iter()
+            .map(|name| self.config.secret(name).map(str::to_owned))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        self.secret_registry.register(&secrets)?;
+        self.secrets = secrets;
+        Ok(())
+    }
     fn safe(&self, text: &str) -> String {
         let mut value = serde_json::Value::String(text.into());
         let Ok(secrets) = self.current_secrets() else {
@@ -165,6 +179,16 @@ impl App {
             .as_str()
             .unwrap_or("Sensitive details withheld")
             .into()
+    }
+    fn safe_picker(&self, mut panel: view::PickerPanel) -> view::PickerPanel {
+        panel.title = self.safe(&panel.title);
+        panel.hint = self.safe(&panel.hint);
+        for item in &mut panel.items {
+            item.label = self.safe(&item.label);
+            item.description = self.safe(&item.description);
+            item.details = item.details.iter().map(|line| self.safe(line)).collect();
+        }
+        panel
     }
     fn notice(&mut self, text: &str) {
         self.state
@@ -656,7 +680,9 @@ impl App {
         self.state.completion.update(
             self.state.editor.text(),
             self.state.editor.cursor(),
-            self.state.command_palette.is_none() && self.state.memory_panel.is_none(),
+            self.state.command_palette.is_none()
+                && self.state.memory_panel.is_none()
+                && self.state.picker_panel.is_none(),
         );
     }
     async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -665,6 +691,9 @@ impl App {
                 && key.kind != KeyEventKind::Press)
         {
             return Ok(false);
+        }
+        if self.state.picker_panel.is_some() {
+            return self.picker_key(key).await;
         }
         if self.state.memory_panel.is_some() {
             return self.memory_key(key).await;
@@ -769,6 +798,20 @@ impl App {
         {
             self.state.completion.dismiss();
             return Ok(false);
+        }
+        if key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+            && self.state.completion.visible()
+            && let Some(suggestion) = self.state.completion.current()
+        {
+            let command = suggestion.text;
+            self.state.editor.set_text(command);
+            if command.ends_with(' ') {
+                return Ok(false);
+            }
+            let exit = self.command(command).await?;
+            self.state.editor.clear();
+            return Ok(exit);
         }
         if key.code == KeyCode::Tab
             && key.modifiers.is_empty()
@@ -942,10 +985,12 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                 app.mouse(event);
             }
             Action::Input(Some(Ok(TerminalEvent::Paste(text)))) => {
-                if let Some(panel) = &mut app.state.memory_panel {
-                    panel.input.insert_paste(&text);
-                } else if app.state.command_palette.is_none() {
-                    app.state.editor.insert_paste(&text);
+                if app.state.picker_panel.is_none() {
+                    if let Some(panel) = &mut app.state.memory_panel {
+                        panel.input.insert_paste(&text);
+                    } else if app.state.command_palette.is_none() {
+                        app.state.editor.insert_paste(&text);
+                    }
                 }
             }
             Action::Input(Some(Ok(_))) | Action::Tick => {}

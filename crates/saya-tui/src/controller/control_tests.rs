@@ -119,6 +119,84 @@ async fn markdown_display_commands_change_only_ui_preference_and_keep_pending_ap
 }
 
 #[tokio::test]
+async fn runtime_commands_change_sandbox_effort_and_model_without_reusing_approvals() {
+    let (_root, mut app) = fixture();
+    app.command("/permissions manual").await.unwrap();
+    app.command("/sandbox off").await.unwrap();
+    assert_eq!(
+        app.config.sandbox.backend,
+        saya_core::execution::BackendKind::Host
+    );
+    assert_eq!(app.config.permissions_mode, PermissionMode::Manual);
+    app.command("/sandbox on").await.unwrap();
+    assert_eq!(
+        app.config.sandbox.backend,
+        saya_core::execution::BackendKind::Auto
+    );
+    app.command("/effort high").await.unwrap();
+    assert_eq!(
+        app.config.profiles["fixture"].thinking_effort,
+        Some(saya_core::config::ThinkingEffort::High)
+    );
+    assert_eq!(app.state.thinking_effort.as_deref(), Some("high"));
+    app.command("/thinking default").await.unwrap();
+    assert_eq!(app.config.profiles["fixture"].thinking_effort, None);
+    assert_eq!(app.state.thinking_effort, None);
+    let mut other = app.config.profiles["fixture"].clone();
+    other.model = "other-model".into();
+    app.config.profiles.insert("other".into(), other);
+    app.command("/model other").await.unwrap();
+    assert_eq!(app.config.profile.as_deref(), Some("other"));
+    assert_eq!(app.state.model, "other-model");
+    assert_eq!(app.config.permissions_mode, PermissionMode::Manual);
+    assert!(app.command("/sandbox maybe").await.is_err());
+    assert!(app.command("/effort impossible").await.is_err());
+}
+
+#[tokio::test]
+async fn cd_uses_an_absolute_or_relative_directory_and_stays_idle_only() {
+    let (root, mut app) = fixture();
+    let nested = app.config.cwd.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    app.command("/cd nested").await.unwrap();
+    assert_eq!(app.config.cwd, nested.canonicalize().unwrap());
+    assert_eq!(
+        app.state.workspace,
+        nested.canonicalize().unwrap().to_string_lossy()
+    );
+    let outside = root.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    app.command(&format!("/cd {}", outside.display()))
+        .await
+        .unwrap();
+    assert_eq!(app.config.cwd, outside.canonicalize().unwrap());
+    let file = root.path().join("not-a-directory");
+    std::fs::write(&file, "x").unwrap();
+    assert!(
+        app.command(&format!("/cd {}", file.display()))
+            .await
+            .is_err()
+    );
+    assert_eq!(app.config.cwd, outside.canonicalize().unwrap());
+}
+
+#[tokio::test]
+async fn enter_executes_the_selected_completion_without_tab_or_right() {
+    let (_root, mut app) = fixture();
+    app.state.editor.set_text("/sand");
+    app.key(key(KeyCode::Enter, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert!(app.state.editor.text().is_empty());
+    assert!(
+        app.state
+            .messages
+            .iter()
+            .any(|message| message.text.contains("Sandbox —"))
+    );
+}
+
+#[tokio::test]
 async fn empty_tab_cycles_all_modes_without_creating_a_conversation_or_notices() {
     let (_root, mut app) = fixture();
     for mode in [
