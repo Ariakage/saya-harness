@@ -20,7 +20,7 @@ mod service_tests;
 mod services;
 mod turn_summary;
 use crate::{
-    attachments,
+    attachments, clipboard,
     commands::COMMANDS,
     i18n::{common, controller as text, permissions as permission_text, view as ui_text},
     input::TerminalInput,
@@ -191,7 +191,7 @@ impl App {
             attachments::parse_paste(text, &self.config.cwd, next_image, next_file)
         {
             self.state.editor.insert(&insertion.text);
-            self.draft_attachments.extend(insertion.attachments);
+            self.add_attachments(insertion.attachments);
         } else {
             self.state.editor.insert_paste(text);
         }
@@ -202,6 +202,43 @@ impl App {
     }
     fn expand_attachments(&self, text: &str) -> String {
         attachments::expand(text, &self.draft_attachments)
+    }
+    async fn paste_clipboard(&mut self) -> Result<()> {
+        let Some(home) = self.config.home() else {
+            self.notice(text::CLIPBOARD_EMPTY);
+            return Ok(());
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || clipboard::read(&home)),
+        )
+        .await
+        .map_err(|_| text::CLIPBOARD_READ_TIMEOUT)?
+        .map_err(|_| text::CLIPBOARD_READ_FAILED)?;
+        match result {
+            Ok(clipboard::Paste::Image(path)) => {
+                self.insert_image_attachment(&path);
+            }
+            Ok(clipboard::Paste::Text(text)) => self.insert_paste(&text),
+            Ok(clipboard::Paste::Empty) => self.notice(text::CLIPBOARD_EMPTY),
+            Err(error) => self.notice(&text::clipboard_read_failed(&error)),
+        }
+        Ok(())
+    }
+    fn insert_image_attachment(&mut self, path: &std::path::Path) {
+        let number = attachments::next_number(self.state.editor.text(), attachments::Kind::Image);
+        if let Some(attachment) = attachments::image_attachment(path, number) {
+            self.state.editor.insert(&attachment.token);
+            self.add_attachments(vec![attachment]);
+        }
+    }
+    fn add_attachments(&mut self, attachments: Vec<attachments::Attachment>) {
+        self.draft_attachments.retain(|current| {
+            !attachments
+                .iter()
+                .any(|attachment| attachment.token == current.token)
+        });
+        self.draft_attachments.extend(attachments);
     }
     fn safe_picker(&self, mut panel: view::PickerPanel) -> view::PickerPanel {
         panel.title = self.safe(&panel.title);
@@ -743,6 +780,15 @@ impl App {
         {
             return Ok(false);
         }
+        if key.kind == KeyEventKind::Press
+            && key.modifiers.contains(KeyModifiers::SUPER)
+            && matches!(key.code, KeyCode::Char('v' | 'V'))
+        {
+            if self.state.command_palette.is_none() {
+                self.paste_clipboard().await?;
+            }
+            return Ok(false);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => {
@@ -770,6 +816,12 @@ impl App {
                     } else {
                         Some(0)
                     };
+                    return Ok(false);
+                }
+                KeyCode::Char('v') => {
+                    if key.kind == KeyEventKind::Press && self.state.command_palette.is_none() {
+                        self.paste_clipboard().await?;
+                    }
                     return Ok(false);
                 }
                 KeyCode::Char('d') if self.state.editor.text().is_empty() => {
@@ -906,6 +958,37 @@ impl App {
                     }
                     _ => {}
                 }
+            }
+        }
+        if key.modifiers.is_empty() && key.kind != KeyEventKind::Release {
+            let text = self.state.editor.text();
+            let cursor = self.state.editor.cursor();
+            match key.code {
+                KeyCode::Left => {
+                    if let Some(target) = attachments::move_left_target(text, cursor) {
+                        self.state.editor.set_cursor(target);
+                        return Ok(false);
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(target) = attachments::move_right_target(text, cursor) {
+                        self.state.editor.set_cursor(target);
+                        return Ok(false);
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some(range) = attachments::backspace_range(text, cursor) {
+                        self.state.editor.delete_range(range.start, range.end);
+                        return Ok(false);
+                    }
+                }
+                KeyCode::Delete => {
+                    if let Some(range) = attachments::delete_range(text, cursor) {
+                        self.state.editor.delete_range(range.start, range.end);
+                        return Ok(false);
+                    }
+                }
+                _ => {}
             }
         }
         match key.code {

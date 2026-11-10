@@ -33,6 +33,15 @@ impl Kind {
     }
 }
 
+pub(crate) fn image_attachment(path: &Path, number: u64) -> Option<Attachment> {
+    let path = path.to_string_lossy();
+    (!path.contains(['\0', '\n', '\r', '<', '>'])).then(|| Attachment {
+        token: Kind::Image.token(number),
+        path: path.into_owned(),
+        kind: Kind::Image,
+    })
+}
+
 pub(crate) fn parse_paste(
     text: &str,
     cwd: &Path,
@@ -154,6 +163,60 @@ pub(crate) fn token_ranges(text: &str) -> Vec<TokenRange> {
     }
     ranges.sort_by_key(|range| range.start);
     ranges
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AtomicRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+pub(crate) fn atomic_ranges(text: &str) -> Vec<AtomicRange> {
+    token_ranges(text)
+        .into_iter()
+        .map(|range| {
+            let start = if range.kind == Kind::File {
+                let owner = crate::i18n::attachments::FILE_OWNER;
+                if text[..range.start].ends_with(owner) {
+                    range.start - owner.len()
+                } else {
+                    range.start
+                }
+            } else {
+                range.start
+            };
+            AtomicRange {
+                start,
+                end: range.end,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn backspace_range(text: &str, cursor: usize) -> Option<AtomicRange> {
+    atomic_ranges(text)
+        .into_iter()
+        .find(|range| range.start < cursor && cursor <= range.end)
+}
+
+pub(crate) fn delete_range(text: &str, cursor: usize) -> Option<AtomicRange> {
+    atomic_ranges(text)
+        .into_iter()
+        .find(|range| range.start <= cursor && cursor < range.end)
+}
+
+pub(crate) fn move_left_target(text: &str, cursor: usize) -> Option<usize> {
+    atomic_ranges(text)
+        .into_iter()
+        .find(|range| range.start < cursor && cursor <= range.end)
+        .map(|range| range.start)
+}
+
+pub(crate) fn move_right_target(text: &str, cursor: usize) -> Option<usize> {
+    atomic_ranges(text)
+        .into_iter()
+        .find(|range| range.start <= cursor && cursor < range.end)
+        .map(|range| range.end)
 }
 
 fn candidate_paths(text: &str) -> Option<Vec<String>> {
@@ -352,5 +415,44 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         assert!(parse_paste("please inspect this", root.path(), 1, 1).is_none());
         assert!(parse_paste("/missing/file.png", root.path(), 1, 1).is_none());
+    }
+
+    #[test]
+    fn attachment_tokens_are_atomic_for_navigation_and_deletion() {
+        let text = "before [Image 1] File: [File 2] after";
+        let image = text.find("[Image 1]").unwrap();
+        let file = text.find("File: [File 2]").unwrap();
+        assert_eq!(
+            atomic_ranges(text),
+            vec![
+                AtomicRange {
+                    start: image,
+                    end: image + "[Image 1]".len(),
+                },
+                AtomicRange {
+                    start: file,
+                    end: file + "File: [File 2]".len(),
+                },
+            ]
+        );
+        assert_eq!(move_left_target(text, image + 4), Some(image));
+        assert_eq!(
+            move_right_target(text, file + 2),
+            Some(file + "File: [File 2]".len())
+        );
+        assert_eq!(
+            backspace_range(text, image + 4),
+            Some(AtomicRange {
+                start: image,
+                end: image + "[Image 1]".len(),
+            })
+        );
+        assert_eq!(
+            delete_range(text, file + 2),
+            Some(AtomicRange {
+                start: file,
+                end: file + "File: [File 2]".len(),
+            })
+        );
     }
 }

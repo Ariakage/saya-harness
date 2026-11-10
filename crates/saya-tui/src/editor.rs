@@ -138,6 +138,19 @@ impl Editor {
         self.normalize_cursor();
     }
 
+    pub(crate) fn set_cursor(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.text.len());
+        self.normalize_cursor();
+    }
+
+    pub(crate) fn delete_range(&mut self, start: usize, end: usize) {
+        if start <= end && end <= self.text.len() {
+            self.text.replace_range(start..end, "");
+            self.cursor = start;
+            self.normalize_cursor();
+        }
+    }
+
     /// Return the logical line and visible display column for the input cursor.
     pub fn cursor_position(&self) -> (usize, usize) {
         let prefix = &self.text[..self.cursor];

@@ -101,6 +101,47 @@ fn pasted_files_become_highlightable_tokens_while_model_text_keeps_the_path() {
 }
 
 #[tokio::test]
+async fn pasted_tokens_move_and_delete_as_atomic_units() {
+    let (_root, mut app) = fixture();
+    let image = app.config.cwd.join("image.png");
+    let file = app.config.cwd.join("notes.md");
+    std::fs::write(&image, b"png").unwrap();
+    std::fs::write(&file, b"notes").unwrap();
+    app.insert_paste(&format!("'{}' '{}'", image.display(), file.display()));
+    assert_eq!(app.state.editor.text(), "[Image 1] File: [File 1]");
+    app.state.editor.set_cursor(3);
+    app.key(key(KeyCode::Left, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.cursor(), 0);
+    app.state.editor.set_cursor(3);
+    app.key(key(KeyCode::Backspace, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), " File: [File 1]");
+    app.state.editor.set_cursor(3);
+    app.key(key(KeyCode::Delete, KeyEventKind::Press))
+        .await
+        .unwrap();
+    assert_eq!(app.state.editor.text(), " ");
+}
+
+#[test]
+fn clipboard_image_path_inserts_an_image_token() {
+    let (root, mut app) = fixture();
+    let image = root.path().join(".saya/paste_image/image.png");
+    std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+    std::fs::write(&image, b"png").unwrap();
+    app.insert_image_attachment(&image);
+    assert_eq!(app.state.editor.text(), "[Image 1]");
+    assert_eq!(app.draft_attachments[0].path, image.to_string_lossy());
+    assert_eq!(
+        app.draft_attachments[0].kind,
+        crate::attachments::Kind::Image
+    );
+}
+
+#[tokio::test]
 async fn markdown_display_commands_change_only_ui_preference_and_keep_pending_approval() {
     let (_root, mut app) = fixture();
     let (request, mut reply) = approval(&app, "display-approval");

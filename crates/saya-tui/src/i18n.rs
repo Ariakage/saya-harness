@@ -470,10 +470,14 @@ pub(crate) mod controller {
         "Clear the current draft before entering command arguments.";
     pub const TUI_TEXT_OUTPUT: &str = "TUI requires text output";
     pub const TERMINAL_BLOCKED: &str = "terminal output remained blocked for two seconds";
+    pub const CLIPBOARD_EMPTY: &str = "Clipboard does not contain text or a supported image.";
+    pub const CLIPBOARD_READ_FAILED: &str = "Clipboard image could not be read or saved";
+    pub const CLIPBOARD_READ_TIMEOUT: &str = "Clipboard image read timed out";
     pub const HELP_LINES: &[&str] = &[
         "Enter send · Alt+Enter / Ctrl+J newline",
         "Empty draft · Tab cycles WORK → CODE → PLAN → BUILD",
         "Ctrl+P commands · Ctrl+C cancel · Ctrl+D exit",
+        "Ctrl+V pastes clipboard text or saves a clipboard image under ~/.saya/paste_image",
         "PgUp/PgDn scroll · End follow output",
         "Click thinking / long tool headers to expand or collapse",
         "Ctrl+O toggles the latest foldable card · wheel scrolls the pane under the pointer",
@@ -535,6 +539,9 @@ pub(crate) mod controller {
     }
     pub fn clipboard_failed(error: impl std::fmt::Display) -> String {
         format!("Clipboard request failed — {error}")
+    }
+    pub fn clipboard_read_failed(error: impl std::fmt::Display) -> String {
+        format!("{CLIPBOARD_READ_FAILED} — {error}")
     }
     pub fn command_without_arguments(name: &str) -> String {
         format!("Use {name} without arguments")
@@ -792,6 +799,7 @@ pub(crate) mod attachments {
     pub const FILE_LABEL: &str = "File";
     pub const IMAGE_PREFIX: &str = "[Image ";
     pub const FILE_PREFIX: &str = "[File ";
+    pub const FILE_OWNER: &str = "File: ";
 
     pub fn image(number: u64) -> String {
         format!("[{IMAGE_LABEL} {number}]")

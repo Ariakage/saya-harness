@@ -2654,6 +2654,19 @@ def pasted_file_references_use_display_tokens(binary):
                                 if token in screen.main_row_text(index)), None)
                     if row is None or screen.row_style(row, token, 1, screen.main_width())[0] != color:
                         raise RuntimeError('pasted token did not use its attachment highlight: ' + token)
+                terminal.send(b'\x7f')
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1]',
+                              'backspace removed the complete file token')
+                terminal.send('\x1b[200~' + "'{}'".format(file) + '\x1b[201~')
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1] File: [File 1]',
+                              'file token restored after atomic deletion')
+                terminal.send(b'\x1b[D')
+                terminal.send(b'\x1b[3~')
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1]',
+                              'delete removed the complete file token after atomic left motion')
+                terminal.send('\x1b[200~' + "'{}'".format(file) + '\x1b[201~')
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1] File: [File 1]',
+                              'final file token restored after atomic edits')
                 terminal.send(b'\r')
                 terminal.until('ATTACHMENTS_OK')
                 wait_idle(terminal, root)
