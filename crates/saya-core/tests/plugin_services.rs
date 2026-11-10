@@ -31,13 +31,13 @@ use saya_core::{
     },
 };
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -69,8 +69,10 @@ done
 "#;
 const OBSERVER: &str = r#"#!/bin/sh
 IFS= read -r event || :
-if [ "${1:-}" = descendants ]; then
-    /bin/sh -c 'printf "%s" "$$" > "$HOME/hook-child"; sleep 0.2; printf escaped > "$HOME/hook-child-survived"; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &
+role="${1:-}"
+if [ -n "$role" ]; then
+    /bin/sh -c 'printf "%s" "$$" > "$HOME/hook-child-$1"; while :; do sleep 1; done' sh "$role" </dev/null >/dev/null 2>&1 &
+    while [ ! -e "$HOME/release-$role" ]; do sleep 0.02; done
 fi
 printf 'observed' > "$HOME/hook-ran"
 printf '{"annotations":[{"level":"info","message":"native hook observed"}]}'
@@ -93,7 +95,7 @@ fn nested_host_pid(status: &str, guest: i32) -> Option<i32> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProcessIdentity {
     pid: i32,
-    started: Option<u128>,
+    started: u128,
 }
 #[cfg(target_os = "linux")]
 fn process_started(pid: i32) -> Option<u128> {
@@ -139,10 +141,7 @@ fn host_process(guest: i32) -> Option<ProcessIdentity> {
             };
             if let Some(pid) = nested_host_pid(&status, guest) {
                 let started = process_started(pid)?;
-                return Some(ProcessIdentity {
-                    pid,
-                    started: Some(started),
-                });
+                return Some(ProcessIdentity { pid, started });
             }
         }
         None
@@ -152,8 +151,139 @@ fn host_process(guest: i32) -> Option<ProcessIdentity> {
         let started = process_started(guest)?;
         Some(ProcessIdentity {
             pid: guest,
-            started: Some(started),
+            started,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ProcessRole {
+    ServerMain,
+    ServerChild,
+    HookStartedChild,
+    HookFinishedChild,
+}
+const PROCESS_FILES: [(ProcessRole, &str); 4] = [
+    (ProcessRole::ServerMain, "pid"),
+    (ProcessRole::ServerChild, "server-child"),
+    (ProcessRole::HookStartedChild, "hook-child-started"),
+    (ProcessRole::HookFinishedChild, "hook-child-finished"),
+];
+const HOOK_RELEASES: [(ProcessRole, &str); 2] = [
+    (ProcessRole::HookStartedChild, "started"),
+    (ProcessRole::HookFinishedChild, "finished"),
+];
+
+fn process_has_identity(process: ProcessIdentity) -> bool {
+    process_started(process.pid) == Some(process.started)
+}
+fn cleanup_processes(processes: &[ProcessIdentity]) {
+    let live = processes
+        .iter()
+        .copied()
+        .filter(|process| process_has_identity(*process))
+        .collect::<Vec<_>>();
+    for process in &live {
+        // SAFETY: only a process whose recorded start identity still matches is signaled.
+        unsafe {
+            libc::kill(process.pid, libc::SIGKILL);
+        }
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while live.iter().any(|process| process_has_identity(*process))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+struct ProcessSampler {
+    processes: Arc<Mutex<BTreeMap<ProcessRole, ProcessIdentity>>>,
+    pending: Arc<Mutex<BTreeMap<ProcessRole, i32>>>,
+    stopping: Arc<AtomicBool>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+impl ProcessSampler {
+    fn start(pool: Arc<ViewPool>) -> Self {
+        let processes = Arc::new(Mutex::new(BTreeMap::new()));
+        let pending = Arc::new(Mutex::new(BTreeMap::new()));
+        let stopping = Arc::new(AtomicBool::new(false));
+        let task_processes = processes.clone();
+        let task_pending = pending.clone();
+        let task_stopping = stopping.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                if let Ok(views) = pool.inventory() {
+                    for view in views {
+                        for &(role, name) in &PROCESS_FILES {
+                            if task_processes.lock().unwrap().contains_key(&role) {
+                                continue;
+                            }
+                            if let Ok(pid) =
+                                std::fs::read_to_string(view.identity.scratch.join(name))
+                                && let Ok(pid) = pid.parse()
+                            {
+                                task_pending.lock().unwrap().entry(role).or_insert(pid);
+                                if let Some(process) = host_process(pid) {
+                                    task_processes.lock().unwrap().insert(role, process);
+                                }
+                            }
+                        }
+                        for &(role, release) in &HOOK_RELEASES {
+                            if task_processes.lock().unwrap().contains_key(&role) {
+                                let _ = std::fs::write(
+                                    view.identity.scratch.join(format!("release-{release}")),
+                                    b"release",
+                                );
+                            }
+                        }
+                    }
+                }
+                if task_stopping.load(Ordering::Acquire) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        });
+        Self {
+            processes,
+            pending,
+            stopping,
+            task: Some(task),
+        }
+    }
+    async fn stop(&mut self) {
+        self.stopping.store(true, Ordering::Release);
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+    fn snapshot(&self) -> BTreeMap<ProcessRole, ProcessIdentity> {
+        self.processes.lock().unwrap().clone()
+    }
+}
+impl Drop for ProcessSampler {
+    fn drop(&mut self) {
+        self.stopping.store(true, Ordering::Release);
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        let recorded = self
+            .processes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut processes = recorded.values().copied().collect::<Vec<_>>();
+        let recorded_roles = recorded.keys().copied().collect::<BTreeSet<_>>();
+        drop(recorded);
+        if let Ok(pending) = self.pending.lock() {
+            processes.extend(
+                pending
+                    .iter()
+                    .filter(|(role, _)| !recorded_roles.contains(role))
+                    .filter_map(|(_, pid)| host_process(*pid)),
+            );
+        }
+        cleanup_processes(&processes);
     }
 }
 
@@ -195,9 +325,7 @@ struct FixtureModel {
     use_tool: bool,
     disable: Option<PluginStore>,
     pool: Arc<ViewPool>,
-    observed_processes: Mutex<Vec<ProcessIdentity>>,
     observed_remote_call: Mutex<bool>,
-    escaped_hook_child: Mutex<bool>,
 }
 impl Model for FixtureModel {
     fn start<'a>(
@@ -208,24 +336,13 @@ impl Model for FixtureModel {
         Box::pin(async move {
             self.requests.lock().unwrap().push(request.clone());
             let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
-            for view in self.pool.inventory()? {
-                for name in ["pid", "server-child", "hook-child"] {
-                    if let Ok(pid) = std::fs::read_to_string(view.identity.scratch.join(name))
-                        && let Ok(pid) = pid.parse()
-                        && let Some(process) = host_process(pid)
-                    {
-                        let mut observed = self.observed_processes.lock().unwrap();
-                        if !observed.contains(&process) {
-                            observed.push(process);
-                        }
-                    }
-                }
-                if view.identity.scratch.join("called").exists() {
-                    *self.observed_remote_call.lock().unwrap() = true;
-                }
-                if view.identity.scratch.join("hook-child-survived").exists() {
-                    *self.escaped_hook_child.lock().unwrap() = true;
-                }
+            if self
+                .pool
+                .inventory()?
+                .iter()
+                .any(|view| view.identity.scratch.join("called").exists())
+            {
+                *self.observed_remote_call.lock().unwrap() = true;
             }
             let item = if first && self.use_tool {
                 if let Some(store) = &self.disable {
@@ -368,9 +485,9 @@ requested=[{}]
             ));
             for (id, event) in [("started", "run.started"), ("finished", "run.finished")] {
                 let arguments = if descendants {
-                    "[\"@plugin/observer.sh\",\"descendants\"]"
+                    format!("[\"@plugin/observer.sh\",\"{id}\"]")
                 } else {
-                    "[\"@plugin/observer.sh\"]"
+                    "[\"@plugin/observer.sh\"]".to_string()
                 };
                 text.push_str(&format!("[[hooks]]\nid=\"{id}\"\nevent=\"{event}\"\nkind=\"observer\"\nprogram=\"shell\"\nargs={arguments}\ntimeout_ms=5000\n"));
             }
@@ -452,9 +569,7 @@ requested=[{}]
             use_tool: check,
             disable: disable.then(|| self.store.clone()),
             pool: self.pool.clone(),
-            observed_processes: Mutex::new(Vec::new()),
             observed_remote_call: Mutex::new(false),
-            escaped_hook_child: Mutex::new(false),
         });
         let store = Arc::new(RecordedStore::default());
         let approval = Arc::new(Approve(AtomicUsize::new(0)));
@@ -541,7 +656,9 @@ async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
     let fixture = Fixture::with_descendants(false, false, true);
     let (mut runtime, mut session, model, store, _) =
         fixture.runtime(WorkMode::Work, PermissionMode::Bypass, true, false);
+    let mut sampler = ProcessSampler::start(fixture.pool.clone());
     let result = runtime.run(&mut session).await.unwrap();
+    sampler.stop().await;
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
     assert!(*model.observed_remote_call.lock().unwrap());
     assert!(session.history.iter().any(|item|matches!(item,HistoryItem::ToolResult {call_id,result} if call_id=="native-remote-call" && result.ok)));
@@ -570,12 +687,18 @@ async fn native_run_calls_plugin_mcp_and_hooks_and_releases_all_views() {
         assert_eq!(record.status, HookStatus::Succeeded);
         assert_eq!(record.cleanup, CleanupState::Cleaned);
     }
-    let observed = model.observed_processes.lock().unwrap().clone();
-    assert!(observed.len() >= 2, "{observed:?}");
-    assert!(!*model.escaped_hook_child.lock().unwrap());
-    for process in observed {
-        let started = process.started.unwrap();
-        assert_ne!(process_started(process.pid), Some(started));
+    let observed = sampler.snapshot();
+    for role in [
+        ProcessRole::ServerMain,
+        ProcessRole::ServerChild,
+        ProcessRole::HookStartedChild,
+        ProcessRole::HookFinishedChild,
+    ] {
+        let process = observed
+            .get(&role)
+            .copied()
+            .unwrap_or_else(|| panic!("{role:?} was not observed: {observed:?}"));
+        assert_ne!(process_started(process.pid), Some(process.started));
         assert_eq!(unsafe { libc::kill(process.pid, 0) }, -1);
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),
@@ -598,6 +721,37 @@ fn namespace_pid_mapping_requires_a_nested_guest_pid() {
     assert_eq!(nested_host_pid("Name:\thost\nNSpid:\t2\n", 2), None);
 }
 
+#[test]
+fn process_cleanup_guard_is_bounded_and_identity_bound() {
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "while :; do sleep 1; done"])
+        .spawn()
+        .unwrap();
+    let pid = i32::try_from(child.id()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let started = loop {
+        if let Some(started) = process_started(pid) {
+            break started;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let process = ProcessIdentity { pid, started };
+    let sampler = ProcessSampler {
+        processes: Arc::new(Mutex::new(BTreeMap::from([(
+            ProcessRole::ServerMain,
+            process,
+        )]))),
+        pending: Arc::new(Mutex::new(BTreeMap::new())),
+        stopping: Arc::new(AtomicBool::new(false)),
+        task: None,
+    };
+    let waiter = std::thread::spawn(move || child.wait().unwrap());
+    drop(sampler);
+    assert!(!waiter.join().unwrap().success());
+    assert!(!process_has_identity(process));
+}
+
 #[tokio::test]
 #[ignore = "requires a verified SAYA_TEST_EXECUTABLE and mandatory native backend"]
 async fn manual_approval_covers_plugin_startup_remote_call_and_each_hook() {
@@ -613,11 +767,13 @@ async fn manual_approval_covers_plugin_startup_remote_call_and_each_hook() {
 #[ignore = "requires a verified SAYA_TEST_EXECUTABLE and mandatory native backend"]
 async fn plan_never_starts_plugin_processes_even_with_bypass_permissions() {
     let fixture = Fixture::new(false, false);
-    let (mut runtime, mut session, model, store, _) =
+    let (mut runtime, mut session, _, store, _) =
         fixture.runtime(WorkMode::Plan, PermissionMode::Bypass, false, false);
+    let mut sampler = ProcessSampler::start(fixture.pool.clone());
     let result = runtime.run(&mut session).await.unwrap();
+    sampler.stop().await;
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
-    assert!(model.observed_processes.lock().unwrap().is_empty());
+    assert!(sampler.snapshot().is_empty());
     assert!(
         !store
             .changes

@@ -517,8 +517,9 @@ fn output_fault_child(mode: &str) -> io::Result<()> {
             "resync probe never filled the terminal output queue"
         );
         report(path, serde_json::json!({"phase":"stalled"}))?;
+        let resume_deadline = Instant::now() + Duration::from_secs(5);
         while !path.with_extension("resume").exists() {
-            if Instant::now() > deadline {
+            if Instant::now() > resume_deadline {
                 return Err(io::ErrorKind::TimedOut.into());
             }
             std::thread::sleep(Duration::from_millis(2));

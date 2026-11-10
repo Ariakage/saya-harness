@@ -981,3 +981,9 @@ CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提�
 R-02的原生验收补充服务主进程、服务子进程和Hook子进程检查。Linux以`setsid`构造脱离组后代，macOS验证当前支持的同一进程组后代；两端记录存活进程的启动身份并与清理后的PID状态交叉核对，Hook子进程另以延迟survival marker的不存在证明没有遗留副作用。另补`HOME == workspace`、HOME符号链接别名、XDG外置、工作区内config的四项源码回归。
 
 本机macOS27.2 ARM执行`RUST_TEST_THREADS=1 just check`，格式、workspace全目标严格Clippy、1320项Rust测试（另8项native ignored）与优化构建通过；`just test-tooling`的75项Python回归通过。显式debug程序通过8项真实原生插件验收；固定release程序的smoke、文本journey、5项历史审查回归及26条TUI旅程全部通过。Linux脱离组分支本轮未在Linux执行；macOS主动脱离进程组的后代仍按[原生隔离](sandbox.md)的`best_effort`边界保留，不据此宣称任意后代树已硬清理。本轮未推送，也未运行远端CI。
+
+### 2026-11-10 第二轮复审整改
+
+按[第二轮复审](review-2026-11-10_02.md)修复F-01至F-03。原生后代验收改为宿主侧独立采样，分别记录服务主进程、服务子进程、`run.started`Hook后代和`run.finished`Hook后代；两个Hook后代等待宿主取得PID与启动身份后退出，因此最后一次模型调用之后的事件也进入证据范围。测试守卫保留原始guest PID，在失败展开路径重新映射并对身份匹配的遗留进程执行bounded kill。
+
+resync PTY探针的填队与resume阶段改用独立五秒期限。本机`RUST_TEST_THREADS=1 just check`通过1321项Rust测试（另8项native ignored）、格式、严格Clippy与优化构建，`just test-tooling`75项通过；真实原生插件8项、固定release的smoke、文本journey、5项历史审查回归及26项TUI旅程全部通过。本轮仍不推送、不运行远端CI，Linux脱离组分支与macOS主动脱离组限制保持原边界。
