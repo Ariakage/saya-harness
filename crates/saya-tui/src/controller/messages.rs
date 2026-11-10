@@ -1,7 +1,10 @@
 //! Live message identity and interface-only thinking snapshots.
 use super::*;
-use crate::i18n::{common, messages as text, tool as tool_text, view as ui_text};
 use crate::tool_summary::{ToolSummary, summarize, summarize_call};
+use crate::{
+    attachments,
+    i18n::{common, messages as text, tool as tool_text, view as ui_text},
+};
 use saya_app::thinking::{ThinkingLog, extract_reasoning};
 use saya_core::{
     contract::ToolResult,
@@ -583,8 +586,11 @@ impl App {
     ) {
         match item {
             HistoryItem::UserText(text) => {
-                self.state
-                    .push_message(Role::User, ui_text::YOU, self.safe(text));
+                self.state.push_message(
+                    Role::User,
+                    ui_text::YOU,
+                    self.safe(&attachments::display(text)),
+                );
             }
             HistoryItem::AssistantText(text) => {
                 if !text.is_empty() {

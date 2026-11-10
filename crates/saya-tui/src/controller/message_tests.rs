@@ -120,6 +120,17 @@ fn todo_history(id: &str, values: serde_json::Value) -> [HistoryItem; 2] {
     ]
 }
 
+#[test]
+fn restored_attachment_paths_collapse_to_display_tokens() {
+    let (_root, mut app) = fixture();
+    let prompt = "[Image 1](</tmp/reference.png>) File: [File 1](</tmp/notes.md>)";
+    app.restore_messages(&[HistoryItem::UserText(prompt.into())]);
+    assert_eq!(
+        app.state.messages.back().unwrap().text,
+        "[Image 1] File: [File 1]"
+    );
+}
+
 #[tokio::test]
 async fn thinking_log_rounds_attach_in_event_order_without_empty_answers_or_review_cards() {
     let (_root, mut app) = fixture();

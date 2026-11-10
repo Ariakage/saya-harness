@@ -1,4 +1,5 @@
 //! Terminal frontend for Saya's shared application services.
+pub(crate) mod attachments;
 pub mod commands;
 pub mod input;
 #[cfg(debug_assertions)]

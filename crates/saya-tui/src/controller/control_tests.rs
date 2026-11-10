@@ -82,6 +82,24 @@ fn key(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
     KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind)
 }
 
+#[test]
+fn pasted_files_become_highlightable_tokens_while_model_text_keeps_the_path() {
+    let (_root, mut app) = fixture();
+    let image = app.config.cwd.join("pasted image.png");
+    let file = app.config.cwd.join("notes.md");
+    std::fs::write(&image, b"png").unwrap();
+    std::fs::write(&file, b"notes").unwrap();
+    let pasted = format!("'{}' {}", image.display(), file.display());
+    app.insert_paste(&pasted);
+    assert_eq!(app.state.editor.text(), "[Image 1] File: [File 1]");
+    assert_eq!(app.draft_attachments.len(), 2);
+    let expanded = app.expand_attachments(app.state.editor.text());
+    assert!(expanded.contains("[Image 1](<"));
+    assert!(expanded.contains("[File 1](<"));
+    assert!(expanded.contains(image.to_string_lossy().as_ref()));
+    assert!(expanded.contains(file.to_string_lossy().as_ref()));
+}
+
 #[tokio::test]
 async fn markdown_display_commands_change_only_ui_preference_and_keep_pending_approval() {
     let (_root, mut app) = fixture();

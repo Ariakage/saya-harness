@@ -787,6 +787,20 @@ pub(crate) mod rich_text {
     pub const TABLE_LABEL: &str = "table";
 }
 
+pub(crate) mod attachments {
+    pub const IMAGE_LABEL: &str = "Image";
+    pub const FILE_LABEL: &str = "File";
+    pub const IMAGE_PREFIX: &str = "[Image ";
+    pub const FILE_PREFIX: &str = "[File ";
+
+    pub fn image(number: u64) -> String {
+        format!("[{IMAGE_LABEL} {number}]")
+    }
+    pub fn file(number: u64) -> String {
+        format!("{FILE_LABEL}: [{FILE_LABEL} {number}]")
+    }
+}
+
 pub(crate) mod terminal {
     pub const CONTROL_WRITE_BUDGET: &str = "terminal control write budget exceeded";
     pub const OUTPUT_STATE_UNAVAILABLE: &str = "terminal output state unavailable";

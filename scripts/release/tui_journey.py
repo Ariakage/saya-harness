@@ -2626,6 +2626,53 @@ def background_control_and_unknown_records(binary):
         fixture.close()
 
 
+def pasted_file_references_use_display_tokens(binary):
+    fixture = Fixture('openai-chat-completions', [{'text': 'ATTACHMENTS_OK'}])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-attachments-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            image = workspace / 'reference image.png'
+            file = workspace / 'notes.md'
+            image.write_bytes(b'png')
+            file.write_text('notes\n')
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.title()
+                pasted = "'{}' '{}'".format(image, file)
+                terminal.send('\x1b[200~' + pasted + '\x1b[201~')
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1] File: [File 1]',
+                              'pasted file display tokens')
+                terminal.settle()
+                screen = terminal.screen
+                if str(image) in screen.text or str(file) in screen.text:
+                    raise RuntimeError('pasted file path remained visible in the TUI')
+                for token, color in (('[Image 1]', (88, 166, 255)), ('[File 1]', (125, 203, 155))):
+                    row = next((index for index in range(2, screen.rows - 1)
+                                if token in screen.main_row_text(index)), None)
+                    if row is None or screen.row_style(row, token, 1, screen.main_width())[0] != color:
+                        raise RuntimeError('pasted token did not use its attachment highlight: ' + token)
+                terminal.send(b'\r')
+                terminal.until('ATTACHMENTS_OK')
+                wait_idle(terminal, root)
+                user = next(message for message in fixture.requests[0]['messages']
+                            if message.get('role') == 'user' and
+                            isinstance(message.get('content'), str) and
+                            '[Image 1](<' in message['content'])
+                prompt = user['content']
+                if not isinstance(prompt, str) or '[Image 1](<' not in prompt or '[File 1](<' not in prompt:
+                    raise RuntimeError('model prompt did not retain attached file destinations: ' + repr(prompt))
+                if '[Image 1] File: [File 1]' not in terminal.screen.body_text():
+                    raise RuntimeError('sent user message did not retain attachment display tokens')
+                terminal.finish()
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def high_frequency_stream(binary):
     pieces = ['chunk_%04d ' % index for index in range(512)] + ['STREAM_FINAL']
     text = ''.join(pieces)
@@ -3185,6 +3232,8 @@ def main():
     passed('cancellation-incomplete-stream-and-continuation')
     background_control_and_unknown_records(binary)
     passed('background-cancel-plan-cleanup-and-unknown-records')
+    pasted_file_references_use_display_tokens(binary)
+    passed('pasted-files-use-highlighted-display-tokens')
     high_frequency_stream(binary)
     passed('high-frequency-complete-stream')
     slow_terminal_consumer(binary)

@@ -73,9 +73,22 @@ pub(super) async fn next_job(
     }
 }
 impl App {
-    pub(super) fn restore_unsent_prompt(&mut self, prompt: String) {
+    pub(super) fn restore_unsent_prompt(
+        &mut self,
+        prompt: String,
+        attachments: Vec<attachments::Attachment>,
+    ) {
         if self.state.editor.text().is_empty() || self.state.editor.text() == prompt {
             self.state.editor.set_text(prompt);
+            for attachment in attachments {
+                if !self
+                    .draft_attachments
+                    .iter()
+                    .any(|current| current.token == attachment.token)
+                {
+                    self.draft_attachments.push(attachment);
+                }
+            }
         } else {
             self.state
                 .push_message(Role::System, text::UNSENT_DRAFT, self.safe(&prompt));
@@ -550,14 +563,18 @@ impl App {
             }
         }
         if let Some(prompt) = self.queued_prompt.take() {
+            let attachments = std::mem::take(&mut self.queued_attachments);
             if self.prepared.is_some() && !cancelled && self.active.is_none() {
-                if let Err(error) = self.start(prompt.clone()).await {
-                    self.restore_unsent_prompt(prompt);
+                if let Err(error) = self
+                    .start_run(prompt.clone(), attachments.clone(), RunKind::Execution)
+                    .await
+                {
+                    self.restore_unsent_prompt(prompt, attachments);
                     self.state.pending_mode = None;
                     return Err(error);
                 }
             } else {
-                self.restore_unsent_prompt(prompt);
+                self.restore_unsent_prompt(prompt, attachments);
             }
         }
         if let Some(mode) = deferred_mode {

@@ -28,6 +28,12 @@
 
 最终 `./scripts/check.sh` 通过格式、workspace全目标严格Clippy、1345项Rust测试、8项条件忽略和release构建，日志为 `target/ui-review-final-2.log`。`just test-tooling`的75项Python回归通过；同一release程序的 `just smoke target/release/saya` 通过离线smoke、文本journey、5项审查回归及26组TUI PTY旅程，其中`/ps`在真实后台任务运行期间完成弹窗读取与关闭验证。本轮未推送、未运行远端CI。
 
+## TUI 图片与文件粘贴token
+
+2026-11-11，按D-058将终端bracketed paste、拖入的现有本地文件改为编号显示token。图片显示蓝色`[Image N]`，其他文件显示绿色`File: [File N]`；Editor、发送后的用户消息、恢复历史、窗口标题和新增`attachments`预览均不再暴露绝对路径。发送时token展开为供模型读取的`[Image N](<PATH>)`链接形式，并支持`file://`、引号、反斜杠空格、多文件及路径redaction。该入口只传递路径，不读取或内嵌终端没有提供的图片二进制。
+
+最终 `RUST_TEST_THREADS=1 ./scripts/check.sh` 通过格式、workspace全目标严格Clippy、1351项Rust测试、8项条件忽略和release构建，日志为 `target/attachments-final-2.log`。首次并行终端的慢写出计时夹具在机器负载下超时，单独串行目标通过；最终以串行完整门禁复验。`just test-tooling`的75项Python回归通过；同一release程序的 `just smoke target/release/saya` 通过离线smoke、文本journey、5项审查回归及27组TUI PTY旅程，其中新增真实粘贴双文件场景验证token显示、蓝绿高亮、路径隐藏和模型prompt中的真实路径。本轮未推送、未运行远端CI。
+
 ## N3 上下文与可执行扩展
 
 2026-11-09，项目负责人启动完成N3及验证验收的持续目标，起点为 `7064bb7`，启动时工作区干净。范围包含DEV-062至DEV-068、DEV-076至DEV-078、DEV-084至DEV-089共16项；2026-11-10，16项均由固定源码 `e1da373` 的四平台验收完成。[逐项验收记录](n3-validation.md#四平台最终验收)

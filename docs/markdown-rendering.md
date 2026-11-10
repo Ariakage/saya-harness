@@ -86,6 +86,7 @@ just tui-preview syntax
 just tui-preview working
 just tui-preview completed
 just tui-preview approval
+just tui-preview attachments
 just tui-preview background
 just tui-preview memory
 just tui-preview skills
@@ -96,7 +97,7 @@ just tui-preview skills
 
 `saya tui-preview [SCENE] [--source]`由 `cfg(debug_assertions)`控制，默认开发构建提供该子命令。优化构建的命令目录按关闭debug assertions的配置生成。该入口使用共享的静态场景，在读取运行配置、初始化日志与打开会话之前分派。
 
-共享场景同时覆盖UI壳层：`approval`、`question`与`background`展示居中弹窗，`help`与`tool`展示详情侧栏，`commands`与`completion`展示覆盖层，`memory`及`skills`／`mcps`／`plugins`／`sessions`展示各自弹窗，`sidebar`展示宽屏信息栏。所有场景调用生产`view::draw`，不发起模型或存储请求。
+共享场景同时覆盖UI壳层：`approval`、`question`与`background`展示居中弹窗，`attachments`展示图片／文件token高亮，`help`与`tool`展示详情侧栏，`commands`与`completion`展示覆盖层，`memory`及`skills`／`mcps`／`plugins`／`sessions`展示各自弹窗，`sidebar`展示宽屏信息栏。所有场景调用生产`view::draw`，不发起模型或存储请求。
 
 ←／→切换场景，s／r切换source／render，Home／End及方向键、PgUp／PgDn和滚轮移动视口，点击脚注或b键导航，q／Esc／Ctrl+D退出，Ctrl+C和终止信号按130退出并恢复终端。
 

@@ -50,6 +50,8 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 Agent运行中继续输入普通消息会把内容作为引导补充，在下一个模型边界保存并加入上下文；当前流式响应和已展开工具调用不会被替换。引导队列上限为16条、累计256KiB。`/tools`按工具调用卡片渲染名称、状态、run／call关联、参数和结构化输出，不直接展示整段JSON。`exec`卡片显示实际命令、工作目录、超时、观测耗时与退出码；审批与澄清使用居中弹窗，不占用普通详情侧栏。
 
+从终端粘贴或拖入现有本地图片／文件时，输入区显示高亮的 `[Image N]`／`File: [File N]`，不会暴露绝对路径；模型请求仍携带对应真实路径。`file://`地址、带空格路径和常见转义形式可识别。该入口只处理终端传入的路径文本，不直接读取剪贴板图片数据。
+
 `/markdown source|render`切换Assistant正文的源码／排版视图，`/footnote NUMBER`跳到最近消息的对应脚注，`/footnote back`返回上一引用。debug构建的 `saya tui-preview [SCENE] [--source]`可打开独立的交互式预览，具体语法、公式／图表回退和场景见[Markdown说明](markdown-rendering.md)。
 
 窗口标题为 `Saya | 首条任务的简短标题`。所有尺寸采用黑底外框与灰色蓝条输入区，Ready行右侧显示权限，底栏显示模式、模型、可选thinking effort和输入占比。达到120列×24行时显示会话、上下文分项估算和扩展状态侧栏。环形指示依据最近一次执行请求的输入用量，缺失显示 `—`，分项估算明确标记为Estimated。可在profile中设置 `thinking_effort = "max"` 等级别，三协议均按相应字段发送，支持范围由所选模型决定。[Thinking effort配置](configuration.md#thinking-effort)

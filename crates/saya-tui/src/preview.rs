@@ -18,6 +18,7 @@ use tokio::signal::unix::{SignalKind, signal};
 pub const SCENES: &[&str] = &[
     "chat",
     "approval",
+    "attachments",
     "question",
     "background",
     "tool",
@@ -253,6 +254,25 @@ pub fn fixture(scene: &str) -> State {
                 title: crate::i18n::view::APPROVAL_REQUIRED.into(),
                 lines,
             });
+        }
+        "attachments" => {
+            state.clear_messages();
+            state.editor.clear();
+            state.session_title = "Inspect pasted assets".into();
+            state.permissions = "auto".into();
+            state.push_message(
+                Role::User,
+                "You",
+                "Compare [Image 1] with File: [File 1] and report the differences.",
+            );
+            state.push_message(
+                Role::Assistant,
+                "configured-model",
+                "I can use both attached file references. No image bytes were embedded in this preview.",
+            );
+            state
+                .editor
+                .set_text("Also inspect [Image 2] and File: [File 2]");
         }
         "question" => {
             state.editor.clear();
@@ -1037,6 +1057,7 @@ mod tests {
     fn every_modal_and_sidebar_has_a_preview_scene() {
         for scene in [
             "approval",
+            "attachments",
             "question",
             "background",
             "help",
@@ -1057,6 +1078,15 @@ mod tests {
                     assert!(state.details.is_some(), "{scene}");
                 }
                 "commands" => assert!(state.command_palette.is_some()),
+                "attachments" => {
+                    assert!(state.editor.text().contains("[Image 2]"));
+                    assert!(
+                        state
+                            .messages
+                            .iter()
+                            .any(|message| message.text.contains("[File 1]"))
+                    );
+                }
                 "completion" => assert!(state.completion.visible()),
                 "memory" => assert!(state.memory_panel.is_some()),
                 "skills" | "mcps" | "plugins" | "sessions" => {

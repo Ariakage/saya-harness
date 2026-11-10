@@ -112,6 +112,8 @@ Chat采用 `reasoning_content`，Messages采用明文thinking块，Responses采�
 
 输入区Message标题加粗，常规空草稿显示 `Describe a task…` 渲染占位。宽度足够时，标题右侧以键帽样式提示Enter发送、Alt+Enter换行及Ctrl+O折叠。人工审批／澄清使用操作详情，粘贴超限优先显示暖色警示。底部浅收边位于留白行，极小窗口按空间简化装饰。
 
+终端bracketed paste或拖入内容若解析为一个或多个现有本地文件，输入区使用 `[Image N]` 与 `File: [File N]` 显示引用，不展示绝对路径。常见图片扩展名使用Image蓝色高亮，其他文件使用File绿色高亮；同类型编号从当前草稿中保留的token之后继续。发送时token展开为 `[Image N](<PATH>)`／`File: [File N](<PATH>)`，因此模型仍能取得真实路径；会话恢复和窗口标题重新折叠为token。支持`file://`、引号路径及反斜杠转义空格。当前只传递文件引用，不读取或内嵌图片二进制；普通文本和不存在的路径保持原样。
+
 ## 模式、权限与安全呈现
 
 PLAN、BUILD、CODE、WORK 的选择来自用户操作。UI 同时展示当前模式与待切换请求，实际生效由 core 的调用边界和后台清理结果决定。Manual Approval 继续覆盖每次 Agent 工具调用，过期确认绑定的调用／策略版本由 core 拒绝。

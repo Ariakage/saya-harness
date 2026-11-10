@@ -397,7 +397,7 @@ impl App {
         let text = self.state.editor.text().to_owned();
         if text.starts_with('/') && !text.starts_with("//") {
             let exit = self.command(&text).await?;
-            self.state.editor.clear();
+            self.clear_editor();
             return Ok(exit);
         }
         if self.pending.is_some() && self.deferred_mode.is_some() {
@@ -428,8 +428,9 @@ impl App {
                     } else {
                         text
                     };
-                    let _ = reply.send(Ok(Some(answer)));
-                    self.state.editor.clear();
+                    let expanded = self.expand_attachments(&answer);
+                    let _ = reply.send(Ok(Some(expanded)));
+                    self.clear_editor();
                     self.state.details = None;
                     self.state.status = common::RUNNING.into();
                 }
@@ -437,13 +438,13 @@ impl App {
                     match text.trim().to_ascii_lowercase().as_str() {
                         "y" | "yes" => {
                             let _ = reply.send(Ok(Some(true)));
-                            self.state.editor.clear();
+                            self.clear_editor();
                             self.state.details = None;
                             self.state.status = common::RUNNING.into();
                         }
                         "n" | "no" => {
                             let _ = reply.send(Ok(Some(false)));
-                            self.state.editor.clear();
+                            self.clear_editor();
                             self.state.details = None;
                             self.state.status = common::RUNNING.into();
                         }
@@ -460,15 +461,16 @@ impl App {
                                     text
                                 };
                                 let display = self.safe(&guidance);
+                                let expanded = self.expand_attachments(&guidance);
                                 self.active
                                     .as_ref()
                                     .ok_or(text::ACTIVE_RUN_REQUIRED)?
                                     .handle
-                                    .steer(guidance)?;
+                                    .steer(expanded)?;
                                 self.pending = Some(Request::Approval(request, reply));
                                 self.state.push_message(Role::User, ui_text::YOU, display);
                                 self.notice(text::GUIDANCE_APPROVAL_PENDING);
-                                self.state.editor.clear();
+                                self.clear_editor();
                             } else {
                                 self.pending = Some(Request::Approval(request, reply));
                                 self.notice(text::APPROVE_OR_CONTROL);
@@ -490,14 +492,15 @@ impl App {
                 return Ok(false);
             }
             let display = self.safe(&guidance);
+            let expanded = self.expand_attachments(&guidance);
             let active = self.active.as_ref().ok_or(text::ACTIVE_RUN_REQUIRED)?;
             if active.kind != RunKind::Execution {
                 return Err(text::GUIDANCE_ACTIVE_ONLY.into());
             }
-            active.handle.steer(guidance)?;
+            active.handle.steer(expanded)?;
             self.state.push_message(Role::User, ui_text::YOU, display);
             self.notice(text::GUIDANCE_QUEUED);
-            self.state.editor.clear();
+            self.clear_editor();
             return Ok(false);
         }
         if !text.trim().is_empty() {
@@ -507,7 +510,7 @@ impl App {
                 text
             };
             self.start(prompt).await?;
-            self.state.editor.clear();
+            self.clear_editor();
         }
         Ok(false)
     }

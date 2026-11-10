@@ -102,6 +102,8 @@ Assistant正文支持有界的基础Markdown呈现，包括ATX标题、无序／
 
 输入区以Strong前景和字重强调Message标题，发送、换行和折叠快捷键采用深底键帽与弱化说明文字。常规空输入在编辑首行显示斜体 `Describe a task…`，占位文字仅参与渲染，发送和Tab模式判断读取Editor草稿。人工审批、澄清、截断和补全场景采用各自提示。原底部留白内增加低对比细线，实际草稿区保留多行编辑与水平跟随。1至2行的极小输入区按空间简化提示，粘贴超限使用暖色加粗警示。
 
+粘贴或拖入本地文件时，草稿显示 `[Image N]` 或 `File: [File N]`，分别用蓝色与绿色加粗高亮。文件引用作为Editor中的稳定token参与光标、换行和裁剪；模型输入保留链接形式的真实路径，会话恢复与窗口标题只显示token。该功能仅处理终端提供的UTF-8路径文本，不负责从剪贴板读取未经终端传递的图片二进制。
+
 ## 运行反馈与结束统计
 
 任务运行时，状态文字后的八列区域内显示一个模式色方块。方块从最右侧逐格移动到最左侧，再折返回右侧，每120ms推进一帧，14帧完成一次往返。Ready、Running、Thinking、Responding、Reviewing和Cancelling以实际运行状态决定是否播放；等待人工批准／输入及结束时隐藏。窄窗口优先保留状态与权限标签，动画按可用空间显示。颜色跟随实际生效模式。
@@ -273,6 +275,7 @@ flowchart LR
 ```sh
 cargo run --locked -p saya-tui --example render_preview -- 120 30
 cargo run --locked -p saya-tui --example render_preview -- 120 30 approval
+cargo run --locked -p saya-tui --example render_preview -- 120 30 attachments
 cargo run --locked -p saya-tui --example render_preview -- 120 30 question
 cargo run --locked -p saya-tui --example render_preview -- 120 30 background
 cargo run --locked -p saya-tui --example render_preview -- 60 24 approval

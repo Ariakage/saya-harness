@@ -20,6 +20,7 @@ mod service_tests;
 mod services;
 mod turn_summary;
 use crate::{
+    attachments,
     commands::COMMANDS,
     i18n::{common, controller as text, permissions as permission_text, view as ui_text},
     input::TerminalInput,
@@ -104,6 +105,8 @@ struct App {
     ui_job: Option<services::UiJob>,
     deferred_mode: Option<WorkMode>,
     queued_prompt: Option<String>,
+    queued_attachments: Vec<attachments::Attachment>,
+    draft_attachments: Vec<attachments::Attachment>,
     queued_compaction: bool,
     memory_pending: Option<saya_app::memory_admin::PreparedMemoryAction>,
     memory_next: Option<String>,
@@ -140,6 +143,8 @@ impl App {
             ui_job: None,
             deferred_mode: None,
             queued_prompt: None,
+            queued_attachments: Vec::new(),
+            draft_attachments: Vec::new(),
             queued_compaction: false,
             memory_pending: None,
             memory_next: None,
@@ -177,6 +182,26 @@ impl App {
             return common::SENSITIVE_WITHHELD.into();
         }
         value.as_str().unwrap_or(common::SENSITIVE_WITHHELD).into()
+    }
+    fn insert_paste(&mut self, text: &str) {
+        let next_image =
+            attachments::next_number(self.state.editor.text(), attachments::Kind::Image);
+        let next_file = attachments::next_number(self.state.editor.text(), attachments::Kind::File);
+        if let Some(insertion) =
+            attachments::parse_paste(text, &self.config.cwd, next_image, next_file)
+        {
+            self.state.editor.insert(&insertion.text);
+            self.draft_attachments.extend(insertion.attachments);
+        } else {
+            self.state.editor.insert_paste(text);
+        }
+    }
+    fn clear_editor(&mut self) {
+        self.state.editor.clear();
+        self.draft_attachments.clear();
+    }
+    fn expand_attachments(&self, text: &str) -> String {
+        attachments::expand(text, &self.draft_attachments)
     }
     fn safe_picker(&self, mut panel: view::PickerPanel) -> view::PickerPanel {
         panel.title = self.safe(&panel.title);
@@ -247,7 +272,8 @@ impl App {
                     _ => None,
                 })
             })
-            .map(|text| self.safe_title(text).chars().take(80).collect::<String>())
+            .map(attachments::display)
+            .map(|text| self.safe_title(&text).chars().take(80).collect::<String>())
             .filter(|text| !text.is_empty())
             .unwrap_or_else(|| common::NEW_SESSION.into());
         self.state.mode = format!("{:?}", self.config.mode).to_uppercase();
@@ -318,7 +344,8 @@ impl App {
         false
     }
     async fn start(&mut self, text: String) -> Result<()> {
-        self.start_run(text, RunKind::Execution).await
+        self.start_run(text, self.draft_attachments.clone(), RunKind::Execution)
+            .await
     }
 
     async fn compact(&mut self) -> Result<()> {
@@ -342,11 +369,20 @@ impl App {
             self.notice(text::COMPACT_UI_WAIT);
             return Ok(());
         }
-        self.start_run(text::COMPACT_SUMMARY.into(), RunKind::Compaction)
-            .await
+        self.start_run(
+            text::COMPACT_SUMMARY.into(),
+            Vec::new(),
+            RunKind::Compaction,
+        )
+        .await
     }
 
-    async fn start_run(&mut self, text: String, kind: RunKind) -> Result<()> {
+    async fn start_run(
+        &mut self,
+        display: String,
+        attachments: Vec<attachments::Attachment>,
+        kind: RunKind,
+    ) -> Result<()> {
         if self.active.is_some() {
             self.notice(text::RUN_ACTIVE);
             return Ok(());
@@ -354,15 +390,17 @@ impl App {
         if self.ui_job.is_some() {
             return Err(text::UI_WAIT_MESSAGE.into());
         }
-        let display = self.safe(&text);
         if self.prepared.is_none() {
             if self.config.profile.is_none() {
                 return Err(text::PROFILE_SELECT_MESSAGE.into());
             }
             self.service("/new", "").await?;
-            self.queued_prompt = Some(text);
+            self.queued_prompt = Some(display);
+            self.queued_attachments = attachments;
             return Ok(());
         }
+        let text = attachments::expand(&display, &attachments);
+        let display = self.safe(&display);
         self.reset_mcp_statuses();
         let prepared = self.prepared.as_mut().ok_or(text::SESSION_UNAVAILABLE)?;
         let run_id = RunId::new();
@@ -517,7 +555,8 @@ impl App {
         self.deferred_mode = None;
         let restored_prompt = self.queued_prompt.is_some();
         if let Some(prompt) = self.queued_prompt.take() {
-            self.restore_unsent_prompt(prompt);
+            let attachments = std::mem::take(&mut self.queued_attachments);
+            self.restore_unsent_prompt(prompt, attachments);
         }
         if self.active.is_none() {
             self.state.pending_mode = None;
@@ -528,7 +567,7 @@ impl App {
             active.cancel.cancel();
             self.state.status = common::CANCELLING.into();
         } else if self.ui_job.is_none() && !restored_prompt {
-            self.state.editor.take();
+            self.clear_editor();
         }
     }
     async fn shutdown(&mut self) -> Result<()> {
@@ -804,7 +843,7 @@ impl App {
                 return Ok(false);
             }
             let exit = self.command(command).await?;
-            self.state.editor.clear();
+            self.clear_editor();
             return Ok(exit);
         }
         if key.code == KeyCode::Tab
@@ -983,7 +1022,7 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
                     if let Some(panel) = &mut app.state.memory_panel {
                         panel.input.insert_paste(&text);
                     } else if app.state.command_palette.is_none() {
-                        app.state.editor.insert_paste(&text);
+                        app.insert_paste(&text);
                     }
                 }
             }

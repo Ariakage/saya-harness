@@ -1,5 +1,6 @@
 //! Pure, bounded TUI state and rendering. Runtime effects belong to the controller.
 use crate::{
+    attachments,
     commands::{COMMANDS, Completion},
     editor::{Editor, MAX_VISUAL_LINE_BYTES, display_grapheme, prefix_boundary, safe_text},
     i18n::{
@@ -1716,6 +1717,30 @@ fn role_style(role: Role) -> Style {
     })
 }
 
+fn attachment_line(text: &str, base: Style) -> Line<'static> {
+    let ranges = attachments::token_ranges(text);
+    if ranges.is_empty() {
+        return Line::styled(text.to_owned(), base);
+    }
+    let mut spans = Vec::with_capacity(ranges.len() * 2 + 1);
+    let mut copied = 0;
+    for range in ranges {
+        if copied < range.start {
+            spans.push(Span::styled(text[copied..range.start].to_owned(), base));
+        }
+        let style = match range.kind {
+            attachments::Kind::Image => base.fg(BLUE).add_modifier(Modifier::BOLD),
+            attachments::Kind::File => base.fg(GREEN).add_modifier(Modifier::BOLD),
+        };
+        spans.push(Span::styled(text[range.start..range.end].to_owned(), style));
+        copied = range.end;
+    }
+    if copied < text.len() {
+        spans.push(Span::styled(text[copied..].to_owned(), base));
+    }
+    Line::from(spans)
+}
+
 fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
     state.message_hits.clear();
     state.footnote_hits.clear();
@@ -1955,7 +1980,17 @@ fn draw_transcript(frame: &mut Frame<'_>, state: &mut State, mut inner: Rect) {
                 Role::System => Style::default().fg(MUTED),
                 _ => Style::default().fg(FOREGROUND),
             };
-            append_wrapped(&text, width, style, &mut lines, &mut line_count);
+            if message.role == Role::User {
+                append_wrapped_line(
+                    attachment_line(&text, style),
+                    width,
+                    &mut lines,
+                    &mut line_count,
+                    MAX_RENDER_LINES,
+                );
+            } else {
+                append_wrapped(&text, width, style, &mut lines, &mut line_count);
+            }
         }
         if message.truncated {
             append_wrapped(
@@ -2288,16 +2323,17 @@ fn draw_editor(frame: &mut Frame<'_>, state: &State, area: Rect) {
             let draft = crop_display(line, first_column, usize::from(inner.width));
             let remaining =
                 usize::from(inner.width).saturating_sub(UnicodeWidthStr::width(draft.as_str()));
-            let mut spans = vec![Span::raw(draft)];
+            let mut rendered =
+                attachment_line(&draft, Style::default().fg(FOREGROUND).bg(INPUT_BACKGROUND));
             if row == cursor_row
                 && let Some(ghost) = &ghost
             {
-                spans.push(Span::styled(
+                rendered.spans.push(Span::styled(
                     crop_display(ghost, 0, remaining),
                     Style::default().fg(MUTED),
                 ));
             }
-            Line::from(spans)
+            rendered
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
@@ -3496,6 +3532,30 @@ mod tests {
         assert_eq!(buffer[(8, 7)].fg, MUTED);
         assert_eq!(state.messages[0].text, "**plain user text**");
         assert_eq!(state.messages[1].text, "`literal`\n# raw heading");
+    }
+
+    #[test]
+    fn pasted_image_and_file_tokens_are_highlighted_in_transcript_and_editor() {
+        let mut state = State::default();
+        state.push_message(Role::User, "You", "[Image 1] File: [File 1]");
+        state
+            .editor
+            .set_text("Inspect [Image 1] and File: [File 1]");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        for (token, color) in [("[Image 1]", BLUE), ("[File 1]", GREEN)] {
+            let mut found = 0;
+            for row in 0..30 {
+                let text = row_text(buffer, row);
+                if let Some(byte) = text.find(token) {
+                    let column = text[..byte].chars().count() as u16;
+                    assert_eq!(buffer[(column, row)].fg, color);
+                    found += 1;
+                }
+            }
+            assert_eq!(found, 2, "{token}");
+        }
     }
 
     #[test]
