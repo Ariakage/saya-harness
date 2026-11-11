@@ -88,7 +88,7 @@ Diff、模型选择、Compact、MCP／Skills、Goal 和多 Agent 面板按其底
 
 上下文分项由共享应用层在执行模型请求边界统计，分类为System、Instructions、Skills、Preferences、Memory、Conversation、Files、Tools和Protocol。估算采用ASCII字符数除以4向上取整，加非ASCII字符数，界面标为Estimated。分项基于归一化请求组件，供应商分词和协议额外开销由实际input用量体现。尚未发起请求且没有历史计量时显示Unknown，执行请求已开始但尚未返回用量时显示`Awaiting execution usage`，独立核查不覆盖执行请求快照。恢复会话时从最近RunMetrics恢复`Last run`输入用量；`/compact`和`/cd`保留此前计量，直到下一次Execution刷新。统计通道仅传数值与固定标签，保留最新快照。
 
-MCP和可执行插件目前显示Not implemented，Skills显示当前请求发现的元数据项数量。规划中的连接器和插件运行能力继续按后续任务推进。极小窗口中的详情优先保留可滚动内容，输入区压缩为单行草稿，PgUp／PgDn按实际可见行数翻页。
+Extensions区显示当前实际接入状态，Skills显示当前请求发现的元数据项数量；MCP和可执行插件通过对应选择器展示当前配置、启停与运行状态，启用或停用仍须经过显式能力授权。极小窗口中的详情优先保留可滚动内容，输入区压缩为单行草稿，PgUp／PgDn按实际可见行数翻页。
 
 用量指示取最近一次执行模型请求的 `input_tokens`，除以执行 profile 的 `context_window_tokens`。独立安全审核和运行累计用量分别处理。每次执行请求开始时清空旧值，完成后使用服务端报告值，估算值带 `~`，缺失时显示 `—`。新建、恢复或更换 profile 后等待新的请求用量。它反映已完成请求的输入占比，当前草稿及之后的工具输出尚未计入。环形字符按占比区间显示，超出窗口时标为 `>100%`。
 

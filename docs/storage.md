@@ -22,6 +22,6 @@ DEV-043 提供 `SqliteStore::read_snapshot`。稳定校验数据库与WAL后在�
 
 默认源总量128 MiB、规范化记录32 MiB、100,000行和5秒协作期限，调用者可通过 `SnapshotLimits` 选择更小或受支持的更大范围。导出先进行类型和关联校验，再按范围投影、脱敏和截断。格式与文件发布见[会话导出](session-export.md)。
 
-## 后续上下文与输出存储
+## 上下文与输出存储
 
-OutputStore、CompactionRecord 和 ContextView 属于[上下文设计](context-management.md)的后续增量。原始历史、模型请求投影、输出引用与摘要检查点分别保存来源和水位，新存储结构按版本化迁移与备份规则接入。当前实现状态以[开发进度](progress.md)为准。
+N3 已接入 OutputStore、CompactionRecord 和 ContextView。原始历史、模型请求投影、输出引用与摘要检查点分别保存来源和水位，存储结构沿用版本化迁移与备份规则；OutputStore另以私有内容对象保存工具输出和用户媒体快照。具体格式、权限、引用及回收边界见[上下文设计](context-management.md)，固定源码验收和后续增量分别见[N3验收](n3-validation.md)与[开发进度](progress.md)。

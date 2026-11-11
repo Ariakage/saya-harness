@@ -112,4 +112,4 @@ JSONL 运行事件使用 `mcp.status`，其服务器条目仅包含 `server`、`
 
 MCP服务要求额外输入时，当前Run以 `needs_input` 结束并保存实际调用状态。用户可在后续输入中补充信息，新的执行继续经过正常授权。服务调用内的交互补充和原调用续接属于后续扩展范围。
 
-macOS 后代进程清理仍按能力等级报告为 `best_effort`。Linux 使用私有 PID namespace，系统依赖、有效委派资源控制及原生执行证据按[N2 验收记录](n2-validation.md)维护。可执行插件、Browser 和自动上下文压缩继续按[后续计划](post-mvp-plan.md)推进。
+macOS 后代进程清理仍按能力等级报告为 `best_effort`。Linux 使用私有 PID namespace，系统依赖、有效委派资源控制及原生执行证据按[N2 验收记录](n2-validation.md)维护。可执行插件和自动／手动上下文压缩已完成N3固定源码验收；Browser及其他后续能力按[后续计划](post-mvp-plan.md)推进。

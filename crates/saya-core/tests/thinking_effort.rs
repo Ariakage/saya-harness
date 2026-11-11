@@ -41,6 +41,7 @@ fn request(profile: &str, purpose: ModelPurpose) -> ModelRequest {
         dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![HistoryItem::UserText("hello".into())],
+        media: Default::default(),
         tools: vec![],
     }
 }

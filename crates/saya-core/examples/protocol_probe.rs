@@ -104,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dynamic_instructions: None,
         max_output_tokens: Some(128),
         history: vec![HistoryItem::UserText("Reply with OK.".into())],
+        media: Default::default(),
         tools: vec![],
     };
     let direct = turn(model.as_ref(), &request).await;

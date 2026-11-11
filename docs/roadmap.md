@@ -110,7 +110,7 @@ GUI 的新增交互、可访问性、目录选择、权限呈现和升级迁移�
 
 ### 运行时后续能力
 
-[能力路线图](capability-roadmap.md)已扩展为F-01至F-20。N0／N1的共享应用服务、增强日志、Session Export和默认TUI已随0.2.0交付，N2原生隔离与MCP已完成四平台验收。N3检查点、上下文／Compact、插件和模型可编辑全局记忆，以及后续Goal、Browser按依赖推进。具体任务与验收见[后续开发计划](post-mvp-plan.md)，跨运行持久调度及多Agent在对应后续阶段交付。
+[能力路线图](capability-roadmap.md)已扩展为F-01至F-20。N0／N1的共享应用服务、增强日志、Session Export和默认TUI已随0.2.0交付，N2原生隔离与MCP、N3检查点、上下文／Compact、插件和模型可编辑全局记忆均已完成固定源码的四平台验收。后续Goal、Browser按依赖推进。具体任务与验收见[后续开发计划](post-mvp-plan.md)，跨运行持久调度及多Agent在对应后续阶段交付。
 
 ## 下一步工作入口
 

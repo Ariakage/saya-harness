@@ -270,6 +270,8 @@ pub struct AgentRuntime {
     started: AtomicBool,
     secret_source: secrets::SecretSource,
     services: Arc<services::RuntimeServices>,
+    media_store: Option<Arc<crate::output_store::OutputStore>>,
+    media_capabilities: crate::config::MediaCapabilities,
 }
 
 #[derive(Default)]
@@ -615,6 +617,8 @@ impl AgentRuntime {
             started: AtomicBool::new(false),
             secret_source,
             services: Arc::new(services::RuntimeServices::default()),
+            media_store: None,
+            media_capabilities: crate::config::MediaCapabilities::default(),
         })
     }
     pub fn handle(&self) -> RuntimeHandle {
@@ -682,6 +686,16 @@ impl AgentRuntime {
             budget, automatic, config,
         )?));
         Ok(self)
+    }
+    /// Attach private media snapshot storage before this single-use run starts.
+    pub fn with_media_store(
+        mut self,
+        store: Arc<crate::output_store::OutputStore>,
+        capabilities: crate::config::MediaCapabilities,
+    ) -> Self {
+        self.media_store = Some(store);
+        self.media_capabilities = capabilities;
+        self
     }
     /// Attach private output storage before this single-use run starts.
     pub fn with_output_store(
@@ -939,6 +953,8 @@ impl AgentRuntime {
                     history.push(HistoryItem::UserText(skills.context_data().to_string()));
                 }
                 history.extend(session.history.iter().cloned());
+                let media =
+                    crate::media::load_history(&history, self.media_store.as_ref(), session.id)?;
                 let request = ModelRequest {
                     request_id,
                     purpose: ModelPurpose::Execution,
@@ -947,6 +963,7 @@ impl AgentRuntime {
                     dynamic_instructions,
                     max_output_tokens: None,
                     history,
+                    media: Arc::new(media),
                     tools,
                 };
                 Ok::<_, BoundaryError>((request, record))
@@ -1722,10 +1739,24 @@ impl AgentRuntime {
         if messages.is_empty() {
             return Ok(false);
         }
-        let items = messages
-            .into_iter()
-            .map(HistoryItem::UserText)
-            .collect::<Vec<_>>();
+        let mut captures = Vec::new();
+        let mut items = Vec::new();
+        for text in messages {
+            if !crate::media::has_media(&text) {
+                items.push(HistoryItem::UserText(text));
+                continue;
+            }
+            let store = self.media_store.as_ref().ok_or_else(|| {
+                error(
+                    "media_unavailable",
+                    "durable media storage is not configured",
+                )
+            })?;
+            let capture =
+                crate::media::capture_user(&text, self.media_capabilities, store, session.id)?;
+            items.push(HistoryItem::UserText(capture.text.clone()));
+            captures.push(capture);
+        }
         let changes = items
             .iter()
             .cloned()

@@ -275,6 +275,7 @@ impl Fixture {
                     HistoryItem::AssistantText("Recorded implementation evidence. ".repeat(1000)),
                     HistoryItem::UserText("Continue the complete current objective".into()),
                 ],
+                media: Default::default(),
                 tools: Vec::new(),
             },
             identity: CountingIdentity {

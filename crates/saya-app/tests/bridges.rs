@@ -261,6 +261,7 @@ async fn dynamic_event_registry_buffers_split_text_and_refreshes_before_delivery
         dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![],
+        media: Default::default(),
         tools: vec![],
     };
     let cancel = RunCancellation::new();

@@ -381,6 +381,8 @@ pub async fn chat(
         console.print(&format!("Recovered {} interrupted run(s); {} tool outcome(s) unknown; no tools were replayed.\n", prepared.recovery.interrupted_runs, prepared.recovery.unknown_tools))?;
     }
     let workspace = prepared.session.workspace.clone();
+    let media = prepared.media.clone();
+    let media_capabilities = prepared.media_capabilities;
     let mut session = Some(prepared.session);
     let store = prepared.store;
     let _session_lock = prepared._lock;
@@ -745,13 +747,20 @@ pub async fn chat(
                         continue;
                     }
                     let current_id = session.as_ref().ok_or("session missing")?.id;
-                    let item = HistoryItem::UserText(text.clone());
+                    let capture = saya_core::media::capture_user(
+                        &text,
+                        media_capabilities,
+                        &media,
+                        current_id,
+                    )?;
+                    let item = HistoryItem::UserText(capture.text.clone());
                     store
                         .commit(&[StoreChange::History {
                             session_id: current_id,
                             item: item.clone(),
                         }])
                         .await?;
+                    drop(capture);
                     session = Some(store
                         .load_session(current_id)
                         .await?

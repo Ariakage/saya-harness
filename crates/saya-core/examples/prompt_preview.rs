@@ -158,6 +158,7 @@ fn execution_request(
         dynamic_instructions: Some(dynamic_instructions),
         max_output_tokens: None,
         history,
+        media: Default::default(),
         tools,
     };
     let request = preview_context(request)?;
@@ -480,6 +481,7 @@ fn compact_request() -> Result<Value, Box<dyn std::error::Error>> {
         dynamic_instructions: None,
         max_output_tokens: Some(65_536),
         history: vec![HistoryItem::UserText(source_data.to_string())],
+        media: Default::default(),
         tools: Vec::new(),
     };
     let fingerprint = digest(compaction::COMPACT_INSTRUCTIONS);
@@ -502,6 +504,7 @@ fn review_request() -> Result<Value, Box<dyn std::error::Error>> {
         dynamic_instructions: None,
         max_output_tokens: Some(65_536),
         history: vec![HistoryItem::UserText(review_data.to_string())],
+        media: Default::default(),
         tools: Vec::new(),
     };
     let fingerprint = digest(prompt::review_instructions());

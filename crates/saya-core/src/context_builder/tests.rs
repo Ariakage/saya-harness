@@ -26,6 +26,7 @@ fn request(history: Vec<HistoryItem>) -> ModelRequest {
         dynamic_instructions: Some("Current mode and permissions".into()),
         max_output_tokens: Some(100),
         history,
+        media: Default::default(),
         tools: vec![ToolDefinition {
             name: "read_file".into(),
             description: "Read a bounded page".into(),

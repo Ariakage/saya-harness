@@ -74,6 +74,7 @@ fn request() -> ModelRequest {
         dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![HistoryItem::UserText("hi".into())],
+        media: Default::default(),
         tools: vec![],
     }
 }
@@ -173,12 +174,25 @@ async fn enabled_image_is_sent_as_anthropic_base64_block() -> Result<(), Box<dyn
         image: true,
         ..Default::default()
     };
+    let capabilities = cfg.multimodal;
     let model = AnthropicModel::new(transport(url)?, cfg, AnthropicVersion::default());
     let mut req = request();
-    req.history = vec![HistoryItem::UserText(format!(
-        "Inspect [Image 1](<{}>)",
-        image.display()
-    ))];
+    let session_id = SessionId::new();
+    let store = Arc::new(saya_core::output_store::OutputStore::open(
+        root.path().join("outputs"),
+        Default::default(),
+        Arc::new(saya_core::credentials::SecretRegistry::default()),
+    )?);
+    let input = format!("Inspect [Image 1](<{}>)", image.display());
+    let capture = saya_core::media::capture_user(&input, capabilities, &store, session_id)?;
+    req.history = vec![HistoryItem::UserText(capture.text.clone())];
+    req.media = Arc::new(saya_core::media::load_history(
+        &req.history,
+        Some(&store),
+        session_id,
+    )?);
+    std::fs::remove_file(&image)?;
+    drop(capture);
     collect(&model, &req).await?;
 
     let body = requests.recv_timeout(Duration::from_secs(1))?;

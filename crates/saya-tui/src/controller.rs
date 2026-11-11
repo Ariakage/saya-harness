@@ -503,16 +503,21 @@ impl App {
             },
         )?;
         if kind == RunKind::Execution {
-            session::append(prepared, text.clone()).await.map_err(|_| {
-                BoundaryError(
-                    saya_core::contract::ErrorInfo {
-                        code: "storage_error".into(),
-                        message: text::CONVERSATION_SAVE_FAILED.into(),
-                    },
-                    None,
-                    None,
-                )
-            })?;
+            session::append(prepared, text.clone())
+                .await
+                .map_err(|failure| {
+                    match failure.downcast::<saya_core::contract::BoundaryError>() {
+                        Ok(failure) => *failure,
+                        Err(_) => BoundaryError(
+                            saya_core::contract::ErrorInfo {
+                                code: "storage_error".into(),
+                                message: text::CONVERSATION_SAVE_FAILED.into(),
+                            },
+                            None,
+                            None,
+                        ),
+                    }
+                })?;
         }
         let mut current = prepared.session.clone();
         self.refresh_header();

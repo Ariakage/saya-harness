@@ -304,6 +304,7 @@ pub async fn review_operation(
             dynamic_instructions: None,
             max_output_tokens: config.max_output_tokens,
             history: vec![HistoryItem::UserText(data.to_string())],
+            media: Default::default(),
             tools: vec![],
         };
         let started = Instant::now();

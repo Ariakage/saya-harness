@@ -1,6 +1,6 @@
 # 上下文、Compact 与长工具输出
 
-**更新于2026-11-10。N3开发线已接入OutputStore、ContextBuilder、自动／手动Compact和记忆投影，并由固定源码 `e1da373` 完成四平台验收。本文描述当前接口与有限预算，实际检查、质量和平台证据见[N3验收](n3-validation.md#四平台最终验收)及[开发进度](progress.md)。**
+**更新于2026-11-11。N3开发线已接入OutputStore、ContextBuilder、自动／手动Compact和记忆投影，并由固定源码 `e1da373` 完成四平台验收。本文描述当前接口与有限预算；媒体快照等后续增量不继承该固定源码证据，实际检查、质量和平台证据见[N3验收](n3-validation.md#四平台最终验收)及[开发进度](progress.md)。**
 
 ## 模块与持久历史
 
@@ -41,6 +41,8 @@ exec捕获位于管道drain阶段，stdout／stderr原有有效捕获上限默�
 output_read返回metadata、chunks及next_cursor，output_search返回相应匹配与页游标。游标绑定脱敏视图摘要，凭据集合变化后需要重新查询。Manual Approval覆盖每次查询调用，PLAN允许获准的只读查询，当前显式deny和Session归属检查持续生效。
 
 Run发布对象持有租约，历史引用遵循有界存储和回收策略。缺失对象返回output_unavailable，重新执行producer沿新的明确调用与权限流程处理。磁盘发布失败保留实际工具结果及捕获错误，恢复核对原意图和封存对象，避免重复副作用。
+
+用户媒体使用同一私有存储中的独立二进制对象格式。对象头保存Session、模态、MIME、文件名、字节数和原始内容SHA-256，历史中的`saya-media://`引用同时携带对象ID和内容摘要；读取时验证发布状态、Session归属、长度与摘要，不做UTF-8或文本脱敏投影。媒体对象沿用总库字节数、对象数、文件租约和显式GC，但使用自身模态及单消息上限，不占用工具producer的单Run捕获额度。`collect_garbage`的`pinned_refs`必须同时包含所有活跃ContextView输出引用和`media::history_references`返回的历史媒体引用；未固定且无租约的对象可以被回收，之后的模型请求以`media_unavailable`失败，不回退到原路径。媒体快照在输入历史提交前完成发布，捕获器持有租约直到事务结束；崩溃留下的未引用对象由同一GC处理。
 
 ## 检索与grep
 

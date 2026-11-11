@@ -12,7 +12,25 @@ use std::{
 };
 
 const MAGIC: &[u8; 8] = b"SAYAOUT1";
+const MEDIA_MAGIC: &[u8; 8] = b"SAYAMED1";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
+
+fn media_error(code: &str, message: &str) -> BoundaryError {
+    error(code, message)
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MediaHeader {
+    version: u8,
+    id: String,
+    session_id: SessionId,
+    kind: crate::media::MediaKind,
+    mime: String,
+    filename: String,
+    byte_len: u64,
+    sha256: String,
+}
 
 pub(super) struct Inner {
     pub(super) dir: Dir,
@@ -220,6 +238,7 @@ impl Inner {
             let temporary = temporary_name(&name);
             if !temporary
                 && object_id(&name).is_none()
+                && media_id(&name).is_none()
                 && pending_id(&name).is_none()
                 && published_id(&name).is_none()
             {
@@ -356,6 +375,218 @@ impl Inner {
         Ok(true)
     }
 
+    fn media_header(&self, file: &mut File, id: &str) -> Result<MediaHeader, BoundaryError> {
+        let mut prefix = [0u8; 12];
+        file.read_exact(&mut prefix)
+            .map_err(|_| media_error("media_corrupt", "Media header is incomplete"))?;
+        if &prefix[..8] != MEDIA_MAGIC {
+            return Err(media_error(
+                "media_corrupt",
+                "Media object format is unsupported",
+            ));
+        }
+        let length = u32::from_be_bytes([prefix[8], prefix[9], prefix[10], prefix[11]]) as usize;
+        if length == 0 || length > MAX_HEADER_BYTES {
+            return Err(media_error("media_corrupt", "Media header size is invalid"));
+        }
+        let mut bytes = vec![0; length];
+        file.read_exact(&mut bytes)
+            .map_err(|_| media_error("media_corrupt", "Media header is incomplete"))?;
+        let header: MediaHeader = serde_json::from_slice(&bytes)
+            .map_err(|_| media_error("media_corrupt", "Media header cannot be decoded"))?;
+        crate::media::validate_metadata(header.kind, &header.mime, &header.filename, &[0])
+            .map_err(|_| media_error("media_corrupt", "Media metadata is invalid"))?;
+        if header.version != 1
+            || header.id != id
+            || media_id(&media_name(id)) != Some(id)
+            || !valid_digest(&header.sha256)
+            || header.byte_len == 0
+            || header.byte_len > crate::media::maximum(header.kind)
+        {
+            return Err(media_error("media_corrupt", "Media identity is invalid"));
+        }
+        let expected = 12u64
+            .checked_add(length as u64)
+            .and_then(|size| size.checked_add(header.byte_len))
+            .ok_or_else(|| media_error("media_corrupt", "Media object size overflows"))?;
+        if file
+            .metadata()
+            .map_err(|_| media_error("media_io", "Media metadata is unavailable"))?
+            .len()
+            != expected
+        {
+            return Err(media_error(
+                "media_corrupt",
+                "Media object length does not match its header",
+            ));
+        }
+        Ok(header)
+    }
+
+    fn ensure_media_capacity(&self, bytes: usize) -> Result<(), BoundaryError> {
+        let names = self.names(true)?;
+        let sealed = names
+            .iter()
+            .filter_map(|name| object_id(name))
+            .collect::<BTreeSet<_>>();
+        let mut total = 0usize;
+        let mut count = 0usize;
+        for name in &names {
+            let size = if temporary_name(name) {
+                self.open_file(name)?
+                    .metadata()
+                    .map_err(|_| error("output_io", "Output temporary metadata is unavailable"))?
+                    .len()
+                    .try_into()
+                    .map_err(|_| error("output_quota", "Output temporary size exceeds capacity"))?
+            } else if let Some(id) = object_id(name) {
+                count += 1;
+                self.header(&mut self.open_file(name)?, id)?.bytes()?
+            } else if let Some(id) = media_id(name) {
+                count += 1;
+                usize::try_from(self.media_header(&mut self.open_file(name)?, id)?.byte_len)
+                    .map_err(|_| error("output_quota", "Media size exceeds capacity"))?
+            } else if let Some(id) = pending_id(name) {
+                if sealed.contains(id) {
+                    continue;
+                }
+                count += 1;
+                self.pending(id)?.capture_limit_bytes
+            } else {
+                continue;
+            };
+            total = total
+                .checked_add(size)
+                .ok_or_else(|| error("output_quota", "Output store usage overflows"))?;
+        }
+        if count >= self.limits.max_objects
+            || total
+                .checked_add(bytes)
+                .is_none_or(|total| total > self.limits.max_store_bytes)
+        {
+            return Err(error("output_quota", "Media snapshot exceeds store quota"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn put_media(
+        &self,
+        session_id: SessionId,
+        kind: crate::media::MediaKind,
+        mime: &str,
+        filename: &str,
+        bytes: &[u8],
+    ) -> Result<SealedMedia, BoundaryError> {
+        let _lock = self.directory_lock()?;
+        self.repair_atomic_links()?;
+        self.ensure_media_capacity(bytes.len())?;
+        let id = format!("media_{}", uuid::Uuid::now_v7().simple());
+        let sha256 = crate::media::digest(bytes);
+        let header = MediaHeader {
+            version: 1,
+            id: id.clone(),
+            session_id,
+            kind,
+            mime: mime.into(),
+            filename: filename.into(),
+            byte_len: bytes.len() as u64,
+            sha256: sha256.clone(),
+        };
+        let header_bytes = serde_json::to_vec(&header)
+            .map_err(|_| media_error("media_io", "Media header cannot be encoded"))?;
+        ensure_safe(&header_bytes, &self.secrets.snapshot()?)?;
+        if header_bytes.len() > MAX_HEADER_BYTES {
+            return Err(media_error(
+                "media_limit",
+                "Media metadata exceeds its limit",
+            ));
+        }
+        let mut record = Vec::with_capacity(12 + header_bytes.len() + bytes.len());
+        record.extend_from_slice(MEDIA_MAGIC);
+        record.extend_from_slice(&(header_bytes.len() as u32).to_be_bytes());
+        record.extend_from_slice(&header_bytes);
+        record.extend_from_slice(bytes);
+        self.create_atomic(&media_name(&id), &record)?;
+        self.create_atomic(&published_name(&id), sha256.as_bytes())?;
+        let file = self
+            .open_file(&media_name(&id))
+            .map_err(|_| media_error("media_unavailable", "Media snapshot cannot be reopened"))?;
+        lock(&file, libc::LOCK_SH)?;
+        let media = crate::media::LoadedMedia {
+            kind,
+            mime: mime.into(),
+            filename: filename.into(),
+            data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+            sha256: sha256.clone(),
+            reference: Some(format!("{id}_{sha256}")),
+            size: bytes.len() as u64,
+        };
+        Ok(SealedMedia {
+            media,
+            _lease: OutputLease { _file: file },
+        })
+    }
+
+    pub(super) fn load_media(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(crate::media::LoadedMedia, OutputLease), BoundaryError> {
+        let (id, digest) = crate::media::parse_reference(reference)?;
+        let mut file = self.open_file(&media_name(id)).map_err(|_| {
+            media_error(
+                "media_unavailable",
+                "Media snapshot is missing or inaccessible",
+            )
+        })?;
+        lock(&file, libc::LOCK_SH)?;
+        private_file(&file)?;
+        let header = self.media_header(&mut file, id)?;
+        if header.sha256 != digest {
+            return Err(media_error(
+                "media_corrupt",
+                "Media reference digest does not match",
+            ));
+        }
+        if header.session_id != session_id {
+            return Err(media_error(
+                "media_denied",
+                "Media snapshot belongs to another session",
+            ));
+        }
+        if !self.published(id, digest)? {
+            return Err(media_error(
+                "media_unavailable",
+                "Media snapshot has not been durably published",
+            ));
+        }
+        let size = usize::try_from(header.byte_len)
+            .map_err(|_| media_error("media_corrupt", "Media size exceeds host capacity"))?;
+        let mut bytes = vec![0; size];
+        for chunk in bytes.chunks_mut(64 * 1024) {
+            file.read_exact(chunk)
+                .map_err(|_| media_error("media_corrupt", "Media content is incomplete"))?;
+        }
+        if crate::media::digest(&bytes) != digest {
+            return Err(media_error(
+                "media_corrupt",
+                "Media content integrity check failed",
+            ));
+        }
+        Ok((
+            crate::media::LoadedMedia {
+                kind: header.kind,
+                mime: header.mime,
+                filename: header.filename,
+                data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
+                sha256: digest.into(),
+                reference: Some(reference.into()),
+                size: header.byte_len,
+            },
+            OutputLease { _file: file },
+        ))
+    }
+
     pub(super) fn reserve(
         &self,
         scope: OutputScope,
@@ -383,6 +614,16 @@ impl Inner {
                     .map_err(|_| error("output_quota", "Output temporary size exceeds capacity"))?;
                 total = total
                     .checked_add(size)
+                    .ok_or_else(|| error("output_quota", "Output store usage overflows"))?;
+                continue;
+            }
+            if let Some(id) = media_id(name) {
+                let bytes = self.media_header(&mut self.open_file(name)?, id)?.byte_len;
+                let bytes = usize::try_from(bytes)
+                    .map_err(|_| error("output_quota", "Media size exceeds capacity"))?;
+                count += 1;
+                total = total
+                    .checked_add(bytes)
                     .ok_or_else(|| error("output_quota", "Output store usage overflows"))?;
                 continue;
             }
@@ -643,7 +884,15 @@ impl Inner {
         }
         let pinned_ids = pinned_refs
             .iter()
-            .map(|reference| parse_reference(reference).map(|(id, _)| id.to_owned()))
+            .map(|reference| {
+                if reference.starts_with("media_") {
+                    crate::media::parse_reference(reference)
+                        .map(|(id, _)| id.to_owned())
+                        .map_err(|_| error("output_reference", "Media reference is invalid"))
+                } else {
+                    parse_reference(reference).map(|(id, _)| id.to_owned())
+                }
+            })
             .collect::<Result<BTreeSet<_>, _>>()?;
         let _lock = self.directory_lock()?;
         self.repair_atomic_links()?;
@@ -651,7 +900,7 @@ impl Inner {
         let mut candidates = Vec::new();
         for name in self.names(false)? {
             let priority =
-                if let Some(id) = object_id(&name) {
+                if let Some(id) = object_id(&name).or_else(|| media_id(&name)) {
                     if self.dir.try_exists(published_name(id)).map_err(|_| {
                         error("output_io", "Output publication state is unavailable")
                     })? {
@@ -672,16 +921,20 @@ impl Inner {
         candidates.sort();
         for (_, name) in candidates {
             let id = object_id(&name)
+                .or_else(|| media_id(&name))
                 .or_else(|| pending_id(&name))
                 .or_else(|| published_id(&name));
             if id.is_none() && !temporary_name(&name) {
                 continue;
             }
             if let Some(marker_id) = published_id(&name)
-                && self
+                && (self
                     .dir
                     .try_exists(object_name(marker_id))
                     .map_err(|_| error("output_io", "Output publication target is unavailable"))?
+                    || self.dir.try_exists(media_name(marker_id)).map_err(|_| {
+                        error("output_io", "Media publication target is unavailable")
+                    })?)
             {
                 continue;
             }
@@ -716,7 +969,7 @@ impl Inner {
             self.dir
                 .remove_file(&name)
                 .map_err(|_| error("output_io", "Output GC removal failed"))?;
-            if let Some(id) = object_id(&name) {
+            if let Some(id) = object_id(&name).or_else(|| media_id(&name)) {
                 let marker = published_name(id);
                 if self
                     .dir
@@ -857,6 +1110,9 @@ fn ensure_safe(bytes: &[u8], secrets: &[String]) -> Result<(), BoundaryError> {
 fn object_name(id: &str) -> String {
     format!("{id}.out")
 }
+fn media_name(id: &str) -> String {
+    format!("{id}.media")
+}
 fn pending_name(id: &str) -> String {
     format!(".pending-{id}.json")
 }
@@ -866,13 +1122,24 @@ fn published_name(id: &str) -> String {
 fn object_id(name: &str) -> Option<&str> {
     name.strip_suffix(".out").filter(|id| valid_id(id))
 }
+fn media_id(name: &str) -> Option<&str> {
+    name.strip_suffix(".media").filter(|id| {
+        id.strip_prefix("media_").is_some_and(|id| {
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    })
+}
 fn pending_id(name: &str) -> Option<&str> {
     name.strip_prefix(".pending-")?
         .strip_suffix(".json")
         .filter(|id| valid_id(id))
 }
 fn published_id(name: &str) -> Option<&str> {
-    name.strip_prefix(".published-").filter(|id| valid_id(id))
+    name.strip_prefix(".published-")
+        .filter(|id| valid_id(id) || media_id(&media_name(id)) == Some(*id))
 }
 fn temporary_name(name: &str) -> bool {
     name.strip_prefix(".tmp-")

@@ -253,6 +253,7 @@ async fn model_turn(
             dynamic_instructions: None,
             max_output_tokens: None,
             history,
+            media: Default::default(),
             tools: available_tools,
         };
         let started = Instant::now();

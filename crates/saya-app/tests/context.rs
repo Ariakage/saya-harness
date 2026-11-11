@@ -71,6 +71,7 @@ fn request() -> ModelRequest {
         dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![],
+        media: Default::default(),
         tools: vec![],
     }
 }

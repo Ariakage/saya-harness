@@ -48,7 +48,7 @@ impl ResponsesModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let input = history(&request.history, self.settings.multimodal)?;
+        let input = history(&request.history, self.settings.multimodal, &request.media)?;
         let mut body = json!({"model":self.settings.model,"instructions":request.combined_instructions(),"input":input,"store":false,"stream":self.settings.stream,"max_output_tokens":output});
         let map = body
             .as_object_mut()
@@ -348,8 +348,9 @@ fn parse_response(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bo
 fn responses_user_content(
     text: &str,
     capabilities: crate::config::MediaCapabilities,
+    snapshots: &crate::media::MediaAttachments,
 ) -> Result<Value, BoundaryError> {
-    let parts = media::expand_user(text, capabilities)?;
+    let parts = media::expand_user_with_snapshots(text, capabilities, snapshots)?;
     if !parts
         .iter()
         .any(|part| matches!(part, media::ContentPart::Media(_)))
@@ -393,6 +394,7 @@ fn responses_user_content(
 fn history(
     items: &[HistoryItem],
     capabilities: crate::config::MediaCapabilities,
+    snapshots: &crate::media::MediaAttachments,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut input = Vec::new();
     let mut pending = HashSet::new();
@@ -405,7 +407,7 @@ fn history(
                 }
                 input.push(json!({
                     "role":"user",
-                    "content":responses_user_content(text, capabilities)?
+                    "content":responses_user_content(text, capabilities, snapshots)?
                 }));
             }
             HistoryItem::AssistantText(text) | HistoryItem::AssistantPartial(text) => {
@@ -971,6 +973,7 @@ mod media_tests {
                 audio: true,
                 video: true,
             },
+            &crate::media::MediaAttachments::default(),
         )
         .unwrap();
         let parts = content.as_array().unwrap();

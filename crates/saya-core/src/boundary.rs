@@ -5,7 +5,7 @@ use crate::contract::{
     Usage,
 };
 use serde_json::Value;
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 /// A fallible adapter operation. It may perform I/O according to the adapter.
 pub type Operation<'a, T> = Pin<Box<dyn Future<Output = Result<T, BoundaryError>> + Send + 'a>>;
@@ -34,6 +34,8 @@ pub struct ModelRequest {
     /// Provider output token limit; `None` uses the execution profile.
     pub max_output_tokens: Option<u32>,
     pub history: Vec<HistoryItem>,
+    /// Host-verified durable media snapshots, keyed by references in history.
+    pub media: Arc<crate::media::MediaAttachments>,
     pub tools: Vec<ToolDefinition>,
 }
 impl ModelRequest {

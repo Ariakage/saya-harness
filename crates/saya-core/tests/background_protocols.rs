@@ -475,6 +475,7 @@ async fn recovered_tool_pairs_remain_valid_for_all_three_provider_protocols()
             dynamic_instructions: None,
             max_output_tokens: None,
             history: recovered.history,
+            media: Default::default(),
             tools: vec![],
         };
         let mut stream = model.start(&req, &Never).await?;

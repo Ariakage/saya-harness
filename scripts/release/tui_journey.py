@@ -2638,6 +2638,8 @@ def pasted_file_references_use_display_tokens(binary):
             image.write_bytes(b'png')
             file.write_text('notes\n')
             config = configuration(root, fixture)
+            with config.open('a') as output:
+                output.write('[profiles.fixture.multimodal]\nimage = true\n')
             terminal = invoke(binary, root, config)
             try:
                 terminal.title()
@@ -2670,13 +2672,26 @@ def pasted_file_references_use_display_tokens(binary):
                 terminal.send(b'\r')
                 terminal.until('ATTACHMENTS_OK')
                 wait_idle(terminal, root)
+                def content_text(message):
+                    content = message.get('content')
+                    if isinstance(content, str):
+                        return content
+                    return ''.join(part.get('text', '') for part in content or []
+                                   if isinstance(part, dict))
+
                 user = next(message for message in fixture.requests[0]['messages']
-                            if message.get('role') == 'user' and
-                            isinstance(message.get('content'), str) and
-                            '[Image 1](<' in message['content'])
-                prompt = user['content']
-                if not isinstance(prompt, str) or '[Image 1](<' not in prompt or '[File 1](<' not in prompt:
-                    raise RuntimeError('model prompt did not retain attached file destinations: ' + repr(prompt))
+                            if message.get('role') == 'user' and '[Image 1]' in content_text(message))
+                content = user.get('content')
+                parts = content if isinstance(content, list) else [{'type': 'text', 'text': content}]
+                prompt = content_text(user)
+                if '[Image 1]' not in prompt or '[File 1](<' not in prompt or str(file) not in prompt:
+                    raise RuntimeError('model prompt did not retain attached file destinations: ' + repr(content))
+                if 'saya-media://' in prompt:
+                    raise RuntimeError('model prompt leaked the durable media reference instead of image content')
+                image = next((part for part in parts
+                              if isinstance(part, dict) and part.get('type') == 'image_url'), None)
+                if image is None or not image['image_url']['url'].startswith('data:image/png;base64,'):
+                    raise RuntimeError('model prompt did not embed the captured image snapshot: ' + repr(content))
                 if '[Image 1] File: [File 1]' not in terminal.screen.body_text():
                     raise RuntimeError('sent user message did not retain attachment display tokens')
                 terminal.finish()

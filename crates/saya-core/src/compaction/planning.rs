@@ -626,6 +626,7 @@ pub(super) fn request_for(
         history: vec![HistoryItem::UserText(String::from_utf8(encoded).map_err(
             |_| error("compaction_invalid", "Compaction request is not UTF-8"),
         )?)],
+        media: input.context.request.media.clone(),
         tools: Vec::new(),
     })
 }

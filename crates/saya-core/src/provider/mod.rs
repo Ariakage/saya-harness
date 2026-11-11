@@ -357,6 +357,7 @@ mod tests {
             dynamic_instructions: None,
             max_output_tokens,
             history: vec![],
+            media: Default::default(),
             tools: vec![],
         }
     }

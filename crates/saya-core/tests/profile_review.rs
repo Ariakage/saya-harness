@@ -215,6 +215,7 @@ async fn missing_review_profile_falls_back_and_execution_switch_is_rejected()
         dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![],
+        media: Default::default(),
         tools: vec![],
     };
     let error = match router.start(&request, &Never).await {

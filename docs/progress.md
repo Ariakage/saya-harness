@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 多模态有界读取与 Session 快照一致性
+
+2026-11-11，按D-061修复本地媒体读取及历史恢复。`media.rs`不再在路径metadata检查后用另一次打开执行整文件读取；同一打开文件描述符通过`take(limit + 1)`有界读入，路径在打开后被替换的定向回归确认仍读取原打开对象，超限读取保持拒绝。新用户输入、文本会话及运行中引导在SQLite历史提交前捕获图片／音频／视频，OutputStore保存带Session归属、模态、MIME、原始字节SHA-256、私有权限和租约的二进制对象，历史标记改写为`saya-media://`引用。运行时按引用恢复并重新核验摘要，三协议使用同一快照；`output_capture.enabled = false`不关闭该Session媒体能力。旧版已保存的纯路径历史保留兼容读取，无法追溯证明其原始内容。
+
+媒体对象纳入OutputStore总库／对象数配额、租约和显式GC，调用方须通过`media::history_references`固定仍被历史引用的对象；回收后返回`media_unavailable`，不回退原路径。新增回归覆盖打开后替换、超限、源文件修改／删除、重开存储、跨Session拒绝、租约、pin／回收及内容篡改。真实SQLite应用层测试在禁用工具输出捕获时验证输入落库、恢复和原始字节一致；Chat／Responses／Anthropic本地HTTP夹具均在源文件删除后验证实际wire仍含快照。7项媒体、17项OutputStore及三项协议定向测试通过，workspace全目标严格Clippy通过；`just test-tooling`的75项Python回归通过，日志为 `target/media-consistency-tooling.log`。13份变更文档的相对链接检查通过，历史示例中的字面`PATH`占位符不属于文件链接。
+
+本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 just check`，格式、workspace全目标严格Clippy、1376项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/media-consistency-check-final.log`。`just prompt all`生成七个场景，实际JSON结构及请求字段断言通过。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/media-consistency-smoke-final.log`；附件场景现显式开启图片能力，并核对模型wire收到base64图片快照、File真实路径和显示token，不暴露`saya-media://`内部引用。本轮未运行远端CI、其他平台或真实模型验收，既有四平台证据继续归属其固定源码。
+
 ## TUI 运行控制、引导与输出边界
 
 2026-11-11，在运行时控制和扩展选择阶段后继续加入TUI运行中引导、`/cd`、`/sandbox`、`/model`、`/effort`／`/thinking`参数补全、`/autocompact`、`/skills`／`/mcps`／`/plugins`选择器、`/sessions`弹窗恢复和结构化`/tools`卡片。运行中普通输入最多16条／累计256KiB，排队到下一模型边界持久化；Run关闭后拒绝迟到输入。MCP切换只影响后续Run，Skill／Plugin选择不绕过原有工具和启用授权，`/sandbox off`仍保留权限、deny、PLAN、凭据存储拒绝和Host能力限制。

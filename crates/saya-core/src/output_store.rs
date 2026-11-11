@@ -294,6 +294,14 @@ pub struct SealedOutput {
     _lease: OutputLease,
 }
 
+/// A private binary media snapshot. Dropping it releases the GC lease; durable
+/// history references must separately be supplied as pins during collection.
+#[derive(Debug)]
+pub struct SealedMedia {
+    pub media: crate::media::LoadedMedia,
+    _lease: OutputLease,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputObjectState {
@@ -452,6 +460,33 @@ impl OutputStore {
         let (_, _, lease) = self.inner.load(session_id, output_ref, true)?;
         Ok(lease)
     }
+
+    /// Atomically retain and publish one binary media snapshot. Its reference
+    /// carries the raw-content SHA-256; session history is the durable pin root.
+    pub fn put_media(
+        &self,
+        session_id: SessionId,
+        kind: crate::media::MediaKind,
+        mime: &str,
+        filename: &str,
+        bytes: &[u8],
+    ) -> Result<SealedMedia, BoundaryError> {
+        crate::media::validate_metadata(kind, mime, filename, bytes)?;
+        self.inner
+            .put_media(session_id, kind, mime, filename, bytes)
+    }
+
+    /// Load a published snapshot after validating session scope and raw SHA-256.
+    pub fn load_media(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<crate::media::LoadedMedia, BoundaryError> {
+        self.inner
+            .load_media(session_id, reference)
+            .map(|(media, _)| media)
+    }
+
     /// Host recovery may inspect sealed objects before deciding which durable
     /// tool references are safe to publish. This never publishes by itself.
     pub fn inventory(&self) -> Result<Vec<OutputInventory>, BoundaryError> {

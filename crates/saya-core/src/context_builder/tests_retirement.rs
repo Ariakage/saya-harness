@@ -113,6 +113,7 @@ pub(crate) fn fixture(
             dynamic_instructions: None,
             max_output_tokens: Some(100),
             history,
+            media: Default::default(),
             tools: Vec::new(),
         },
         CountingIdentity {

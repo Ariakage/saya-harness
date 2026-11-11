@@ -86,6 +86,7 @@
 | D-058 | 2026-11-11 | TUI粘贴文件使用编号token而非路径显示 | 项目负责人要求图片和文件粘贴后显示为高亮`[Image N]`／`File: [File N]`。Editor与历史只显示token，模型输入保留链接包装的真实本地路径；识别现有文件、`file://`、引号及转义路径。该入口不读取或内嵌剪贴板图片二进制。[TUI](tui.md) |
 | D-059 | 2026-11-11 | 附件token原子编辑并支持剪贴板图片二进制 | 项目负责人要求附件占位符整体移动／删除，并支持直接粘贴剪贴板图片。Editor将`[Image N]`／`File: [File N]`作为原子片段；`Ctrl+V`优先从系统剪贴板读取PNG/TIFF等图片并保存到`~/.saya/paste_image/`，随后插入Image token，无图片时回退文本。图片读取与文件写入保持32MiB、5秒及私有权限边界。[TUI](tui.md) |
 | D-060 | 2026-11-11 | profile显式控制图片、音频与视频输入，DeepSeek测试profile启用图片 | 项目负责人要求多模态模型读取视频／音频／图片，并为当前DeepSeek profile启用其支持的图片能力。profile新增`multimodal.image/audio/video`；TUI增加Audio／Video原子token；Chat与Responses映射图片、音频及视频文件输入，Messages当前支持图片。未开启或不受支持的模态在发送前明确失败。本地忽略的`.saya/local/deepseek.toml`仅启用image，能力开关进入profile身份指纹。[配置](configuration.md#多模态输入)、[模型协议](model-protocols.md#多模态内容) |
+| D-061 | 2026-11-11 | 媒体输入使用SHA-256内容身份和OutputStore持久快照 | 项目负责人要求修复有界读取竞态及Session恢复一致性。新输入在落库前从同一打开文件描述符执行有界读取，保存带Session归属、内容摘要、租约及GC引用的二进制对象；后续请求和恢复不再读取原路径。旧版已经保存的纯路径历史继续兼容，但明确保留无法追溯验证原始内容的限制。[模型协议](model-protocols.md#多模态内容)、[上下文](context-management.md#长工具输出) |
 
 完整基线是当前产品行为的权威入口，文末覆盖表追踪所有已收敛主题。实现中的函数签名、内部拆分和兼容依赖版本由开发者处理，不重新提出偏好问题。
 

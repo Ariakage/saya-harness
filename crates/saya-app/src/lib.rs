@@ -316,17 +316,18 @@ pub fn build_runtime(
         } else {
             None
         };
+    let outputs = Arc::new(saya_core::output_store::OutputStore::open(
+        config.data_dir.join("outputs"),
+        config.output_capture.limits,
+        registry.clone(),
+    )?);
+    if sandbox.backend != saya_core::execution::BackendKind::Host {
+        sandbox
+            .protected_paths
+            .push(outputs.protected_path().to_owned());
+    }
+    runtime = runtime.with_media_store(outputs.clone(), selected.multimodal);
     if config.output_capture.enabled {
-        let outputs = Arc::new(saya_core::output_store::OutputStore::open(
-            config.data_dir.join("outputs"),
-            config.output_capture.limits,
-            registry.clone(),
-        )?);
-        if sandbox.backend != saya_core::execution::BackendKind::Host {
-            sandbox
-                .protected_paths
-                .push(outputs.protected_path().to_owned());
-        }
         runtime = runtime.with_output_store(outputs)?;
     }
     let memory_root = config.memory_root()?;

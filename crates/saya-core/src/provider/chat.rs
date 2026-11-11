@@ -61,6 +61,7 @@ impl ChatModel {
             &request.combined_instructions(),
             &request.history,
             self.settings.multimodal,
+            &request.media,
         )?;
         let mut body = json!({"model":self.settings.model, "messages":messages, "store":false, "stream":self.settings.stream});
         let map = body
@@ -99,8 +100,9 @@ impl ChatModel {
 fn chat_user_content(
     text: &str,
     capabilities: crate::config::MediaCapabilities,
+    snapshots: &crate::media::MediaAttachments,
 ) -> Result<Value, BoundaryError> {
-    let parts = media::expand_user(text, capabilities)?;
+    let parts = media::expand_user_with_snapshots(text, capabilities, snapshots)?;
     if !parts
         .iter()
         .any(|part| matches!(part, media::ContentPart::Media(_)))
@@ -147,6 +149,7 @@ fn chat_history(
     instructions: &str,
     history: &[HistoryItem],
     capabilities: crate::config::MediaCapabilities,
+    snapshots: &crate::media::MediaAttachments,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = vec![json!({"role":"system","content":instructions})];
     let mut text: Option<String> = None;
@@ -203,7 +206,7 @@ fn chat_history(
                 }
                 messages.push(json!({
                     "role":"user",
-                    "content":chat_user_content(value, capabilities)?
+                    "content":chat_user_content(value, capabilities, snapshots)?
                 }));
             }
             HistoryItem::AssistantPartial(value) if value.is_empty() => {}
@@ -844,6 +847,7 @@ mod reasoning_tests {
                 audio: true,
                 video: true,
             },
+            &crate::media::MediaAttachments::default(),
         )
         .unwrap();
         let parts = content.as_array().unwrap();

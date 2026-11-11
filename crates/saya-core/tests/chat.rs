@@ -74,6 +74,7 @@ fn request() -> ModelRequest {
         dynamic_instructions: None,
         max_output_tokens: None,
         history: vec![HistoryItem::UserText("hi".into())],
+        media: Default::default(),
         tools: vec![],
     }
 }
@@ -206,14 +207,32 @@ async fn enabled_media_is_sent_as_chat_content_parts() -> Result<(), Box<dyn std
         audio: true,
         video: true,
     };
+    let capabilities = cfg.multimodal;
     let model = ChatModel::new(transport(url)?, cfg, ChatCompatibility::default());
     let mut req = request();
-    req.history = vec![HistoryItem::UserText(format!(
+    let session_id = SessionId::new();
+    let store = Arc::new(saya_core::output_store::OutputStore::open(
+        root.path().join("outputs"),
+        Default::default(),
+        Arc::new(saya_core::credentials::SecretRegistry::default()),
+    )?);
+    let input = format!(
         "Inspect [Image 1](<{}>) [Audio 1](<{}>) [Video 1](<{}>)",
         image.display(),
         audio.display(),
         video.display()
-    ))];
+    );
+    let capture = saya_core::media::capture_user(&input, capabilities, &store, session_id)?;
+    req.history = vec![HistoryItem::UserText(capture.text.clone())];
+    req.media = Arc::new(saya_core::media::load_history(
+        &req.history,
+        Some(&store),
+        session_id,
+    )?);
+    std::fs::remove_file(&image)?;
+    std::fs::remove_file(&audio)?;
+    std::fs::remove_file(&video)?;
+    drop(capture);
     collect(&model, &req).await?;
 
     let body = requests.recv_timeout(Duration::from_secs(1))?;

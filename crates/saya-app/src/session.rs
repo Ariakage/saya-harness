@@ -1,8 +1,9 @@
 //! Durable session creation, validation, recovery and exclusive ownership.
 use saya_core::{
     boundary::Store,
-    config::{Config, Protocol},
+    config::{Config, MediaCapabilities, Protocol},
     contract::{HistoryItem, ModelProtocol, Session, SessionId, WorkMode},
+    output_store::OutputStore,
 };
 use saya_core::{
     boundary::StoreChange,
@@ -13,6 +14,8 @@ use std::sync::Arc;
 
 pub struct Prepared {
     pub store: Arc<SqliteStore>,
+    pub media: Arc<OutputStore>,
+    pub media_capabilities: MediaCapabilities,
     pub session: Session,
     pub _lock: SessionLock,
     pub recovery: RecoverySummary,
@@ -69,6 +72,39 @@ pub fn open(config: &Config) -> Result<Arc<SqliteStore>, Box<dyn std::error::Err
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Arc::new(SqliteStore::open(&config.data_dir, secrets)?))
 }
+fn media_store(config: &Config) -> Result<Arc<OutputStore>, Box<dyn std::error::Error>> {
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    let registry = Arc::new(saya_core::credentials::SecretRegistry::default());
+    registry.register(&secrets)?;
+    Ok(Arc::new(OutputStore::open(
+        config.data_dir.join("outputs"),
+        config.output_capture.limits,
+        registry,
+    )?))
+}
+fn capture_history(
+    session: &mut Session,
+    media: &OutputStore,
+    capabilities: MediaCapabilities,
+) -> Result<Vec<saya_core::media::MediaCapture>, Box<dyn std::error::Error>> {
+    let mut captures = Vec::new();
+    for item in &mut session.history {
+        let HistoryItem::UserText(text) = item else {
+            continue;
+        };
+        if !saya_core::media::has_media(text) {
+            continue;
+        }
+        let capture = saya_core::media::capture_user(text, capabilities, media, session.id)?;
+        *text = capture.text.clone();
+        captures.push(capture);
+    }
+    Ok(captures)
+}
 /// Parse a session identifier, returning a validation error for malformed input.
 pub fn parse_id(raw: &str) -> Result<SessionId, Box<dyn std::error::Error>> {
     Ok(serde_json::from_value(serde_json::json!(raw)).map_err(|_| "invalid session ID")?)
@@ -76,20 +112,26 @@ pub fn parse_id(raw: &str) -> Result<SessionId, Box<dyn std::error::Error>> {
 /// Create durable session metadata and acquire an exclusive lock held by Prepared.
 pub async fn create(
     config: &Config,
-    session: Session,
+    mut session: Session,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     check_roots(config, &session.workspace, session.work_mode)?;
     let store = open(config)?;
+    let media = media_store(config)?;
     let lock = store.lock_session(session.id)?;
     let profile = config
         .profiles
         .get(&session.profile)
         .ok_or("session profile not found")?;
+    let media_capabilities = profile.multimodal;
+    let captures = capture_history(&mut session, &media, media_capabilities)?;
     store
         .create_session(&session, &profile.fingerprint()?)
         .await?;
+    drop(captures);
     Ok(Prepared {
         store,
+        media,
+        media_capabilities,
         session,
         _lock: lock,
         recovery: RecoverySummary::default(),
@@ -178,8 +220,12 @@ pub async fn resume(
     if recovery.interrupted_runs > 0 {
         session = store.load_session(id).await?.ok_or("session not found")?;
     }
+    let media = media_store(config)?;
+    let media_capabilities = profile.multimodal;
     Ok(Prepared {
         store,
+        media,
+        media_capabilities,
         session,
         _lock: lock,
         recovery,
@@ -190,7 +236,13 @@ pub async fn append(
     prepared: &mut Prepared,
     text: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let item = HistoryItem::UserText(text);
+    let capture = saya_core::media::capture_user(
+        &text,
+        prepared.media_capabilities,
+        &prepared.media,
+        prepared.session.id,
+    )?;
+    let item = HistoryItem::UserText(capture.text.clone());
     prepared
         .store
         .commit(&[StoreChange::History {
@@ -198,6 +250,7 @@ pub async fn append(
             item: item.clone(),
         }])
         .await?;
+    drop(capture);
     prepared.session = prepared
         .store
         .load_session(prepared.session.id)

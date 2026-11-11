@@ -1,6 +1,6 @@
 # 架构设计
 
-**0.2.0 已发布 N0 共享基础、N1 默认 TUI 及交互与审查修复。当前 N2 开发线已完成原生执行隔离、MCP 与凭据管理，并通过四平台整体验收。本文记录实际架构与后续扩展边界，各源码版本的验收范围见[开发进度](progress.md)和[N2 验收](n2-validation.md)。**
+**0.2.0 已发布 N0 共享基础、N1 默认 TUI 及交互与审查修复。N2 原生执行隔离、MCP 与凭据管理和 N3 上下文、OutputStore、可执行扩展及全局记忆均已完成固定源码的四平台验收；当前后续增量的证据单独维护。本文记录实际架构与扩展边界，各源码版本的验收范围见[开发进度](progress.md)、[N2 验收](n2-validation.md)和[N3 验收](n3-validation.md)。**
 
 约束为 Rust、CLI → TUI → GUI、Saya 自己驱动 Agent 循环，同时支持编程与通用任务。CLI 包含交互和单次运行、四种工作模式、三种权限模式、三类模型协议、本地工具、流式／结构化输出和会话恢复，默认 WORK 与 auto。精确契约以[完整基线](mvp-baseline.md)为准，范围见[需求规格](requirements.md)，行为见[执行契约](execution.md)。
 
@@ -27,7 +27,7 @@ N2 执行层通过 `ExecutionBackend` 和 `PreparedEnvironment` 接入独立 Sea
 
 统一工具注册表维护本地及 MCP 工具的稳定名称、schema、宿主分类和目录代次。stdio 服务启动先经过命令许可与意图记录，HTTP 连接由宿主管理，外部工具调用复用运行时权限、预算、取消和持久化。宿主私有凭据存储、引用绑定、刷新／撤销及管理入口见[MCP 与凭据](mcp.md)。
 
-BrowserProvider、ContextBuilder／OutputStore 与插件仍属后续规划，设计分别见[Browser](browser.md)、[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。
+N3 的 ContextBuilder、OutputStore、Compact／检查点、全局记忆与可执行插件已接入共享运行入口并完成固定源码验收，设计见[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。BrowserProvider 仍属后续规划，设计见[Browser](browser.md)。
 
 运行时通过输入、控制与事件／结果接口连接界面。终端格式、TUI 组件和 GUI 状态管理不进入核心循环；结果与事件使用 B-17 的 schema v1。内部 Rust 函数签名按实现处理，0.1 不承诺独立 SDK 稳定性。
 
@@ -45,13 +45,15 @@ auto 的 TOML 规则按 deny＞ask＞allow 判断，原生工作区读写默认 
 
 三类模型协议分别实现文本流、工具与错误适配，不共用某一家请求 DTO 驱动核心。core 使用统一内部消息并保留必要协议状态、调用标识与不透明内容；映射及版本按 B-05、B-06 分别验证。不启用 provider 服务端工具、provider 侧后台任务或自动协议回退；本地后台任务由 Saya 管理。
 
-本地工具与澄清按 B-14 实现，D-046 提供 Todo 会话元数据工具。参数完整并校验后，检查工作模式、允许路径、显式规则及所需核查／确认，在实际派发前重查。bypass 跳过逻辑路径范围检查，PLAN、显式 deny 与所选执行后端的硬边界继续生效。文件修改使用版本冲突检查与单文件替换，命令使用 argv。0.2.0 的命令执行沿用宿主权限，当前 N2 开发线默认使用原生隔离。
+本地工具与澄清按 B-14 实现，D-046 提供 Todo 会话元数据工具。参数完整并校验后，检查工作模式、允许路径、显式规则及所需核查／确认，在实际派发前重查。bypass 跳过逻辑路径范围检查，PLAN、显式 deny 与所选执行后端的硬边界继续生效。文件修改使用版本冲突检查与单文件替换，命令使用 argv。0.2.0 的命令执行沿用宿主权限，当前开发线默认使用原生隔离。
 
 MCP 服务声明、annotations 和输出均作为外部数据处理，PLAN 只读分类由宿主配置决定。目录变化使旧代次许可失效，工具请求发送一次，断连后无法确认副作用时保存 unknown。凭据后端为私有明文文件，动态 `SecretRegistry` 保留刷新前后已知值，模型输入、工具结果、存储、事件和界面显示使用当前集合检查。启用 MCP 时，模型正文和可读 Thinking 在请求完成后统一脱敏展示，具体范围见[MCP 边界](mcp.md#私有存储与执行边界)。
 
 run 默认不交互，显式预授权精确匹配本次运行；无法询问且缺少许可返回 needs_confirmation／3，缺少澄清返回 needs_input／4。确认与澄清由界面承接，许可由 core 协调；stdout 的 JSON／JSONL 与 stderr 诊断、控制终端提示分离。
 
 会话使用 SQLite WAL，内部数据库 schema 为 2，保存完整消息、必要协议状态、工具意图／结果与关键业务事件。副作用前保存意图，调用后保存结果；失败停止后续调度。恢复原历史、工作模式与配置引用后等待输入，不重执行工具，权限使用本次启动设置，不恢复历史授权。
+
+多模态输入在首次写入历史前由应用层捕获到 OutputStore 的私有二进制快照，历史标记保存带 SHA-256 的持久对象引用。运行时按 Session 归属和内容摘要装载快照，三种协议共享同一媒体展开边界；源文件后续变化不影响恢复。媒体引用与工具输出引用共同纳入显式保留和回收，具体兼容限制见[模型协议](model-protocols.md#多模态内容)。
 
 数据与日志使用 B-18 的 XDG 目录，PLAN 下不能与目标工作区重叠。每会话跨进程排他写锁；迁移先备份，unknown 不自动重执行，配置与工作区变化按 B-20 显式处理。SQLite 操作不能阻塞模型流与控制事件的处理。
 
@@ -107,7 +109,7 @@ flowchart TD
 
 产品与接口基线由[完整基线](mvp-baseline.md) B-01 至 B-24 定义。当前直接依赖包含 Tokio、clap、reqwest＋rustls、serde／toml、tracing 与 rusqlite，补丁解析使用 diffy，边界错误使用显式 Rust 类型。具体版本与直接依赖以各 crate 的 Cargo.toml 和 Cargo.lock 为准。
 
-saya-core、saya-app、saya-tui、saya-cli 四个 crate 和锁文件已建立。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI，当前 N2 源码另包含原生隔离及 MCP。saya-tui 通过 saya-app 组装服务，并直接使用 saya-core 的配置、契约、脱敏与任务清单类型。0.1.0、0.2.0 及历史候选的四平台证据继续归属各自源码。N2 本机整合门禁及固定源码的四平台源码 CI、原生／MCP／Markdown／TUI 正常入口与性能验收均已通过，见[发行验证](release-validation.md)、[TUI 验证](tui-validation.md)、[N2 验收](n2-validation.md)和[开发进度](progress.md)。
+saya-core、saya-app、saya-tui、saya-cli 四个 crate 和锁文件已建立。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI；当前开发线还包含原生隔离、MCP、OutputStore、ContextBuilder、检查点、全局记忆及可执行插件。saya-tui 通过 saya-app 组装服务，并直接使用 saya-core 的配置、契约、脱敏与任务清单类型。0.1.0、0.2.0、N2 与 N3 固定源码的四平台证据分别归属各自版本。N3 本机整合门禁及固定源码的四平台源码 CI、原生／MCP／插件／Markdown／TUI 正常入口与性能验收均已通过，见[发行验证](release-validation.md)、[TUI 验证](tui-validation.md)、[N2 验收](n2-validation.md)、[N3 验收](n3-validation.md)和[开发进度](progress.md)。
 
 ## 提示词装配
 

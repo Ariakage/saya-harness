@@ -90,7 +90,7 @@ impl AnthropicModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let messages = history(&request.history, self.settings.multimodal)?;
+        let messages = history(&request.history, self.settings.multimodal, &request.media)?;
         let system = if self.prompt_cache
             && ((request.purpose == crate::contract::ModelPurpose::Execution
                 && request.dynamic_instructions.is_some())
@@ -453,6 +453,7 @@ fn append_message(messages: &mut Vec<Value>, role: &str, block: Value) {
 fn history(
     items: &[HistoryItem],
     capabilities: crate::config::MediaCapabilities,
+    snapshots: &crate::media::MediaAttachments,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = Vec::new();
     let mut pending = HashSet::new();
@@ -463,7 +464,7 @@ fn history(
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
-                for part in media::expand_user(text, capabilities)? {
+                for part in media::expand_user_with_snapshots(text, capabilities, snapshots)? {
                     match part {
                         media::ContentPart::Text(text) => {
                             append_message(
@@ -999,6 +1000,7 @@ mod media_tests {
                 image: true,
                 ..crate::config::MediaCapabilities::default()
             },
+            &crate::media::MediaAttachments::default(),
         )
         .unwrap();
         assert_eq!(messages[0]["content"][1]["type"], "image");
@@ -1011,7 +1013,8 @@ mod media_tests {
                 crate::config::MediaCapabilities {
                     audio: true,
                     ..crate::config::MediaCapabilities::default()
-                }
+                },
+                &crate::media::MediaAttachments::default(),
             )
             .unwrap_err()
             .0
