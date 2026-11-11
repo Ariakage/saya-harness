@@ -118,6 +118,28 @@ async fn patch_definition_and_path_errors_explain_the_expected_workspace_shape()
                 serde_json::json!({
                     "path":"file.txt",
                     "patch":"--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                    "expected_version":version.clone()
+                }),
+            ),
+            &ToolContext {
+                run: run.clone(),
+                workspace: temp.path().into(),
+            },
+            &NeverCancel,
+        )
+        .await?;
+    let error = result.error.ok_or("expected invalid_patch")?;
+    assert_eq!(error.code, "invalid_patch");
+    assert!(error.message.contains("--- a/file.txt"));
+    assert!(error.message.contains("+++ b/file.txt"));
+    let conflict = tool
+        .execute(
+            &call(
+                "apply_patch",
+                "wrong-origin",
+                serde_json::json!({
+                    "path":"file.txt",
+                    "patch":"--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-not-present\n+new\n",
                     "expected_version":version
                 }),
             ),
@@ -128,10 +150,9 @@ async fn patch_definition_and_path_errors_explain_the_expected_workspace_shape()
             &NeverCancel,
         )
         .await?;
-    let error = result.error.ok_or("expected invalid_patch")?;
-    assert_eq!(error.code, "invalid_patch");
-    assert!(error.message.contains("--- a/file.txt"));
-    assert!(error.message.contains("+++ b/file.txt"));
+    let error = conflict.error.ok_or("expected patch_conflict")?;
+    assert_eq!(error.code, "patch_conflict");
+    assert!(error.message.contains("old_start/new_start"));
     Ok(())
 }
 

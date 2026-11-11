@@ -775,7 +775,13 @@ async fn managed_memory_tools_use_real_runtime_approvals_history_and_forget()
                     confirmation: Some(approvals.clone()),
                     limits: RuntimeLimits::default(),
                 })?
-                .with_context_budget(ContextBudget::new(64_000, 2048, 6401))?
+                // This scenario targets memory tools, not the dedicated automatic
+                // compaction path. Keep its original budget without auto-compacting.
+                .with_context_settings(
+                    ContextBudget::new(64_000, 2048, 6401),
+                    false,
+                    Default::default(),
+                )?
                 .with_global_memory(memory.clone(), saya_core::config::MemorySettings::default())?;
                 let result = engine.run(&mut session).await?;
                 assert_eq!(

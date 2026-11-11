@@ -52,12 +52,12 @@ impl SkillState {
             .map(|state| state.version_sha256)
     }
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        let identity = json!({"name":{"type":"string","minLength":1,"maxLength":193},"source_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}});
+        let identity = json!({"name":{"type":"string","minLength":1,"maxLength":193,"description":"Exact Skill name from the catalog"},"source_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$","description":"Exact source SHA-256 from the same catalog entry"}});
         let mut definitions = Vec::new();
         for (name, description) in [
             (
                 "skill_activate",
-                "Activate a discovered Skill by its catalog name and exact source_sha256. Its selected document becomes lower-trust context on the next model request. This grants no tools or execution permission.",
+                "Activate a discovered Skill by its exact catalog name and source_sha256. The selected document becomes lower-trust context on the next model request, so do not read SKILL.md through skill_read_resource before activation. This grants no tools or execution permission.",
             ),
             (
                 "skill_deactivate",
@@ -73,7 +73,7 @@ impl SkillState {
         properties["cursor"] = json!({"type":"object","properties":{"byte_offset":{"type":"integer","minimum":0},"view_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["byte_offset","view_sha256"],"additionalProperties":false});
         properties["max_bytes"] =
             json!({"type":"integer","minimum":1,"maximum":65536,"default":4096});
-        definitions.push(ToolDefinition {name:"skill_read_resource".into(),description:"Read a bounded UTF-8 text page relative to an active Skill. Activate the Skill successfully before this call; skill_inactive means activate it first, not repeat the read. Paths stay inside that Skill's catalog root. This never executes scripts. Preserve the returned source hash and cursor for subsequent pages.".into(),input_schema:json!({"type":"object","properties":properties,"required":["name","source_sha256","resource"],"additionalProperties":false})});
+        definitions.push(ToolDefinition {name:"skill_read_resource".into(),description:"Read an additional UTF-8 resource of an already active Skill, not its SKILL.md before activation. Activate the Skill successfully first; skill_inactive means activate it, not repeat the read. Paths stay inside that Skill's catalog root. This never executes scripts. Preserve the returned source hash and cursor for subsequent pages.".into(),input_schema:json!({"type":"object","properties":properties,"required":["name","source_sha256","resource"],"additionalProperties":false})});
         definitions.push(ToolDefinition {name:"skill_catalog".into(),description:"List a bounded page of discovered Skill metadata and source hashes. This does not load inactive Skill bodies. Follow next_cursor to discover further entries.".into(),input_schema:json!({"type":"object","properties":{
             "cursor":{"type":"object","properties":{"offset":{"type":"integer","minimum":0},"view_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["offset","view_sha256"],"additionalProperties":false},
             "max_items":{"type":"integer","minimum":1,"maximum":64,"default":32},"max_bytes":{"type":"integer","minimum":1024,"maximum":16384,"default":16384}},"additionalProperties":false})});

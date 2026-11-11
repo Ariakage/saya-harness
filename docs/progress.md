@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 提示词与模型任务能力优化
+
+2026-11-11，提示词评估扩展为10个场景，新增无序区间／相邻区间合并、输入不可变性和多次尝试下的事件状态聚合。补丁指导压缩为连续上下文、独立行数计算与实际起始行，明确多hunk累计行差；对相距较远或多行增删的修改优先一个小hunk，成功后重读并使用新版本。Skill明确激活后携带文档、附加资源读取及 `skill_inactive` 恢复路径。评估工具继续拒绝exec，外部行为测试而非模型自述决定通过。
+
+最终小hunk候选三批合计90/90通过，整体缓存命中率96.11%，Turn 1为91.28%，Turn 2+为97.50%。输入4,789,904 tokens，缓存4,603,776、未缓存186,128，输出89,489，总计4,879,393；输入／输出占98.17%／1.83%，缓存／未缓存输入占94.35%／3.81%。旧程序两批60次运行有9次失败工具结果，最终三批90次为7次；含错误运行比例由8/60（13.33%）降至7/90（7.78%），每次成功模型请求对应的错误由9/254（3.54%）降至7/375（1.87%）。新增事件状态聚合9/9通过且0工具错误，区间合并错误由4次降为1次，范围约束与直接补丁仍有波动，不能宣称所有场景均改善。迭代、分组、token和原始SHA见[提示词与模型任务能力联合验证](prompt-capability-2026-11-11.md)。
+
+`just test-tooling` 的81项Python回归通过，日志为 `target/prompt-capability-tooling.log`。Memory工具测试显式关闭自动Compact以保持其原64K测试预算下的独立验收，专用Compact测试不变；产品默认预算未改。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1390项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-capability-check-final.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/prompt-capability-smoke.log`；程序与三批评估候选的SHA-256均为 `7d0dae2a68bba1d4df21bfc72b6c3ef1564acd2272ecc8ab7d22792a09fef645`。未运行远端CI、其他模型或四平台重新验收。
+
 ## 环境历史帧的上下文观察兼容
 
 2026-11-11，正常入口smoke连续两次发现执行后的Skills发现数保持0。根因是共享前缀优化把 `saya_execution_environment_v1` 移到Runtime与项目上下文之间，而 `saya-app` 的ContextModel仍把该位置固定解释成项目数据，导致后续项目、Skill和个人来源解析中断。观察器现识别并消费合法环境帧，将其文本计入System，再继续解析项目、Skill和个人上下文；用户正文不能借该标签获得运行时权限。

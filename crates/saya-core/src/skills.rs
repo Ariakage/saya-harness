@@ -487,7 +487,7 @@ impl SkillManager {
         if let Some(path) = resource {
             resource_path(path)?;
             let active = self.active.get(name).ok_or_else(|| {
-                error("skill_inactive", "Skill resources require an active Skill")
+                error("skill_inactive", "Skill is not active; call skill_activate with its exact name and source_sha256 before reading resources")
             })?;
             if !active
                 .resources
@@ -812,7 +812,7 @@ impl SkillManager {
         resource_path(path)?;
         let previous =
             self.active.get(&selection.name).cloned().ok_or_else(|| {
-                error("skill_inactive", "Skill resources require an active Skill")
+                error("skill_inactive", "Skill is not active; call skill_activate with its exact name and source_sha256 before reading resources")
             })?;
         if previous.metadata.binding_sha256 != selection.catalog_binding_sha256 {
             self.invalidate(&selection.name)?;

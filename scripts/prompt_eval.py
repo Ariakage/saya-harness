@@ -136,6 +136,67 @@ assert app.paginate(items, 4, 3) == [9], app.paginate(items, 4, 3)
 assert app.page_count(items, 3) == 4
 '''
 
+INTERVALS = '''"""Interval operations used by the scheduler."""
+
+
+def merge(intervals):
+    """Return merged intervals without changing the caller's list."""
+    if not intervals:
+        return []
+    ordered = list(intervals)
+    result = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = result[-1]
+        if start < last_end:
+            result[-1] = (last_start, max(last_end, end))
+        else:
+            result.append((start, end))
+    return result
+
+
+def span(intervals):
+    """Return the covered span after merging."""
+    return sum(end - start for start, end in merge(intervals))
+'''
+
+INTERVALS_CHECK = '''import intervals
+source = [(5, 6), (1, 2), (2, 5), (10, 12), (11, 11)]
+original = list(source)
+assert intervals.merge(source) == [(1, 6), (10, 12)], intervals.merge(source)
+assert source == original
+assert intervals.merge([]) == []
+assert intervals.merge([(1, 2), (4, 5)]) == [(1, 2), (4, 5)]
+assert intervals.merge([(1, 3), (3, 4)]) == [(1, 4)]
+assert intervals.span([(1, 2), (2, 4)]) == 3
+'''
+
+LEDGER = '''{"run_id":"Alpha-1","event":"started","attempt":1}
+{"run_id":"Beta-2","event":"started","attempt":1}
+{"run_id":"Alpha-1","event":"failed","attempt":1}
+{"run_id":"Delta-4","event":"started","attempt":1}
+{"run_id":"Alpha-1","event":"started","attempt":2}
+{"run_id":"Gamma-3","event":"succeeded","attempt":1}
+{"run_id":"Beta-2","event":"cancelled","attempt":1}
+{"run_id":"Alpha-1","event":"succeeded","attempt":2}
+'''
+
+
+def ledger_checks(workspace):
+    try:
+        data = json.loads((workspace / "ledger-summary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return [f"ledger summary unreadable: {type(error).__name__}"]
+    errors = []
+    terminal = {"Alpha-1": "succeeded", "Beta-2": "cancelled", "Gamma-3": "succeeded"}
+    if data.get("terminal") != terminal:
+        errors.append("terminal state mismatch")
+    if data.get("active") != ["Delta-4"]:
+        errors.append("active runs mismatch")
+    if data.get("succeeded") != 2:
+        errors.append("succeeded count mismatch")
+    return errors
+
+
 SALES = '''region,product,amount
 north,lamp,120
 south,desk,340
@@ -269,6 +330,20 @@ SCENARIOS = [
         "prompt": "service.log contains exactly one ERROR entry. Write incident.txt with that entry's error code and its 1-based line number. Do not run commands.",
         "files": {"service.log": make_log()},
         "checks": {"tool_absent": ["exec"], "custom": incident_checks},
+    },
+    {
+        "id": "code_intervals",
+        "mode": "code",
+        "prompt": "Fix merge in intervals.py so unsorted intervals merge when overlapping or touching. Preserve the caller's input list, return a list of tuples, and keep empty input and span behavior correct. Use apply_patch on the existing file. Do not use write_file or exec; an external evaluator will check behavior.",
+        "files": {"intervals.py": INTERVALS},
+        "checks": {"tool_required": ["apply_patch"], "tool_absent": ["write_file", "exec"], "custom": python_check(INTERVALS_CHECK)},
+    },
+    {
+        "id": "work_event_state",
+        "mode": "work",
+        "prompt": "Read events.jsonl and write ledger-summary.json with three fields: terminal maps each run_id with a terminal event to its latest state; active is a sorted list of run_ids with started but no terminal event; succeeded is the number of runs whose terminal state is succeeded. Treat attempts as attempts, not separate runs. Do not run commands.",
+        "files": {"events.jsonl": LEDGER},
+        "checks": {"tool_absent": ["exec"], "custom": ledger_checks},
     },
 ]
 

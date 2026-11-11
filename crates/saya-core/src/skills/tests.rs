@@ -180,14 +180,11 @@ fn user_skill_target_preserves_exact_catalog_root_and_does_not_execute_script_re
             .deactivate("guide", &active.metadata.source_sha256)
             .unwrap()
     );
-    assert_eq!(
-        manager
-            .read_resource(&selection, None, None, 1024, &stop())
-            .unwrap_err()
-            .0
-            .code,
-        "skill_inactive"
-    );
+    let error = manager
+        .read_resource(&selection, None, None, 1024, &stop())
+        .unwrap_err();
+    assert_eq!(error.0.code, "skill_inactive");
+    assert!(error.0.message.contains("skill_activate"));
 }
 
 #[test]

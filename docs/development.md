@@ -110,7 +110,7 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 
 ## 提示词基线／候选场景对照
 
-`scripts/prompt_eval.py` 提供显式启用的 DeepSeek 场景，使用 `deepseek-chat` 兼容端点，覆盖 PLAN 恶意文本只读边界、已有文件补丁、Skill 选择、通用文件交付、多hunk补丁、范围注入、CSV聚合和长日志检索。它不替代离线回归，也不证明跨模型泛化。每次运行记录程序 SHA、模型、上下文窗口、实际工具结果、请求次数及任务产物检查，便于在相同条件下比较修改前后行为。
+`scripts/prompt_eval.py` 提供显式启用的 DeepSeek 场景，使用 `deepseek-chat` 兼容端点，覆盖 PLAN 恶意文本只读边界、已有文件补丁、Skill 选择、通用文件交付、多hunk补丁、范围注入、CSV聚合、长日志检索、无序区间合并和事件状态聚合。它不替代离线回归，也不证明跨模型泛化。每次运行记录程序 SHA、模型、上下文窗口、实际工具结果、请求次数及任务产物检查，便于在相同条件下比较修改前后行为。
 
 先保留待比较程序并提供测试凭据：
 
@@ -118,7 +118,7 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 . .saya/local/deepseek.env
 ```
 
-每个候选可执行多轮独立运行；以下命令对8个场景各重复3次，最多并发6个运行，并保存失败工具诊断：
+每个候选可执行多轮独立运行；以下命令对10个场景各重复3次，最多并发6个运行，并保存失败工具诊断：
 
 ```bash
 python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/saya-candidate --label candidate-b1 --output target/prompt-r2/candidate-b1-r3.json --repeat 3 --jobs 6 --diagnostics

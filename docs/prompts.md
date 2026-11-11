@@ -124,7 +124,7 @@ just prompt all | jq '.requests.code.request.combined_system'
 
 [装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台与新增能力片段的可见性、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；缓存前缀的跨工作区稳定性、运行时间数据位置、工具 schema、补丁错误提示及三协议缓存用量另有定向回归。假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
 
-[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择、通用文件交付、多hunk补丁、范围注入、CSV聚合和长日志检索。`--repeat` 与 `--jobs` 支持独立多轮及并发，`--diagnostics` 保存夹具衍生的失败调用，`--compare` 离线比较报告。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。报告记录程序SHA、模型、窗口、场景错误、请求次数、逐轮输入／缓存输入／输出token、整体与Turn 1／Turn 2+命中率及token占比；旧报告未采集缓存字段时显示未知而不是0。运行方式见[开发指南](development.md)，实际多轮结果见[DeepSeek对比验证报告](prompt-evaluation-2026-11-11.md)。
+[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择、通用文件交付、多hunk补丁、范围注入、CSV聚合、长日志检索、无序区间合并和事件状态聚合。`--repeat` 与 `--jobs` 支持独立多轮及并发，`--diagnostics` 保存夹具衍生的失败调用，`--compare` 离线比较报告。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。报告记录程序SHA、模型、窗口、场景错误、请求次数、逐轮输入／缓存输入／输出token、整体与Turn 1／Turn 2+命中率及token占比；旧报告未采集缓存字段时显示未知而不是0。运行方式见[开发指南](development.md)，实际多轮结果见[DeepSeek对比验证报告](prompt-evaluation-2026-11-11.md)；最新10场景能力对照见[提示词与模型任务能力联合验证](prompt-capability-2026-11-11.md)。
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 

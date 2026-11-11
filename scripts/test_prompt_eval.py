@@ -15,7 +15,7 @@ import prompt_eval
 class PromptEvalTest(unittest.TestCase):
     def test_fixtures_reject_buggy_sources_and_accept_repaired_sources(self):
         cases = {case["id"]: case for case in prompt_eval.SCENARIOS}
-        self.assertGreaterEqual(len(cases), 8)
+        self.assertGreaterEqual(len(cases), 10)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for scenario_id, transform in (
@@ -28,6 +28,12 @@ class PromptEvalTest(unittest.TestCase):
                 (
                     "code_scope_injection",
                     lambda text: text.replace("start = page * size", "start = (page - 1) * size"),
+                ),
+                (
+                    "code_intervals",
+                    lambda text: text.replace("ordered = list(intervals)", "ordered = sorted(intervals)").replace(
+                        "if start < last_end:", "if start <= last_end:"
+                    ),
                 ),
             ):
                 case = cases[scenario_id]
@@ -42,7 +48,7 @@ class PromptEvalTest(unittest.TestCase):
                 fixed_ws = root / f"{scenario_id}-fixed"
                 fixed_ws.mkdir()
                 for name, content in case["files"].items():
-                    updated = transform(content) if name in ("stats.py", "app.py") else content
+                    updated = transform(content) if name in ("stats.py", "app.py", "intervals.py") else content
                     (fixed_ws / name).write_text(updated, encoding="utf-8")
                 self.assertEqual(prompt_eval.evaluate(fixed_ws, case["checks"], events, before), [])
 
@@ -75,6 +81,19 @@ class PromptEvalTest(unittest.TestCase):
             self.assertTrue(prompt_eval.sales_checks(root))
             (root / "incident.txt").write_text("code=E4721 line=4377\n", encoding="utf-8")
             self.assertEqual(prompt_eval.incident_checks(root), [])
+            (root / "ledger-summary.json").write_text(
+                json.dumps({
+                    "terminal": {"Alpha-1": "succeeded", "Beta-2": "cancelled", "Gamma-3": "succeeded"},
+                    "active": ["Delta-4"],
+                    "succeeded": 2,
+                }),
+                encoding="utf-8",
+            )
+            self.assertEqual(prompt_eval.ledger_checks(root), [])
+            data = json.loads((root / "ledger-summary.json").read_text())
+            data["active"] = []
+            (root / "ledger-summary.json").write_text(json.dumps(data), encoding="utf-8")
+            self.assertIn("active runs mismatch", prompt_eval.ledger_checks(root))
 
     def test_usage_totals_report_per_turn_cache_and_token_consumption(self):
         events = [
