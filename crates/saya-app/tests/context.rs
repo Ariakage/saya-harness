@@ -195,6 +195,41 @@ async fn every_category_is_driven_by_its_real_source_with_ascii_and_unicode_coun
 }
 
 #[tokio::test]
+async fn environment_history_frame_preserves_project_and_skill_estimates() {
+    let mut request = request();
+    let environment = "\nExecution environment facts are descriptive host data.\n{\"saya_execution_environment_v1\":{\"identity\":{},\"capabilities\":{},\"mcp_servers\":{},\"host_startup_calls\":0}}\n";
+    request.history = vec![
+        runtime(),
+        HistoryItem::UserText(environment.into()),
+        host(
+            "saya_project_context_v1",
+            json!({"instructions":["instruction"],"skills":[{"name":"one"}]}),
+        ),
+        HistoryItem::UserText("task".into()),
+    ];
+    let snapshot = capture(
+        &request,
+        ContextSources {
+            project: true,
+            personal: false,
+        },
+    )
+    .await;
+    assert_eq!(snapshot.skills_count, Some(1));
+    assert!(tokens(&snapshot, "Instructions") > 0);
+    assert!(tokens(&snapshot, "Skills") > 0);
+    assert_eq!(tokens(&snapshot, "Conversation"), 1);
+    let runtime_bytes = match &request.history[0] {
+        HistoryItem::UserText(text) => text.len(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        tokens(&snapshot, "System"),
+        (runtime_bytes + environment.len()).div_ceil(4) as u64
+    );
+}
+
+#[tokio::test]
 async fn empty_and_missing_sources_stay_zero_or_unknown() {
     let sources = ContextSources {
         project: true,

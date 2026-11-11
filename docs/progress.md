@@ -4,6 +4,12 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 环境历史帧的上下文观察兼容
+
+2026-11-11，正常入口smoke连续两次发现执行后的Skills发现数保持0。根因是共享前缀优化把 `saya_execution_environment_v1` 移到Runtime与项目上下文之间，而 `saya-app` 的ContextModel仍把该位置固定解释成项目数据，导致后续项目、Skill和个人来源解析中断。观察器现识别并消费合法环境帧，将其文本计入System，再继续解析项目、Skill和个人上下文；用户正文不能借该标签获得运行时权限。
+
+新增回归覆盖Runtime、环境、项目、Skills和正文的连续装配，核对Skills发现数及各分类token。`saya-app` 上下文11项定向测试通过；此前失败的参考界面场景及完整27组TUI PTY随后通过。与媒体加固共同的最终门禁为1390项Rust测试、8项条件忽略、严格Clippy和release构建，日志为 `target/media-hardening-check-final.log`；smoke日志为 `target/media-hardening-smoke-context-fix.log`，程序SHA-256为 `1d728541a30d742ac622ca2b18d8950e9dd82b845522654bb59b9ed8c5f6200d`。未运行远端CI或其他平台验收。
+
 ## 媒体捕获、非执行请求与回收加固
 
 2026-11-11，独立审查并加固既有媒体工作区改动。新输入的本地媒体先保存原始字节快照；已有持久引用在重新进入历史前验证Session、模态、能力和摘要。审查中发现已有引用捕获后未持有租约，历史提交前可能被并发GC回收；新增回归在修复前复现回收，修复后新建对象与已有引用均由 `MediaCapture` 持有租约至事务结束。失败捕获只以best-effort清理本次新建对象，不误删已有对象，剩余孤儿继续由GC处理。

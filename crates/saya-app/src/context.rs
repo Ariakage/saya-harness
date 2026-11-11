@@ -171,6 +171,33 @@ fn injected(history: &[HistoryItem], index: usize, key: &str) -> Option<Value> {
     valid.then(|| Value::Object(data.clone()))
 }
 
+fn environment(item: &HistoryItem) -> bool {
+    let HistoryItem::UserText(text) = item else {
+        return false;
+    };
+    let Some(encoded) =
+        text.strip_prefix("\nExecution environment facts are descriptive host data.\n")
+    else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(encoded.trim()) else {
+        return false;
+    };
+    let Some(fields) = value.as_object().filter(|fields| fields.len() == 1) else {
+        return false;
+    };
+    let Some(data) = fields
+        .get("saya_execution_environment_v1")
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    ["identity", "capabilities", "mcp_servers"]
+        .iter()
+        .all(|key| data.get(*key).is_some_and(Value::is_object))
+        && data.get("host_startup_calls").is_some_and(Value::is_u64)
+}
+
 fn snapshot(
     request: &ModelRequest,
     sources: ContextSources,
@@ -191,6 +218,12 @@ fn snapshot(
             counts[SYSTEM].text(text);
         }
         first += 1;
+        if request.history.get(first).is_some_and(environment) {
+            if let HistoryItem::UserText(text) = &request.history[first] {
+                counts[SYSTEM].text(text);
+            }
+            first += 1;
+        }
         let mut complete = true;
         if sources.project {
             if let Some(project) = injected(&request.history, first, "saya_project_context_v1") {
