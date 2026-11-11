@@ -41,7 +41,8 @@ pub enum Authentication {
     None,
 }
 
-/// HTTP transport configuration. Timeout values must be nonzero. Additional
+/// HTTP transport configuration. Connect and idle timeouts must be nonzero;
+/// `total_timeout = 0` disables the client-wide total timeout. Additional
 /// headers map names to environment variable names and cannot override
 /// protocol, authentication, routing, or framing headers.
 pub struct HttpConfig {
@@ -102,11 +103,11 @@ impl HttpTransport {
         config: HttpConfig,
         environment: &Environment,
     ) -> Result<Self, BoundaryError> {
-        if config.connect_timeout.is_zero()
-            || config.idle_timeout.is_zero()
-            || config.total_timeout.is_zero()
-        {
-            return Err(failure("invalid_config", "HTTP timeouts must be nonzero"));
+        if config.connect_timeout.is_zero() || config.idle_timeout.is_zero() {
+            return Err(failure(
+                "invalid_config",
+                "HTTP connect and idle timeouts must be nonzero",
+            ));
         }
         let mut base = Url::parse(&config.base_url)
             .map_err(|_| failure("invalid_config", "invalid API base URL"))?;
@@ -183,12 +184,15 @@ impl HttpTransport {
                 })?;
             headers.insert(name, header(value)?);
         }
-        let client = Client::builder()
+        let mut client = Client::builder()
             .redirect(Policy::none())
             .retry(reqwest::retry::never())
             .connect_timeout(config.connect_timeout)
-            .read_timeout(config.idle_timeout)
-            .timeout(config.total_timeout)
+            .read_timeout(config.idle_timeout);
+        if !config.total_timeout.is_zero() {
+            client = client.timeout(config.total_timeout);
+        }
+        let client = client
             .build()
             .map_err(|_| failure("invalid_config", "could not build HTTP client"))?;
         Ok(Self {

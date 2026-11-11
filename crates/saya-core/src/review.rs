@@ -145,6 +145,7 @@ pub struct ReviewConfig {
     pub max_output_tokens: Option<u32>,
     pub connect_timeout: Duration,
     pub idle_timeout: Duration,
+    /// Zero disables only the total cap; connect, idle and active budgets remain.
     pub total_timeout: Duration,
     pub known_secrets: Vec<String>,
     pub retry_jitter_max: Duration,
@@ -155,9 +156,9 @@ impl ReviewConfig {
             execution_profile,
             review_profile: None,
             max_output_tokens: None,
-            connect_timeout: Duration::from_secs(10),
-            idle_timeout: Duration::from_secs(60),
-            total_timeout: Duration::from_secs(180),
+            connect_timeout: Duration::from_secs(300),
+            idle_timeout: Duration::from_secs(900),
+            total_timeout: Duration::ZERO,
             known_secrets: vec![],
             retry_jitter_max: Duration::from_millis(250),
         }
@@ -314,11 +315,21 @@ pub async fn review_operation(
                 model.start(&request, cancel),
                 cancel,
                 budget,
-                config.connect_timeout.min(config.total_timeout),
+                if config.total_timeout.is_zero() {
+                    config.connect_timeout
+                } else {
+                    config.connect_timeout.min(config.total_timeout)
+                },
             )
             .await?;
             loop {
-                let remaining = config.total_timeout.saturating_sub(started.elapsed());
+                let remaining = if config.total_timeout.is_zero() {
+                    config.idle_timeout
+                } else {
+                    config
+                        .idle_timeout
+                        .min(config.total_timeout.saturating_sub(started.elapsed()))
+                };
                 match bounded(
                     stream.next(cancel),
                     cancel,
@@ -402,7 +413,11 @@ pub async fn review_operation(
                 }
                 let retryable = matches!(
                     error.0.code.as_str(),
-                    "transient_connection" | "rate_limited" | "server_error"
+                    "transient_connection"
+                        | "rate_limited"
+                        | "server_error"
+                        | "model_timeout"
+                        | "model_connect_timeout"
                 );
                 if !retryable || received || attempt == 2 {
                     return Ok(ReviewOutcome {

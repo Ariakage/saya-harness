@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 模型超时与有限间隔重试
+
+2026-11-12，按D-062调整模型等待策略。`model_connect_timeout_seconds` 默认300秒，覆盖连接、发送及等待响应头阶段；`model_idle_timeout_seconds` 默认900秒，限制相邻流数据块／事件间隔；`model_timeout_seconds` 默认0，运行时和HTTP客户端均不设置单次总超时。0不关闭取消、Run活跃预算、模型次数、工具或Compact独立上限，Compact也不会把0传成非法的零超时。
+
+响应头／流空闲超时与暂时性连接、429、可重试5xx在尚无有效响应事件时最多重试2次，使用1／2秒退避、有限抖动和Retry-After上限；耗尽后返回最后错误。已有partial不重试拼接。审核沿用当前Run设置，原型与生产运行时采用相同语义。
+
+新增配置解析、HTTP零总时限、固定idle／总时限、有限重试、partial不重试及独立活跃预算回归，定向84项测试通过。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1392项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/model-timeout-check.log`。一次完整门禁中的TUI终端计时波动导致共享锁连锁失败，独立终端套件9/9复验及后续完整门禁通过，初始日志保留为 `target/model-timeout-check-initial.log`。`just test-tooling` 的81项Python回归通过，日志为 `target/model-timeout-tooling.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/model-timeout-smoke.log`；程序SHA-256为 `c30d8aec0845f1fe864691e79f0d1123da148d593996a20a7b0b33288d085279`。未运行远端CI或其他平台验收。
+
 ## 上下文摘要投影与防溢出
 
 2026-11-12，优化Compact后的模型投影。此前 `saya_context_summary.summary` 会再次包含完整宿主校验包装，包括必留项全文、引用元数据、上下文版本、退休清单和机械观察；这些字段既占用上下文，又增加压缩后仍超过55%目标或输入容量的概率。现仅向模型投影结构化摘要正文，外层继续保留来源范围、摘要来源hash和显式保留的原始用户组。`required_items`、引用元数据、上下文版本及退休证明仍完整保存在 `ContextView`／`CompactionRecord`，持久化校验、CAS、恢复和权限边界不变；旧的简单摘要夹具继续兼容。

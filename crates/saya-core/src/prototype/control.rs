@@ -9,6 +9,7 @@ pub(super) struct Limits {
     pub active_time: Duration,
     pub model_connect: Duration,
     pub model_idle: Duration,
+    /// Zero disables only the request-total cap, not idle or active budgets.
     pub model_total: Duration,
     pub tool_timeout: Duration,
     pub retry_jitter_max: Duration,
@@ -19,9 +20,9 @@ impl Default for Limits {
             model_requests: 64,
             tool_calls: 256,
             active_time: Duration::from_secs(1800),
-            model_connect: Duration::from_secs(10),
-            model_idle: Duration::from_secs(60),
-            model_total: Duration::from_secs(180),
+            model_connect: Duration::from_secs(300),
+            model_idle: Duration::from_secs(900),
+            model_total: Duration::ZERO,
             tool_timeout: Duration::from_secs(120),
             retry_jitter_max: Duration::from_millis(250),
         }
@@ -102,7 +103,7 @@ impl Budget {
     }
 }
 
-/// Only pre-response transport failures, rate limits and retryable servers qualify.
+/// Pre-response transport failures, timeouts, rate limits and retryable servers qualify.
 pub(super) fn retry_delay(
     code: &str,
     attempt: usize,
@@ -114,7 +115,11 @@ pub(super) fn retry_delay(
         || attempt >= 2
         || !matches!(
             code,
-            "transient_connection" | "rate_limited" | "server_error"
+            "transient_connection"
+                | "rate_limited"
+                | "server_error"
+                | "model_timeout"
+                | "model_connect_timeout"
         )
     {
         return None;

@@ -474,6 +474,35 @@ async fn anthropic_key_version_and_environment_headers_are_separate()
     Ok(())
 }
 
+#[test]
+fn zero_total_timeout_disables_only_the_client_total_cap() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut cfg = config("http://127.0.0.1:1/v1".into());
+    cfg.total_timeout = Duration::ZERO;
+    HttpTransport::new(cfg)?;
+    let mut invalid = config("http://127.0.0.1:1/v1".into());
+    invalid.connect_timeout = Duration::ZERO;
+    assert_eq!(
+        HttpTransport::new(invalid)
+            .err()
+            .ok_or("zero connect timeout accepted")?
+            .0
+            .code,
+        "invalid_config"
+    );
+    let mut invalid = config("http://127.0.0.1:1/v1".into());
+    invalid.idle_timeout = Duration::ZERO;
+    assert_eq!(
+        HttpTransport::new(invalid)
+            .err()
+            .ok_or("zero idle timeout accepted")?
+            .0
+            .code,
+        "invalid_config"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn total_timeout_stops_a_stream_even_if_bytes_keep_arriving()
 -> Result<(), Box<dyn std::error::Error>> {

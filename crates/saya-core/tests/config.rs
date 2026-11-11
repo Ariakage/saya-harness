@@ -70,6 +70,51 @@ fn test_env(home: &Path) -> Environment {
 }
 
 #[test]
+fn model_timeouts_allow_unlimited_total_without_disabling_other_bounds() {
+    let defaults = config::Limits::default();
+    assert_eq!(defaults.model_connect_timeout_seconds, 300);
+    assert_eq!(defaults.model_idle_timeout_seconds, 900);
+    assert_eq!(defaults.model_timeout_seconds, 0);
+    let temp = TempDir::new().unwrap();
+    let text = fixture().replace(
+        "max_model_requests = 10",
+        "max_model_requests = 10\nmodel_connect_timeout_seconds = 300\nmodel_idle_timeout_seconds = 900\nmodel_timeout_seconds = 0",
+    );
+    let path = write(temp.path(), "config.toml", &text);
+    let loaded = config::load(
+        Overrides {
+            config: Some(path),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(loaded.limits.model_connect_timeout_seconds, 300);
+    assert_eq!(loaded.limits.model_idle_timeout_seconds, 900);
+    assert_eq!(loaded.limits.model_timeout_seconds, 0);
+    let invalid = write(
+        temp.path(),
+        "invalid.toml",
+        &fixture().replace(
+            "max_model_requests = 10",
+            "max_model_requests = 10\nmodel_idle_timeout_seconds = 0",
+        ),
+    );
+    let Err(error) = config::load(
+        Overrides {
+            config: Some(invalid),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    ) else {
+        panic!("zero idle timeout was accepted")
+    };
+    assert_eq!(error.0.code, "invalid_config");
+}
+
+#[test]
 fn model_output_defaults_resolve_after_explicit_targets_for_all_protocols() {
     let temp = TempDir::new().unwrap();
     for protocol in [

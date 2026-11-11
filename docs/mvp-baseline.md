@@ -8,6 +8,8 @@
 
 N3开发线按D-053并由D-054更新B-04、B-06、B-10及B-15的模型输出规则。最具体请求／用途的显式max_output_tokens优先，其次profile显式值、profile.limit.output声明值、适配器返回的上游output limit及65536缺省，单个目标不得超过1000000。核查与摘要省略用途覆盖时继承实际所选profile，实际请求再按剩余上下文收缩。下文保留的8192／1024及示例显式值对应0.1基线，当前配置与稳定水位见[输出配置](configuration.md#模型输出-token-目标)和[决策记录](decisions.md)。
 
+D-062更新B-15／B-16的超时与重试：模型连接及响应头等待默认300秒，相邻流数据块默认900秒，`model_timeout_seconds = 0` 关闭单次模型总时限。0不影响取消、Run活跃预算、工具或Compact独立上限。尚无有效响应事件的超时进入有限间隔重试；已有partial仍不重试拼接。详见[模型超时与间隔重试](configuration.md#模型超时与间隔重试)。
+
 ## 决定总览
 
 | 编号 | 主题 | 已确定行为 |
@@ -254,9 +256,9 @@ model_timeout_seconds = 180
 | 工具调用 | max_tool_calls | 每次运行 256 次，后台启动、查询与取消以及拒绝与无效请求均计数 |
 | 后台任务 | max_background_running／max_background_jobs | 默认最多同时运行 4 个，保留本运行最多 256 个任务结果；由运行时配置，均不能绕过整体预算 |
 | 活跃运行时间 | active_run_timeout_seconds | 1800 秒；等待人工确认／澄清时暂停计时 |
-| 模型连接超时 | model_connect_timeout_seconds | 10 秒 |
-| 模型流空闲超时 | model_idle_timeout_seconds | 60 秒 |
-| 单次模型总超时 | model_timeout_seconds | 180 秒 |
+| 模型连接及响应头超时 | model_connect_timeout_seconds | 300 秒；D-062 |
+| 模型流数据块间隔超时 | model_idle_timeout_seconds | 900 秒；D-062 |
+| 单次模型总超时 | model_timeout_seconds | 0 表示不设置总上限；D-062 |
 | 命令默认／最大超时 | command_timeout_seconds／max_command_timeout_seconds | 120／600 秒 |
 | 读文件返回／处理上限 | read_return_max_bytes／read_file_max_bytes | 256 KiB／16 MiB |
 | 单次原生写入／补丁 | write_max_bytes | 1 MiB |
@@ -269,7 +271,7 @@ model_timeout_seconds = 180
 
 ## B-16 错误、取消与重试
 
-- 模型暂时性连接失败、429 和可重试 5xx，在没有接收任何成功响应的正文／流事件前最多重试 2 次，使用 1 秒、2 秒退避和抖动；Retry-After 最多等待 30 秒，仍计入预算。鉴权、配置、参数和普通 4xx 不自动重试。
+- 模型暂时性连接失败、429、可重试 5xx，以及D-062的响应头／流空闲超时，在没有接收任何成功响应的正文／流事件前最多重试 2 次，使用 1 秒、2 秒退避和抖动；Retry-After 最多等待 30 秒，仍计入预算。鉴权、配置、参数和普通 4xx 不自动重试，重试耗尽后返回最后错误。
 - 已接收部分模型响应后失败，不重试拼接新响应；保存 partial 标记并以失败结束，不执行不完整工具请求。
 - 工具不由框架自动重跑。执行错误、拒绝、未知工具或参数错误以结构化结果返回，模型可在剩余预算内产生新的调用；同名工具同参数连续失败 3 次停止运行。
 - 用户拒绝人工确认后，同一规范化操作在本次运行内不会再次弹窗；返回拒绝，Agent 可以采用不同方案或说明阻碍。

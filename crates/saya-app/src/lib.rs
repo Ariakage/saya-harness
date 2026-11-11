@@ -257,7 +257,11 @@ pub fn build_runtime(
         max_model_calls: config.context.max_compaction_calls,
         connect_timeout: limits.model_connect.min(Duration::from_secs(3600)),
         idle_timeout: limits.model_idle.min(Duration::from_secs(3600)),
-        request_timeout: limits.model_total.min(Duration::from_secs(3600)),
+        request_timeout: if limits.model_total.is_zero() {
+            Duration::from_secs(3600)
+        } else {
+            limits.model_total.min(Duration::from_secs(3600))
+        },
         operation_timeout: Duration::from_secs(config.context.compaction_timeout_seconds)
             .min(limits.active_time),
         retry_jitter_max: limits.retry_jitter_max,

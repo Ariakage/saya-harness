@@ -390,9 +390,9 @@ impl Default for Limits {
             max_background_running: 4,
             max_background_jobs: 256,
             active_run_timeout_seconds: 1800,
-            model_connect_timeout_seconds: 10,
-            model_idle_timeout_seconds: 60,
-            model_timeout_seconds: 180,
+            model_connect_timeout_seconds: 300,
+            model_idle_timeout_seconds: 900,
+            model_timeout_seconds: 0,
             command_timeout_seconds: 120,
             max_command_timeout_seconds: 600,
             read_return_max_bytes: 262144,
@@ -429,7 +429,6 @@ impl Limits {
                 self.active_run_timeout_seconds,
                 self.model_connect_timeout_seconds,
                 self.model_idle_timeout_seconds,
-                self.model_timeout_seconds,
                 self.command_timeout_seconds,
                 self.max_command_timeout_seconds,
             ]
@@ -437,7 +436,7 @@ impl Limits {
             || self.command_timeout_seconds > self.max_command_timeout_seconds
         {
             return Err(invalid(
-                "limits must be positive and the command timeout must not exceed its maximum",
+                "limits and command timeouts must be positive, with the command timeout not exceeding its maximum; model_timeout_seconds may be zero",
             ));
         }
         Ok(())

@@ -264,12 +264,22 @@ async fn model_turn(
                 model.start(&request, cancel),
                 cancel,
                 budget.remaining(),
-                limits.model_connect.min(limits.model_total),
+                if limits.model_total.is_zero() {
+                    limits.model_connect
+                } else {
+                    limits.model_connect.min(limits.model_total)
+                },
                 "model_connect_timeout",
             )
             .await?;
             loop {
-                let remaining = limits.model_total.saturating_sub(started.elapsed());
+                let remaining = if limits.model_total.is_zero() {
+                    limits.model_idle
+                } else {
+                    limits
+                        .model_idle
+                        .min(limits.model_total.saturating_sub(started.elapsed()))
+                };
                 let update = bounded(
                     stream.next(cancel),
                     cancel,

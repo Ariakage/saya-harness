@@ -503,7 +503,8 @@ async fn model_timeout_falls_back_but_active_budget_ends_run()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = support::temp_workspace()?;
     let (policy, op) = setup(root.path())?;
-    let config = ReviewConfig::new("exec".into());
+    let mut config = ReviewConfig::new("exec".into());
+    config.retry_jitter_max = Duration::ZERO;
     let started = tokio::time::Instant::now();
     let outcome = review_operation(
         &policy,
@@ -516,7 +517,7 @@ async fn model_timeout_falls_back_but_active_budget_ends_run()
     .await?;
     assert_eq!(outcome.source, ReviewDecisionSource::HumanFallback);
     assert_eq!(outcome.decision, Decision::Ask);
-    assert_eq!(started.elapsed(), Duration::from_secs(10));
+    assert_eq!(started.elapsed(), Duration::from_secs(903));
     let err = review_operation(
         &policy,
         input(&op),

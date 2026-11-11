@@ -419,6 +419,18 @@ fn retry_rules_stop_after_partial_and_cap_retry_after() {
         None
     );
     assert_eq!(
+        retry_delay("model_timeout", 0, false, None, Duration::ZERO),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(
+        retry_delay("model_connect_timeout", 0, false, None, Duration::ZERO),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(
+        retry_delay("model_timeout", 0, true, None, Duration::ZERO),
+        None
+    );
+    assert_eq!(
         retry_delay("authentication", 0, false, None, Duration::ZERO),
         None
     );
@@ -594,18 +606,24 @@ async fn cancellation_and_connection_timeout_stop_the_model()
     assert!(store.load_session(session.id).await?.is_none());
     let (mut session, run_id) = setup();
     let start = Instant::now();
-    let timeout = run(
+    let timeout = run_with_limits(
         &mut session,
         &run_id,
         &NeverModel,
         &ToolRegistry::default(),
         &MemoryStore::default(),
         &NoCancel,
+        Limits {
+            model_connect: Duration::from_secs(10),
+            model_total: Duration::from_secs(10),
+            retry_jitter_max: Duration::ZERO,
+            ..Limits::default()
+        },
     )
     .await
     .expect_err("must time out");
     assert_eq!(timeout.0.code, "model_connect_timeout");
-    assert_eq!(start.elapsed(), Duration::from_secs(10));
+    assert_eq!(start.elapsed(), Duration::from_secs(33));
     Ok(())
 }
 
@@ -784,22 +802,25 @@ async fn idle_total_and_active_deadlines_are_enforced() {
         (
             Limits {
                 model_idle: Duration::from_secs(3),
+                retry_jitter_max: Duration::ZERO,
                 ..Limits::default()
             },
             "model_timeout",
-            3,
+            12,
         ),
         (
             Limits {
                 model_total: Duration::from_secs(4),
+                retry_jitter_max: Duration::ZERO,
                 ..Limits::default()
             },
             "model_timeout",
-            4,
+            15,
         ),
         (
             Limits {
                 active_time: Duration::from_secs(5),
+                retry_jitter_max: Duration::ZERO,
                 ..Limits::default()
             },
             "limit_reached",

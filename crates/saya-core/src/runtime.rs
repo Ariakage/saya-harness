@@ -200,6 +200,7 @@ pub struct RuntimeLimits {
     pub active_time: Duration,
     pub model_connect: Duration,
     pub model_idle: Duration,
+    /// Zero disables only the per-request total cap, not idle or Run budgets.
     pub model_total: Duration,
     pub tool_timeout: Duration,
     pub retry_jitter_max: Duration,
@@ -213,9 +214,9 @@ impl Default for RuntimeLimits {
             model_requests: 64,
             tool_calls: 256,
             active_time: Duration::from_secs(1800),
-            model_connect: Duration::from_secs(10),
-            model_idle: Duration::from_secs(60),
-            model_total: Duration::from_secs(180),
+            model_connect: Duration::from_secs(300),
+            model_idle: Duration::from_secs(900),
+            model_total: Duration::ZERO,
             tool_timeout: Duration::from_secs(120),
             retry_jitter_max: Duration::from_millis(250),
             background_running: 4,
@@ -515,7 +516,6 @@ impl AgentRuntime {
             || limits.active_time.is_zero()
             || limits.model_connect.is_zero()
             || limits.model_idle.is_zero()
-            || limits.model_total.is_zero()
             || limits.tool_timeout.is_zero()
             || limits.write_max_bytes == 0
         {
@@ -1056,12 +1056,22 @@ impl AgentRuntime {
                 let mut stream = self
                     .bounded(
                         self.model.start(&request, self.cancel.as_ref()),
-                        self.limits.model_connect.min(self.limits.model_total),
+                        if self.limits.model_total.is_zero() {
+                            self.limits.model_connect
+                        } else {
+                            self.limits.model_connect.min(self.limits.model_total)
+                        },
                         "model_connect_timeout",
                     )
                     .await?;
                 loop {
-                    let left = self.limits.model_total.saturating_sub(start.elapsed());
+                    let left = if self.limits.model_total.is_zero() {
+                        self.limits.model_idle
+                    } else {
+                        self.limits
+                            .model_idle
+                            .min(self.limits.model_total.saturating_sub(start.elapsed()))
+                    };
                     match self
                         .bounded(
                             stream.next(self.cancel.as_ref()),
@@ -1126,7 +1136,11 @@ impl AgentRuntime {
                         && attempt < 2
                         && matches!(
                             err.0.code.as_str(),
-                            "transient_connection" | "rate_limited" | "server_error"
+                            "transient_connection"
+                                | "rate_limited"
+                                | "server_error"
+                                | "model_timeout"
+                                | "model_connect_timeout"
                         )
                     {
                         let jitter_max =
