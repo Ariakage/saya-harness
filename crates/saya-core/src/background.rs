@@ -870,7 +870,7 @@ impl crate::boundary::Tool for BackgroundTool {
             ),
             BackgroundToolKind::Status => (
                 "background_status",
-                "Get a background job's status and any completed result without waiting.",
+                "Get a background job's current status without waiting. Continue independent work first, then inspect the completed inner result before using or delivering it; a successful status query does not prove the job succeeded.",
                 serde_json::json!({"job_id":{"type":"string"}}),
                 serde_json::json!(["job_id"]),
             ),

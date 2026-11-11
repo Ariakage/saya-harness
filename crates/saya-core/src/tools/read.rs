@@ -939,7 +939,7 @@ impl crate::boundary::Tool for ReadTool {
         let (name, description, properties, required) = match self.kind {
             ReadToolKind::ReadFile => (
                 "read_file",
-                "Read a UTF-8 file with line range and version",
+                "Read a UTF-8 file with 1-based start_line and bounded line_count. The returned version is required for later writes. A truncated result is not the end of the file; narrow the range or continue reading.",
                 json!({"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1}}),
                 json!(["path", "start_line", "line_count"]),
             ),
@@ -951,13 +951,13 @@ impl crate::boundary::Tool for ReadTool {
             ),
             ReadToolKind::FindFiles => (
                 "find_files",
-                "Find files using a glob",
+                "Find workspace paths using a glob, not a regular expression. Hidden or ignored entries depend on include_ignored. Results are bounded by host limits.",
                 json!({"path":{"type":"string"},"glob":{"type":"string"},"include_ignored":{"type":"boolean"}}),
                 json!(["path", "glob"]),
             ),
             ReadToolKind::SearchText => (
                 "search_text",
-                "Search text files",
+                "Search workspace text with a literal pattern or a regular expression when regex is true. Use focused paths and patterns; a truncated result is incomplete evidence, not proof of absence.",
                 json!({"path":{"type":"string"},"pattern":{"type":"string"},"regex":{"type":"boolean"},"include_ignored":{"type":"boolean"}}),
                 json!(["path", "pattern"]),
             ),

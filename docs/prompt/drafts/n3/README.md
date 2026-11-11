@@ -41,7 +41,7 @@
 
 摘要验证在宿主完成，覆盖schema、已知来源、必留约束、引用归属、当前记忆版本／遗忘、剩余输入预算及来源水位。模型生成的摘要保持任务上下文的证据级别，历史批准携带原始范围和来源。实际工具调用仍经过本次运行的模式、权限、路径与预算检查。
 
-检查点与ContextView指针通过来源水位CAS原子提交。条件式续接规则固定于静态前缀，动态checkpoint_selected_by_host标志控制本次适用性，所有字节参加预算。恢复重新读取本次配置、有效模式与权限、当前项目／Skill来源、记忆版本和可用工具。压缩失败与保存冲突保留原始会话和此前有效检查点。[上下文设计](../../../context-management.md)
+检查点与ContextView指针通过来源水位CAS原子提交。未选中已提交上下文checkpoint时只向静态前缀追加短续接说明，选中时追加完整续接规则；动态checkpoint_selected_by_host标志标记本次适用性，所有字节参加预算。恢复重新读取本次配置、有效模式与权限、当前项目／Skill来源、记忆版本和可用工具。压缩失败与保存冲突保留原始会话和此前有效检查点。[上下文设计](../../../context-management.md)
 
 DEV-063使用版本1结构化schema，包含来源范围、objective、constraints、decisions、completed、remaining、uncertainties、required_ids和references。事实保留source IDs、evidence等级与状态。协调器复用实际请求计数，默认80%触发、严格55%目标，单用户长Run保留最新原文重放。记忆失效组先由宿主来源证明替换，再映射到摘要输入。原始草案继续保留学习轨迹，当前版本和提示词指纹沿运行时记录维护。
 

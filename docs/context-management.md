@@ -96,9 +96,9 @@ ContextBuilder保留最新原始UserText、未闭合调用、宿主标记的保�
 
 ## 缓存与恢复
 
-静态系统规则、规范工具顺序和条件式续接规则保持稳定前缀。动态 `checkpoint_selected_by_host` 表示本次请求是否选择已提交检查点，续接段按该标志适用。时间、模式、任务、记忆、Skill状态和输出水位进入动态来源段。
+静态系统规则和规范工具顺序保持稳定前缀。未选中已提交上下文checkpoint时只附加短续接说明；宿主选中checkpoint后，完整续接规则进入该次请求的静态前缀，动态 `checkpoint_selected_by_host` 表示本次选择。时间、模式、任务、记忆、Skill状态和输出水位进入动态来源段。
 
-摘要与保留来源带明确的历史数据envelope。固定前缀、续接规则及动态标志全部参与计数，压缩前后使用同一静态前缀。Anthropic cache_control及各协议现有缓存能力继续沿provider适配器处理。
+摘要与保留来源带明确的历史数据envelope。完整续接规则与动态标志全部参与计数；普通请求的短续接说明保持固定。Anthropic cache_control及各协议现有缓存能力继续沿provider适配器处理。
 
 CompactionRecord保存源范围／hash、保留组、失效组manifest、提示词与适配器版本、用量及目标／实际投影统计。恢复验证当前profile、项目／Skill／记忆版本和原始历史，版本不兼容的视图需要重新构建。会话恢复采用本次权限配置。
 

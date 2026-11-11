@@ -148,6 +148,57 @@ fn review_scenarios_are_data_for_future_model_evaluation() -> Result<(), Box<dyn
 }
 
 #[test]
+fn capabilities_are_selected_from_actual_tool_visibility() -> Result<(), Box<dyn std::error::Error>>
+{
+    let basic = prompt::execution(WorkMode::Work, PermissionMode::Auto, &tools(&["read_file"]))?;
+    for heading in [
+        "# Workspace snapshots",
+        "# Activated extensions",
+        "# Session task tracking",
+        "# Output retrieval",
+        "# Memory writes and forgetting",
+    ] {
+        assert!(!basic.instructions.contains(heading));
+    }
+    let full = prompt::execution_with_memory(
+        WorkMode::Code,
+        PermissionMode::Auto,
+        &tools(&[
+            "checkpoint_create",
+            "skill_activate",
+            "todo_write",
+            "output_read",
+            "memory_read",
+            "memory_update",
+        ]),
+        true,
+    )?;
+    for heading in [
+        "# Workspace snapshots",
+        "# Activated extensions",
+        "# Session task tracking",
+        "# Output retrieval",
+        "# Memory writes and forgetting",
+        "# Saya memory context",
+    ] {
+        assert!(full.instructions.contains(heading), "missing {heading}");
+    }
+    let read_only = prompt::execution_with_memory(
+        WorkMode::Plan,
+        PermissionMode::Auto,
+        &tools(&["memory_read"]),
+        false,
+    )?;
+    assert!(!read_only.instructions.contains("# Saya memory context"));
+    assert!(
+        !read_only
+            .instructions
+            .contains("# Memory writes and forgetting")
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_facts_stay_in_data_and_do_not_promote_untrusted_strings()
 -> Result<(), Box<dyn std::error::Error>> {
     use saya_core::contract::{HistoryItem, ModelProtocol, Run, RunId, Session, SessionId};

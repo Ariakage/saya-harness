@@ -24,11 +24,22 @@
 
 同日按交互反馈将音频、视频显示token由`Audio: [Audio N]`／`Video: [Video N]`收紧为与图片一致的`[Audio N]`／`[Video N]`，保持媒体类型高亮、整token移动删除和发送时路径展开。定向附件与渲染回归通过；完整门禁再次通过1369项Rust测试、8项条件忽略、严格Clippy和release构建，日志为 `target/audio-video-token-check.log`。
 
-## 完整模型提示词预览
+## 提示词能力装配与真实模型对照
+
+2026-11-11，按四组外部提示词材料与本机源码复核改进执行提示。核心保留四模式×三权限、低信任数据边界和结构化Compact证据分级；通用工具段改为按实际能力注入的输出检索、记忆写入、Skill／扩展、任务清单与工作区快照。PLAN增加有界调研与来源／假设区分，核心明确运行中引导默认修正当前任务、用户约束持续到明确解除。工具定义补充单文件补丁版本与格式、读取分页、直接argv、后台完成结果及工作区快照语义。完整续接仅在宿主选中上下文checkpoint时进入请求，普通请求只保留短说明。
+
+`just prompt` 改用与生产一致的 `AgentRuntime::model_tool_definitions`，覆盖工作区checkpoint及按模式过滤的工具schema；Memory与checkpoint后端使用临时目录，不写入工作区。执行预览再经过ContextBuilder。新增能力可见性、生产schema与文档快照回归；`scripts/prompt_eval.py` 提供显式DeepSeek基线／候选对照，临时工作区拒绝exec，不执行模型生成的命令。
+
+使用同一 `deepseek-flash`、Chat Completions、128000窗口及8192输出上限运行四个小样本。基线（SHA `25326338fb3560f6870c38c48e8aa45b5c79699489a1367d136f34dad8132c71`）完成3／4项、21次模型请求、3次工具错误；首轮候选（SHA `6654dc3a6cdae50c420a30e5d3e356d9dd3a8a205769f386604b7acd153c5b1b`）完成4／4项、20次请求、3次工具错误。直接补丁由基线5次请求／1次invalid_patch改为连续两轮4次请求／0工具错误；通用报告由未保留颜色名称改为两轮通过。Skill选择仍出现2–3次invalid_patch，说明该路径没有稳定解决。上述结果为同一服务的小样本对照，不代表跨模型提升；报告保存在 `target/prompt-improvement/{baseline,candidate,candidate-repeat}.json`，未提交真实凭据或模型回复。
+
+本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1370项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-improvement/check.log`。`just test-tooling` 的75项Python回归通过，日志为 `target/prompt-improvement/tooling.log`。生产预览生成28个工具定义，工作区不遗留Memory／checkpoint目录。尚未运行远端CI、其他模型或四平台重新验收。
+
+
+
 
 2026-11-11，新增 `just prompt [work|plan|code|build|compact|memory|review|all]`，省略类型时输出 `all`。预览复用实际静态装配器、动态系统上下文、RuntimeContext、项目发现、Memory与Compact／Review提示词，并输出完整 `ModelRequest` 风格的 `instructions`、`dynamic_instructions`、有序 `history`、`combined_system`、指纹和provider工具schema。Code／Build／Work／Plan场景包含后台、Skill、Memory、MCP与Plugin工具层；当前工作区和HOME的项目上下文为实际发现，未启用扩展与已激活Skill正文使用带`fixture_notice`的明确样例，全程不调用模型或执行工具。
 
-`just prompt code`、`build`、`compact`、`memory`及默认`all`均以JSON解析和`jq`字段断言核对模式段、动态注入、项目／Skill／Memory数据、25个工具定义及独立用途。本机执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1369项Rust测试、8项条件忽略和release构建通过，日志为 `target/prompt-preview-check.log`。本轮未推送、未运行远端CI。
+`just prompt code`、`build`、`compact`、`memory`及默认`all`均以JSON解析和`jq`字段断言核对模式段、动态注入、项目／Skill／Memory数据、生产工具定义及独立用途。本机执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1369项Rust测试、8项条件忽略和release构建通过，日志为 `target/prompt-preview-check.log`。本轮未推送、未运行远端CI。
 
 ## TUI 显示文本目录
 

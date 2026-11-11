@@ -554,12 +554,12 @@ impl crate::boundary::Tool for WriteTool {
         let (name, desc, properties) = match self.kind {
             WriteToolKind::WriteFile => (
                 "write_file",
-                "Create or replace one UTF-8 file",
+                "Create one UTF-8 file or replace an existing one after version validation. Existing files require the complete SHA-256 version from the latest read; null is valid only for a target that does not yet exist. Parent directories are not created automatically.",
                 json!({"path":{"type":"string"},"content":{"type":"string"},"expected_version":{"type":["string","null"]}}),
             ),
             WriteToolKind::ApplyPatch => (
                 "apply_patch",
-                "Apply a single-file unified diff",
+                "Modify one existing UTF-8 file using a single-file unified diff and the complete expected_version from the latest read. Headers must match path (for example --- a/path and +++ b/path). Creation, deletion, rename, and multi-file patches are rejected. Example: --- a/file.txt\\n+++ b/file.txt\\n@@ -1 +1 @@\\n-old\\n+new\\n",
                 json!({"path":{"type":"string"},"patch":{"type":"string"},"expected_version":{"type":"string"}}),
             ),
         };

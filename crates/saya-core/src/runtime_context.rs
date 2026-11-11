@@ -179,10 +179,18 @@ impl AgentRuntime {
                 end: session.history.len(),
             }]
         };
-        request.instructions.push_str("\n\n");
         request
             .instructions
-            .push_str(crate::compaction::CONTINUATION_INSTRUCTIONS);
+            .push_str("\n\n# Context continuation\n");
+        if view.is_some() {
+            request
+                .instructions
+                .push_str(crate::compaction::CONTINUATION_INSTRUCTIONS);
+        } else {
+            request.instructions.push_str(
+                "No historical context checkpoint is selected for this request. Continue from the current original user text, retained protocol groups, and effective runtime context.",
+            );
+        }
         let dynamic = request.dynamic_instructions.get_or_insert_with(String::new);
         dynamic.push_str("\n# Host-selected context checkpoint\n");
         dynamic.push_str(

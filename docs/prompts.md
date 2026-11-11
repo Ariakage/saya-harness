@@ -19,6 +19,7 @@
 | bypass | [bypass.md](../crates/saya-core/prompts/v1/permissions/bypass.md) | 说明跳过项及仍有效的硬限制 |
 | 后台任务 | [background.md](../crates/saya-core/prompts/v1/background.md) | 启动回执、依赖与冲突、查询、取消及清理 |
 | 独立审核器 | [review.md](../crates/saya-core/prompts/v1/review.md) | 数据边界、完整效果、allow／ask／deny 和输出契约 |
+| 能力片段 | [capabilities.md](../crates/saya-core/prompts/v1/capabilities.md) | 输出检索、记忆写入、Skill／扩展、任务清单与工作区快照的按需注入 |
 
 这些文件由 `include_str!` 嵌入 core crate，无运行时外部文件依赖；修改后须重新构建。不提供用户自定义 prompt 覆盖或 persona 注册表。Anthropic 缓存断点通过 CLI 参数显式开启，见下文。
 
@@ -28,14 +29,17 @@
 
 1. 固定版本、稳定核心、工具纪律。
 2. 恰好一个工作模式段与一个权限说明段。
-3. 实际注册后台控制工具时才追加后台段。
-4. 从 `ToolDefinition` 注册表生成排序后的可用名称清单；名称需唯一且为最长 64 字节的英文标识符，可含数字、下划线和连字符，首字符需为字母。
+3. 实际注册后台控制工具时才追加后台段；按当前工具注册情况选择输出检索、记忆写入／遗忘、Skill／扩展、任务清单与工作区快照段。未注册能力不注入其指导。
+4. 记忆读取能力实际可用时追加 Memory Context；关闭读取或仅有写入能力时不注入。
+5. 从 `ToolDefinition` 注册表生成排序后的可用名称清单；名称需唯一且为最长 64 字节的英文标识符，可含数字、下划线和连字符，首字符需为字母。
 
-工具说明与 schema 继续通过 `ModelRequest.tools` 传入，不提升为系统指令；用户任务、项目材料与显式提供的偏好／记忆保留在历史中。静态装配器不直接拼接来源 prompt、项目文档或任意自定义字符串。它返回段名、版本和 SHA-256 文本指纹以便离线审阅；指纹只标识静态文本，不证明模型遵守程度，也尚未接入持久化记录。
+工具说明与 schema 继续通过 `ModelRequest.tools` 传入，不提升为系统指令；内置描述明确补丁版本、单文件修改、读取分页和直接 argv 等调用语义。用户任务、项目材料与显式提供的偏好／记忆保留在历史中。静态装配器不直接拼接来源 prompt、项目文档或任意自定义字符串。它返回段名、版本和 SHA-256 文本指纹以便离线审阅；指纹只标识静态文本，不证明模型遵守程度，也尚未接入持久化记录。
 
 [可复用 core 循环](../crates/saya-core/src/runtime.rs)及假模型原型已使用完整装配器，取代每模式的一句指令。每次请求都按生效模式、权限与过滤后的工具重新装配；切换后不残留旧模式段。稳定核心保持相同前缀，但没有虚构 provider 缓存命中保证，也没有引入某产品专用的动态分隔标记。
 
 每次执行模型请求在静态提示词之后加入动态系统段：宿主时钟采样的 UTC、本地时间和 UTC 偏移、操作系统与架构、工作区、模型配置引用、实际工作／权限模式，以及项目上下文和显式偏好／记忆是否提供。时间可能变旧，不推断地理位置；模型名称不是上游身份认证。字符串序列化为 JSON 并标记为数据，不包含配置凭据或完整历史。运行事实仍保留原有 `runtime_context` 兼容数据项；这些临时快照不持久化。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史中，来源、哈希、范围与刷新见[项目上下文](project-context.md)。显式偏好和记忆放在 `saya_personal_context_v1` 数据项，不自动发现；它们不是系统授权，模型仍可能受内容影响。
+
+上下文管理未选中历史checkpoint时只注入短续接说明；宿主选中已提交的上下文checkpoint时才追加完整续接规则，并在动态系统段设置 `checkpoint_selected_by_host`。完整摘要与来源引用仍是历史数据，不恢复旧授权。
 
 ## 前缀缓存
 
@@ -110,13 +114,15 @@ just prompt all
 just prompt all | jq '.requests.code.request.combined_system'
 ```
 
-可用类型为 `work`、`plan`、`code`、`build`、`compact`、`memory`、`review` 和 `all`；省略类型等同 `all`。Code、Build、Work与Plan场景包含静态core／tools／mode／permission段、条件后台段、动态宿主与运行事实、项目上下文、显式偏好、Memory上下文、已激活Skill正文、当前任务，以及按provider schema输出的内置、Skill、Memory、MCP与Plugin工具定义。Compact场景使用实际Compact instructions与输出schema；Review场景使用实际独立审核instructions和样例操作数据。
+可用类型为 `work`、`plan`、`code`、`build`、`compact`、`memory`、`review` 和 `all`；省略类型等同 `all`。Code、Build、Work与Plan场景包含静态core／tools／mode／permission段、条件后台段、动态宿主与运行事实、项目上下文、显式偏好、Memory上下文、已激活Skill正文、当前任务，以及生产运行时生成的内置、Skill、Memory与工作区checkpoint工具schema。外部MCP与Plugin只使用明确的离线fixture，Compact场景使用实际Compact instructions与输出schema；Review场景使用实际独立审核instructions和样例操作数据。
 
-输出中的 `instructions`、`dynamic_instructions`、`history` 与 `tools` 对应运行时 `ModelRequest` 字段，`combined_system` 是组合后的系统文本，`instructions_fingerprint` 与 `system_fingerprint` 分别标识静态文本和本次组合文本，`tool_layers` 按builtin／Skill／Memory／MCP／Plugin归类工具名。项目上下文从当前工作区和HOME发现；Skill激活、Memory投影、MCP和Plugin条目是明确的离线fixture。`fixture_notice` 会保留在JSON中，不能把fixture工具名或已激活Skill误认为当前运行配置。
+输出中的 `instructions`、`dynamic_instructions`、`history` 与 `tools` 对应运行时 `ModelRequest` 字段，`combined_system` 是组合后的系统文本，`instructions_fingerprint` 与 `system_fingerprint` 分别标识静态文本和本次组合文本，`tool_layers` 按builtin／Skill／Memory／MCP／Plugin归类工具名。预览使用与生产相同的 `AgentRuntime::model_tool_definitions`，包含工作区checkpoint和按模式过滤的工具定义；Memory、Skill和checkpoint后端位于临时目录，预览不会在工作区创建这些存储。执行场景再经过ContextBuilder，未选中checkpoint时显示短续接说明。项目上下文从当前工作区和HOME发现；Skill激活、Memory投影、MCP和Plugin条目是明确的离线fixture。`fixture_notice` 会保留在JSON中，不能把fixture工具名或已激活Skill误认为当前运行配置。
 
 预览输出包含实际工作区路径、项目指令和发现的Skill元数据。它只应在本地审阅，不应直接提交或粘贴到公开位置；需要分享时先人工脱敏。
 
-[装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台能力条件、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
+[装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台与新增能力片段的可见性、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
+
+[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择和通用文件交付。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。脚本记录程序SHA、模型、窗口、场景错误和请求次数，不把单次模型的行为波动当成普遍提升。运行方式见[开发指南](development.md)。
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 

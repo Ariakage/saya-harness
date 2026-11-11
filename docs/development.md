@@ -108,6 +108,20 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 
 真实模型联调单独执行，明确所需配置与可能产生的费用，不作为默认测试的隐含前提。密钥通过最终选定的配置机制提供，仓库只保留不含真实凭据的示例。
 
+## 提示词基线／候选场景对照
+
+`scripts/prompt_eval.py` 提供显式启用的 DeepSeek 小样本场景，使用 `deepseek-chat` 兼容端点，覆盖 PLAN 中的恶意文本只读边界、已有文件补丁、Skill 选择和通用文件交付。它不替代离线回归，也不证明跨模型泛化。每次运行记录程序 SHA、模型、上下文窗口、实际工具结果、请求次数及任务产物检查，便于在相同条件下比较修改前后行为。
+
+先保留待比较程序，再分别运行：
+
+```bash
+. .saya/local/deepseek.env
+python3 -B -I scripts/prompt_eval.py --binary target/prompt-improvement/saya-baseline --label baseline --output target/prompt-improvement/baseline.json
+python3 -B -I scripts/prompt_eval.py --binary target/debug/saya --label candidate --output target/prompt-improvement/candidate.json
+```
+
+场景使用独立临时目录，测试配置显式拒绝 `exec`，模型生成的命令不会执行。`--scenario` 可重复指定单个用例；`--keep-workspaces` 会把任务目录保存在报告旁供本地检查，默认只保存结构化结果，不保存模型回复。服务接收任务文本和提供的样例文件，可能产生费用；输出报告和日志不得写入真实凭据。对同一修改至少复测关键用例，区分单次模型波动与稳定趋势。
+
 ## 文档随实现更新
 
 建立 Rust 工程后更新“当前状态”；实现 CLI 后补充真实命令、配置和退出行为；公共接口稳定后再补接口说明。尚未实现或验证的 TUI、GUI 能力继续保留为计划。

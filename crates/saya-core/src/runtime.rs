@@ -762,6 +762,15 @@ impl AgentRuntime {
     pub fn mode(&self) -> Result<crate::mode::ModeSnapshot, BoundaryError> {
         self.modes.snapshot()
     }
+    /// Project the model-facing tool definitions without executing a tool or
+    /// starting MCP services. Host-selected capabilities use the same filters
+    /// as normal execution; callers may append explicit external fixtures.
+    pub fn model_tool_definitions(
+        &self,
+        mode: WorkMode,
+    ) -> Result<Vec<ToolDefinition>, BoundaryError> {
+        self.definitions(mode)
+    }
     fn definitions(&self, mode: WorkMode) -> Result<Vec<ToolDefinition>, BoundaryError> {
         let mut tools = self.dispatcher.definitions(mode)?;
         if let Some(memory) = &self.managed_memory {
@@ -883,13 +892,13 @@ impl AgentRuntime {
             };
             let request = (|| {
                 let tools = self.definitions(snap.current)?;
-                let mut instructions =
-                    crate::prompt::execution(snap.current, self.run.permissions, &tools)?
-                        .instructions;
-                if self.managed_memory.is_some() {
-                    instructions.push_str("\n\n");
-                    instructions.push_str(crate::global_memory::MEMORY_CONTEXT_INSTRUCTIONS);
-                }
+                let instructions = crate::prompt::execution_with_memory(
+                    snap.current,
+                    self.run.permissions,
+                    &tools,
+                    self.managed_memory.is_some(),
+                )?
+                .instructions;
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
                 let mut dynamic_instructions = crate::prompt::system_context(

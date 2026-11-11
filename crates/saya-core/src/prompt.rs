@@ -16,6 +16,7 @@ pub const VERSION: &str = "saya-prompts-v1";
 const CORE: &str = include_str!("../prompts/v1/core.md");
 const TOOLS: &str = include_str!("../prompts/v1/tools.md");
 const BACKGROUND: &str = include_str!("../prompts/v1/background.md");
+const MEMORY_OPERATIONS: &str = include_str!("../prompts/v1/memory-operations.md");
 const REVIEW: &str = include_str!("../prompts/v1/review.md");
 
 /// Offline prompt inspection scenarios exposed by the `prompt` recipe.
@@ -132,6 +133,33 @@ pub fn execution(
     }) {
         sections.push(("background", BACKGROUND));
     }
+    if names.iter().any(|name| name.starts_with("checkpoint_")) {
+        sections.push((
+            "workspace_snapshots",
+            include_str!("../prompts/v1/workspace-snapshots.md"),
+        ));
+    }
+    if names.iter().any(|name| name.starts_with("skill_")) {
+        sections.push(("extensions", include_str!("../prompts/v1/extensions.md")));
+    }
+    if names.contains("todo_write") {
+        sections.push((
+            "task_tracking",
+            include_str!("../prompts/v1/task-tracking.md"),
+        ));
+    }
+    if names
+        .iter()
+        .any(|name| *name == "output_read" || *name == "output_search")
+    {
+        sections.push((
+            "output_retrieval",
+            include_str!("../prompts/v1/output-retrieval.md"),
+        ));
+    }
+    if names.contains("memory_update") || names.contains("memory_forget") {
+        sections.push(("memory_operations", MEMORY_OPERATIONS));
+    }
     let mut instructions = format!("Saya prompt pack: {VERSION}\n\n");
     let mut section_ids = Vec::new();
     for (id, text) in sections {
@@ -153,10 +181,7 @@ pub fn execution(
         )
     })?);
     instructions.push('\n');
-    let fingerprint = Sha256::digest(instructions.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let fingerprint = fingerprint(&instructions);
     Ok(PromptBundle {
         version: VERSION,
         section_ids,
@@ -164,6 +189,40 @@ pub fn execution(
         fingerprint,
     })
 }
+fn fingerprint(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Select memory guidance alongside the other registered capabilities.
+/// A configured memory component with reads disabled contributes no such text.
+pub fn execution_with_memory(
+    mode: WorkMode,
+    permissions: PermissionMode,
+    tools: &[ToolDefinition],
+    memory_read: bool,
+) -> Result<PromptBundle, BoundaryError> {
+    let mut bundle = execution(mode, permissions, tools)?;
+    if memory_read
+        && tools.iter().any(|tool| {
+            matches!(
+                tool.name.as_str(),
+                "memory_read" | "memory_search" | "memory_evidence"
+            )
+        })
+    {
+        bundle.section_ids.push("memory_context");
+        bundle.instructions.push_str("\n\n");
+        bundle
+            .instructions
+            .push_str(crate::global_memory::MEMORY_CONTEXT_INSTRUCTIONS);
+        bundle.fingerprint = fingerprint(&bundle.instructions);
+    }
+    Ok(bundle)
+}
+
 /// A separate, tool-free review policy. Never append execution mode prompts,
 /// project instructions, or task transcripts to this instruction string.
 pub fn review_instructions() -> &'static str {

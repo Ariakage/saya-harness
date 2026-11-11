@@ -1100,7 +1100,7 @@ impl Tool for ExecTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "exec".into(),
-            description: "Run a directly specified local command. Host output_refs support bounded output_search and output_read when available; inspect capture completeness and gaps.".into(),
+            description: "Run a directly specified argv command with no implicit shell. Use an absolute executable or a bare name resolved through PATH. Omitted cwd uses the workspace; a relative cwd is resolved there. Environment entries use literal values or permitted references and timeout_seconds is bounded. Use a shell only when its semantics are required. Inspect exit status, timeout, cancellation, and output capture completeness.".into(),
             input_schema: serde_json::json!({"type":"object","properties":{
                 "argv":{"type":"array","minItems":1,"items":{"type":"string"}},
                 "cwd":{"type":["string","null"]},"timeout_seconds":{"type":["integer","null"],"minimum":1},
