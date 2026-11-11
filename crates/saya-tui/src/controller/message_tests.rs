@@ -98,6 +98,30 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
         modifiers: KeyModifiers::NONE,
     }
 }
+
+fn buffer_position(
+    buffer: &ratatui::buffer::Buffer,
+    text: &str,
+    width: u16,
+    height: u16,
+) -> (u16, u16) {
+    for row in 0..height {
+        for column in 0..width {
+            let mut candidate = String::new();
+            for x in column..width {
+                candidate.push_str(buffer[(x, row)].symbol());
+                if candidate == text {
+                    return (column, row);
+                }
+                if candidate.len() >= text.len() {
+                    break;
+                }
+            }
+        }
+    }
+    panic!("missing rendered text: {text}");
+}
+
 fn todo_result(values: serde_json::Value) -> ToolResult {
     ToolResult {
         ok: true,
@@ -564,6 +588,70 @@ async fn copying_or_clearing_a_selection_preserves_the_pending_approval_and_draf
     ));
     app.reply_approval(false);
     assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
+}
+
+#[tokio::test]
+async fn command_c_copies_user_and_tool_message_selections() {
+    let (_root, mut app) = fixture();
+    for (role, label, text, target, folded) in [
+        (
+            Role::User,
+            "You",
+            "USER_COPY_TARGET",
+            "USER_COPY_TARGET",
+            false,
+        ),
+        (
+            Role::Tool,
+            "exec",
+            "TOOL_COPY_TARGET",
+            "TOOL_COPY_TARGET",
+            false,
+        ),
+        (
+            Role::Tool,
+            "TOOL_HEADER_TARGET",
+            "TOOL_CARD_BODY",
+            "TOOL_HEADER_TARGET",
+            true,
+        ),
+    ] {
+        app.state.clear_messages();
+        let id = app.state.push_message(role, label, text);
+        if folded {
+            app.state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == id)
+                .unwrap()
+                .tool_card = true;
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 45)).unwrap();
+        terminal
+            .draw(|frame| view::draw(frame, &mut app.state))
+            .unwrap();
+        let (column, row) = buffer_position(terminal.backend().buffer(), target, 160, 45);
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, row));
+        app.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            column + target.len() as u16 - 1,
+            row,
+        ));
+        app.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            column + target.len() as u16 - 1,
+            row,
+        ));
+        app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.state.take_clipboard_request().as_deref(),
+            Some(target),
+            "{role:?} folded={folded} selection was not copied"
+        );
+    }
 }
 
 #[tokio::test]

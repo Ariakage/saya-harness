@@ -476,7 +476,7 @@ pub(crate) mod controller {
     pub const HELP_LINES: &[&str] = &[
         "Enter send · Alt+Enter / Ctrl+J newline",
         "Empty draft · Tab cycles WORK → CODE → PLAN → BUILD",
-        "Ctrl+P commands · Ctrl+C cancel · Ctrl+D exit",
+        "Ctrl+P commands · Ctrl+C / Cmd+C copy selection or cancel · Ctrl+D exit",
         "Ctrl+V pastes clipboard text or saves a clipboard image under ~/.saya/paste_image",
         "PgUp/PgDn scroll · End follow output",
         "Click thinking / long tool headers to expand or collapse",

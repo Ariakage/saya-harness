@@ -100,6 +100,13 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
         };
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
+                if key.kind == KeyEventKind::Press
+                    && key.modifiers.contains(KeyModifiers::SUPER)
+                    && matches!(key.code, KeyCode::Char('c' | 'C'))
+                {
+                    state.copy_text_selection();
+                    continue;
+                }
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     match key.code {
                         KeyCode::Char('c') => {

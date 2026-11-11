@@ -1,6 +1,6 @@
 # 开发进度
 
-**更新于2026-11-11。N3上下文、可执行扩展及全局记忆已完成四平台验收，固定源码为 `e1da373`。四端均通过完整Rust门禁、原生隔离、性能v2、MCP／OAuth、8项真实插件、34条CLI、15条TUI和历史入口回归，程序SHA、源码清单及执行前后身份一致。N2固定源码 `aaec8c5` 的四平台证据与已发布0.2.0历史证据继续按各自源码保留。**
+**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存及复杂任务能力优化。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -11,6 +11,12 @@
 响应头／流空闲超时与暂时性连接、429、可重试5xx在尚无有效响应事件时最多重试2次，使用1／2秒退避、有限抖动和Retry-After上限；耗尽后返回最后错误。已有partial不重试拼接。审核沿用当前Run设置，原型与生产运行时采用相同语义。
 
 新增配置解析、HTTP零总时限、固定idle／总时限、有限重试、partial不重试及独立活跃预算回归，定向84项测试通过。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1392项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/model-timeout-check.log`。一次完整门禁中的TUI终端计时波动导致共享锁连锁失败，独立终端套件9/9复验及后续完整门禁通过，初始日志保留为 `target/model-timeout-check-initial.log`。`just test-tooling` 的81项Python回归通过，日志为 `target/model-timeout-tooling.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/model-timeout-smoke.log`；程序SHA-256为 `c30d8aec0845f1fe864691e79f0d1123da148d593996a20a7b0b33288d085279`。未运行远端CI或其他平台验收。
+
+## TUI 消息与工具选区复制
+
+2026-11-12，修复TUI内用户消息与工具调用信息无法按macOS习惯复制的问题。此前选区与OSC52路径已支持Ctrl+C，但只显式接入Cmd+V，Cmd+C未进入复制处理。正常入口与debug预览现同时识别Ctrl+C和Cmd+C：存在拖选区时复制并清除选区，Ctrl+C无选区时继续取消运行，Cmd+C不会触发取消。
+
+新增回归分别选择并复制用户消息正文、展开的工具消息正文和折叠工具卡标题，核对OSC52前的剪贴板请求内容。本地macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1393项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/tui-copy-check.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。
 
 ## 上下文摘要投影与防溢出
 

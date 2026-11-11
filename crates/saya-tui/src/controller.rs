@@ -791,6 +791,13 @@ impl App {
             }
             return Ok(false);
         }
+        if key.kind == KeyEventKind::Press
+            && key.modifiers.contains(KeyModifiers::SUPER)
+            && matches!(key.code, KeyCode::Char('c' | 'C'))
+        {
+            self.state.copy_text_selection();
+            return Ok(false);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => {
