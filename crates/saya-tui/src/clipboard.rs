@@ -63,7 +63,7 @@ pub(crate) fn write_text(text: &str) -> bool {
         commands.push(xclip);
         commands
             .into_iter()
-            .any(|command| command.pipe_text(text).unwrap_or(false))
+            .any(|mut command| command.pipe_text(text).unwrap_or(false))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
