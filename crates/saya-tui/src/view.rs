@@ -3542,11 +3542,11 @@ mod tests {
         state.push_message(
             Role::User,
             "You",
-            "[Image 1] Audio: [Audio 1] Video: [Video 1] File: [File 1]",
+            "[Image 1] [Audio 1] [Video 1] File: [File 1]",
         );
         state
             .editor
-            .set_text("Inspect [Image 1], Audio: [Audio 1], Video: [Video 1], and File: [File 1]");
+            .set_text("Inspect [Image 1], [Audio 1], [Video 1], and File: [File 1]");
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();

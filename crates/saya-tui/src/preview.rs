@@ -263,16 +263,16 @@ pub fn fixture(scene: &str) -> State {
             state.push_message(
                 Role::User,
                 "You",
-                "Compare [Image 1], Audio: [Audio 1], Video: [Video 1], and File: [File 1].",
+                "Compare [Image 1], [Audio 1], [Video 1], and File: [File 1].",
             );
             state.push_message(
                 Role::Assistant,
                 "configured-model",
                 "I can inspect every enabled media reference. No media bytes were embedded in this preview.",
             );
-            state.editor.set_text(
-                "Also inspect [Image 2], Audio: [Audio 2], Video: [Video 2], and File: [File 2]",
-            );
+            state
+                .editor
+                .set_text("Also inspect [Image 2], [Audio 2], [Video 2], and File: [File 2]");
         }
         "question" => {
             state.editor.clear();

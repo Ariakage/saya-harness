@@ -112,7 +112,7 @@ Chat采用 `reasoning_content`，Messages采用明文thinking块，Responses采�
 
 输入区Message标题加粗，常规空草稿显示 `Describe a task…` 渲染占位。宽度足够时，标题右侧以键帽样式提示Enter发送、Alt+Enter换行及Ctrl+O折叠。人工审批／澄清使用操作详情，粘贴超限优先显示暖色警示。底部浅收边位于留白行，极小窗口按空间简化装饰。
 
-终端bracketed paste或拖入内容若解析为一个或多个现有本地文件，输入区使用 `[Image N]`、`Audio: [Audio N]`、`Video: [Video N]` 与 `File: [File N]` 显示引用，不展示绝对路径。图片、音频、视频和其他文件分别使用不同高亮；同类型编号从当前草稿中保留的token之后继续。发送时token展开为对应的 `(<PATH>)` 引用；前三种媒体由 profile 能力控制并读取为协议content part，普通 File 仍向模型提供真实路径。会话恢复和窗口标题重新折叠为token。支持`file://`、引号路径及反斜杠转义空格。
+终端bracketed paste或拖入内容若解析为一个或多个现有本地文件，输入区使用 `[Image N]`、`[Audio N]`、`[Video N]` 与 `File: [File N]` 显示引用，不展示绝对路径。图片、音频、视频和其他文件分别使用不同高亮；同类型编号从当前草稿中保留的token之后继续。发送时token展开为对应的 `(<PATH>)` 引用；前三种媒体由 profile 能力控制并读取为协议content part，普通 File 仍向模型提供真实路径。会话恢复和窗口标题重新折叠为token。支持`file://`、引号路径及反斜杠转义空格。
 
 附件token在Editor中是原子单元：左右移动跨过整个token，token内部或边界上的Backspace／Delete移除完整附件，不会逐字符破坏占位符。`Ctrl+V`会优先读取系统剪贴板图片二进制，保存为私有文件到`~/.saya/paste_image/`，再插入`[Image N]`；PNG不可用时尝试TIFF，Linux使用Wayland／X11对应工具。剪贴板没有图片时回退为文本粘贴。图片读取上限32MiB，读取有5秒异步期限；普通文本和不存在的路径保持原样。
 

@@ -173,9 +173,7 @@ pub(crate) fn atomic_ranges(text: &str) -> Vec<AtomicRange> {
         .into_iter()
         .map(|range| {
             let owner = match range.kind {
-                Kind::Image => None,
-                Kind::Audio => Some(crate::i18n::attachments::AUDIO_OWNER),
-                Kind::Video => Some(crate::i18n::attachments::VIDEO_OWNER),
+                Kind::Image | Kind::Audio | Kind::Video => None,
                 Kind::File => Some(crate::i18n::attachments::FILE_OWNER),
             };
             let start = if let Some(owner) = owner {
@@ -427,9 +425,13 @@ mod tests {
             "",
         )
         .unwrap();
-        assert_eq!(insertion.text, "Audio: [Audio 1] Video: [Video 1]");
+        assert_eq!(insertion.text, "[Audio 1] [Video 1]");
         assert_eq!(insertion.attachments[0].kind, Kind::Audio);
         assert_eq!(insertion.attachments[1].kind, Kind::Video);
+        assert_eq!(
+            display(&expand(&insertion.text, &insertion.attachments)),
+            insertion.text
+        );
     }
 
     #[test]

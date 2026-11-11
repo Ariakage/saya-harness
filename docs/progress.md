@@ -16,11 +16,13 @@
 
 ## 多模态图片、音频与视频输入
 
-2026-11-11，按D-060为profile增加显式`multimodal.image/audio/video`能力。TUI将本地音频和视频分别显示为`Audio: [Audio N]`与`Video: [Video N]`原子token；发送时图片、音频和视频从有界本地文件读取并映射为Chat／Responses content parts，Messages当前发送base64图片。能力关闭、文件不可读、格式不受支持或超限均在HTTP请求前明确失败，普通File继续作为路径文本交给模型和工具。媒体载荷使用有界Token估算，能力开关进入profile身份指纹。
+2026-11-11，按D-060为profile增加显式`multimodal.image/audio/video`能力。TUI将本地音频和视频分别显示为`[Audio N]`与`[Video N]`原子token；发送时图片、音频和视频从有界本地文件读取并映射为Chat／Responses content parts，Messages当前发送base64图片。能力关闭、文件不可读、格式不受支持或超限均在HTTP请求前明确失败，普通File继续作为路径文本交给模型和工具。媒体载荷使用有界Token估算，能力开关进入profile身份指纹。
 
 本地忽略配置 `.saya/local/deepseek.toml` 的三个DeepSeek测试profile仅开启`image = true`，仍保持`max_output_tokens = 1000000`且未加入Git。`saya config check`通过；真实`deepseek-responses`单次图片请求正确识别本机生成的空白文档图标。临时图片、数据库和会话目录已清理。
 
 本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1368项Rust测试、8项条件忽略和release构建通过，日志为 `target/multimodal-check.log`。新增真实HTTP夹具覆盖Chat图片／音频／视频、Responses图片／音频／视频及Messages图片wire；`just test-tooling`的75项Python回归通过。本轮未推送、未运行远端CI。
+
+同日按交互反馈将音频、视频显示token由`Audio: [Audio N]`／`Video: [Video N]`收紧为与图片一致的`[Audio N]`／`[Video N]`，保持媒体类型高亮、整token移动删除和发送时路径展开。定向附件与渲染回归通过；完整门禁再次通过1369项Rust测试、8项条件忽略、严格Clippy和release构建，日志为 `target/audio-video-token-check.log`。
 
 ## 完整模型提示词预览
 

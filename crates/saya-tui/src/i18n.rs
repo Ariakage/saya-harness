@@ -804,8 +804,6 @@ pub(crate) mod attachments {
     pub const VIDEO_PREFIX: &str = "[Video ";
     pub const FILE_PREFIX: &str = "[File ";
     pub const FILE_OWNER: &str = "File: ";
-    pub const AUDIO_OWNER: &str = "Audio: ";
-    pub const VIDEO_OWNER: &str = "Video: ";
 
     pub fn image(number: u64) -> String {
         format!("[{IMAGE_LABEL} {number}]")
@@ -814,10 +812,10 @@ pub(crate) mod attachments {
         format!("{FILE_LABEL}: [{FILE_LABEL} {number}]")
     }
     pub fn audio(number: u64) -> String {
-        format!("{AUDIO_LABEL}: [{AUDIO_LABEL} {number}]")
+        format!("[{AUDIO_LABEL} {number}]")
     }
     pub fn video(number: u64) -> String {
-        format!("{VIDEO_LABEL}: [{VIDEO_LABEL} {number}]")
+        format!("[{VIDEO_LABEL} {number}]")
     }
 }
 
