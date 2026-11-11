@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -10,7 +10,7 @@ use std::{
 };
 
 #[cfg(any(target_os = "linux", test))]
-use std::{fs::OpenOptions, io::Write};
+use std::fs::OpenOptions;
 
 #[cfg(all(unix, any(target_os = "linux", test)))]
 use std::os::unix::fs::OpenOptionsExt;
@@ -41,6 +41,65 @@ pub(crate) fn read(home: &Path) -> io::Result<Paste> {
         Some(text) if !text.is_empty() => Paste::Text(text),
         _ => Paste::Empty,
     })
+}
+
+/// Write selected text to the local system clipboard when a platform helper is
+/// available. Remote terminals still receive the OSC 52 fallback from the caller.
+pub(crate) fn write_text(text: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("pbcopy").pipe_text(text).unwrap_or(false)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut commands = Vec::new();
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            let mut command = Command::new("wl-copy");
+            command.arg("--type").arg("text/plain;charset=utf-8");
+            commands.push(command);
+        }
+        let mut xclip = Command::new("xclip");
+        xclip.args(["-selection", "clipboard"]);
+        commands.push(xclip);
+        commands
+            .into_iter()
+            .any(|command| command.pipe_text(text).unwrap_or(false))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = text;
+        false
+    }
+}
+
+trait TextWriter {
+    fn pipe_text(&mut self, text: &str) -> io::Result<bool>;
+}
+
+impl TextWriter for Command {
+    fn pipe_text(&mut self, text: &str) -> io::Result<bool> {
+        let mut child = match self
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let written = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("clipboard helper has no stdin"))?
+            .write_all(text.as_bytes());
+        if let Err(error) = written {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        Ok(child.wait()?.success())
+    }
 }
 
 fn paste_directory(home: &Path) -> PathBuf {
@@ -221,5 +280,16 @@ mod tests {
     fn missing_clipboard_tools_report_no_paste() {
         let mut command = Command::new("__saya_missing_clipboard_tool__");
         assert_eq!(bounded_output(&mut command, 1024).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clipboard_text_writer_pipes_the_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("clipboard");
+        let mut command = Command::new("sh");
+        command.args(["-c", "cat > \"$1\"", "sh"]).arg(&path);
+        assert!(command.pipe_text("界e\u{301}水").unwrap());
+        assert_eq!(fs::read_to_string(path).unwrap(), "界e\u{301}水");
     }
 }

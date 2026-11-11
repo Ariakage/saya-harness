@@ -22,6 +22,8 @@ const RESTORE_WAIT: Duration = Duration::from_millis(100);
 const WRITE_WAIT: Duration = Duration::from_millis(100);
 const FRAME_WRITE_WAIT: Duration = Duration::from_millis(250);
 const MOUSE_BYTES: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const KEYBOARD_BYTES: &[u8] = b"\x1b[>1u";
+const POP_KEYBOARD_BYTES: &[u8] = b"\x1b[<1u";
 const RESYNC_BYTES: &[u8] = b"\x18\x1b\\\x1b[0m\x1b[2J\x1b[H\x1b[?25l";
 const RESTORE_BYTES: &[u8] = b"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[?1049l";
 const PUSH_TITLE: &[u8] = b"\x1b[22;2t";
@@ -114,6 +116,7 @@ fn write_restore(fd: i32, title_saved: bool) -> io::Result<()> {
     // Finish any partially written OSC before screen and title restoration.
     for bytes in [
         b"\x1b\\".as_slice(),
+        POP_KEYBOARD_BYTES,
         RESTORE_BYTES,
         if title_saved { POP_TITLE } else { b"" },
     ] {
@@ -368,6 +371,8 @@ impl TerminalGuard {
         )?;
         // Button-motion tracking enables drag selection without hover events.
         guard.output.write_control(MOUSE_BYTES)?;
+        // Kitty-protocol terminals pass Cmd+C as SUPER+C; unsupported terminals ignore it.
+        guard.output.write_control(KEYBOARD_BYTES)?;
         // XTWINOPS saves only the window title, leaving the icon label alone.
         // https://www.invisible-island.net/xterm/ctlseqs/ctlseqs.html
         guard.output.save_title()?;
@@ -407,10 +412,10 @@ impl TerminalGuard {
         Ok(())
     }
 
-    /// Request clipboard copy through OSC 52 after a user selection gesture.
-    /// The terminal decides whether to accept clipboard writes. At most 64 KiB
-    /// of UTF-8 text is encoded, and the control write has the existing 100 ms
-    /// budget. Empty text performs no clipboard operation.
+    /// Copy selected text to the local clipboard when possible, then request the
+    /// same operation through OSC 52 for remote terminals. At most 64 KiB of
+    /// UTF-8 text is written, and the control write keeps its existing budget.
+    /// Empty text performs no clipboard operation.
     pub fn copy_text(&mut self, text: &str) -> io::Result<()> {
         self.check_active()?;
         if text.len() > crate::view::MAX_COPY_BYTES {
@@ -422,6 +427,7 @@ impl TerminalGuard {
         if text.is_empty() {
             return Ok(());
         }
+        crate::clipboard::write_text(text);
         self.output
             .write_control(format!("\x1b\\\x1b]52;c;{}\x1b\\", STANDARD.encode(text)).as_bytes())
     }

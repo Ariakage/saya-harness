@@ -18,6 +18,8 @@
 
 新增回归分别选择并复制用户消息正文、展开的工具消息正文和折叠工具卡标题，核对OSC52前的剪贴板请求内容。本地macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1393项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/tui-copy-check.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。
 
+后续实测确认OSC52通过PTY字节断言不等于终端真正更新系统剪贴板。当前实现先用macOS `pbcopy`或Linux `wl-copy`／`xclip`写本机剪贴板，再保留OSC52回退，并启用Kitty增强键盘协议让支持的终端转发Cmd+C。真实PTY通过Ctrl+C和`SUPER+C`复制助手正文、详情标题、运行中的用户消息、`read_file`工具标题及展开结果；macOS以`pbpaste`逐项读回一致，同时验证运行未取消、草稿保留及拖动／键盘报告恢复。
+
 ## TUI 附件占位符统一
 
 2026-11-12，按用户反馈移除普通文件前的`File: `侧前缀。拖入或粘贴文件现直接显示绿色`[File N]`，与`[Image N]`、`[Audio N]`、`[Video N]`保持一致；Editor原子移动、删除、发送时真实路径展开、恢复折叠和模型wire内容不变。

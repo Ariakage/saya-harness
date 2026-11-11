@@ -3051,27 +3051,35 @@ def run_feedback_journey(binary):
 def selection_and_clipboard_journey(binary):
     gate = threading.Event()
     copy_text = '界e\u0301水'
+    user_copy = 'USER_ACTIVE_COPY_TARGET'
+    tool_copy = 'TOOL_COPY_TARGET'
     draft = 'retained copy draft'
     selected_style = ((232, 232, 237), (45, 65, 88))
+    native_clipboard = sys.platform == 'darwin' and Path('/usr/bin/pbpaste').exists()
+    original_clipboard = (subprocess.run(['/usr/bin/pbpaste'], capture_output=True, check=True).stdout
+                          if native_clipboard else None)
 
     def blocked_reply(_request):
-        if not gate.wait(10):
+        if not gate.wait(30):
             raise RuntimeError('selection observer did not release the model fixture')
         return {'text': 'CLIPBOARD_RUN_DONE'}
 
     fixture = Fixture('openai-chat-completions', [
-        {'text': 'COPY_START ' + copy_text + ' COPY_END'}, blocked_reply,
+        {'text': 'COPY_START ' + copy_text + ' COPY_END'},
+        {'call': ('copy-tool', 'read_file', {'path': 'copy.txt', 'start_line': 1, 'line_count': 1})},
+        blocked_reply,
     ])
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-selection-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
+            (root / 'workspace' / 'copy.txt').write_text(tool_copy + '\n')
             config = configuration(root, fixture)
             terminal = invoke(binary, root, config)
             try:
                 terminal.resize(160, 45)
                 terminal.title()
-                terminal.line('Show text for the selection check')
+                terminal.line('Show USER_FIRST_COPY_TARGET for the selection check')
                 terminal.until('COPY_START')
                 wait_idle(terminal, root)
                 terminal.settle()
@@ -3082,6 +3090,11 @@ def selection_and_clipboard_journey(binary):
                     return [base64.b64decode(match.group(1), validate=True).decode('utf-8')
                             for match in re.finditer(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)',
                                                      bytes(terminal.raw))]
+
+                def system_clipboard():
+                    if not native_clipboard:
+                        return None
+                    return subprocess.run(['/usr/bin/pbpaste'], capture_output=True, check=True).stdout.decode()
 
                 def locate(text):
                     width = terminal.screen.main_width()
@@ -3117,6 +3130,8 @@ def selection_and_clipboard_journey(binary):
                     raise RuntimeError('drag selection copied without Ctrl+C')
                 terminal.send(b'\x03')
                 terminal.wait(lambda: clipboard_messages() == [copy_text], 'Unicode OSC 52 copy')
+                if native_clipboard:
+                    terminal.wait(lambda: system_clipboard() == copy_text, 'native Unicode system clipboard copy')
                 terminal.wait(lambda: not has_selection(), 'copied selection cleared')
                 if terminal.editor_text() != draft:
                     raise RuntimeError('selection copy changed the input draft')
@@ -3149,45 +3164,82 @@ def selection_and_clipboard_journey(binary):
                     raise RuntimeError('details selection copied without Ctrl+C')
                 terminal.send(b'\x03')
                 terminal.wait(lambda: clipboard_messages() == [copy_text, details_title], 'details OSC 52 copy')
+                if native_clipboard:
+                    terminal.wait(lambda: system_clipboard() == details_title, 'native details system clipboard copy')
                 terminal.wait(lambda: not has_selection(), 'copied details selection cleared')
                 terminal.send(b'\x1b')
                 terminal.wait(lambda: 'Configured profiles · UI' not in terminal.screen.details_text() and
                               locate(copy_text) is not None, 'details closed')
                 terminal.settle()
 
-                terminal.line('Keep the model request active during selection')
-                terminal.wait(lambda: len(fixture.requests) == 2 and terminal.screen.status() == 'Thinking',
-                              'active model request before copy')
+                terminal.resize(160, 45)
+                terminal.wait(lambda: (terminal.screen.main_width() or 0) > 100, 'wide tool selection layout')
+                terminal.line('Keep ' + user_copy + ' active during the tool selection')
+                terminal.wait(lambda: len(fixture.requests) >= 2, 'tool request before copy')
                 terminal.send(draft)
                 terminal.wait(lambda: terminal.editor_text() == draft, 'active-run copy draft')
-                drag(copy_text, 5)
+                terminal.wait(lambda: len(fixture.requests) == 3 and terminal.screen.status() == 'Thinking',
+                              'tool result waiting for its final model response')
+                tool_headers = [header for header in terminal.screen.fold_headers() if 'read_file' in header[2]]
+                if len(tool_headers) != 1:
+                    raise RuntimeError('selection journey did not retain one visible read_file tool card')
+                tool_header = tool_headers[0]
+
+                drag(user_copy, len(user_copy))
                 if clipboard_messages() != [copy_text, details_title]:
-                    raise RuntimeError('active selection copied without Ctrl+C')
+                    raise RuntimeError('active user selection copied without Cmd+C')
+                terminal.send(b'\x1b[99;9u')
+                terminal.wait(lambda: clipboard_messages() == [copy_text, details_title, user_copy],
+                              'active user Cmd+C OSC 52 copy')
+                if native_clipboard:
+                    terminal.wait(lambda: system_clipboard() == user_copy, 'active user native system clipboard copy')
+
+                drag(tool_header[2], len(tool_header[2]))
                 terminal.send(b'\x03')
-                terminal.wait(lambda: clipboard_messages() == [copy_text, details_title, copy_text],
-                              'active-run OSC 52 copy')
+                terminal.wait(lambda: clipboard_messages() ==
+                              [copy_text, details_title, user_copy, tool_header[2]],
+                              'tool title Ctrl+C OSC 52 copy')
+                if native_clipboard:
+                    terminal.wait(lambda: system_clipboard() == tool_header[2],
+                                  'tool title native system clipboard copy')
+
+                terminal.click(tool_header[0] + 2, tool_header[1])
+                terminal.wait(lambda: locate(tool_copy) is not None, 'expanded tool body')
+                drag(tool_copy, len(tool_copy))
+                terminal.send(b'\x03')
+                terminal.wait(lambda: clipboard_messages() ==
+                              [copy_text, details_title, user_copy, tool_header[2], tool_copy],
+                              'tool body Ctrl+C OSC 52 copy')
+                if native_clipboard:
+                    terminal.wait(lambda: system_clipboard() == tool_copy,
+                                  'tool body native system clipboard copy')
                 terminal.settle()
                 if terminal.screen.status() != 'Thinking' or terminal.editor_text() != draft:
                     raise RuntimeError('selection copy cancelled the active run or changed its draft')
                 gate.set()
                 terminal.until('CLIPBOARD_RUN_DONE')
                 result = wait_idle(terminal, root, count=2)
-                if result['status'] != 'completed' or len(fixture.requests) != 2:
+                if result['status'] != 'completed' or len(fixture.requests) != 3:
                     raise RuntimeError('selection copy interrupted or replayed the model request')
                 terminal.send(b'\x7f' * len(draft))
                 terminal.wait(lambda: terminal.editor_text() == '', 'cleared active-run draft')
                 terminal.finish()
                 if b'\x1b[?1002l' not in terminal.raw:
                     raise RuntimeError('terminal did not restore drag reporting')
+                if b'\x1b[>1u' not in terminal.raw or b'\x1b[<1u' not in terminal.raw:
+                    raise RuntimeError('terminal did not enter and restore enhanced keyboard reporting')
                 copied = clipboard_messages()
-                if copied != [copy_text, details_title, copy_text]:
+                if copied != [copy_text, details_title, user_copy, tool_header[2], tool_copy]:
                     raise RuntimeError('terminal emitted unexpected clipboard data during run completion or exit')
-                return {'clipboard_texts': copied, 'drag_reporting_restored': True}
+                return {'clipboard_texts': copied, 'drag_reporting_restored': True,
+                        'keyboard_reporting_restored': True, 'native_clipboard_verified': native_clipboard}
             finally:
                 gate.set()
                 terminal.close()
     finally:
         fixture.close()
+        if original_clipboard is not None:
+            subprocess.run(['/usr/bin/pbcopy'], input=original_clipboard, check=True)
 
 
 def invalid_routes(binary):
