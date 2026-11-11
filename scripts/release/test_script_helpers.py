@@ -311,6 +311,18 @@ class ScriptHelpersTest(unittest.TestCase):
             self.assertEqual(saved['cells'], screen.cells)
             self.assertEqual(saved['columns'], 2)
 
+    def test_process_cleanup_accepts_missing_or_no_longer_owned_pids(self):
+        for error in (
+            ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH)),
+            PermissionError(errno.EPERM, os.strerror(errno.EPERM)),
+        ):
+            with self.subTest(error=type(error).__name__), \
+                 mock.patch.object(tui_journey.os, 'kill', side_effect=error):
+                tui_journey.require_process_gone(1234)
+        with mock.patch.object(tui_journey.os, 'kill', return_value=None):
+            with self.assertRaises(RuntimeError):
+                tui_journey.require_process_gone(1234)
+
     def test_docker_platform_defaults_to_the_engine_and_accepts_an_override(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / 'main.rs'

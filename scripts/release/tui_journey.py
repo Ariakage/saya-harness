@@ -2725,6 +2725,15 @@ def high_frequency_stream(binary):
         fixture.close()
 
 
+def require_process_gone(pid):
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        # A cleaned child PID may be reused by another UID before this check.
+        return
+    raise RuntimeError(f'slow consumer exited before background cleanup of PID {pid}')
+
+
 def slow_terminal_consumer(binary):
     pieces = [('frame_%04d_' % index) + ('x' * 500) for index in range(240)]
     call = ('slow-background', 'background_start', {
@@ -2782,12 +2791,7 @@ def slow_terminal_consumer(binary):
                 if elapsed < 1.8:
                     raise RuntimeError(f'slow consumer exited before the total output deadline: {elapsed:.3f}s')
                 for pid in (child_pid, sleep_pid):
-                    try:
-                        os.kill(pid, 0)
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        raise RuntimeError(f'slow consumer exited before background cleanup of PID {pid}')
+                    require_process_gone(pid)
             finally:
                 terminal.close()
     finally:
