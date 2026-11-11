@@ -132,11 +132,11 @@ fn execution_request(
         work_mode: mode,
         permissions: PermissionMode::Auto,
     };
-    let mut dynamic_instructions = preview_environment_facts();
-    dynamic_instructions.push_str(&prompt::system_context(&session, &run, true, true, true)?);
+    let dynamic_instructions = prompt::system_context(&session, &run, true, true, true)?;
 
     let mut history = vec![
         prompt::runtime_context(&session, &run)?,
+        HistoryItem::UserText(preview_environment_facts()),
         HistoryItem::UserText(data.project_context.to_string()),
         HistoryItem::UserText(
             json!({"saya_personal_context_v1":{

@@ -620,7 +620,7 @@ impl AgentRuntime {
             services: Arc::new(services::RuntimeServices::default()),
             media_store: None,
             media_capabilities: crate::config::MediaCapabilities::default(),
-            started_at: crate::prompt::cache_aligned_time(std::time::SystemTime::now()),
+            started_at: std::time::SystemTime::now(),
         })
     }
     pub fn handle(&self) -> RuntimeHandle {
@@ -917,22 +917,23 @@ impl AgentRuntime {
                 .instructions;
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
-                let mut dynamic_instructions = String::new();
-                if let Some(facts) = environment_facts {
-                    dynamic_instructions.push_str(&facts);
-                }
-                dynamic_instructions.push_str(&crate::prompt::system_context_at(
+                let dynamic_instructions = Some(crate::prompt::system_context(
                     session,
                     &run,
                     self.project_context.is_some(),
                     self.personal_context.preferences.is_some(),
                     self.personal_context.memory.is_some(),
-                    self.started_at,
                 )?);
-                let dynamic_instructions = Some(dynamic_instructions);
                 let request_id = uuid::Uuid::now_v7().to_string();
                 let mut record = None;
-                let mut history = vec![crate::prompt::runtime_context(session, &run)?];
+                let mut history = vec![crate::prompt::runtime_context_at(
+                    session,
+                    &run,
+                    self.started_at,
+                )?];
+                if let Some(facts) = environment_facts {
+                    history.push(HistoryItem::UserText(facts));
+                }
                 if let Some(state) = &self.project_context {
                     let mut state = state.lock().map_err(|_| {
                         error("project_context_error", "project context lock failed")

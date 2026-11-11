@@ -673,7 +673,14 @@ async fn responses_adapter_drives_runtime_and_replays_tool_result()
     let first_system = first["instructions"].as_str().ok_or("missing system")?;
     let next_system = next["instructions"].as_str().ok_or("missing system")?;
     assert_eq!(first_system, next_system);
-    assert!(next_system.contains("\"captured_at\""));
+    assert!(!next_system.contains("\"captured_at\""));
+    assert!(next["input"].as_array().is_some_and(|input| {
+        input.iter().any(|item| {
+            item["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("\"captured_at\""))
+        })
+    }));
     let input = next["input"].as_array().ok_or("missing input")?;
     assert!(input.contains(&raw));
     assert!(

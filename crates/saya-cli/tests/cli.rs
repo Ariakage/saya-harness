@@ -572,13 +572,27 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
         .unwrap();
     assert_eq!(facts["host"]["os"], std::env::consts::OS);
     assert_eq!(facts["host"]["architecture"], std::env::consts::ARCH);
-    assert!(facts["captured_at"]["utc"].as_str().unwrap().ends_with('Z'));
-    assert!(facts["captured_at"]["utc_offset_seconds"].is_number());
+    assert!(facts.get("captured_at").is_none());
     assert_eq!(facts["project_context_available"], true);
     assert_eq!(facts["user_preferences_supplied"], true);
     assert_eq!(facts["long_term_memory_supplied"], true);
-    let execution = system
-        .lines()
+    let runtime = messages
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .filter_map(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .find_map(|value| value.get("saya_runtime_context_v1").cloned())
+        .unwrap();
+    assert!(
+        runtime["captured_at"]["utc"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z')
+    );
+    assert!(runtime["captured_at"]["utc_offset_seconds"].is_number());
+    let execution = messages
+        .iter()
+        .filter_map(|message| message["content"].as_str())
+        .flat_map(|content| content.lines())
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find_map(|value| value.get("saya_execution_environment_v1").cloned())
         .unwrap();

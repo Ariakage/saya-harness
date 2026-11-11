@@ -402,20 +402,13 @@ async fn normal_entry_starts_authorized_stdio_redacts_results_and_reaps_before_r
     assert!(!serde_json::to_string(&saved).unwrap().contains(TOKEN));
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
-    assert!(
-        requests[0]
-            .dynamic_instructions
-            .as_ref()
-            .unwrap()
-            .contains("saya_execution_environment_v1")
-    );
-    assert!(
-        requests[0]
-            .dynamic_instructions
-            .as_ref()
-            .unwrap()
-            .contains("unsupported")
-    );
+    let request = &requests[0];
+    let dynamic = request.dynamic_instructions.as_deref().unwrap();
+    assert!(!dynamic.contains("saya_execution_environment_v1"));
+    assert!(!dynamic.contains("unsupported"));
+    let history = serde_json::to_string(&request.history).unwrap();
+    assert!(history.contains("saya_execution_environment_v1"));
+    assert!(history.contains("unsupported"));
     let states = store.states.lock().unwrap();
     let status = states
         .iter()

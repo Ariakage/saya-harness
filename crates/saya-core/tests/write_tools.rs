@@ -101,6 +101,11 @@ async fn patch_definition_and_path_errors_explain_the_expected_workspace_shape()
     let definition = tool.definition();
     assert!(definition.description.contains("old_count"));
     assert!(definition.description.contains("new_count"));
+    assert!(
+        definition
+            .description
+            .contains("never use the total hunk body line count")
+    );
     let properties = &definition.input_schema["properties"];
     for field in ["path", "patch", "expected_version"] {
         assert!(properties[field]["description"].is_string());

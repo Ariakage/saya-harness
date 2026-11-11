@@ -19,7 +19,15 @@ fn search_definitions_require_directory_roots_and_describe_patterns()
         );
     }
     let read = ReadTool::new(files.clone(), ReadToolKind::ReadFile).definition();
-    assert!(read.description.contains("search_text first"));
+    assert!(
+        read.description
+            .contains("use search_text before read_file")
+    );
+    assert!(
+        read.input_schema["properties"]["line_count"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("do not use large pages"))
+    );
     let search = ReadTool::new(files, ReadToolKind::SearchText).definition();
     let properties = &search.input_schema["properties"];
     assert!(

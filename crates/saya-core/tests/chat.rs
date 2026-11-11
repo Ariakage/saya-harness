@@ -540,7 +540,16 @@ async fn chat_adapter_drives_runtime_tool_loop() -> Result<(), Box<dyn std::erro
         .as_str()
         .ok_or("missing system")?;
     assert_eq!(first_system, second_system);
-    assert!(second_system.contains("\"captured_at\""));
+    assert!(!second_system.contains("\"captured_at\""));
+    assert!(
+        second["messages"]
+            .as_array()
+            .is_some_and(|messages| messages.iter().any(|message| {
+                message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("\"captured_at\""))
+            }))
+    );
     assert!(
         second["messages"]
             .as_array()

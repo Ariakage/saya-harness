@@ -942,8 +942,8 @@ impl crate::boundary::Tool for ReadTool {
         let (name, description, properties, required) = match self.kind {
             ReadToolKind::ReadFile => (
                 "read_file",
-                "Read a UTF-8 file with 1-based start_line and bounded line_count. The returned version is required for later writes. A truncated result is not the end of the file; narrow the range or continue reading. For large files, locate the relevant lines with search_text first and read only the needed range.",
-                json!({"path":{"type":"string","description":"Workspace-relative file path"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1}}),
+                "Read a UTF-8 file with 1-based start_line and bounded line_count. The returned version is required for later writes. A truncated result is not the end of the file; narrow the range or continue reading. When the task is to find matching text or a specific entry, use search_text before read_file, even if the file size is unknown; do not scan from line 1 with read_file. For large files, read only the needed range after searching. Search hits already include the path, line number, and matching text; never reread an entire large file merely to confirm a hit.",
+                json!({"path":{"type":"string","description":"Workspace-relative file path"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"description":"Bounded number of lines to read; do not use large pages to scan for matching text"}}),
                 json!(["path", "start_line", "line_count"]),
             ),
             ReadToolKind::ListDir => (

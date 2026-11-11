@@ -280,20 +280,12 @@ fn runtime_prompts_are_english_without_a_fixed_communication_language()
 }
 
 #[test]
-fn cache_aligned_context_is_stable_and_workspace_stays_in_runtime_data()
+fn run_context_keeps_instance_data_out_of_the_shared_system_prefix()
 -> Result<(), Box<dyn std::error::Error>> {
     use saya_core::contract::{ModelProtocol, Run, RunId, Session, SessionId};
     use std::time::{Duration, UNIX_EPOCH};
 
     let start = UNIX_EPOCH + Duration::from_secs(1_800_000_123);
-    assert_eq!(
-        prompt::cache_aligned_time(start),
-        UNIX_EPOCH + Duration::from_secs(1_800_000_120)
-    );
-    assert_eq!(
-        prompt::cache_aligned_time(start),
-        prompt::cache_aligned_time(start + Duration::from_secs(30))
-    );
     let session = Session {
         id: SessionId::new(),
         workspace: "/workspace/private-name".into(),
@@ -309,11 +301,35 @@ fn cache_aligned_context_is_stable_and_workspace_stays_in_runtime_data()
         work_mode: WorkMode::Work,
         permissions: PermissionMode::Auto,
     };
-    let first = prompt::system_context_at(&session, &run, true, true, true, start)?;
-    let next_turn = prompt::system_context_at(&session, &run, true, true, true, start)?;
+    let first = prompt::system_context(&session, &run, true, true, true)?;
+    let next_turn = prompt::system_context(&session, &run, true, true, true)?;
     assert_eq!(first, next_turn);
     assert!(!first.contains("private-name"));
-    let runtime = serde_json::to_string(&prompt::runtime_context(&session, &run)?)?;
-    assert!(runtime.contains("private-name"));
+    assert!(!first.contains("captured_at"));
+
+    let other_session = Session {
+        id: SessionId::new(),
+        workspace: "/tmp/an-unrelated-workspace".into(),
+        ..session.clone()
+    };
+    let other_run = Run {
+        id: RunId::new(),
+        session_id: other_session.id,
+        ..run.clone()
+    };
+    assert_eq!(
+        first,
+        prompt::system_context(&other_session, &other_run, true, true, true)?
+    );
+
+    let runtime = prompt::runtime_context_at(&session, &run, start)?;
+    assert_eq!(runtime, prompt::runtime_context_at(&session, &run, start)?);
+    let encoded = serde_json::to_string(&runtime)?;
+    assert!(encoded.contains("private-name"));
+    assert!(encoded.contains("captured_at"));
+    assert_ne!(
+        runtime,
+        prompt::runtime_context_at(&session, &run, start + Duration::from_secs(30))?
+    );
     Ok(())
 }
