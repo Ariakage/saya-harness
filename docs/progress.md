@@ -4,6 +4,12 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 上下文摘要投影与防溢出
+
+2026-11-12，优化Compact后的模型投影。此前 `saya_context_summary.summary` 会再次包含完整宿主校验包装，包括必留项全文、引用元数据、上下文版本、退休清单和机械观察；这些字段既占用上下文，又增加压缩后仍超过55%目标或输入容量的概率。现仅向模型投影结构化摘要正文，外层继续保留来源范围、摘要来源hash和显式保留的原始用户组。`required_items`、引用元数据、上下文版本及退休证明仍完整保存在 `ContextView`／`CompactionRecord`，持久化校验、CAS、恢复和权限边界不变；旧的简单摘要夹具继续兼容。
+
+三协议成功Compact回归逐字段验证摘要本体一致，且宿主专用字段不进入模型请求。ContextBuilder、Compact协调器和运行时定向62项测试通过。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1390项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/context-projection-check.log`。`just test-tooling` 的81项Python回归通过，日志为 `target/context-projection-tooling.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/context-projection-smoke.log`；程序SHA-256为 `30f0be9c683c2e0011fca2d6655c9255a07f86cf92a79521084f3e36155ab364`。未运行远端CI或其他平台验收。
+
 ## 提示词与模型任务能力优化
 
 2026-11-11，提示词评估扩展为10个场景，新增无序区间／相邻区间合并、输入不可变性和多次尝试下的事件状态聚合。补丁指导压缩为连续上下文、独立行数计算与实际起始行，明确多hunk累计行差；对相距较远或多行增删的修改优先一个小hunk，成功后重读并使用新版本。Skill明确激活后携带文档、附加资源读取及 `skill_inactive` 恢复路径。评估工具继续拒绝exec，外部行为测试而非模型自述决定通过。

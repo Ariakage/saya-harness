@@ -587,6 +587,9 @@ fn summary_item(
     view: &ContextView,
     retained: &[RetainedGroup],
 ) -> Result<HistoryItem, BoundaryError> {
+    // Host-only validation metadata stays in the durable record. Older simple
+    // summary fixtures and views keep their existing body without unwrapping.
+    let summary = view.summary.get("summary").unwrap_or(&view.summary);
     // This is explicitly historical source data even on a provider whose only
     // data carrier is a user-role message. It grants no authority or approvals.
     let data = json!({"saya_context_summary": {
@@ -597,7 +600,7 @@ fn summary_item(
         "covered_prefix": view.covered_prefix,
         "source_prefix_sha256": view.source_prefix_sha256,
         "retained_original_groups": retained,
-        "summary": view.summary,
+        "summary": summary,
     }});
     let text = serde_json::to_string(&data)
         .map_err(|_| error("context_view", "Summary envelope cannot be encoded"))?;

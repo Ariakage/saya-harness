@@ -379,6 +379,21 @@ async fn structured_summary_preserves_control_state_exact_constraints_and_origin
             prepared.view.summary["required_items"][0]["text"],
             fixture.required[0].text
         );
+        let HistoryItem::UserText(projected) = &prepared.projected_request.history[0] else {
+            panic!("summary projection carrier")
+        };
+        let projected: Value = serde_json::from_str(projected).unwrap();
+        let envelope = &projected["saya_context_summary"];
+        assert_eq!(envelope["summary"], prepared.view.summary["summary"]);
+        for field in [
+            "required_items",
+            "references",
+            "context_versions",
+            "retirement_manifest",
+            "mechanical_observations",
+        ] {
+            assert!(envelope.get(field).is_none(), "host-only field: {field}");
+        }
         assert!(prepared.view.summary.get("permissions").is_none());
         prepared
             .verify_current(
