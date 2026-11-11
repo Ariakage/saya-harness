@@ -58,6 +58,7 @@ pub(crate) mod command {
 pub(crate) mod common {
     pub const APP_NAME: &str = "Saya Harness";
     pub const WINDOW_NAME: &str = "Saya";
+    pub const COPIED: &str = "✓ Copied";
     pub const READY: &str = "Ready";
     pub const RUNNING: &str = "Running";
     pub const THINKING: &str = "Thinking";

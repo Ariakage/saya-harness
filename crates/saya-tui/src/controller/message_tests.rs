@@ -549,7 +549,7 @@ async fn joined_task_failure_takes_the_handle_and_closes_thinking_and_unknown_to
 }
 
 #[tokio::test]
-async fn copying_or_clearing_a_selection_preserves_the_pending_approval_and_draft() {
+async fn releasing_a_selection_copies_it_and_preserves_the_pending_approval_and_draft() {
     let (_root, mut app) = fixture();
     app.state.clear_messages();
     app.state.push_message(Role::User, "You", "COPY_ME");
@@ -560,6 +560,7 @@ async fn copying_or_clearing_a_selection_preserves_the_pending_approval_and_draf
     app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
     assert!(app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 3)));
     app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 8, 3));
+    app.show_copy_notice(Instant::now());
     app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
         .await
         .unwrap();
@@ -573,25 +574,13 @@ async fn copying_or_clearing_a_selection_preserves_the_pending_approval_and_draf
         receiver.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    render(&mut app, 160, 45);
-    app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
-    app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 3));
-    app.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 8, 3));
-    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-        .await
-        .unwrap();
-    assert!(!app.state.copy_text_selection());
-    assert!(app.pending.is_some());
-    assert!(matches!(
-        receiver.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty)
-    ));
+    assert!(app.state.copy_text_selection());
     app.reply_approval(false);
     assert_eq!(receiver.await.unwrap().unwrap(), Some(false));
 }
 
 #[tokio::test]
-async fn command_c_copies_user_and_tool_message_selections() {
+async fn command_c_copies_an_unreleased_user_or_tool_message_selection() {
     let (_root, mut app) = fixture();
     for (role, label, text, target, folded) in [
         (
@@ -638,11 +627,6 @@ async fn command_c_copies_user_and_tool_message_selections() {
             column + target.len() as u16 - 1,
             row,
         ));
-        app.mouse(mouse(
-            MouseEventKind::Up(MouseButton::Left),
-            column + target.len() as u16 - 1,
-            row,
-        ));
         app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER))
             .await
             .unwrap();
@@ -651,6 +635,11 @@ async fn command_c_copies_user_and_tool_message_selections() {
             Some(target),
             "{role:?} folded={folded} selection was not copied"
         );
+        app.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            column + target.len() as u16 - 1,
+            row,
+        ));
     }
 }
 

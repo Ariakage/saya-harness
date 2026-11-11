@@ -3119,43 +3119,51 @@ def selection_and_clipboard_journey(binary):
                     return any(background == selected_style[1]
                                for row in terminal.screen.colors for _foreground, background in row)
 
-                def drag(text, columns):
+                def select(text, columns):
                     terminal.wait(lambda: locate(text) is not None, 'visible selection text ' + text)
                     column, row = locate(text)
                     terminal.send(f'\x1b[<0;{column + 1};{row + 1}M'
-                                  f'\x1b[<32;{column + columns};{row + 1}M'
-                                  f'\x1b[<0;{column + columns};{row + 1}m')
+                                  f'\x1b[<32;{column + columns};{row + 1}M')
                     terminal.wait(lambda: terminal.screen.body_style(text) == selected_style,
                                   'visible dragged selection')
                     terminal.settle()
                     return column, row
 
+                def release(column, columns, row):
+                    terminal.send(f'\x1b[<0;{column + columns};{row + 1}m')
+
                 if clipboard_messages():
                     raise RuntimeError('terminal emitted clipboard data before user selection')
                 terminal.send(draft)
                 terminal.wait(lambda: terminal.editor_text() == draft, 'copy draft')
-                drag(copy_text, 5)
+                column, row = select(copy_text, 5)
                 if clipboard_messages():
-                    raise RuntimeError('drag selection copied without Ctrl+C')
-                terminal.send(b'\x03')
-                terminal.wait(lambda: clipboard_messages() == [copy_text], 'Unicode OSC 52 copy')
+                    raise RuntimeError('drag selection copied before mouse release')
+                release(column, 5, row)
+                terminal.wait(lambda: clipboard_messages() == [copy_text], 'automatic Unicode OSC 52 copy')
                 if native_clipboard:
-                    terminal.wait(lambda: system_clipboard() == copy_text, 'native Unicode system clipboard copy')
+                    terminal.wait(lambda: system_clipboard() == copy_text, 'automatic native Unicode copy')
                 terminal.wait(lambda: not has_selection(), 'copied selection cleared')
+                terminal.wait(lambda: '✓ Copied' in terminal.screen.text, 'top-right copied notice')
                 if terminal.editor_text() != draft:
                     raise RuntimeError('selection copy changed the input draft')
 
-                drag(copy_text, 5)
+                terminal.send(b'\x03')
+                terminal.settle()
+                if clipboard_messages() != [copy_text]:
+                    raise RuntimeError('Ctrl+C after automatic copy repeated the clipboard write')
+
+                select(copy_text, 5)
                 terminal.send(b'\x1b')
                 terminal.wait(lambda: not has_selection(), 'Esc cleared selection')
                 terminal.settle()
-                drag(copy_text, 5)
+                select(copy_text, 5)
                 terminal.resize(100, 32)
                 terminal.wait(lambda: terminal.screen.main_width() == 100 and
                               locate(copy_text) is not None and not has_selection(),
                               'resize cleared selection after repaint')
                 terminal.settle()
-                column, row = drag(copy_text, 5)
+                column, row = select(copy_text, 5)
                 terminal.wheel(column, row, down=False)
                 terminal.wait(lambda: not has_selection(), 'scroll cleared selection')
                 terminal.settle()
@@ -3168,14 +3176,17 @@ def selection_and_clipboard_journey(binary):
                 terminal.until('Configured profiles · UI')
                 terminal.settle()
                 details_title = 'Configured profiles · UI'
-                drag(details_title, len(details_title))
-                if clipboard_messages() != [copy_text]:
-                    raise RuntimeError('details selection copied without Ctrl+C')
-                terminal.send(b'\x03')
-                terminal.wait(lambda: clipboard_messages() == [copy_text, details_title], 'details OSC 52 copy')
+                column, row = select(details_title, len(details_title))
+                release(column, len(details_title), row)
+                terminal.wait(lambda: clipboard_messages() == [copy_text, details_title],
+                              'automatic details OSC 52 copy')
                 if native_clipboard:
-                    terminal.wait(lambda: system_clipboard() == details_title, 'native details system clipboard copy')
+                    terminal.wait(lambda: system_clipboard() == details_title, 'automatic native details copy')
                 terminal.wait(lambda: not has_selection(), 'copied details selection cleared')
+                terminal.send(b'\x1b[99;9u')
+                terminal.settle()
+                if clipboard_messages() != [copy_text, details_title]:
+                    raise RuntimeError('Cmd+C after automatic copy repeated the clipboard write')
                 terminal.send(b'\x1b')
                 terminal.wait(lambda: 'Configured profiles · UI' not in terminal.screen.details_text() and
                               locate(copy_text) is not None, 'details closed')
@@ -3194,34 +3205,38 @@ def selection_and_clipboard_journey(binary):
                     raise RuntimeError('selection journey did not retain one visible read_file tool card')
                 tool_header = tool_headers[0]
 
-                drag(user_copy, len(user_copy))
+                column, row = select(user_copy, len(user_copy))
                 if clipboard_messages() != [copy_text, details_title]:
-                    raise RuntimeError('active user selection copied without Cmd+C')
-                terminal.send(b'\x1b[99;9u')
+                    raise RuntimeError('active user selection copied before release')
+                release(column, len(user_copy), row)
                 terminal.wait(lambda: clipboard_messages() == [copy_text, details_title, user_copy],
-                              'active user Cmd+C OSC 52 copy')
+                              'automatic active user OSC 52 copy')
                 if native_clipboard:
-                    terminal.wait(lambda: system_clipboard() == user_copy, 'active user native system clipboard copy')
-
-                drag(tool_header[2], len(tool_header[2]))
+                    terminal.wait(lambda: system_clipboard() == user_copy, 'automatic active user native copy')
                 terminal.send(b'\x03')
+                terminal.settle()
+                if terminal.screen.status() != 'Thinking':
+                    raise RuntimeError('Ctrl+C after automatic copy cancelled the active run')
+
+                column, row = select(tool_header[2], len(tool_header[2]))
+                release(column, len(tool_header[2]), row)
                 terminal.wait(lambda: clipboard_messages() ==
                               [copy_text, details_title, user_copy, tool_header[2]],
-                              'tool title Ctrl+C OSC 52 copy')
+                              'automatic tool title OSC 52 copy')
                 if native_clipboard:
                     terminal.wait(lambda: system_clipboard() == tool_header[2],
-                                  'tool title native system clipboard copy')
+                                  'automatic tool title native copy')
 
                 terminal.click(tool_header[0] + 2, tool_header[1])
                 terminal.wait(lambda: locate(tool_copy) is not None, 'expanded tool body')
-                drag(tool_copy, len(tool_copy))
-                terminal.send(b'\x03')
+                column, row = select(tool_copy, len(tool_copy))
+                release(column, len(tool_copy), row)
                 terminal.wait(lambda: clipboard_messages() ==
                               [copy_text, details_title, user_copy, tool_header[2], tool_copy],
-                              'tool body Ctrl+C OSC 52 copy')
+                              'automatic tool body OSC 52 copy')
                 if native_clipboard:
                     terminal.wait(lambda: system_clipboard() == tool_copy,
-                                  'tool body native system clipboard copy')
+                                  'automatic tool body native copy')
                 terminal.settle()
                 if terminal.screen.status() != 'Thinking' or terminal.editor_text() != draft:
                     raise RuntimeError('selection copy cancelled the active run or changed its draft')
@@ -3235,7 +3250,7 @@ def selection_and_clipboard_journey(binary):
                 terminal.finish()
                 if b'\x1b[?1002l' not in terminal.raw:
                     raise RuntimeError('terminal did not restore drag reporting')
-                if b'\x1b[>1u' not in terminal.raw or b'\x1b[<1u' not in terminal.raw:
+                if b'\x1b[>9u' not in terminal.raw or b'\x1b[<1u' not in terminal.raw:
                     raise RuntimeError('terminal did not enter and restore enhanced keyboard reporting')
                 copied = clipboard_messages()
                 if copied != [copy_text, details_title, user_copy, tool_header[2], tool_copy]:
@@ -3294,7 +3309,7 @@ def main():
     screens['run_feedback'] = run_feedback_journey(binary)
     passed('mode-activity-animation-run-summary-and-unknown-usage')
     screens['selection_clipboard'] = selection_and_clipboard_journey(binary)
-    passed('drag-selection-unicode-osc52-draft-and-active-run')
+    passed('automatic-selection-copy-tool-body-copied-notice-and-active-run')
     mode_permission_matrix(binary)
     passed('four-modes-three-permissions')
     command_completion_journey(binary)

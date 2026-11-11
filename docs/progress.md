@@ -20,6 +20,8 @@
 
 后续实测确认OSC52通过PTY字节断言不等于终端真正更新系统剪贴板。当前实现先用macOS `pbcopy`或Linux `wl-copy`／`xclip`写本机剪贴板，再保留OSC52回退，并启用Kitty增强键盘协议让支持的终端转发Cmd+C。真实PTY通过Ctrl+C和`SUPER+C`复制助手正文、详情标题、运行中的用户消息、`read_file`工具标题及展开结果；macOS以`pbpaste`逐项读回一致，同时验证运行未取消、草稿保留及拖动／键盘报告恢复。
 
+随后按iTerm2实际交互改为松开鼠标立即复制Saya完整选区，不再依赖iTerm2右键菜单或Cmd+C。复制成功后在右上角显示约1.5秒的绿色`✓ Copied`；紧随其后的Ctrl+C／Cmd+C被消费，不会取消运行、清空草稿或重复覆盖剪贴板。选区文字提取新增跨行整段回归，终端增强键盘请求改为完整按键上报。真实PTY逐项复制Unicode助手正文、详情标题、运行中的用户消息、`read_file`工具标题及展开结果，macOS `pbpaste`立即读回一致，并验证Toast、自动复制后的快捷键隔离与增强键盘恢复。本机macOS27.2 ARM执行`RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、293项TUI测试及完整Rust门禁通过；同一release执行`just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。本轮未推送、未运行远端CI。
+
 ## TUI Full 会话导出
 
 2026-11-12，`/export`新增`full`范围：`/export full json|markdown PATH`同时包含完整工具参数、工具结果、持久事件、metrics、activities、审批记录和`ProviderItem`中的助手思考／签名／加密状态；原`/export-full`继续作为兼容别名。Transcript仍省略ProviderItem与内部事件。Full仅在输出前复用现有脱敏和UTF-8限额，不绕过当前配置凭据或持久遮蔽标记。

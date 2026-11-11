@@ -59,6 +59,19 @@ stream = false
     .unwrap();
     (root, app)
 }
+
+#[tokio::test]
+async fn copied_notice_is_visible_for_its_bounded_interval() {
+    let (_root, mut app) = fixture();
+    let now = Instant::now();
+    app.show_copy_notice(now);
+    assert!(app.state.copied_notice);
+    assert!(!app.refresh_copy_notice(now + Duration::from_secs(1)));
+    assert!(app.state.copied_notice);
+    assert!(app.refresh_copy_notice(now + Duration::from_secs(2)));
+    assert!(!app.state.copied_notice);
+    assert!(!app.refresh_copy_notice(now + Duration::from_secs(3)));
+}
 pub(super) fn approval(app: &App, id: &str) -> (Request, ApprovalReceiver) {
     let (reply, receiver) = oneshot::channel();
     (

@@ -111,6 +111,7 @@ struct App {
     memory_pending: Option<saya_app::memory_admin::PreparedMemoryAction>,
     memory_next: Option<String>,
     memory_last_operation: Option<String>,
+    copy_notice_until: Option<Instant>,
 }
 impl App {
     fn new(mut config: Config, options: Options) -> Result<Self> {
@@ -149,6 +150,7 @@ impl App {
             memory_pending: None,
             memory_next: None,
             memory_last_operation: None,
+            copy_notice_until: None,
         };
         app.refresh_header();
         app.reset_mcp_statuses();
@@ -577,6 +579,19 @@ impl App {
         memory_changed
             || was_active != self.state.activity_active
             || (self.state.activity_visible() && previous_frame != self.state.activity_frame)
+    }
+
+    fn show_copy_notice(&mut self, now: Instant) {
+        self.copy_notice_until = Some(now + std::time::Duration::from_millis(1500));
+        self.state.copied_notice = true;
+    }
+
+    fn refresh_copy_notice(&mut self, now: Instant) -> bool {
+        if self.copy_notice_until.is_some_and(|until| now < until) {
+            return false;
+        }
+        self.copy_notice_until = None;
+        std::mem::replace(&mut self.state.copied_notice, false)
     }
 
     fn append_run_summary(&mut self, summary: &turn_summary::TurnSummary, usage: Option<&Usage>) {
@@ -1159,14 +1174,21 @@ async fn run_loop(app: &mut App, terminal: &mut TerminalGuard) -> Result<u8> {
         }
         app.refresh_completion();
         dirty |= app.refresh_activity(Instant::now());
-        if let Some(text) = app.state.take_clipboard_request()
-            && let Err(error) = terminal.copy_text(&text)
-        {
-            if error.kind() != std::io::ErrorKind::InvalidInput {
-                return Err(error.into());
+        dirty |= app.refresh_copy_notice(Instant::now());
+        if let Some(text) = app.state.take_clipboard_request() {
+            match terminal.copy_text(&text) {
+                Ok(()) => {
+                    app.show_copy_notice(Instant::now());
+                    dirty = true;
+                }
+                Err(error) => {
+                    if error.kind() != std::io::ErrorKind::InvalidInput {
+                        return Err(error.into());
+                    }
+                    app.notice(&text::clipboard_failed(&error));
+                    dirty = true;
+                }
             }
-            app.notice(&text::clipboard_failed(&error));
-            dirty = true;
         }
         if redraw && dirty && app.exit_after_run.is_none() {
             let rendered = terminal

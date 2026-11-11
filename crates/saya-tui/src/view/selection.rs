@@ -266,6 +266,25 @@ mod tests {
     }
 
     #[test]
+    fn multiline_selection_copies_every_intersected_row() {
+        let mut selection = Selection::default();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 8, 3));
+        for (row, text) in [(0, "hello"), (1, "world"), (2, "last")] {
+            buffer.set_string(0, row, text, ratatui::style::Style::default());
+        }
+        let area = Some(Rect::new(0, 0, 8, 3));
+        selection.render(&mut buffer, [area, None]);
+        selection.begin(0, 0);
+        selection.drag(3, 2);
+        selection.release(3, 2);
+        assert!(selection.copy());
+        assert_eq!(
+            selection.take_clipboard().as_deref(),
+            Some("hello\nworld\nlast")
+        );
+    }
+
+    #[test]
     fn resize_reset_and_overlarge_snapshots_clear_selection_without_copying() {
         let mut selection = Selection::default();
         let area = Some(Rect::new(1, 1, 12, 1));

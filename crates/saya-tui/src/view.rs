@@ -181,6 +181,7 @@ pub struct State {
     pub status: String,
     pub activity_active: bool,
     pub activity_frame: u64,
+    pub copied_notice: bool,
     pub pending_mode: Option<String>,
     pub usage: String,
     pub context_window_tokens: Option<u64>,
@@ -240,6 +241,7 @@ impl Default for State {
             status: common::READY.into(),
             activity_active: false,
             activity_frame: 0,
+            copied_notice: false,
             pending_mode: None,
             usage: String::new(),
             context_window_tokens: None,
@@ -340,6 +342,7 @@ impl State {
                 if let Some(point) = self.selection.release(event.column, event.row) {
                     self.footnote_at(point.x, point.y) || self.toggle_at(point.x, point.y)
                 } else {
+                    self.selection.copy();
                     true
                 }
             }
@@ -356,6 +359,9 @@ impl State {
 
     /// Queue a clipboard request for selected visible text. No terminal I/O occurs here.
     pub fn copy_text_selection(&mut self) -> bool {
+        if self.copied_notice {
+            return true;
+        }
         if self.command_palette.is_some()
             || self.picker_panel.is_some()
             || self.completion_viewport.is_some()
@@ -1035,29 +1041,40 @@ fn draw_session(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
             ),
         ])
     };
-    let hint = if state.completion.visible() {
-        if area.width < 28 {
-            ui_text::COMPLETION_SHORT
-        } else {
-            ui_text::COMPLETION_KEYS
-        }
-    } else if state.editor.text().is_empty() && state.command_palette.is_none() {
-        if area.width >= 70 {
-            ui_text::TAB_MODE
-        } else if area.width >= 44 {
-            ui_text::TAB_MODE_SHORT
-        } else {
-            ui_text::CTRL_P
-        }
-    } else if area.width < 44 {
-        ui_text::CTRL_P
+    let hint = if state.copied_notice {
+        Line::styled(
+            format!(" {} ", common::COPIED),
+            Style::default()
+                .fg(BACKGROUND)
+                .bg(GREEN)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
-        ui_text::COMMANDS_HINT
+        let hint = if state.completion.visible() {
+            if area.width < 28 {
+                ui_text::COMPLETION_SHORT
+            } else {
+                ui_text::COMPLETION_KEYS
+            }
+        } else if state.editor.text().is_empty() && state.command_palette.is_none() {
+            if area.width >= 70 {
+                ui_text::TAB_MODE
+            } else if area.width >= 44 {
+                ui_text::TAB_MODE_SHORT
+            } else {
+                ui_text::CTRL_P
+            }
+        } else if area.width < 44 {
+            ui_text::CTRL_P
+        } else {
+            ui_text::COMMANDS_HINT
+        };
+        Line::styled(hint, Style::default().fg(MUTED))
     };
     draw_split_line(
         frame,
         title,
-        Line::styled(hint, Style::default().fg(MUTED)),
+        hint,
         Rect::new(area.x, area.y, area.width, 1),
         12,
     );
@@ -2681,6 +2698,25 @@ mod tests {
         (0..buffer.area.width)
             .map(|column| buffer[(column, row)].symbol())
             .collect()
+    }
+
+    #[test]
+    fn copied_notice_uses_the_top_right_status_badge() {
+        let mut state = State {
+            copied_notice: true,
+            ..State::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = row_text(buffer, 0);
+        assert!(row.contains(common::COPIED));
+        let column = row.find('C').unwrap() as u16;
+        assert_eq!(buffer[(column, 0)].bg, GREEN);
+        assert_eq!(buffer[(column, 0)].fg, BACKGROUND);
+        state.copied_notice = false;
+        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        assert!(!row_text(terminal.backend().buffer(), 0).contains(common::COPIED));
     }
 
     #[test]
