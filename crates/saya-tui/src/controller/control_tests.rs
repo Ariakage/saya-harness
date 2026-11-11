@@ -91,7 +91,7 @@ fn pasted_files_become_highlightable_tokens_while_model_text_keeps_the_path() {
     std::fs::write(&file, b"notes").unwrap();
     let pasted = format!("'{}' {}", image.display(), file.display());
     app.insert_paste(&pasted);
-    assert_eq!(app.state.editor.text(), "[Image 1] File: [File 1]");
+    assert_eq!(app.state.editor.text(), "[Image 1] [File 1]");
     assert_eq!(app.draft_attachments.len(), 2);
     let expanded = app.expand_attachments(app.state.editor.text());
     assert!(expanded.contains("[Image 1](<"));
@@ -108,7 +108,7 @@ async fn pasted_tokens_move_and_delete_as_atomic_units() {
     std::fs::write(&image, b"png").unwrap();
     std::fs::write(&file, b"notes").unwrap();
     app.insert_paste(&format!("'{}' '{}'", image.display(), file.display()));
-    assert_eq!(app.state.editor.text(), "[Image 1] File: [File 1]");
+    assert_eq!(app.state.editor.text(), "[Image 1] [File 1]");
     app.state.editor.set_cursor(3);
     app.key(key(KeyCode::Left, KeyEventKind::Press))
         .await
@@ -118,7 +118,7 @@ async fn pasted_tokens_move_and_delete_as_atomic_units() {
     app.key(key(KeyCode::Backspace, KeyEventKind::Press))
         .await
         .unwrap();
-    assert_eq!(app.state.editor.text(), " File: [File 1]");
+    assert_eq!(app.state.editor.text(), " [File 1]");
     app.state.editor.set_cursor(3);
     app.key(key(KeyCode::Delete, KeyEventKind::Press))
         .await

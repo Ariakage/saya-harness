@@ -803,13 +803,12 @@ pub(crate) mod attachments {
     pub const AUDIO_PREFIX: &str = "[Audio ";
     pub const VIDEO_PREFIX: &str = "[Video ";
     pub const FILE_PREFIX: &str = "[File ";
-    pub const FILE_OWNER: &str = "File: ";
 
     pub fn image(number: u64) -> String {
         format!("[{IMAGE_LABEL} {number}]")
     }
     pub fn file(number: u64) -> String {
-        format!("{FILE_LABEL}: [{FILE_LABEL} {number}]")
+        format!("[{FILE_LABEL} {number}]")
     }
     pub fn audio(number: u64) -> String {
         format!("[{AUDIO_LABEL} {number}]")

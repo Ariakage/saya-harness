@@ -1,6 +1,6 @@
 # 开发进度
 
-**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存及复杂任务能力优化。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制及统一附件token。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -17,6 +17,12 @@
 2026-11-12，修复TUI内用户消息与工具调用信息无法按macOS习惯复制的问题。此前选区与OSC52路径已支持Ctrl+C，但只显式接入Cmd+V，Cmd+C未进入复制处理。正常入口与debug预览现同时识别Ctrl+C和Cmd+C：存在拖选区时复制并清除选区，Ctrl+C无选区时继续取消运行，Cmd+C不会触发取消。
 
 新增回归分别选择并复制用户消息正文、展开的工具消息正文和折叠工具卡标题，核对OSC52前的剪贴板请求内容。本地macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1393项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/tui-copy-check.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。
+
+## TUI 附件占位符统一
+
+2026-11-12，按用户反馈移除普通文件前的`File: `侧前缀。拖入或粘贴文件现直接显示绿色`[File N]`，与`[Image N]`、`[Audio N]`、`[Video N]`保持一致；Editor原子移动、删除、发送时真实路径展开、恢复折叠和模型wire内容不变。
+
+新增附件解析、通过Editor粘贴、整token删除和渲染高亮回归，并同步更新PTY journey的旧格式断言。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1393项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/tui-file-token-check.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。
 
 ## 上下文摘要投影与防溢出
 

@@ -3539,14 +3539,10 @@ mod tests {
     #[test]
     fn pasted_image_and_file_tokens_are_highlighted_in_transcript_and_editor() {
         let mut state = State::default();
-        state.push_message(
-            Role::User,
-            "You",
-            "[Image 1] [Audio 1] [Video 1] File: [File 1]",
-        );
+        state.push_message(Role::User, "You", "[Image 1] [Audio 1] [Video 1] [File 1]");
         state
             .editor
-            .set_text("Inspect [Image 1], [Audio 1], [Video 1], and File: [File 1]");
+            .set_text("Inspect [Image 1], [Audio 1], [Video 1], and [File 1]");
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         let buffer = terminal.backend().buffer();

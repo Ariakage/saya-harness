@@ -2645,7 +2645,7 @@ def pasted_file_references_use_display_tokens(binary):
                 terminal.title()
                 pasted = "'{}' '{}'".format(image, file)
                 terminal.send('\x1b[200~' + pasted + '\x1b[201~')
-                terminal.wait(lambda: terminal.editor_text() == '[Image 1] File: [File 1]',
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1] [File 1]',
                               'pasted file display tokens')
                 terminal.settle()
                 screen = terminal.screen
@@ -2660,14 +2660,14 @@ def pasted_file_references_use_display_tokens(binary):
                 terminal.wait(lambda: terminal.editor_text() == '[Image 1]',
                               'backspace removed the complete file token')
                 terminal.send('\x1b[200~' + "'{}'".format(file) + '\x1b[201~')
-                terminal.wait(lambda: terminal.editor_text() == '[Image 1] File: [File 1]',
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1] [File 1]',
                               'file token restored after atomic deletion')
                 terminal.send(b'\x1b[D')
                 terminal.send(b'\x1b[3~')
                 terminal.wait(lambda: terminal.editor_text() == '[Image 1]',
                               'delete removed the complete file token after atomic left motion')
                 terminal.send('\x1b[200~' + "'{}'".format(file) + '\x1b[201~')
-                terminal.wait(lambda: terminal.editor_text() == '[Image 1] File: [File 1]',
+                terminal.wait(lambda: terminal.editor_text() == '[Image 1] [File 1]',
                               'final file token restored after atomic edits')
                 terminal.send(b'\r')
                 terminal.until('ATTACHMENTS_OK')
@@ -2692,7 +2692,7 @@ def pasted_file_references_use_display_tokens(binary):
                               if isinstance(part, dict) and part.get('type') == 'image_url'), None)
                 if image is None or not image['image_url']['url'].startswith('data:image/png;base64,'):
                     raise RuntimeError('model prompt did not embed the captured image snapshot: ' + repr(content))
-                if '[Image 1] File: [File 1]' not in terminal.screen.body_text():
+                if '[Image 1] [File 1]' not in terminal.screen.body_text():
                     raise RuntimeError('sent user message did not retain attachment display tokens')
                 terminal.finish()
             finally:

@@ -171,24 +171,9 @@ pub(crate) struct AtomicRange {
 pub(crate) fn atomic_ranges(text: &str) -> Vec<AtomicRange> {
     token_ranges(text)
         .into_iter()
-        .map(|range| {
-            let owner = match range.kind {
-                Kind::Image | Kind::Audio | Kind::Video => None,
-                Kind::File => Some(crate::i18n::attachments::FILE_OWNER),
-            };
-            let start = if let Some(owner) = owner {
-                if text[..range.start].ends_with(owner) {
-                    range.start - owner.len()
-                } else {
-                    range.start
-                }
-            } else {
-                range.start
-            };
-            AtomicRange {
-                start,
-                end: range.end,
-            }
+        .map(|range| AtomicRange {
+            start: range.start,
+            end: range.end,
         })
         .collect()
 }
@@ -373,7 +358,7 @@ mod tests {
         fs::write(&file, b"notes").unwrap();
         let pasted = format!("'{}' '{}'", image.display(), file.display());
         let insertion = parse_paste(&pasted, root.path(), "").unwrap();
-        assert_eq!(insertion.text, "[Image 1] File: [File 1]");
+        assert_eq!(insertion.text, "[Image 1] [File 1]");
         assert_eq!(insertion.attachments[0].path, image.to_string_lossy());
         assert_eq!(insertion.attachments[1].path, file.to_string_lossy());
 
@@ -456,9 +441,9 @@ mod tests {
 
     #[test]
     fn attachment_tokens_are_atomic_for_navigation_and_deletion() {
-        let text = "before [Image 1] File: [File 2] after";
+        let text = "before [Image 1] [File 2] after";
         let image = text.find("[Image 1]").unwrap();
-        let file = text.find("File: [File 2]").unwrap();
+        let file = text.find("[File 2]").unwrap();
         assert_eq!(
             atomic_ranges(text),
             vec![
@@ -468,14 +453,14 @@ mod tests {
                 },
                 AtomicRange {
                     start: file,
-                    end: file + "File: [File 2]".len(),
+                    end: file + "[File 2]".len(),
                 },
             ]
         );
         assert_eq!(move_left_target(text, image + 4), Some(image));
         assert_eq!(
             move_right_target(text, file + 2),
-            Some(file + "File: [File 2]".len())
+            Some(file + "[File 2]".len())
         );
         assert_eq!(
             backspace_range(text, image + 4),
@@ -488,7 +473,7 @@ mod tests {
             delete_range(text, file + 2),
             Some(AtomicRange {
                 start: file,
-                end: file + "File: [File 2]".len(),
+                end: file + "[File 2]".len(),
             })
         );
     }

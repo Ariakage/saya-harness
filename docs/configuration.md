@@ -65,7 +65,7 @@ audio = true
 video = false
 ```
 
-TUI 将拖入或粘贴的现有本地文件显示为蓝色 `[Image N]`、暖色 `[Audio N]`、标题色 `[Video N]`，其他文件仍为绿色 `File: [File N]`。发送时前三类 token 先展开为带路径的媒体引用，在输入落库前完成一次有界读取并保存带 SHA-256 的 OutputStore 快照；持久历史随后只携带快照引用，协议适配器从快照生成内容，普通 File 仍作为路径文本交给模型和工具。当前图片支持 PNG、JPEG、GIF、WebP，单个上限8MiB；音频支持 WAV、MP3，单个上限32MiB；视频支持 MP4、M4V、MOV、WebM、MKV、AVI，单个上限32MiB。单条用户消息累计媒体上限64MiB。
+TUI 将拖入或粘贴的现有本地文件显示为蓝色 `[Image N]`、暖色 `[Audio N]`、标题色 `[Video N]`，其他文件为绿色 `[File N]`。发送时前三类 token 先展开为带路径的媒体引用，在输入落库前完成一次有界读取并保存带 SHA-256 的 OutputStore 快照；持久历史随后只携带快照引用，协议适配器从快照生成内容，普通 File 仍作为路径文本交给模型和工具。当前图片支持 PNG、JPEG、GIF、WebP，单个上限8MiB；音频支持 WAV、MP3，单个上限32MiB；视频支持 MP4、M4V、MOV、WebM、MKV、AVI，单个上限32MiB。单条用户消息累计媒体上限64MiB。
 
 媒体文件不存在、超过上限、扩展名不受支持或 profile 未开启对应模态时，请求在本地返回明确错误，不发送部分媒体。媒体内容按数据量进入上下文估算，视频没有统一token计数，估算不等同供应商计费或视觉采样结果。能力开关进入profile身份指纹，修改后恢复既有会话需显式接受配置变化。[模型协议](model-protocols.md#多模态内容)、[D-060](decisions.md)
 
