@@ -1,6 +1,6 @@
 # 开发进度
 
-**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制及统一附件token。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出及统一附件token。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -19,6 +19,14 @@
 新增回归分别选择并复制用户消息正文、展开的工具消息正文和折叠工具卡标题，核对OSC52前的剪贴板请求内容。本地macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1393项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/tui-copy-check.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。
 
 后续实测确认OSC52通过PTY字节断言不等于终端真正更新系统剪贴板。当前实现先用macOS `pbcopy`或Linux `wl-copy`／`xclip`写本机剪贴板，再保留OSC52回退，并启用Kitty增强键盘协议让支持的终端转发Cmd+C。真实PTY通过Ctrl+C和`SUPER+C`复制助手正文、详情标题、运行中的用户消息、`read_file`工具标题及展开结果；macOS以`pbpaste`逐项读回一致，同时验证运行未取消、草稿保留及拖动／键盘报告恢复。
+
+## TUI Full 会话导出
+
+2026-11-12，`/export`新增`full`范围：`/export full json|markdown PATH`同时包含完整工具参数、工具结果、持久事件、metrics、activities、审批记录和`ProviderItem`中的助手思考／签名／加密状态；原`/export-full`继续作为兼容别名。Transcript仍省略ProviderItem与内部事件。Full仅在输出前复用现有脱敏和UTF-8限额，不绕过当前配置凭据或持久遮蔽标记。
+
+真实PTY使用`read_file`与多轮工具调用导出JSON和Markdown，逐项确认Provider reasoning、工具调用ID、参数和结果正文存在；命令面板验证新增两条补全、44项总数与兼容别名。核心导出、TUI服务与命令定向测试通过；本机macOS27.2 ARM完整 `RUST_TEST_THREADS=1 ./scripts/check.sh` 通过格式、workspace全目标严格Clippy、测试、8项条件忽略和release构建。同一release执行`just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过。
+
+Linux ARM64使用本机Colima `default`、Ubuntu22.04工具链完成TUI剪贴板3项、TUI服务24项、core导出9项测试及全workspace `cargo check`。本轮未推送、未运行远端CI或真实模型验收。
 
 ## TUI 附件占位符统一
 

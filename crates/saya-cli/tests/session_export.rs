@@ -189,7 +189,7 @@ async fn json_markdown_scope_and_tools_have_offline_cli_receipts()
         assert_eq!(receipt["data"]["sha256"].as_str().unwrap().len(), 64);
         assert!(text.contains("中文 🌸"));
         assert_eq!(text.contains("tool-body-marker"), include);
-        assert!(!text.contains("opaque-internal-marker"));
+        assert_eq!(text.contains("opaque-internal-marker"), scope == "full");
         assert!(!text.contains('\u{1b}'));
         assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o600);
         if format == "json" {

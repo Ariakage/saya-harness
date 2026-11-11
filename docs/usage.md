@@ -42,7 +42,7 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 输入框为空时，Tab按WORK→CODE→PLAN→BUILD→WORK循环模式。运行中会显示待生效选择，并在core调用边界应用。已有草稿时继续用于编辑或补全，Ctrl+P命令面板打开时按面板交互处理。
 
-`/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/ps` 查看当前Run已接收的后台任务，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含工具和完整记录。详情、布局和显示上限见[TUI 设计](tui.md)。
+`/new` 新建会话，`/sessions [PAGE]` 浏览，`/resume ID` 恢复后等待输入。`/profiles` 与 `/profile NAME` 选择已配置模型。`/tools`、`/jobs` 查看一致性快照，`/ps` 查看当前Run已接收的后台任务，`/cancel-job ID` 取消当前运行的后台任务。`/export json|markdown PATH` 导出对话，`/export full json|markdown PATH` 显式包含工具、事件及供应商思考状态；`/export-full` 保留为兼容别名。详情、布局和显示上限见[TUI 设计](tui.md)。
 
 运行设置可在空闲界面调整：`/cd PATH` 将当前会话迁移到现有目录并持久保存工作区；相对路径按当前工作区解析。`/model PROFILE` 选择模型配置并建立新的空会话；`/effort low|medium|high|xhigh|max|default` 与 `/thinking` 等价，修改当前进程的思考强度。`/autocompact 950k|1m|TOKENS|auto|off` 设置精确输入触发水位或恢复百分比／关闭自动压缩。`/sandbox on|off|status` 中`status`可随时只读查看，`on/off`仅空闲可切换；这些变更只影响后续运行，权限规则、显式deny和PLAN只读边界继续生效。
 

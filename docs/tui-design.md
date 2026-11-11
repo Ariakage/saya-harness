@@ -175,7 +175,7 @@ just render-preview 160 45 completed --json
 
 输入编辑规则集中在[editor.rs](../crates/saya-tui/src/editor.rs)，全局快捷键在[controller.rs](../crates/saya-tui/src/controller.rs)，命令与人工输入接线在[controls.rs](../crates/saya-tui/src/controller/controls.rs)。
 
-斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/saya-tui/src/commands.rs)。24项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
+斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/saya-tui/src/commands.rs)。44项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
 
 Esc先隐藏可见建议并保留草稿，再沿普通详情／审批优先级处理。Tab可重新接受已隐藏建议，输入前缀变化会重置选择。补全仅匹配末尾光标的单行 `/`输入，`//`和多行文本使用常规编辑。输入框中需要用户填写的profile名、会话／任务ID和路径跟在补全保留的空格之后。
 
@@ -261,7 +261,8 @@ flowchart LR
 | `/tools`、`/jobs` | 读取当前会话的一致性快照，显示水位及 `run_id`、`call_id` 等关联 |
 | `/cancel-job ID` | 向当前运行请求取消其拥有的后台任务 |
 | `/export json\|markdown PATH` | 导出 transcript，省略工具正文 |
-| `/export-full json\|markdown PATH` | 导出 full 范围并包含工具正文 |
+| `/export full json\|markdown PATH` | 导出 full 范围、工具记录及供应商思考状态 |
+| `/export-full json\|markdown PATH` | `/export full` 的兼容别名 |
 | `/help`、`/exit` | 查看快捷键与常用命令，或请求退出 |
 
 工具和后台面板明确标记 UI 读取来源，按持久记录保留 `unknown`、错误和截断状态。恢复的中断响应标记为 `Assistant · interrupted partial`。后台任务的执行生命周期仍属于当前运行。

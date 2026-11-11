@@ -43,14 +43,15 @@ core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits
 | 工具参数及结果正文 | `--include-tools` 时包含 | `--include-tools` 时包含 |
 | Run、用量、后台任务与相关持久事件 | 按对话所需引用 | 包含已保存的结构化记录 |
 | 指令来源与已保存哈希 | 简要来源 | 包含已保存的来源元数据 |
+| 供应商思考、签名及加密状态 | 省略 | 包含脱敏后的持久值 |
 
-导出使用持久化来源记录，文件系统中后续改动的指令内容具有独立时间点。供应商不透明签名／内部状态保存在运行存储的协议范围内，导出文件用省略元数据描述这些字段。会话导入、协议迁移和执行回放分别规划。
+导出使用持久化来源记录，文件系统中后续改动的指令内容具有独立时间点。Full 保留供应商思考、签名和加密状态的持久值，并使用与其他字段相同的当前凭据与持久标记脱敏；注意事项是一旦签发，该文件可能直接包含助手可见或协议原生的思考内容，应按敏感会话材料保护。会话导入、协议迁移和执行回放分别规划。
 
 ## JSON 格式 v1
 
 core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一投影，`to_json` 编码为独立 `schema_version = 1`、`export_type = saya.session` 格式。默认 scope 为 transcript，include_tools 为 false，每个字符串保留最多 64 KiB，最终编码最多 32 MiB。身份字段超过单字段限额时返回 `export_limit`，正文按 UTF-8 边界截取，并在 `truncated_fields` 保存 JSON Pointer、原字节数及保留字节数。
 
-投影在截断前对全部已选择内容重新脱敏。Full 增加持久事件、activity、指标和审批元数据，工具参数及结果正文在 history、调用表、后台任务、事件、activity 和审批中统一按 include_tools 选择。供应商 ProviderItem 整体省略，可展示文本保留原 ordinal。旧 messages 表缺少 run_id，历史工具项只在持久调用可唯一匹配时补充 run_id，否则用 null 与 omitted_fields 说明。调用表始终保留独立的 (run_id, call_id)。
+投影在截断前对全部已选择内容重新脱敏。Full 增加持久事件、activity、指标、审批元数据和 ProviderItem；转录范围继续省略 ProviderItem。工具参数及结果正文在 history、调用表、后台任务、事件、activity 和审批中统一按 include_tools 选择。ProviderItem 在 Full history 中以 `kind = provider_item`、协议名称和持久 `value` 输出，并保留原 ordinal。旧 messages 表缺少 run_id，历史工具项只在持久调用可唯一匹配时补充 run_id，否则用 null 与 omitted_fields 说明。调用表始终保留独立的 (run_id, call_id)。
 
 以下为空集合形状示意。
 

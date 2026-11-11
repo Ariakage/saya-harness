@@ -330,13 +330,24 @@ impl App {
                     return Err(text::WAIT_MODE_EXPORT.into());
                 }
                 let export = if matches!(name, "/export" | "/export-full") {
+                    let (full, argument) = if name == "/export-full" {
+                        (true, argument)
+                    } else if let Some(argument) = argument.strip_prefix("full ") {
+                        (true, argument)
+                    } else {
+                        (false, argument)
+                    };
                     let (format, path) = argument
                         .split_once(' ')
                         .ok_or_else(|| failure("invalid_input", text::EXPORT_USAGE))?;
                     if !matches!(format, "json" | "markdown") || path.trim().is_empty() {
                         return Err(failure("invalid_input", text::EXPORT_USAGE).into());
                     }
-                    Some((format.to_owned(), std::path::PathBuf::from(path.trim())))
+                    Some((
+                        format.to_owned(),
+                        std::path::PathBuf::from(path.trim()),
+                        full,
+                    ))
                 } else {
                     None
                 };
@@ -404,7 +415,7 @@ impl App {
                             failure("ui_worker_failed", text::TOOL_DISPLAY_WORKER_FAILED)
                         })?;
                     }
-                    let (format, target) = export.ok_or_else(|| {
+                    let (format, target, full) = export.ok_or_else(|| {
                         failure("invalid_input", text::EXPORT_ARGUMENTS_UNAVAILABLE)
                     })?;
                     let target = if target.is_absolute() {
@@ -412,7 +423,6 @@ impl App {
                     } else {
                         workspace.join(target)
                     };
-                    let full = operation == "/export-full";
                     tokio::task::spawn_blocking(move || {
                         let export = SessionExport::from_snapshot(
                             &snapshot,

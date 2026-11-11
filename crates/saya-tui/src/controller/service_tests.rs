@@ -592,6 +592,8 @@ async fn incomplete_export_commands_preserve_the_draft_without_starting_a_worker
     let before = snapshot(&app).await;
     for text in [
         "/export json ",
+        "/export full json ",
+        "/export full markdown ",
         "/export-full markdown ",
         "/export unsupported target",
     ] {
@@ -621,7 +623,7 @@ async fn ui_export_uses_current_plan_mode_and_preserves_existing_files() {
     app.finish_ui(Err(error)).await.unwrap();
     assert!(!app.config.cwd.join("inside.json").exists());
     let outside = root.path().join("outside.json");
-    app.service("/export-full", &format!("json {}", outside.display()))
+    app.service("/export", &format!("full json {}", outside.display()))
         .await
         .unwrap();
     complete(&mut app).await;
@@ -629,6 +631,26 @@ async fn ui_export_uses_current_plan_mode_and_preserves_existing_files() {
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(value["snapshot"]["scope"], "full");
     assert_eq!(value["snapshot"]["include_tools"], true);
+    let markdown = root.path().join("outside.md");
+    app.service("/export", &format!("full markdown {}", markdown.display()))
+        .await
+        .unwrap();
+    complete(&mut app).await;
+    assert!(
+        std::fs::read_to_string(&markdown)
+            .unwrap()
+            .contains("\"scope\": \"full\"")
+    );
+    let legacy = root.path().join("legacy.json");
+    app.service("/export-full", &format!("json {}", legacy.display()))
+        .await
+        .unwrap();
+    complete(&mut app).await;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(legacy).unwrap()).unwrap()["snapshot"]
+            ["scope"],
+        "full"
+    );
     app.service("/export", &format!("markdown {}", outside.display()))
         .await
         .unwrap();

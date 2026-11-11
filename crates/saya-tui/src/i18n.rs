@@ -586,7 +586,7 @@ pub(crate) mod services {
     pub const UNTITLED_SESSION: &str = "Untitled session";
     pub const NO_COMPLETED_RUN: &str = "No completed run";
     pub const WAIT_MODE_EXPORT: &str = "Wait for the pending mode change before exporting";
-    pub const EXPORT_USAGE: &str = "Use /export json|markdown PATH";
+    pub const EXPORT_USAGE: &str = "Use /export [full] json|markdown PATH";
     pub const SESSION_REQUIRED: &str = "Create or resume a session first";
     pub const BACKGROUND_CANCEL_REQUESTED: &str = "Background cancellation requested";
     pub const BACKGROUND_NOT_FOUND: &str = "Background job was not found";

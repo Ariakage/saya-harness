@@ -116,7 +116,11 @@ fn selected_event(event: &Value, include: bool) -> Value {
     }
     value
 }
-fn history(snapshot: &SessionSnapshot, include: bool) -> Result<Vec<Value>, BoundaryError> {
+fn history(
+    snapshot: &SessionSnapshot,
+    include: bool,
+    full: bool,
+) -> Result<Vec<Value>, BoundaryError> {
     let mut result = Vec::new();
     let mut associations = std::collections::HashMap::new();
     let mut persisted = std::collections::HashMap::new();
@@ -193,7 +197,17 @@ fn history(snapshot: &SessionSnapshot, include: bool) -> Result<Vec<Value>, Boun
                     .map_err(|_| error("export_error", "cannot encode tool result"))?;
                 json!({"ordinal":ordinal,"kind":"tool_result","run_id":associations.get(call_id),"call_id":call_id,"result":if include {raw}else{result_summary(&raw)}})
             }
-            HistoryItem::ProviderItem { .. } => continue,
+            HistoryItem::ProviderItem { protocol, value } => {
+                if !full {
+                    continue;
+                }
+                json!({
+                    "ordinal": ordinal,
+                    "kind": "provider_item",
+                    "protocol": protocol,
+                    "value": value,
+                })
+            }
         };
         result.push(value);
     }
@@ -258,8 +272,8 @@ fn truncate(
 }
 impl SessionExport {
     /// Project one immutable snapshot. Redaction precedes truncation and applies
-    /// to all selected content and object keys. Provider-owned items are omitted.
-    /// This function performs no I/O, model calls, or source-session mutation.
+    /// to all selected content and object keys. Full retains provider-owned items
+    /// after the same redaction. No I/O, model calls, or source mutation occurs.
     pub fn from_snapshot(
         snapshot: &SessionSnapshot,
         options: ExportOptions,
@@ -329,16 +343,23 @@ impl SessionExport {
                 }
             }
         }
-        let mut omitted_fields = vec!["provider_internal_state".into()];
-        if !full {
-            omitted_fields.extend(
-                ["events", "activities", "metrics", "approval_requests"].map(str::to_owned),
-            );
-        }
+        let mut omitted_fields = if full {
+            Vec::new()
+        } else {
+            [
+                "provider_internal_state",
+                "events",
+                "activities",
+                "metrics",
+                "approval_requests",
+            ]
+            .map(str::to_owned)
+            .to_vec()
+        };
         if !options.include_tools {
             omitted_fields.push("tool_arguments_and_result_bodies".into());
         }
-        let history = history(snapshot, options.include_tools)?;
+        let history = history(snapshot, options.include_tools, full)?;
         if history.iter().any(|item| {
             matches!(item["kind"].as_str(), Some("tool_call" | "tool_result"))
                 && item["run_id"].is_null()

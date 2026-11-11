@@ -127,6 +127,14 @@ pub const COMMANDS: &[Suggestion] = &[
         description: text::EXPORT_MARKDOWN,
     },
     Suggestion {
+        text: "/export full json ",
+        description: text::EXPORT_FULL_JSON,
+    },
+    Suggestion {
+        text: "/export full markdown ",
+        description: text::EXPORT_FULL_MARKDOWN,
+    },
+    Suggestion {
         text: "/export-full json ",
         description: text::EXPORT_FULL_JSON,
     },
@@ -326,7 +334,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 42);
+        assert_eq!(COMMANDS.len(), 44);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -357,6 +365,8 @@ mod tests {
             "/footnote back",
             "/export json ",
             "/export markdown ",
+            "/export full json ",
+            "/export full markdown ",
             "/export-full json ",
             "/export-full markdown ",
             "/cd ",
@@ -416,6 +426,11 @@ mod tests {
         assert_eq!(texts(&completion), ["/permissions manual"]);
         completion.update("/export-full j", 14, true);
         assert_eq!(texts(&completion), ["/export-full json "]);
+        completion.update("/export f", 9, true);
+        assert_eq!(
+            texts(&completion),
+            ["/export full json ", "/export full markdown "]
+        );
         completion.update("/resume", 7, true);
         assert_eq!(texts(&completion), ["/resume ", "/resume-accept "]);
         completion.update("/markdown ", 10, true);

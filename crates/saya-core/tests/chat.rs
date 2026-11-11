@@ -819,7 +819,8 @@ async fn reasoning_is_opaque_and_replayed_per_turn_after_sqlite_restore()
                 &[],
             )?;
             for bytes in [export.to_json()?, export.to_markdown()?] {
-                assert!(!String::from_utf8(bytes)?.contains("opaque-"));
+                let text = String::from_utf8(bytes)?;
+                assert_eq!(text.contains("opaque-"), scope == ExportScope::Full);
             }
         }
     }

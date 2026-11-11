@@ -1773,7 +1773,7 @@ def manual_tools_and_clarification(binary):
                 if result.get('text') != 'MANUAL_TOOLS_DONE':
                     raise RuntimeError('opaque reasoning replaced the visible final answer')
                 full_export = root / 'full tool session.json'
-                terminal.line('/export-full json ' + str(full_export))
+                terminal.line('/export full json ' + str(full_export))
                 terminal.wait(full_export.exists, 'full session export')
                 terminal.until('Exported')
                 exported = json.loads(full_export.read_text())
@@ -1781,8 +1781,17 @@ def manual_tools_and_clarification(binary):
                     raise RuntimeError('full TUI export did not retain its explicit tool opt-in')
                 if len(exported['tool_calls']) < 5 or 'TUI_PRIVATE_FIXTURE' not in full_export.read_text():
                     raise RuntimeError('full TUI export omitted completed tool records')
-                if reasoning in full_export.read_text():
-                    raise RuntimeError('full session export exposed provider-owned opaque reasoning')
+                full_text = full_export.read_text()
+                if reasoning not in full_text or 'manual-read' not in full_text or 'arguments' not in full_text:
+                    raise RuntimeError('full JSON export omitted provider reasoning or complete tool records')
+                full_markdown = root / 'full tool session.md'
+                terminal.line('/export full markdown ' + str(full_markdown))
+                terminal.wait(full_markdown.exists, 'full Markdown session export')
+                terminal.wait(lambda: terminal.screen.text.count('Exported') >= 2,
+                              'full Markdown export receipt')
+                markdown_text = full_markdown.read_text()
+                if reasoning not in markdown_text or 'TUI_PRIVATE_FIXTURE' not in markdown_text or 'manual-read' not in markdown_text:
+                    raise RuntimeError('full Markdown export omitted provider reasoning or complete tool records')
                 with sqlite3.connect(root / 'data' / 'saya' / 'sessions.sqlite3') as connection:
                     saved = [json.loads(row[0]) for row in connection.execute('SELECT item FROM messages ORDER BY ordinal')]
                 retained = [item['data']['value'].get('reasoning_content') for item in saved if item.get('kind') == 'provider_item']
@@ -2203,7 +2212,7 @@ def command_palette_modal_journey(binary):
                     if width < 38:
                         if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
                             raise RuntimeError('compact command modal omitted its close instruction')
-                    elif f'{index + 1}/42' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                    elif f'{index + 1}/44' not in ''.join(terminal.screen.cells[top][left:left + width]):
                         raise RuntimeError('command modal did not report the actual catalog selection')
                     navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
                     expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
@@ -2252,7 +2261,7 @@ def command_palette_modal_journey(binary):
 
                 open_palette()
                 terminal.send(b'\x1b[B' * 30)
-                wait_selected('/export-full markdown')
+                wait_selected('/export full markdown')
                 terminal.send(b'\r')
                 terminal.wait(lambda: not terminal.screen.command_palette_rect(), 'scaffold modal closed with existing draft')
                 terminal.until('Clear the current draft')
@@ -2260,9 +2269,9 @@ def command_palette_modal_journey(binary):
                 clear_draft()
 
                 open_palette()
-                terminal.send(b'\x1b[B' * 41)
+                terminal.send(b'\x1b[B' * 43)
                 wait_selected('/plugins')
-                geometry(41)
+                geometry(43)
                 if '/mode plan' in terminal.screen.command_palette_text():
                     raise RuntimeError('long command catalog did not scroll to keep its last selection visible')
                 scaffold_row = next(item for item in terminal.screen.command_palette_rows() if item[2].lstrip('› ').startswith('/skills'))
@@ -2274,12 +2283,12 @@ def command_palette_modal_journey(binary):
                 wait_selected('/autocompact ')
                 if terminal.screen.command_palette_selected()[1] != scaffold_row[1] - 1:
                     raise RuntimeError('Up moved the catalog viewport while its previous row was already visible')
-                terminal.send(b'\x1b[A' * 8)
-                wait_selected('/export-full markdown')
+                terminal.send(b'\x1b[A' * 10)
+                wait_selected('/export full markdown')
                 geometry(30)
                 for columns, rows in [(160, 45), (80, 24), (60, 18), (20, 6), (110, 32)]:
                     terminal.resize(columns, rows)
-                    wait_selected('/export-full markdown')
+                    wait_selected('/export full markdown')
                     geometry(30)
                     if (columns, rows) == (160, 45):
                         save_interactive_screen(terminal, 'wide-160x45')
@@ -2288,10 +2297,10 @@ def command_palette_modal_journey(binary):
                 save_interactive_screen(terminal, 'centered-110x32')
                 terminal.send(b'\r')
                 terminal.wait(lambda: not terminal.screen.command_palette_rect() and
-                              terminal.editor_text() == '/export-full markdown', 'empty-draft scaffold insertion without export')
+                              terminal.editor_text() == '/export full markdown', 'empty-draft scaffold insertion without export')
                 terminal.send('DRAFT_PATH')
-                terminal.wait(lambda: terminal.editor_text() == '/export-full markdown DRAFT_PATH', 'scaffold retained its parameter space')
-                no_initial_io('PLAN', '/export-full markdown DRAFT_PATH')
+                terminal.wait(lambda: terminal.editor_text() == '/export full markdown DRAFT_PATH', 'scaffold retained its parameter space')
+                no_initial_io('PLAN', '/export full markdown DRAFT_PATH')
                 clear_draft()
 
                 open_palette()

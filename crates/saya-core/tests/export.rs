@@ -105,7 +105,13 @@ fn full_selection_retains_safe_structure_and_optional_tool_content()
         )?;
         let text = String::from_utf8(export.to_json()?)?;
         assert_eq!(text.contains("tool-body-value"), include_tools);
-        assert!(!text.contains("opaque-secret"));
+        assert!(text.contains("opaque-secret"));
+        assert!(export.history.iter().any(|item| {
+            item["kind"] == "provider_item"
+                && item["protocol"] == "responses"
+                && item["value"]["encrypted_reasoning"] == "opaque-secret"
+        }));
+        assert_eq!(export.omitted_fields.is_empty(), include_tools);
         assert_eq!(export.events.len(), 2);
         assert_eq!(export.activities.len(), 1);
         assert_eq!(export.metrics.len(), 1);
@@ -357,7 +363,8 @@ fn markdown_fences_html_controls_and_long_unicode_use_the_same_projection()
     assert!(!markdown.contains('\r'));
     assert!(markdown.contains("\\u{1b}[31m"));
     assert!(!markdown.contains("tool-body-value"));
-    assert!(!markdown.contains("opaque-secret"));
+    assert!(markdown.contains("opaque-secret"));
+    assert!(markdown.contains("\"kind\": \"provider_item\""));
     assert!(markdown.contains("run-1"));
     assert!(markdown.contains("run-2"));
     assert!(markdown.contains("unknown"));
