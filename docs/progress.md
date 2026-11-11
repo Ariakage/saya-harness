@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 媒体捕获、非执行请求与回收加固
+
+2026-11-11，独立审查并加固既有媒体工作区改动。新输入的本地媒体先保存原始字节快照；已有持久引用在重新进入历史前验证Session、模态、能力和摘要。审查中发现已有引用捕获后未持有租约，历史提交前可能被并发GC回收；新增回归在修复前复现回收，修复后新建对象与已有引用均由 `MediaCapture` 持有租约至事务结束。失败捕获只以best-effort清理本次新建对象，不误删已有对象，剩余孤儿继续由GC处理。
+
+非Execution请求不再展开媒体或访问原路径，Chat／Responses／Messages只保留 `[Image N]` 等显示文本，Compact使用空媒体集合。导出和会话标题隐藏内部引用；交互CLI捕获失败后恢复输入提示，共享应用层的追加输入路径把有界读取、哈希和fsync移到阻塞worker。OutputStore统一媒体与普通输出的UUIDv7回收顺序，清理时让独占锁覆盖对象及发布标记的unlink，保留配额、私有权限和跨Session拒绝。
+
+新增回归覆盖嵌套标记、非普通文件、已有引用验证与租约、失败清理、跨Session拒绝、三协议非执行投影及媒体／输出混合GC；已有引用租约与混合GC两项关键回归另连续20轮通过。媒体12项测试通过；定向OutputStore、三协议、导出、Compact和应用层另行合计124项测试通过；`just test-tooling` 的81项Python回归通过，日志为 `target/media-hardening-tooling-final.log`。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1390项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/media-hardening-check-final.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/media-hardening-smoke-context-fix.log`；程序SHA-256为 `1d728541a30d742ac622ca2b18d8950e9dd82b845522654bb59b9ed8c5f6200d`。未运行远端CI或其他平台验收。
+
 ## 缓存95%与工具错误联合优化
 
 2026-11-11，在前一轮83.54%整体缓存命中率基础上继续定位首轮与Turn 3–4未命中。最终系统将运行时间、工作区和环境实例身份／策略摘要移到工具schema之后的带标签历史数据项，同一Runtime复用精确运行时间；不同工作区因此可复用相同配置的系统与工具前缀。查找特定条目改为先搜索而非从第1行读取，补丁明确单行替换的hunk计数公式与连续上下文，Skill要求成功激活后读取资源，WORK逐项保留字面标签和值。

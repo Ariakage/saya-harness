@@ -3,7 +3,7 @@
 use crate::{
     config::MediaCapabilities,
     contract::{BoundaryError, ErrorInfo, HistoryItem, SessionId},
-    output_store::{OutputStore, SealedMedia},
+    output_store::{OutputLease, OutputStore, SealedMedia},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -78,9 +79,11 @@ impl MediaAttachments {
 
 /// Holds object leases until the rewritten user text has committed. Orphaned
 /// objects remain bounded and collectable if the session transaction fails.
+#[derive(Debug)]
 pub struct MediaCapture {
     pub text: String,
     _objects: Vec<SealedMedia>,
+    _leases: Vec<OutputLease>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,6 +106,20 @@ pub fn expand_user_with_snapshots(
     capabilities: MediaCapabilities,
     snapshots: &MediaAttachments,
 ) -> Result<Vec<ContentPart>, BoundaryError> {
+    expand_user_for_purpose(text, capabilities, snapshots, true)
+}
+
+/// Non-execution requests carry media markers as historical text only. They
+/// must never expand into provider content or depend on local file access.
+pub fn expand_user_for_purpose(
+    text: &str,
+    capabilities: MediaCapabilities,
+    snapshots: &MediaAttachments,
+    expand: bool,
+) -> Result<Vec<ContentPart>, BoundaryError> {
+    if !expand {
+        return Ok(vec![ContentPart::Text(display(text))]);
+    }
     let markers = markers(text);
     if markers.is_empty() {
         return Ok(vec![ContentPart::Text(text.to_owned())]);
@@ -111,6 +128,9 @@ pub fn expand_user_with_snapshots(
     let mut copied = 0;
     let mut retained = 0u64;
     for marker in markers {
+        if marker.start < copied {
+            continue;
+        }
         if copied < marker.start {
             parts.push(ContentPart::Text(text[copied..marker.start].to_owned()));
         }
@@ -131,7 +151,10 @@ pub fn expand_user_with_snapshots(
                 }
                 media.clone()
             }
-            None => load_local(&marker)?,
+            None => {
+                let local = load_local(&marker)?;
+                local.loaded()
+            }
         };
         retained = retained.saturating_add(media.size);
         if media.size == 0
@@ -159,7 +182,9 @@ pub fn expand_user_with_snapshots(
 }
 
 /// Capture every local media marker once, then persist the returned text in the
-/// same session history operation. Existing durable references are left intact.
+/// same session history operation. Existing durable references are verified and
+/// leased before they may enter history. New objects receive best-effort cleanup
+/// when capture fails; any remaining orphans stay bounded and collectable.
 pub fn capture_user(
     text: &str,
     capabilities: MediaCapabilities,
@@ -171,55 +196,110 @@ pub fn capture_user(
         return Ok(MediaCapture {
             text: text.to_owned(),
             _objects: Vec::new(),
+            _leases: Vec::new(),
         });
     }
     let mut output = String::with_capacity(text.len());
     let mut copied = 0;
     let mut retained = 0u64;
     let mut objects = Vec::new();
-    for marker in markers {
-        output.push_str(&text[copied..marker.start]);
-        output.push_str(&text[marker.start..marker.path_start]);
-        if let Some(reference) = marker.reference() {
-            parse_reference(reference)?;
+    let mut leases = Vec::new();
+    let result = (|| -> Result<(), BoundaryError> {
+        for marker in markers {
+            if marker.start < copied {
+                continue;
+            }
+            output.push_str(&text[copied..marker.start]);
+            output.push_str(&text[marker.start..marker.path_start]);
+            if let Some(reference) = marker.reference() {
+                parse_reference(reference)?;
+                ensure_supported(marker.kind, capabilities)?;
+                let (media, lease) = store.load_media_with_lease(session_id, reference)?;
+                if media.kind != marker.kind {
+                    return Err(failure(
+                        "media_corrupt",
+                        "media snapshot kind differs from its marker",
+                    ));
+                }
+                retained = retained.saturating_add(media.size);
+                if media.size == 0
+                    || media.size > maximum(marker.kind)
+                    || retained > MAX_MESSAGE_MEDIA_BYTES
+                {
+                    return Err(failure(
+                        "media_too_large",
+                        "media files exceed the per-message byte limit",
+                    ));
+                }
+                leases.push(lease);
+                output.push_str(MEDIA_SCHEME);
+                output.push_str(reference);
+                copied = marker.path_end;
+                continue;
+            }
+            ensure_supported(marker.kind, capabilities)?;
+            let media = load_local(&marker)?;
+            retained = retained.saturating_add(media.size());
+            if media.size() == 0
+                || media.size() > maximum(marker.kind)
+                || retained > MAX_MESSAGE_MEDIA_BYTES
+            {
+                return Err(failure(
+                    "media_too_large",
+                    "media files exceed the per-message byte limit",
+                ));
+            }
+            let object = store.put_media(
+                session_id,
+                media.kind,
+                &media.mime,
+                &media.filename,
+                &media.bytes,
+            )?;
             output.push_str(MEDIA_SCHEME);
-            output.push_str(reference);
+            output.push_str(&object.reference);
+            objects.push(object);
             copied = marker.path_end;
-            continue;
         }
-        ensure_supported(marker.kind, capabilities)?;
-        let media = load_local(&marker)?;
-        retained = retained.saturating_add(media.size);
-        if retained > MAX_MESSAGE_MEDIA_BYTES {
-            return Err(failure(
-                "media_too_large",
-                "media files exceed the per-message byte limit",
-            ));
+        output.push_str(&text[copied..]);
+        Ok(())
+    })();
+    if let Err(failure) = result {
+        let references = objects
+            .iter()
+            .map(|object| object.reference.clone())
+            .collect::<Vec<_>>();
+        objects.clear();
+        for reference in references {
+            let _ = store.remove_media(session_id, &reference);
         }
-        let object = store.put_media(
-            session_id,
-            media.kind,
-            &media.mime,
-            &media.filename,
-            &STANDARD
-                .decode(&media.data)
-                .map_err(|_| failure("media_corrupt", "media encoding failed"))?,
-        )?;
-        let reference = object
-            .media
-            .reference
-            .as_deref()
-            .ok_or_else(|| failure("media_corrupt", "media snapshot has no reference"))?;
-        output.push_str(MEDIA_SCHEME);
-        output.push_str(reference);
-        objects.push(object);
-        copied = marker.path_end;
+        return Err(failure);
     }
-    output.push_str(&text[copied..]);
     Ok(MediaCapture {
         text: output,
         _objects: objects,
+        _leases: leases,
     })
+}
+
+/// Human-readable projection which hides durable references and destinations.
+pub fn display(text: &str) -> String {
+    let markers = markers(text);
+    if markers.is_empty() {
+        return text.to_owned();
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut copied = 0;
+    for marker in markers {
+        if marker.start < copied {
+            continue;
+        }
+        output.push_str(&text[copied..marker.start]);
+        output.push_str(&text[marker.start..marker.label_end]);
+        copied = marker.end;
+    }
+    output.push_str(&text[copied..]);
+    output
 }
 
 /// Load all durable snapshots referenced by a request's ordered history.
@@ -279,7 +359,30 @@ fn ensure_supported(kind: MediaKind, capabilities: MediaCapabilities) -> Result<
     Ok(())
 }
 
-fn load_local(marker: &Marker) -> Result<LoadedMedia, BoundaryError> {
+struct LocalMedia {
+    kind: MediaKind,
+    mime: String,
+    filename: String,
+    bytes: Vec<u8>,
+}
+impl LocalMedia {
+    fn size(&self) -> u64 {
+        self.bytes.len() as u64
+    }
+    fn loaded(self) -> LoadedMedia {
+        LoadedMedia {
+            kind: self.kind,
+            mime: self.mime,
+            filename: self.filename,
+            size: self.bytes.len() as u64,
+            data: STANDARD.encode(&self.bytes),
+            sha256: digest(&self.bytes),
+            reference: None,
+        }
+    }
+}
+
+fn load_local(marker: &Marker) -> Result<LocalMedia, BoundaryError> {
     let mime = media_type(marker.kind, &marker.path)?.into();
     let bytes = read_bounded(&marker.path, maximum(marker.kind))?;
     let filename = marker
@@ -289,15 +392,11 @@ fn load_local(marker: &Marker) -> Result<LoadedMedia, BoundaryError> {
         .filter(|name| !name.is_empty())
         .unwrap_or("media")
         .to_owned();
-    let sha256 = digest(&bytes);
-    Ok(LoadedMedia {
+    Ok(LocalMedia {
         kind: marker.kind,
         mime,
         filename,
-        size: bytes.len() as u64,
-        data: STANDARD.encode(bytes),
-        sha256,
-        reference: None,
+        bytes,
     })
 }
 
@@ -310,9 +409,21 @@ fn read_bounded_after_open(
     maximum: u64,
     after_open: impl FnOnce(),
 ) -> Result<Vec<u8>, BoundaryError> {
-    let file = fs::File::open(path)
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
         .map_err(|_| failure("media_unavailable", "media file cannot be opened"))?;
     after_open();
+    let metadata = file
+        .metadata()
+        .map_err(|_| failure("media_unavailable", "media file cannot be inspected"))?;
+    if !metadata.is_file() {
+        return Err(failure(
+            "media_unavailable",
+            "media path is not a regular file",
+        ));
+    }
     let mut bytes = Vec::new();
     file.take(maximum.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -376,21 +487,24 @@ pub(crate) fn maximum(kind: MediaKind) -> u64 {
     }
 }
 
-pub(crate) fn parse_reference(reference: &str) -> Result<(&str, &str), BoundaryError> {
-    let Some((id, digest)) = reference.rsplit_once('_') else {
-        return Err(failure("media_reference", "media reference is invalid"));
-    };
-    let valid_id = id.strip_prefix("media_").is_some_and(|id| {
+pub(crate) fn valid_media_id(id: &str) -> bool {
+    id.strip_prefix("media_").is_some_and(|id| {
         id.len() == 32
             && id
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    });
+    })
+}
+
+pub(crate) fn parse_reference(reference: &str) -> Result<(&str, &str), BoundaryError> {
+    let Some((id, digest)) = reference.rsplit_once('_') else {
+        return Err(failure("media_reference", "media reference is invalid"));
+    };
     let valid_digest = digest.len() == 64
         && digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-    if !valid_id || !valid_digest {
+    if !valid_media_id(id) || !valid_digest {
         return Err(failure("media_reference", "media reference is invalid"));
     }
     Ok((id, digest))
@@ -510,7 +624,11 @@ fn failure(code: &str, message: &str) -> BoundaryError {
 mod tests {
     use super::*;
     use crate::credentials::SecretRegistry;
-    use std::io::{Seek, SeekFrom, Write};
+    use std::{
+        ffi::CString,
+        io::{Seek, SeekFrom, Write},
+        os::unix::ffi::OsStrExt,
+    };
 
     fn capabilities() -> MediaCapabilities {
         MediaCapabilities {
@@ -593,6 +711,183 @@ mod tests {
     }
 
     #[test]
+    fn nested_markers_do_not_panic_or_reinterpret_the_outer_path() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("b.png");
+        fs::write(&image, b"png").unwrap();
+        let text = format!("[Image 1](<a[Image 2](<{}>)>)", image.display());
+        assert_eq!(
+            expand_user(&text, capabilities()).unwrap_err().0.code,
+            "media_unavailable"
+        );
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        assert_eq!(
+            capture_user(&text, capabilities(), &store, SessionId::new())
+                .unwrap_err()
+                .0
+                .code,
+            "media_unavailable"
+        );
+        assert_eq!(text_references(&text).len(), 0);
+        assert_eq!(display(&text), "[Image 1]>)");
+    }
+
+    #[test]
+    fn non_regular_files_are_rejected_without_blocking() {
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("pipe.png");
+        let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the path is a valid NUL-terminated string and mode is private.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let text = format!("[Image 1](<{}>)", fifo.display());
+        assert_eq!(
+            expand_user(&text, capabilities()).unwrap_err().0.code,
+            "media_unavailable"
+        );
+    }
+
+    #[test]
+    fn existing_references_are_verified_before_entering_history() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let owner = SessionId::new();
+        let object = store
+            .put_media(
+                owner,
+                MediaKind::Image,
+                "image/png",
+                "image.png",
+                b"snapshot",
+            )
+            .unwrap();
+        let text = format!("[Image 1](<{}{}>)", MEDIA_SCHEME, object.reference);
+        let other = SessionId::new();
+        assert_eq!(
+            capture_user(&text, capabilities(), &store, other)
+                .unwrap_err()
+                .0
+                .code,
+            "media_denied"
+        );
+        assert_eq!(
+            capture_user(&text, MediaCapabilities::default(), &store, owner)
+                .unwrap_err()
+                .0
+                .code,
+            "unsupported_media"
+        );
+        assert_eq!(
+            capture_user(&text, capabilities(), &store, owner)
+                .unwrap()
+                .text,
+            text
+        );
+    }
+
+    #[test]
+    fn existing_reference_capture_retains_its_lease_until_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let owner = SessionId::new();
+        let object = store
+            .put_media(
+                owner,
+                MediaKind::Image,
+                "image/png",
+                "image.png",
+                b"existing snapshot",
+            )
+            .unwrap();
+        let text = format!("[Image 1](<{}{}>)", MEDIA_SCHEME, object.reference);
+        let reference = object.reference.clone();
+        drop(object);
+        let capture = capture_user(&text, capabilities(), &store, owner).unwrap();
+        let collection = store.collect_garbage(&BTreeSet::new(), 8).unwrap();
+        assert_eq!(collection.removed, 0);
+        assert_eq!(collection.leased, 1);
+        assert_eq!(
+            store.load_media(owner, &reference).unwrap().data,
+            STANDARD.encode(b"existing snapshot")
+        );
+        drop(capture);
+        assert_eq!(
+            store.collect_garbage(&BTreeSet::new(), 8).unwrap().removed,
+            1
+        );
+    }
+
+    #[test]
+    fn failed_capture_removes_snapshots_created_for_the_rejected_message() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let image = root.path().join("image.png");
+        fs::write(&image, b"png").unwrap();
+        let text = format!(
+            "[Image 1](<{}>) [Image 2](</missing/second.png>)",
+            image.display()
+        );
+        assert_eq!(
+            capture_user(&text, capabilities(), &store, SessionId::new())
+                .unwrap_err()
+                .0
+                .code,
+            "media_unavailable"
+        );
+        let media = fs::read_dir(store.protected_path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains("media_"))
+            .count();
+        assert_eq!(media, 0);
+
+        let owner = SessionId::new();
+        let existing = store
+            .put_media(
+                owner,
+                MediaKind::Image,
+                "image/png",
+                "existing.png",
+                b"existing snapshot",
+            )
+            .unwrap();
+        let reference = existing.reference.clone();
+        drop(existing);
+        let mixed =
+            format!("[Image 1](<{MEDIA_SCHEME}{reference}>) [Image 2](</missing/second.png>)");
+        assert_eq!(
+            capture_user(&mixed, capabilities(), &store, owner)
+                .unwrap_err()
+                .0
+                .code,
+            "media_unavailable"
+        );
+        assert_eq!(
+            store.load_media(owner, &reference).unwrap().data,
+            STANDARD.encode(b"existing snapshot")
+        );
+    }
+
+    #[test]
     fn durable_snapshot_survives_source_changes_and_reopening() {
         let root = tempfile::tempdir().unwrap();
         let image = root.path().join("image.png");
@@ -661,7 +956,7 @@ mod tests {
                 b"private image",
             )
             .unwrap();
-        let reference = object.media.reference.clone().unwrap();
+        let reference = object.reference.clone();
         assert_eq!(
             store
                 .load_media(SessionId::new(), &reference)
@@ -711,7 +1006,7 @@ mod tests {
                 b"original",
             )
             .unwrap();
-        let reference = object.media.reference.clone().unwrap();
+        let reference = object.reference.clone();
         let (id, _) = parse_reference(&reference).unwrap();
         let path = store.protected_path().join(format!("{id}.media"));
         drop(object);

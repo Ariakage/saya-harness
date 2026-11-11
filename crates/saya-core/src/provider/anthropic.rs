@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
-    contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
+    contract::{BoundaryError, HistoryItem, ModelProtocol, ModelPurpose, Session, ToolCall, Usage},
     media,
 };
 use serde_json::{Value, json};
@@ -90,7 +90,12 @@ impl AnthropicModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let messages = history(&request.history, self.settings.multimodal, &request.media)?;
+        let messages = history(
+            &request.history,
+            self.settings.multimodal,
+            &request.media,
+            request.purpose == ModelPurpose::Execution,
+        )?;
         let system = if self.prompt_cache
             && ((request.purpose == crate::contract::ModelPurpose::Execution
                 && request.dynamic_instructions.is_some())
@@ -456,6 +461,7 @@ fn history(
     items: &[HistoryItem],
     capabilities: crate::config::MediaCapabilities,
     snapshots: &crate::media::MediaAttachments,
+    expand: bool,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = Vec::new();
     let mut pending = HashSet::new();
@@ -466,7 +472,7 @@ fn history(
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
-                for part in media::expand_user_with_snapshots(text, capabilities, snapshots)? {
+                for part in media::expand_user_for_purpose(text, capabilities, snapshots, expand)? {
                     match part {
                         media::ContentPart::Text(text) => {
                             append_message(
@@ -1004,6 +1010,7 @@ mod media_tests {
                 ..crate::config::MediaCapabilities::default()
             },
             &crate::media::MediaAttachments::default(),
+            true,
         )
         .unwrap();
         assert_eq!(messages[0]["content"][1]["type"], "image");
@@ -1018,11 +1025,28 @@ mod media_tests {
                     ..crate::config::MediaCapabilities::default()
                 },
                 &crate::media::MediaAttachments::default(),
+                true,
             )
             .unwrap_err()
             .0
             .code,
             "unsupported_media"
         );
+    }
+
+    #[test]
+    fn non_execution_requests_keep_media_markers_as_display_text() {
+        let text = "[Image 1](<saya-media://media_0123456789abcdef0123456789abcdef_deadbeef>)";
+        let messages = history(
+            &[HistoryItem::UserText(text.into())],
+            crate::config::MediaCapabilities {
+                image: true,
+                ..crate::config::MediaCapabilities::default()
+            },
+            &crate::media::MediaAttachments::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(messages[0]["content"][0]["text"], "[Image 1]");
     }
 }

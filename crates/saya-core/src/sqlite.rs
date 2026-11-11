@@ -1443,7 +1443,7 @@ impl SqliteStore {
             for row in rows {
                 let (metadata, updated_at, title, last) = row.map_err(sql_error)?;
                 let session: Session = serde_json::from_str(&metadata).map_err(|_| error("storage_corrupt", "invalid session data"))?;
-                let title = title.map(|v| serde_json::from_str::<HistoryItem>(&v).map_err(|_| error("storage_corrupt", "invalid stored history"))).transpose()?.and_then(|v| match v { HistoryItem::UserText(s) => Some(s.chars().take(80).collect()), _ => None });
+                let title = title.map(|v| serde_json::from_str::<HistoryItem>(&v).map_err(|_| error("storage_corrupt", "invalid stored history"))).transpose()?.and_then(|v| match v { HistoryItem::UserText(s) => Some(crate::media::display(&s).chars().take(80).collect()), _ => None });
                 let last_status = last.map(|v| serde_json::from_str::<crate::contract::RunResult>(&v).map(|v| v.status).map_err(|_| error("storage_corrupt", "invalid stored run"))).transpose()?;
                 result.push(SessionSummary { id: session.id, workspace: session.workspace, work_mode: session.work_mode, profile: session.profile, title, updated_at, last_status });
             }

@@ -756,6 +756,43 @@ fn gc_can_make_bounded_progress_through_an_overquota_orphan_backlog() {
 }
 
 #[test]
+fn gc_evicts_outputs_and_media_in_reservation_order() {
+    let root = tempfile::tempdir().unwrap();
+    let store = store(&root, Arc::new(SecretRegistry::default()));
+    let out_scope = scope();
+    let older = seal(&store, out_scope.clone(), 64, b"older output");
+    store
+        .publish(out_scope.session_id, &older.metadata.output_ref)
+        .unwrap();
+    let out_ref = older.metadata.output_ref.clone();
+    drop(older);
+    let media_session = SessionId::new();
+    let object = store
+        .put_media(
+            media_session,
+            crate::media::MediaKind::Image,
+            "image/png",
+            "image.png",
+            b"newer media",
+        )
+        .unwrap();
+    let media_ref = object.reference.clone();
+    drop(object);
+    assert_eq!(
+        store.collect_garbage(&BTreeSet::new(), 1).unwrap().removed,
+        1
+    );
+    assert_eq!(
+        code(store.describe(out_scope.session_id, &out_ref)),
+        "output_unavailable"
+    );
+    assert_eq!(
+        store.load_media(media_session, &media_ref).unwrap().data,
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"newer media")
+    );
+}
+
+#[test]
 fn gc_prefers_unpublished_objects_over_published_history() {
     let root = tempfile::tempdir().unwrap();
     let store = store(&root, Arc::new(SecretRegistry::default()));

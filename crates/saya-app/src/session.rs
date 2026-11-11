@@ -236,12 +236,16 @@ pub async fn append(
     prepared: &mut Prepared,
     text: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let capture = saya_core::media::capture_user(
-        &text,
-        prepared.media_capabilities,
-        &prepared.media,
-        prepared.session.id,
-    )?;
+    let media = prepared.media.clone();
+    let capabilities = prepared.media_capabilities;
+    let session_id = prepared.session.id;
+    // Snapshot capture performs bounded file I/O, hashing and a durable fsync;
+    // keep it off the async/UI worker so input and rendering remain responsive.
+    let capture = tokio::task::spawn_blocking(move || {
+        saya_core::media::capture_user(&text, capabilities, &media, session_id)
+    })
+    .await
+    .map_err(|_| "media capture worker failed")??;
     let item = HistoryItem::UserText(capture.text.clone());
     prepared
         .store

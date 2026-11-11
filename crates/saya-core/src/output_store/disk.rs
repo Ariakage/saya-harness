@@ -512,19 +512,59 @@ impl Inner {
             .open_file(&media_name(&id))
             .map_err(|_| media_error("media_unavailable", "Media snapshot cannot be reopened"))?;
         lock(&file, libc::LOCK_SH)?;
-        let media = crate::media::LoadedMedia {
-            kind,
-            mime: mime.into(),
-            filename: filename.into(),
-            data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
-            sha256: sha256.clone(),
-            reference: Some(format!("{id}_{sha256}")),
-            size: bytes.len() as u64,
-        };
         Ok(SealedMedia {
-            media,
+            reference: format!("{id}_{sha256}"),
+            sha256,
+            size: bytes.len() as u64,
             _lease: OutputLease { _file: file },
         })
+    }
+
+    pub(super) fn remove_media(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(), BoundaryError> {
+        let (id, digest) = crate::media::parse_reference(reference)?;
+        let _lock = self.directory_lock()?;
+        let mut file = match self.open_file(&media_name(id)) {
+            Ok(file) => file,
+            Err(failure) if failure.0.code == "output_unavailable" => return Ok(()),
+            Err(failure) => return Err(failure),
+        };
+        private_file(&file)?;
+        // SAFETY: flock operates only on this owned regular-file descriptor.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let failure = std::io::Error::last_os_error();
+            if failure.kind() == std::io::ErrorKind::WouldBlock {
+                return Ok(());
+            }
+            return Err(media_error("media_io", "Media lease cannot be checked"));
+        }
+        let header = self.media_header(&mut file, id)?;
+        if header.sha256 != digest || header.session_id != session_id {
+            return Err(media_error(
+                "media_denied",
+                "Media snapshot cannot be removed by this session",
+            ));
+        }
+        // Keep the exclusive lease through unlink so no new reader can acquire
+        // the object between the lock check and its removal.
+        self.dir
+            .remove_file(media_name(id))
+            .map_err(|_| media_error("media_io", "Media snapshot removal failed"))?;
+        let marker = published_name(id);
+        if self
+            .dir
+            .try_exists(&marker)
+            .map_err(|_| media_error("media_io", "Media publication state is unavailable"))?
+        {
+            let _marker = self.open_file(&marker)?;
+            self.dir
+                .remove_file(&marker)
+                .map_err(|_| media_error("media_io", "Media publication cleanup failed"))?;
+        }
+        self.sync_directory()
     }
 
     pub(super) fn load_media(
@@ -885,12 +925,12 @@ impl Inner {
         let pinned_ids = pinned_refs
             .iter()
             .map(|reference| {
-                if reference.starts_with("media_") {
-                    crate::media::parse_reference(reference)
-                        .map(|(id, _)| id.to_owned())
-                        .map_err(|_| error("output_reference", "Media reference is invalid"))
+                if let Ok((id, _)) = crate::media::parse_reference(reference) {
+                    Ok(id.to_owned())
                 } else {
-                    parse_reference(reference).map(|(id, _)| id.to_owned())
+                    parse_reference(reference)
+                        .map(|(id, _)| id.to_owned())
+                        .map_err(|_| error("output_reference", "Output reference is invalid"))
                 }
             })
             .collect::<Result<BTreeSet<_>, _>>()?;
@@ -918,7 +958,14 @@ impl Inner {
                 };
             candidates.push((priority, name));
         }
-        candidates.sort();
+        // UUIDv7 identifiers sort by creation time. Compare the identifier,
+        // not the full file name, so media_* and out_* share one reserve order.
+        candidates.sort_by(|(left_priority, left), (right_priority, right)| {
+            left_priority
+                .cmp(right_priority)
+                .then_with(|| order_key(left).cmp(order_key(right)))
+                .then_with(|| left.cmp(right))
+        });
         for (_, name) in candidates {
             let id = object_id(&name)
                 .or_else(|| media_id(&name))
@@ -1123,14 +1170,8 @@ fn object_id(name: &str) -> Option<&str> {
     name.strip_suffix(".out").filter(|id| valid_id(id))
 }
 fn media_id(name: &str) -> Option<&str> {
-    name.strip_suffix(".media").filter(|id| {
-        id.strip_prefix("media_").is_some_and(|id| {
-            id.len() == 32
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
-    })
+    let id = name.strip_suffix(".media")?;
+    crate::media::valid_media_id(id).then_some(id)
 }
 fn pending_id(name: &str) -> Option<&str> {
     name.strip_prefix(".pending-")?
@@ -1144,6 +1185,17 @@ fn published_id(name: &str) -> Option<&str> {
 fn temporary_name(name: &str) -> bool {
     name.strip_prefix(".tmp-")
         .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+fn order_key(name: &str) -> &str {
+    let id = object_id(name)
+        .or_else(|| media_id(name))
+        .or_else(|| pending_id(name))
+        .or_else(|| published_id(name));
+    id.map_or(name, |id| {
+        id.strip_prefix("media_")
+            .or_else(|| id.strip_prefix("out_"))
+            .unwrap_or(id)
+    })
 }
 fn valid_id(id: &str) -> bool {
     id.strip_prefix("out_").is_some_and(|id| {

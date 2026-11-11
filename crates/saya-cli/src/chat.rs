@@ -747,12 +747,21 @@ pub async fn chat(
                         continue;
                     }
                     let current_id = session.as_ref().ok_or("session missing")?.id;
-                    let capture = saya_core::media::capture_user(
+                    let capture = match saya_core::media::capture_user(
                         &text,
                         media_capabilities,
                         &media,
                         current_id,
-                    )?;
+                    ) {
+                        Ok(capture) => capture,
+                        Err(failure) => {
+                            console.print(&format!(
+                                "saya: {}\n> ",
+                                safe_terminal_text(&failure.to_string())
+                            ))?;
+                            continue;
+                        }
+                    };
                     let item = HistoryItem::UserText(capture.text.clone());
                     store
                         .commit(&[StoreChange::History {

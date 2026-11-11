@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
-    contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
+    contract::{BoundaryError, HistoryItem, ModelProtocol, ModelPurpose, Session, ToolCall, Usage},
     media,
 };
 use serde_json::{Value, json};
@@ -62,6 +62,7 @@ impl ChatModel {
             &request.history,
             self.settings.multimodal,
             &request.media,
+            request.purpose == ModelPurpose::Execution,
         )?;
         let mut body = json!({"model":self.settings.model, "messages":messages, "store":false, "stream":self.settings.stream});
         let map = body
@@ -101,13 +102,18 @@ fn chat_user_content(
     text: &str,
     capabilities: crate::config::MediaCapabilities,
     snapshots: &crate::media::MediaAttachments,
+    expand: bool,
 ) -> Result<Value, BoundaryError> {
-    let parts = media::expand_user_with_snapshots(text, capabilities, snapshots)?;
+    let parts = media::expand_user_for_purpose(text, capabilities, snapshots, expand)?;
     if !parts
         .iter()
         .any(|part| matches!(part, media::ContentPart::Media(_)))
     {
-        return Ok(Value::String(text.to_owned()));
+        return Ok(Value::String(if expand {
+            text.to_owned()
+        } else {
+            media::display(text)
+        }));
     }
     let content = parts
         .into_iter()
@@ -150,6 +156,7 @@ fn chat_history(
     history: &[HistoryItem],
     capabilities: crate::config::MediaCapabilities,
     snapshots: &crate::media::MediaAttachments,
+    expand: bool,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = vec![json!({"role":"system","content":instructions})];
     let mut text: Option<String> = None;
@@ -206,7 +213,7 @@ fn chat_history(
                 }
                 messages.push(json!({
                     "role":"user",
-                    "content":chat_user_content(value, capabilities, snapshots)?
+                    "content":chat_user_content(value, capabilities, snapshots, expand)?
                 }));
             }
             HistoryItem::AssistantPartial(value) if value.is_empty() => {}
@@ -855,6 +862,7 @@ mod reasoning_tests {
                 video: true,
             },
             &crate::media::MediaAttachments::default(),
+            true,
         )
         .unwrap();
         let parts = content.as_array().unwrap();
@@ -866,5 +874,21 @@ mod reasoning_tests {
         assert_eq!(audio["input_audio"]["format"], "wav");
         let video = parts.iter().find(|part| part["type"] == "file").unwrap();
         assert_eq!(video["file"]["filename"], "video.mp4");
+    }
+
+    #[test]
+    fn non_execution_requests_keep_media_markers_as_display_text() {
+        let text = "[Image 1](<saya-media://media_0123456789abcdef0123456789abcdef_deadbeef>)";
+        let content = chat_user_content(
+            text,
+            crate::config::MediaCapabilities {
+                image: true,
+                ..crate::config::MediaCapabilities::default()
+            },
+            &crate::media::MediaAttachments::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(content, json!("[Image 1]"));
     }
 }

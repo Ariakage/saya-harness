@@ -148,7 +148,7 @@ fn history(snapshot: &SessionSnapshot, include: bool) -> Result<Vec<Value>, Boun
     for (ordinal, item) in snapshot.session.history.iter().enumerate() {
         let value = match item {
             HistoryItem::UserText(text) => {
-                json!({"ordinal":ordinal,"kind":"user_text","text":text})
+                json!({"ordinal":ordinal,"kind":"user_text","text":crate::media::display(text)})
             }
             HistoryItem::AssistantText(text) => {
                 json!({"ordinal":ordinal,"kind":"assistant_text","text":text})

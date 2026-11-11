@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
-    contract::{BoundaryError, HistoryItem, ModelProtocol, Session, ToolCall, Usage},
+    contract::{BoundaryError, HistoryItem, ModelProtocol, ModelPurpose, Session, ToolCall, Usage},
     media,
 };
 use serde_json::{Value, json};
@@ -48,7 +48,12 @@ impl ResponsesModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let input = history(&request.history, self.settings.multimodal, &request.media)?;
+        let input = history(
+            &request.history,
+            self.settings.multimodal,
+            &request.media,
+            request.purpose == ModelPurpose::Execution,
+        )?;
         let mut body = json!({"model":self.settings.model,"instructions":request.combined_instructions(),"input":input,"store":false,"stream":self.settings.stream,"max_output_tokens":output});
         let map = body
             .as_object_mut()
@@ -355,13 +360,18 @@ fn responses_user_content(
     text: &str,
     capabilities: crate::config::MediaCapabilities,
     snapshots: &crate::media::MediaAttachments,
+    expand: bool,
 ) -> Result<Value, BoundaryError> {
-    let parts = media::expand_user_with_snapshots(text, capabilities, snapshots)?;
+    let parts = media::expand_user_for_purpose(text, capabilities, snapshots, expand)?;
     if !parts
         .iter()
         .any(|part| matches!(part, media::ContentPart::Media(_)))
     {
-        return Ok(Value::String(text.to_owned()));
+        return Ok(Value::String(if expand {
+            text.to_owned()
+        } else {
+            media::display(text)
+        }));
     }
     let content = parts
         .into_iter()
@@ -401,6 +411,7 @@ fn history(
     items: &[HistoryItem],
     capabilities: crate::config::MediaCapabilities,
     snapshots: &crate::media::MediaAttachments,
+    expand: bool,
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut input = Vec::new();
     let mut pending = HashSet::new();
@@ -413,7 +424,7 @@ fn history(
                 }
                 input.push(json!({
                     "role":"user",
-                    "content":responses_user_content(text, capabilities, snapshots)?
+                    "content":responses_user_content(text, capabilities, snapshots, expand)?
                 }));
             }
             HistoryItem::AssistantText(text) | HistoryItem::AssistantPartial(text) => {
@@ -980,6 +991,7 @@ mod media_tests {
                 video: true,
             },
             &crate::media::MediaAttachments::default(),
+            true,
         )
         .unwrap();
         let parts = content.as_array().unwrap();
@@ -994,5 +1006,21 @@ mod media_tests {
             .find(|part| part["type"] == "input_file")
             .unwrap();
         assert_eq!(video["filename"], "video.mp4");
+    }
+
+    #[test]
+    fn non_execution_requests_keep_media_markers_as_display_text() {
+        let text = "[Image 1](<saya-media://media_0123456789abcdef0123456789abcdef_deadbeef>)";
+        let content = responses_user_content(
+            text,
+            crate::config::MediaCapabilities {
+                image: true,
+                ..crate::config::MediaCapabilities::default()
+            },
+            &crate::media::MediaAttachments::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(content, json!("[Image 1]"));
     }
 }

@@ -298,7 +298,9 @@ pub struct SealedOutput {
 /// history references must separately be supplied as pins during collection.
 #[derive(Debug)]
 pub struct SealedMedia {
-    pub media: crate::media::LoadedMedia,
+    pub reference: String,
+    pub sha256: String,
+    pub size: u64,
     _lease: OutputLease,
 }
 
@@ -482,9 +484,28 @@ impl OutputStore {
         session_id: SessionId,
         reference: &str,
     ) -> Result<crate::media::LoadedMedia, BoundaryError> {
-        self.inner
-            .load_media(session_id, reference)
+        self.load_media_with_lease(session_id, reference)
             .map(|(media, _)| media)
+    }
+
+    /// Keep an existing referenced object leased while its rewritten input is
+    /// waiting for the session-history commit.
+    pub(crate) fn load_media_with_lease(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(crate::media::LoadedMedia, OutputLease), BoundaryError> {
+        self.inner.load_media(session_id, reference)
+    }
+
+    /// Remove a snapshot created by the current input before its history
+    /// committed. The object must belong to the session and match its digest.
+    pub(crate) fn remove_media(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(), BoundaryError> {
+        self.inner.remove_media(session_id, reference)
     }
 
     /// Host recovery may inspect sealed objects before deciding which durable
