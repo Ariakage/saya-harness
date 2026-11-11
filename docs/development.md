@@ -41,7 +41,7 @@ cargo install just --locked
 | `just prompt code` | 输出指定场景的完整离线模型请求，可省略为 `all` |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
 | `just render-preview 140 60 syntax` | 输出离线场景快照，可追加 `--source` 或 `--json` |
-| `just test-tooling` | 执行CI使用的发行、N2与N3离线Python回归 |
+| `just test-tooling` | 执行CI使用的发行、N2、N3及提示词评估离线Python回归 |
 | `just smoke BINARY` | 对显式指定程序执行CLI、文本会话、审查回归及完整TUI旅程 |
 
 ```sh
@@ -110,17 +110,35 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 
 ## 提示词基线／候选场景对照
 
-`scripts/prompt_eval.py` 提供显式启用的 DeepSeek 小样本场景，使用 `deepseek-chat` 兼容端点，覆盖 PLAN 中的恶意文本只读边界、已有文件补丁、Skill 选择和通用文件交付。它不替代离线回归，也不证明跨模型泛化。每次运行记录程序 SHA、模型、上下文窗口、实际工具结果、请求次数及任务产物检查，便于在相同条件下比较修改前后行为。
+`scripts/prompt_eval.py` 提供显式启用的 DeepSeek 场景，使用 `deepseek-chat` 兼容端点，覆盖 PLAN 恶意文本只读边界、已有文件补丁、Skill 选择、通用文件交付、多hunk补丁、范围注入、CSV聚合和长日志检索。它不替代离线回归，也不证明跨模型泛化。每次运行记录程序 SHA、模型、上下文窗口、实际工具结果、请求次数及任务产物检查，便于在相同条件下比较修改前后行为。
 
-先保留待比较程序，再分别运行：
+先保留待比较程序并提供测试凭据：
 
 ```bash
 . .saya/local/deepseek.env
-python3 -B -I scripts/prompt_eval.py --binary target/prompt-improvement/saya-baseline --label baseline --output target/prompt-improvement/baseline.json
-python3 -B -I scripts/prompt_eval.py --binary target/debug/saya --label candidate --output target/prompt-improvement/candidate.json
 ```
 
-场景使用独立临时目录，测试配置显式拒绝 `exec`，模型生成的命令不会执行。`--scenario` 可重复指定单个用例；`--keep-workspaces` 会把任务目录保存在报告旁供本地检查，默认只保存结构化结果，不保存模型回复。服务接收任务文本和提供的样例文件，可能产生费用；输出报告和日志不得写入真实凭据。对同一修改至少复测关键用例，区分单次模型波动与稳定趋势。
+每个候选可执行多轮独立运行；以下命令对8个场景各重复3次，最多并发6个运行，并保存失败工具诊断：
+
+```bash
+python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/saya-candidate --label candidate-b1 --output target/prompt-r2/candidate-b1-r3.json --repeat 3 --jobs 6 --diagnostics
+```
+
+同一程序应至少再运行一批，区分模型波动与稳定趋势：
+
+```bash
+python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/saya-candidate --label candidate-b2 --output target/prompt-r2/candidate-b2-r3.json --repeat 3 --jobs 6 --diagnostics
+```
+
+已有报告可离线比较，不会发起模型请求：
+
+```bash
+python3 -B -I scripts/prompt_eval.py --compare target/prompt-r2/baseline-r3.json target/prompt-r2/candidate-b1-r3.json target/prompt-r2/candidate-b2-r3.json
+```
+
+`--scenario` 可重复指定单个用例，`--repeat` 和 `--jobs` 必须为正数。`--keep-workspaces` 会把任务目录保存在报告旁供本地检查，默认只保存结构化结果，不保存模型回复。报告包含每个模型轮次的 `input_tokens`、`cached_input_tokens`、`uncached_input_tokens`、`output_tokens`，并聚合总token、整体／Turn 1／Turn 2+缓存命中率与输入、输出、缓存、未缓存占比。没有缓存字段的旧报告显示未知，不应解释为0命中。计算口径与实际结果见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。
+
+场景使用独立临时目录，测试配置显式拒绝 `exec`，模型生成的命令不会执行。服务接收任务文本和提供的样例文件，可能产生费用；输出报告和日志不得写入真实凭据。缓存用量采集及汇总逻辑的离线回归通过 `python3 -B scripts/test_prompt_eval.py` 执行，也已纳入 `just test-tooling`。
 
 ## 文档随实现更新
 

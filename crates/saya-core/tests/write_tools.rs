@@ -76,6 +76,61 @@ fn call(name: &str, id: &str, args: serde_json::Value) -> ToolCall {
 }
 
 #[tokio::test]
+async fn patch_definition_and_path_errors_explain_the_expected_workspace_shape()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    std::fs::write(temp.path().join("file.txt"), "old\n")?;
+    let (session, run) = fixture(temp.path());
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let version = files.read_file(Path::new("file.txt"), 1, 10)?.version;
+    let tool = WriteTool::new(
+        files,
+        store_for(&session, &run).await?,
+        Arc::new(Gate {
+            count: AtomicUsize::new(0),
+            allowed_checks: usize::MAX,
+        }),
+        WriteToolKind::ApplyPatch,
+        DEFAULT_WRITE_MAX_BYTES,
+    );
+    let definition = tool.definition();
+    assert!(definition.description.contains("old_count"));
+    assert!(definition.description.contains("new_count"));
+    let properties = &definition.input_schema["properties"];
+    for field in ["path", "patch", "expected_version"] {
+        assert!(properties[field]["description"].is_string());
+    }
+    let result = tool
+        .execute(
+            &call(
+                "apply_patch",
+                "wrong-path",
+                serde_json::json!({
+                    "path":"file.txt",
+                    "patch":"--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                    "expected_version":version
+                }),
+            ),
+            &ToolContext {
+                run,
+                workspace: temp.path().into(),
+            },
+            &NeverCancel,
+        )
+        .await?;
+    let error = result.error.ok_or("expected invalid_patch")?;
+    assert_eq!(error.code, "invalid_patch");
+    assert!(error.message.contains("--- a/file.txt"));
+    assert!(error.message.contains("+++ b/file.txt"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_update_conflict_and_permissions() -> Result<(), Box<dyn std::error::Error>> {
     let temp = support::temp_workspace()?;
     let (session, run) = fixture(temp.path());

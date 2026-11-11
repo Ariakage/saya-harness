@@ -153,6 +153,7 @@ impl Model for TestModel {
                     usage: Some(Usage {
                         input_tokens: Some(100),
                         output_tokens: Some(50),
+                        cached_input_tokens: None,
                         estimated: false,
                     }),
                 }));

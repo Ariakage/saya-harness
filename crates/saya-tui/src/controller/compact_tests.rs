@@ -94,6 +94,7 @@ async fn idle_compact_uses_the_real_controller_without_a_user_message_or_executi
     app.record_context_input(Some(saya_core::contract::Usage {
         input_tokens: Some(42_000),
         output_tokens: Some(1_000),
+        cached_input_tokens: None,
         estimated: false,
     }));
     app.state.context_breakdown = vec![crate::view::ContextEntry {

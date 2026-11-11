@@ -37,7 +37,7 @@
 
 [可复用 core 循环](../crates/saya-core/src/runtime.rs)及假模型原型已使用完整装配器，取代每模式的一句指令。每次请求都按生效模式、权限与过滤后的工具重新装配；切换后不残留旧模式段。稳定核心保持相同前缀，但没有虚构 provider 缓存命中保证，也没有引入某产品专用的动态分隔标记。
 
-每次执行模型请求在静态提示词之后加入动态系统段：宿主时钟采样的 UTC、本地时间和 UTC 偏移、操作系统与架构、工作区、模型配置引用、实际工作／权限模式，以及项目上下文和显式偏好／记忆是否提供。时间可能变旧，不推断地理位置；模型名称不是上游身份认证。字符串序列化为 JSON 并标记为数据，不包含配置凭据或完整历史。运行事实仍保留原有 `runtime_context` 兼容数据项；这些临时快照不持久化。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史中，来源、哈希、范围与刷新见[项目上下文](project-context.md)。显式偏好和记忆放在 `saya_personal_context_v1` 数据项，不自动发现；它们不是系统授权，模型仍可能受内容影响。
+每次执行模型请求在静态提示词之后加入动态系统段：Runtime 创建时按分钟对齐并供后续轮次复用的 UTC、本地时间和 UTC 偏移、操作系统与架构、模型配置引用、实际工作／权限模式，以及项目上下文和显式偏好／记忆是否提供。时间可能变旧，不推断地理位置；模型名称不是上游身份认证。工作区路径只保留在 `runtime_context` 数据项中，不在动态系统段重复。执行环境事实与宿主 checkpoint 标志位于 `Dynamic request context` 之前，避免把这些较稳定的数据排到逐请求事实之后。字符串序列化为 JSON 并标记为数据，不包含配置凭据或完整历史；临时快照不持久化。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史中，来源、哈希、范围与刷新见[项目上下文](project-context.md)。显式偏好和记忆放在 `saya_personal_context_v1` 数据项，不自动发现；它们不是系统授权，模型仍可能受内容影响。
 
 上下文管理未选中历史checkpoint时只注入短续接说明；宿主选中已提交的上下文checkpoint时才追加完整续接规则，并在动态系统段设置 `checkpoint_selected_by_host`。完整摘要与来源引用仍是历史数据，不恢复旧授权。
 
@@ -47,7 +47,9 @@
 
 启用 Anthropic 缓存时，同一模型实例内相同静态前缀和工具定义的并发冷请求会等待首个响应事件；失败、取消或丢弃流时释放等待者，四分钟后重新尝试。不同模型实例和进程不共享协调状态，超过内部键数量上限时可能不协调，因此不保证杜绝重复写入。该协调不复用模型输出，不保证服务端确实创建了缓存。
 
-OpenAI 兼容协议保留相同的静态字节前缀并依赖服务端自动缓存；DeepSeek 也自行处理缓存，不额外发送 `cache_control` 或其不支持的 `prompt_cache_key`。参见 [OpenAI 缓存文档](https://developers.openai.com/api/docs/guides/prompt-caching)、[DeepSeek 上下文缓存](https://api-docs.deepseek.com/guides/kv_cache/)和 [Responses 兼容说明](https://api-docs.deepseek.com/guides/responses_api/)。动态时间仍会使其后的前缀不同，不能保证整个会话历史命中。当前没有跨进程预热、命中率统计或真实服务命中验证。
+OpenAI 兼容协议保留相同的静态字节前缀并依赖服务端自动缓存；DeepSeek 也自行处理缓存，不额外发送 `cache_control` 或其不支持的 `prompt_cache_key`。运行级时间快照避免后续模型轮次仅因秒级时钟变化而截断缓存前缀；工作区与历史数据仍会使不同任务的后续部分不同。参见 [OpenAI 缓存文档](https://developers.openai.com/api/docs/guides/prompt-caching)、[DeepSeek 上下文缓存](https://api-docs.deepseek.com/guides/kv_cache/)和 [Responses 兼容说明](https://api-docs.deepseek.com/guides/responses_api/)。
+
+`Usage.cached_input_tokens` 以可选字段记录 provider 实际报告的缓存输入量，未上报时保持未知且维持既有 JSON 形状。Chat Completions 兼容 `prompt_tokens_details.cached_tokens` 与 `prompt_cache_hit_tokens`，Responses 读取 `input_tokens_details.cached_tokens`，Messages 读取 `cache_read_input_tokens`；运行指标只在相关请求均上报时合计缓存量。真实 DeepSeek 多轮对照中，前缀优化前24次记录为整体36.37%／Turn 2+ 35.53%，优化后48次运行合并为整体83.54%／Turn 2+ 91.75%。完整 token 数量、占比与限制见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。这些结果不是服务端保证，也不代表其他模型。
 
 [审核组件](../crates/saya-core/src/review.rs)使用独立英文审核 prompt，保留现有一个数据消息、无工具、1024 输出 token 默认上限、严格 JSON 解析与失败转人工逻辑。它不接收执行 prompt、项目说明或完整执行历史；数据仍为 `tool/arguments/work_mode/permissions/goal_summary`。尤其不把 `goal_summary` 中“用户已授权”的说法当成原始用户证据。
 
@@ -120,13 +122,13 @@ just prompt all | jq '.requests.code.request.combined_system'
 
 预览输出包含实际工作区路径、项目指令和发现的Skill元数据。它只应在本地审阅，不应直接提交或粘贴到公开位置；需要分享时先人工脱敏。
 
-[装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台与新增能力片段的可见性、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
+[装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台与新增能力片段的可见性、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；缓存时间对齐与运行级系统文本稳定性、工具 schema、补丁错误提示及三协议缓存用量另有定向回归。假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
 
-[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择和通用文件交付。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。脚本记录程序SHA、模型、窗口、场景错误和请求次数，不把单次模型的行为波动当成普遍提升。运行方式见[开发指南](development.md)。首轮实际结果、复测和适用范围见[DeepSeek对比验证报告](prompt-evaluation-2026-11-11.md)。
+[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择、通用文件交付、多hunk补丁、范围注入、CSV聚合和长日志检索。`--repeat` 与 `--jobs` 支持独立多轮及并发，`--diagnostics` 保存夹具衍生的失败调用，`--compare` 离线比较报告。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。报告记录程序SHA、模型、窗口、场景错误、请求次数、逐轮输入／缓存输入／输出token、整体与Turn 1／Turn 2+命中率及token占比；旧报告未采集缓存字段时显示未知而不是0。运行方式见[开发指南](development.md)，实际多轮结果见[DeepSeek对比验证报告](prompt-evaluation-2026-11-11.md)。
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 
-三协议适配、持久会话、受权限控制的工具以及用户级／项目指令与 Skill 发现已接入 CLI 和共享应用层。当前默认 TUI 使用同一运行时，实际验证范围见[开发进度](progress.md)。缓存命中、跨模型泛化、提示注入抵抗和安全分类效果需要对应评测证据。
+三协议适配、持久会话、受权限控制的工具以及用户级／项目指令与 Skill 发现已接入 CLI 和共享应用层。当前默认 TUI 使用同一运行时，实际验证范围见[开发进度](progress.md)。跨模型泛化、其他服务的缓存命中、提示注入抵抗和安全分类效果仍需要对应评测证据。
 
 ## 会话任务清单提示
 

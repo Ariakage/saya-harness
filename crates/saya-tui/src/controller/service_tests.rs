@@ -208,6 +208,7 @@ async fn resumed_session_restores_context_usage_from_run_metrics() {
                     execution_usage: Some(Usage {
                         input_tokens: Some(42_000),
                         output_tokens: Some(1_000),
+                        cached_input_tokens: None,
                         estimated: false,
                     }),
                     review_usage: None,
@@ -284,6 +285,7 @@ async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
     app.record_context_input(Some(Usage {
         input_tokens: Some(512),
         output_tokens: Some(20),
+        cached_input_tokens: None,
         estimated: true,
     }));
     app.record_context_snapshot(ContextSnapshot {
@@ -312,6 +314,7 @@ async fn profile_selection_clears_the_title_and_previous_context_usage() {
     app.record_context_input(Some(Usage {
         input_tokens: Some(512),
         output_tokens: None,
+        cached_input_tokens: None,
         estimated: false,
     }));
     app.record_context_snapshot(ContextSnapshot {

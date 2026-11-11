@@ -371,7 +371,10 @@ async fn cache_usage_totals_match_complete_and_cumulative_stream_fields()
     let mut end = stop("end_turn");
     end[0]["usage"] = json!({"input_tokens":13,"output_tokens":4,"cache_creation_input_tokens":15,"cache_read_input_tokens":25});
     events.extend(end);
-    for (stream, response, expected) in [(false, full.to_string(), 14), (true, sse(&events), 53)] {
+    for (stream, response, expected_input, expected_cached) in [
+        (false, full.to_string(), 14, 3),
+        (true, sse(&events), 53, 25),
+    ] {
         let content_type = if stream {
             "text/event-stream"
         } else {
@@ -385,7 +388,8 @@ async fn cache_usage_totals_match_complete_and_cumulative_stream_fields()
         );
         let (_, usage, _) = collect(&model, &request()).await?;
         let usage = usage.ok_or("missing usage")?;
-        assert_eq!(usage.input_tokens, Some(expected));
+        assert_eq!(usage.input_tokens, Some(expected_input));
+        assert_eq!(usage.cached_input_tokens, Some(expected_cached));
         assert_eq!(usage.output_tokens, Some(4));
         assert!(!usage.estimated);
     }

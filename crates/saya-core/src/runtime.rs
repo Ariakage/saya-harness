@@ -272,6 +272,7 @@ pub struct AgentRuntime {
     services: Arc<services::RuntimeServices>,
     media_store: Option<Arc<crate::output_store::OutputStore>>,
     media_capabilities: crate::config::MediaCapabilities,
+    started_at: std::time::SystemTime,
 }
 
 #[derive(Default)]
@@ -619,6 +620,7 @@ impl AgentRuntime {
             services: Arc::new(services::RuntimeServices::default()),
             media_store: None,
             media_capabilities: crate::config::MediaCapabilities::default(),
+            started_at: crate::prompt::cache_aligned_time(std::time::SystemTime::now()),
         })
     }
     pub fn handle(&self) -> RuntimeHandle {
@@ -915,16 +917,18 @@ impl AgentRuntime {
                 .instructions;
                 let mut run = self.run.clone();
                 run.work_mode = snap.current;
-                let mut dynamic_instructions = crate::prompt::system_context(
+                let mut dynamic_instructions = String::new();
+                if let Some(facts) = environment_facts {
+                    dynamic_instructions.push_str(&facts);
+                }
+                dynamic_instructions.push_str(&crate::prompt::system_context_at(
                     session,
                     &run,
                     self.project_context.is_some(),
                     self.personal_context.preferences.is_some(),
                     self.personal_context.memory.is_some(),
-                )?;
-                if let Some(facts) = environment_facts {
-                    dynamic_instructions.push_str(&facts);
-                }
+                    self.started_at,
+                )?);
                 let dynamic_instructions = Some(dynamic_instructions);
                 let request_id = uuid::Uuid::now_v7().to_string();
                 let mut record = None;

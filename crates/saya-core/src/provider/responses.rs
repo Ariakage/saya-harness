@@ -326,9 +326,15 @@ fn parse_response(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bo
                     "provider usage is incomplete",
                 ));
             }
+            let cached = usage
+                .get("input_tokens_details")
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("cached_tokens"))
+                .and_then(Value::as_u64);
             Some(Usage {
                 input_tokens: input,
                 output_tokens: output,
+                cached_input_tokens: cached,
                 estimated: false,
             })
         }

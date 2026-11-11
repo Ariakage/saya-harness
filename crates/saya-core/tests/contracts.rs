@@ -13,6 +13,7 @@ fn result() -> RunResult {
         usage: Some(Usage {
             input_tokens: None,
             output_tokens: None,
+            cached_input_tokens: None,
             estimated: true,
         }),
         artifacts: vec![],

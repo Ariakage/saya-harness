@@ -273,6 +273,15 @@ fn clock_context(now: SystemTime) -> serde_json::Value {
     serde_json::json!({"utc": utc.as_ref().map(|v| format!("{}Z", format(v))), "local": local.as_ref().map(format), "utc_offset_seconds": local.as_ref().map(|v| v.tm_gmtoff)})
 }
 
+/// Round a timestamp down to its minute boundary so requests within the same
+/// minute share an identical system prefix for provider KV caching.
+pub fn cache_aligned_time(now: SystemTime) -> SystemTime {
+    now.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| UNIX_EPOCH + std::time::Duration::from_secs((d.as_secs() / 60) * 60))
+        .unwrap_or(now)
+}
+
 /// Add per-request host and session facts to execution system instructions.
 /// Project files and personal content remain separately labeled untrusted data.
 /// This context is ephemeral and must not be persisted as conversation history.
@@ -282,6 +291,26 @@ pub fn system_context(
     project_context_available: bool,
     preferences_available: bool,
     memory_available: bool,
+) -> Result<String, BoundaryError> {
+    system_context_at(
+        session,
+        run,
+        project_context_available,
+        preferences_available,
+        memory_available,
+        cache_aligned_time(SystemTime::now()),
+    )
+}
+
+/// Build [`system_context`] with a caller-supplied timestamp (such as the run's
+/// start timestamp) so multi-turn requests keep a byte-identical system prefix.
+pub fn system_context_at(
+    session: &Session,
+    run: &Run,
+    project_context_available: bool,
+    preferences_available: bool,
+    memory_available: bool,
+    captured_at: SystemTime,
 ) -> Result<String, BoundaryError> {
     if session.id != run.session_id {
         return Err(BoundaryError(
@@ -293,7 +322,7 @@ pub fn system_context(
             None,
         ));
     }
-    let workspace = session.workspace.to_str().ok_or_else(|| {
+    let _workspace = session.workspace.to_str().ok_or_else(|| {
         BoundaryError(
             ErrorInfo {
                 code: "invalid_prompt_context".into(),
@@ -304,9 +333,8 @@ pub fn system_context(
         )
     })?;
     let facts = serde_json::json!({
-        "captured_at": clock_context(SystemTime::now()),
+        "captured_at": clock_context(captured_at),
         "host": {"os": std::env::consts::OS, "architecture": std::env::consts::ARCH},
-        "workspace": workspace,
         "profile": session.profile,
         "model": session.model,
         "protocol": session.protocol,

@@ -233,13 +233,11 @@ async fn automatic_compaction_rebuilds_then_dispatches_and_restores_all_protocol
                 .iter()
                 .find(|request| request.purpose == ModelPurpose::Execution)
                 .unwrap();
-            assert!(
-                execution
-                    .dynamic_instructions
-                    .as_ref()
-                    .unwrap()
-                    .contains("\"checkpoint_selected_by_host\":true")
-            );
+            let dynamic = execution.dynamic_instructions.as_deref().unwrap();
+            assert!(dynamic.contains("\"checkpoint_selected_by_host\":true"));
+            let checkpoint = dynamic.find("# Host-selected context checkpoint").unwrap();
+            let request = dynamic.find("# Dynamic request context").unwrap();
+            assert!(checkpoint < request);
             assert!(execution.history.iter().any(|item| matches!(item, HistoryItem::UserText(text) if text == "Continue from the recorded evidence.")));
             assert!(!execution.history.iter().any(|item| matches!(item, HistoryItem::AssistantText(text) if text.contains("temporary repetitive observation"))));
         }

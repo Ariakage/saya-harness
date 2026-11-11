@@ -4,6 +4,14 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 提示词多轮对照与前缀缓存
+
+2026-11-11，真实 `deepseek-flash` 对照扩展为8个场景，覆盖PLAN只读注入、已有文件与多hunk补丁、Skill路由、WORK精确交付、范围注入、CSV聚合和长日志检索。评估工具新增 `--repeat`、`--jobs`、`--diagnostics` 和离线 `--compare`，保存每轮输入、缓存输入、未缓存输入、输出及总token，并计算整体、Turn 1与Turn 2+命中率和token占比。早期未采集缓存字段的报告在对比中显示未知，不按0处理。
+
+修改前基线24次运行虽全部通过，但有17次失败工具结果；最终提示词/schema与缓存计量候选24次全部通过、1次失败工具结果。缓存前缀优化版以同一程序完成两批各24次运行，合并48/48通过、4次可恢复的补丁hunk计数错误，平均每次运行4.42次模型请求。优化前24次的整体／Turn 2+缓存命中率为36.37%／35.53%；优化后合并为83.54%／91.75%。优化后合计输入3,390,916 tokens，其中缓存2,832,640、未缓存558,276，输出48,275，总计3,439,191；输入／输出占总消耗98.60%／1.40%，缓存／未缓存输入占总消耗82.36%／16.23%。计算口径、分组、程序SHA及原始报告摘要见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。
+
+实现将Runtime创建时的分钟对齐时间快照复用于后续模型轮次，工作区只保留在`runtime_context`数据项，执行环境事实和宿主checkpoint标志排在动态请求事实之前。`Usage.cached_input_tokens`以可选字段接入Chat、Responses和Messages适配器及运行指标合计，未上报时保留既有JSON形状。离线预览与生产顺序一致；定向Rust回归通过。`just test-tooling` 的81项Python回归通过，日志为 `target/prompt-cache-tooling.log`。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1388项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-cache-check.log`；最终release程序SHA-256为 `d42656ca8c17755646fef6a41e6f848a6e7060237bf3ad87b064ecc85f7fdd0e`。未运行远端CI、其他模型或四平台重新验收。
+
 ## 多模态有界读取与 Session 快照一致性
 
 2026-11-11，按D-061修复本地媒体读取及历史恢复。`media.rs`不再在路径metadata检查后用另一次打开执行整文件读取；同一打开文件描述符通过`take(limit + 1)`有界读入，路径在打开后被替换的定向回归确认仍读取原打开对象，超限读取保持拒绝。新用户输入、文本会话及运行中引导在SQLite历史提交前捕获图片／音频／视频，OutputStore保存带Session归属、模态、MIME、原始字节SHA-256、私有权限和租约的二进制对象，历史标记改写为`saya-media://`引用。运行时按引用恢复并重新核验摘要，三协议使用同一快照；`output_capture.enabled = false`不关闭该Session媒体能力。旧版已保存的纯路径历史保留兼容读取，无法追溯证明其原始内容。

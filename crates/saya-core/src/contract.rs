@@ -198,6 +198,8 @@ pub enum RunStatus {
 pub struct Usage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
     pub estimated: bool,
 }
 

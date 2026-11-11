@@ -85,7 +85,7 @@ fn event(kind: &str, fields: Value) -> Value {
 fn done(output: Vec<Value>) -> Value {
     event(
         "response.completed",
-        json!({"response":{"status":"completed","output":output,"usage":{"input_tokens":12,"output_tokens":4}}}),
+        json!({"response":{"status":"completed","output":output,"usage":{"input_tokens":12,"output_tokens":4,"input_tokens_details":{"cached_tokens":8}}}}),
     )
 }
 fn message(text: &str) -> Value {
@@ -402,7 +402,9 @@ async fn preserves_reasoning_and_tool_items_in_original_order_on_replay()
     req.tools.push(ToolDefinition {name:"read_file".into(),description:"read".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})});
     let (items, usage, visible) = collect(&model, &req).await?;
     assert!(visible.is_empty());
-    assert_eq!(usage.ok_or("missing usage")?.input_tokens, Some(12));
+    let usage = usage.ok_or("missing usage")?;
+    assert_eq!(usage.input_tokens, Some(12));
+    assert_eq!(usage.cached_input_tokens, Some(8));
     assert!(
         matches!(&items[..],[HistoryItem::ProviderItem {value:a,..},HistoryItem::ProviderItem {value:b,..},HistoryItem::ToolCall(c)] if *a==reasoning && *b==call && c.call_id=="call_1")
     );
@@ -451,7 +453,7 @@ async fn stream_text_delta_and_complete_json_preserve_raw_message()
         done(vec![msg.clone()]),
     ]);
     let full =
-        json!({"status":"completed","output":[msg],"usage":{"input_tokens":5,"output_tokens":2}})
+        json!({"status":"completed","output":[msg],"usage":{"input_tokens":5,"output_tokens":2,"input_tokens_details":{"cached_tokens":3}}})
             .to_string();
     let (url, _) = fixture::server(vec![
         ("text/event-stream", stream),
@@ -470,7 +472,9 @@ async fn stream_text_delta_and_complete_json_preserve_raw_message()
     );
     let complete = ResponsesModel::new(client, settings(false), ResponsesCompatibility::default());
     let (items, usage, _) = collect(&complete, &request()).await?;
-    assert_eq!(usage.ok_or("missing usage")?.output_tokens, Some(2));
+    let usage = usage.ok_or("missing usage")?;
+    assert_eq!(usage.output_tokens, Some(2));
+    assert_eq!(usage.cached_input_tokens, Some(3));
     assert!(
         matches!(&items[..],[HistoryItem::ProviderItem {..},HistoryItem::AssistantText(text)] if text=="hello")
     );
@@ -668,10 +672,7 @@ async fn responses_adapter_drives_runtime_and_replays_tool_result()
     let next = requests.recv_timeout(Duration::from_secs(1))?;
     let first_system = first["instructions"].as_str().ok_or("missing system")?;
     let next_system = next["instructions"].as_str().ok_or("missing system")?;
-    assert_eq!(
-        first_system.split("# Dynamic request context").next(),
-        next_system.split("# Dynamic request context").next()
-    );
+    assert_eq!(first_system, next_system);
     assert!(next_system.contains("\"captured_at\""));
     let input = next["input"].as_array().ok_or("missing input")?;
     assert!(input.contains(&raw));

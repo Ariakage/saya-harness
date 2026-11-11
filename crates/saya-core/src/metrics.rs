@@ -46,8 +46,11 @@ struct Totals {
     completed: u64,
     input: u64,
     output: u64,
+    cached_input: u64,
+    has_cached_input: bool,
     input_unknown: bool,
     output_unknown: bool,
+    cached_input_unknown: bool,
     estimated: bool,
 }
 impl Totals {
@@ -69,9 +72,20 @@ impl Totals {
                 },
                 None => self.output_unknown = true,
             }
+            match usage.cached_input_tokens {
+                Some(n) => {
+                    self.has_cached_input = true;
+                    match self.cached_input.checked_add(n) {
+                        Some(sum) => self.cached_input = sum,
+                        None => self.cached_input_unknown = true,
+                    }
+                }
+                None => self.cached_input_unknown = true,
+            }
         } else {
             self.input_unknown = true;
             self.output_unknown = true;
+            self.cached_input_unknown = true;
         }
     }
     fn usage(&self) -> Option<Usage> {
@@ -89,6 +103,14 @@ impl Totals {
                 None
             } else {
                 Some(self.output)
+            },
+            cached_input_tokens: if !self.has_cached_input
+                || self.cached_input_unknown
+                || incomplete
+            {
+                None
+            } else {
+                Some(self.cached_input)
             },
             estimated: self.estimated || self.input_unknown || self.output_unknown || incomplete,
         })
@@ -196,9 +218,11 @@ impl Metrics {
         } else {
             let input_tokens = sum(|usage| usage.input_tokens);
             let output_tokens = sum(|usage| usage.output_tokens);
+            let cached_input_tokens = sum(|usage| usage.cached_input_tokens);
             Some(Usage {
                 input_tokens,
                 output_tokens,
+                cached_input_tokens,
                 estimated: usages.iter().any(|usage| usage.estimated)
                     || input_tokens.is_none()
                     || output_tokens.is_none(),
@@ -371,6 +395,7 @@ mod tests {
         let usage = Usage {
             input_tokens: Some(1),
             output_tokens: Some(1),
+            cached_input_tokens: None,
             estimated: false,
         };
         let cost = estimate(Some(&pricing), Some(&usage)).unwrap();
@@ -399,10 +424,51 @@ mod tests {
                 Some(&Usage {
                     input_tokens: Some(u64::MAX),
                     output_tokens: Some(u64::MAX),
+                    cached_input_tokens: None,
                     estimated: false
                 })
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn cached_usage_aggregates_only_when_every_completed_request_reports_it() {
+        let mut totals = Totals {
+            requests: 2,
+            ..Totals::default()
+        };
+        totals.finish(Some(Usage {
+            input_tokens: Some(100),
+            output_tokens: Some(10),
+            cached_input_tokens: Some(40),
+            estimated: false,
+        }));
+        totals.finish(Some(Usage {
+            input_tokens: Some(200),
+            output_tokens: Some(20),
+            cached_input_tokens: Some(150),
+            estimated: false,
+        }));
+        let usage = totals.usage().unwrap();
+        assert_eq!(usage.input_tokens, Some(300));
+        assert_eq!(usage.output_tokens, Some(30));
+        assert_eq!(usage.cached_input_tokens, Some(190));
+        assert!(!usage.estimated);
+
+        let mut incomplete = Totals {
+            requests: 1,
+            ..Totals::default()
+        };
+        incomplete.finish(Some(Usage {
+            input_tokens: Some(100),
+            output_tokens: Some(10),
+            cached_input_tokens: None,
+            estimated: false,
+        }));
+        let usage = incomplete.usage().unwrap();
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.cached_input_tokens, None);
+        assert!(!usage.estimated);
     }
 }

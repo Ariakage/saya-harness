@@ -170,6 +170,7 @@ mod tests {
             usage: Some(Usage {
                 input_tokens: Some(100),
                 output_tokens: output,
+                cached_input_tokens: None,
                 estimated,
             }),
             error: None,
@@ -199,6 +200,7 @@ mod tests {
             Some(&Usage {
                 input_tokens: Some(9000),
                 output_tokens: Some(2000),
+                cached_input_tokens: None,
                 estimated: false,
             }),
             now + Duration::from_secs(79),
@@ -215,16 +217,19 @@ mod tests {
             Some(Usage {
                 input_tokens: None,
                 output_tokens: Some(3),
+                cached_input_tokens: None,
                 estimated: false,
             }),
             Some(Usage {
                 input_tokens: Some(3),
                 output_tokens: None,
+                cached_input_tokens: None,
                 estimated: false,
             }),
             Some(Usage {
                 input_tokens: Some(u64::MAX),
                 output_tokens: Some(1),
+                cached_input_tokens: None,
                 estimated: false,
             }),
         ] {
@@ -245,6 +250,7 @@ mod tests {
                 Some(&Usage {
                     input_tokens: Some(1000),
                     output_tokens: Some(200),
+                    cached_input_tokens: None,
                     estimated: true
                 }),
                 now + Duration::from_secs(2)

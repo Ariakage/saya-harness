@@ -278,3 +278,42 @@ fn runtime_prompts_are_english_without_a_fixed_communication_language()
     assert!(prompt::review_instructions().is_ascii());
     Ok(())
 }
+
+#[test]
+fn cache_aligned_context_is_stable_and_workspace_stays_in_runtime_data()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::contract::{ModelProtocol, Run, RunId, Session, SessionId};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let start = UNIX_EPOCH + Duration::from_secs(1_800_000_123);
+    assert_eq!(
+        prompt::cache_aligned_time(start),
+        UNIX_EPOCH + Duration::from_secs(1_800_000_120)
+    );
+    assert_eq!(
+        prompt::cache_aligned_time(start),
+        prompt::cache_aligned_time(start + Duration::from_secs(30))
+    );
+    let session = Session {
+        id: SessionId::new(),
+        workspace: "/workspace/private-name".into(),
+        work_mode: WorkMode::Work,
+        profile: "cache-profile".into(),
+        protocol: ModelProtocol::ChatCompletions,
+        model: "cache-model".into(),
+        history: vec![],
+    };
+    let run = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    let first = prompt::system_context_at(&session, &run, true, true, true, start)?;
+    let next_turn = prompt::system_context_at(&session, &run, true, true, true, start)?;
+    assert_eq!(first, next_turn);
+    assert!(!first.contains("private-name"));
+    let runtime = serde_json::to_string(&prompt::runtime_context(&session, &run)?)?;
+    assert!(runtime.contains("private-name"));
+    Ok(())
+}

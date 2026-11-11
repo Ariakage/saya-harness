@@ -320,6 +320,7 @@ async fn cd_uses_an_absolute_or_relative_directory_and_stays_idle_only() {
     app.record_context_input(Some(Usage {
         input_tokens: Some(1_024),
         output_tokens: Some(64),
+        cached_input_tokens: None,
         estimated: false,
     }));
     let nested = app.config.cwd.join("nested");
@@ -981,6 +982,7 @@ async fn context_meter_tracks_only_the_latest_execution_request_and_clears_unkno
             usage: tokens.map(|tokens| Usage {
                 input_tokens: Some(tokens),
                 output_tokens: Some(50),
+                cached_input_tokens: None,
                 estimated: true,
             }),
             error: None,
@@ -991,6 +993,7 @@ async fn context_meter_tracks_only_the_latest_execution_request_and_clears_unkno
     app.record_context_input(Some(Usage {
         input_tokens: Some(100),
         output_tokens: None,
+        cached_input_tokens: None,
         estimated: false,
     }));
     for purpose in [ModelPurpose::Review, ModelPurpose::Execution] {
@@ -1028,6 +1031,7 @@ async fn final_event_drain_keeps_latest_request_usage_separate_from_run_totals()
                     usage: Some(Usage {
                         input_tokens: Some(input),
                         output_tokens: Some(10),
+                        cached_input_tokens: None,
                         estimated: false,
                     }),
                     error: None,
@@ -1042,6 +1046,7 @@ async fn final_event_drain_keeps_latest_request_usage_separate_from_run_totals()
     result.usage = Some(Usage {
         input_tokens: Some(9000),
         output_tokens: Some(2000),
+        cached_input_tokens: None,
         estimated: false,
     });
     app.finish(Ok((Ok(result), session))).await.unwrap();
@@ -1076,6 +1081,7 @@ async fn run_summaries_close_every_terminal_status_once_with_actual_mode_and_tot
         result.usage = Some(Usage {
             input_tokens: Some(500),
             output_tokens: Some(100),
+            cached_input_tokens: None,
             estimated: false,
         });
         session.work_mode = WorkMode::Code;
@@ -1124,6 +1130,7 @@ async fn summary_usage_and_model_timing_do_not_leak_between_turns() {
         Some(Usage {
             input_tokens: Some(500),
             output_tokens: Some(100),
+            cached_input_tokens: None,
             estimated: false,
         }),
         None,
@@ -1189,6 +1196,7 @@ async fn execution_start_clears_old_usage_even_before_expired_approval_is_remove
         app.record_context_input(Some(Usage {
             input_tokens: Some(512),
             output_tokens: Some(10),
+            cached_input_tokens: None,
             estimated: true,
         }));
         let (request, receiver) = approval(&app, "meter-waiting");
@@ -1221,6 +1229,7 @@ async fn final_event_drain_clears_old_usage_when_only_the_next_request_start_arr
     app.record_context_input(Some(Usage {
         input_tokens: Some(512),
         output_tokens: Some(10),
+        cached_input_tokens: None,
         estimated: false,
     }));
     let (sender, events) = mpsc::channel(1);

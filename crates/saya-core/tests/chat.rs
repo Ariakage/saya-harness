@@ -156,7 +156,7 @@ async fn streams_text_and_usage_with_explicit_storage_disabled()
         chunk(json!({"content":"hello "}), Value::Null),
         chunk(json!({"content":"world"}), Value::Null),
         chunk(json!({}), json!("stop")),
-        json!({"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3}}),
+        json!({"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":7}}}),
     ]);
     let (url, requests) = fixture::server(vec![("text/event-stream", body)])?;
     let model = ChatModel::new(
@@ -169,8 +169,13 @@ async fn streams_text_and_usage_with_explicit_storage_disabled()
     assert_eq!(items, vec![HistoryItem::AssistantText(text)]);
     let usage = usage.ok_or("missing usage")?;
     assert_eq!(
-        (usage.input_tokens, usage.output_tokens, usage.estimated),
-        (Some(11), Some(3), false)
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cached_input_tokens,
+            usage.estimated
+        ),
+        (Some(11), Some(3), Some(7), false)
     );
     let request = requests.recv_timeout(Duration::from_secs(1))?;
     assert_eq!(request["store"], false);
@@ -336,7 +341,7 @@ async fn interleaved_tool_fragments_round_trip_with_original_ids()
 }
 #[tokio::test]
 async fn complete_json_maps_text_tool_and_usage() -> Result<(), Box<dyn std::error::Error>> {
-    let response = json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":2}});
+    let response = json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":6}});
     let (url, requests) = fixture::server(vec![("application/json", response.to_string())])?;
     let model = ChatModel::new(
         transport(url)?,
@@ -350,7 +355,9 @@ async fn complete_json_maps_text_tool_and_usage() -> Result<(), Box<dyn std::err
     assert!(
         matches!(&items[..],[HistoryItem::AssistantText(text),HistoryItem::ToolCall(call)] if text=="checking" && call.call_id=="call-1")
     );
-    assert_eq!(usage.ok_or("missing usage")?.output_tokens, Some(2));
+    let usage = usage.ok_or("missing usage")?;
+    assert_eq!(usage.output_tokens, Some(2));
+    assert_eq!(usage.cached_input_tokens, Some(6));
     let request = requests.recv_timeout(Duration::from_secs(1))?;
     assert_eq!(request["max_tokens"], 8192);
     assert_eq!(request["stream"], false);
@@ -532,10 +539,7 @@ async fn chat_adapter_drives_runtime_tool_loop() -> Result<(), Box<dyn std::erro
     let second_system = second["messages"][0]["content"]
         .as_str()
         .ok_or("missing system")?;
-    assert_eq!(
-        first_system.split("# Dynamic request context").next(),
-        second_system.split("# Dynamic request context").next()
-    );
+    assert_eq!(first_system, second_system);
     assert!(second_system.contains("\"captured_at\""));
     assert!(
         second["messages"]

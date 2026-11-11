@@ -132,8 +132,8 @@ fn execution_request(
         work_mode: mode,
         permissions: PermissionMode::Auto,
     };
-    let mut dynamic_instructions = prompt::system_context(&session, &run, true, true, true)?;
-    dynamic_instructions.push_str(&preview_environment_facts());
+    let mut dynamic_instructions = preview_environment_facts();
+    dynamic_instructions.push_str(&prompt::system_context(&session, &run, true, true, true)?);
 
     let mut history = vec![
         prompt::runtime_context(&session, &run)?,
@@ -175,12 +175,14 @@ fn preview_context(mut request: ModelRequest) -> Result<ModelRequest, Box<dyn st
         .instructions
         .push_str("\n\n# Context continuation\n");
     request.instructions.push_str("No historical context checkpoint is selected for this request. Continue from the current original user text, retained protocol groups, and effective runtime context.");
-    request
-        .dynamic_instructions
-        .get_or_insert_with(String::new)
-        .push_str(
-            "\n# Host-selected context checkpoint\n{\"checkpoint_selected_by_host\":false}\n",
-        );
+    let dynamic = request.dynamic_instructions.get_or_insert_with(String::new);
+    let checkpoint_section =
+        "\n# Host-selected context checkpoint\n{\"checkpoint_selected_by_host\":false}\n";
+    if let Some(index) = dynamic.find("# Dynamic request context\n") {
+        dynamic.insert_str(index, checkpoint_section);
+    } else {
+        dynamic.push_str(checkpoint_section);
+    }
     let budget = saya_core::context_builder::ContextBudget::new(128_000, 8_192, 1_024);
     let history = request.history.clone();
     let input = saya_core::context_builder::BuildInput {

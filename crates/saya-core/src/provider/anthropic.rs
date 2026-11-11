@@ -388,13 +388,15 @@ fn usage(value: Option<&Value>) -> Result<Option<Usage>, BoundaryError> {
             "provider usage is incomplete",
         ));
     }
+    let cache_read = token_count(obj, "cache_read_input_tokens")?;
     Ok(Some(Usage {
         input_tokens: total_input_tokens(
             input,
             token_count(obj, "cache_creation_input_tokens")?,
-            token_count(obj, "cache_read_input_tokens")?,
+            cache_read,
         )?,
         output_tokens: output,
+        cached_input_tokens: cache_read,
         estimated: false,
     }))
 }
@@ -915,6 +917,7 @@ impl StreamState {
                     self.cache_read_tokens,
                 )?,
                 output_tokens: Some(o),
+                cached_input_tokens: self.cache_read_tokens,
                 estimated: false,
             }),
             _ => None,

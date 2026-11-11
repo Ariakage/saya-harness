@@ -52,8 +52,9 @@ prompt type="all":
 render-preview *args:
     cargo run --locked -p saya-tui --example render_preview -- "$@"
 
-# 执行发行、N2 与 N3 验收脚本的离线 Python 回归
+# 执行发行、N2、N3 与提示词评估脚本的离线 Python 回归
 test-tooling:
+    python3 -B scripts/test_prompt_eval.py
     python3 -B scripts/n2/test_install_linux_tools.py
     python3 -B scripts/n2/test_native_acceptance.py
     python3 -B scripts/n2/test_verify_performance.py

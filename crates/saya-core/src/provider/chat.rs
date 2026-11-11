@@ -475,9 +475,16 @@ fn parse_usage(value: Option<&Value>) -> Result<Option<Usage>, BoundaryError> {
             "provider usage is incomplete",
         ));
     }
+    let cached = usage
+        .get("prompt_tokens_details")
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_u64));
     Ok(Some(Usage {
         input_tokens: input,
         output_tokens: output,
+        cached_input_tokens: cached,
         estimated: false,
     }))
 }

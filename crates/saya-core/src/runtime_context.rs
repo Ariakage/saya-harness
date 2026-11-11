@@ -192,11 +192,15 @@ impl AgentRuntime {
             );
         }
         let dynamic = request.dynamic_instructions.get_or_insert_with(String::new);
-        dynamic.push_str("\n# Host-selected context checkpoint\n");
-        dynamic.push_str(
-            &serde_json::json!({"checkpoint_selected_by_host":view.is_some()}).to_string(),
+        let checkpoint_section = format!(
+            "\n# Host-selected context checkpoint\n{}\n",
+            serde_json::json!({"checkpoint_selected_by_host":view.is_some()})
         );
-        dynamic.push('\n');
+        if let Some(index) = dynamic.find("# Dynamic request context\n") {
+            dynamic.insert_str(index, &checkpoint_section);
+        } else {
+            dynamic.push_str(&checkpoint_section);
+        }
         let make_input = |view| BuildInput {
             history_offset: request.history.len().saturating_sub(session.history.len()),
             request: &request,

@@ -422,7 +422,10 @@ impl ReadTools {
     fn walker(&self, path: &Path, include_ignored: bool) -> Result<ignore::Walk, ReadError> {
         let (target, root, rel) = self.resolve(path)?;
         if !root.dir.metadata(rel).map_err(io_err)?.is_dir() {
-            return Err(err("invalid_path", "search root is not a directory"));
+            return Err(err(
+                "invalid_path",
+                "search root is not a directory; pass the containing directory and a focused pattern",
+            ));
         }
         let mut builder = WalkBuilder::new(target);
         builder
@@ -939,26 +942,26 @@ impl crate::boundary::Tool for ReadTool {
         let (name, description, properties, required) = match self.kind {
             ReadToolKind::ReadFile => (
                 "read_file",
-                "Read a UTF-8 file with 1-based start_line and bounded line_count. The returned version is required for later writes. A truncated result is not the end of the file; narrow the range or continue reading.",
-                json!({"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1}}),
+                "Read a UTF-8 file with 1-based start_line and bounded line_count. The returned version is required for later writes. A truncated result is not the end of the file; narrow the range or continue reading. For large files, locate the relevant lines with search_text first and read only the needed range.",
+                json!({"path":{"type":"string","description":"Workspace-relative file path"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1}}),
                 json!(["path", "start_line", "line_count"]),
             ),
             ReadToolKind::ListDir => (
                 "list_dir",
                 "List direct directory entries",
-                json!({"path":{"type":"string"}}),
+                json!({"path":{"type":"string","description":"Directory path (use . for workspace root)"}}),
                 json!(["path"]),
             ),
             ReadToolKind::FindFiles => (
                 "find_files",
                 "Find workspace paths using a glob, not a regular expression. Hidden or ignored entries depend on include_ignored. Results are bounded by host limits.",
-                json!({"path":{"type":"string"},"glob":{"type":"string"},"include_ignored":{"type":"boolean"}}),
+                json!({"path":{"type":"string","description":"Directory root to search (use . for workspace root)"},"glob":{"type":"string","description":"Glob matched against relative paths under path"},"include_ignored":{"type":"boolean"}}),
                 json!(["path", "glob"]),
             ),
             ReadToolKind::SearchText => (
                 "search_text",
-                "Search workspace text with a literal pattern or a regular expression when regex is true. Use focused paths and patterns; a truncated result is incomplete evidence, not proof of absence.",
-                json!({"path":{"type":"string"},"pattern":{"type":"string"},"regex":{"type":"boolean"},"include_ignored":{"type":"boolean"}}),
+                "Search text recursively under a directory path (use `.` for the workspace) with a literal pattern, or a regular expression when regex is true. Hits report the file and 1-based line number. Use focused paths and patterns; a truncated result is incomplete evidence, not proof of absence.",
+                json!({"path":{"type":"string","description":"Directory root to search (must be a directory such as ., not a file path)"},"pattern":{"type":"string","description":"Literal text to match, or regex when regex is true"},"regex":{"type":"boolean"},"include_ignored":{"type":"boolean"}}),
                 json!(["path", "pattern"]),
             ),
         };

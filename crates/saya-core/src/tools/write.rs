@@ -323,7 +323,14 @@ impl WriteTools {
             std::str::from_utf8(&bytes).map_err(|_| err("invalid_text", "file is not UTF-8"))?;
         let patches: Vec<_> = PatchSet::parse(patch_text, ParseOptions::unidiff())
             .collect::<Result<_, _>>()
-            .map_err(|e| err("invalid_patch", e.to_string()))?;
+            .map_err(|e| {
+                err(
+                    "invalid_patch",
+                    format!(
+                        "{e}; expected a standard unified diff with `--- a/<path>`, `+++ b/<path>`, and `@@ -old_start,old_count +new_start,new_count @@` where old_count = context + `-` lines and new_count = context + `+` lines (never include `*** Begin Patch` or `*** End Patch`)"
+                    ),
+                )
+            })?;
         if patches.len() != 1 {
             return Err(err("invalid_patch", "exactly one file patch is required"));
         }
@@ -359,13 +366,26 @@ impl WriteTools {
             _ => (original_path.as_path(), modified_path.as_path()),
         };
         if old != new || old != normalized(path) {
+            let suggested = path
+                .strip_prefix(&self.files.workspace)
+                .unwrap_or(path)
+                .display()
+                .to_string();
             return Err(err(
                 "invalid_patch",
-                "patch paths must match the requested file",
+                format!(
+                    "patch paths must match the requested file; use a workspace-relative path such as `{suggested}` and the same file in `--- a/{suggested}` and `+++ b/{suggested}`"
+                ),
             ));
         }
-        let updated =
-            diffy::apply(original, patch).map_err(|e| err("patch_conflict", e.to_string()))?;
+        let updated = diffy::apply(original, patch).map_err(|e| {
+            err(
+                "patch_conflict",
+                format!(
+                    "{e}; reread the file and copy unchanged context lines exactly, with hunk line numbers and counts from that read"
+                ),
+            )
+        })?;
         self.write_file(path, &updated, Some(expected_version), bound_target, cancel)
     }
 }
@@ -555,12 +575,12 @@ impl crate::boundary::Tool for WriteTool {
             WriteToolKind::WriteFile => (
                 "write_file",
                 "Create one UTF-8 file or replace an existing one after version validation. Existing files require the complete SHA-256 version from the latest read; null is valid only for a target that does not yet exist. Parent directories are not created automatically.",
-                json!({"path":{"type":"string"},"content":{"type":"string"},"expected_version":{"type":["string","null"]}}),
+                json!({"path":{"type":"string","description":"Workspace-relative target file path"},"content":{"type":"string"},"expected_version":{"type":["string","null"],"description":"Complete SHA-256 version from the latest read_file, or null for a new file"}}),
             ),
             WriteToolKind::ApplyPatch => (
                 "apply_patch",
-                "Modify one existing UTF-8 file using a single-file unified diff and the complete expected_version from the latest read. Headers must match path (for example --- a/path and +++ b/path). Creation, deletion, rename, and multi-file patches are rejected. Example: --- a/file.txt\\n+++ b/file.txt\\n@@ -1 +1 @@\\n-old\\n+new\\n",
-                json!({"path":{"type":"string"},"patch":{"type":"string"},"expected_version":{"type":"string"}}),
+                "Modify one existing UTF-8 file with a standard unified diff; never use `*** Begin Patch` or `*** End Patch`. Supply the complete expected_version from the latest read of that file. Use a workspace-relative path and name the same file in both headers, for example path `src/lib.rs` with `--- a/src/lib.rs` and `+++ b/src/lib.rs`. Include 1 unchanged context line before and 1 after each change (for a 1-line replacement, the 4 hunk lines ` `, `-`, `+`, ` ` always use `,3`: `@@ -start,3 +start,3 @@`). In general `old_count` is the count of space-prefixed context plus `-` lines in the hunk (excluding `+`), and `new_count` is the count of space-prefixed context plus `+` lines (excluding `-`). Every hunk line starts with ` `, `-`, or `+` and ends with a newline. Several hunks for the same file may appear in ascending line order. Creation, deletion, rename, and multi-file patches are rejected; use write_file for new files.\n\nExample patch (2 context + 1 removed = 3 old lines; 2 context + 1 added = 3 new lines):\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,3 +2,3 @@\n fn total(a: i32, b: i32) -> i32 {\n-    a - b\n+    a + b\n }\n",
+                json!({"path":{"type":"string","description":"Workspace-relative path of the existing file (must match --- a/<path> and +++ b/<path>)"},"patch":{"type":"string","description":"Single-file unified diff using 1 context line before and after each change (for 1-line replacement use @@ -start,3 +start,3 @@)"},"expected_version":{"type":"string","description":"Complete SHA-256 version from the latest read_file"}}),
             ),
         };
         let required = match self.kind {

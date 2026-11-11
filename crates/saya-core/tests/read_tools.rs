@@ -1,6 +1,34 @@
 mod support;
-use saya_core::tools::read::{ReadLimits, ReadTools};
-use std::{fs, path::Path};
+use saya_core::{
+    boundary::Tool,
+    tools::read::{ReadLimits, ReadTool, ReadToolKind, ReadTools},
+};
+use std::{fs, path::Path, sync::Arc};
+
+#[test]
+fn search_definitions_require_directory_roots_and_describe_patterns()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let files = Arc::new(tools(temp.path())?);
+    for kind in [ReadToolKind::FindFiles, ReadToolKind::SearchText] {
+        let definition = ReadTool::new(files.clone(), kind).definition();
+        let path = &definition.input_schema["properties"]["path"]["description"];
+        assert!(
+            path.as_str()
+                .is_some_and(|text| text.contains("Directory root"))
+        );
+    }
+    let read = ReadTool::new(files.clone(), ReadToolKind::ReadFile).definition();
+    assert!(read.description.contains("search_text first"));
+    let search = ReadTool::new(files, ReadToolKind::SearchText).definition();
+    let properties = &search.input_schema["properties"];
+    assert!(
+        properties["pattern"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("Literal text"))
+    );
+    Ok(())
+}
 
 fn tools(root: &Path) -> Result<ReadTools, Box<dyn std::error::Error>> {
     Ok(ReadTools::new(root, &[], false, ReadLimits::default())?)
