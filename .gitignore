@@ -4,5 +4,9 @@
 # Rust build output; Cargo.lock remains tracked.
 /target/
 
+# Python bytecode caches created by test and helper scripts.
+__pycache__/
+*.py[cod]
+
 # Private local test configuration and credentials.
 /.saya/local/
