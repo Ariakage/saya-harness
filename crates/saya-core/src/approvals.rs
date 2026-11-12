@@ -746,13 +746,15 @@ impl OneShotPermit {
     pub(crate) fn finish_file(&self) -> Result<(), BoundaryError> {
         self.end()
     }
-    pub(crate) fn authorize_external(
+    /// Authorize either a trusted built-in adapter or an MCP adapter. The
+    /// normalized operation includes the complete descriptor fingerprint.
+    pub(crate) fn authorize_registered(
         &self,
         call: &ToolCall,
         context: &ToolContext,
         descriptor: &crate::registry::OperationDescriptor,
     ) -> Result<bool, BoundaryError> {
-        self.check(call, context, &Operation::external(descriptor)?)
+        self.check(call, context, &Operation::registered(descriptor)?)
     }
     pub(crate) fn finish_external(&self) -> Result<(), BoundaryError> {
         self.end()

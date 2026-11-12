@@ -1004,3 +1004,66 @@ fn n3_context_limits_and_unknown_settings_fail_closed_without_echoing_source() {
         assert!(!temp.path().join(".saya").exists());
     }
 }
+
+#[test]
+fn dev079_web_and_browser_settings_default_off_and_validate_strictly() {
+    let temp = TempDir::new().unwrap();
+    let path = write(temp.path(), "config.toml", &format!("{}\n", fixture()));
+    let config = config::load(
+        Overrides {
+            config: Some(path.clone()),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert!(!config.web.enabled);
+    assert!(!config.browser.enabled);
+    assert!(config.web.allowed_origins.is_empty());
+    assert!(config.web.search.is_none());
+
+    let valid = format!(
+        "{}\n[web]\nenabled=true\nallowed_origins=[\"http://127.0.0.1:8080\"]\nlocalhost_development_origin=\"http://127.0.0.1:8080\"\n[web.search]\nendpoint=\"http://127.0.0.1:8080/search\"\nmax_results=5\n",
+        fixture()
+    );
+    fs::write(&path, valid).unwrap();
+    let config = config::load(
+        Overrides {
+            config: Some(path.clone()),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert!(config.web.enabled);
+    assert!(config.web.search.is_some());
+
+    for table in [
+        "[web]\nenabled=true",
+        "[web]\nenabled=false\nmax_redirects=6",
+        "[web]\nenabled=false\nselector=\"body\"",
+        "[web]\nenabled=true\nallowed_origins=[\"https://example.com\"]\n[web.search]\nendpoint=\"https://other.example/search\"",
+        "[browser]\nmax_wait_ms=0",
+        "[browser]\nmax_snapshot_bytes=0",
+        "[browser]\ninstall=true",
+    ] {
+        let path = write(
+            temp.path(),
+            "config.toml",
+            &format!("{}\n{table}\n", fixture()),
+        );
+        let error = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        )
+        .err()
+        .expect("invalid DEV-079 setting accepted");
+        assert_eq!(error.0.code, "invalid_config", "{table}");
+    }
+}

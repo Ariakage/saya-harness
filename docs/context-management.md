@@ -24,7 +24,7 @@ exec管道／MCP解码结果
   -> output_search定位、output_read分页
 ```
 
-exec捕获位于管道drain阶段，stdout／stderr原有有效捕获上限默认各64KiB，超限继续排空。MCP在模型正文限额之前捕获文本和structuredContent为NDJSON，二进制内容记录省略描述。Browser产物接入仍按其后续任务推进。[配置与上限](configuration.md#输出捕获与上下文预算)
+exec捕获位于管道drain阶段，stdout／stderr原有有效捕获上限默认各64KiB，超限继续排空。MCP在模型正文限额之前捕获文本和structuredContent为NDJSON，二进制内容记录省略描述。DEV-079 的 Web 正文与 Browser 快照分别以 `Web`／`Browser` 流进入 OutputStore；快照捕获包含宿主投影后的 text／elements／document／source，超过16KiB投影时仍保留页面、文档与元素引用，供模型继续交互。[配置与上限](configuration.md#输出捕获与上下文预算)
 
 | 项目 | 当前默认或边界 |
 | --- | --- |
@@ -32,7 +32,8 @@ exec捕获位于管道drain阶段，stdout／stderr原有有效捕获上限默�
 | 对象数、尾部和预览 | 4096项，tail及preview各4096字节 |
 | 模型侧output_read | 默认8KiB、100行，最多8KiB、200行，较低宿主上限优先 |
 | 模型侧output_search | 最多50项、4行上下文及8KiB，较低宿主上限优先 |
-| 大历史结果投影 | 宿主有对应durable引用且原结果超过16KiB时，以引用和必要状态投影 |
+| 大历史结果投影 | 宿主有对应durable引用且原结果超过16KiB时，以引用和必要状态投影；Web／Browser 额外保留 source、page／document／document_revision／url／elements 或 final_url／status／content_type／result_count，Web 搜索正文由 output_read／output_search 回取，MCP／exec 投影不变 |
+| 捕获完成状态 | `eof`、`limit_reached`、`cancelled`、`read_failed`；只有 `eof` 且无缺口时 coverage 为 `complete` |
 
 元数据包括output_ref、Session／Run／call／stream归属、capture_limit_bytes、total_bytes_seen、retained_bytes、retained_source_bytes、retained_ranges、gaps、artifact_complete、completion、coverage、withheld_reason、preview_head／tail及sha256。退出码、超时、取消和实际执行错误继续保留在工具结果中。
 

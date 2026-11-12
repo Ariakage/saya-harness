@@ -568,6 +568,10 @@ struct Document {
     memory: MemorySettings,
     #[serde(default)]
     plugins: PluginSettings,
+    #[serde(default)]
+    web: crate::web::WebSettings,
+    #[serde(default)]
+    browser: crate::browser::BrowserSettings,
 }
 /// Effective settings; no model is implicitly selected. Secret values stay in Environment.
 #[derive(Clone)]
@@ -592,6 +596,8 @@ pub struct Config {
     pub context: ContextSettings,
     pub memory: MemorySettings,
     pub plugins: PluginSettings,
+    pub web: crate::web::WebSettings,
+    pub browser: crate::browser::BrowserSettings,
     env: Environment,
 }
 impl Config {
@@ -829,6 +835,12 @@ pub fn load(
     doc.output_capture.limits.validate()?;
     doc.context.validate()?;
     doc.plugins.validate()?;
+    doc.web
+        .validate()
+        .map_err(|_| invalid("web settings are invalid"))?;
+    doc.browser
+        .validate()
+        .map_err(|_| invalid("browser settings are invalid"))?;
     if doc
         .review
         .max_output_tokens
@@ -925,6 +937,8 @@ pub fn load(
         context: doc.context,
         memory: doc.memory,
         plugins: doc.plugins,
+        web: doc.web,
+        browser: doc.browser,
         env,
     })
 }

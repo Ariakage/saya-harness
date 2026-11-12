@@ -90,6 +90,7 @@
 | D-062 | 2026-11-12 | 模型总时限默认关闭，响应头300秒、流间隔900秒，超时进入有限间隔重试 | 项目负责人认为180秒总时限过短，明确要求无限总时限、服务器响应头300秒和相邻流数据块900秒。`model_timeout_seconds = 0` 只关闭单次总时限；取消、Run活跃预算、次数限制、工具及Compact独立超时继续生效。响应头／流空闲超时与暂时性连接、429、可重试5xx在尚无有效响应事件时最多重试2次，使用1／2秒退避和有限抖动，耗尽后返回最后错误；已收到部分响应时不重试拼接。更新B-15／B-16及[超时配置](configuration.md#模型超时与间隔重试)。 |
 | D-063 | 2026-11-12 | TUI普通文件占位符统一为`[File N]` | 项目负责人要求移除拖入文件前额外的`File: `前缀，使图片、音频、视频和普通文件都直接显示单一编号token。原子移动、删除和发送时真实路径展开保持不变。[TUI](tui.md) |
 | D-064 | 2026-11-12 | N4 Goal使用独立版本化存储、显式自动授权和证据驱动完成 | 项目负责人要求完成N4 Goal编排与验收。Goal绑定专属Session与工作区，通过独立SQLite WAL、revision CAS、lease与dispatch intent编排有界Run；自动继续必须显式`start --auto`并绑定配置指纹。Step完成、Run完成和验收证据分别记录，未知副作用不自动重放，只有全部验收项具有主机证据才完成。CLI与TUI共用GoalStore，TUI自动执行当前要求auto／bypass，Manual使用CLI审批。[Goal设计](goal.md)、[N4验收](n4-validation.md) |
+| D-065 | 2026-11-12 | 启动/实施N5 DEV-079至DEV-083，PLAN扩展受限URL读取但禁止主动Browser | 项目负责人本次明确要求完成N5 Browser范围与DEV-079审查修复。PLAN在只读文件／搜索和人工交互之外，允许显式配置的受限`fetch_url`／`web_search`，但`browser_open`／`close`／`navigate`等归为`BrowserWrite`，`browser_snapshot`／`wait`／`screenshot`归为`BrowserRead`，两类在PLAN均拒绝；只读运行时不得注册或执行Browser工具。Web／Browser输出、取消、生命周期、输出捕获与Goal配置指纹按本次实现收敛。该记录不声称真实Chromium／Playwright worker或平台验收已完成，N5联合验收仍按后续任务取得证据。[Browser设计](browser.md)、[执行契约](execution.md)、[配置](configuration.md) |
 
 完整基线是当前产品行为的权威入口，文末覆盖表追踪所有已收敛主题。实现中的函数签名、内部拆分和兼容依赖版本由开发者处理，不重新提出偏好问题。
 

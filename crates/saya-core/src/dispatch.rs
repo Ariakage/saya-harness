@@ -362,6 +362,19 @@ impl ToolDispatcher {
             .map_err(|_| failure("registry_error", "tool registry lock failed"))?
             .register_builtin(definition)
     }
+    /// Register a host-owned adapter whose classification and schema are fixed
+    /// by this build. It follows the same approval, capture and persistence
+    /// path as a discovered MCP adapter.
+    pub(crate) fn register_builtin_adapter(
+        &self,
+        definition: crate::boundary::ToolDefinition,
+        adapter: Arc<dyn Tool>,
+    ) -> Result<(), BoundaryError> {
+        self.registry
+            .write()
+            .map_err(|_| failure("registry_error", "tool registry lock failed"))?
+            .register_builtin_adapter(definition, adapter)
+    }
     /// Return native tool schemas without executing or authorizing a call.
     pub fn definitions(
         &self,
@@ -372,7 +385,24 @@ impl ToolDispatcher {
             .read()
             .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
         registry.validate_current_secrets(&self.current_secrets()?)?;
-        Ok(registry.definitions(mode, !self.read_only))
+        Ok(registry
+            .definitions(mode, !self.read_only)
+            .into_iter()
+            .filter(|definition| {
+                !self.read_only
+                    || !matches!(
+                        crate::registry::builtin_effect(&definition.name),
+                        Some(
+                            crate::registry::ToolEffect::BrowserRead
+                                | crate::registry::ToolEffect::BrowserWrite
+                        )
+                    )
+            })
+            .collect())
+    }
+    /// Whether this dispatcher hides every side-effecting and browser tool.
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.read_only
     }
     fn registered(&self, name: &str) -> Result<Option<RegisteredTool>, BoundaryError> {
         Ok(self
@@ -660,7 +690,20 @@ impl ToolDispatcher {
             Operation::background_control(&call.name)?
         } else if let Some(entry) = self.registered(&call.name)? {
             entry.validate_arguments(call)?;
-            Operation::external(entry.descriptor())?
+            if self.read_only
+                && (entry.descriptor().requires_durability()
+                    || matches!(
+                        entry.descriptor().effect,
+                        crate::registry::ToolEffect::BrowserRead
+                            | crate::registry::ToolEffect::BrowserWrite
+                    ))
+            {
+                return Err(failure(
+                    "durability_required",
+                    "side effects require durable storage",
+                ));
+            }
+            Operation::registered(entry.descriptor())?
         } else {
             return Err(failure("unknown_tool", "unsupported local tool"));
         };
@@ -971,27 +1014,34 @@ impl ToolDispatcher {
                     .registered(&call.name)?
                     .ok_or_else(|| failure("unknown_tool", "unsupported tool"))?;
                 entry.validate_arguments(call)?;
-                if self.read_only && entry.descriptor().requires_durability() {
+                if self.read_only
+                    && (entry.descriptor().requires_durability()
+                        || matches!(
+                            entry.descriptor().effect,
+                            crate::registry::ToolEffect::BrowserRead
+                                | crate::registry::ToolEffect::BrowserWrite
+                        ))
+                {
                     return Err(failure(
                         "durability_required",
                         "side effects require durable storage",
                     ));
                 }
-                if !permit.authorize_external(call, context, entry.descriptor())? {
+                if !permit.authorize_registered(call, context, entry.descriptor())? {
                     return Err(failure(
                         "stale_approval",
-                        "external approval is stale or cancelled",
+                        "registered tool approval is stale or cancelled",
                     ));
                 }
                 let _lease = ExternalLease(&permit);
                 let mut recorded = call.clone();
                 let mut arguments = serde_json::from_str(&recorded.arguments)
-                    .map_err(|_| failure("invalid_args", "invalid external arguments"))?;
+                    .map_err(|_| failure("invalid_args", "invalid registered arguments"))?;
                 arguments =
-                    Operation::external(entry.descriptor())?.normalized_arguments(arguments)?;
+                    Operation::registered(entry.descriptor())?.normalized_arguments(arguments)?;
                 crate::redaction::redact(&mut arguments, &known_secrets)?;
                 recorded.arguments = serde_json::to_string(&arguments)
-                    .map_err(|_| failure("invalid_args", "invalid external arguments"))?;
+                    .map_err(|_| failure("invalid_args", "invalid registered arguments"))?;
                 store
                     .commit(&[StoreChange::ToolIntent {
                         run_id: context.run.id,
@@ -1001,7 +1051,7 @@ impl ToolDispatcher {
                 let outcome = match self.begin_external(&entry) {
                     Ok((adapter, _registry_lease)) => {
                         if !cancel.is_cancelled()
-                            && permit.authorize_external(call, context, entry.descriptor())?
+                            && permit.authorize_registered(call, context, entry.descriptor())?
                         {
                             let mut remote = call.clone();
                             if let crate::registry::ToolSource::Mcp { remote_name, .. } =
@@ -1020,7 +1070,7 @@ impl ToolDispatcher {
                         } else {
                             Err(failure(
                                 "stale_approval",
-                                "external approval is stale or cancelled",
+                                "registered tool approval is stale or cancelled",
                             ))
                         }
                     }
@@ -1065,7 +1115,11 @@ impl ToolDispatcher {
                         );
                         data.insert(
                             "output_capture_format".into(),
-                            serde_json::json!("mcp_text_projection_ndjson_v1"),
+                            serde_json::json!(match &entry.descriptor().source {
+                                crate::registry::ToolSource::Mcp { .. } =>
+                                    "mcp_text_projection_ndjson_v1",
+                                crate::registry::ToolSource::Builtin => "sealed_text_v1",
+                            }),
                         );
                     }
                     if !capture.capture_errors.is_empty() {

@@ -189,6 +189,37 @@ HTTP 配置使用 `[mcp.servers.NAME.transport]`，设置 `type = "http"` 与完
 
 每个服务可设置 `[mcp.servers.NAME.limits]`。默认连接超时 20 秒，请求／目录发现超时 120 秒，单个 wire 消息和完整工具目录各 1 MiB，最多 32 页、256 个工具，结果投影 256 KiB、128 个内容块。运行时同时执行共享活跃时间与工具预算，人工确认期间暂停活跃计时，收尾独立完成。
 
+## Web 与 Browser（DEV-079）
+
+Web 读取与浏览器默认关闭。配置加载执行严格校验，未知字段、缺失 origin 或越界限额直接报错。本阶段没有生产 browser worker：`browser.enabled = true` 在程序任务装配时返回明确错误，实际 Playwright／Chromium 接入属于 DEV-080。
+
+```toml
+[web]
+enabled = false
+# 精确 origin，包含 scheme 与显式端口（如需要）。
+allowed_origins = ["https://example.com"]
+# 仅用于开发回环测试，必须同时出现在 allowed_origins。
+# localhost_development_origin = "http://127.0.0.1:8080"
+max_redirects = 5
+request_timeout_ms = 20000
+max_response_bytes = 2097152
+max_content_chars = 262144
+
+# 只有显式提供 endpoint 时才注册 web_search。
+# [web.search]
+# endpoint = "https://example.com/search"
+# max_results = 10
+
+[browser]
+enabled = false
+max_snapshot_bytes = 262144
+max_wait_ms = 60000
+```
+
+`fetch_url` 只接受 HTTP／HTTPS 的 GET／HEAD，拒绝 userinfo、fragment、特殊 scheme 和系统 proxy。每次重定向都重新检查 origin、公开地址与完整 DNS 答案，并把连接固定到已核查 IP。DNS 解析与响应体读取同时受 timeout 和取消约束；响应大小、内容类型、UTF-8、超时与取消均有边界。字节截断落在 UTF-8 多字节中间时保留有效前缀并标记 truncated，真正损坏的输入仍报 `invalid_utf8`。非 HTML 内容同样在截断时返回 `truncated = true`；没有 OutputStore、捕获失败或捕获未保留字节时，正文返回有界 16KiB 前缀并标记 truncated，不返回空成功。HTML 提取以任意命名空间的 element handler 排除 script／style／noscript／template（含 SVG／MathML）与 RawText／ScriptData，并避免相邻文本块无空白粘连。搜索 endpoint 必须严格规范化为 HTTP／HTTPS，不能包含 query 或 fragment，其 origin 必须出现在 `allowed_origins` 中；字面私网或回环地址默认拒绝，只有同时显式配置 `localhost_development_origin` 时才允许开发回环；开发 origin 必须是回环地址，回环 allowlist 条目必须同时指定为开发 origin。搜索请求固定为 `GET endpoint?q=<query>&limit=<n>`，响应必须是 `{"results":[{"title","url","snippet"?}]}` 严格 JSON，`url` 必须是可规范化的 HTTP／HTTPS 地址。网页正文和快照分别作为 `Web`／`Browser` 流进入 OutputStore，长内容保留 `output_ref`、coverage 与 truncated；搜索长结果投影只保留 `result_count` 等元数据，正文经 `output_read`／`output_search` 回取；上游、提取、provider 或捕获已截断时使用 `limit_reached` 完成状态，不伪称 `eof` 完整。
+
+工具权限分类为 `WebRead`、`BrowserRead`、`BrowserWrite`。`browser_open`／`close`／`navigate` 为 `BrowserWrite`；`snapshot`／`wait`／`screenshot` 为 `BrowserRead`；`click`／`fill`／`press`／`download`／`upload` 为 `BrowserWrite`。PLAN 只开放 `WebRead`，两类 Browser 效果均拒绝；只读运行时不得注册或执行 Browser 工具。`auto` 允许 `WebRead`／`BrowserRead` 并让 `BrowserWrite` 走独立模型核查；Manual Approval 逐次确认；bypass 仍受 PLAN 和显式 deny 限制。`browser_screenshot`／`download`／`upload` 仅在 provider facts 声明支持时注册；DEV-079 只验证元数据，截图媒体不保存、不注入模型请求，真实保存与注入由 DEV-082 完成，download／upload 结果标记 `untrusted_browser`。`browser_close` 在 provider 确认前保留 session／pages 并允许安全重试；shutdown 幂等、失败可重试且有界超时，browser 清理失败仍继续 MCP、插件、environment、broker 与目录清理并在末尾汇总首个错误；完整 shutdown 后的 open 失败或取消不会复用旧的干净状态。已派发的 navigate／click／fill／press／upload／download 被取消时返回 `outcome_unknown` 并持久化为 unknown，入口即已取消则返回 `cancelled`。PLAN 清理后返回 WORK 时显式 `browser_open` 会创建全新 provider 资源。
+
 ## 输出捕获与上下文预算
 
 N3开发线默认开启私有OutputStore，位置为所选 `data_dir` 下的 `outputs/`。新增配置独立控制捕获存储，原有 `limits.command_stdout_max_bytes`／`command_stderr_max_bytes`继续限制各流的有效捕获量，默认各64KiB。显式扩大这些值时仍受OutputStore对象及Run剩余额度约束。用户媒体快照与工具捕获共用该私有根及总库／对象数配额；`output_capture.enabled = false`只关闭工具输出捕获，不禁用Session媒体快照。

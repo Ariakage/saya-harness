@@ -7,6 +7,7 @@ use crate::{
         ResultProjection,
     },
     contract::{BoundaryError, HistoryItem, Session, ToolResult},
+    output_store::{OutputMetadata, OutputStream},
 };
 use std::{
     collections::BTreeMap,
@@ -42,6 +43,76 @@ impl ContextState {
             published: AtomicBool::new(false),
             rebuild: AtomicBool::new(false),
         })
+    }
+}
+
+/// Host fields retained when a long Web/Browser result is projected to
+/// OutputStore references. MCP and exec projections keep their existing shape;
+/// the browser model must still receive its opaque page/document/element
+/// references, and web results keep their origin and result metadata.
+fn retained_host_fields(outputs: &[OutputMetadata]) -> &'static [&'static str] {
+    let browser = outputs
+        .iter()
+        .any(|output| output.scope.stream == OutputStream::Browser);
+    let web = outputs
+        .iter()
+        .any(|output| output.scope.stream == OutputStream::Web);
+    if browser {
+        &[
+            "source",
+            "page",
+            "document",
+            "document_revision",
+            "url",
+            "title",
+            "text",
+            "elements",
+            "truncated",
+        ]
+    } else if web {
+        &[
+            "source",
+            "final_url",
+            "status",
+            "content_type",
+            "redirects",
+            "body",
+            "result_count",
+            "truncated",
+        ]
+    } else {
+        &[]
+    }
+}
+
+fn project_tool_result(result: &ToolResult, outputs: &[OutputMetadata]) -> ToolResult {
+    let mut data = serde_json::json!({"output_refs":outputs,"projection":"Retrieve required retained evidence using output_search and output_read. Inspect completeness and gaps."});
+    if let Some(source) = result.data.as_ref().and_then(serde_json::Value::as_object) {
+        for key in [
+            "exit_code",
+            "timed_out",
+            "cancelled",
+            "stdout_truncated",
+            "stderr_truncated",
+            "is_error",
+            "output_capture_errors",
+            "output_capture_format",
+        ] {
+            if let Some(value) = source.get(key) {
+                data[key] = value.clone();
+            }
+        }
+        for key in retained_host_fields(outputs) {
+            if let Some(value) = source.get(*key) {
+                data[*key] = value.clone();
+            }
+        }
+    }
+    ToolResult {
+        ok: result.ok,
+        error: result.error.clone(),
+        truncated: true,
+        data: Some(data),
     }
 }
 
@@ -97,29 +168,7 @@ impl AgentRuntime {
                     .len()
                     > 16 * 1024
             {
-                let mut data = serde_json::json!({"output_refs":outputs,"projection":"Retrieve required retained evidence using output_search and output_read. Inspect completeness and gaps."});
-                if let Some(source) = result.data.as_ref().and_then(serde_json::Value::as_object) {
-                    for key in [
-                        "exit_code",
-                        "timed_out",
-                        "cancelled",
-                        "stdout_truncated",
-                        "stderr_truncated",
-                        "is_error",
-                        "output_capture_errors",
-                        "output_capture_format",
-                    ] {
-                        if let Some(value) = source.get(key) {
-                            data[key] = value.clone();
-                        }
-                    }
-                }
-                let replacement = ToolResult {
-                    ok: result.ok,
-                    error: result.error.clone(),
-                    truncated: true,
-                    data: Some(data),
-                };
+                let replacement = project_tool_result(result, outputs);
                 projections.push(ResultProjection {
                     source_index,
                     source_item_sha256: context_builder::item_digest(item)?,
@@ -479,5 +528,196 @@ impl crate::boundary::Model for ModeBoundCompactionModel {
             self.check_sources()?;
             self.inner.start(request, cancel).await
         })
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use crate::{
+        boundary::ToolDefinition,
+        context_builder::{BuildInput, ContextBudget, CountingIdentity, ResultProjection},
+        contract::{ModelProtocol, ModelPurpose, RunId, SessionId, ToolCall},
+        output_store::{CaptureCompletion, OutputCoverage, OutputRange, OutputScope},
+    };
+    use serde_json::json;
+
+    fn metadata(call_id: &str, stream: OutputStream) -> OutputMetadata {
+        OutputMetadata {
+            output_ref: format!("{call_id}_output"),
+            scope: OutputScope {
+                session_id: SessionId::new(),
+                run_id: RunId::new(),
+                call_id: call_id.into(),
+                stream,
+            },
+            capture_limit_bytes: 256 * 1024,
+            total_bytes_seen: 32 * 1024,
+            retained_bytes: 8 * 1024,
+            retained_source_bytes: 32 * 1024,
+            retained_ranges: vec![OutputRange {
+                start: 0,
+                end: 32 * 1024,
+            }],
+            gaps: Vec::new(),
+            artifact_complete: false,
+            completion: CaptureCompletion::LimitReached,
+            coverage: OutputCoverage::RetainedRangesOnly,
+            withheld_reason: None,
+            preview_head: "preview".into(),
+            preview_tail: "tail".into(),
+            sha256: "digest".into(),
+        }
+    }
+
+    #[test]
+    fn long_browser_projection_retains_interactive_references() {
+        let elements = (0..40)
+            .map(|index| {
+                json!({
+                    "element_ref": format!("el_{index:064}"),
+                    "role": "button",
+                    "name": "x".repeat(600),
+                })
+            })
+            .collect::<Vec<_>>();
+        let result = ToolResult {
+            ok: true,
+            error: None,
+            truncated: true,
+            data: Some(json!({
+                "source": "untrusted_browser",
+                "page": "page_abc",
+                "document": "doc_abc",
+                "document_revision": 3,
+                "url": "https://example.com/page",
+                "title": "Example",
+                "elements": elements,
+            })),
+        };
+        assert!(
+            serde_json::to_vec(&result).unwrap().len() > 16 * 1024,
+            "fixture must exceed the projection threshold"
+        );
+        let call_id = "call-browser".to_owned();
+        let item = HistoryItem::ToolResult {
+            call_id: call_id.clone(),
+            result: result.clone(),
+        };
+        let outputs = vec![metadata(&call_id, OutputStream::Browser)];
+        let projection = ResultProjection {
+            source_index: 1,
+            source_item_sha256: context_builder::item_digest(&item).unwrap(),
+            call_id: call_id.clone(),
+            replacement: project_tool_result(&result, &outputs),
+            outputs: outputs.clone(),
+        };
+        let request = ModelRequest {
+            request_id: "request-browser".into(),
+            purpose: ModelPurpose::Execution,
+            profile: "fixture".into(),
+            instructions: "fixture".into(),
+            dynamic_instructions: None,
+            max_output_tokens: Some(100),
+            history: vec![
+                HistoryItem::ToolCall(ToolCall {
+                    call_id: call_id.clone(),
+                    name: "browser_snapshot".into(),
+                    arguments: "{}".into(),
+                }),
+                item,
+            ],
+            media: Default::default(),
+            tools: vec![ToolDefinition {
+                name: "browser_snapshot".into(),
+                description: "fixture".into(),
+                input_schema: json!({"type":"object","properties":{}}),
+            }],
+        };
+        let identity = CountingIdentity {
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fixture-model".into(),
+            adapter_version: "fixture-v1".into(),
+        };
+        let built = context_builder::build(
+            BuildInput {
+                request: &request,
+                identity: &identity,
+                budget: ContextBudget::new(100_000, 100, 100),
+                source_history: &request.history,
+                history_offset: 0,
+                revision: 1,
+                committed_view: None,
+                protected_ranges: &[],
+                output_projections: std::slice::from_ref(&projection),
+                group_retirements: &[],
+            },
+            None,
+        )
+        .unwrap();
+        let HistoryItem::ToolResult { result, .. } = built
+            .request
+            .history
+            .iter()
+            .find(|item| matches!(item, HistoryItem::ToolResult { .. }))
+            .expect("projection did not produce a tool result")
+        else {
+            panic!("projection did not produce a tool result");
+        };
+        let data = result.data.as_ref().unwrap();
+        assert_eq!(data["source"], "untrusted_browser");
+        assert_eq!(data["page"], "page_abc");
+        assert_eq!(data["document"], "doc_abc");
+        assert_eq!(data["document_revision"], 3);
+        assert_eq!(data["url"], "https://example.com/page");
+        assert_eq!(data["elements"].as_array().unwrap().len(), 40);
+        assert!(
+            data["output_refs"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
+    }
+
+    #[test]
+    fn withheld_capture_projection_retains_the_inline_fallback() {
+        for (stream, field) in [(OutputStream::Web, "body"), (OutputStream::Browser, "text")] {
+            let mut data = serde_json::Map::new();
+            data.insert("source".into(), json!("untrusted_source"));
+            data.insert(field.into(), json!("readable fallback"));
+            let result = ToolResult {
+                ok: true,
+                error: None,
+                truncated: true,
+                data: Some(serde_json::Value::Object(data)),
+            };
+            let mut output = metadata("call-withheld", stream);
+            output.total_bytes_seen = 32;
+            output.retained_bytes = 0;
+            output.coverage = OutputCoverage::Withheld;
+            output.withheld_reason = Some(crate::output_store::WithheldReason::CaptureDisabled);
+            let projected = project_tool_result(&result, &[output]);
+            assert_eq!(projected.data.unwrap()[field], "readable fallback");
+        }
+    }
+
+    #[test]
+    fn exec_projection_does_not_gain_browser_or_web_fields() {
+        let mut result = ToolResult {
+            ok: true,
+            error: None,
+            truncated: true,
+            data: Some(json!({
+                "stdout": "x".repeat(20 * 1024),
+                "page": "page_should_not_leak",
+                "final_url": "https://example.com",
+            })),
+        };
+        result.data.as_mut().unwrap()["stdout"] = json!("x".repeat(20 * 1024));
+        let outputs = vec![metadata("call-exec", OutputStream::Stdout)];
+        let projected = project_tool_result(&result, &outputs);
+        let data = projected.data.unwrap();
+        assert!(data.get("page").is_none());
+        assert!(data.get("final_url").is_none());
+        assert!(data.get("stdout").is_none());
     }
 }

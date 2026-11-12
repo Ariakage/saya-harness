@@ -746,6 +746,44 @@ impl AgentRuntime {
             .configure_mcp(settings, environment, authorizer, registry)?;
         Ok(runtime)
     }
+    /// Register the host-controlled web tool surface. Settings default to
+    /// disabled; this method therefore rejects disabled settings explicitly.
+    pub fn with_web(self, settings: crate::web::WebSettings) -> Result<Self, BoundaryError> {
+        self.with_web_resolver(settings, None)
+    }
+    /// Offline-testable variant using a host-owned resolver. The resolver is
+    /// never selected by model input.
+    pub fn with_web_resolver(
+        self,
+        settings: crate::web::WebSettings,
+        resolver: Option<Arc<dyn crate::network::NetworkResolver>>,
+    ) -> Result<Self, BoundaryError> {
+        let runtime = Arc::new(crate::web::WebRuntime::new(settings, resolver)?);
+        crate::web::register_tools(&runtime, self.dispatcher.as_ref())?;
+        Ok(self)
+    }
+    /// Register the provider-backed browser surface for this Run. The provider
+    /// remains host-owned; DEV-079 ships no production worker.
+    pub fn with_browser(
+        self,
+        settings: crate::browser::BrowserSettings,
+        provider: Arc<dyn crate::browser::BrowserProvider>,
+    ) -> Result<Self, BoundaryError> {
+        if self.dispatcher.is_read_only() {
+            return Err(error(
+                "invalid_config",
+                "Browser tools are unavailable in a read-only runtime",
+            ));
+        }
+        let state = Arc::new(crate::browser::BrowserState::new(
+            settings,
+            provider,
+            self.run.clone(),
+        )?);
+        crate::browser::register_tools(&state, self.dispatcher.as_ref())?;
+        self.services.configure_browser(state)?;
+        Ok(self)
+    }
     /// Install a UI clarification handler before starting this single-use run.
     pub fn with_input_handler(mut self, handler: Arc<dyn InputHandler>) -> Self {
         self.input = Some(handler);

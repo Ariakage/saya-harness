@@ -97,6 +97,8 @@ pub enum OutputStream {
     Stderr,
     Mcp,
     Text,
+    Web,
+    Browser,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +135,9 @@ impl OutputScope {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureCompletion {
     Eof,
+    /// The producer reached its own size or extraction limit. The captured
+    /// bytes are valid but the source was not observed to its end.
+    LimitReached,
     Cancelled,
     ReadFailed,
 }
@@ -553,6 +558,12 @@ impl OutputCapture {
     }
     pub fn scope(&self) -> &OutputScope {
         &self.record.scope
+    }
+    /// The effective capture limit after host quotas. A producer that observed
+    /// more than this or received zero must seal with `LimitReached` instead of
+    /// claiming `Eof`.
+    pub fn capture_limit_bytes(&self) -> usize {
+        self.record.capture_limit_bytes
     }
     pub fn total_bytes_seen(&self) -> u64 {
         self.observed

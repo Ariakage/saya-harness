@@ -472,6 +472,8 @@ TUI在现有富文本显示基础上增加宽度自适应管道表格、`__加�
 - core 运行协调器、三协议适配、本地持久会话与恢复已接入 CLI。工具往返、取消、超时、预算、权限、模式切换、结构化输出和四类任务通过受控验证，指定模型三协议文本与工具往返完成小规模联调。正式源码 `eaade53` 的[四平台 CI](https://github.com/Ariakage/saya-harness/actions/runs/42383106399)与[原生发行验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600)均通过。
 - [v0.1.0 已发布](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，四个平台安装包、校验和、验证记录及双语说明已上传，七项资产的公开下载内容均与验收产物一致。
 - 后续规划包含 F-01 至 F-20，N0 至 N5／DEV-038 至 DEV-089 的依赖与验收见[开发计划](post-mvp-plan.md)。本轮细化 Browser、原生 Sandbox／AST、上下文／长输出和插件规范，运行内后台工具已有 D-029 的 MVP 实现。
+- DEV-079 已完成宿主侧 Browser／Web 组件并通过本轮审查修复。`BrowserState` 校验 Run／Session 归属、每 Run 私有会话、同页串行、不透明文档与元素引用；`click`／`fill`／`press`／`upload` 显式核验当前 document token 并返回 `document_revision`，`wait` 后保守作废文档。unknown 绑定具体页面，跨页 snapshot 或新 open 不会清除；open 自身 unknown 使用独立全局保守状态，仅完整 close／shutdown 可清。Provider 全部方法接收取消，慢 wait／navigate 可中断；close 在 provider 确认前不丢弃 session／pages 并可重试，shutdown 幂等、失败可重试且有界超时。PLAN 清理保留可重启状态，回到 WORK 后显式 `browser_open` 创建全新 provider 生命周期。受控 `fetch_url` 支持 GET／HEAD、最多五次手工重定向、逐跳 origin／公开地址／DNS 检查与 IP 固定、禁用系统 proxy；DNS 与 body 读取响应 timeout／取消；非 HTML 截断、UTF-8 多字节截断与 HTML script／style／noscript／template 排除已覆盖，捕获失败返回有界正文前缀，截断捕获使用 `limit_reached` 而非 `eof`。新增 `WebRead`／`BrowserRead`／`BrowserWrite` 权限边界（open／close／navigate 为 BrowserWrite；snapshot／wait／screenshot 为 BrowserRead），只读运行时不注册也不执行 Browser 工具。本机验证：`cargo test -p saya-core --lib` 532 项通过，`cargo test -p saya-core --test config --test runtime_services --test registry --test permissions` 通过，`cargo test -p saya-app --test goal_fingerprint` 通过，`cargo clippy -p saya-core --all-targets -- -D warnings` 与 `cargo fmt --all` 通过；未运行四平台或真实浏览器。真实 Chromium／Playwright worker、登录、文件 broker、模型图片和四平台验收仍属 DEV-080 至 DEV-083，N5 整体未完成。
+- DEV-079 最终本机门禁在 macOS27.2 ARM／Rust1.99.1 完成：`RUST_TEST_THREADS=1 just check` 通过1489项Rust测试、8项条件忽略、格式、workspace全目标严格Clippy和release构建，日志为 `target/n5/dev079-signoff-check.log`；`just test-tooling` 81项通过，日志为 `target/n5/dev079-signoff-tooling.log`。同一release程序完成离线smoke、文本journey、5项历史审查回归和28组TUI PTY，日志为 `target/n5/dev079-signoff-smoke.log`，程序SHA-256为 `cd548dcfaf50e707b5fe721c0e0c757b75b776b1f0145cc93f9dd520daeb0255`。这些证据不覆盖真实Chromium或其他平台。
 - DEV-038至DEV-053已完成并随0.2.0发行，代码审查和发行证据见对应历史记录。当前N2的DEV-054至DEV-061、DEV-075已完成四平台验收，下一阶段为N3上下文与扩展。
 
 ## 2026-11-09 风险优先代码审查
@@ -501,7 +503,7 @@ R-02已修复并完成独立复核，本地稳定试用程序使用本次最终�
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 完成（四平台验收） | 原生隔离、受控网络、命令结构事实、MCP与凭据通过最终源码CI、原生／性能／MCP／Markdown与TUI验收，见[N2记录](n2-validation.md#最终四平台验收) |
 | N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 完成（四平台验收） | 16项共享运行入口通过四端Rust、原生、性能、MCP、插件、CLI与TUI联合矩阵，固定源码 `e1da373`，见[N3最终验收](n3-validation.md#四平台最终验收) |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 完成（本机受控验收） | 独立版本化 Goal 存储、专属 Session、手动／有限自动 Run、租约恢复、预算、证据核验、重规划、CLI／TUI 与报告通过本机 PTY／故障矩阵，见[N4验收](n4-validation.md) |
-| N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
+| N5 Browser | DEV-079 至 DEV-083 | DEV-079 完成（组件与离线测试），DEV-080 至 DEV-083 待开始 | `BrowserProvider`／`BrowserState`、受控 `fetch_url`／显式 endpoint `web_search`、固定工具面、三权限分类、Web／Browser OutputStore 流和 shutdown 清理已通过离线测试；真实 Chromium／Playwright worker 与联合验收未开始 |
 
 ### 全局记忆规划补充
 

@@ -9,6 +9,7 @@
 pub mod approvals;
 pub mod background;
 pub mod boundary;
+pub mod browser;
 pub mod checkpoint;
 pub mod command_analysis;
 pub mod compaction;
@@ -51,6 +52,10 @@ pub mod sqlite;
 pub mod text;
 pub mod tools;
 mod wal_recovery;
+pub mod web;
 
 #[cfg(test)]
 mod prototype;
+
+#[cfg(test)]
+mod web_browser_tests;

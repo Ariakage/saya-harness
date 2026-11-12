@@ -35,6 +35,17 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, sync::Mutex as AsyncMutex, task::JoinHandle};
 
+/// Host cleanup has its own bounded timeout and is not tied to a model request.
+struct HostCleanupCancellation;
+impl Cancellation for HostCleanupCancellation {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::pending())
+    }
+}
+
 #[derive(Clone, Default)]
 struct Settings {
     execution: Option<(SandboxPolicy, Option<BrokerPolicy>)>,
@@ -84,6 +95,7 @@ pub(super) struct RuntimeServices {
     fatal: Mutex<Option<BoundaryError>>,
     executor: Mutex<Option<tokio::runtime::Handle>>,
     transition_running: Mutex<bool>,
+    browser: Mutex<Option<Arc<crate::browser::BrowserState>>>,
 }
 impl Default for RuntimeServices {
     fn default() -> Self {
@@ -98,6 +110,7 @@ impl Default for RuntimeServices {
             fatal: Mutex::new(None),
             executor: Mutex::new(None),
             transition_running: Mutex::new(false),
+            browser: Mutex::new(None),
         }
     }
 }
@@ -170,6 +183,51 @@ impl Tool for ManagedTool {
 }
 
 impl RuntimeServices {
+    pub(super) fn configure_browser(
+        &self,
+        browser: Arc<crate::browser::BrowserState>,
+    ) -> Result<(), BoundaryError> {
+        if self.begun.load(Ordering::Acquire) {
+            return Err(error(
+                "invalid_run",
+                "Browser settings cannot change during a run",
+            ));
+        }
+        *self
+            .browser
+            .lock()
+            .map_err(|_| error("runtime_services", "Browser state lock failed"))? = Some(browser);
+        Ok(())
+    }
+
+    /// Shared browser cleanup invoked by both PLAN preparation and Run
+    /// shutdown. The state remains registered so an explicit browser_open can
+    /// start a fresh provider lifecycle after returning from PLAN, and a
+    /// failed or timed-out shutdown keeps the retryable state intact.
+    async fn shutdown_browser(&self) -> Result<(), BoundaryError> {
+        let browser = self
+            .browser
+            .lock()
+            .map_err(|_| error("runtime_services", "Browser state lock failed"))?
+            .clone();
+        let Some(browser) = browser else {
+            return Ok(());
+        };
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            browser.shutdown(&HostCleanupCancellation),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                browser.mark_shutdown_unknown().await;
+                return Err(error("outcome_unknown", "Browser shutdown timed out"));
+            }
+        }
+        Ok(())
+    }
+
     async fn emit_status(&self, state: &mut State) -> Result<(), BoundaryError> {
         let servers = state.statuses.values().cloned().collect::<Vec<_>>();
         if servers.is_empty() || servers == state.emitted_status {
@@ -292,9 +350,14 @@ impl RuntimeServices {
                 .map_err(|_| error("runtime_services", "Service settings lock failed"))?
                 .execution
                 .is_some();
+        let browser = self
+            .browser
+            .lock()
+            .map_err(|_| error("runtime_services", "Browser state lock failed"))?
+            .is_some();
         if target != WorkMode::Plan
             || !self.begun.load(Ordering::Acquire)
-            || (!self.local_configured.load(Ordering::Acquire) && !isolated)
+            || (!self.local_configured.load(Ordering::Acquire) && !isolated && !browser)
         {
             return handle.jobs.request_mode(target);
         }
@@ -320,6 +383,7 @@ impl RuntimeServices {
         // can race this idle fast path. In-flight invocations retain the guard
         // across the second permit check and native process-lease acquisition.
         if !self.local_configured.load(Ordering::Acquire)
+            && !browser
             && handle.modes.active_invocations()? == 1
             && execution
                 .as_ref()
@@ -423,11 +487,22 @@ impl RuntimeServices {
             .and_then(|seconds| seconds.checked_add(20))
             .ok_or_else(|| error("outcome_unknown", "Service cleanup budget is invalid"))?;
         tokio::time::timeout(Duration::from_secs(seconds), async {
-            self.stop_servers(&mut state, dispatcher, true).await?;
-            if let Some(environment) = &state.environment {
-                environment.wait_for_process_cleanup().await?;
+            // Browser resources are released first, before environment and
+            // broker teardown. A browser failure does not skip unrelated
+            // services; the first failure is returned after all cleanup steps.
+            let mut first_error = self.shutdown_browser().await.err();
+            if let Err(error) = self.stop_servers(&mut state, dispatcher, true).await {
+                first_error.get_or_insert(error);
             }
-            Ok::<(), BoundaryError>(())
+            if let Some(environment) = &state.environment
+                && let Err(error) = environment.wait_for_process_cleanup().await
+            {
+                first_error.get_or_insert(error);
+            }
+            match first_error {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
         })
         .await
         .map_err(|_| {
@@ -1401,50 +1476,74 @@ impl RuntimeServices {
         }
     }
     pub(super) async fn shutdown(&self, dispatcher: &ToolDispatcher) -> Result<(), BoundaryError> {
+        // Browser first: release provider pages before environment and broker
+        // teardown. A browser failure must not skip the remaining cleanup; every
+        // step runs and the first error is reported at the end.
+        let mut first_error = None;
+        if let Err(error) = self.shutdown_browser().await {
+            first_error.get_or_insert(error);
+        }
         let mut state = self.state.lock().await;
         state.closed = true;
         if let Some(preparation) = &state.plugin_preparation {
             preparation.cancel();
         }
-        self.finish_plugin_preparation(&mut state, true).await?;
-        self.stop_servers(&mut state, dispatcher, false).await?;
-        self.cleanup_plugins(&mut state).await?;
-        if let Some(path) = state.plugin_broker_directory.as_ref() {
-            std::fs::remove_dir(path).map_err(|_| {
-                error(
-                    "outcome_unknown",
-                    "Private plugin broker root cleanup is incomplete",
-                )
-            })?;
-            state.plugin_broker_directory = None;
+        if let Err(error) = self.finish_plugin_preparation(&mut state, true).await {
+            first_error.get_or_insert(error);
         }
-        if let Some(environment) = &state.environment {
-            environment.wait_for_process_cleanup().await?;
-            if !environment.cleanup()?.complete {
-                return Err(error(
-                    "outcome_unknown",
-                    "Execution environment cleanup is incomplete",
-                ));
+        if let Err(error) = self.stop_servers(&mut state, dispatcher, false).await {
+            first_error.get_or_insert(error);
+        }
+        if let Err(error) = self.cleanup_plugins(&mut state).await {
+            first_error.get_or_insert(error);
+        }
+        if let Some(path) = state.plugin_broker_directory.clone() {
+            match std::fs::remove_dir(&path) {
+                Ok(()) => state.plugin_broker_directory = None,
+                Err(_) => {
+                    first_error.get_or_insert(error(
+                        "outcome_unknown",
+                        "Private plugin broker root cleanup is incomplete",
+                    ));
+                }
             }
         }
-        state.environment = None;
-        if let Some(broker) = state.broker.take() {
-            broker
-                .shutdown()
-                .await
-                .map_err(|_| error("outcome_unknown", "Network broker shutdown is incomplete"))?;
+        if let Some(environment) = state.environment.clone() {
+            if let Err(error) = environment.wait_for_process_cleanup().await {
+                first_error.get_or_insert(error);
+            }
+            match environment.cleanup() {
+                Ok(result) if result.complete => state.environment = None,
+                Ok(_) => {
+                    first_error.get_or_insert(error(
+                        "outcome_unknown",
+                        "Execution environment cleanup is incomplete",
+                    ));
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        if let Some(directory) = state.broker_directory.take() {
-            std::fs::remove_dir(directory).map_err(|_| {
-                error(
-                    "outcome_unknown",
-                    "Private broker directory cleanup is incomplete",
-                )
-            })?;
+        if let Some(broker) = state.broker.take()
+            && broker.shutdown().await.is_err()
+        {
+            first_error.get_or_insert(error(
+                "outcome_unknown",
+                "Network broker shutdown is incomplete",
+            ));
+        }
+        if let Some(directory) = state.broker_directory.take()
+            && std::fs::remove_dir(directory).is_err()
+        {
+            first_error.get_or_insert(error(
+                "outcome_unknown",
+                "Private broker directory cleanup is incomplete",
+            ));
         }
         drop(state);
         // Persist the final mode only after its cleanup guard is released.
-        tokio::time::timeout(Duration::from_secs(10), async {
+        let mode_cleanup = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(failure) = self.fatal()? {
                     return Err(failure);
@@ -1460,8 +1559,15 @@ impl RuntimeServices {
             }
         })
         .await
-        .map_err(|_| error("outcome_unknown", "Mode cleanup could not be confirmed"))??;
-        Ok(())
+        .map_err(|_| error("outcome_unknown", "Mode cleanup could not be confirmed"))
+        .and_then(|result| result);
+        if let Err(error) = mode_cleanup {
+            first_error.get_or_insert(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 fn env_reference(environment: &Environment, name: &str) -> Result<String, BoundaryError> {
@@ -1527,4 +1633,249 @@ async fn confirm_startup(
     let result = tokio::select! {biased;_ =cancel.cancelled()=>Err(startup_cancelled(runtime)),result=handler.confirm(request,cancel)=>result};
     runtime.budget.resume()?;
     result
+}
+
+#[cfg(test)]
+mod browser_cleanup_tests {
+    use super::*;
+    use crate::{
+        browser::{BrowserSettings, BrowserState, FixtureProvider},
+        contract::{PermissionMode, Run, RunId, SessionId, WorkMode},
+    };
+
+    struct NeverCancel;
+    impl Cancellation for NeverCancel {
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+        fn cancelled(&self) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_cleanup_invokes_browser_provider_shutdown() {
+        use crate::{
+            approvals::{ApprovalSetup, PermissionRevision, Preauthorizations},
+            dispatch::ToolDispatcher,
+            memory::MemoryStore,
+            mode::ModeController,
+            permissions::{PermissionConfig, Policy},
+            tools::{
+                exec::ExecConfig,
+                read::{ReadLimits, ReadTools},
+            },
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let run = Run {
+            id: RunId::new(),
+            session_id: SessionId::new(),
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Auto,
+        };
+        let policy = Arc::new(Policy::new(temp.path(), PermissionConfig::default()).unwrap());
+        let modes = ModeController::new(WorkMode::Work);
+        let dispatcher = ToolDispatcher::new(
+            policy,
+            modes.clone(),
+            PermissionRevision::new(modes.clone(), PermissionMode::Auto),
+            Arc::new(MemoryStore::default()),
+            ApprovalSetup {
+                run_id: run.id,
+                session_id: run.session_id,
+                initial_permissions: PermissionMode::Auto,
+                preauthorizations: Preauthorizations::default(),
+                known_secrets: Vec::new(),
+                cancellation: Arc::new(NeverCancel),
+            },
+            Arc::new(ReadTools::new(temp.path(), &[], false, ReadLimits::default()).unwrap()),
+            ExecConfig::default(),
+        )
+        .unwrap();
+        let services = RuntimeServices::default();
+        let provider = Arc::new(FixtureProvider::full());
+        let state = Arc::new(
+            BrowserState::new(
+                BrowserSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+                provider.clone(),
+                run.clone(),
+            )
+            .unwrap(),
+        );
+        services.configure_browser(state).unwrap();
+        let revision = modes.snapshot().unwrap().revision;
+        assert!(modes.begin_shared(revision).unwrap());
+        modes.request(WorkMode::Plan).unwrap();
+        services
+            .cleanup_for_plan(&modes, &dispatcher, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(provider.shutdown_count(), 1);
+        // The state stays registered after PLAN cleanup; returning to WORK and
+        // explicitly opening again creates a fresh provider resource lifecycle.
+        let browser = services
+            .browser
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("browser state was discarded during PLAN cleanup");
+        let opened = browser
+            .open(
+                &ToolContext {
+                    run: run.clone(),
+                    workspace: temp.path().to_path_buf(),
+                },
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert!(opened.page.starts_with("page_"));
+        modes.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn shared_cleanup_invokes_browser_provider_shutdown_exactly_once() {
+        let services = RuntimeServices::default();
+        let provider = Arc::new(FixtureProvider::full());
+        let state = Arc::new(
+            BrowserState::new(
+                BrowserSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+                provider.clone(),
+                Run {
+                    id: RunId::new(),
+                    session_id: SessionId::new(),
+                    work_mode: WorkMode::Work,
+                    permissions: PermissionMode::Auto,
+                },
+            )
+            .unwrap(),
+        );
+        services.configure_browser(state).unwrap();
+        services.shutdown_browser().await.unwrap();
+        services.shutdown_browser().await.unwrap();
+        assert_eq!(provider.shutdown_count(), 1);
+        // Cleanup keeps the registered state so a later explicit open can start
+        // a fresh provider lifecycle.
+        assert!(services.browser.lock().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn browser_shutdown_failure_does_not_skip_later_cleanup() {
+        use crate::{
+            approvals::{ApprovalSetup, PermissionRevision, Preauthorizations},
+            dispatch::ToolDispatcher,
+            memory::MemoryStore,
+            mode::ModeController,
+            permissions::{PermissionConfig, Policy},
+            tools::{
+                exec::ExecConfig,
+                read::{ReadLimits, ReadTools},
+            },
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let run = Run {
+            id: RunId::new(),
+            session_id: SessionId::new(),
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Auto,
+        };
+        let policy = Arc::new(Policy::new(temp.path(), PermissionConfig::default()).unwrap());
+        let modes = ModeController::new(WorkMode::Work);
+        let dispatcher = ToolDispatcher::new(
+            policy,
+            modes.clone(),
+            PermissionRevision::new(modes, PermissionMode::Auto),
+            Arc::new(MemoryStore::default()),
+            ApprovalSetup {
+                run_id: run.id,
+                session_id: run.session_id,
+                initial_permissions: PermissionMode::Auto,
+                preauthorizations: Preauthorizations::default(),
+                known_secrets: Vec::new(),
+                cancellation: Arc::new(NeverCancel),
+            },
+            Arc::new(ReadTools::new(temp.path(), &[], false, ReadLimits::default()).unwrap()),
+            ExecConfig::default(),
+        )
+        .unwrap();
+        let services = RuntimeServices::default();
+        let provider = Arc::new(FixtureProvider::full());
+        let state = Arc::new(
+            BrowserState::new(
+                BrowserSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+                provider.clone(),
+                run,
+            )
+            .unwrap(),
+        );
+        services.configure_browser(state).unwrap();
+        let broker_directory = temp.path().join("broker");
+        std::fs::create_dir(&broker_directory).unwrap();
+        {
+            let mut state = services.state.lock().await;
+            state.broker_directory = Some(broker_directory.clone());
+        }
+        provider.fail_next_shutdown_unknown();
+        let error = services.shutdown(&dispatcher).await.unwrap_err();
+        assert_eq!(error.0.code, "outcome_unknown");
+        // Browser cleanup failed, but the later broker directory cleanup still
+        // ran and the retryable browser state remains registered.
+        assert!(!broker_directory.exists());
+        assert!(services.state.lock().await.broker_directory.is_none());
+        assert!(services.browser.lock().unwrap().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_timeout_keeps_retryable_browser_state() {
+        let services = RuntimeServices::default();
+        let provider = Arc::new(FixtureProvider::full().with_shutdown_delay(3_600_000));
+        let run = Run {
+            id: RunId::new(),
+            session_id: SessionId::new(),
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Auto,
+        };
+        let state = Arc::new(
+            BrowserState::new(
+                BrowserSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+                provider.clone(),
+                run.clone(),
+            )
+            .unwrap(),
+        );
+        services.configure_browser(state).unwrap();
+        let error = services.shutdown_browser().await.unwrap_err();
+        assert_eq!(error.0.code, "outcome_unknown");
+        assert_eq!(provider.shutdown_count(), 0);
+        assert!(services.browser.lock().unwrap().is_some());
+        let browser = services
+            .browser
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("retryable state was discarded");
+        let error = browser
+            .open(
+                &ToolContext {
+                    run,
+                    workspace: std::path::PathBuf::from("."),
+                },
+                &NeverCancel,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "outcome_unknown");
+    }
 }

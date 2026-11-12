@@ -335,6 +335,15 @@ pub fn build_runtime(
     if config.output_capture.enabled {
         runtime = runtime.with_output_store(outputs)?;
     }
+    if config.browser.enabled {
+        return Err(
+            "browser.enabled requires the DEV-080 browser worker, which is not part of this build"
+                .into(),
+        );
+    }
+    if config.web.enabled {
+        runtime = runtime.with_web(config.web.clone())?;
+    }
     let memory_root = config.memory_root()?;
     let memory = Arc::new(saya_core::global_memory::GlobalMemoryStore::open(
         &memory_root,

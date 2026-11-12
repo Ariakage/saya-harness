@@ -43,6 +43,13 @@ pub enum ToolEffect {
     SessionMetadata,
     Interaction,
     Control,
+    /// Host-controlled web reading, such as an explicitly enabled fetch or
+    /// search endpoint. All response bodies are untrusted web content.
+    WebRead,
+    /// Host-controlled browser observation. Never available in PLAN.
+    BrowserRead,
+    /// Browser interaction or file transfer. May have external side effects.
+    BrowserWrite,
     ExternalReadOnly,
     ExternalUnknown,
 }
@@ -74,13 +81,17 @@ impl OperationDescriptor {
                 | ToolEffect::SessionMetadata
                 | ToolEffect::Interaction
                 | ToolEffect::Control
+                | ToolEffect::WebRead
                 | ToolEffect::ExternalReadOnly
         )
     }
     pub fn requires_durability(&self) -> bool {
         matches!(
             self.effect,
-            ToolEffect::FileWrite | ToolEffect::Process | ToolEffect::ExternalUnknown
+            ToolEffect::FileWrite
+                | ToolEffect::Process
+                | ToolEffect::BrowserWrite
+                | ToolEffect::ExternalUnknown
         )
     }
 }
@@ -186,6 +197,43 @@ impl ToolRegistry {
             descriptor,
             validator: None,
             adapter: None,
+        })
+    }
+    /// Register a host-owned built-in adapter. Unlike external MCP discovery,
+    /// the schema and identity are host-authored and validated with the same
+    /// bounded offline validator before dispatch.
+    pub(crate) fn register_builtin_adapter(
+        &mut self,
+        definition: ToolDefinition,
+        adapter: Arc<dyn Tool>,
+    ) -> Result<(), BoundaryError> {
+        let effect = builtin_effect(&definition.name)
+            .ok_or_else(|| failure("invalid_tool", "unknown built-in tool"))?;
+        if definition.input_schema.get("type").and_then(Value::as_str) != Some("object")
+            || definition.description.len() > 8192
+        {
+            return Err(failure(
+                "invalid_tool_schema",
+                "built-in tool metadata must use a bounded object schema",
+            ));
+        }
+        let validator = compile_external_schema(&definition.input_schema)?;
+        let descriptor = descriptor(&definition, ToolSource::Builtin, effect)?;
+        let metadata = serde_json::json!({"descriptor":descriptor,"name":definition.name,
+            "description":definition.description,"schema":definition.input_schema});
+        let encoded = serde_json::to_string(&metadata)
+            .map_err(|_| failure("invalid_tool", "cannot encode built-in metadata"))?;
+        if crate::redaction::contains_secret(&encoded, &self.known_secrets) {
+            return Err(failure(
+                "credential_exposure",
+                "built-in tool metadata contains a known credential",
+            ));
+        }
+        self.insert(RegisteredTool {
+            definition,
+            descriptor,
+            validator: Some(validator),
+            adapter: Some(adapter),
         })
     }
     /// Register a discovered MCP adapter under a stable provider-compatible name.
@@ -325,6 +373,12 @@ pub fn builtin_effect(name: &str) -> Option<ToolEffect> {
         "todo_write" | "output_read" | "output_search" => ToolEffect::SessionMetadata,
         "ask_user" => ToolEffect::Interaction,
         "background_start" | "background_status" | "background_cancel" => ToolEffect::Control,
+        "fetch_url" | "web_search" => ToolEffect::WebRead,
+        "browser_snapshot" | "browser_wait" | "browser_screenshot" => ToolEffect::BrowserRead,
+        "browser_open" | "browser_close" | "browser_navigate" | "browser_click"
+        | "browser_fill" | "browser_press" | "browser_download" | "browser_upload" => {
+            ToolEffect::BrowserWrite
+        }
         _ => return None,
     })
 }

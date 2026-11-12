@@ -115,6 +115,7 @@ enum Target {
     Input,
     BackgroundControl,
     Metadata,
+    Builtin(crate::registry::OperationDescriptor),
     External(crate::registry::OperationDescriptor),
 }
 impl Operation {
@@ -188,6 +189,33 @@ impl Operation {
             tool: descriptor.name.clone(),
             target: Target::External(descriptor.clone()),
         })
+    }
+    /// Construct either a trusted host built-in or an MCP adapter operation
+    /// from the registry snapshot bound into its approval.
+    pub fn registered(
+        descriptor: &crate::registry::OperationDescriptor,
+    ) -> Result<Self, BoundaryError> {
+        use crate::registry::{ToolEffect, ToolSource};
+        match &descriptor.source {
+            ToolSource::Mcp { .. } => Self::external(descriptor),
+            ToolSource::Builtin => {
+                if crate::registry::builtin_effect(&descriptor.name) != Some(descriptor.effect)
+                    || !matches!(
+                        descriptor.effect,
+                        ToolEffect::WebRead | ToolEffect::BrowserRead | ToolEffect::BrowserWrite
+                    )
+                {
+                    return Err(failure(
+                        "invalid_args",
+                        "invalid built-in operation identity",
+                    ));
+                }
+                Ok(Self {
+                    tool: descriptor.name.clone(),
+                    target: Target::Builtin(descriptor.clone()),
+                })
+            }
+        }
     }
     /// Construct a file operation. Existing targets and existing parents of new
     /// targets are canonicalized. This reads filesystem metadata, not content.
@@ -406,6 +434,17 @@ impl Operation {
                     "__saya_operation".into(),
                     serde_json::to_value(descriptor).map_err(|_| {
                         failure("invalid_args", "invalid external operation identity")
+                    })?,
+                );
+            }
+            Target::Builtin(descriptor) => {
+                if map.contains_key("__saya_operation") {
+                    return Err(failure("invalid_args", "reserved built-in operation field"));
+                }
+                map.insert(
+                    "__saya_operation".into(),
+                    serde_json::to_value(descriptor).map_err(|_| {
+                        failure("invalid_args", "invalid built-in operation identity")
                     })?,
                 );
             }
@@ -647,6 +686,19 @@ impl Policy {
                         | "checkpoint_diff"
                         | "checkpoint_accept"
                         | "checkpoint_restore"
+                        | "fetch_url"
+                        | "web_search"
+                        | "browser_open"
+                        | "browser_close"
+                        | "browser_navigate"
+                        | "browser_snapshot"
+                        | "browser_click"
+                        | "browser_fill"
+                        | "browser_press"
+                        | "browser_wait"
+                        | "browser_screenshot"
+                        | "browser_download"
+                        | "browser_upload"
                 ) && !crate::registry::valid_external_name(tool)
                 {
                     return Err(failure("invalid_config", "unknown rule tool"));
@@ -747,10 +799,17 @@ impl Policy {
                     ..
                 }
             );
+        let builtin_effect = match &op.target {
+            Target::Builtin(descriptor) => Some(descriptor.effect),
+            _ => None,
+        };
+        let web_read = builtin_effect == Some(crate::registry::ToolEffect::WebRead);
+        let browser_read = builtin_effect == Some(crate::registry::ToolEffect::BrowserRead);
+        let browser_write = builtin_effect == Some(crate::registry::ToolEffect::BrowserWrite);
         let input = op.tool == "ask_user";
         let control = matches!(op.target, Target::BackgroundControl);
         let metadata = matches!(op.target, Target::Metadata);
-        if mode == WorkMode::Plan && !read && !input && !control && !metadata {
+        if mode == WorkMode::Plan && !read && !web_read && !input && !control && !metadata {
             return decision(Decision::Deny, "plan_read_only");
         }
         let path = match &op.target {
@@ -760,6 +819,7 @@ impl Policy {
             | Target::Input
             | Target::BackgroundControl
             | Target::Metadata
+            | Target::Builtin(_)
             | Target::External(_) => None,
         };
         if permissions != PermissionMode::Bypass
@@ -806,6 +866,8 @@ impl Policy {
         }
         if allow
             || read
+            || web_read
+            || browser_read
             || input
             || control
             || metadata
@@ -819,6 +881,9 @@ impl Policy {
                     "native_default"
                 },
             );
+        }
+        if browser_write {
+            return decision(Decision::ModelReview, "browser_write_review");
         }
         decision(Decision::ModelReview, "unmatched_exec")
     }
@@ -860,6 +925,7 @@ impl Rule {
             | Target::Input
             | Target::BackgroundControl
             | Target::Metadata
+            | Target::Builtin(_)
             | Target::External(_) => None,
         };
         let path_matches = self.path.as_ref().is_none_or(|pattern| {

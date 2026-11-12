@@ -620,6 +620,18 @@ pub fn goal_profile_fingerprint(config: &Config, profile: &str) -> Result<String
             "Goal Plugin configuration cannot be fingerprinted",
         )
     })?);
+    hash.update(serde_json::to_vec(&config.web).map_err(|_| {
+        failure(
+            "invalid_goal",
+            "Goal web configuration cannot be fingerprinted",
+        )
+    })?);
+    hash.update(serde_json::to_vec(&config.browser).map_err(|_| {
+        failure(
+            "invalid_goal",
+            "Goal browser configuration cannot be fingerprinted",
+        )
+    })?);
     hash.update(
         serde_json::to_vec(&serde_json::json!({
             "review_profile": config.review.profile.as_deref(),

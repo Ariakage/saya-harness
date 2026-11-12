@@ -10,7 +10,7 @@
 
 - 新会话默认工作模式为 WORK；PLAN、BUILD、CODE、WORK 的职责见[运行模式](modes.md)。
 - 默认权限模式为 `auto`，另有 `bypass permissions` 和 `Manual Approval`；CLI 参数分别为 `--permissions auto|bypass|manual`。
-- PLAN 在三种权限模式下均保持只读调查，不修改工作区文件。
+- PLAN 在三种权限模式下均保持只读调查，不修改工作区文件。PLAN 允许显式配置的受限 URL 读取（`fetch_url` 与可选 `web_search`），但禁止 `browser_open`、`browser_navigate`、`browser_snapshot`、`browser_click` 等全部主动 Browser 工具，包括观察类调用。
 - 恢复会话时恢复原工作模式，但使用本次启动的权限设置，不从历史恢复授权。
 
 ## 运行中引导
@@ -60,6 +60,8 @@ TUI 的 Agent 执行期间可以继续提交普通用户消息。消息进入有
 工具为 read_file、list_dir、find_files、search_text、write_file、apply_patch、exec，以及人工澄清用的 ask_user；后台控制工具为 background_start、background_status 和 background_cancel。核心输入输出见 B-14。
 
 开发线按D-046增加 `todo_write` 会话任务清单工具，PLAN可更新任务元数据，Manual Approval每次调用均需批准。完整列表替换、校验限额及恢复规则见[运行时](runtime.md#会话任务清单)。
+
+N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。真实 Chromium／Playwright worker 与平台验收仍属 DEV-080 至 DEV-083。
 
 工具按下面的顺序处理：
 

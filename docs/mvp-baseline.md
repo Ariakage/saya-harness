@@ -190,7 +190,8 @@ model_timeout_seconds = 180
 
 - `auto`、`bypass`、`manual` 分别对应已确认的三种权限模式；默认 `auto`。Manual Approval 的每次工具调用均须人工批准，包括读取、搜索和后台启动／查询／取消；模型请求不单独确认。
 - 权限模式允许在会话空闲时由用户修改，运行中直接拒绝修改并提示取消或等待。修改清空本运行外可重用的临时许可；0.1 不自动持久化授权。
-- PLAN 仅启用只读文件／搜索工具及人工交互，禁用写工具和通用 `exec`。这条限制在三种权限模式与显式预授权下均不能绕过。
+- PLAN 仅启用只读文件／搜索工具、受限 URL 读取（`fetch_url`，以及显式配置 endpoint 时的 `web_search`）及人工交互，禁用写工具、通用 `exec` 和主动 Browser 工具（`browser_open`／`navigate`／`snapshot`／`click` 等全部浏览器观察与交互）。这条限制在三种权限模式与显式预授权下均不能绕过。
+- 工具效果区分为 `WebRead`、`BrowserRead`、`BrowserWrite`。`WebRead` 走受控读取并在 PLAN 可用；`BrowserRead` 允许 snapshot／wait／screenshot 等观察，`BrowserWrite` 覆盖 open／close／navigate／click／fill／press／download／upload。PLAN 拒绝两类 Browser 效果；`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入独立模型核查；Manual Approval 逐次确认；bypass 仍保留 PLAN 与显式 deny。只读运行时不得注册或执行任何 Browser 工具。
 - auto／manual 的文件工具默认只访问规范化工作区及用户明确配置的 additional roots；范围外直接拒绝，用户可显式扩充根。bypass 跳过这些路径范围检查。
 - 用户明确配置的 deny 规则、工作模式限制、参数校验、取消和运行预算仍然生效；bypass 跳过人工确认、路径规则和 auto 模型核查，不生成虚假的核查记录。
 - 路径约束落实在文件工具及命令启动目录校验。通用命令是本机进程，MVP 不提供操作系统沙箱，不把 cwd 或参数审批宣称为子进程文件系统隔离。真正的沙箱明确列入后续能力。
