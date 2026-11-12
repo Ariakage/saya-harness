@@ -1020,8 +1020,48 @@ fn dev079_web_and_browser_settings_default_off_and_validate_strictly() {
     .unwrap();
     assert!(!config.web.enabled);
     assert!(!config.browser.enabled);
+    assert!(!config.browser.worker.enabled);
+    assert!(!config.browser.vm.enabled);
+    assert_eq!(config.browser.vm.connect_timeout_ms, 20_000);
+    assert_eq!(config.browser.vm.request_timeout_ms, 120_000);
+    assert_eq!(config.browser.vm.cleanup_timeout_ms, 10_000);
+    assert_eq!(config.browser.vm.stderr_limit_bytes, 64 * 1024);
+    assert_eq!(config.browser.worker.connect_timeout_ms, 20_000);
+    assert_eq!(config.browser.worker.request_timeout_ms, 120_000);
+    assert_eq!(config.browser.worker.stderr_limit_bytes, 64 * 1024);
     assert!(config.web.allowed_origins.is_empty());
     assert!(config.web.search.is_none());
+
+    let worker_root = temp.path().join("worker");
+    let digest = "0".repeat(64);
+    let worker = format!(
+        "[browser.worker]\nenabled=true\nnode=\"{}\"\nworker_root=\"{}\"\nchromium=\"{}\"\nidentity_manifest=\"{}\"\nidentity_sha256=\"{digest}\"\ntemp_root=\"{}\"\nproxy=\"http://127.0.0.1:3128\"\n",
+        temp.path().join("node").display(),
+        worker_root.display(),
+        temp.path().join("chromium").display(),
+        temp.path().join("identity.json").display(),
+        temp.path().display(),
+    );
+    let path = write(
+        temp.path(),
+        "config.toml",
+        &format!("{}\n{worker}\n", fixture()),
+    );
+    let config = config::load(
+        Overrides {
+            config: Some(path.clone()),
+            ..Default::default()
+        },
+        test_env(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert!(config.browser.worker.enabled);
+    assert_eq!(config.browser.worker.identity_sha256, Some(digest));
+    assert_eq!(
+        config.browser.worker.proxy.as_deref(),
+        Some("http://127.0.0.1:3128")
+    );
 
     let valid = format!(
         "{}\n[web]\nenabled=true\nallowed_origins=[\"http://127.0.0.1:8080\"]\nlocalhost_development_origin=\"http://127.0.0.1:8080\"\n[web.search]\nendpoint=\"http://127.0.0.1:8080/search\"\nmax_results=5\n",
@@ -1048,6 +1088,25 @@ fn dev079_web_and_browser_settings_default_off_and_validate_strictly() {
         "[browser]\nmax_wait_ms=0",
         "[browser]\nmax_snapshot_bytes=0",
         "[browser]\ninstall=true",
+        "[browser.worker]\nenabled=true",
+        "[browser.worker]\nnode=\"relative/node\"",
+        "[browser.worker]\nidentity_sha256=\"ABC\"",
+        "[browser.worker]\nproxy=\"http://user:pass@127.0.0.1:3128\"",
+        "[browser.worker]\nproxy=\"https://127.0.0.1:3128\"",
+        "[browser.worker]\nproxy=\"http://192.0.2.1:3128\"",
+        "[browser.worker]\nproxy=\"http://localhost:3128\"",
+        "[browser.worker]\nconnect_timeout_ms=1",
+        "[browser.worker]\nstderr_limit_bytes=1",
+        "[browser.vm]\nenabled=true",
+        "[browser.vm]\nbackend=\"docker\"",
+        "[browser.vm]\nssh=\"relative/ssh\"",
+        "[browser.vm]\nhost=\"example.com\"",
+        "[browser.vm]\nuser=\"root@example.com\"",
+        "[browser.vm]\nport=0",
+        "[browser.vm]\nnode=\"/opt/node;id\"",
+        "[browser.vm]\nidentity_sha256=\"ABC\"",
+        "[browser.vm]\ncleanup_timeout_ms=1",
+        "[browser.vm]\nstderr_limit_bytes=1",
     ] {
         let path = write(
             temp.path(),

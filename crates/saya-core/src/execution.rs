@@ -98,6 +98,43 @@ pub enum NetworkPolicy {
     #[default]
     Deny,
     Proxy(ProxyEndpoint),
+    /// Allow outbound TCP only to a fixed loopback port. This purpose exists for
+    /// the host side of the dedicated VM browser backend: the only reachable
+    /// service is the VM's forwarded SSH port, never general browser egress.
+    /// Generic policies keep `Deny` as their default.
+    LoopbackPort {
+        port: u16,
+    },
+}
+/// Trusted host selection for a browser worker environment. It is never a
+/// model argument and never binds the workspace, a home directory, the Saya
+/// configuration tree or credential directories by default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserSandboxProfile {
+    /// Existing Node, Playwright and Chromium installation roots. Each is
+    /// mounted read-only; the run-private profile, output and tmp directories
+    /// are created below the environment scratch directory instead.
+    pub install_roots: Vec<PathBuf>,
+}
+/// Run-private browser directories. The browser worker may write only here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserSandboxDirectories {
+    pub profile: PathBuf,
+    pub output: PathBuf,
+    pub tmp: PathBuf,
+    pub work: PathBuf,
+    pub config: PathBuf,
+}
+/// What the host execution layer actually established for a browser worker.
+/// Chromium's own sandbox is verified by the provider, not inferred here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserEnvironmentEvidence {
+    pub backend: BackendKind,
+    pub nested_user_namespace: bool,
+    pub procfs: bool,
+    pub dev_shm: bool,
+    pub chromium_sandbox_verified_by_provider: bool,
 }
 #[derive(Debug, Clone)]
 pub struct SandboxPolicy {
@@ -105,12 +142,19 @@ pub struct SandboxPolicy {
     pub workspace: PathBuf,
     pub read_roots: Vec<PathBuf>,
     pub write_roots: Vec<PathBuf>,
+    /// Exact files exposed read-only in addition to `read_roots`. Used by the
+    /// VM host channel so an SSH identity file and known-hosts file are
+    /// readable without exposing their whole parent directory.
+    pub read_files: Vec<PathBuf>,
     /// Literal denied paths. Unsupported masks fail preparation.
     pub protected_paths: Vec<PathBuf>,
     pub network: NetworkPolicy,
     pub resources: ResourceLimits,
     /// An explicitly delegated cgroup v2 subtree. No global tree is modified.
     pub cgroup_root: Option<PathBuf>,
+    /// Browser workers use a separate filesystem and syscall profile. Generic
+    /// policies leave this unset and keep the existing behavior unchanged.
+    pub browser: Option<BrowserSandboxProfile>,
 }
 impl SandboxPolicy {
     pub fn workspace(workspace: PathBuf) -> Self {
@@ -118,11 +162,31 @@ impl SandboxPolicy {
             backend: BackendKind::Auto,
             read_roots: vec![workspace.clone()],
             write_roots: vec![workspace.clone()],
+            read_files: Vec::new(),
             workspace,
             protected_paths: Vec::new(),
             network: NetworkPolicy::Deny,
             resources: ResourceLimits::default(),
             cgroup_root: None,
+            browser: None,
+        }
+    }
+    /// Browser-specific policy. Only `install_roots` are exposed read-only;
+    /// writable roots always come from the environment's private scratch.
+    pub fn browser(profile: BrowserSandboxProfile) -> Self {
+        Self {
+            backend: BackendKind::Auto,
+            // The generic workspace is not bound in browser mode. A temporary
+            // directory only satisfies shared policy normalization.
+            workspace: std::env::temp_dir(),
+            read_roots: Vec::new(),
+            write_roots: Vec::new(),
+            read_files: Vec::new(),
+            protected_paths: Vec::new(),
+            network: NetworkPolicy::Deny,
+            resources: ResourceLimits::default(),
+            cgroup_root: None,
+            browser: Some(profile),
         }
     }
 }
@@ -134,6 +198,10 @@ pub struct EnvironmentIdentity {
     pub execution_os: String,
     pub architecture: String,
     pub policy_digest: String,
+    /// Present only for browser environments. Generic environments omit it so
+    /// their identity report remains byte-for-byte compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserEnvironmentEvidence>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleanupReport {
@@ -159,6 +227,7 @@ struct Environment {
     identity: EnvironmentIdentity,
     capabilities: BackendCapabilities,
     scratch: PathBuf,
+    browser_directories: Option<BrowserSandboxDirectories>,
     cgroup: Option<cgroup::Cgroup>,
     closed: AtomicBool,
     cleanup_lock: Mutex<()>,
@@ -200,11 +269,81 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
     policy.workspace = existing_directory(&policy.workspace)?;
     policy.read_roots = normalize_roots(&policy.read_roots)?;
     policy.write_roots = normalize_roots(&policy.write_roots)?;
+    policy.read_files = policy
+        .read_files
+        .iter()
+        .map(|path| existing_file(path))
+        .collect::<Result<Vec<_>, _>>()?;
     policy.protected_paths = policy
         .protected_paths
         .iter()
         .map(|path| normalize_path(path))
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(profile) = &mut policy.browser {
+        // Browser mode never inherits generic roots: the installer decides
+        // exactly which installation trees and private directories exist.
+        if !policy.read_roots.is_empty()
+            || !policy.write_roots.is_empty()
+            || !policy.protected_paths.is_empty()
+        {
+            return Err(failure(
+                "invalid_sandbox_policy",
+                "browser sandbox binds only explicit installation roots and private directories",
+            ));
+        }
+        if profile.install_roots.is_empty() || profile.install_roots.len() > 64 {
+            return Err(failure(
+                "invalid_sandbox_policy",
+                "browser sandbox requires between 1 and 64 installation roots",
+            ));
+        }
+        profile.install_roots = profile
+            .install_roots
+            .iter()
+            .map(|path| {
+                existing_directory(path).map_err(|_| {
+                    failure(
+                        "invalid_sandbox_policy",
+                        format!(
+                            "browser installation root is unavailable: {}",
+                            path.display()
+                        ),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        profile.install_roots.sort();
+        profile.install_roots.dedup();
+        // SAFETY: geteuid takes no arguments and has no side effects.
+        let root_home = unsafe { libc::geteuid() } == 0;
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .or_else(|| root_home.then(|| PathBuf::from("/root")))
+            .and_then(|path| fs::canonicalize(path).ok());
+        for path in &profile.install_roots {
+            if path == Path::new("/") {
+                return Err(failure(
+                    "unsupported_fs_policy",
+                    "browser installation roots must be narrower than the filesystem root",
+                ));
+            }
+            if home.as_ref().is_some_and(|home| path == home) {
+                return Err(failure(
+                    "invalid_sandbox_policy",
+                    "browser installation roots cannot be the whole home directory",
+                ));
+            }
+            if path
+                .components()
+                .any(|component| component.as_os_str() == ".saya")
+            {
+                return Err(failure(
+                    "invalid_sandbox_policy",
+                    "browser installation roots cannot expose the Saya configuration tree",
+                ));
+            }
+        }
+    }
     if let NetworkPolicy::Proxy(proxy) = &mut policy.network {
         if !matches!(proxy.endpoint.ip(), std::net::IpAddr::V4(ip) if ip == std::net::Ipv4Addr::LOCALHOST)
             && !matches!(proxy.endpoint.ip(), std::net::IpAddr::V6(ip) if ip == std::net::Ipv6Addr::LOCALHOST)
@@ -219,6 +358,14 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
             proxy.unix_socket = Some(normalize_path(path)?);
         }
     }
+    if let NetworkPolicy::LoopbackPort { port } = policy.network
+        && port == 0
+    {
+        return Err(failure(
+            "invalid_sandbox_policy",
+            "loopback TCP policy requires a nonzero port",
+        ));
+    }
     validate_resources(&policy.resources)?;
     let backend = match policy.backend {
         BackendKind::Auto if cfg!(target_os = "macos") => BackendKind::Seatbelt,
@@ -230,6 +377,39 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
         }
         backend => backend,
     };
+    if let NetworkPolicy::LoopbackPort { .. } = policy.network
+        && backend != BackendKind::Seatbelt
+    {
+        return Err(unavailable(
+            "loopback TCP network policy is only implemented by the Seatbelt backend",
+        ));
+    }
+    if policy.browser.is_some() {
+        match backend {
+            BackendKind::Host => {
+                return Err(browser_unavailable(
+                    "host execution cannot enforce browser filesystem, namespace or syscall isolation",
+                ));
+            }
+            BackendKind::Seatbelt => {
+                #[cfg(target_os = "macos")]
+                return Err(browser_unavailable(
+                    "macOS Seatbelt prevents Chromium's sandbox_apply from reinitializing; a browser sandbox would require disabling Chromium's own sandbox, which is unsupported",
+                ));
+                #[cfg(not(target_os = "macos"))]
+                return Err(browser_unavailable(
+                    "selected browser backend is unavailable on this platform",
+                ));
+            }
+            BackendKind::Bubblewrap => {
+                #[cfg(not(target_os = "linux"))]
+                return Err(browser_unavailable(
+                    "Bubblewrap browser backend is unavailable on this platform",
+                ));
+            }
+            BackendKind::Auto => unreachable!("auto backend was resolved above"),
+        }
+    }
     if backend != BackendKind::Host
         && policy
             .read_roots
@@ -243,8 +423,9 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
         ));
     }
     policy.backend = backend;
+    let browser = policy.browser.is_some();
     let base = [std::env::temp_dir(), PathBuf::from("/var/tmp")].into_iter().filter_map(|path| fs::canonicalize(path).ok()).find(|path| {
-        !path.starts_with(&policy.workspace) && !policy.write_roots.iter().any(|root| path.starts_with(root))
+        (browser || !path.starts_with(&policy.workspace)) && !policy.write_roots.iter().any(|root| path.starts_with(root))
     }).ok_or_else(|| failure("unsupported_fs_policy", "no private runtime directory is available outside the workspace and writable roots"))?;
     let scratch = base.join(format!("saya-sandbox-{}", uuid::Uuid::now_v7()));
     fs::DirBuilder::new()
@@ -282,6 +463,36 @@ fn prepare_inner(
             "workspace or private runtime cannot be inside a protected path",
         ));
     }
+    let browser_directories = if policy.browser.is_some() {
+        let directories = BrowserSandboxDirectories {
+            profile: scratch.join("browser-profile"),
+            output: scratch.join("browser-output"),
+            tmp: scratch.join("browser-tmp"),
+            work: scratch.join("browser-work"),
+            config: scratch.join("browser-config"),
+        };
+        for path in [
+            &directories.profile,
+            &directories.output,
+            &directories.tmp,
+            &directories.work,
+            &directories.config,
+        ] {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(path)
+                .map_err(io_error)?;
+        }
+        for name in ["config", "cache", "data", "state", "runtime"] {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(directories.profile.join(name))
+                .map_err(io_error)?;
+        }
+        Some(directories)
+    } else {
+        None
+    };
     let mut capabilities = BackendCapabilities {
         filesystem: CapabilityLevel::Hard,
         network: CapabilityLevel::Hard,
@@ -296,7 +507,12 @@ fn prepare_inner(
     let linux = if policy.backend == BackendKind::Bubblewrap {
         capabilities.syscall_filter = CapabilityLevel::Hard;
         capabilities.process_cleanup = CapabilityLevel::Hard;
-        Some(linux::LinuxBackend::prepare(&policy, &scratch)?)
+        Some(match (&policy.browser, &browser_directories) {
+            (Some(profile), Some(directories)) => {
+                linux::LinuxBackend::prepare_browser(&policy, profile, directories, &scratch)?
+            }
+            _ => linux::LinuxBackend::prepare(&policy, &scratch)?,
+        })
     } else {
         None
     };
@@ -337,6 +553,15 @@ fn prepare_inner(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
+    let browser_evidence = policy.browser.as_ref().map(|_| BrowserEnvironmentEvidence {
+        backend: policy.backend,
+        nested_user_namespace: true,
+        procfs: true,
+        dev_shm: true,
+        // The provider must verify the real Chromium process. Preparation only
+        // establishes the host-side capability envelope.
+        chromium_sandbox_verified_by_provider: false,
+    });
     let identity = EnvironmentIdentity {
         id: uuid::Uuid::now_v7().to_string(),
         backend: policy.backend,
@@ -344,6 +569,7 @@ fn prepare_inner(
         execution_os: std::env::consts::OS.into(),
         architecture: std::env::consts::ARCH.into(),
         policy_digest: digest,
+        browser: browser_evidence,
     };
     Ok(PreparedEnvironment {
         inner: Arc::new(Environment {
@@ -351,6 +577,7 @@ fn prepare_inner(
             identity,
             capabilities,
             scratch,
+            browser_directories,
             cgroup,
             closed: AtomicBool::new(false),
             cleanup_lock: Mutex::new(()),
@@ -412,6 +639,17 @@ impl PreparedEnvironment {
     pub fn capabilities(&self) -> &BackendCapabilities {
         &self.inner.capabilities
     }
+    /// Private writable directories for a browser worker, if this is one.
+    pub fn browser_directories(&self) -> Option<&BrowserSandboxDirectories> {
+        self.inner.browser_directories.as_ref()
+    }
+    /// Host-side browser capability evidence. `None` for generic environments.
+    pub fn browser_evidence(&self) -> Option<&BrowserEnvironmentEvidence> {
+        self.inner.identity.browser.as_ref()
+    }
+    pub fn is_browser(&self) -> bool {
+        self.inner.policy.browser.is_some()
+    }
     /// Trusted built-in file worker in this environment's actual filesystem.
     /// Callers must not guess a GUI or test-harness current executable.
     pub fn file_worker_argv(&self) -> Result<Vec<OsString>, BoundaryError> {
@@ -468,12 +706,29 @@ impl PreparedEnvironment {
         if self.inner.policy.backend == BackendKind::Host {
             return Ok(());
         }
-        let temporary = if self.inner.policy.backend == BackendKind::Bubblewrap {
-            PathBuf::from("/tmp")
+        if let Some(browser) = &self.inner.browser_directories {
+            env.insert("TMPDIR".into(), browser.tmp.clone().into_os_string());
+            env.insert("HOME".into(), browser.profile.clone().into_os_string());
+            for (name, directory) in [
+                ("XDG_CONFIG_HOME", "config"),
+                ("XDG_CACHE_HOME", "cache"),
+                ("XDG_DATA_HOME", "data"),
+                ("XDG_STATE_HOME", "state"),
+                ("XDG_RUNTIME_DIR", "runtime"),
+            ] {
+                env.insert(
+                    name.into(),
+                    browser.profile.join(directory).into_os_string(),
+                );
+            }
         } else {
-            self.inner.scratch.join("tmp")
-        };
-        env.insert("TMPDIR".into(), temporary.into_os_string());
+            let temporary = if self.inner.policy.backend == BackendKind::Bubblewrap {
+                PathBuf::from("/tmp")
+            } else {
+                self.inner.scratch.join("tmp")
+            };
+            env.insert("TMPDIR".into(), temporary.into_os_string());
+        }
         if let NetworkPolicy::Proxy(proxy) = &self.inner.policy.network {
             let url = OsString::from(format!("http://{}/", proxy.endpoint));
             for name in [
@@ -514,7 +769,29 @@ impl PreparedEnvironment {
             ));
         }
         let cwd = existing_directory(cwd)?;
+        let browser_cwd = self
+            .inner
+            .browser_directories
+            .as_ref()
+            .is_some_and(|directories| {
+                [
+                    &directories.profile,
+                    &directories.output,
+                    &directories.tmp,
+                    &directories.work,
+                    &directories.config,
+                ]
+                .into_iter()
+                .any(|root| cwd.starts_with(root))
+            })
+            || self.inner.policy.browser.as_ref().is_some_and(|profile| {
+                profile
+                    .install_roots
+                    .iter()
+                    .any(|root| cwd.starts_with(root))
+            });
         if self.inner.policy.backend != BackendKind::Host
+            && !browser_cwd
             && !self
                 .inner
                 .policy
@@ -611,10 +888,21 @@ impl PreparedCommand {
         };
         command.args(args).current_dir(&self.cwd).env_clear();
         if self.bootstrap_index.is_some() {
+            let temporary = self
+                .environment
+                .browser_directories
+                .as_ref()
+                .map(|directories| directories.tmp.clone())
+                .unwrap_or_else(|| self.environment.scratch.join("tmp"));
             command
                 .env("PATH", "/usr/bin:/bin")
                 .env("LANG", "C")
-                .env("TMPDIR", self.environment.scratch.join("tmp"));
+                .env("TMPDIR", temporary);
+            if self.environment.policy.browser.is_some() {
+                // Selects the browser payload syscall profile in the trusted
+                // launcher. It is host-controlled and not part of payload env.
+                command.env("SAYA_BROWSER_SANDBOX", "1");
+            }
         } else {
             command.envs(&self.env);
         }
@@ -796,6 +1084,16 @@ fn existing_directory(path: &Path) -> Result<PathBuf, BoundaryError> {
     }
     Ok(path)
 }
+fn existing_file(path: &Path) -> Result<PathBuf, BoundaryError> {
+    let path = fs::canonicalize(path).map_err(io_error)?;
+    if !path.is_file() {
+        return Err(failure(
+            "invalid_sandbox_policy",
+            "sandbox read file must be an existing regular file",
+        ));
+    }
+    Ok(path)
+}
 fn normalize_roots(paths: &[PathBuf]) -> Result<Vec<PathBuf>, BoundaryError> {
     let mut result = paths
         .iter()
@@ -859,4 +1157,114 @@ fn io_error(error: io::Error) -> BoundaryError {
 }
 fn unavailable(message: impl Into<String>) -> BoundaryError {
     failure("sandbox_capability_unavailable", message)
+}
+fn browser_unavailable(message: impl Into<String>) -> BoundaryError {
+    failure("browser_sandbox_unavailable", message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn generic_policy_reports_no_browser_evidence_and_keeps_host_behavior() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut policy = SandboxPolicy::workspace(workspace.path().into());
+        policy.backend = BackendKind::Host;
+        let environment = prepare(&policy).expect("host environment");
+        assert!(!environment.is_browser());
+        assert!(environment.browser_directories().is_none());
+        assert!(environment.browser_evidence().is_none());
+        assert!(environment.identity().browser.is_none());
+        assert_eq!(environment.identity().backend, BackendKind::Host);
+        environment.cleanup().expect("cleanup");
+    }
+    #[test]
+    fn browser_policy_rejects_host_execution() {
+        let install = tempfile::tempdir().expect("installation root");
+        let mut policy = SandboxPolicy::browser(BrowserSandboxProfile {
+            install_roots: vec![install.path().into()],
+        });
+        assert!(policy.read_roots.is_empty());
+        assert!(policy.write_roots.is_empty());
+        assert!(policy.protected_paths.is_empty());
+        assert!(policy.browser.is_some());
+        policy.backend = BackendKind::Host;
+        let error = prepare(&policy).expect_err("host cannot isolate a browser");
+        assert_eq!(error.0.code, "browser_sandbox_unavailable");
+        assert!(error.0.message.contains("host"));
+    }
+    #[test]
+    fn browser_policy_rejects_generic_roots_and_missing_installation_paths() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mut policy = SandboxPolicy::workspace(workspace.path().into());
+        policy.backend = BackendKind::Host;
+        policy.browser = Some(BrowserSandboxProfile {
+            install_roots: vec![workspace.path().into()],
+        });
+        assert_eq!(
+            prepare(&policy).expect_err("generic roots").0.code,
+            "invalid_sandbox_policy"
+        );
+        let mut policy = SandboxPolicy::browser(BrowserSandboxProfile {
+            install_roots: vec![workspace.path().join("missing")],
+        });
+        policy.backend = BackendKind::Host;
+        let error = prepare(&policy).expect_err("missing installation root");
+        assert_eq!(error.0.code, "invalid_sandbox_policy");
+        assert!(error.0.message.contains("unavailable"));
+        let empty = SandboxPolicy::browser(BrowserSandboxProfile {
+            install_roots: Vec::new(),
+        });
+        assert_eq!(
+            prepare(&empty).expect_err("empty roots").0.code,
+            "invalid_sandbox_policy"
+        );
+        let configuration = tempfile::tempdir().expect("configuration fixture");
+        let saya = configuration.path().join(".saya");
+        fs::create_dir(&saya).expect("configuration root");
+        let policy = SandboxPolicy::browser(BrowserSandboxProfile {
+            install_roots: vec![saya],
+        });
+        let error = prepare(&policy).expect_err("Saya configuration root");
+        assert_eq!(error.0.code, "invalid_sandbox_policy");
+        assert!(error.0.message.contains("configuration"));
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+            && home.is_dir()
+        {
+            let policy = SandboxPolicy::browser(BrowserSandboxProfile {
+                install_roots: vec![home],
+            });
+            assert_eq!(
+                prepare(&policy).expect_err("whole home directory").0.code,
+                "invalid_sandbox_policy"
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_browser_policy_fails_without_weakening_chromium_sandbox() {
+        let install = tempfile::tempdir().expect("installation root");
+        let policy = SandboxPolicy::browser(BrowserSandboxProfile {
+            install_roots: vec![install.path().into()],
+        });
+        let error = prepare(&policy).expect_err("macOS Seatbelt cannot host Chromium");
+        assert_eq!(error.0.code, "browser_sandbox_unavailable");
+        assert!(error.0.message.contains("sandbox_apply"));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_browser_policy_never_falls_back_to_another_backend() {
+        let install = tempfile::tempdir().expect("installation root");
+        let mut policy = SandboxPolicy::browser(BrowserSandboxProfile {
+            install_roots: vec![install.path().into()],
+        });
+        policy.backend = BackendKind::Seatbelt;
+        assert_eq!(
+            prepare(&policy)
+                .expect_err("browser never uses Seatbelt on Linux")
+                .0
+                .code,
+            "browser_sandbox_unavailable"
+        );
+    }
 }

@@ -80,6 +80,16 @@ impl SeatbeltBackend {
                 path,
             );
         }
+        // Exact read-only files (for example an SSH identity and known-hosts
+        // file) avoid exposing their whole parent directory.
+        for (index, path) in policy.read_files.iter().enumerate() {
+            let key = format!("F{index}");
+            parameters.push("-D".into());
+            parameters.push(path_parameter(&key, path));
+            profile.push_str(&format!(
+                "(allow file-read* file-map-executable (literal (param \"{key}\")))\n"
+            ));
+        }
         for (index, path) in policy.write_roots.iter().enumerate() {
             parameter(
                 &mut profile,
@@ -114,6 +124,17 @@ impl SeatbeltBackend {
             // this port on both IPv4 and IPv6 loopback.
             profile.push_str(&format!(
                 "(allow network-outbound (remote tcp \"{address}\"))\n"
+            ));
+        }
+        if let NetworkPolicy::LoopbackPort { port } = &policy.network {
+            // The VM host channel can reach only the forwarded SSH port on
+            // loopback. No DNS, proxy, or general outbound network is allowed.
+            profile.push_str(&format!(
+                "(allow network-outbound (remote tcp \"localhost:{port}\"))\n\
+                 (allow mach-lookup\n\
+                   (global-name \"com.apple.system.opendirectoryd.libinfo\")\n\
+                   (global-name \"com.apple.system.opendirectoryd.membership\")\n\
+                   (global-name \"com.apple.bsd.dirhelper\"))\n"
             ));
         }
         let backend = Self {

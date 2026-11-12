@@ -1,6 +1,6 @@
 # 0.1.0 之后的开发计划
 
-**初版制订于2026-11-07，更新于2026-11-12。本文包含六个阶段及DEV-038至DEV-089共52项开发任务。N0／N1已随0.2.0发行，N2与N3均已完成四平台验收，N4已完成本机实现与受控验收，N5保持规划。实际进度见[开发进度](progress.md)。**
+**初版制订于2026-11-07，更新于2026-11-13。本文包含六个阶段及DEV-038至DEV-089共52项开发任务。N0／N1已随0.2.0发行，N2与N3均已完成四平台验收，N4已完成本机实现与受控验收，N5的DEV-079／DEV-080组件已完成离线实现与测试，DEV-080专用Colima VM真实入口已通过；native浏览器未取得真实平台验收，四平台联合验收尚未开始。实际进度见[开发进度](progress.md)。**
 
 需求来源为项目负责人引用的《Harness功能设计》对话，历史来源标识为 `6aef3957-d280-83ee-9098-278ae10191f8`。需求已提取到本仓库的设计草案，核对时以文档、源码与决策记录为依据。0.1.0 的发行证据见[发行验证](release-validation.md)，原 P0 至 P7 和 DEV-001 至 DEV-037 定义保存在[MVP 实施任务](implementation-plan.md)。
 
@@ -30,7 +30,7 @@
 
 N0与N1已随 **0.2.0正式版**交付，包含候选阶段完善的交互与审查修复，已发布产物的功能和限制保留在[双语发行说明](release-notes-0.2.0.md)。当前N2已接入原生隔离、命令结构事实、stdio／HTTP MCP与凭据管理，最终固定源码的四平台CI、原生、MCP、完整性能及Markdown／TUI验收全部通过。[N2验收记录](n2-validation.md#最终四平台验收)
 
-N3的OutputStore、Compact、检查点、插件／Hooks和模型可编辑全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台验收。N4 Goal已完成独立版本化存储、手动与有限自动编排、持久 worker、TUI／CLI 和故障矩阵本机验收；N5 Browser保持规划。后续版本号和跨平台固定源码证据在发行范围收敛时确定。[N3最终验收](n3-validation.md#四平台最终验收)、[N4验收](n4-validation.md)
+N3的OutputStore、Compact、检查点、插件／Hooks和模型可编辑全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台验收。N4 Goal已完成独立版本化存储、手动与有限自动编排、持久 worker、TUI／CLI 和故障矩阵本机验收；N5 Browser的DEV-079／DEV-080组件已完成离线实现与测试，DEV-080专用Colima VM真实入口已通过，但native浏览器尚未取得真实平台验收；DEV-081至DEV-083及四平台联合验收未开始。后续版本号和跨平台固定源码证据在发行范围收敛时确定。[N3最终验收](n3-validation.md#四平台最终验收)、[N4验收](n4-validation.md)
 
 Goal 的手动与有限自动阶段均已接入独立持久调度，复用执行隔离、检查点、上下文管理和专属 Session 锁。多 Agent Goal 的后续工作归 F-09。
 
@@ -146,7 +146,7 @@ DEV-069至DEV-074已实现。Goal 使用独立版本化 SQLite、专属 Session�
 | 任务 | 内容 | 最小依赖 | 交付与验证 |
 | --- | --- | --- | --- |
 | DEV-079 | BrowserProvider、资源及观察接口 | DEV-054、DEV-057、DEV-076 | 会话／页面／文档版本、URL 读取、显式搜索服务、快照／产物及受控操作描述 |
-| DEV-080 | 托管 Chromium 与 Playwright worker | DEV-079、DEV-059 | 经原生后端启动固定版本，管理受限 MCP 通道，验证 Chromium 自有 sandbox 和 worker 生命周期 |
+| DEV-080 | 托管 Chromium 与 Playwright worker | DEV-079、DEV-059 | 经原生后端启动固定版本，管理受限 MCP 通道，验证 Chromium 自有 sandbox 和 worker 生命周期；按D-066增加显式Colima VM后端以保留双层sandbox，VM网络与broker仍由DEV-081接入 |
 | DEV-081 | Browser 网络、登录和文件 broker | DEV-080、DEV-060 | 验证重定向、内网／元数据、代理旁路、陈旧元素、凭据槽、上传／下载、后台取消和 unknown 提交 |
 | DEV-082 | Browser CLI／TUI 与模型能力适配 | DEV-081、DEV-050 | 展示来源、动作、审批和产物，输出检索及截图按 profile 能力接入，覆盖 PLAN／权限和慢页面 |
 | DEV-083 | Browser／原生隔离／Compact／插件联合验收 | DEV-068、DEV-075、DEV-077、DEV-078、DEV-082 | 实际后端测试、注入／资源／故障矩阵、来源及状态保真、原生性能证据和双语发行说明 |

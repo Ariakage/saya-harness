@@ -368,6 +368,13 @@ impl McpClient {
         self.generation.load(Ordering::Acquire)
     }
 
+    /// Protocol version selected for this connection, if initialization completed.
+    pub fn protocol_version(&self) -> Option<String> {
+        self.service
+            .peer_info()
+            .map(|info| info.protocol_version.as_str().to_owned())
+    }
+
     /// A lost notification stream requires a new connection before approvals can be issued.
     pub fn is_connected(&self) -> bool {
         !self.service.is_closed() && self.notifications_alive.load(Ordering::Acquire)

@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use saya_core::execution::BrowserSandboxProfile;
 use saya_core::execution::{
     self, BackendKind, CapabilityLevel, NetworkPolicy, ProxyEndpoint, ResourceLimits, SandboxPolicy,
 };
@@ -513,6 +515,198 @@ fn requested_cgroup_limits_use_only_the_explicitly_delegated_tree() {
     environment
         .cleanup()
         .expect("actual cgroup kill and removal");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn browser_environment_binds_install_read_only_and_private_directories() {
+    let installation = tempfile::tempdir().expect("installation root");
+    fs::write(installation.path().join("marker.txt"), "SAYA_INSTALL").expect("install marker");
+    let outside = tempfile::tempdir().expect("outside root");
+    fs::write(outside.path().join("secret.txt"), "SAYA_SECRET").expect("secret marker");
+    let install = fs::canonicalize(installation.path()).expect("canonical installation");
+    let policy = SandboxPolicy::browser(BrowserSandboxProfile {
+        install_roots: vec![install.clone()],
+    });
+    let environment = match execution::prepare(&policy) {
+        Ok(environment) => environment,
+        Err(error)
+            if matches!(
+                error.0.code.as_str(),
+                "sandbox_capability_unavailable" | "browser_sandbox_unavailable"
+            ) =>
+        {
+            eprintln!(
+                "native browser backend unavailable on this host: {}",
+                error.0.message
+            );
+            return;
+        }
+        Err(error) => panic!("browser preparation failed: {}", error.0.message),
+    };
+    let directories = environment
+        .browser_directories()
+        .expect("run-private browser directories")
+        .clone();
+    let evidence = environment.browser_evidence().expect("browser evidence");
+    assert_eq!(evidence.backend, BackendKind::Bubblewrap);
+    assert!(evidence.nested_user_namespace);
+    assert!(evidence.procfs);
+    assert!(evidence.dev_shm);
+    assert!(
+        !evidence.chromium_sandbox_verified_by_provider,
+        "preparation must not claim actual Chromium verification"
+    );
+    assert!(environment.identity().browser.is_some());
+    for directory in [
+        &directories.profile,
+        &directories.output,
+        &directories.tmp,
+        &directories.work,
+        &directories.config,
+    ] {
+        assert!(directory.is_dir(), "missing {}", directory.display());
+    }
+    let script = r#"
+import ctypes
+import os
+import sys
+install, outside, profile, output, temporary = sys.argv[1:]
+assert os.geteuid() != 0, 'browser payload runs as root'
+assert open(os.path.join(install, 'marker.txt')).read() == 'SAYA_INSTALL'
+assert not os.path.exists(outside), 'host path leaked into browser view'
+assert os.statvfs(install).f_flag & os.ST_RDONLY, 'installation root is writable'
+assert open('/proc/self/status').read().startswith('Name:'), 'private procfs missing'
+assert ' - proc ' in open('/proc/self/mountinfo').read(), 'procfs is not private'
+assert os.path.isdir('/dev/shm'), 'dev shm missing'
+open(os.path.join(output, 'result.txt'), 'w').write('SAYA_OUTPUT')
+assert os.environ['HOME'] == profile
+assert os.environ['TMPDIR'] == temporary
+try:
+    open(os.path.join(install, 'forbidden.txt'), 'w')
+except OSError:
+    pass
+else:
+    raise SystemExit('installation root accepted a write')
+libc = ctypes.CDLL(None, use_errno=True)
+assert libc.unshare(0x10000000) == 0, 'nested user namespace failed: %d' % ctypes.get_errno()
+print('SAYA_BROWSER_SANDBOX_OK')
+"#;
+    let output = launch(
+        &environment,
+        &directories.profile,
+        &[
+            "/usr/bin/python3",
+            "-I",
+            "-S",
+            "-c",
+            script,
+            install.to_str().expect("installation path"),
+            outside.path().to_str().expect("outside path"),
+            directories.profile.to_str().expect("profile path"),
+            directories.output.to_str().expect("output path"),
+            directories.tmp.to_str().expect("tmp path"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "browser payload failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "SAYA_BROWSER_SANDBOX_OK"
+    );
+    assert_eq!(
+        fs::read_to_string(directories.output.join("result.txt")).expect("private output result"),
+        "SAYA_OUTPUT"
+    );
+    assert!(!install.join("forbidden.txt").exists());
+    environment.cleanup().expect("browser cleanup");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires SAYA_TEST_CHROMIUM_BIN and SAYA_TEST_BROWSER_ROOT pointing at a real offline Chromium installation"]
+fn real_chromium_starts_with_its_own_sandbox_in_browser_environment() {
+    use std::time::{Duration, Instant};
+    let Some(binary) = std::env::var_os("SAYA_TEST_CHROMIUM_BIN") else {
+        eprintln!("SAYA_TEST_CHROMIUM_BIN is not set; real Chromium test not run");
+        return;
+    };
+    let Some(root) = std::env::var_os("SAYA_TEST_BROWSER_ROOT") else {
+        eprintln!("SAYA_TEST_BROWSER_ROOT is not set; real Chromium test not run");
+        return;
+    };
+    let binary = std::path::PathBuf::from(binary);
+    let root = std::path::PathBuf::from(root);
+    assert!(
+        binary.is_absolute() && binary.is_file(),
+        "Chromium binary is unavailable"
+    );
+    assert!(root.is_dir(), "Chromium installation root is unavailable");
+    let policy = SandboxPolicy::browser(BrowserSandboxProfile {
+        install_roots: vec![root],
+    });
+    let environment = execution::prepare(&policy).expect("browser environment");
+    let directories = environment
+        .browser_directories()
+        .expect("private browser directories")
+        .clone();
+    let profile = directories.profile.join("chromium");
+    let argv = [
+        binary.as_os_str().to_owned(),
+        "--headless=new".into(),
+        "--disable-gpu".into(),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        format!(
+            "--user-data-dir={}",
+            directories.profile.join("chromium").display()
+        )
+        .into(),
+        format!("--crash-dumps-dir={}", directories.output.display()).into(),
+        "--dump-dom".into(),
+        "about:blank".into(),
+    ];
+    let prepared = environment
+        .prepare_command(&argv, &directories.profile, &BTreeMap::new())
+        .expect("prepared Chromium command");
+    let mut command = Command::new(&prepared.program);
+    prepared
+        .configure(&mut command)
+        .expect("configure Chromium");
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start Chromium");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if child.try_wait().expect("Chromium status").is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("Chromium did not exit before its bound");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let output = child.wait_with_output().expect("Chromium output");
+    assert!(
+        output.status.success(),
+        "Chromium failed with its own sandbox enabled: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .to_ascii_lowercase()
+            .contains("<html"),
+        "Chromium did not return DOM output"
+    );
+    assert!(!profile.exists() || profile.is_dir());
+    environment.cleanup().expect("browser cleanup");
 }
 
 #[test]

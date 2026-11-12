@@ -56,7 +56,11 @@ Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目
 
 宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 过滤器允许协议为0的 `AF_UNIX`／`SOCK_STREAM` 与 `SOCK_SEQPACKET` 匿名已连接pair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，用于运行时self-pipe和Rust fork结果通道。命名Unix socket创建及datagram pair受过滤器拒绝，匿名pair同时受前述内核身份与行为探测约束。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
 
-启动创建独立 session，执行前规范化未声明描述符的 close-on-exec 标志，并约束 TIOCSTI 等终端相关入口。宿主固定私有 launcher 镜像，通过有界、解除目录链接的文件描述符传入实际环境值。Browser 专用 profile 和其自身 sandbox 的组合留在后续 [Browser 阶段](browser.md)验收。
+启动创建独立 session，执行前规范化未声明描述符的 close-on-exec 标志，并约束 TIOCSTI 等终端相关入口。宿主固定私有 launcher 镜像，通过有界、解除目录链接的文件描述符传入实际环境值。
+
+Linux 的 Browser 专用 profile 保留通用 payload 过滤器，额外提供嵌套 user namespace、私有 `/proc`、`/dev/shm` 与非 root 映射身份，并只读绑定宿主显式给出的 Node 父目录、worker root 与 Chromium 包目录；profile／output／tmp／work／config 五个可写根都位于该 environment 的 Run 私有 scratch，不绑定 workspace、HOME、`.saya` 或凭据目录。Browser profile 的 `mount` 参数检查读取 seccomp_data 的 args[3]（offset 40，即 mountflags），`umount2` 读取 args[1]（offset 24）；这样合法 mount flags 通过，`MS_MOVE` 等被拒绝。Chromium 自身的 sandbox 不能只依赖 Bubblewrap 固定赋予的 `NoNewPrivs=1`、`Seccomp=2`：provider 还必须取得 Chromium 自有的 `InitializeSandbox` stderr 证据，否则在首次真实启动后返回 `browser_sandbox_unavailable`。macOS Seatbelt 无法在 Chromium 重初始化其 sandbox 时同时保持外层限制，因此浏览器环境明确返回 `browser_sandbox_unavailable`。组合行为与平台证据见 [Browser 阶段](browser.md)。
+
+按 D-066，专用 VM 后端不把 Chromium 放进宿主 Seatbelt／Bubblewrap browser profile，而是在 VM 内保留 Chromium 自有 sandbox；宿主只运行受控 `ssh`。该通道使用通用 Seatbelt policy：`read_files` 精确只读绑定 `ssh`、identity 与 known-hosts 三个文件（不包含 `/etc/passwd`），`write_roots` 仅一个 0700 run 私有目录，`NetworkPolicy::LoopbackPort { port }` 只允许到 VM 转发 SSH 端口的 TCP，其他出站与 DNS 仍拒绝。canonicalize 后的 identity／known-hosts 路径会再次接受空白、控制字符与引号校验，符号链接目标也不能绕过。回环 host 统一归一化为 ssh 可接受的裸 IP 字面量（`[::1]` 变为 `::1`），HostName、argv 与网络策略使用同一形式。`read_files` 与 `LoopbackPort` 是受控新增用途，通用默认仍是 `Deny` 且不绑定额外文件；Linux backend 对 `LoopbackPort` 明确返回不可用，不回退其他网络策略。VM 内 renderer sandbox 证据由受控远端命令读取 VM `/proc`，不使用宿主 `/proc`；VM 内普通进程没有 `NoNewPrivs`／`Seccomp`，因此 renderer 上的这两个属性在该环境是可判别证据。实现与已执行的真实 VM 证据见 [Browser VM 扩展](browser.md#dev-080-vm-后端扩展)。
 
 当前采用用户命名空间的非特权启动，从固定候选路径检查 bwrap／socat 的文件权限与身份，并在 prepare 中探测 namespace、Seccomp 和策略可用性。内核、发行版 LSM 或依赖约束导致的失败返回明确原因。
 

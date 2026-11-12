@@ -1,5 +1,8 @@
 //! Bubblewrap filesystem views with a base filter and payload-only socket filter.
-use super::{NetworkPolicy, PreparedCommand, SandboxPolicy, failure, unavailable};
+use super::{
+    BrowserSandboxDirectories, BrowserSandboxProfile, NetworkPolicy, PreparedCommand,
+    SandboxPolicy, browser_unavailable, failure, unavailable,
+};
 use crate::contract::BoundaryError;
 use std::{
     collections::BTreeMap,
@@ -69,12 +72,56 @@ const SYSTEM_READ_ROOTS: [&str; 6] = [
     "/lib64",
     "/etc/alternatives",
 ];
+// Browser workers additionally need runtime libraries, fonts and certificate
+// stores. Whole /etc, HOME, workspaces and credential trees stay unbound.
+const BROWSER_SYSTEM_READ_ROOTS: [&str; 18] = [
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/etc/alternatives",
+    "/etc/ssl",
+    "/etc/pki",
+    "/etc/ca-certificates",
+    "/etc/fonts",
+    "/etc/localtime",
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/nsswitch.conf",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    "/etc/host.conf",
+];
 impl LinuxBackend {
     pub(super) fn helper_path(&self) -> &Path {
         &self.helper_path
     }
     pub(super) fn prepare(policy: &SandboxPolicy, scratch: &Path) -> Result<Self, BoundaryError> {
-        reject_control_filesystem_roots(policy)?;
+        Self::prepare_with_profile(policy, scratch, None)
+    }
+    /// Browser workers need nested user namespaces, a private procfs and
+    /// /dev/shm while keeping the generic payload filter untouched.
+    pub(super) fn prepare_browser(
+        policy: &SandboxPolicy,
+        profile: &BrowserSandboxProfile,
+        directories: &BrowserSandboxDirectories,
+        scratch: &Path,
+    ) -> Result<Self, BoundaryError> {
+        Self::prepare_with_profile(policy, scratch, Some((profile, directories)))
+    }
+    fn prepare_with_profile(
+        policy: &SandboxPolicy,
+        scratch: &Path,
+        browser: Option<(&BrowserSandboxProfile, &BrowserSandboxDirectories)>,
+    ) -> Result<Self, BoundaryError> {
+        if let Some((profile, _)) = browser {
+            reject_browser_install_roots(profile)?;
+            verify_nested_user_namespace()?;
+        } else {
+            reject_control_filesystem_roots(policy)?;
+        }
         verify_supported_pair_kernel()?;
         verify_connected_pair_boundaries(scratch).map_err(|error| {
             unavailable(format!(
@@ -95,13 +142,23 @@ impl LinuxBackend {
                 "Bubblewrap 0.13.1 or newer is required for the validated filesystem setup and descriptor APIs",
             ));
         }
-        let filter_path = scratch.join("base.bpf");
+        let browser_mode = browser.is_some();
+        let filter_path = scratch.join(if browser_mode {
+            "browser.bpf"
+        } else {
+            "base.bpf"
+        });
         let mut filter_file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&filter_path)
             .map_err(super::io_error)?;
-        for instruction in filter(false) {
+        let base_program = if browser_mode {
+            browser_filter(false)
+        } else {
+            filter(false)
+        };
+        for instruction in base_program {
             filter_file
                 .write_all(&instruction.code.to_ne_bytes())
                 .map_err(super::io_error)?;
@@ -122,22 +179,52 @@ impl LinuxBackend {
             "--unshare-ipc",
             "--unshare-net",
             "--unshare-uts",
-            "--disable-userns",
-            "--new-session",
-            "--die-with-parent",
-            "--cap-drop",
-            "ALL",
-            "--dev",
-            "/dev",
-            "--tmpfs",
-            "/tmp",
         ]
         .into_iter()
         .map(Into::into)
         .collect();
+        if browser_mode {
+            // Chromium refuses to start as euid 0. Map a non-root identity
+            // inside the user namespace; the host uid remains the only mapped
+            // identity, so private directories stay writable and host
+            // authority is unchanged.
+            args.extend(["--uid", "65534", "--gid", "65534"].map(Into::into));
+        } else {
+            args.push("--disable-userns".into());
+        }
+        args.extend(
+            [
+                "--new-session",
+                "--die-with-parent",
+                "--cap-drop",
+                "ALL",
+                "--dev",
+                "/dev",
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+        if browser_mode {
+            // Chromium's own sandbox needs a private procfs and a writable
+            // shared-memory filesystem. The generic view deliberately omits
+            // /proc so this stays browser-only.
+            args.extend(
+                ["--proc", "/proc", "--perms", "1777", "--tmpfs", "/dev/shm"].map(Into::into),
+            );
+        }
+        if browser_mode {
+            args.extend(["--perms", "1777", "--tmpfs", "/tmp"].map(Into::into));
+        } else {
+            args.extend(["--tmpfs", "/tmp"].into_iter().map(Into::into));
+        }
         let mut mount_fds = Vec::new();
         let mut system_roots = Vec::new();
-        for path in SYSTEM_READ_ROOTS {
+        let system_read_roots: &[&str] = if browser_mode {
+            &BROWSER_SYSTEM_READ_ROOTS
+        } else {
+            &SYSTEM_READ_ROOTS
+        };
+        for path in system_read_roots {
             if Path::new(path).exists() {
                 system_roots.push((
                     fs::canonicalize(path).map_err(super::io_error)?,
@@ -152,11 +239,29 @@ impl LinuxBackend {
                 )?;
             }
         }
-        for path in &policy.read_roots {
-            bind(&mut args, &mut mount_fds, "--ro-bind-fd", path, path)?;
-        }
-        for path in &policy.write_roots {
-            bind(&mut args, &mut mount_fds, "--bind-fd", path, path)?;
+        if let Some((profile, directories)) = browser {
+            for path in &profile.install_roots {
+                bind(&mut args, &mut mount_fds, "--ro-bind-fd", path, path)?;
+            }
+            for path in [
+                &directories.profile,
+                &directories.output,
+                &directories.tmp,
+                &directories.work,
+                &directories.config,
+            ] {
+                bind(&mut args, &mut mount_fds, "--bind-fd", path, path)?;
+            }
+        } else {
+            for path in &policy.read_roots {
+                bind(&mut args, &mut mount_fds, "--ro-bind-fd", path, path)?;
+            }
+            for path in &policy.read_files {
+                bind(&mut args, &mut mount_fds, "--ro-bind-fd", path, path)?;
+            }
+            for path in &policy.write_roots {
+                bind(&mut args, &mut mount_fds, "--bind-fd", path, path)?;
+            }
         }
         let helper_path = scratch.join("saya-worker");
         // /proc/self/exe pins the image actually running, including when its
@@ -173,48 +278,51 @@ impl LinuxBackend {
         )?;
         // Masks live only in the private filesystem view. Missing names under a
         // writable root cannot safely be masked without altering the host tree.
-        let empty = scratch.join("empty");
-        fs::create_dir(&empty).map_err(super::io_error)?;
-        let mask = scratch.join("denied");
-        fs::write(&mask, b"").map_err(super::io_error)?;
-        let mask_file = Arc::new(fs::File::open(&mask).map_err(super::io_error)?);
-        fs::set_permissions(&mask, fs::Permissions::from_mode(0o000)).map_err(super::io_error)?;
-        for (source, destination) in protection_masks(policy, &system_roots)? {
-            match fs::symlink_metadata(&source) {
-                Ok(metadata) => {
-                    if metadata.is_dir() {
-                        bind(
-                            &mut args,
-                            &mut mount_fds,
-                            "--ro-bind-fd",
-                            &empty,
-                            &destination,
-                        )?;
-                    } else {
-                        // Bubblewrap consumes each bind-fd descriptor. Aliases
-                        // of the same mask need independently owned fd numbers.
-                        bind_descriptor(
-                            &mut args,
-                            &mut mount_fds,
-                            "--ro-bind-fd",
-                            Arc::new(mask_file.try_clone().map_err(super::io_error)?),
-                            &destination,
-                        );
+        if !browser_mode {
+            let empty = scratch.join("empty");
+            fs::create_dir(&empty).map_err(super::io_error)?;
+            let mask = scratch.join("denied");
+            fs::write(&mask, b"").map_err(super::io_error)?;
+            let mask_file = Arc::new(fs::File::open(&mask).map_err(super::io_error)?);
+            fs::set_permissions(&mask, fs::Permissions::from_mode(0o000))
+                .map_err(super::io_error)?;
+            for (source, destination) in protection_masks(policy, &system_roots)? {
+                match fs::symlink_metadata(&source) {
+                    Ok(metadata) => {
+                        if metadata.is_dir() {
+                            bind(
+                                &mut args,
+                                &mut mount_fds,
+                                "--ro-bind-fd",
+                                &empty,
+                                &destination,
+                            )?;
+                        } else {
+                            // Bubblewrap consumes each bind-fd descriptor. Aliases
+                            // of the same mask need independently owned fd numbers.
+                            bind_descriptor(
+                                &mut args,
+                                &mut mount_fds,
+                                "--ro-bind-fd",
+                                Arc::new(mask_file.try_clone().map_err(super::io_error)?),
+                                &destination,
+                            );
+                        }
                     }
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    if policy
-                        .write_roots
-                        .iter()
-                        .any(|root| destination.starts_with(root))
-                    {
-                        return Err(failure(
-                            "unsupported_fs_policy",
-                            "a missing protected path inside a writable root cannot be safely masked",
-                        ));
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        if policy
+                            .write_roots
+                            .iter()
+                            .any(|root| destination.starts_with(root))
+                        {
+                            return Err(failure(
+                                "unsupported_fs_policy",
+                                "a missing protected path inside a writable root cannot be safely masked",
+                            ));
+                        }
                     }
+                    Err(error) => return Err(super::io_error(error)),
                 }
-                Err(error) => return Err(super::io_error(error)),
             }
         }
         let socat = match &policy.network {
@@ -263,6 +371,11 @@ impl LinuxBackend {
                     &program.path,
                 );
                 Some(program)
+            }
+            NetworkPolicy::LoopbackPort { .. } => {
+                return Err(unavailable(
+                    "Linux loopback TCP isolation is not implemented for the VM host channel",
+                ));
             }
         };
         let backend = Self {
@@ -445,6 +558,45 @@ fn known_fixed_pair_kernel_release(release: &str) -> bool {
     (*major == 5 && *minor == 15 && *patch >= 86)
         || (*major == 6 && *minor == 1 && *patch >= 2)
         || (*major, *minor) >= (6, 2)
+}
+
+// Chromium's namespace sandbox creates its own user namespace. Probe the
+// kernel capability once during preparation; the browser profile omits
+// Bubblewrap's --disable-userns and permits the required clone/unshare flags.
+fn verify_nested_user_namespace() -> Result<(), BoundaryError> {
+    // SAFETY: the child performs only unshare(2) and _exit(2), both
+    // async-signal-safe. It touches no allocator, lock or Rust runtime.
+    let child = unsafe { libc::fork() };
+    if child < 0 {
+        return Err(browser_unavailable(
+            "browser user-namespace capability probe could not start",
+        ));
+    }
+    if child == 0 {
+        let status = unsafe { libc::unshare(libc::CLONE_NEWUSER) };
+        unsafe { libc::_exit(if status == 0 { 0 } else { 1 }) };
+    }
+    let mut status = 0;
+    loop {
+        // SAFETY: this is the unreaped child created immediately above.
+        let waited = unsafe { libc::waitpid(child, &mut status, 0) };
+        if waited == child {
+            break;
+        }
+        if waited < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        return Err(browser_unavailable(
+            "browser user-namespace capability probe could not be reaped",
+        ));
+    }
+    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+        Ok(())
+    } else {
+        Err(browser_unavailable(
+            "nested user namespaces are unavailable; Chromium's own sandbox cannot be initialized",
+        ))
+    }
 }
 
 // Older kernels allowed connected pairs to regain a connectable/listening
@@ -756,6 +908,10 @@ fn bind_descriptor(
 // files permit migration and resource changes. Include bind aliases and roots
 // above or below a mount, while allowing a read-only cgroup filesystem view.
 fn reject_control_filesystem_roots(policy: &SandboxPolicy) -> Result<(), BoundaryError> {
+    let mounts = read_mount_table()?;
+    reject_control_mount_aliases(policy, &mounts)
+}
+fn read_mount_table() -> Result<String, BoundaryError> {
     use std::io::Read;
     let mut mounts = String::new();
     fs::File::open("/proc/self/mountinfo")
@@ -768,7 +924,29 @@ fn reject_control_filesystem_roots(policy: &SandboxPolicy) -> Result<(), Boundar
             "host mount table exceeds sandbox validation budget",
         ));
     }
-    reject_control_mount_aliases(policy, &mounts)
+    Ok(mounts)
+}
+// Browser installation trees are mounted read-only. Reject any tree that
+// overlaps procfs, device filesystems or cgroup controllers, including through
+// bind aliases, so the browser view cannot widen its control boundary.
+fn reject_browser_install_roots(profile: &BrowserSandboxProfile) -> Result<(), BoundaryError> {
+    let roots = profile.install_roots.iter().collect::<Vec<_>>();
+    for root in &roots {
+        for control in [Path::new("/proc"), Path::new("/dev")] {
+            if root.starts_with(control) || control.starts_with(root.as_path()) {
+                return Err(failure(
+                    "unsupported_fs_policy",
+                    "browser installation roots cannot overlap control filesystems",
+                ));
+            }
+        }
+    }
+    let mounts = read_mount_table()?;
+    reject_mount_aliases(&roots, &mounts, "proc")?;
+    for filesystem in ["cgroup", "cgroup2"] {
+        reject_mount_aliases(&roots, &mounts, filesystem)?;
+    }
+    Ok(())
 }
 fn reject_control_mount_aliases(policy: &SandboxPolicy, mounts: &str) -> Result<(), BoundaryError> {
     let roots = policy
@@ -883,7 +1061,98 @@ const RETURN: u16 = 0x06;
 const AND: u16 = 0x54;
 const DENY: u32 = 0x0005_0000 | libc::EPERM as u32;
 const ALLOW: u32 = 0x7fff_0000;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FilterProfile {
+    General,
+    Browser,
+}
+const GENERAL_BLOCKED: &[libc::c_long] = &[
+    libc::SYS_ptrace,
+    libc::SYS_process_vm_readv,
+    libc::SYS_process_vm_writev,
+    libc::SYS_pidfd_getfd,
+    libc::SYS_open_by_handle_at,
+    libc::SYS_name_to_handle_at,
+    libc::SYS_bpf,
+    libc::SYS_perf_event_open,
+    libc::SYS_keyctl,
+    libc::SYS_add_key,
+    libc::SYS_request_key,
+    libc::SYS_mount,
+    libc::SYS_umount2,
+    libc::SYS_pivot_root,
+    libc::SYS_move_mount,
+    libc::SYS_open_tree,
+    libc::SYS_fsopen,
+    libc::SYS_fsconfig,
+    libc::SYS_fsmount,
+    libc::SYS_fspick,
+    libc::SYS_mount_setattr,
+    libc::SYS_setns,
+    libc::SYS_unshare,
+    libc::SYS_reboot,
+    libc::SYS_kexec_load,
+    libc::SYS_kexec_file_load,
+    libc::SYS_init_module,
+    libc::SYS_finit_module,
+    libc::SYS_delete_module,
+    libc::SYS_swapon,
+    libc::SYS_swapoff,
+    libc::SYS_syslog,
+    libc::SYS_fanotify_init,
+    libc::SYS_userfaultfd,
+    libc::SYS_io_uring_setup,
+    libc::SYS_io_uring_enter,
+    libc::SYS_io_uring_register,
+];
+// Browser workers may create nested namespaces and mount inside their own
+// namespace, so mount/umount/pivot_root/unshare are handled with argument
+// checks below instead of being denied outright. All other generic denials
+// remain, in particular setns, ptrace, pidfd_getfd and the new mount API.
+const BROWSER_BLOCKED: &[libc::c_long] = &[
+    libc::SYS_ptrace,
+    libc::SYS_process_vm_readv,
+    libc::SYS_process_vm_writev,
+    libc::SYS_pidfd_getfd,
+    libc::SYS_open_by_handle_at,
+    libc::SYS_name_to_handle_at,
+    libc::SYS_bpf,
+    libc::SYS_perf_event_open,
+    libc::SYS_keyctl,
+    libc::SYS_add_key,
+    libc::SYS_request_key,
+    libc::SYS_move_mount,
+    libc::SYS_open_tree,
+    libc::SYS_fsopen,
+    libc::SYS_fsconfig,
+    libc::SYS_fsmount,
+    libc::SYS_fspick,
+    libc::SYS_mount_setattr,
+    libc::SYS_setns,
+    libc::SYS_reboot,
+    libc::SYS_kexec_load,
+    libc::SYS_kexec_file_load,
+    libc::SYS_init_module,
+    libc::SYS_finit_module,
+    libc::SYS_delete_module,
+    libc::SYS_swapon,
+    libc::SYS_swapoff,
+    libc::SYS_syslog,
+    libc::SYS_fanotify_init,
+    libc::SYS_userfaultfd,
+    libc::SYS_io_uring_setup,
+    libc::SYS_io_uring_enter,
+    libc::SYS_io_uring_register,
+];
 fn filter(payload: bool) -> Vec<libc::sock_filter> {
+    filter_for(payload, FilterProfile::General)
+}
+// Only selected by the trusted launcher when the host prepared a browser
+// environment. The generic payload filter never widens.
+fn browser_filter(payload: bool) -> Vec<libc::sock_filter> {
+    filter_for(payload, FilterProfile::Browser)
+}
+fn filter_for(payload: bool, profile: FilterProfile) -> Vec<libc::sock_filter> {
     #[cfg(target_arch = "x86_64")]
     let arch = 0xc000_003e;
     #[cfg(target_arch = "aarch64")]
@@ -899,45 +1168,6 @@ fn filter(payload: bool) -> Vec<libc::sock_filter> {
         instruction(BITS, 0, 1, 0x4000_0000),
         instruction(RETURN, 0, 0, 0x8000_0000),
     ]);
-    let blocked = [
-        libc::SYS_ptrace,
-        libc::SYS_process_vm_readv,
-        libc::SYS_process_vm_writev,
-        libc::SYS_pidfd_getfd,
-        libc::SYS_open_by_handle_at,
-        libc::SYS_name_to_handle_at,
-        libc::SYS_bpf,
-        libc::SYS_perf_event_open,
-        libc::SYS_keyctl,
-        libc::SYS_add_key,
-        libc::SYS_request_key,
-        libc::SYS_mount,
-        libc::SYS_umount2,
-        libc::SYS_pivot_root,
-        libc::SYS_move_mount,
-        libc::SYS_open_tree,
-        libc::SYS_fsopen,
-        libc::SYS_fsconfig,
-        libc::SYS_fsmount,
-        libc::SYS_fspick,
-        libc::SYS_mount_setattr,
-        libc::SYS_setns,
-        libc::SYS_unshare,
-        libc::SYS_reboot,
-        libc::SYS_kexec_load,
-        libc::SYS_kexec_file_load,
-        libc::SYS_init_module,
-        libc::SYS_finit_module,
-        libc::SYS_delete_module,
-        libc::SYS_swapon,
-        libc::SYS_swapoff,
-        libc::SYS_syslog,
-        libc::SYS_fanotify_init,
-        libc::SYS_userfaultfd,
-        libc::SYS_io_uring_setup,
-        libc::SYS_io_uring_enter,
-        libc::SYS_io_uring_register,
-    ];
     if payload {
         // Anonymous connected streams and sequenced packets support runtime
         // self-pipes and Rust's child-exec error channel. Both keep a fixed peer,
@@ -963,32 +1193,47 @@ fn filter(payload: bool) -> Vec<libc::sock_filter> {
             instruction(RETURN, 0, 0, ALLOW),
         ]);
     }
+    let blocked = match profile {
+        FilterProfile::General => GENERAL_BLOCKED,
+        FilterProfile::Browser => BROWSER_BLOCKED,
+    };
     for number in blocked {
         program.extend([
-            instruction(EQUAL, 0, 1, number as u32),
+            instruction(EQUAL, 0, 1, *number as u32),
             instruction(RETURN, 0, 0, DENY),
         ]);
     }
-    // glibc falls back to clone when clone3 reports ENOSYS. Its pointed-to
-    // flags cannot be inspected by classic BPF.
-    program.extend([
-        instruction(EQUAL, 0, 1, libc::SYS_clone3 as u32),
-        instruction(RETURN, 0, 0, 0x0005_0000 | libc::ENOSYS as u32),
-    ]);
-    let namespaces = (libc::CLONE_NEWUSER
-        | libc::CLONE_NEWNS
-        | libc::CLONE_NEWPID
-        | libc::CLONE_NEWNET
-        | libc::CLONE_NEWIPC
-        | libc::CLONE_NEWUTS
-        | libc::CLONE_NEWCGROUP) as u32;
-    program.extend([
-        instruction(EQUAL, 0, 3, libc::SYS_clone as u32),
-        instruction(LOAD, 0, 0, 16),
-        instruction(BITS, 0, 1, namespaces),
-        instruction(RETURN, 0, 0, DENY),
-        instruction(LOAD, 0, 0, 0),
-    ]);
+    match profile {
+        FilterProfile::General => {
+            // glibc falls back to clone when clone3 reports ENOSYS. Its pointed-to
+            // flags cannot be inspected by classic BPF.
+            program.extend([
+                instruction(EQUAL, 0, 1, libc::SYS_clone3 as u32),
+                instruction(RETURN, 0, 0, 0x0005_0000 | libc::ENOSYS as u32),
+            ]);
+            let namespaces = browser_namespace_mask();
+            program.extend([
+                instruction(EQUAL, 0, 3, libc::SYS_clone as u32),
+                instruction(LOAD, 0, 0, 16),
+                instruction(BITS, 0, 1, namespaces),
+                instruction(RETURN, 0, 0, DENY),
+                instruction(LOAD, 0, 0, 0),
+            ]);
+        }
+        FilterProfile::Browser => {
+            // Classic BPF cannot inspect clone3's pointed-to flags. Accept only
+            // the stable struct size and rely on the nested namespace plus the
+            // blocked setns/new-mount API boundary; all other clone flags are
+            // checked in the clone/unshare paths below.
+            append_browser_clone3(&mut program);
+            append_browser_flags(&mut program, libc::SYS_clone, 16, browser_clone_mask());
+            append_browser_flags(&mut program, libc::SYS_unshare, 16, browser_unshare_mask());
+            // mount(source, target, filesystemtype, mountflags, data): the
+            // flags are arguments[3], which starts at offset 40 in seccomp_data.
+            append_browser_flags(&mut program, libc::SYS_mount, 40, browser_mount_mask());
+            append_browser_flags(&mut program, libc::SYS_umount2, 24, browser_umount_mask());
+        }
+    }
     let domains = if payload {
         vec![libc::AF_INET, libc::AF_INET6]
     } else {
@@ -1012,13 +1257,107 @@ fn filter(payload: bool) -> Vec<libc::sock_filter> {
     ]);
     program
 }
+// Check a syscall's flag argument against a permit mask. A matching syscall
+// falls through to the argument checks; a nonmatching one skips the whole block.
+fn append_browser_flags(
+    program: &mut Vec<libc::sock_filter>,
+    syscall: libc::c_long,
+    offset: u32,
+    allowed: u32,
+) {
+    program.extend([
+        instruction(EQUAL, 0, 5, syscall as u32),
+        instruction(LOAD, 0, 0, offset),
+        instruction(AND, 0, 0, !allowed),
+        instruction(EQUAL, 1, 0, 0),
+        instruction(RETURN, 0, 0, DENY),
+        instruction(RETURN, 0, 0, ALLOW),
+    ]);
+}
+fn append_browser_clone3(program: &mut Vec<libc::sock_filter>) {
+    // struct clone_args is eleven 64-bit fields on the supported architectures.
+    const CLONE_ARGS_BYTES: u32 = (std::mem::size_of::<u64>() * 11) as u32;
+    program.extend([
+        instruction(EQUAL, 0, 4, libc::SYS_clone3 as u32),
+        instruction(LOAD, 0, 0, 24),
+        instruction(EQUAL, 1, 0, CLONE_ARGS_BYTES),
+        instruction(RETURN, 0, 0, 0x0005_0000 | libc::ENOSYS as u32),
+        instruction(RETURN, 0, 0, ALLOW),
+    ]);
+}
+fn browser_namespace_mask() -> u32 {
+    (libc::CLONE_NEWUSER
+        | libc::CLONE_NEWNS
+        | libc::CLONE_NEWPID
+        | libc::CLONE_NEWNET
+        | libc::CLONE_NEWIPC
+        | libc::CLONE_NEWUTS
+        | libc::CLONE_NEWCGROUP) as u32
+}
+fn browser_clone_mask() -> u32 {
+    let ordinary = libc::CLONE_VM
+        | libc::CLONE_FS
+        | libc::CLONE_FILES
+        | libc::CLONE_SIGHAND
+        | libc::CLONE_PIDFD
+        | libc::CLONE_VFORK
+        | libc::CLONE_PARENT
+        | libc::CLONE_THREAD
+        | libc::CLONE_SYSVSEM
+        | libc::CLONE_SETTLS
+        | libc::CLONE_PARENT_SETTID
+        | libc::CLONE_CHILD_CLEARTID
+        | libc::CLONE_CHILD_SETTID
+        | libc::CLONE_IO;
+    // The low byte carries the exit signal. CLONE_PTRACE and unknown bits stay
+    // denied.
+    0xff | ordinary as u32 | browser_namespace_mask()
+}
+fn browser_unshare_mask() -> u32 {
+    browser_namespace_mask()
+        | (libc::CLONE_FS | libc::CLONE_FILES | libc::CLONE_SYSVSEM | libc::CLONE_IO) as u32
+}
+fn browser_mount_mask() -> u32 {
+    (libc::MS_RDONLY
+        | libc::MS_NOSUID
+        | libc::MS_NODEV
+        | libc::MS_NOEXEC
+        | libc::MS_SYNCHRONOUS
+        | libc::MS_REMOUNT
+        | libc::MS_DIRSYNC
+        | libc::MS_NOSYMFOLLOW
+        | libc::MS_NOATIME
+        | libc::MS_NODIRATIME
+        | libc::MS_BIND
+        | libc::MS_REC
+        | libc::MS_SILENT
+        | libc::MS_UNBINDABLE
+        | libc::MS_PRIVATE
+        | libc::MS_SLAVE
+        | libc::MS_SHARED
+        | libc::MS_RELATIME
+        | libc::MS_I_VERSION
+        | libc::MS_STRICTATIME
+        | libc::MS_LAZYTIME) as u32
+}
+fn browser_umount_mask() -> u32 {
+    (libc::MNT_FORCE | libc::MNT_DETACH | libc::MNT_EXPIRE | libc::UMOUNT_NOFOLLOW) as u32
+}
 pub(super) struct Filter {
     program: Vec<libc::sock_filter>,
 }
 impl Filter {
     pub(super) fn prepare() -> Self {
+        // The trusted launcher receives this value from the host-configured
+        // command environment, not from the payload environment.
+        let browser = std::env::var_os("SAYA_BROWSER_SANDBOX")
+            .is_some_and(|value| value.to_str() == Some("1"));
         Self {
-            program: filter(true),
+            program: if browser {
+                browser_filter(true)
+            } else {
+                filter(true)
+            },
         }
     }
     pub(super) fn install(&self) -> io::Result<()> {
@@ -1106,6 +1445,19 @@ mod tests {
         syscall: u32,
         arguments: [u32; 3],
     ) -> u32 {
+        evaluate_arguments4(
+            program,
+            arch,
+            syscall,
+            [arguments[0], arguments[1], arguments[2], 0],
+        )
+    }
+    fn evaluate_arguments4(
+        program: &[libc::sock_filter],
+        arch: u32,
+        syscall: u32,
+        arguments: [u32; 4],
+    ) -> u32 {
         let mut accumulator = 0;
         let mut pc = 0;
         for _ in 0..program.len() {
@@ -1118,6 +1470,7 @@ mod tests {
                         16 => arguments[0],
                         24 => arguments[1],
                         32 => arguments[2],
+                        40 => arguments[3],
                         _ => panic!("unexpected BPF load"),
                     }
                 }
@@ -1281,6 +1634,215 @@ mod tests {
             evaluate(&payload, arch, 0x4000_0000 | libc::SYS_socket as u32, 0),
             0x8000_0000
         );
+    }
+    #[test]
+    fn browser_filter_allows_required_namespaces_and_denies_widened_flags() {
+        #[cfg(target_arch = "x86_64")]
+        let arch = 0xc000_003e;
+        #[cfg(target_arch = "aarch64")]
+        let arch = 0xc000_00b7;
+        let payload = browser_filter(true);
+        let base = browser_filter(false);
+        for program in [&payload, &base] {
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_clone as u32,
+                    [libc::SIGCHLD as u32, 0, 0]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_clone as u32,
+                    [(libc::SIGCHLD | libc::CLONE_NEWUSER) as u32, 0, 0]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_clone as u32,
+                    [(libc::CLONE_NEWUSER | libc::CLONE_PTRACE) as u32, 0, 0]
+                ),
+                DENY
+            );
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_unshare as u32,
+                    [libc::CLONE_NEWUSER as u32, 0, 0]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_unshare as u32,
+                    [libc::CLONE_PTRACE as u32, 0, 0]
+                ),
+                DENY
+            );
+            assert_eq!(
+                evaluate_arguments4(
+                    program,
+                    arch,
+                    libc::SYS_mount as u32,
+                    [
+                        0,
+                        0,
+                        0,
+                        (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as u32
+                    ]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments4(
+                    program,
+                    arch,
+                    libc::SYS_mount as u32,
+                    [0, 0, 0, libc::MS_MOVE as u32]
+                ),
+                DENY
+            );
+            // A flags value placed in the filesystemtype slot (arguments[2],
+            // offset 32) must not be mistaken for mount flags.
+            assert_eq!(
+                evaluate_arguments4(
+                    program,
+                    arch,
+                    libc::SYS_mount as u32,
+                    [
+                        0,
+                        0,
+                        libc::MS_MOVE as u32,
+                        (libc::MS_NOSUID | libc::MS_NODEV) as u32
+                    ]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments4(
+                    program,
+                    arch,
+                    libc::SYS_mount as u32,
+                    [0, 0, 0, (libc::MS_NOSUID | libc::MS_MOVE) as u32]
+                ),
+                DENY
+            );
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_umount2 as u32,
+                    [0, libc::MNT_DETACH as u32, 0]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_umount2 as u32,
+                    [0, libc::MS_MOVE as u32, 0]
+                ),
+                DENY
+            );
+            let clone_args_bytes = (std::mem::size_of::<u64>() * 11) as u32;
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_clone3 as u32,
+                    [0, clone_args_bytes, 0]
+                ),
+                ALLOW
+            );
+            assert_eq!(
+                evaluate_arguments(program, arch, libc::SYS_clone3 as u32, [0, 0, 0]),
+                0x0005_0000 | libc::ENOSYS as u32
+            );
+            // Chromium sandbox needs these, but process-fd stealing and
+            // namespace switching remain denied.
+            for allowed in [
+                libc::SYS_setresuid,
+                libc::SYS_setresgid,
+                libc::SYS_capset,
+                libc::SYS_prctl,
+                libc::SYS_seccomp,
+                libc::SYS_memfd_create,
+                libc::SYS_pidfd_open,
+                libc::SYS_pidfd_send_signal,
+                libc::SYS_chroot,
+                libc::SYS_pivot_root,
+            ] {
+                assert_eq!(evaluate(program, arch, allowed as u32, 0), ALLOW);
+            }
+            for denied in [
+                libc::SYS_ptrace,
+                libc::SYS_pidfd_getfd,
+                libc::SYS_setns,
+                libc::SYS_move_mount,
+                libc::SYS_mount_setattr,
+                libc::SYS_open_tree,
+                libc::SYS_bpf,
+                libc::SYS_userfaultfd,
+            ] {
+                assert_eq!(evaluate(program, arch, denied as u32, 0), DENY);
+            }
+            assert_eq!(
+                evaluate_arguments(
+                    program,
+                    arch,
+                    libc::SYS_socketpair as u32,
+                    [libc::AF_UNIX as u32, libc::SOCK_STREAM as u32, 0]
+                ),
+                ALLOW
+            );
+        }
+        assert_eq!(
+            evaluate_arguments(
+                &payload,
+                arch,
+                libc::SYS_socketpair as u32,
+                [libc::AF_UNIX as u32, libc::SOCK_DGRAM as u32, 0]
+            ),
+            DENY
+        );
+        assert_eq!(
+            evaluate_arguments(
+                &base,
+                arch,
+                libc::SYS_socketpair as u32,
+                [libc::AF_UNIX as u32, libc::SOCK_DGRAM as u32, 0]
+            ),
+            ALLOW,
+            "the trusted launcher may create the bridge socket pairs"
+        );
+        assert_eq!(
+            evaluate(
+                &payload,
+                arch,
+                libc::SYS_socket as u32,
+                libc::AF_UNIX as u32
+            ),
+            DENY
+        );
+        assert_eq!(
+            evaluate(&base, arch, libc::SYS_socket as u32, libc::AF_UNIX as u32),
+            ALLOW
+        );
+        // The generic filter never widens to namespace or mount calls.
+        let generic = filter(true);
+        assert_eq!(evaluate(&generic, arch, libc::SYS_unshare as u32, 0), DENY);
+        assert_eq!(evaluate(&generic, arch, libc::SYS_mount as u32, 0), DENY);
     }
     #[test]
     fn kernel_socket_pair_release_gate_accepts_only_confirmed_fixed_ranges() {

@@ -13,8 +13,14 @@ pub mod thinking;
 use saya_core::{
     approvals::Preauthorizations,
     boundary::{Cancellation, Model, Store},
+    browser::{
+        vm::assemble_vm_browser_provider,
+        worker::{NativeBrowserEnvironmentFactory, PlaywrightMcpProvider, browser_install_roots},
+    },
     config::{Auth, Config, Output, Profile, Protocol},
-    contract::{BoundaryError, ModelProtocol, PermissionMode, Run, RunId, Session, SessionId},
+    contract::{
+        BoundaryError, ErrorInfo, ModelProtocol, PermissionMode, Run, RunId, Session, SessionId,
+    },
     input::InputHandler,
     permissions::Policy,
     project_context::ProjectContext,
@@ -141,6 +147,60 @@ pub fn new_session(config: &Config) -> Result<Session, Box<dyn std::error::Error
         history: vec![],
     })
 }
+/// Assemble the production browser provider from explicit host inputs.
+///
+/// `browser.enabled` requires exactly one worker backend. Selecting
+/// `browser.vm.enabled` builds the dedicated-VM backend and never falls back to
+/// the native/Seatbelt/Host path. Otherwise `browser.worker.enabled` builds the
+/// native provider after verifying its identity and preflighting the native
+/// browser environment. Host execution and macOS Seatbelt fail with
+/// `browser_sandbox_unavailable`. Browser network policy remains
+/// `NetworkPolicy::Deny` for the native provider and `LoopbackPort` (VM SSH
+/// only) for the VM host channel in this increment; `worker.proxy` is reserved
+/// for the later broker stage and is not injected.
+pub fn assemble_browser_provider(
+    config: &Config,
+    exec: ExecConfig,
+) -> Result<Option<Arc<PlaywrightMcpProvider>>, BoundaryError> {
+    if !config.browser.enabled {
+        return Ok(None);
+    }
+    if config.browser.vm.enabled {
+        if config.browser.worker.enabled {
+            return Err(BoundaryError(
+                ErrorInfo {
+                    code: "invalid_config".into(),
+                    message: "browser must enable either the native worker or the VM backend"
+                        .into(),
+                },
+                None,
+                None,
+            ));
+        }
+        let provider = assemble_vm_browser_provider(config.browser.vm.clone(), exec)?;
+        return Ok(Some(Arc::new(provider)));
+    }
+    if !config.browser.worker.enabled {
+        return Err(BoundaryError(
+            ErrorInfo {
+                code: "invalid_config".into(),
+                message: "browser.enabled requires browser.worker.enabled or browser.vm.enabled"
+                    .into(),
+            },
+            None,
+            None,
+        ));
+    }
+    let settings = config.browser.worker.clone();
+    let install_roots = browser_install_roots(&settings)?;
+    let factory = Arc::new(NativeBrowserEnvironmentFactory::new(
+        install_roots,
+        config.sandbox.backend,
+    )?);
+    let provider = PlaywrightMcpProvider::managed(settings, factory, exec)?;
+    Ok(Some(Arc::new(provider)))
+}
+
 /// Assemble a policy-checked runtime and decorate its model with interface events.
 /// Preparation may read project instructions. Execution begins with runtime.run.
 pub fn build_runtime(
@@ -235,6 +295,7 @@ pub fn build_runtime(
     review.idle_timeout = limits.model_idle;
     review.total_timeout = limits.model_total;
     review.known_secrets = known_secrets.clone();
+    let browser_exec = exec.clone();
     let mut runtime = AgentRuntime::new(RuntimeSetup {
         run,
         model,
@@ -335,11 +396,8 @@ pub fn build_runtime(
     if config.output_capture.enabled {
         runtime = runtime.with_output_store(outputs)?;
     }
-    if config.browser.enabled {
-        return Err(
-            "browser.enabled requires the DEV-080 browser worker, which is not part of this build"
-                .into(),
-        );
+    if let Some(provider) = assemble_browser_provider(config, browser_exec)? {
+        runtime = runtime.with_browser(config.browser.clone(), provider)?;
     }
     if config.web.enabled {
         runtime = runtime.with_web(config.web.clone())?;

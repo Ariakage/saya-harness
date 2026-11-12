@@ -677,6 +677,11 @@ impl ManagedProcess {
     pub(crate) fn take_stdin(&mut self) -> Option<tokio::process::ChildStdin> {
         self.child.as_mut().and_then(|child| child.stdin.take())
     }
+    /// The process-group leader PID. The group identity stays reserved until
+    /// the owned child is reaped.
+    pub(crate) fn pid(&self) -> Pid {
+        self.pid
+    }
     pub(crate) fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
         self.child.as_mut().and_then(|child| child.stdout.take())
     }

@@ -6,6 +6,10 @@
 //! references. It never exposes selectors, scripts, evaluate, install, raw MCP
 //! discovery or developer tools. Unknown dispatched actions stop replay until a
 //! fresh snapshot confirms an observable state.
+
+pub mod vm;
+pub mod worker;
+
 use crate::{
     boundary::{Cancellation, Operation, Tool, ToolContext, ToolDefinition},
     contract::{BoundaryError, ErrorInfo, Run, RunId, SessionId, ToolCall, ToolResult},
@@ -112,15 +116,19 @@ fn invalid_config(message: &'static str) -> BoundaryError {
     failure("invalid_config", message)
 }
 
-/// Default-disabled browser settings. A real worker and profile policy arrive
-/// in DEV-080; this stage validates configuration and exposes explicit error
-/// boundaries instead of pretending a browser is available.
+/// Default-disabled browser settings. The optional worker settings identify a
+/// host-provisioned Playwright runtime; enabling them does not install or
+/// download anything.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BrowserSettings {
     pub enabled: bool,
     pub max_snapshot_bytes: usize,
     pub max_wait_ms: u64,
+    pub worker: worker::BrowserWorkerSettings,
+    /// Explicit dedicated-VM worker. Selecting it never falls back to the
+    /// native/Seatbelt/Host backends.
+    pub vm: vm::BrowserVmSettings,
 }
 impl Default for BrowserSettings {
     fn default() -> Self {
@@ -128,6 +136,8 @@ impl Default for BrowserSettings {
             enabled: false,
             max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
             max_wait_ms: DEFAULT_MAX_WAIT_MS,
+            worker: worker::BrowserWorkerSettings::default(),
+            vm: vm::BrowserVmSettings::default(),
         }
     }
 }
@@ -139,6 +149,13 @@ impl BrowserSettings {
             || self.max_wait_ms > 10 * 60 * 1000
         {
             return Err(invalid_config("Browser limits are invalid"));
+        }
+        self.worker.validate()?;
+        self.vm.validate()?;
+        if self.vm.enabled && self.worker.enabled {
+            return Err(invalid_config(
+                "Browser must select either the native worker or the VM backend, not both",
+            ));
         }
         Ok(())
     }
@@ -1397,7 +1414,8 @@ impl BrowserState {
                     if error.uncertain {
                         self.inner.lock().await.open_uncertain = true;
                     }
-                    return Err(error.into_boundary());
+                    // Provider shutdown below terminates the worker and is the
+                    // ultimate cleanup even when the page close failed.
                 }
             }
         }
@@ -2725,7 +2743,7 @@ mod tests {
         let cancel = SwitchCancel(flag.clone());
         let trigger = flag.clone();
         let task = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             trigger.store(true, Ordering::Release);
         });
         let error = state
@@ -2744,7 +2762,7 @@ mod tests {
         let cancel = SwitchCancel(flag.clone());
         let trigger = flag.clone();
         let task = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             trigger.store(true, Ordering::Release);
         });
         let error = state
@@ -3056,6 +3074,35 @@ mod tests {
                 .code,
             "invalid_provider_result"
         );
+    }
+
+    #[test]
+    fn settings_reject_selecting_two_worker_backends() {
+        let mut settings = BrowserSettings::default();
+        settings.worker.enabled = true;
+        settings.worker.node = Some("/opt/node".into());
+        settings.worker.worker_root = Some("/opt/worker".into());
+        settings.worker.chromium = Some("/opt/chromium".into());
+        settings.worker.identity_manifest = Some("/opt/manifest.json".into());
+        settings.worker.identity_sha256 = Some("0".repeat(64));
+        settings.worker.validate().unwrap();
+        settings.vm.enabled = true;
+        settings.vm.colima = Some("/usr/local/bin/colima".into());
+        settings.vm.ssh = Some("/usr/bin/ssh".into());
+        settings.vm.profile = Some("saya-browser".into());
+        settings.vm.host = Some("127.0.0.1".into());
+        settings.vm.user = Some("saya".into());
+        settings.vm.port = Some(2222);
+        settings.vm.identity_file = Some("/tmp/key".into());
+        settings.vm.known_hosts = Some("/tmp/known_hosts".into());
+        settings.vm.node = Some("/opt/node".into());
+        settings.vm.worker_root = Some("/opt/worker".into());
+        settings.vm.chromium =
+            Some("/opt/browsers/chromium_headless_shell-1254/chrome-headless-shell".into());
+        settings.vm.identity_manifest = Some("/opt/manifest.json".into());
+        settings.vm.identity_sha256 = Some("0".repeat(64));
+        settings.vm.remote_temp_root = Some("/tmp/runs".into());
+        assert_eq!(settings.validate().unwrap_err().0.code, "invalid_config");
     }
 
     #[tokio::test]
