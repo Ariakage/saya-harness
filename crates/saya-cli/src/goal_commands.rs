@@ -1,11 +1,11 @@
 //! CLI adapter for durable Goal planning, bounded continuation and reports.
 
-use super::{Cancel, Cli, Terminal, personal_context, signals};
+use super::{Cancel, Cli, Terminal, personal_context, safe_output, signals};
 use clap::{Args, Subcommand, ValueEnum};
 use saya_app::{
     goal::{
         GoalRunContext, account_planning, configured_auto_goal, continue_once,
-        goal_profile_fingerprint, now_ms, plan_goal, verify_manual_criterion,
+        goal_profile_fingerprint, now_ms, plan_goal, verify_criterion,
     },
     new_session, session,
 };
@@ -144,12 +144,13 @@ pub enum GoalAction {
     Resume { goal_id: String },
     /// Cancel a Goal and stop automatic scheduling.
     Cancel { goal_id: String },
-    /// Verify one manual acceptance criterion with explicit user evidence.
+    /// Verify one acceptance criterion after all steps complete.
     Verify {
         goal_id: String,
         criterion: String,
+        /// Required for manual evidence; file criteria use host verification only.
         #[arg(long)]
-        summary: String,
+        summary: Option<String>,
     },
     /// Resolve an unknown step outcome. Retry is never implicit.
     Resolve {
@@ -193,6 +194,12 @@ fn secrets(config: &Config) -> Result<Vec<String>, BoundaryError> {
 }
 
 fn store(config: &Config) -> Result<GoalStore, BoundaryError> {
+    session::check_roots(config, &config.cwd, config.mode).map_err(|_| {
+        failure(
+            "plan_write_denied",
+            "PLAN Goal storage must be outside the current workspace",
+        )
+    })?;
     GoalStore::open(&config.data_dir, secrets(config)?)
 }
 
@@ -247,9 +254,9 @@ fn goal_text(goal: &GoalRecord) {
 }
 
 fn bounded_file(path: &PathBuf) -> Result<String, BoundaryError> {
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
         .map_err(|_| failure("invalid_goal_plan", "Goal plan file is unavailable"))?;
     let metadata = file
@@ -262,8 +269,15 @@ fn bounded_file(path: &PathBuf) -> Result<String, BoundaryError> {
         ));
     }
     let mut text = String::new();
-    file.read_to_string(&mut text)
+    file.take(1024 * 1024 + 1)
+        .read_to_string(&mut text)
         .map_err(|_| failure("invalid_goal_plan", "Goal plan file is not UTF-8"))?;
+    if text.len() > 1024 * 1024 {
+        return Err(failure(
+            "invalid_goal_plan",
+            "Goal plan file exceeded its size limit while being read",
+        ));
+    }
     Ok(text)
 }
 
@@ -416,7 +430,7 @@ fn run_context(
     cli: &Cli,
     config: &Config,
     approval_file: Option<&PathBuf>,
-    cancellation: Arc<dyn Cancellation>,
+    cancellation: Arc<Cancel>,
     interactive: bool,
     accept_config_change: bool,
 ) -> Result<GoalRunContext, BoundaryError> {
@@ -473,7 +487,14 @@ async fn continue_goal(
         true,
         accept_config_change,
     )?;
-    let outcome = continue_once(config, &store, goal_id, context).await?;
+    let outcome = match continue_once(config, &store, goal_id, context).await {
+        Ok(outcome) => outcome,
+        Err(error) if error.0.code == "goal_budget" => {
+            let goal = store.load(goal_id).await?;
+            return Ok(json!({"schema_version":1,"data":{"goal":goal}}));
+        }
+        Err(error) => return Err(error),
+    };
     Ok(json!({
         "schema_version":1,
         "data":{"goal":outcome.goal,"run":outcome.result}
@@ -491,6 +512,7 @@ async fn auto_loop(
 ) -> Result<(GoalRecord, Vec<Value>), BoundaryError> {
     let store = store(config)?;
     let mut runs = Vec::new();
+    let mut first_run_approval = approval_file.cloned();
     loop {
         configured_auto_goal(config, &goal)?;
         if goal.status != GoalStatus::Ready {
@@ -507,11 +529,12 @@ async fn auto_loop(
         let context = run_context(
             cli,
             config,
-            approval_file,
+            first_run_approval.as_ref(),
             cancel.clone(),
             interactive,
             accept_config_change,
         )?;
+        first_run_approval = None;
         let outcome = match continue_once(config, &store, goal.id, context).await {
             Ok(outcome) => outcome,
             Err(error) if error.0.code == "goal_budget" => {
@@ -648,9 +671,15 @@ async fn report(
     };
     if let Some(target) = file {
         let cancel = Arc::new(Cancel::new());
-        let receipt = saya_app::export::publish(
-            target,
+        let target = if target.is_absolute() {
+            target.clone()
+        } else {
+            config.cwd.join(target)
+        };
+        let receipt = saya_app::export::publish_session(
+            &target,
             &bytes,
+            &config.cwd,
             &goal.workspace,
             config.mode,
             cancel.as_ref(),
@@ -790,7 +819,7 @@ pub async fn run(action: &GoalAction, cli: &Cli, config: &Config) -> Result<u8, 
         } => {
             let cancel = Arc::new(Cancel::new());
             let _signals = start_signals(cancel.clone())?;
-            let goal = verify_manual_criterion(
+            let goal = verify_criterion(
                 config,
                 &store(config)?,
                 parse_goal(goal_id)?,
@@ -865,7 +894,7 @@ pub async fn run(action: &GoalAction, cli: &Cli, config: &Config) -> Result<u8, 
             .and_then(|run| run.get("text"))
             .and_then(Value::as_str)
         {
-            println!("\n{text}");
+            println!("\n{}", safe_output(text, config));
         }
     });
     let run_failed = value

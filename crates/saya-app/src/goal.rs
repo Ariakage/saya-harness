@@ -14,7 +14,7 @@ use saya_core::{
     },
     goal::{
         AcceptanceCriterion, GoalId, GoalLease, GoalPlan, GoalRecord, GoalRunSummary, GoalStatus,
-        GoalStep, GoalStore, verify_file_criterion,
+        GoalStep, GoalStore, VerificationSpec, verify_file_criterion,
     },
     input::InputHandler,
     runtime::{ApprovalHandler, PersonalContext},
@@ -227,7 +227,7 @@ pub struct GoalRunContext {
     pub personal_context: PersonalContext,
     pub anthropic_prompt_cache: bool,
     pub accept_config_change: bool,
-    pub cancellation: Arc<dyn Cancellation>,
+    pub cancellation: Arc<crate::interaction::RunCancellation>,
 }
 
 pub struct GoalRunOutcome {
@@ -319,6 +319,7 @@ async fn run_step(
     let heartbeat_wait = Duration::from_millis((heartbeat_ttl / 3).clamp(1_000, 30_000));
     let heartbeat_error = Arc::new(Mutex::new(None::<BoundaryError>));
     let heartbeat_failure = heartbeat_error.clone();
+    let heartbeat_cancellation = context.cancellation.clone();
     let heartbeat = tokio::spawn(async move {
         loop {
             tokio::time::sleep(heartbeat_wait).await;
@@ -326,10 +327,32 @@ async fn run_step(
                 .renew_lease(&mut heartbeat_lease, now_ms(), Some(heartbeat_ttl))
                 .await
             {
+                heartbeat_cancellation.cancel();
                 if let Ok(mut failure) = heartbeat_failure.lock() {
                     *failure = Some(error);
                 }
                 break;
+            }
+        }
+    });
+    let control_store = store.clone();
+    let control_cancellation = context.cancellation.clone();
+    let control_goal_id = goal.id;
+    let control = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            match control_store.load(control_goal_id).await {
+                Ok(current)
+                    if matches!(current.status, GoalStatus::Paused | GoalStatus::Cancelled) =>
+                {
+                    control_cancellation.cancel();
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    control_cancellation.cancel();
+                    break;
+                }
             }
         }
     });
@@ -338,7 +361,9 @@ async fn run_step(
         .await
         .unwrap_or_else(|error| failed_result(session.id, run_id, error));
     heartbeat.abort();
+    control.abort();
     let _ = heartbeat.await;
+    let _ = control.await;
     if let Some(error) = heartbeat_error
         .lock()
         .ok()
@@ -365,20 +390,34 @@ async fn run_step(
         )
         .await?;
     let mut goal = goal;
-    if matches!(
-        goal.status,
-        GoalStatus::Ready | GoalStatus::Waiting | GoalStatus::Running
-    ) {
+    if matches!(goal.status, GoalStatus::Ready | GoalStatus::Waiting) {
+        let final_verification = !goal.steps.is_empty()
+            && goal
+                .steps
+                .iter()
+                .all(|step| step.status == saya_core::goal::StepStatus::Completed);
         let acceptance = goal.acceptance.clone();
         for criterion in &acceptance {
-            if goal.criterion_verified(&criterion.id) {
+            if matches!(
+                criterion.verification,
+                saya_core::goal::VerificationSpec::Manual
+            ) || (goal.criterion_verified(&criterion.id) && !final_verification)
+            {
                 continue;
             }
-            if let Some(evidence) = verify_file_criterion(&goal.workspace, criterion, timestamp()?)?
-            {
-                goal = store
-                    .record_evidence(goal.id, evidence, timestamp()?)
-                    .await?;
+            match verify_file_criterion(&goal.workspace, criterion, timestamp()?) {
+                Ok(Some(evidence)) => {
+                    goal = store
+                        .record_evidence(goal.id, evidence, timestamp()?)
+                        .await?;
+                }
+                Ok(None) => {}
+                Err(_) if final_verification && goal.criterion_verified(&criterion.id) => {
+                    goal = store
+                        .invalidate_file_evidence(goal.id, &criterion.id, timestamp()?)
+                        .await?;
+                }
+                Err(_) => {}
             }
         }
     }
@@ -429,29 +468,61 @@ pub async fn continue_once(
     }
 }
 
-/// Verify one manual criterion from explicit user evidence and a separate
-/// no-tools model review. The host still controls persistence and completion.
-pub async fn verify_manual_criterion(
+/// Verify one criterion after all steps complete. Manual evidence receives a
+/// separate no-tools review; file criteria are always rechecked by the host.
+pub async fn verify_criterion(
     config: &Config,
     store: &GoalStore,
     goal_id: GoalId,
     criterion_id: &str,
-    summary: String,
+    summary: Option<String>,
     cancel: &dyn Cancellation,
 ) -> Result<GoalRecord, BoundaryError> {
-    if summary.trim().is_empty() || summary.len() > saya_core::goal::MAX_GOAL_EVIDENCE_BYTES {
-        return Err(failure(
-            "invalid_goal_evidence",
-            "manual evidence summary is invalid",
-        ));
-    }
-    let mut goal = store.reserve_verification(goal_id, timestamp()?).await?;
+    let mut goal = store
+        .reserve_verification(goal_id, criterion_id, timestamp()?)
+        .await?;
     let criterion = goal
         .acceptance
         .iter()
         .find(|criterion| criterion.id == criterion_id)
         .ok_or_else(|| failure("goal_not_found", "acceptance criterion was not found"))?
         .clone();
+    if !matches!(&criterion.verification, VerificationSpec::Manual) {
+        if summary.is_some() {
+            return Err(failure(
+                "invalid_goal_evidence",
+                "file acceptance verification does not take a manual summary",
+            ));
+        }
+        let evidence = match verify_file_criterion(&goal.workspace, &criterion, timestamp()?) {
+            Ok(Some(evidence)) => evidence,
+            Ok(None) => {
+                return Err(failure(
+                    "goal_verification_failed",
+                    "file criterion did not produce host evidence",
+                ));
+            }
+            Err(error) => {
+                if goal.criterion_verified(&criterion.id) {
+                    store
+                        .invalidate_file_evidence(goal.id, &criterion.id, timestamp()?)
+                        .await?;
+                }
+                return Err(error);
+            }
+        };
+        return store.record_evidence(goal.id, evidence, timestamp()?).await;
+    }
+    let summary = summary
+        .filter(|summary| {
+            !summary.trim().is_empty() && summary.len() <= saya_core::goal::MAX_GOAL_EVIDENCE_BYTES
+        })
+        .ok_or_else(|| {
+            failure(
+                "invalid_goal_evidence",
+                "manual evidence summary is invalid",
+            )
+        })?;
     let evidence = saya_core::goal::GoalEvidence {
         id: saya_core::goal::EvidenceId::new(),
         criterion_id: criterion_id.into(),

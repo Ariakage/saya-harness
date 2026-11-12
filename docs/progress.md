@@ -18,6 +18,8 @@ TUI新增`/goals`选择器与`/goal create|plan|confirm|status|continue|start|pa
 
 Linux ARM64使用本机Colima `default`、8 GiB Ubuntu24.04.4 VM及Ubuntu22.04/Rust1.99.1容器，以单并发和关闭测试debug／incremental完成Goal core8项、Goal CLI7项、TUI Goal service／preview／picker各1项及workspace `cargo check --locked`，日志为`target/n4-linux.log`。未限制并发的首次编译OOM及缺少native工具的测试环境日志分别保留为`target/n4-linux-initial.log`与`target/n4-linux-sandbox-missing.log`；临时volume、容器和Colima均已清理。本轮未推送、未运行远端CI或四平台固定源码发行验收。
 
+2026-11-12 对 `56ad4f0` 完成独立审查并整改15项Goal契约问题，覆盖计划确认恢复、证据类型与最终文件重验、Draft／Cancelled完成旁路、单次预授权、租约失败取消、PLAN存储与报告、全部预算dispatch、未知token用量、活动Run取消、终端输出及有界读取。新增定向回归Goal core 14/14、Goal CLI 15/15通过，包含真实双进程活动模型请求取消。最终本机 `RUST_TEST_THREADS=1 just check` 通过1428项Rust测试、8项条件忽略、严格Clippy和release构建，`just test-tooling` 81项通过；同一release的smoke、文本journey、5项历史审查回归及28组TUI PTY全部通过。程序SHA-256为 `e3e75edfebc8f89a4570227c5ee2e9669fa1a2004b2ddbceb8545ec15a61ef77`，日志为 `target/n4-review-{check,tooling,smoke}.log`。完整整改证据见[N4审查与整改报告](review-2026-11-11.md)；原提交的平台日志和程序哈希继续归属 `56ad4f0`，不用于替代整改后验证。本轮未运行远端CI或其他平台重验。
+
 ## 模型超时与有限间隔重试
 
 2026-11-12，按D-062调整模型等待策略。`model_connect_timeout_seconds` 默认300秒，覆盖连接、发送及等待响应头阶段；`model_idle_timeout_seconds` 默认900秒，限制相邻流数据块／事件间隔；`model_timeout_seconds` 默认0，运行时和HTTP客户端均不设置单次总超时。0不关闭取消、Run活跃预算、模型次数、工具或Compact独立上限，Compact也不会把0传成非法的零超时。

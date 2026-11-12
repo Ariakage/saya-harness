@@ -2,7 +2,7 @@
 
 use super::{
     DispatchState, GoalDispatch, GoalId, GoalRecord, GoalStatus, GoalWaitReason, StepStatus,
-    failure,
+    VerificationSpec, failure,
 };
 use crate::{
     contract::{BoundaryError, ErrorInfo, RunId},
@@ -196,6 +196,78 @@ fn active_lease(
         Some(_) => Err(storage("goal_leased", "Goal is owned by another worker")),
         None => Err(storage("goal_lease_lost", "Goal worker lease is missing")),
     }
+}
+
+fn resumed_state(
+    record: &GoalRecord,
+) -> Result<(GoalStatus, crate::goal::GoalPhase, Option<GoalWaitReason>), BoundaryError> {
+    use crate::goal::GoalPhase;
+    if record.current_step.is_some() {
+        return Err(storage(
+            "goal_running",
+            "Goal step is still running or requires recovery",
+        ));
+    }
+    match &record.wait_reason {
+        Some(GoalWaitReason::PlanConfirmation) => {
+            return Ok((
+                GoalStatus::Waiting,
+                GoalPhase::Planning,
+                Some(GoalWaitReason::PlanConfirmation),
+            ));
+        }
+        Some(reason @ GoalWaitReason::UnknownSideEffect { .. }) => {
+            return Ok((
+                GoalStatus::Waiting,
+                GoalPhase::Verifying,
+                Some(reason.clone()),
+            ));
+        }
+        _ => {}
+    }
+    let all_steps_completed = !record.steps.is_empty()
+        && record
+            .steps
+            .iter()
+            .all(|step| step.status == StepStatus::Completed);
+    if record.budget_exhausted() {
+        return Ok((GoalStatus::LimitReached, GoalPhase::Finished, None));
+    }
+    if let Some(step) = record
+        .steps
+        .iter()
+        .find(|step| step.status == StepStatus::Failed)
+        && step
+            .last_result
+            .as_ref()
+            .is_some_and(|result| result.status == crate::contract::RunStatus::Cancelled)
+    {
+        return Ok((
+            GoalStatus::Waiting,
+            GoalPhase::Verifying,
+            Some(GoalWaitReason::UnknownSideEffect { step_id: step.id }),
+        ));
+    }
+    if record.wait_reason == Some(GoalWaitReason::ExternalInput)
+        || record
+            .steps
+            .iter()
+            .any(|step| step.status == StepStatus::Failed)
+    {
+        return Ok((
+            GoalStatus::Blocked,
+            GoalPhase::Executing,
+            Some(GoalWaitReason::ExternalInput),
+        ));
+    }
+    if all_steps_completed {
+        return Ok((
+            GoalStatus::Waiting,
+            GoalPhase::Verifying,
+            Some(GoalWaitReason::Verification),
+        ));
+    }
+    Ok((GoalStatus::Ready, GoalPhase::Executing, None))
 }
 
 impl GoalStore {
@@ -589,7 +661,7 @@ impl GoalStore {
                 .next_pending_step()
                 .cloned()
                 .ok_or_else(|| storage("goal_no_step", "Goal has no runnable step"))?;
-            if record.usage.runs >= record.budget.max_runs {
+            if record.budget_exhausted() {
                 record.status = GoalStatus::LimitReached;
                 record.phase = crate::goal::GoalPhase::Finished;
                 record.wait_reason = None;
@@ -597,7 +669,7 @@ impl GoalStore {
                 record.revision = record.revision.saturating_add(1);
                 write_connection(&transaction, &record, &secrets, None)?;
                 transaction.commit().map_err(sql_error)?;
-                return Err(storage("goal_budget", "Goal Run budget is exhausted"));
+                return Err(storage("goal_budget", "Goal budget is exhausted"));
             }
             record.reserve_run()?;
             let attempt = step.attempts.saturating_add(1);
@@ -733,14 +805,18 @@ impl GoalStore {
                 .usage
                 .active_seconds
                 .saturating_add(metrics.duration_ms.div_ceil(1000));
-            record.usage.add_usage(summary.usage.as_ref());
+            let completed = summary.status == crate::contract::RunStatus::Completed
+                && summary.persistence_saved;
+            if completed {
+                record.usage.add_usage(summary.usage.as_ref());
+            } else {
+                record.usage.add_incomplete_usage(summary.usage.as_ref());
+            }
             let index = record
                 .steps
                 .iter()
                 .position(|step| step.id == step_id)
                 .ok_or_else(|| storage("goal_corrupt", "Goal step disappeared"))?;
-            let completed = summary.status == crate::contract::RunStatus::Completed
-                && summary.persistence_saved;
             let step_status = if completed {
                 StepStatus::Completed
             } else {
@@ -755,24 +831,16 @@ impl GoalStore {
             } else {
                 DispatchState::Failed
             };
+            let requested_status = record.status;
             if completed
                 && record
                     .steps
                     .iter()
                     .all(|step| step.status == StepStatus::Completed)
             {
+                record.status = GoalStatus::Waiting;
                 record.phase = crate::goal::GoalPhase::Verifying;
-                if record
-                    .acceptance
-                    .iter()
-                    .all(|criterion| record.criterion_verified(&criterion.id))
-                {
-                    record.status = GoalStatus::Completed;
-                    record.phase = crate::goal::GoalPhase::Finished;
-                } else {
-                    record.status = GoalStatus::Waiting;
-                    record.wait_reason = Some(GoalWaitReason::Verification);
-                }
+                record.wait_reason = Some(GoalWaitReason::Verification);
             } else if completed {
                 record.status = GoalStatus::Ready;
                 record.phase = crate::goal::GoalPhase::Executing;
@@ -786,9 +854,34 @@ impl GoalStore {
                 });
                 record.wait_reason = Some(GoalWaitReason::ExternalInput);
             }
-            if record.budget_exhausted() && record.status != GoalStatus::Completed {
+            if record.budget_exhausted() {
                 record.status = GoalStatus::LimitReached;
                 record.phase = crate::goal::GoalPhase::Finished;
+            }
+            match requested_status {
+                GoalStatus::Cancelled => {
+                    record.status = GoalStatus::Cancelled;
+                    record.phase = crate::goal::GoalPhase::Finished;
+                    record.wait_reason = None;
+                }
+                GoalStatus::Paused => {
+                    record.status = GoalStatus::Paused;
+                    if record
+                        .steps
+                        .iter()
+                        .all(|step| step.status == StepStatus::Completed)
+                    {
+                        record.phase = crate::goal::GoalPhase::Verifying;
+                        record.wait_reason = Some(GoalWaitReason::Verification);
+                    } else if step_status == StepStatus::Failed {
+                        record.phase = crate::goal::GoalPhase::Executing;
+                        record.wait_reason = Some(GoalWaitReason::ExternalInput);
+                    } else {
+                        record.phase = crate::goal::GoalPhase::Executing;
+                        record.wait_reason = None;
+                    }
+                }
+                _ => {}
             }
             record.revision = record.revision.saturating_add(1);
             record.validate()?;
@@ -839,6 +932,53 @@ impl GoalStore {
             record.validate()?;
             write_connection(&transaction, &record, &secrets, None)?;
             transaction.commit().map_err(sql_error)?;
+            Ok(record)
+        })
+        .await
+        .map_err(|_| storage("goal_storage", "Goal storage worker failed"))?
+    }
+
+    pub async fn invalidate_file_evidence(
+        &self,
+        goal_id: GoalId,
+        criterion_id: &str,
+        now: String,
+    ) -> Result<GoalRecord, BoundaryError> {
+        let connection = self.connection.clone();
+        let secrets = self.secrets.clone();
+        let criterion_id = criterion_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let mut connection = connection
+                .lock()
+                .map_err(|_| storage("goal_storage", "Goal database lock poisoned"))?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            let mut record = load_connection(&transaction, goal_id)?;
+            let criterion = record
+                .acceptance
+                .iter()
+                .find(|criterion| criterion.id == criterion_id)
+                .ok_or_else(|| storage("goal_not_found", "acceptance criterion was not found"))?;
+            if matches!(&criterion.verification, VerificationSpec::Manual)
+                || record.status != GoalStatus::Waiting
+                || record.wait_reason != Some(GoalWaitReason::Verification)
+            {
+                return Err(storage(
+                    "invalid_goal_state",
+                    "only stale file evidence awaiting verification can be invalidated",
+                ));
+            }
+            let previous = record.evidence.len();
+            record
+                .evidence
+                .retain(|evidence| evidence.criterion_id != criterion_id);
+            if record.evidence.len() != previous {
+                record.updated_at = now;
+                record.revision = record.revision.saturating_add(1);
+                write_connection(&transaction, &record, &secrets, None)?;
+                transaction.commit().map_err(sql_error)?;
+            }
             Ok(record)
         })
         .await
@@ -903,13 +1043,27 @@ impl GoalStore {
                     step.run_id = Some(run_id);
                 }
                 record.current_step = None;
-                record.status = GoalStatus::Waiting;
+                let requested_status = record.status;
                 record.phase = crate::goal::GoalPhase::Verifying;
                 record.wait_reason = Some(GoalWaitReason::UnknownSideEffect { step_id });
                 record.failure = Some(ErrorInfo {
                     code: "goal_outcome_unknown".into(),
                     message: "worker stopped before the Run outcome was recorded".into(),
                 });
+                match requested_status {
+                    GoalStatus::Cancelled => {
+                        record.status = GoalStatus::Cancelled;
+                        record.phase = crate::goal::GoalPhase::Finished;
+                        record.wait_reason = None;
+                        record.authorization = None;
+                    }
+                    GoalStatus::Paused => {
+                        record.status = GoalStatus::Paused;
+                    }
+                    _ => {
+                        record.status = GoalStatus::Waiting;
+                    }
+                }
                 record.usage.model_requests =
                     record.usage.model_requests.saturating_add(1);
                 record.usage.tool_calls = record.usage.tool_calls.saturating_add(1);
@@ -1075,10 +1229,12 @@ impl GoalStore {
     pub async fn reserve_verification(
         &self,
         goal_id: GoalId,
+        criterion_id: &str,
         now: String,
     ) -> Result<GoalRecord, BoundaryError> {
         let connection = self.connection.clone();
         let secrets = self.secrets.clone();
+        let criterion_id = criterion_id.to_owned();
         tokio::task::spawn_blocking(move || {
             let mut connection = connection
                 .lock()
@@ -1087,7 +1243,26 @@ impl GoalStore {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(sql_error)?;
             let mut record = load_connection(&transaction, goal_id)?;
-            if record.usage.model_requests >= record.budget.max_model_requests {
+            let criterion = record
+                .acceptance
+                .iter()
+                .find(|criterion| criterion.id == criterion_id)
+                .ok_or_else(|| storage("goal_not_found", "acceptance criterion was not found"))?;
+            if record.status != GoalStatus::Waiting
+                || record.wait_reason != Some(GoalWaitReason::Verification)
+                || record.steps.is_empty()
+                || record
+                    .steps
+                    .iter()
+                    .any(|step| step.status != StepStatus::Completed)
+            {
+                return Err(storage(
+                    "invalid_goal_state",
+                    "Goal is not awaiting acceptance verification",
+                ));
+            }
+            let manual = matches!(&criterion.verification, VerificationSpec::Manual);
+            if manual && record.usage.model_requests >= record.budget.max_model_requests {
                 record.status = GoalStatus::LimitReached;
                 record.phase = crate::goal::GoalPhase::Finished;
                 record.updated_at = now;
@@ -1113,7 +1288,9 @@ impl GoalStore {
             }
             record.usage.verification_attempts =
                 record.usage.verification_attempts.saturating_add(1);
-            record.usage.model_requests = record.usage.model_requests.saturating_add(1);
+            if manual {
+                record.usage.model_requests = record.usage.model_requests.saturating_add(1);
+            }
             record.updated_at = now;
             record.revision = record.revision.saturating_add(1);
             write_connection(&transaction, &record, &secrets, None)?;
@@ -1153,10 +1330,10 @@ impl GoalStore {
                     |row| row.get(0),
                 )
                 .map_err(sql_error)?;
-            if leased != 0 {
+            if leased != 0 && !matches!(status, GoalStatus::Paused | GoalStatus::Cancelled) {
                 return Err(storage(
                     "goal_running",
-                    "Goal has an active worker; cancel its current Run first",
+                    "Goal has an active worker; wait for its current Run to finish",
                 ));
             }
             let allowed = match status {
@@ -1173,12 +1350,12 @@ impl GoalStore {
                             && !record
                                 .steps
                                 .iter()
-                                .any(|step| step.status == StepStatus::Failed))
+                                .any(|step| step.status == StepStatus::Failed)
                             && record.wait_reason != Some(GoalWaitReason::ExternalInput)
                             && !matches!(
                                 record.wait_reason,
                                 Some(GoalWaitReason::UnknownSideEffect { .. })
-                            )
+                            ))
                 }
                 GoalStatus::Blocked => matches!(
                     record.status,
@@ -1195,9 +1372,29 @@ impl GoalStore {
                     "requested Goal transition is not allowed from the current state",
                 ));
             }
-            record.status = status;
-            record.phase = phase;
-            record.wait_reason = wait_reason;
+            let (next_status, next_phase, next_wait) = if status == GoalStatus::Paused {
+                let phase = match record.wait_reason {
+                    Some(GoalWaitReason::PlanConfirmation) => crate::goal::GoalPhase::Planning,
+                    Some(
+                        GoalWaitReason::Verification | GoalWaitReason::UnknownSideEffect { .. },
+                    ) => crate::goal::GoalPhase::Verifying,
+                    _ => crate::goal::GoalPhase::Executing,
+                };
+                (GoalStatus::Paused, phase, record.wait_reason.clone())
+            } else if status == GoalStatus::Ready && record.status == GoalStatus::Paused {
+                resumed_state(&record)?
+            } else {
+                (status, phase, wait_reason)
+            };
+            record.status = next_status;
+            record.phase = next_phase;
+            record.wait_reason = next_wait;
+            if next_status == GoalStatus::Cancelled {
+                record.authorization = None;
+            }
+            if matches!(next_status, GoalStatus::Ready | GoalStatus::Completed) {
+                record.failure = None;
+            }
             record.updated_at = now;
             record.revision = record.revision.saturating_add(1);
             record.validate()?;

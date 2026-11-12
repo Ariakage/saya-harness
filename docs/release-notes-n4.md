@@ -14,7 +14,8 @@ saya goal plan GOAL_ID
 saya goal confirm GOAL_ID
 saya goal continue GOAL_ID --mode build
 saya goal start GOAL_ID --auto --mode build
-saya goal verify GOAL_ID criterion-1 "Reviewed the test report"
+saya goal verify GOAL_ID criterion-1 --summary "Reviewed the test report"
+saya goal verify GOAL_ID file-criterion
 saya goal report GOAL_ID --format markdown --file ./goal.md
 saya goal worker
 ```
@@ -26,7 +27,8 @@ TUI 提供 `/goals` 选择器和 `/goal create|plan|confirm|status|continue|star
 - 完整生命周期使用独立版本化 SQLite WAL；revision CAS、dispatch intent、lease 和证据发布均持久化。
 - worker 只恢复已过期租约。执行结果无法确认时进入 `unknown_side_effect`，不会自动重放。
 - 自动继续必须显式 `start --auto`，绑定当前模式、权限、profile、权限规则、Sandbox 和运行上限。配置变化会阻塞自动 Goal，等待重新授权。
-- Goal 预算限制 Run、模型请求、工具、活跃时间、token、规划、核验与重规划。
+- Goal 预算限制 Run、模型请求、工具、活跃时间、token、规划、核验与重规划；成功模型调用缺少完整 token usage 时保守停止后续 Step。
+- 文件验收在最终完成前由主机重新核验；人工摘要不能替代文件证据。
 - 模型计划的文字完成或模型核验意见不能替代主机证据。只有全部 Step 完成且全部验收项存在证据时才会完成。
 - Manual Approval 的 Goal 执行通过 CLI 终端审批；当前 TUI Goal continue／start 使用 auto 或 bypass，并继续遵守 PLAN、显式 deny 与 Sandbox 硬边界。
 
@@ -49,7 +51,8 @@ saya goal plan GOAL_ID
 saya goal confirm GOAL_ID
 saya goal continue GOAL_ID --mode build
 saya goal start GOAL_ID --auto --mode build
-saya goal verify GOAL_ID criterion-1 "Reviewed the test report"
+saya goal verify GOAL_ID criterion-1 --summary "Reviewed the test report"
+saya goal verify GOAL_ID file-criterion
 saya goal report GOAL_ID --format markdown --file ./goal.md
 saya goal worker
 ```
@@ -61,7 +64,8 @@ Safety and recovery boundaries:
 - The lifecycle uses an independent versioned SQLite WAL store with revision CAS, dispatch intents, leases, and transactional evidence publication.
 - A worker recovers only expired leases. An outcome that cannot be established becomes `unknown_side_effect` and is never replayed automatically.
 - Automatic continuation requires an explicit `start --auto` authorization bound to the current mode, permissions, profile, permission rules, sandbox, and runtime limits. Configuration changes block automatic continuation until reauthorized.
-- Goal budgets cover Runs, model requests, tools, active time, tokens, planning, verification, and replanning.
+- Goal budgets cover Runs, model requests, tools, active time, tokens, planning, verification, and replanning. Successful model calls without complete token usage conservatively stop further Step dispatch.
+- File acceptance is rechecked by the host before final completion; a manual summary cannot replace file evidence.
 - A model's completion prose or verification opinion cannot replace host evidence. Completion requires every Step to finish and every acceptance criterion to have recorded evidence.
 - Manual Approval Goal execution uses the CLI terminal approval path. TUI Goal continue/start currently require auto or bypass permissions and still respect PLAN, explicit deny, and hard sandbox boundaries.
 

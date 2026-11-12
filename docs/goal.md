@@ -19,7 +19,7 @@ saya goal status GOAL_ID
 saya goal continue GOAL_ID [--approval-file PATH]
 saya goal start GOAL_ID --auto
 saya goal pause|resume|cancel GOAL_ID
-saya goal verify GOAL_ID CRITERION --summary TEXT
+saya goal verify GOAL_ID CRITERION [--summary TEXT]
 saya goal resolve GOAL_ID STEP_ID --retry
 saya goal replan GOAL_ID
 saya goal report GOAL_ID [--format json|markdown] [--file PATH]
@@ -27,6 +27,8 @@ saya goal worker [--once]
 ```
 
 TUI 提供 `/goals` 选择器与 `/goal create|plan|confirm|status|continue|start|pause|resume|cancel|verify|report|replan ID`。TUI 的交互式 Goal Run 当前要求 `auto` 或 `bypass` 权限；`Manual Approval` 使用 CLI 的终端审批路径。自动启动必须显式执行 `start --auto`，不会由普通发送或后台恢复隐式产生。
+
+核验只在全部 Step 完成后开放。人工条件要求 `--summary`（TUI 为条件 ID 后的文字）并经过独立无工具核验；文件条件不接受人工摘要，`goal verify GOAL_ID CRITERION` 直接由主机重新读取文件。暂停会保留当前等待原因，恢复等待计划确认或验收的 Goal 时仍回到对应 Waiting，不会绕过确认。运行中的暂停／取消会持久化控制意图并传播到当前 Runtime；取消为终态并撤销自动授权。
 
 实现和验收细节见[N4验收](n4-validation.md)。
 
@@ -59,7 +61,7 @@ G1 可在共享基础稳定后单独开发，G2 的执行依赖按[后续开发�
 
 当前实现将一个 Goal 绑定到一个专属 Session，步骤关联多个 Run；跨 Session 关联及子 Goal 按后续需求扩展。工具调用继续使用 `(run_id, call_id)` 关联。
 
-证据中的文件包含生成时摘要，核验时重新检查版本。计划完成、模型自述、命令退出码和目标验收分别记录，目标完成要求每条验收条件具有对应证据。
+证据中的文件包含生成时摘要，核验时重新检查版本。中间 Step 只在文件条件已满足时记录证据，暂未满足不会阻断后续 Step；全部 Step 完成后会重新核验所有文件条件，文件变化或缺失会使旧证据失效。计划完成、模型自述、命令退出码和目标验收分别记录，目标完成要求每条验收条件具有与核验类型、路径及摘要匹配的证据。
 
 ## 生命周期草案
 
@@ -130,15 +132,16 @@ saya goal worker
 - 模式来自用户选择。自动阶段的首版建议使用用户选定的固定执行模式，模式调整由 Agent 提议并等待用户确认，在调用边界生效。
 - 自动继续需要独立、有限的 `start --auto` 启动授权，记录模式、权限、profile／权限规则／沙箱／运行上限构成的配置指纹和预算。worker 或手工恢复时重新判定当前权限；配置变化会令自动 Goal 进入 `blocked / authorization`，需人工恢复并重新显式授权。
 - 自动启动前核验所选后端的文件、网络、资源和清理能力，硬要求缺失时给出可处理原因。best_effort 的资源与清理能力按显式 profile 展示，具体矩阵见[原生后端设计](sandbox.md)。
-- 每个 Run 保有模型、工具、活跃时间和清理上限。Goal 总预算累计 Run 数、模型请求（含 review／plan／compaction）、工具、活跃时间、输入／输出 token、规划／核验尝试及重规划；达到硬上限后停止新调度。
-- 可声明为硬上限的资源在执行前预留、执行后结算，未知用量和中断记录按保守策略处理。具体单位、缺失 usage 行为和默认上限在 DEV-069／DEV-072 收敛。
+- 每个 Run 保有模型、工具、活跃时间和清理上限。Goal 总预算累计 Run 数、模型请求（含 review／plan／compaction）、工具、活跃时间、输入／输出 token、规划／核验尝试及重规划；达到任一硬上限后，在下一个 Step dispatch 前停止新调度。
+- 成功规划、执行或人工核验缺少完整 input／output token usage 时，记录 `token_usage_unknown` 并保守停止后续 Step 调度，不按零用量处理。已知失败 Run 保留已观察用量，是否重试仍由 unknown 边界和 `max_replans` 单独约束。
+- `continue --approval-file` 的预授权只适用于该次 Run；`start --auto --approval-file` 只装入自动序列的第一个 Run，不会在后续 Step 重新加载或恢复已消费授权。
 - 重试和重规划具有次数上限、失败分类及停止原因。结果不明的副作用进入等待处理，重试前先检查已有意图、结果和幂等记录。
 
 ## 持久化与恢复
 
 Goal、Step、Run 关联和调度意图位于独立版本化数据库，按事务和配置化 redaction 保存。目标状态改变与步骤启动 intent 在事务内提交，之后才调用运行服务；写入失败停止后续调度。状态更新使用 revision CAS，验收证据与 completion 在同一事务内发布。
 
-每个 Goal 同时运行一个受管理 Run，持有 Goal lease 和现有 Session 写锁。worker 心跳续租；只恢复租约已过期的 dispatch。intent／running 未得到终态的 dispatch 标为 unknown，并等待 `goal resolve --retry`，不会自动重放。`goal continue` 与 TUI 前台执行使用同一租约和 Session 锁边界。
+每个 Goal 同时运行一个受管理 Run，持有 Goal lease 和现有 Session 写锁。worker 心跳续租；续期失败会立即请求取消当前 Run，避免失去排他所有权后继续执行。只恢复租约已过期的 dispatch。intent／running 未得到终态的 dispatch 标为 unknown，并等待 `goal resolve --retry`，不会自动重放。`goal continue` 与 TUI 前台执行使用同一租约和 Session 锁边界。
 
 G2 引入持久队列后，再根据明确的自动授权恢复调度。0.1.0 运行内后台任务的结果作为原有 Run 数据记录，其现有结束清理语义在适用运行中继续执行。
 

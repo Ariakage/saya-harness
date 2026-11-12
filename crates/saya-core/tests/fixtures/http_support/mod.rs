@@ -61,6 +61,55 @@ pub fn server(
     });
     Ok((format!("http://{address}/v1"), receiver))
 }
+type GatedServer = (String, mpsc::Receiver<Value>, mpsc::Sender<()>);
+
+/// Hold the response until the test releases it, preserving a real in-flight request.
+pub fn server_gated(body: String) -> Result<GatedServer, Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let (sender, receiver) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    std::thread::spawn(move || {
+        let Ok((mut socket, _)) = listener.accept() else {
+            return;
+        };
+        let _ = socket.set_read_timeout(Some(Duration::from_secs(3)));
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        let body_pos = loop {
+            match socket.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => request.extend_from_slice(&buf[..n]),
+            }
+            if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..pos]);
+                let size = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= pos + 4 + size {
+                    break pos + 4;
+                }
+            }
+        };
+        if let Ok(json) = serde_json::from_slice(&request[body_pos..]) {
+            let _ = sender.send(json);
+        }
+        let _ = released.recv_timeout(Duration::from_secs(10));
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = socket.write_all(header.as_bytes());
+        let _ = socket.write_all(body.as_bytes());
+    });
+    Ok((format!("http://{address}/v1"), receiver, release))
+}
+
 pub fn sse(events: &[Value]) -> String {
     let mut body = String::new();
     for event in events {

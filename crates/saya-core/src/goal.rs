@@ -32,6 +32,7 @@ pub const MAX_GOAL_STEPS: usize = 64;
 pub const MAX_GOAL_TITLE_BYTES: usize = 256;
 pub const MAX_GOAL_INSTRUCTION_BYTES: usize = 32 * 1024;
 pub const MAX_GOAL_EVIDENCE_BYTES: usize = 16 * 1024;
+const MAX_GOAL_EVIDENCE_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 fn failure(code: &str, message: &str) -> BoundaryError {
     BoundaryError(
@@ -217,6 +218,34 @@ impl AcceptanceCriterion {
     }
 }
 
+fn bounded_file_digest(reader: impl Read) -> Result<String, BoundaryError> {
+    let mut limited = reader.take(MAX_GOAL_EVIDENCE_FILE_BYTES + 1);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let count = limited
+            .read(&mut buffer)
+            .map_err(|_| failure("goal_verification_failed", "acceptance file cannot be read"))?;
+        if count == 0 {
+            break;
+        }
+        total = total.saturating_add(count as u64);
+        if total > MAX_GOAL_EVIDENCE_FILE_BYTES {
+            return Err(failure(
+                "goal_verification_failed",
+                "acceptance file exceeded its size limit while being read",
+            ));
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
 /// Recheck a bounded workspace-relative file criterion without following links.
 /// Manual criteria return `None` and must be verified by an explicit user action.
 pub fn verify_file_criterion(
@@ -261,36 +290,27 @@ pub fn verify_file_criterion(
     options
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
-    let mut file = directory
+    let file = directory
         .open_with(name, &options)
         .map_err(|_| failure("goal_verification_failed", "acceptance file is unavailable"))?
         .into_std();
     let metadata = file
         .metadata()
         .map_err(|_| failure("goal_verification_failed", "acceptance file is unavailable"))?;
-    if !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
+    if !metadata.is_file() || metadata.len() > MAX_GOAL_EVIDENCE_FILE_BYTES {
         return Err(failure(
             "goal_verification_failed",
             "acceptance file is not a bounded regular file",
         ));
     }
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| failure("goal_verification_failed", "acceptance file cannot be read"))?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let digest = hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    if expected.is_some_and(|expected| expected != digest) {
+    let digest = if expected.is_some() {
+        Some(bounded_file_digest(file)?)
+    } else {
+        None
+    };
+    if let (Some(expected), Some(actual)) = (expected, digest.as_deref())
+        && expected != actual
+    {
         return Err(failure(
             "goal_verification_failed",
             "acceptance file SHA-256 differs from the declared digest",
@@ -312,7 +332,7 @@ pub fn verify_file_criterion(
             "Host confirmed the declared regular file exists".into()
         },
         path: Some(path.clone()),
-        sha256: expected.map(|_| digest),
+        sha256: digest,
         observed_at,
     }))
 }
@@ -476,7 +496,7 @@ impl GoalRunSummary {
             persistence_saved: result
                 .persistence
                 .as_ref()
-                .is_none_or(|persistence| persistence.saved),
+                .is_some_and(|persistence| persistence.saved),
             finished_at,
         })
     }
@@ -592,6 +612,21 @@ impl GoalEvidence {
         }
         Ok(())
     }
+
+    fn matches_criterion(&self, criterion: &AcceptanceCriterion) -> bool {
+        match (&criterion.verification, &self.kind) {
+            (VerificationSpec::Manual, EvidenceKind::Manual) => {
+                self.path.is_none() && self.sha256.is_none()
+            }
+            (VerificationSpec::FileExists { path }, EvidenceKind::FileExists) => {
+                self.path.as_ref() == Some(path) && self.sha256.is_none()
+            }
+            (VerificationSpec::FileSha256 { path, sha256 }, EvidenceKind::FileDigest) => {
+                self.path.as_ref() == Some(path) && self.sha256.as_deref() == Some(sha256.as_str())
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -648,6 +683,9 @@ pub struct GoalUsage {
     pub active_seconds: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Successful model calls without complete token reporting stop new dispatch.
+    #[serde(default)]
+    pub token_usage_unknown: bool,
     pub planning_attempts: u32,
     pub verification_attempts: u32,
     pub replans: u32,
@@ -659,13 +697,30 @@ impl GoalUsage {
     }
 
     pub fn add_usage(&mut self, usage: Option<&Usage>) {
-        if let Some(usage) = usage {
-            self.input_tokens = self
-                .input_tokens
-                .saturating_add(usage.input_tokens.unwrap_or(0));
-            self.output_tokens = self
-                .output_tokens
-                .saturating_add(usage.output_tokens.unwrap_or(0));
+        self.add_usage_inner(usage, true);
+    }
+
+    /// Preserve known usage from a failed Run; bounded replanning owns its retry.
+    pub fn add_incomplete_usage(&mut self, usage: Option<&Usage>) {
+        self.add_usage_inner(usage, false);
+    }
+
+    fn add_usage_inner(&mut self, usage: Option<&Usage>, require_complete: bool) {
+        let Some(usage) = usage else {
+            if require_complete {
+                self.token_usage_unknown = true;
+            }
+            return;
+        };
+        if let Some(input) = usage.input_tokens {
+            self.input_tokens = self.input_tokens.saturating_add(input);
+        } else if require_complete {
+            self.token_usage_unknown = true;
+        }
+        if let Some(output) = usage.output_tokens {
+            self.output_tokens = self.output_tokens.saturating_add(output);
+        } else if require_complete {
+            self.token_usage_unknown = true;
         }
     }
 }
@@ -853,12 +908,18 @@ impl GoalRecord {
             ));
         }
         validate_acyclic(&self.steps)?;
-        if self
-            .evidence
-            .iter()
-            .any(|evidence| evidence.validate(&criteria).is_err())
-        {
-            return Err(failure("invalid_goal", "Goal evidence is invalid"));
+        if self.evidence.iter().any(|evidence| {
+            evidence.validate(&criteria).is_err()
+                || self
+                    .acceptance
+                    .iter()
+                    .find(|criterion| criterion.id == evidence.criterion_id)
+                    .is_none_or(|criterion| !evidence.matches_criterion(criterion))
+        }) {
+            return Err(failure(
+                "invalid_goal",
+                "Goal evidence does not match its acceptance criterion",
+            ));
         }
         if self.current_step.is_some_and(|id| !step_ids.contains(&id)) {
             return Err(failure(
@@ -873,6 +934,7 @@ impl GoalRecord {
                 .map(|evidence| evidence.criterion_id.as_str())
                 .collect::<HashSet<_>>();
             if self.acceptance.is_empty()
+                || self.steps.is_empty()
                 || self
                     .acceptance
                     .iter()
@@ -977,14 +1039,50 @@ impl GoalRecord {
     }
 
     pub fn add_evidence(&mut self, evidence: GoalEvidence) -> Result<(), BoundaryError> {
-        if self
-            .evidence
-            .iter()
-            .any(|item| item.criterion_id == evidence.criterion_id)
+        if !matches!(self.status, GoalStatus::Ready | GoalStatus::Waiting)
+            || self.current_step.is_some()
+            || self.steps.is_empty()
+            || (self.status == GoalStatus::Waiting
+                && self.wait_reason != Some(GoalWaitReason::Verification))
         {
-            return Ok(());
+            return Err(failure(
+                "invalid_goal_state",
+                "Goal evidence requires an active plan with no running step",
+            ));
         }
-        self.evidence.push(evidence);
+        let criterion = self
+            .acceptance
+            .iter()
+            .find(|criterion| criterion.id == evidence.criterion_id)
+            .ok_or_else(|| failure("invalid_goal_evidence", "acceptance criterion is unknown"))?;
+        if !evidence.matches_criterion(criterion) {
+            return Err(failure(
+                "invalid_goal_evidence",
+                "evidence does not match the acceptance verification method",
+            ));
+        }
+        if evidence.kind == EvidenceKind::Manual
+            && (self.status != GoalStatus::Waiting
+                || self.wait_reason != Some(GoalWaitReason::Verification)
+                || self
+                    .steps
+                    .iter()
+                    .any(|step| step.status != StepStatus::Completed))
+        {
+            return Err(failure(
+                "invalid_goal_state",
+                "manual evidence requires a completed plan awaiting verification",
+            ));
+        }
+        if let Some(existing) = self
+            .evidence
+            .iter_mut()
+            .find(|item| item.criterion_id == evidence.criterion_id)
+        {
+            *existing = evidence;
+        } else {
+            self.evidence.push(evidence);
+        }
         if self
             .acceptance
             .iter()
@@ -998,6 +1096,7 @@ impl GoalRecord {
             self.phase = GoalPhase::Finished;
             self.wait_reason = None;
             self.current_step = None;
+            self.failure = None;
         }
         self.validate()
     }
@@ -1009,7 +1108,8 @@ impl GoalRecord {
     }
 
     pub fn budget_exhausted(&self) -> bool {
-        self.usage.runs >= self.budget.max_runs
+        self.usage.token_usage_unknown
+            || self.usage.runs >= self.budget.max_runs
             || self.usage.model_requests >= self.budget.max_model_requests
             || self.usage.tool_calls >= self.budget.max_tool_calls
             || self.usage.active_seconds >= self.budget.max_active_seconds

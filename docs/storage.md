@@ -20,7 +20,7 @@
 
 N4 Goal 使用独立 `data_dir/goals/goals.sqlite3`，不改变 Session 数据库 schema。Goal 数据库使用独立 application ID、`user_version=1`、WAL、`synchronous=FULL`、0700 目录和 0600 文件，拒绝数据库符号链接。Goal／Step／evidence／budget／usage 作为版本化 JSON 记录保存，索引列只用于状态、Session、profile 与 revision 查询。
 
-`goals`、`leases`、`workspace_leases` 和 `dispatches` 分别保存目标 revision、Goal worker 租约、同工作区排他租约及 Step 启动 intent。状态改变、Step intent、Run 关联、usage 与 evidence 发布在事务中完成；revision 保存采用 CAS。worker 只恢复已过期租约下的 `intent/running` dispatch，终态未知时标记 `unknown_side_effect`，不会重放。数据目录身份、链接拒绝、凭据拒绝、并发冲突、预算与恢复矩阵见[N4验收](n4-validation.md)。
+`goals`、`leases`、`workspace_leases` 和 `dispatches` 分别保存目标 revision、Goal worker 租约、同工作区排他租约及 Step 启动 intent。状态改变、Step intent、Run 关联、usage 与 evidence 发布在事务中完成；revision 保存采用 CAS。证据必须匹配验收类型、路径和摘要，文件证据在最终完成前重验，失效时移除旧记录。`token_usage_unknown` 使用 serde 默认值兼容早期记录；成功模型调用缺少完整 token usage 时停止新 Step dispatch。worker 只恢复已过期租约下的 `intent/running` dispatch，终态未知时标记 `unknown_side_effect`，不会重放。数据目录身份、链接拒绝、凭据拒绝、并发冲突、预算与恢复矩阵见[N4验收](n4-validation.md)。
 
 ## 只读导出快照
 

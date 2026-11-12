@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    contract::{PermissionMode, RunStatus, Usage},
+    contract::{PermissionMode, RunResult, RunStatus, SCHEMA_VERSION, Usage},
     metrics::RunMetrics,
 };
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
@@ -50,6 +50,30 @@ fn plan(first: StepId, second: StepId) -> GoalPlan {
             },
         ],
     }
+}
+
+fn single_manual_goal() -> (GoalRecord, StepId) {
+    let mut goal = record();
+    let step = StepId::new();
+    goal.apply_plan(
+        GoalPlan {
+            acceptance: vec![AcceptanceCriterion {
+                id: "criterion-1".into(),
+                text: "The work is verified".into(),
+                verification: VerificationSpec::Manual,
+            }],
+            steps: vec![PlannedStep {
+                id: step,
+                title: "Step".into(),
+                instruction: "Perform bounded work".into(),
+                depends_on: vec![],
+            }],
+        },
+        "2026-11-12T04:00:00Z".into(),
+    )
+    .unwrap();
+    goal.confirm_plan("2026-11-12T04:01:00Z".into()).unwrap();
+    (goal, step)
 }
 
 fn summary(run_id: RunId, now: &str) -> GoalRunSummary {
@@ -527,4 +551,206 @@ async fn failed_known_work_is_replanned_once_but_unknown_side_effects_wait() {
         }
         store.release_lease(&lease).await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn pause_and_resume_restore_confirmation_instead_of_authorizing_execution() {
+    let root = tempfile::tempdir().unwrap();
+    let store = GoalStore::open(&root.path().join("data"), vec![]).unwrap();
+    let mut goal = record();
+    goal.apply_plan(
+        plan(StepId::new(), StepId::new()),
+        "2026-11-12T05:00:00Z".into(),
+    )
+    .unwrap();
+    let goal = store.create(goal).await.unwrap();
+    let paused = store
+        .transition(
+            goal.id,
+            GoalStatus::Paused,
+            GoalPhase::Executing,
+            None,
+            "2026-11-12T05:01:00Z".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(paused.wait_reason, Some(GoalWaitReason::PlanConfirmation));
+    let resumed = store
+        .transition(
+            goal.id,
+            GoalStatus::Ready,
+            GoalPhase::Executing,
+            None,
+            "2026-11-12T05:02:00Z".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed.status, GoalStatus::Waiting);
+    assert_eq!(resumed.wait_reason, Some(GoalWaitReason::PlanConfirmation));
+}
+
+#[tokio::test]
+async fn evidence_cannot_complete_ready_cancelled_or_empty_goals() {
+    let root = tempfile::tempdir().unwrap();
+    let store = GoalStore::open(&root.path().join("data"), vec![]).unwrap();
+    let (goal, step) = single_manual_goal();
+    let evidence = GoalEvidence {
+        id: EvidenceId::new(),
+        criterion_id: "criterion-1".into(),
+        step_id: Some(step),
+        run_id: None,
+        kind: EvidenceKind::Manual,
+        summary: "Reviewed".into(),
+        path: None,
+        sha256: None,
+        observed_at: "2026-11-12T05:03:00Z".into(),
+    };
+    let mut ready = goal.clone();
+    assert!(ready.add_evidence(evidence.clone()).is_err());
+    let goal = store.create(goal).await.unwrap();
+    let cancelled = store
+        .transition(
+            goal.id,
+            GoalStatus::Cancelled,
+            GoalPhase::Finished,
+            None,
+            "2026-11-12T05:04:00Z".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status, GoalStatus::Cancelled);
+    assert!(
+        store
+            .record_evidence(goal.id, evidence, "2026-11-12T05:05:00Z".into())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.load(goal.id).await.unwrap().status,
+        GoalStatus::Cancelled
+    );
+}
+
+#[test]
+fn missing_persistence_and_successful_token_usage_fail_closed() {
+    let run_id = RunId::new();
+    let result = RunResult {
+        schema_version: SCHEMA_VERSION,
+        session_id: None,
+        run_id: Some(run_id),
+        status: RunStatus::Failed,
+        stop_reason: Some("storage_error".into()),
+        text: None,
+        error: None,
+        usage: None,
+        artifacts: vec![],
+        persistence: None,
+    };
+    let summary = GoalRunSummary::from_result(&result, "2026-11-12T05:06:00Z".into()).unwrap();
+    assert!(!summary.persistence_saved);
+
+    let (mut goal, _) = single_manual_goal();
+    goal.usage.add_usage(None);
+    assert!(goal.usage.token_usage_unknown);
+    assert!(goal.budget_exhausted());
+    let mut failed_run = GoalUsage::default();
+    failed_run.add_incomplete_usage(None);
+    assert!(!failed_run.token_usage_unknown);
+
+    let mut legacy = serde_json::to_value(GoalUsage::default()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("token_usage_unknown");
+    let decoded: GoalUsage = serde_json::from_value(legacy).unwrap();
+    assert!(!decoded.token_usage_unknown);
+}
+
+#[tokio::test]
+async fn dispatch_rejects_every_exhausted_budget_before_starting() {
+    let root = tempfile::tempdir().unwrap();
+    let store = GoalStore::open(&root.path().join("data"), vec![]).unwrap();
+    let (mut goal, _) = single_manual_goal();
+    goal.budget.max_model_requests = 1;
+    goal.usage.model_requests = 1;
+    let goal = store.create(goal).await.unwrap();
+    let lease = store
+        .acquire_lease(goal.id, "budget".into(), 1_000, Some(60_000))
+        .await
+        .unwrap();
+    let error = store
+        .begin_dispatch(&lease, RunId::new(), 1_001, "2026-11-12T05:07:00Z".into())
+        .await
+        .unwrap_err();
+    assert_eq!(error.0.code, "goal_budget");
+    assert_eq!(
+        store.load(goal.id).await.unwrap().status,
+        GoalStatus::LimitReached
+    );
+}
+
+#[tokio::test]
+async fn active_pause_and_cancel_survive_run_completion() {
+    let root = tempfile::tempdir().unwrap();
+    let store = GoalStore::open(&root.path().join("data"), vec![]).unwrap();
+    for action in [GoalStatus::Paused, GoalStatus::Cancelled] {
+        let (mut goal, _) = single_manual_goal();
+        goal.workspace = PathBuf::from(format!("/workspace-{action:?}"));
+        let goal = store.create(goal).await.unwrap();
+        let lease = store
+            .acquire_lease(goal.id, format!("worker-{action:?}"), 1_000, Some(60_000))
+            .await
+            .unwrap();
+        let dispatch = store
+            .begin_dispatch(&lease, RunId::new(), 1_001, "2026-11-12T05:08:00Z".into())
+            .await
+            .unwrap();
+        store.mark_running(&dispatch, &lease, 1_002).await.unwrap();
+        let requested = store
+            .transition(
+                goal.id,
+                action,
+                GoalPhase::Executing,
+                None,
+                "2026-11-12T05:09:00Z".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(requested.status, action);
+        let finished = store
+            .finish_dispatch(
+                &lease,
+                &dispatch,
+                summary(dispatch.run_id, "2026-11-12T05:10:00Z"),
+                &metrics(),
+                "2026-11-12T05:11:00Z".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finished.status, action);
+        store.release_lease(&lease).await.unwrap();
+        if action == GoalStatus::Paused {
+            let resumed = store
+                .transition(
+                    goal.id,
+                    GoalStatus::Ready,
+                    GoalPhase::Executing,
+                    None,
+                    "2026-11-12T05:12:00Z".into(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resumed.status, GoalStatus::Waiting);
+            assert_eq!(resumed.wait_reason, Some(GoalWaitReason::Verification));
+        }
+    }
+}
+
+#[test]
+fn digest_reading_enforces_the_actual_byte_limit() {
+    assert!(bounded_file_digest(std::io::repeat(0)).is_err());
+    assert_eq!(
+        bounded_file_digest(std::io::Cursor::new(b"hello")).unwrap(),
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    );
 }

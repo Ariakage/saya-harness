@@ -1825,9 +1825,12 @@ def goal_orchestration_journey(binary):
         }],
     })
     fixture = Fixture('openai-chat-completions', [
-        {'text': generated_plan},
-        {'text': 'GOAL_STEP_DONE'},
-        {'text': '{"satisfied":true,"reason":"Reviewed the completed Goal step"}'},
+        {'text': generated_plan,
+         'chat_usage': {'prompt_tokens': 100, 'completion_tokens': 40}},
+        {'text': 'GOAL_STEP_DONE',
+         'chat_usage': {'prompt_tokens': 100, 'completion_tokens': 4}},
+        {'text': '{"satisfied":true,"reason":"Reviewed the completed Goal step"}',
+         'chat_usage': {'prompt_tokens': 100, 'completion_tokens': 8}},
     ])
     try:
         with tempfile.TemporaryDirectory(prefix='saya-tui-goal-') as directory:

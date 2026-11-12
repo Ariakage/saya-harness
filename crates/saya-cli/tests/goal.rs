@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::Path,
-    process::{Command, Output},
-    time::Duration,
+    process::{Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 
@@ -43,7 +43,7 @@ stream = {stream}
     path
 }
 
-fn command(root: &Path, home: &Path, config: &Path) -> Command {
+fn text_command(root: &Path, home: &Path, config: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_saya"));
     command
         .env_clear()
@@ -53,9 +53,13 @@ fn command(root: &Path, home: &Path, config: &Path) -> Command {
         .arg("--config")
         .arg(config)
         .arg("--data-dir")
-        .arg(root.join("data"))
-        .arg("--output")
-        .arg("json");
+        .arg(root.join("data"));
+    command
+}
+
+fn command(root: &Path, home: &Path, config: &Path) -> Command {
+    let mut command = text_command(root, home, config);
+    command.arg("--output").arg("json");
     command
 }
 
@@ -88,6 +92,28 @@ fn plan(step_ids: &[&str], criterion: &str) -> String {
         "steps":steps,
     }))
     .unwrap()
+}
+
+fn completion(text: &str) -> String {
+    json!({
+        "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":text}}],
+        "usage":{"prompt_tokens":10,"completion_tokens":4}
+    })
+    .to_string()
+}
+
+fn tool_call(id: &str, name: &str, arguments: Value) -> String {
+    json!({
+        "choices":[{
+            "index":0,
+            "finish_reason":"tool_calls",
+            "message":{"role":"assistant","content":null,"tool_calls":[{
+                "id":id,"type":"function","function":{"name":name,"arguments":arguments.to_string()}
+            }]}
+        }],
+        "usage":{"prompt_tokens":10,"completion_tokens":4}
+    })
+    .to_string()
 }
 
 #[test]
@@ -130,6 +156,23 @@ fn goal_cli_creates_plans_confirms_reports_and_controls_lifecycle() {
         "plan_confirmation"
     );
     assert_eq!(planned["data"]["confirmation_required"], true);
+
+    let paused_before_confirmation =
+        json_output(command(root.path(), home.path(), &config).args(["goal", "pause", goal_id]));
+    assert_eq!(
+        paused_before_confirmation["data"]["goal"]["status"],
+        "paused"
+    );
+    let resumed_before_confirmation =
+        json_output(command(root.path(), home.path(), &config).args(["goal", "resume", goal_id]));
+    assert_eq!(
+        resumed_before_confirmation["data"]["goal"]["status"],
+        "waiting"
+    );
+    assert_eq!(
+        resumed_before_confirmation["data"]["goal"]["wait_reason"]["kind"],
+        "plan_confirmation"
+    );
 
     let confirmed =
         json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
@@ -291,7 +334,7 @@ fn finite_auto_goal_replans_a_known_failed_step_once() {
     let partial = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"PARTIAL_FAILURE\"},\"finish_reason\":null}]}\n\n";
     let recovered = concat!(
         "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"RECOVERED_STEP\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n",
         "data: [DONE]\n\n",
     );
     let (url, _requests) = fixture::server(vec![
@@ -516,4 +559,471 @@ async fn goal_worker_blocks_when_permissions_change_after_automatic_authorizatio
         "authorization"
     );
     assert_eq!(status["data"]["goal"]["usage"]["runs"], 0);
+}
+
+#[test]
+fn plan_goal_queries_do_not_create_storage_in_the_workspace() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let config = config(root.path(), "http://127.0.0.1:1/v1");
+    fs::write(
+        &config,
+        fs::read_to_string(&config)
+            .unwrap()
+            .replace(r#"mode = "build""#, r#"mode = "plan""#),
+    )
+    .unwrap();
+    let output = command(root.path(), home.path(), &config)
+        .args(["goal", "list"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!root.path().join("data/goals/goals.sqlite3").exists());
+}
+
+#[test]
+fn planning_exhaustion_blocks_manual_step_dispatch() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let generated = plan(&["018bcfe5-6800-7000-8000-000000000071"], "criterion-1");
+    let (url, requests) = fixture::server(vec![(
+        "application/json",
+        json!({
+            "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":generated}}],
+            "usage":{"prompt_tokens":10,"completion_tokens":4}
+        })
+        .to_string(),
+    )])
+    .unwrap();
+    let config = config(root.path(), &url);
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Enforce the planning budget",
+        "--accept",
+        "The result is verified",
+        "--max-model-requests",
+        "1",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    json_output(command(root.path(), home.path(), &config).args(["goal", "plan", goal_id]));
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+    requests.recv_timeout(Duration::from_secs(1)).unwrap();
+    let output = command(root.path(), home.path(), &config)
+        .args(["goal", "continue", goal_id])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"]["goal"]["status"], "limit_reached");
+    assert_eq!(value["data"]["goal"]["usage"]["model_requests"], 1);
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
+fn draft_and_cancelled_goals_cannot_be_verified_complete() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let response = json!({
+        "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"done"}}],
+        "usage":{"prompt_tokens":10,"completion_tokens":4}
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)]).unwrap();
+    let config = config(root.path(), &url);
+
+    let draft = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Draft remains incomplete",
+        "--accept",
+        "The result is verified",
+    ]));
+    let draft_id = draft["data"]["goal"]["id"].as_str().unwrap();
+    let output = command(root.path(), home.path(), &config)
+        .args([
+            "goal",
+            "verify",
+            draft_id,
+            "criterion-1",
+            "--summary",
+            "none",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Cancelled remains terminal",
+        "--accept",
+        "The result is verified",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let plan_path = root.path().join("cancel-plan.json");
+    fs::write(
+        &plan_path,
+        plan(&["018bcfe5-6800-7000-8000-000000000072"], "criterion-1"),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+    json_output(
+        command(root.path(), home.path(), &config).args(["goal", "start", goal_id, "--auto"]),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "cancel", goal_id]));
+    let output = command(root.path(), home.path(), &config)
+        .args([
+            "goal",
+            "verify",
+            goal_id,
+            "criterion-1",
+            "--summary",
+            "none",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let status =
+        json_output(command(root.path(), home.path(), &config).args(["goal", "status", goal_id]));
+    assert_eq!(status["data"]["goal"]["status"], "cancelled");
+    requests.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
+fn file_evidence_is_deferred_refreshed_and_host_rechecked() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    let ids = [
+        "018bcfe5-6800-7000-8000-000000000081",
+        "018bcfe5-6800-7000-8000-000000000082",
+        "018bcfe5-6800-7000-8000-000000000083",
+    ];
+    let steps = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            json!({
+                "id":id,
+                "title":format!("Step {}", index + 1),
+                "instruction":format!("Perform file step {}", index + 1),
+                "depends_on":if index == 0 { Vec::<String>::new() } else { vec![ids[index - 1].to_owned()] }
+            })
+        })
+        .collect::<Vec<_>>();
+    let (url, requests) = fixture::server(vec![
+        ("application/json", completion("prepare")),
+        (
+            "application/json",
+            tool_call(
+                "create-file",
+                "write_file",
+                json!({"path":"final.txt","content":"hello","expected_version":null}),
+            ),
+        ),
+        ("application/json", completion("created")),
+        (
+            "application/json",
+            tool_call(
+                "change-file",
+                "write_file",
+                json!({"path":"final.txt","content":"changed","expected_version":digest}),
+            ),
+        ),
+        ("application/json", completion("changed")),
+    ])
+    .unwrap();
+    let config = config(root.path(), &url);
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Refresh final file evidence",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let plan_path = root.path().join("file-plan.json");
+    fs::write(
+        &plan_path,
+        serde_json::to_vec_pretty(&json!({
+            "acceptance":[{"id":"file","text":"Exact final content","verification":{"kind":"file_sha256","path":"final.txt","sha256":digest}}],
+            "steps":steps,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+    let started = json_output(
+        command(root.path(), home.path(), &config).args(["goal", "start", goal_id, "--auto"]),
+    );
+    assert_eq!(started["data"]["goal"]["status"], "waiting");
+    assert_eq!(started["data"]["goal"]["evidence"], json!([]));
+    assert!(
+        started["data"]["goal"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|step| step["status"] == "completed")
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("final.txt")).unwrap(),
+        "changed"
+    );
+    for _ in 0..5 {
+        requests.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
+
+    let manual = command(root.path(), home.path(), &config)
+        .args(["goal", "verify", goal_id, "file", "--summary", "pretend"])
+        .output()
+        .unwrap();
+    assert_eq!(manual.status.code(), Some(2));
+    let mismatch = command(root.path(), home.path(), &config)
+        .args(["goal", "verify", goal_id, "file"])
+        .output()
+        .unwrap();
+    assert_eq!(mismatch.status.code(), Some(2));
+    assert!(requests.try_recv().is_err());
+
+    fs::write(root.path().join("final.txt"), "hello").unwrap();
+    let verified = json_output(
+        command(root.path(), home.path(), &config).args(["goal", "verify", goal_id, "file"]),
+    );
+    assert_eq!(verified["data"]["goal"]["status"], "completed");
+    assert_eq!(
+        verified["data"]["goal"]["evidence"][0]["kind"],
+        "file_digest"
+    );
+    assert_eq!(verified["data"]["goal"]["evidence"][0]["sha256"], digest);
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
+fn automatic_preauthorization_is_limited_to_the_first_run() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let command_line = "printf x >> preauth-count.txt";
+    let arguments = json!({"argv":["/bin/sh","-c",command_line]});
+    let (url, requests) = fixture::server(vec![
+        (
+            "application/json",
+            tool_call("first-exec", "exec", arguments.clone()),
+        ),
+        ("application/json", completion("first done")),
+        (
+            "application/json",
+            tool_call("second-exec", "exec", arguments),
+        ),
+    ])
+    .unwrap();
+    let config = config(root.path(), &url);
+    fs::write(
+        &config,
+        format!(
+            "{}\n[[permissions.rules]]\neffect = \"ask\"\ntool = \"exec\"\n",
+            fs::read_to_string(&config).unwrap()
+        ),
+    )
+    .unwrap();
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Do not reuse preauthorization",
+        "--accept",
+        "The result is verified",
+        "--max-replans",
+        "0",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let plan_path = root.path().join("preauth-plan.json");
+    fs::write(
+        &plan_path,
+        plan(
+            &[
+                "018bcfe5-6800-7000-8000-000000000091",
+                "018bcfe5-6800-7000-8000-000000000092",
+            ],
+            "criterion-1",
+        ),
+    )
+    .unwrap();
+    let approvals = root.path().join("approval.json");
+    fs::write(
+        &approvals,
+        serde_json::to_vec(&json!({
+            "schema_version":1,
+            "commands":[{"argv":["/bin/sh","-c",command_line],"cwd":"."}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+    let output = command(root.path(), home.path(), &config)
+        .args(["goal", "start", goal_id, "--auto", "--approval-file"])
+        .arg(&approvals)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    assert_eq!(
+        fs::read_to_string(root.path().join("preauth-count.txt")).unwrap(),
+        "x"
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"]["goal"]["usage"]["runs"], 2);
+    assert_eq!(value["data"]["goal"]["status"], "limit_reached");
+    for _ in 0..3 {
+        requests.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
+fn plan_goal_report_protects_current_workspace_and_uses_its_relative_root() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let goal_workspace = root.path().join("goal-workspace");
+    let current_workspace = root.path().join("current-workspace");
+    fs::create_dir(&goal_workspace).unwrap();
+    fs::create_dir(&current_workspace).unwrap();
+    let config = config(root.path(), "http://127.0.0.1:1/v1");
+    fs::write(
+        &config,
+        fs::read_to_string(&config)
+            .unwrap()
+            .replace(r#"mode = "build""#, r#"mode = "plan""#),
+    )
+    .unwrap();
+    let created = json_output(
+        command(root.path(), home.path(), &config)
+            .arg("--cwd")
+            .arg(&goal_workspace)
+            .args(["goal", "create", "Protect both workspaces"]),
+    );
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let output = command(root.path(), home.path(), &config)
+        .arg("--cwd")
+        .arg(&current_workspace)
+        .args(["goal", "report", goal_id, "--file", "report.md"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!current_workspace.join("report.md").exists());
+    assert!(!root.path().join("report.md").exists());
+}
+
+#[test]
+fn goal_text_output_replaces_terminal_control_characters() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let (url, _requests) = fixture::server(vec![(
+        "application/json",
+        completion("BEFORE\u{1b}]0;goal-title\u{7}AFTER"),
+    )])
+    .unwrap();
+    let config = config(root.path(), &url);
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Sanitize final text",
+        "--accept",
+        "The result is verified",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let plan_path = root.path().join("terminal-plan.json");
+    fs::write(
+        &plan_path,
+        plan(&["018bcfe5-6800-7000-8000-000000000093"], "criterion-1"),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+    let output = text_command(root.path(), home.path(), &config)
+        .args(["goal", "continue", goal_id])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("BEFORE"));
+    assert!(text.contains("AFTER"));
+    assert!(!text.contains('\u{1b}'));
+    assert!(!text.contains('\u{7}'));
+}
+
+#[test]
+fn cancelling_an_active_goal_cancels_the_in_flight_model_run() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let (url, requests, release) = fixture::server_gated(completion("late response")).unwrap();
+    let config = config(root.path(), &url);
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Cancel an active Run",
+        "--accept",
+        "The result is verified",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let plan_path = root.path().join("active-plan.json");
+    fs::write(
+        &plan_path,
+        plan(&["018bcfe5-6800-7000-8000-000000000094"], "criterion-1"),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+
+    let mut running = command(root.path(), home.path(), &config)
+        .args(["goal", "start", goal_id, "--auto"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    requests.recv_timeout(Duration::from_secs(2)).unwrap();
+    let cancelled = command(root.path(), home.path(), &config)
+        .args(["goal", "cancel", goal_id])
+        .output()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        if running.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !exited {
+        running.kill().unwrap();
+    }
+    let output = running.wait_with_output().unwrap();
+    let _ = release.send(());
+    assert!(cancelled.status.success());
+    assert!(exited, "active Goal did not observe cancellation");
+    assert_eq!(output.status.code(), Some(130));
+    let status =
+        json_output(command(root.path(), home.path(), &config).args(["goal", "status", goal_id]));
+    assert_eq!(status["data"]["goal"]["status"], "cancelled");
 }

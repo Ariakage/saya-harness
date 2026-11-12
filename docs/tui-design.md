@@ -266,8 +266,8 @@ flowchart LR
 | `/goal status\|report ID` | 打开完整 Goal 状态或报告详情 |
 | `/goal continue ID` | 执行一个依赖就绪步骤；TUI 当前要求 auto／bypass |
 | `/goal start ID` | 显式启动有限自动续跑 |
-| `/goal pause\|resume\|cancel ID` | 控制后续调度并保留实际状态 |
-| `/goal verify ID CRITERION SUMMARY` | 记录用户证据并执行独立无工具核验 |
+| `/goal pause\|resume\|cancel ID` | 控制调度并保留实际状态；恢复不会绕过计划确认或验收等待 |
+| `/goal verify ID CRITERION [SUMMARY]` | 人工证据执行独立无工具核验；文件条件省略摘要并由主机重验 |
 | `/goal replan ID` | 对已知失败执行一次有界修正 |
 | `/export json\|markdown PATH` | 导出 transcript，省略工具正文 |
 | `/export full json\|markdown PATH` | 导出 full 范围、工具记录及供应商思考状态 |

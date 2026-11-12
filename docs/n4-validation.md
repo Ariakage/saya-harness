@@ -28,23 +28,29 @@
 
 | 要求 | 证据 |
 | --- | --- |
-| 创建、计划、确认、状态、暂停、恢复、取消 | `saya-cli` Goal 生命周期集成测试；CLI JSON 与 Markdown report |
+| 创建、计划、确认、状态、暂停、恢复、取消 | 暂停／恢复保留计划确认与验收等待；真实双进程用例验证活动 Run 接收取消并以 130 收尾 |
 | 结构计划与依赖 | 严格 JSON、未知字段拒绝、重复／悬空／循环依赖、前缀校验测试 |
 | 手动一步与 Run 关联 | 本地三协议兼容 fixture、专属 Session 加锁、Step Run 与 usage 持久化 |
 | 有限自动续跑 | 自动模式逐 Step 执行，完成全部 Step 后等待显式验收证据 |
 | 虚假完成 | 模型文本完成但证据缺失时保持 `waiting / verification` |
 | 已知失败重规划 | 不完整模型流产生已知 failed Run，`max_replans` 内修正一次并重试；unknown／未持久化失败不重试 |
-| 预算 | `max_runs=1` 在第二步启动前进入 `limit_reached` 且不产生第二次模型请求 |
+| 预算 | `max_runs=1` 阻止第二步；规划耗尽 `max_model_requests=1` 后手动 continue 不产生新请求；成功调用缺失 token usage 时保守停止后续 dispatch |
 | worker 崩溃 | 过期 dispatch 恢复为 unknown，Goal 等待人工处理，恢复过程不发起重放请求 |
 | 同工作区并发 | 第二个 Goal 获取工作区租约时返回 `goal_workspace_busy`，释放后可按序继续 |
 | 权限漂移 | auto authorization 后改为 Manual，worker 进入 `blocked / authorization` 且不执行 Run |
-| 文件证据 | 文件存在、SHA-256、错误摘要和中间链接拒绝 |
+| 文件证据 | 文件存在、SHA-256、错误摘要和中间链接拒绝；中间 Step 暂未满足不中断，最终变化使旧证据失效，主机重验不调用模型 |
 | TUI | 实际 PTY 完成 `/goal create`、模型计划、确认、Goal 选择器、暂停／恢复、自动 Step、核验、report 与终端恢复 |
 | 本地平台 | macOS ARM 完整 Rust／smoke；Linux ARM64 Colima 定向 Goal／SQLite／TUI 测试与 workspace 编译 |
 
-## 本机验证
+## 审查整改
 
-最终 release 程序 SHA-256 为
+2026-11-12 对原提交 `56ad4f0` 的 15 项发现完成整改，详见[N4 审查与整改报告](review-2026-11-11.md)。新增 core 反例覆盖状态恢复、证据生命周期、缺失 persistence、全部预算 dispatch、活动暂停／取消和实际读取字节上限；新增 CLI 反例覆盖 PLAN 写库与双工作区报告、人工证据类型、Draft／Cancelled、单次预授权、终端控制字符、文件最终重验及活动模型请求取消。
+
+定向验收中 Goal core 14/14、Goal CLI 15/15 通过。完整整改门禁和 release 证据在报告第 6 节与[开发进度](progress.md)中单独记录；原提交的验收如下保留为历史基线。
+
+## 原提交本机验证（`56ad4f0`）
+
+原提交 release 程序 SHA-256 为
 `bd24cedf78d235edcf5b07e63b4575243edb4a86c8ea7562399d79feeb6e32c2`。
 
 macOS 27.2 ARM／Rust 1.99.1：

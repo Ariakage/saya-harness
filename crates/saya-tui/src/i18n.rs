@@ -613,7 +613,7 @@ pub(crate) mod services {
     pub const GOAL_USAGE: &str =
         "Use /goal status|continue|start|pause|resume|cancel|report|verify|replan ID";
     pub const GOALS_NO_ARGUMENTS: &str = "Use /goals without arguments";
-    pub const GOAL_VERIFY_USAGE: &str = "Use /goal verify ID CRITERION SUMMARY";
+    pub const GOAL_VERIFY_USAGE: &str = "Use /goal verify ID CRITERION [SUMMARY]";
     pub const GOAL_MANUAL_UNAVAILABLE: &str = "Goal execution in TUI requires auto or bypass permissions. Use the CLI for manual approvals.";
     pub const GOAL_NOT_READY: &str = "Goal must be confirmed and ready before automatic start";
     pub const GOAL_CANCELLED: &str = "Goal operation cancelled";

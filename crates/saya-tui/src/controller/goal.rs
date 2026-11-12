@@ -43,6 +43,12 @@ fn secrets(config: &Config) -> std::result::Result<Vec<String>, BoundaryError> {
 }
 
 fn store(config: &Config) -> std::result::Result<GoalStore, BoundaryError> {
+    session::check_roots(config, &config.cwd, config.mode).map_err(|_| {
+        failure(
+            "plan_write_denied",
+            "PLAN Goal storage overlaps the workspace",
+        )
+    })?;
     GoalStore::open(&config.data_dir, secrets(config)?)
 }
 
@@ -363,9 +369,10 @@ impl App {
                     } else {
                         config.cwd.join(target)
                     };
-                    let receipt = saya_app::export::publish(
+                    let receipt = saya_app::export::publish_session(
                         &target,
                         &bytes,
+                        &config.cwd,
                         &goal.workspace,
                         config.mode,
                         context_cancel.as_ref(),
@@ -419,7 +426,6 @@ impl App {
                 let goal_id = parse_id(id)?;
                 let cancel = Arc::new(RunCancellation::new());
                 let checking = cancel.clone();
-                let context_cancel: Arc<dyn Cancellation> = cancel.clone();
                 let run = GoalRunContext {
                     permissions: config.permissions_mode,
                     confirmation: None,
@@ -428,7 +434,7 @@ impl App {
                     personal_context: options,
                     anthropic_prompt_cache: self.options.anthropic_prompt_cache,
                     accept_config_change: false,
-                    cancellation: context_cancel,
+                    cancellation: cancel.clone(),
                 };
                 let join = tokio::spawn(async move {
                     let goal_store = store(&config)?;
@@ -470,7 +476,6 @@ impl App {
                         if goal.status != GoalStatus::Ready || checking.is_cancelled() {
                             break;
                         }
-                        let context_cancel: Arc<dyn Cancellation> = worker_cancel.clone();
                         let context = GoalRunContext {
                             permissions: config.permissions_mode,
                             confirmation: None,
@@ -479,7 +484,7 @@ impl App {
                             personal_context: options.clone(),
                             anthropic_prompt_cache,
                             accept_config_change: false,
-                            cancellation: context_cancel,
+                            cancellation: worker_cancel.clone(),
                         };
                         goal = match continue_once(&config, &goal_store, goal.id, context).await {
                             Ok(outcome) => outcome.goal,
@@ -503,21 +508,25 @@ impl App {
                 self.begin_ui(cancel, join);
             }
             "verify" if !id.is_empty() => {
-                let Some((criterion, summary)) = tail.split_once(' ') else {
-                    return Err(text::GOAL_VERIFY_USAGE.into());
+                let (criterion, summary) = match tail.split_once(' ') {
+                    Some((criterion, summary)) => (criterion, Some(summary.to_owned())),
+                    None => (tail, None),
                 };
-                if criterion.is_empty() || summary.trim().is_empty() {
+                if criterion.is_empty()
+                    || summary
+                        .as_deref()
+                        .is_some_and(|summary| summary.trim().is_empty())
+                {
                     return Err(text::GOAL_VERIFY_USAGE.into());
                 }
                 let config = self.config.clone();
                 let goal_id = parse_id(id)?;
                 let criterion = criterion.to_owned();
-                let summary = summary.to_owned();
                 let cancel = Arc::new(RunCancellation::new());
                 let checking = cancel.clone();
                 let context_cancel: Arc<dyn Cancellation> = cancel.clone();
                 let join = tokio::spawn(async move {
-                    let goal = saya_app::goal::verify_manual_criterion(
+                    let goal = saya_app::goal::verify_criterion(
                         &config,
                         &store(&config)?,
                         goal_id,

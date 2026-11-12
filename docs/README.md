@@ -40,6 +40,7 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 与文件保存 | DEV-043 至 DEV-046 已实现，本机验收通过 |
 | [Goal 设计](goal.md) | 目标、证据、预算、恢复与分层交付 | DEV-069 至 DEV-074 已完成本机受控验收 |
 | [N4 Goal 验收](n4-validation.md) | Goal 存储、执行、worker、预算、TUI 与故障矩阵 | 完成本机受控验收 |
+| [N4 审查与整改](review-2026-11-11.md) | 15 项 Goal 契约问题、复现、修复及回归证据 | 整改状态见报告 |
 | [N4 中英双语说明](release-notes-n4.md) | Goal 功能、命令、安全边界与已知限制 | 开发线说明，版本号待定 |
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P7 验收完成 |
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |

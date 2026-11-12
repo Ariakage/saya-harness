@@ -48,7 +48,7 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 `/sessions`打开已保存会话弹窗，展示会话标题、ID、模式、profile和最后状态，Enter恢复选中会话。`/skills`打开用户级与工作区发现的Skill选择器，`/mcps`打开MCP服务选择器，`/plugins`打开已安装插件选择器。选择器支持↑↓、PgUp／PgDn和Enter，Esc返回保留的草稿。MCP服务的Enter操作切换后续运行的启用状态；Skill与Plugin条目Enter打开只读详情。Skill正文激活仍经过运行时Skill工具与权限，Plugin启用／停用仍通过显式 `saya plugin enable|disable` 能力授权。
 
-`/goals`打开持久Goal选择器，Enter查看目标、验收项、步骤、Run关联、预算和证据。`/goal create OBJECTIVE`创建专属Session与Goal，`/goal plan ID`生成结构化计划，`/goal confirm ID`确认后进入ready。`/goal continue ID`执行一个依赖就绪步骤，`/goal start ID`执行显式有限的自动续跑；执行要求auto或bypass权限，Manual Approval使用CLI入口。`/goal pause|resume|cancel ID`控制后续调度，`/goal verify ID CRITERION SUMMARY`记录并独立核验人工证据，`/goal replan ID`对已知失败执行一次有界修正。完整入口和语义见[Goal 编排](goal.md)。
+`/goals`打开持久Goal选择器，Enter查看目标、验收项、步骤、Run关联、预算和证据。`/goal create OBJECTIVE`创建专属Session与Goal，`/goal plan ID`生成结构化计划，`/goal confirm ID`确认后进入ready。`/goal continue ID`执行一个依赖就绪步骤，`/goal start ID`执行显式有限的自动续跑；执行要求auto或bypass权限，Manual Approval使用CLI入口。`/goal pause|resume|cancel ID`控制调度，恢复会保留计划确认或验收等待原因。`/goal verify ID CRITERION SUMMARY`记录并独立核验人工证据；文件条件使用`/goal verify ID CRITERION`，不接受人工摘要，由主机重新核验。`/goal replan ID`对已知失败执行一次有界修正。完整入口和语义见[Goal 编排](goal.md)。
 
 Agent运行中继续输入普通消息会把内容作为引导补充，在下一个模型边界保存并加入上下文；当前流式响应和已展开工具调用不会被替换。引导队列上限为16条、累计256KiB。`/tools`按工具调用卡片渲染名称、状态、run／call关联、参数和结构化输出，不直接展示整段JSON。`exec`卡片显示实际命令、工作目录、超时、观测耗时与退出码；审批与澄清使用居中弹窗，不占用普通详情侧栏。
 
@@ -79,7 +79,7 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 ./target/release/saya --config "$config_path" goal plan GOAL_ID
 ./target/release/saya --config "$config_path" goal confirm GOAL_ID
 ./target/release/saya --config "$config_path" --mode build goal continue GOAL_ID
-./target/release/saya --config "$config_path" goal verify GOAL_ID criterion-1 'Reviewed the test report'
+./target/release/saya --config "$config_path" goal verify GOAL_ID criterion-1 --summary 'Reviewed the test report'
 ./target/release/saya --config "$config_path" goal report GOAL_ID --format markdown --file ./goal.md
 ./target/release/saya --config "$config_path" goal worker
 ```
