@@ -113,6 +113,7 @@ pub enum PickerKind {
     Mcps,
     Plugins,
     Sessions,
+    Goals,
 }
 
 #[derive(Debug, Clone)]

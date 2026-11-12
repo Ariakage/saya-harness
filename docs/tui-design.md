@@ -175,7 +175,7 @@ just render-preview 160 45 completed --json
 
 输入编辑规则集中在[editor.rs](../crates/saya-tui/src/editor.rs)，全局快捷键在[controller.rs](../crates/saya-tui/src/controller.rs)，命令与人工输入接线在[controls.rs](../crates/saya-tui/src/controller/controls.rs)。
 
-斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/saya-tui/src/commands.rs)。44项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
+斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/saya-tui/src/commands.rs)。57项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
 
 Esc先隐藏可见建议并保留草稿，再沿普通详情／审批优先级处理。Tab可重新接受已隐藏建议，输入前缀变化会重置选择。补全仅匹配末尾光标的单行 `/`输入，`//`和多行文本使用常规编辑。输入框中需要用户填写的profile名、会话／任务ID和路径跟在补全保留的空格之后。
 
@@ -260,6 +260,15 @@ flowchart LR
 | `/profiles`、`/profile NAME` | 查看配置中的 profile，空闲时选择 profile，下一条消息创建新会话 |
 | `/tools`、`/jobs` | 读取当前会话的一致性快照，显示水位及 `run_id`、`call_id` 等关联 |
 | `/cancel-job ID` | 向当前运行请求取消其拥有的后台任务 |
+| `/goals` | 打开持久 Goal 选择器，查看目标、步骤、预算和证据 |
+| `/goal create OBJECTIVE` | 创建专属 Session 与 Goal，随后使用 plan／confirm |
+| `/goal plan\|confirm ID` | 调用结构化规划器，再由用户显式确认计划 |
+| `/goal status\|report ID` | 打开完整 Goal 状态或报告详情 |
+| `/goal continue ID` | 执行一个依赖就绪步骤；TUI 当前要求 auto／bypass |
+| `/goal start ID` | 显式启动有限自动续跑 |
+| `/goal pause\|resume\|cancel ID` | 控制后续调度并保留实际状态 |
+| `/goal verify ID CRITERION SUMMARY` | 记录用户证据并执行独立无工具核验 |
+| `/goal replan ID` | 对已知失败执行一次有界修正 |
 | `/export json\|markdown PATH` | 导出 transcript，省略工具正文 |
 | `/export full json\|markdown PATH` | 导出 full 范围、工具记录及供应商思考状态 |
 | `/export-full json\|markdown PATH` | `/export full` 的兼容别名 |
@@ -268,6 +277,8 @@ flowchart LR
 工具和后台面板明确标记 UI 读取来源，按持久记录保留 `unknown`、错误和截断状态。恢复的中断响应标记为 `Assistant · interrupted partial`。后台任务的执行生命周期仍属于当前运行。
 
 新建、恢复和快照／导出各自使用可取消的 UI 任务，同一时刻最多一个。Ctrl+C 请求取消并等待结果。导出相对路径按当前会话工作区解析，目标父目录须已存在，安全发布保护已有目标。发布提交完成后才收到取消时，界面仍报告实际发布回执。PLAN 导出路径检查沿用共享应用服务。会话与发布接线见[services.rs](../crates/saya-tui/src/controller/services.rs)。
+
+Goal UI 复用同一有界 UI 任务：列表与状态来自 `GoalStore` 一致 revision；计划和核验使用无工具模型请求；continue／start 通过共享 Goal 引擎持有租约与 Session 锁。Goal 运行不把模型正文伪装成普通聊天回答，完成后以结构化目标面板展示 Step、Run、预算与证据。TUI 自动执行要求 auto／bypass；Manual Approval 使用 CLI 的终端审批。详细语义见[Goal 编排](goal.md)与[N4验收](n4-validation.md)。
 
 ## 从实际组件生成预览
 

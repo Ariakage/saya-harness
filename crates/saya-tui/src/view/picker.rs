@@ -109,6 +109,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut State) {
     let action = match panel.kind {
         PickerKind::Mcps => text::ENTER_TOGGLE,
         PickerKind::Sessions => text::ENTER_RESUME,
+        PickerKind::Goals => text::ENTER_DETAILS,
         PickerKind::Skills | PickerKind::Plugins => text::ENTER_DETAILS,
     };
     frame.render_widget(

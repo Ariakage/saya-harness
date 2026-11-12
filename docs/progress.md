@@ -1,8 +1,22 @@
 # 开发进度
 
-**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出及统一附件token。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
+
+## N4 Goal 编排
+
+2026-11-12，按D-064完成DEV-069至DEV-074。新增独立版本化`data_dir/goals/goals.sqlite3`、严格Goal／Step／验收证据模型、revision CAS、worker lease、dispatch intent、预算usage及未知结果恢复。Goal绑定专属Session与工作区，每个Step通过现有AgentRuntime、权限、Sandbox、Compact、检查点、工具派发和Session锁执行。
+
+CLI新增`goal create|plan|confirm|list|status|continue|start|pause|resume|cancel|verify|resolve|replan|report|worker`。结构化规划和人工证据核验使用无工具、纯英文请求；计划必须经用户确认。只有全部Step完成且每个验收项具备主机证据时Goal才可完成。自动继续必须显式`start --auto`，绑定配置指纹并在权限／配置漂移时阻塞。worker只恢复过期lease，unknown副作用不会重放；已知失败在`max_replans`内执行保守修正。
+
+TUI新增`/goals`选择器与`/goal create|plan|confirm|status|continue|start|pause|resume|cancel|verify|report|replan ID`，面板展示步骤、Run、预算、usage、证据和等待原因。TUI自动执行当前要求auto／bypass，Manual Approval使用CLI终端审批。
+
+完整验收与限制见[N4验收](n4-validation.md)和[N4中英双语说明](release-notes-n4.md)。
+
+本机最终验收使用 macOS27.2 ARM／Rust1.99.1：格式、workspace全目标严格Clippy、1414项Rust测试、8项条件忽略与release构建通过，日志为`target/n4-check.log`；81项Python工具回归通过，日志为`target/n4-tooling.log`。同一release程序通过离线smoke、文本journey、5项审查回归及28组TUI PTY，Goal场景完整覆盖选择器、计划确认、暂停／恢复、自动Step、核验和report，日志为`target/n4-smoke.log`与`target/n4-goal-pty.log`。Goal CLI fixture显式使用Host sandbox，避免混同N2 native验收；修改后的7项Goal CLI测试和严格Clippy通过。程序SHA-256为`bd24cedf78d235edcf5b07e63b4575243edb4a86c8ea7562399d79feeb6e32c2`。
+
+Linux ARM64使用本机Colima `default`、8 GiB Ubuntu24.04.4 VM及Ubuntu22.04/Rust1.99.1容器，以单并发和关闭测试debug／incremental完成Goal core8项、Goal CLI7项、TUI Goal service／preview／picker各1项及workspace `cargo check --locked`，日志为`target/n4-linux.log`。未限制并发的首次编译OOM及缺少native工具的测试环境日志分别保留为`target/n4-linux-initial.log`与`target/n4-linux-sandbox-missing.log`；临时volume、容器和Colima均已清理。本轮未推送、未运行远端CI或四平台固定源码发行验收。
 
 ## 模型超时与有限间隔重试
 
@@ -484,7 +498,7 @@ R-02已修复并完成独立复核，本地稳定试用程序使用本次最终�
 | N1 默认 TUI | DEV-047 至 DEV-053 | 完成（四平台候选验收） | 默认入口、对话／审批／会话／后台／导出已接入共享服务，候选与本机试用程序通过验证，设计与双语说明已交付 |
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 完成（四平台验收） | 原生隔离、受控网络、命令结构事实、MCP与凭据通过最终源码CI、原生／性能／MCP／Markdown与TUI验收，见[N2记录](n2-validation.md#最终四平台验收) |
 | N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 完成（四平台验收） | 16项共享运行入口通过四端Rust、原生、性能、MCP、插件、CLI与TUI联合矩阵，固定源码 `e1da373`，见[N3最终验收](n3-validation.md#四平台最终验收) |
-| N4 Goal 编排 | DEV-069 至 DEV-074 | 待开始 | 先做目标数据和手动步骤，后续自动阶段依赖持久调度等能力 |
+| N4 Goal 编排 | DEV-069 至 DEV-074 | 完成（本机受控验收） | 独立版本化 Goal 存储、专属 Session、手动／有限自动 Run、租约恢复、预算、证据核验、重规划、CLI／TUI 与报告通过本机 PTY／故障矩阵，见[N4验收](n4-validation.md) |
 | N5 Browser | DEV-079 至 DEV-083 | 待开始 | 托管 Chromium／Playwright worker、网络及文件 broker、界面和联合验收待开发 |
 
 ### 全局记忆规划补充

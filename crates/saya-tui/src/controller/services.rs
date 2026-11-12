@@ -95,7 +95,7 @@ impl App {
             self.notice(text::UNSENT_DRAFT_RETAINED);
         }
     }
-    fn require_idle(&self) -> Result<()> {
+    pub(super) fn require_idle(&self) -> Result<()> {
         if self.active.is_some() {
             return Err(text::CANCEL_BEFORE_SESSION.into());
         }
@@ -113,6 +113,15 @@ impl App {
         self.notice(text::LOADING_UI);
     }
     pub(super) async fn service(&mut self, name: &str, argument: &str) -> Result<()> {
+        if name == "/goals" {
+            if !argument.is_empty() {
+                return Err(text::GOALS_NO_ARGUMENTS.into());
+            }
+            return self.open_goals().await;
+        }
+        if name == "/goal" {
+            return self.goal(argument).await;
+        }
         if self.ui_job.is_some() {
             return Err(text::UI_ACTIVE.into());
         }

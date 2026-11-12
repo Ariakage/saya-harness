@@ -4,6 +4,7 @@ mod compact_tests;
 #[cfg(test)]
 mod control_tests;
 mod controls;
+mod goal;
 mod memory;
 #[cfg(test)]
 mod memory_tests;

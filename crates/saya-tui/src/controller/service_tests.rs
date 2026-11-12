@@ -4,7 +4,13 @@ use super::*;
 use saya_core::{
     boundary::{Cancellation, StoreChange},
     config::{Environment, Overrides},
-    contract::{ErrorInfo, HistoryItem, PermissionMode, Run, ToolCall, ToolResult, ToolState},
+    contract::{
+        ErrorInfo, HistoryItem, PermissionMode, Run, ToolCall, ToolResult, ToolState, WorkMode,
+    },
+    goal::{
+        AcceptanceCriterion, GoalBudget, GoalPlan, GoalRecord, GoalSeed, GoalStore, PlannedStep,
+        StepId, VerificationSpec,
+    },
     sqlite::{SnapshotLimits, SqliteStore},
 };
 use std::{
@@ -659,6 +665,83 @@ async fn ui_export_uses_current_plan_mode_and_preserves_existing_files() {
     app.finish_ui(Err(error)).await.unwrap();
     assert_eq!(std::fs::read(&outside).unwrap(), bytes);
     assert!(snapshot(&app).await.runs.is_empty());
+}
+
+#[tokio::test]
+async fn goal_selector_status_and_pause_use_the_shared_store() {
+    let (_root, mut app) = fixture();
+    let store = GoalStore::open(&app.config.data_dir, vec![]).unwrap();
+    let mut goal = GoalRecord::new(GoalSeed {
+        session_id: saya_core::contract::SessionId::new(),
+        objective: "Deliver a Goal panel".into(),
+        workspace: app.config.cwd.clone(),
+        profile: "fixture".into(),
+        mode: WorkMode::Build,
+        permissions: PermissionMode::Auto,
+        budget: GoalBudget::default(),
+        now: saya_app::events::timestamp().unwrap(),
+    })
+    .unwrap();
+    goal.apply_plan(
+        GoalPlan {
+            acceptance: vec![AcceptanceCriterion {
+                id: "criterion-1".into(),
+                text: "The Goal panel is verified".into(),
+                verification: VerificationSpec::Manual,
+            }],
+            steps: vec![PlannedStep {
+                id: StepId::new(),
+                title: "Implement the panel".into(),
+                instruction: "Implement the bounded TUI Goal panel".into(),
+                depends_on: vec![],
+            }],
+        },
+        saya_app::events::timestamp().unwrap(),
+    )
+    .unwrap();
+    goal.confirm_plan(saya_app::events::timestamp().unwrap())
+        .unwrap();
+    let goal = store.create(goal).await.unwrap();
+
+    app.service("/goals", "").await.unwrap();
+    complete(&mut app).await;
+    let panel = app.state.picker_panel.as_ref().unwrap();
+    assert_eq!(panel.kind, crate::view::PickerKind::Goals);
+    assert_eq!(panel.items[0].id, goal.id.0.to_string());
+    app.state.picker_panel = None;
+
+    app.service("/goal", &format!("status {}", goal.id.0))
+        .await
+        .unwrap();
+    complete(&mut app).await;
+    let details = app.state.details.as_ref().unwrap();
+    assert!(details.title.contains("Goal"));
+    assert!(
+        details
+            .lines
+            .iter()
+            .any(|line| line.contains("Deliver a Goal panel"))
+    );
+    assert!(
+        details
+            .lines
+            .iter()
+            .any(|line| line.contains("Implement the panel"))
+    );
+
+    app.service("/goal", &format!("pause {}", goal.id.0))
+        .await
+        .unwrap();
+    complete(&mut app).await;
+    assert!(
+        app.state
+            .details
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line.contains("Status: Paused"))
+    );
 }
 
 #[tokio::test]

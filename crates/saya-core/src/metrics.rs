@@ -14,7 +14,7 @@ use std::{
 };
 use tracing::Instrument;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunMetrics {
     pub execution_requests: u64,
     pub review_requests: u64,

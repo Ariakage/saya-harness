@@ -186,6 +186,58 @@ pub const COMMANDS: &[Suggestion] = &[
         text: "/plugins",
         description: text::PLUGINS,
     },
+    Suggestion {
+        text: "/goals",
+        description: text::GOALS,
+    },
+    Suggestion {
+        text: "/goal create ",
+        description: text::GOAL_CREATE,
+    },
+    Suggestion {
+        text: "/goal plan ",
+        description: text::GOAL_PLAN,
+    },
+    Suggestion {
+        text: "/goal confirm ",
+        description: text::GOAL_CONFIRM,
+    },
+    Suggestion {
+        text: "/goal status ",
+        description: text::GOAL_STATUS,
+    },
+    Suggestion {
+        text: "/goal continue ",
+        description: text::GOAL_CONTINUE,
+    },
+    Suggestion {
+        text: "/goal start ",
+        description: text::GOAL_START,
+    },
+    Suggestion {
+        text: "/goal pause ",
+        description: text::GOAL_PAUSE,
+    },
+    Suggestion {
+        text: "/goal resume ",
+        description: text::GOAL_RESUME,
+    },
+    Suggestion {
+        text: "/goal cancel ",
+        description: text::GOAL_CANCEL,
+    },
+    Suggestion {
+        text: "/goal report ",
+        description: text::GOAL_REPORT,
+    },
+    Suggestion {
+        text: "/goal verify ",
+        description: text::GOAL_VERIFY,
+    },
+    Suggestion {
+        text: "/goal replan ",
+        description: text::GOAL_REPLAN,
+    },
 ];
 
 /// Completion state for a single editor prefix. Updates perform no I/O.
@@ -334,7 +386,7 @@ mod tests {
 
     #[test]
     fn catalog_preserves_palette_order_and_adds_all_argument_scaffolds() {
-        assert_eq!(COMMANDS.len(), 44);
+        assert_eq!(COMMANDS.len(), 57);
         let expected = [
             "/mode plan",
             "/mode build",
@@ -380,6 +432,19 @@ mod tests {
             "/skills",
             "/mcps",
             "/plugins",
+            "/goals",
+            "/goal create ",
+            "/goal plan ",
+            "/goal confirm ",
+            "/goal status ",
+            "/goal continue ",
+            "/goal start ",
+            "/goal pause ",
+            "/goal resume ",
+            "/goal cancel ",
+            "/goal report ",
+            "/goal verify ",
+            "/goal replan ",
         ];
         assert_eq!(
             COMMANDS.iter().map(|item| item.text).collect::<Vec<_>>(),

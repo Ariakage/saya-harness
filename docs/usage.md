@@ -48,6 +48,8 @@ Enter 发送消息，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板。C
 
 `/sessions`打开已保存会话弹窗，展示会话标题、ID、模式、profile和最后状态，Enter恢复选中会话。`/skills`打开用户级与工作区发现的Skill选择器，`/mcps`打开MCP服务选择器，`/plugins`打开已安装插件选择器。选择器支持↑↓、PgUp／PgDn和Enter，Esc返回保留的草稿。MCP服务的Enter操作切换后续运行的启用状态；Skill与Plugin条目Enter打开只读详情。Skill正文激活仍经过运行时Skill工具与权限，Plugin启用／停用仍通过显式 `saya plugin enable|disable` 能力授权。
 
+`/goals`打开持久Goal选择器，Enter查看目标、验收项、步骤、Run关联、预算和证据。`/goal create OBJECTIVE`创建专属Session与Goal，`/goal plan ID`生成结构化计划，`/goal confirm ID`确认后进入ready。`/goal continue ID`执行一个依赖就绪步骤，`/goal start ID`执行显式有限的自动续跑；执行要求auto或bypass权限，Manual Approval使用CLI入口。`/goal pause|resume|cancel ID`控制后续调度，`/goal verify ID CRITERION SUMMARY`记录并独立核验人工证据，`/goal replan ID`对已知失败执行一次有界修正。完整入口和语义见[Goal 编排](goal.md)。
+
 Agent运行中继续输入普通消息会把内容作为引导补充，在下一个模型边界保存并加入上下文；当前流式响应和已展开工具调用不会被替换。引导队列上限为16条、累计256KiB。`/tools`按工具调用卡片渲染名称、状态、run／call关联、参数和结构化输出，不直接展示整段JSON。`exec`卡片显示实际命令、工作目录、超时、观测耗时与退出码；审批与澄清使用居中弹窗，不占用普通详情侧栏。
 
 从终端粘贴或拖入现有本地图片、音频、视频或其他文件时，输入区分别显示高亮的 `[Image N]`、`[Audio N]`、`[Video N]` 或 `[File N]`，不会暴露绝对路径。图片／音频／视频仅在其profile显式开启对应 `multimodal` 能力时作为原生内容发送；普通File仍携带真实路径。`file://`地址、带空格路径和常见转义形式可识别。附件token作为整体移动和删除。`Ctrl+V`可直接读取系统剪贴板图片，保存到`~/.saya/paste_image/`后插入Image token；没有图片时回退到文本粘贴。
@@ -73,6 +75,13 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 ./target/release/saya --config "$config_path" session show SESSION_ID
 ./target/release/saya --config "$config_path" resume SESSION_ID
 ./target/release/saya --config "$config_path" run --session SESSION_ID 'Continue the task'
+./target/release/saya --config "$config_path" goal create 'Deliver a verified result' --accept 'Tests pass'
+./target/release/saya --config "$config_path" goal plan GOAL_ID
+./target/release/saya --config "$config_path" goal confirm GOAL_ID
+./target/release/saya --config "$config_path" --mode build goal continue GOAL_ID
+./target/release/saya --config "$config_path" goal verify GOAL_ID criterion-1 'Reviewed the test report'
+./target/release/saya --config "$config_path" goal report GOAL_ID --format markdown --file ./goal.md
+./target/release/saya --config "$config_path" goal worker
 ```
 
 将 `SESSION_ID` 替换为列表中的实际 ID。也可用 `run --prompt-file PATH` 或 `run --stdin` 提供任务，三种输入方式互斥；`run --interactive` 使用控制终端确认和澄清，即使任务从 stdin 读取。`--output json` 输出最终结果，`jsonl` 输出有序运行事件；会话查询支持文本和 JSON。控制终端提示不会混入机器输出。配置已知凭据时，文本输出可能等待整条模型消息以完成脱敏。启用 MCP 后使用动态凭据集合，模型正文与可读 Thinking 在本次请求完成后按最新凭据快照脱敏展示。
@@ -130,7 +139,7 @@ Saya 发现用户级及工作区的约定项目指令与 Skill 元数据，工�
 - **会话正在使用、配置改变或恢复失败**：先确认是否有另一 Saya 进程持有会话锁；核对 profile 和工作区。不要删除数据库或 WAL 来强行解锁；涉及损坏时先保留原文件及备份，再调查错误。
 - **日志不可写**：检查状态目录权限与剩余空间；日志路径不应指向不安全的符号链接。
 
-原生隔离与 MCP 已完成 N2 固定源码验收；可执行插件、自动／手动上下文压缩、检查点和全局记忆已接入共享入口并完成 N3 固定源码验收。Goal、Browser 和 GUI 继续按[能力路线图](capability-roadmap.md)推进；后续增量的验证范围以[开发进度](progress.md)为准。
+原生隔离与 MCP 已完成 N2 固定源码验收；可执行插件、自动／手动上下文压缩、检查点和全局记忆已接入共享入口并完成 N3 固定源码验收。N4 Goal 已完成本机受控验收。Browser 和 GUI 继续按[能力路线图](capability-roadmap.md)推进；后续增量的验证范围以[开发进度](progress.md)为准。
 
 ## 会话导出
 

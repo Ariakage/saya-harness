@@ -635,9 +635,8 @@ impl App {
                 self.show_processes()?;
             }
             "/new" | "/profile" | "/model" | "/profiles" | "/resume" | "/resume-accept"
-            | "/sessions" | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job" => {
-                self.service(name, argument).await?
-            }
+            | "/sessions" | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job"
+            | "/goals" | "/goal" => self.service(name, argument).await?,
             _ => return Err(text::UNKNOWN_COMMAND.into()),
         }
         Ok(false)

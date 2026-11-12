@@ -16,6 +16,12 @@
 
 机器事件与相应持久状态同事务提交后输出；可见文本 delta 不单独写库。事件序号按会话预留，重启后未使用的序号留空，不会复用。每次运行的执行／审核请求计数、工具次数、持续时间及可用 token 用量和显式费率估算也记录在状态日志；会话详情可查询。
 
+## Goal 存储
+
+N4 Goal 使用独立 `data_dir/goals/goals.sqlite3`，不改变 Session 数据库 schema。Goal 数据库使用独立 application ID、`user_version=1`、WAL、`synchronous=FULL`、0700 目录和 0600 文件，拒绝数据库符号链接。Goal／Step／evidence／budget／usage 作为版本化 JSON 记录保存，索引列只用于状态、Session、profile 与 revision 查询。
+
+`goals`、`leases`、`workspace_leases` 和 `dispatches` 分别保存目标 revision、Goal worker 租约、同工作区排他租约及 Step 启动 intent。状态改变、Step intent、Run 关联、usage 与 evidence 发布在事务中完成；revision 保存采用 CAS。worker 只恢复已过期租约下的 `intent/running` dispatch，终态未知时标记 `unknown_side_effect`，不会重放。数据目录身份、链接拒绝、凭据拒绝、并发冲突、预算与恢复矩阵见[N4验收](n4-validation.md)。
+
 ## 只读导出快照
 
 DEV-043 提供 `SqliteStore::read_snapshot`。稳定校验数据库与WAL后在内存image的单只读事务中取得所有集合，读取源文件时使用文件身份与限额校验，查询期间观察取消和期限。实际 MAX(change_log.seq) 与 MAX(events.seq) 作为持久水位，预留事件空洞保持原状。旧 schema 返回显式迁移提示，源文件及 SQLite 附加文件保持只读。

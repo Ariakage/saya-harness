@@ -6,7 +6,7 @@
 
 0.1.0 与 0.2.0-rc.2 的历史发行及验收保留各自源码和产物归属。
 
-当前开发线已完成 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI。固定源码 `aaec8c5` 已通过 Ubuntu 22.04 x86_64／aarch64 与 macOS 15 Intel／ARM 的源码 CI、原生／MCP／Markdown／TUI 和完整性能验收。0.2.0 的功能与限制继续归属已发布产物。Linux 原生后端另要求可确认的内核修复身份与能力探测。[隔离配置](docs/configuration.md#n2-原生隔离配置)、[原生隔离](docs/sandbox.md)、[MCP 与凭据](docs/mcp.md)、[N2 最终验收记录](docs/n2-validation.md)
+当前开发线已完成 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI；固定源码 `aaec8c5` 已完成四平台验收。N3 上下文、插件／Hooks 与全局记忆由固定源码 `e1da373` 完成四平台验收。N4 Goal 已实现独立持久存储、结构化计划、手动／有限自动 Run、恢复、预算、证据验收和 CLI／TUI 面板，并完成本机受控验收。0.2.0 的功能与限制继续归属已发布产物。[隔离配置](docs/configuration.md#n2-原生隔离配置)、[N2 验收](docs/n2-validation.md)、[N3 验收](docs/n3-validation.md)、[N4 验收](docs/n4-validation.md)
 
 ## 已确认方向
 
@@ -90,6 +90,8 @@ just tui-preview syntax
 | [日志与追踪](docs/observability.md) | 五级诊断、关联 span、日志查询与安全边界 |
 | [Session 导出](docs/session-export.md) | 一致性快照、Markdown／JSON 与文件保存 |
 | [Goal 设计](docs/goal.md) | 目标、步骤、证据、手动与有限自动推进 |
+| [N4 Goal 验收](docs/n4-validation.md) | Goal 存储、手动／自动推进、worker、预算、报告与故障矩阵 |
+| [N4 中英双语说明](docs/release-notes-n4.md) | Goal 命令、预算、恢复、安全边界与当前限制 |
 | [MVP 实施路线图](docs/roadmap.md) | 8 个 MVP 里程碑、工作量估算与交付条件 |
 | [实施任务](docs/implementation-plan.md) | 37 个任务、依赖、交付与基线／验收覆盖 |
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |
@@ -98,7 +100,7 @@ just tui-preview syntax
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。后续 Goal、Browser 和 GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)
+0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。N4 Goal 已完成本机实现与受控验收。Browser 和 GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)、[N4验收](docs/n4-validation.md)
 
 ## 许可证
 

@@ -19,6 +19,8 @@
 | bypass | [bypass.md](../crates/saya-core/prompts/v1/permissions/bypass.md) | 说明跳过项及仍有效的硬限制 |
 | 后台任务 | [background.md](../crates/saya-core/prompts/v1/background.md) | 启动回执、依赖与冲突、查询、取消及清理 |
 | 独立审核器 | [review.md](../crates/saya-core/prompts/v1/review.md) | 数据边界、完整效果、allow／ask／deny 和输出契约 |
+| Goal 规划器 | [goal-plan.md](../crates/saya-core/prompts/v1/goal-plan.md) | 严格 JSON 计划、依赖、验收项、步骤与确认边界 |
+| Goal 核验器 | [goal-verification.md](../crates/saya-core/prompts/v1/goal-verification.md) | 仅依据主机证据判断单个验收项，拒绝模型自述替代 |
 | 能力片段 | [capabilities.md](../crates/saya-core/prompts/v1/capabilities.md) | 输出检索、记忆写入、Skill／扩展、任务清单与工作区快照的按需注入 |
 
 这些文件由 `include_str!` 嵌入 core crate，无运行时外部文件依赖；修改后须重新构建。不提供用户自定义 prompt 覆盖或 persona 注册表。Anthropic 缓存断点通过 CLI 参数显式开启，见下文。
@@ -52,6 +54,8 @@ OpenAI 兼容协议保留相同的静态字节前缀并依赖服务端自动缓�
 `Usage.cached_input_tokens` 以可选字段记录 provider 实际报告的缓存输入量，未上报时保持未知且维持既有 JSON 形状。Chat Completions 兼容 `prompt_tokens_details.cached_tokens` 与 `prompt_cache_hit_tokens`，Responses 读取 `input_tokens_details.cached_tokens`，Messages 读取 `cache_read_input_tokens`；运行指标只在相关请求均上报时合计缓存量。真实 DeepSeek 多轮对照中，前缀优化前24次记录为整体36.37%／Turn 2+ 35.53%，优化后48次运行合并为整体83.54%／Turn 2+ 91.75%。完整 token 数量、占比与限制见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。这些结果不是服务端保证，也不代表其他模型。后续将运行时间、工作区和环境实例数据移至工具schema之后，最终96次运行达到整体95.05%／Turn 2+ 97.20%，并在相同48次规模下将失败工具结果由4次降为3次；见[缓存95%与工具错误联合验证](prompt-cache-95-2026-11-11.md)。
 
 [审核组件](../crates/saya-core/src/review.rs)使用独立英文审核 prompt，保留现有一个数据消息、无工具、1024 输出 token 默认上限、严格 JSON 解析与失败转人工逻辑。它不接收执行 prompt、项目说明或完整执行历史；数据仍为 `tool/arguments/work_mode/permissions/goal_summary`。尤其不把 `goal_summary` 中“用户已授权”的说法当成原始用户证据。
+
+Goal 规划与核验使用另外两个无工具请求。规划器接收目标、工作区、模式及用户已提供的验收项，输出严格 `GoalPlan` JSON；计划只保存为待确认状态，用户确认前没有任何 Step 运行。核验器只接收一个验收项与主机记录的 evidence，输出严格 `satisfied/reason` JSON；file-exists／SHA-256仍由主机重新检查，模型意见不能单独完成 Goal。
 
 权限执行逻辑没有因这次 prompt 定制而更换：auto 的原生文件工具默认放行、未命中 exec 才触发模型核查；manual 对每次工具调用要求人工批准；显式 allow 仍可按现有基线跳过核查。英文审核提示词不是对所有文件和命令新增的扫描层，不能覆盖硬 deny、PLAN 或已有人工拒绝。需要精确用户证据的高影响操作，在当前审核输入不足时建议 ask，再由真实确认或已有规则处理。
 

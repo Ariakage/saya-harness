@@ -21,6 +21,7 @@ pub mod dispatch;
 pub mod execution;
 pub mod export;
 pub mod global_memory;
+pub mod goal;
 pub mod hook_store;
 pub mod hooks;
 pub mod input;

@@ -2884,6 +2884,7 @@ dependencies = [
  "cap-std",
  "libc",
  "saya-core",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",

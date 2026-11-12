@@ -30,6 +30,7 @@ pub const SCENES: &[&str] = &[
     "mcps",
     "plugins",
     "sessions",
+    "goals",
     "idle",
     "working",
     "completed",
@@ -393,6 +394,7 @@ pub fn fixture(scene: &str) -> State {
         "mcps" => state.picker_panel = Some(picker_fixture(PickerKind::Mcps)),
         "plugins" => state.picker_panel = Some(picker_fixture(PickerKind::Plugins)),
         "sessions" => state.picker_panel = Some(picker_fixture(PickerKind::Sessions)),
+        "goals" => state.picker_panel = Some(picker_fixture(PickerKind::Goals)),
         "idle" => {
             state.clear_messages();
             state.editor.clear();
@@ -711,6 +713,23 @@ fn picker_fixture(kind: PickerKind) -> PickerPanel {
                     "session-previous",
                     "Implement background processes",
                     "session-previous · WORK · default · Completed",
+                    false,
+                ),
+            ],
+        ),
+        PickerKind::Goals => (
+            picker_text::GOALS_TITLE,
+            vec![
+                picker_item(
+                    "goal-active",
+                    "Deliver verified Goal orchestration",
+                    "Ready · 1/3 steps · auto authorized",
+                    true,
+                ),
+                picker_item(
+                    "goal-paused",
+                    "Modernize generated documentation",
+                    "Paused · 2/5 steps · verification waiting",
                     false,
                 ),
             ],

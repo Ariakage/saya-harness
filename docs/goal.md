@@ -1,6 +1,34 @@
 # Goal 目标编排设计
 
-**状态为后续设计草案。项目负责人明确希望未来提供 `/goal`，能力编号 F-20，实现任务为 DEV-069 至 DEV-074。**
+**状态：DEV-069 至 DEV-074 已实现并通过本机受控验收。能力编号 F-20；跨平台固定源码证据和发行版本仍按验收记录单独维护。**
+
+## 当前实现
+
+Goal 使用独立、版本化的 `data_dir/goals/goals.sqlite3`。数据库采用 WAL、私有目录／文件权限、显式 application ID／schema version、版本 CAS、单 Goal worker 租约和 dispatch intent。Goal 绑定一个专属 Session 与工作区，步骤按依赖串行复用现有 AgentRuntime、工具派发、权限、隔离、Compact、检查点及 Session 锁。
+
+CLI 与 TUI 共用 `saya-core::goal` 数据／存储和 `saya-app::goal` 计划／运行编排。模型计划与人工证据核验使用无工具、纯英文请求；模型输出只是候选数据，必须经过严格 schema 校验。步骤完成、Run 完成及 Goal 验收分别记录，模型自述或计划文字不能单独令 Goal 完成。
+
+当前入口：
+
+```sh
+saya goal create "OBJECTIVE" [--accept TEXT]...
+saya goal plan GOAL_ID [--plan-file PLAN.json]
+saya goal confirm GOAL_ID
+saya goal list
+saya goal status GOAL_ID
+saya goal continue GOAL_ID [--approval-file PATH]
+saya goal start GOAL_ID --auto
+saya goal pause|resume|cancel GOAL_ID
+saya goal verify GOAL_ID CRITERION --summary TEXT
+saya goal resolve GOAL_ID STEP_ID --retry
+saya goal replan GOAL_ID
+saya goal report GOAL_ID [--format json|markdown] [--file PATH]
+saya goal worker [--once]
+```
+
+TUI 提供 `/goals` 选择器与 `/goal create|plan|confirm|status|continue|start|pause|resume|cancel|verify|report|replan ID`。TUI 的交互式 Goal Run 当前要求 `auto` 或 `bypass` 权限；`Manual Approval` 使用 CLI 的终端审批路径。自动启动必须显式执行 `start --auto`，不会由普通发送或后台恢复隐式产生。
+
+实现和验收细节见[N4验收](n4-validation.md)。
 
 ## 产品语义
 
@@ -8,7 +36,7 @@ Goal 保存目标、验收条件、步骤、预算和证据，关联一个工作
 
 当前方案将目标生命周期放在应用／编排层，底层复用 AgentRuntime、工具派发、权限、取消和存储。首次交付以单目标串行步骤和手动继续为基础，随后增加显式授权的自动续跑。用户需求见[决策记录](decisions.md)，具体拆分是本设计的规划方案。
 
-规划、核验与重规划提示词按 D-030 使用英文，模型建议通过结构化校验后交给编排服务。Compact 后从 Goal 持久记录与当前配置重建目标、验收项、权限和剩余预算，摘要内容保留来源与不确定状态。
+规划与核验提示词按 D-030 使用英文，模型建议通过结构化校验后交给编排服务。当前重规划采用有界、保守的失败修正：只对已持久化且非 unknown／取消的失败步骤追加“先检查现状、不得重放未确认副作用”的修正指令，并受 `max_replans` 限制；unknown 副作用进入等待，不自动重试。Compact 后从 Goal 持久记录和当前配置恢复目标、验收项、权限与剩余预算。
 
 ## 三层交付
 
@@ -24,12 +52,12 @@ G1 可在共享基础稳定后单独开发，G2 的执行依赖按[后续开发�
 
 | 对象 | 主要字段 |
 | --- | --- |
-| Goal | ID、objective、acceptance criteria、工作区、profile 引用、状态、阶段、预算、创建与更新时间 |
-| Step | ID、依赖、说明、用户选定模式、状态、尝试次数、关联 Run、输入及产物引用 |
-| Evidence | 验收项 ID、来源 Run／调用、文件与摘要、执行命令或核验方式、结果、核验时间 |
-| Continuation | 手动／自动授权范围、当前调用权限引用、剩余预算、调度租约与暂停原因 |
+| Goal | UUID、专属 Session、objective、acceptance criteria、工作区、profile、模式、状态／阶段、预算／usage、当前 Step、wait／failure、auto authorization、revision、创建／更新时间 |
+| Step | UUID、ordinal、依赖、标题／指令、运行模式、状态、尝试次数、关联 Run、最近结构化 Run 结果 |
+| Evidence | UUID、验收项 ID、来源 Step／Run、manual／file-exists／file-digest／artifact 类型、摘要、相对路径、SHA-256、核验时间 |
+| Continuation | 显式 auto 标记、模式、权限模式、配置指纹、授权时间、worker owner／过期租约及持久 dispatch 状态 |
 
-第一轮实现可将一个 Goal 绑定到主要 Session，步骤关联多个 Run。跨 Session 关联及子 Goal 按实际需求扩展。工具调用继续使用 `(run_id, call_id)` 关联。
+当前实现将一个 Goal 绑定到一个专属 Session，步骤关联多个 Run；跨 Session 关联及子 Goal 按后续需求扩展。工具调用继续使用 `(run_id, call_id)` 关联。
 
 证据中的文件包含生成时摘要，核验时重新检查版本。计划完成、模型自述、命令退出码和目标验收分别记录，目标完成要求每条验收条件具有对应证据。
 
@@ -73,25 +101,25 @@ flowchart TD
 交互入口与 CLI 子命令使用同一应用服务。
 
 ```text
-/goal create "Deliver a Rust API with tests and documentation"
+/goals
+/goal create Deliver a Rust API with tests and documentation
 /goal plan GOAL_ID
-/goal list
+/goal confirm GOAL_ID
 /goal status GOAL_ID
 /goal continue GOAL_ID
-/goal pause GOAL_ID
-/goal resume GOAL_ID
-/goal cancel GOAL_ID
+/goal start GOAL_ID
+/goal pause|resume|cancel GOAL_ID
+/goal verify GOAL_ID criterion-1 Reviewed evidence
 /goal report GOAL_ID
 ```
 
 ```sh
-# 以下为后续接口草案
 saya goal create "Deliver a Rust API with tests and documentation"
-saya goal plan GOAL_ID --mode plan
-saya goal continue GOAL_ID --mode build
+saya goal plan GOAL_ID
+saya goal continue GOAL_ID
 saya goal report GOAL_ID
-# 自动阶段开放后的显式启动入口
 saya goal start GOAL_ID --auto --mode build
+saya goal worker
 ```
 
 创建先保存目标。计划生成和步骤执行各自由明确操作启动，G1 的 continue 执行一个步骤后返回。恢复加载状态、当前配置和证据，随后等待继续指令。`saya resume SESSION_ID` 使用会话恢复语义。
@@ -100,17 +128,17 @@ saya goal start GOAL_ID --auto --mode build
 
 - 计划、模型输出和验收结果作为数据进入编排服务，工具权限仍由当前运行策略决定。Manual Approval 逐工具确认，PLAN、deny 以及选定隔离后端的边界在实际派发处验证。
 - 模式来自用户选择。自动阶段的首版建议使用用户选定的固定执行模式，模式调整由 Agent 提议并等待用户确认，在调用边界生效。
-- 自动继续需要独立、有限的启动授权，记录目标、工作区、执行身份、配置指纹和预算。恢复按本次调用权限重新判定工具许可。
+- 自动继续需要独立、有限的 `start --auto` 启动授权，记录模式、权限、profile／权限规则／沙箱／运行上限构成的配置指纹和预算。worker 或手工恢复时重新判定当前权限；配置变化会令自动 Goal 进入 `blocked / authorization`，需人工恢复并重新显式授权。
 - 自动启动前核验所选后端的文件、网络、资源和清理能力，硬要求缺失时给出可处理原因。best_effort 的资源与清理能力按显式 profile 展示，具体矩阵见[原生后端设计](sandbox.md)。
-- 每个 Run 保有模型、工具、活跃时间和清理上限。Goal 总预算另外累计 Run 数、请求、工具、活跃时间、规划／核验／压缩及重规划尝试，费用继续标记为估算。
+- 每个 Run 保有模型、工具、活跃时间和清理上限。Goal 总预算累计 Run 数、模型请求（含 review／plan／compaction）、工具、活跃时间、输入／输出 token、规划／核验尝试及重规划；达到硬上限后停止新调度。
 - 可声明为硬上限的资源在执行前预留、执行后结算，未知用量和中断记录按保守策略处理。具体单位、缺失 usage 行为和默认上限在 DEV-069／DEV-072 收敛。
 - 重试和重规划具有次数上限、失败分类及停止原因。结果不明的副作用进入等待处理，重试前先检查已有意图、结果和幂等记录。
 
 ## 持久化与恢复
 
-Goal、Step、Run 关联和调度意图通过版本化数据库迁移加入，按现有备份与事务约定执行。目标状态改变与步骤启动意图在事务内保存，之后调用运行服务。写入失败停止后续调度。
+Goal、Step、Run 关联和调度意图位于独立版本化数据库，按事务和配置化 redaction 保存。目标状态改变与步骤启动 intent 在事务内提交，之后才调用运行服务；写入失败停止后续调度。状态更新使用 revision CAS，验收证据与 completion 在同一事务内发布。
 
-每个 Goal 同时运行一个受管理 Run，持有目标排他控制和现有 Session 写锁。跨 Goal 的同工作区写入需要 F-05 的隔离或显式排他策略。worker 租约恢复需核对进程身份、执行记录和授权范围，丢失连接的执行标记为待核对。
+每个 Goal 同时运行一个受管理 Run，持有 Goal lease 和现有 Session 写锁。worker 心跳续租；只恢复租约已过期的 dispatch。intent／running 未得到终态的 dispatch 标为 unknown，并等待 `goal resolve --retry`，不会自动重放。`goal continue` 与 TUI 前台执行使用同一租约和 Session 锁边界。
 
 G2 引入持久队列后，再根据明确的自动授权恢复调度。0.1.0 运行内后台任务的结果作为原有 Run 数据记录，其现有结束清理语义在适用运行中继续执行。
 

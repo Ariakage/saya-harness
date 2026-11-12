@@ -6,6 +6,7 @@
 - 工作模式：[PLAN](v1/modes/plan.md)、[BUILD](v1/modes/build.md)、[CODE](v1/modes/code.md)、[WORK](v1/modes/work.md)
 - 权限模式：[auto](v1/permissions/auto.md)、[Manual Approval](v1/permissions/manual.md)、[bypass](v1/permissions/bypass.md)
 - [独立安全审核](v1/review.md)
+- [Goal结构化规划](v1/goal-plan.md)、[Goal验收核验](v1/goal-verification.md)
 - [结构化Compact](v1/compact.md)、[条件式续接](v1/compaction-continuation.md)、[有来源的记忆上下文](v1/memory-context.md)
 - 按实际能力选择的[输出检索](v1/output-retrieval.md)、[记忆写入与遗忘](v1/memory-operations.md)、[Skill与扩展](v1/extensions.md)、[会话任务清单](v1/task-tracking.md)和[工作区快照](v1/workspace-snapshots.md)
 

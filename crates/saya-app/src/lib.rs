@@ -4,6 +4,7 @@ pub mod context;
 pub mod events;
 pub mod export;
 mod extensions;
+pub mod goal;
 pub mod interaction;
 pub mod mcp;
 pub mod memory_admin;

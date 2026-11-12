@@ -50,6 +50,19 @@ pub(crate) mod command {
     pub const SKILLS: &str = "Open the discovered Skill selector";
     pub const MCPS: &str = "Open the configured MCP server selector";
     pub const PLUGINS: &str = "Open the installed Plugin selector";
+    pub const GOALS: &str = "Open the durable Goal selector";
+    pub const GOAL_CREATE: &str = "Create a durable Goal with a dedicated session";
+    pub const GOAL_PLAN: &str = "Generate a structured plan for explicit confirmation";
+    pub const GOAL_CONFIRM: &str = "Confirm a generated Goal plan";
+    pub const GOAL_STATUS: &str = "Show Goal steps, evidence, budget and current state";
+    pub const GOAL_CONTINUE: &str = "Run one dependency-ready Goal step";
+    pub const GOAL_START: &str = "Explicitly start finite automatic Goal continuation";
+    pub const GOAL_PAUSE: &str = "Pause future Goal scheduling";
+    pub const GOAL_RESUME: &str = "Return a paused or blocked Goal to ready";
+    pub const GOAL_CANCEL: &str = "Cancel a Goal and its future scheduling";
+    pub const GOAL_REPORT: &str = "Open the complete Goal report";
+    pub const GOAL_VERIFY: &str = "Record user evidence for one acceptance criterion";
+    pub const GOAL_REPLAN: &str = "Apply one bounded replan to a known failed step";
     pub const THINKING_LEVEL: &str = "Set thinking effort for subsequent requests";
     pub const AUTOCOMPACT_AUTO: &str = "Restore the configured percentage trigger";
     pub const AUTOCOMPACT_OFF: &str = "Disable automatic compaction";
@@ -271,12 +284,14 @@ pub(crate) mod picker {
     pub const MCPS_TITLE: &str = "MCP servers";
     pub const PLUGINS_TITLE: &str = "Plugins";
     pub const SESSIONS_TITLE: &str = "Sessions";
+    pub const GOALS_TITLE: &str = "Goals";
     pub const NO_SKILLS: &str = "No applicable Skills were discovered.";
     pub const NO_MCPS: &str = "No MCP servers are configured.";
     pub const NO_PLUGINS: &str = "No installed Plugins are available.";
     pub const PLUGIN_STORE_MISSING: &str =
         "No Plugin store exists. Install a local package with `saya plugin install`.";
     pub const SESSION_EMPTY: &str = "No sessions are saved on this page.";
+    pub const NO_GOALS: &str = "No durable Goals are saved.";
     pub const ENTER_DETAILS: &str = "Enter details · ↑↓ select · Esc close";
     pub const ENTER_TOGGLE: &str = "Enter toggle · ↑↓ select · Esc close";
     pub const ENTER_RESUME: &str = "Enter resume · ↑↓ select · Esc close";
@@ -595,6 +610,19 @@ pub(crate) mod services {
     pub const UNKNOWN_UI: &str = "Unknown UI command";
     pub const SELECTOR_CANCELLED: &str = "Selector loading cancelled";
     pub const UI_QUERY_CANCELLED: &str = "UI query cancelled";
+    pub const GOAL_USAGE: &str =
+        "Use /goal status|continue|start|pause|resume|cancel|report|verify|replan ID";
+    pub const GOALS_NO_ARGUMENTS: &str = "Use /goals without arguments";
+    pub const GOAL_VERIFY_USAGE: &str = "Use /goal verify ID CRITERION SUMMARY";
+    pub const GOAL_MANUAL_UNAVAILABLE: &str = "Goal execution in TUI requires auto or bypass permissions. Use the CLI for manual approvals.";
+    pub const GOAL_NOT_READY: &str = "Goal must be confirmed and ready before automatic start";
+    pub const GOAL_CANCELLED: &str = "Goal operation cancelled";
+    pub const GOAL_CREATE_USAGE: &str = "Use /goal create OBJECTIVE";
+    pub const GOAL_PROFILE_REQUIRED: &str = "Choose a model profile before creating a Goal";
+    pub const GOAL_SESSION_FAILED: &str = "Goal session cannot be created";
+    pub const GOAL_PLAN_BUDGET: &str = "Goal planning budget is exhausted";
+    pub const GOAL_REPORT_EXPORTED: &str = "Goal report · exported";
+    pub const GOAL_REPORT_ENCODE_FAILED: &str = "Goal report receipt cannot be encoded";
     pub const HISTORY_OMITTED: &str = "Earlier stored history is omitted from this view. Use session export to inspect the full history.";
     pub const SESSION_RESTORED: &str = "Session restored. Waiting for new input.";
     pub const NEW_SESSION_READY: &str = "New session ready. Waiting for your message.";

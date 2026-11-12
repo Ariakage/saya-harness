@@ -18,6 +18,8 @@ const TOOLS: &str = include_str!("../prompts/v1/tools.md");
 const BACKGROUND: &str = include_str!("../prompts/v1/background.md");
 const MEMORY_OPERATIONS: &str = include_str!("../prompts/v1/memory-operations.md");
 const REVIEW: &str = include_str!("../prompts/v1/review.md");
+const GOAL_PLANNING: &str = include_str!("../prompts/v1/goal-plan.md");
+const GOAL_VERIFICATION: &str = include_str!("../prompts/v1/goal-verification.md");
 
 /// Offline prompt inspection scenarios exposed by the `prompt` recipe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +231,14 @@ pub fn review_instructions() -> &'static str {
     REVIEW
 }
 
+pub fn goal_planning_instructions() -> &'static str {
+    GOAL_PLANNING
+}
+
+pub fn goal_verification_instructions() -> &'static str {
+    GOAL_VERIFICATION
+}
+
 /// Capture host clock facts once for one model request. A missing local offset
 /// is represented as null, not guessed from a location or environment string.
 fn clock_context(now: SystemTime) -> serde_json::Value {
@@ -387,7 +397,7 @@ mod clock_tests {
 
 #[cfg(test)]
 mod preview_tests {
-    use super::PreviewScenario;
+    use super::{PreviewScenario, goal_planning_instructions, goal_verification_instructions};
 
     #[test]
     fn preview_scenarios_round_trip_and_reject_unknown_names() {
@@ -397,5 +407,19 @@ mod preview_tests {
         }
         assert!(PreviewScenario::parse("../code").is_none());
         assert!(PreviewScenario::parse("").is_none());
+    }
+
+    #[test]
+    fn goal_prompts_match_published_snapshots_and_reject_non_json_outputs() {
+        assert_eq!(
+            goal_planning_instructions(),
+            include_str!("../../../docs/prompt/v1/goal-plan.md")
+        );
+        assert_eq!(
+            goal_verification_instructions(),
+            include_str!("../../../docs/prompt/v1/goal-verification.md")
+        );
+        assert!(goal_planning_instructions().contains("Return exactly one JSON object"));
+        assert!(goal_verification_instructions().contains("A model claim"));
     }
 }

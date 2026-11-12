@@ -1810,6 +1810,101 @@ def manual_tools_and_clarification(binary):
         fixture.close()
 
 
+def goal_orchestration_journey(binary):
+    generated_plan = json.dumps({
+        'acceptance': [{
+            'id': 'criterion-1',
+            'text': 'The Goal step is complete',
+            'verification': {'kind': 'manual'},
+        }],
+        'steps': [{
+            'id': '018bcfe5-6800-7000-8000-000000000031',
+            'title': 'Run the Goal step',
+            'instruction': 'Complete the bounded Goal step and report the result',
+            'depends_on': [],
+        }],
+    })
+    fixture = Fixture('openai-chat-completions', [
+        {'text': generated_plan},
+        {'text': 'GOAL_STEP_DONE'},
+        {'text': '{"satisfied":true,"reason":"Reviewed the completed Goal step"}'},
+    ])
+    try:
+        with tempfile.TemporaryDirectory(prefix='saya-tui-goal-') as directory:
+            root = Path(directory)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            config = configuration(root, fixture)
+            terminal = invoke(binary, root, config)
+            try:
+                terminal.title()
+                terminal.resize(160, 45)
+                terminal.line('/goal create Deliver a verified TUI Goal')
+                terminal.wait(lambda: 'Goal · Draft' in terminal.screen.details_text(),
+                              'TUI Goal creation')
+                listed = subprocess.run(
+                    [str(binary), '--config', str(config), '--cwd', str(workspace),
+                     '--output', 'json', 'goal', 'list'],
+                    cwd=workspace, env=environment(root), capture_output=True, text=True, timeout=15)
+                if listed.returncode != 0:
+                    raise RuntimeError('Goal list failed after TUI creation: ' + listed.stderr)
+                goals = json.loads(listed.stdout)['data']['goals']
+                if len(goals) != 1:
+                    raise RuntimeError('TUI Goal creation did not persist one Goal')
+                goal_id = goals[0]['id']
+                terminal.line('/goal plan ' + goal_id)
+                terminal.wait(lambda: 'Goal · Waiting' in terminal.screen.details_text() and
+                              'PlanConfirmation' in terminal.screen.details_text(),
+                              'TUI Goal planning')
+                terminal.line('/goal confirm ' + goal_id)
+                terminal.wait(lambda: 'Goal · Ready' in terminal.screen.details_text(),
+                              'TUI Goal plan confirmation')
+                terminal.line('/goals')
+                terminal.wait(lambda: 'Deliver a verified TUI Goal' in terminal.screen.text and
+                              'Enter details' in terminal.screen.text, 'Goal selector')
+                terminal.send(b'\x1b')
+                terminal.wait(lambda: 'Deliver a verified TUI Goal' not in terminal.screen.text,
+                              'Goal selector closed')
+
+                terminal.line('/goal pause ' + goal_id)
+                terminal.wait(lambda: 'Goal · Paused' in terminal.screen.details_text() and
+                              'Run the Goal step' in terminal.screen.details_text(),
+                              'paused Goal details')
+                terminal.line('/goal resume ' + goal_id)
+                terminal.wait(lambda: 'Goal · Ready' in terminal.screen.details_text(),
+                              'resumed Goal details')
+                terminal.line('/goal start ' + goal_id)
+                terminal.wait(lambda: 'Goal · Waiting' in terminal.screen.details_text() and
+                              'GOAL_STEP_DONE' not in terminal.screen.text,
+                              'automatic Goal step completion')
+                if len(fixture.requests) != 2:
+                    raise RuntimeError('TUI Goal start did not execute exactly one model step')
+
+                terminal.line('/goal verify ' + goal_id +
+                              ' criterion-1 Reviewed the completed Goal step')
+                terminal.wait(lambda: 'Goal · Completed' in terminal.screen.details_text() and
+                              'criterion-1' in terminal.screen.details_text(),
+                              'verified completed Goal')
+                goal_report = root / 'goal-report.md'
+                terminal.line('/goal report ' + goal_id + ' ' + str(goal_report))
+                terminal.wait(goal_report.exists, 'TUI Goal report export')
+                terminal.wait(lambda: 'Goal report · exported' in terminal.screen.details_text(),
+                              'TUI Goal report receipt')
+                if 'The Goal step is complete' not in goal_report.read_text():
+                    raise RuntimeError('TUI-exported Goal report omitted acceptance evidence')
+                terminal.line('/goal report ' + goal_id)
+                terminal.wait(lambda: 'Goal · Completed' in terminal.screen.details_text() and
+                              'Evidence' in terminal.screen.details_text(),
+                              'Goal report panel')
+                if len(fixture.requests) != 3:
+                    raise RuntimeError('TUI Goal verification did not use one bounded model call')
+                terminal.finish()
+            finally:
+                terminal.close()
+    finally:
+        fixture.close()
+
+
 def save_interactive_screen(terminal, name):
     """Save fixture screens only in the explicitly selected debug directory."""
     directory = os.environ.get('SAYA_TUI_SNAPSHOT_DIR')
@@ -2212,7 +2307,7 @@ def command_palette_modal_journey(binary):
                     if width < 38:
                         if 'Esc close' not in ''.join(terminal.screen.cells[top + height - 1][left:left + width]):
                             raise RuntimeError('compact command modal omitted its close instruction')
-                    elif f'{index + 1}/44' not in ''.join(terminal.screen.cells[top][left:left + width]):
+                    elif f'{index + 1}/57' not in ''.join(terminal.screen.cells[top][left:left + width]):
                         raise RuntimeError('command modal did not report the actual catalog selection')
                     navigation = ''.join(terminal.screen.cells[top + height - 2][left + 1:left + width - 1])
                     expected_hint = '↑↓ · Enter' if width < 38 else '↑↓ select · Enter run · Esc close'
@@ -3324,6 +3419,8 @@ def main():
     passed('markdown-source-render-footnotes-and-original-history')
     manual_tools_and_clarification(binary)
     passed('manual-read-search-background-query-and-clarification')
+    goal_orchestration_journey(binary)
+    passed('goal-selector-lifecycle-auto-run-verification-and-report')
     thinking_tools_and_mouse_journey(binary)
     passed('thinking-tool-folds-mouse-scroll-and-restore')
     todos_manual_plan_and_restore_journey(binary)

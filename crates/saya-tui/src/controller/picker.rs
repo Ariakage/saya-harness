@@ -315,7 +315,7 @@ impl App {
             return Ok(());
         };
         match panel.kind {
-            PickerKind::Skills | PickerKind::Plugins => {
+            PickerKind::Skills | PickerKind::Plugins | PickerKind::Goals => {
                 let title = item.label.clone();
                 self.state.picker_panel = None;
                 self.state.set_details(Details {

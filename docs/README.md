@@ -19,17 +19,18 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [CLI 入口与实现记录](cli-preview.md) | 单次运行、文本会话和当前入口 | 0.1.0 已发布，当前使用见使用指南 |
 | [项目指令与 Skill 发现](project-context.md) | 来源、优先级与刷新规则 | 受控验证通过 |
 | [SQLite 存储组件](storage.md) | 事务、事件序号与持久化边界 | 本机受控验证，恢复见开发进度 |
-| [saya-plugin v1 规范](saya-plugin.md) | manifest、权限、lock、生命周期和验收 | 规范草案，loader 待实现 |
+| [saya-plugin v1 规范](saya-plugin.md) | manifest、权限、lock、生命周期和验收 | N3 已实现，固定源码四平台验收 |
 | [插件结构 schema](schemas/saya-plugin-v1.schema.json) | TOML 解析结果的 JSON Schema | v1 草案，含语义验证要求 |
 | [插件 manifest 示例](../examples/saya-plugin.example.toml) | 声明 Skills／MCP／Hook 的结构示例 | 格式示例 |
 | [后续能力路线图](capability-roadmap.md) | F-01 至 F-20 的功能模块、优先级与依赖 | MVP 基础与待开发增量分别记录 |
 | [后续开发计划](post-mvp-plan.md) | 0.2.0 候选、N0 至 N5、DEV-038 至 DEV-089 | 任务定义与设计草案 |
-| [全局记忆](memory.md) | MEMORY.md、模型编辑／遗忘、审阅与回滚 | 设计草案，DEV-084 至 DEV-089 待开发 |
-| [原生 Sandbox](sandbox.md) | Seatbelt、Linux 原生组合、网络、AST 与能力等级 | 后端组合已明确，接口待实现 |
+| [全局记忆](memory.md) | MEMORY.md、模型编辑／遗忘、审阅与回滚 | DEV-084 至 DEV-089 已完成四平台验收 |
+| [原生 Sandbox](sandbox.md) | Seatbelt、Linux 原生组合、网络、AST 与能力等级 | 已接入共享运行入口并完成固定源码四平台验收 |
 | [工具注册](tool-registry.md) | 可信操作描述、外部schema、权限、版本和派发 | DEV-054实现与验收见开发进度 |
 | [命令结构分析](command-analysis.md) | CST风险事实、预算、独立审核与批准绑定 | DEV-075实现与验收见开发进度 |
-| [N2验收](n2-validation.md) | 原生隔离、命令分析与MCP的阶段要求及证据 | 开发中 |
-| [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | 设计草案 |
+| [N2验收](n2-validation.md) | 原生隔离、命令分析与MCP的阶段要求及证据 | 完成四平台验收 |
+| [N3验收](n3-validation.md) | 上下文、插件／Hooks、记忆与联合矩阵 | 完成四平台验收 |
+| [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | N3 已实现并接入共享运行入口 |
 | [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | 设计草案 |
 | [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | DEV-047 至 DEV-053 已完成候选验收，后续交互完善见开发进度 |
 | [Markdown与调试预览](markdown-rendering.md) | 语法、Unicode数学、图表、脚注导航与source／render | 本地开发线，验收见开发进度 |
@@ -37,7 +38,9 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [TUI 验证](tui-validation.md) | 候选与后续源码的环境、脚本和证据 | 各轮验证按实际源码记录 |
 | [日志与追踪](observability.md) | 五级日志、span、安全记录与本地查询 | DEV-040 至 DEV-042 已实现，本机验收通过 |
 | [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 与文件保存 | DEV-043 至 DEV-046 已实现，本机验收通过 |
-| [Goal 设计](goal.md) | 目标、证据、预算、恢复与分层交付 | 设计草案，DEV-069 至 DEV-074 待开发 |
+| [Goal 设计](goal.md) | 目标、证据、预算、恢复与分层交付 | DEV-069 至 DEV-074 已完成本机受控验收 |
+| [N4 Goal 验收](n4-validation.md) | Goal 存储、执行、worker、预算、TUI 与故障矩阵 | 完成本机受控验收 |
+| [N4 中英双语说明](release-notes-n4.md) | Goal 功能、命令、安全边界与已知限制 | 开发线说明，版本号待定 |
 | [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P7 验收完成 |
 | [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
 | [发行检查](release-checklist.md) | 24 组基线、验收与已知限制 | P7 验收完成 |

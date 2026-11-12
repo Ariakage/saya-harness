@@ -78,7 +78,7 @@ DEV-038／039 已将模型组装、`build_runtime`、会话准备／恢复与 `e
 
 界面以对话为主，工具、会话和诊断信息按需展开。左键拖选松开后立即复制完整选区，并在右上角短暂显示`✓ Copied`。候选快捷键为 Enter 发送、Alt+Enter 换行、Ctrl+P 命令面板、Ctrl+C／Cmd+C 复制选区、Ctrl+C 取消运行或清空输入、空闲时 Ctrl+D 退出。复制优先写本机系统剪贴板，并保留OSC52供远程终端使用；iTerm2等保留Cmd+C或右键Copy的终端不会让这些菜单决定Saya选区内容。
 
-Diff、模型选择、Compact、MCP／Skills、Goal 和多 Agent 面板按其底层能力交付进度开放。首版命令列表通过实际可用能力生成。
+Diff、模型选择、Compact、MCP／Skills 和 Goal 面板已按底层能力开放；多 Agent 面板继续按后续进度实现。Goal 选择器、结构化计划、确认、手动／自动执行、暂停、核验和报告见[Goal 编排](goal.md)。
 
 ## 紧凑窗口与会话标题
 

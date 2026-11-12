@@ -1,6 +1,7 @@
 mod chat;
 mod events;
 mod export;
+mod goal_commands;
 mod logs;
 mod mcp;
 mod memory_commands;
@@ -107,6 +108,11 @@ impl From<OutputOption> for Output {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Plan and continue durable Goals with acceptance evidence and bounded budgets.
+    Goal {
+        #[command(subcommand)]
+        action: goal_commands::GoalAction,
+    },
     /// Inspect and administer the configured managed global memory.
     Memory {
         #[command(subcommand)]
@@ -1317,6 +1323,19 @@ async fn main() -> std::process::ExitCode {
         {
             Err(error) => query_error(error, cli.output.map(Into::into)),
             Ok(config) => mcp::run(&config, action).await,
+        },
+        Some(Command::Goal { action }) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
+        {
+            Err(error) => query_error(error, cli.output.map(Into::into)),
+            Ok(config) => match goal_commands::run(action, &cli, &config).await {
+                Ok(code) => code,
+                Err(error) => query_error(
+                    safe_output(&error.to_string(), &config),
+                    Some(config.output),
+                ),
+            },
         },
         Some(Command::Memory { action }) => match std::env::current_dir()
             .map_err(|_| "cannot determine current directory".to_owned())
