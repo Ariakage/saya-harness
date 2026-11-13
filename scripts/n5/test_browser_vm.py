@@ -311,6 +311,10 @@ class IdentityTests(unittest.TestCase):
         ]
 
         def fake_ssh(args, config_path, script, arguments):
+            if script == browser_vm.NETWORK_PREFLIGHT_SCRIPT:
+                return b"network=preflight-ok\n"
+            if script == browser_vm.SSHD_FORWARDING_SCRIPT:
+                return b"sshd=forwarding-ok\n"
             if script == browser_vm.PROBE_SCRIPT:
                 payload = fake_ssh.payload
                 return (
@@ -404,6 +408,10 @@ class IdentityTests(unittest.TestCase):
         }
 
         def fake_ssh(args, config_path, script, arguments):
+            if script == browser_vm.NETWORK_PREFLIGHT_SCRIPT:
+                return b"network=preflight-ok\n"
+            if script == browser_vm.SSHD_FORWARDING_SCRIPT:
+                return b"sshd=forwarding-ok\n"
             if script == browser_vm.PROBE_SCRIPT:
                 return (manifest_record + named_records).encode()
             if script == browser_vm.CAT_SCRIPT:
@@ -509,6 +517,10 @@ class IdentityTests(unittest.TestCase):
             def fake_ssh(ssh_args, config_path, script, arguments):
                 if script == browser_vm.PREFLIGHT_SCRIPT:
                     return b"preflight=ok\n"
+                if script == browser_vm.NETWORK_PREFLIGHT_SCRIPT:
+                    return b"network=preflight-ok\n"
+                if script == browser_vm.SSHD_FORWARDING_SCRIPT:
+                    return b"sshd=forwarding-ok\n"
                 if script == browser_vm.PROBE_SCRIPT:
                     return fixture.records().encode()
                 if script == browser_vm.CAT_SCRIPT:
@@ -538,6 +550,108 @@ class IdentityTests(unittest.TestCase):
         for forbidden in ("npm install", "npx ", "curl ", "wget ", "apt-get ", "pip install"):
             self.assertNotIn(forbidden, source)
         self.assertNotIn("latest", source.lower())
+
+
+class NetworkPrerequisiteTests(unittest.TestCase):
+    def test_network_preflight_covers_tools_and_user_namespace_values(self):
+        script = browser_vm.NETWORK_PREFLIGHT_SCRIPT
+        for required in [
+            "sudo",
+            "unshare",
+            "socat",
+            "setpriv",
+            "nsenter",
+            "ip -o route show",
+            "sudo -n true",
+            "sudo -n unshare -n",
+            "sudo -n nsenter -t",
+            "unshare -Ur",
+            "unprivileged_userns_clone",
+            "apparmor_restrict_unprivileged_userns",
+            "network=preflight-ok",
+        ]:
+            self.assertIn(required, script)
+        forwarding = browser_vm.SSHD_FORWARDING_SCRIPT
+        for required in [
+            "sshd_bin",
+            "-T 2>/dev/null",
+            "sudo -n",
+            "allowstreamlocalforwarding",
+            "allowtcpforwarding",
+            "sshd=forwarding-ok",
+        ]:
+            self.assertIn(required, forwarding)
+        apparmor = browser_vm.APPARMOR_USERNS_SCRIPT
+        self.assertIn(
+            "kernel.apparmor_restrict_unprivileged_userns=0", apparmor
+        )
+        self.assertIn("/etc/sysctl.d/99-saya-browser-userns.conf", apparmor)
+        # The dedicated VM is reconfigured, never the host.
+        self.assertNotIn("sysctl --system", apparmor)
+
+    def test_network_prerequisites_are_verified_and_fail_controlled(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = ssh_namespace(Path(temporary))
+            calls = []
+
+            def ok_ssh(a, config_path, script, arguments):
+                calls.append(script)
+                if script == browser_vm.SSHD_FORWARDING_SCRIPT:
+                    return b"sshd=forwarding-ok\n"
+                return b"network=preflight-ok\n"
+
+            with mock.patch.object(browser_vm, "ssh_run", ok_ssh):
+                browser_vm.verify_network_prerequisites(args, Path("/tmp/config"))
+            self.assertEqual(
+                calls,
+                [
+                    browser_vm.NETWORK_PREFLIGHT_SCRIPT,
+                    browser_vm.SSHD_FORWARDING_SCRIPT,
+                ],
+            )
+
+            def failing_ssh(a, config_path, script, arguments):
+                raise browser_vm.ToolError("command failed (4): missing=unshare-net")
+
+            with mock.patch.object(browser_vm, "ssh_run", failing_ssh):
+                with self.assertRaises(browser_vm.ToolError):
+                    browser_vm.verify_network_prerequisites(args, Path("/tmp/config"))
+
+            def refusing_forwarding(a, config_path, script, arguments):
+                if script == browser_vm.SSHD_FORWARDING_SCRIPT:
+                    return b"sshd=streamlocal-forwarding-no\n"
+                return b"network=preflight-ok\n"
+
+            with mock.patch.object(browser_vm, "ssh_run", refusing_forwarding):
+                with self.assertRaises(browser_vm.ToolError):
+                    browser_vm.verify_network_prerequisites(args, Path("/tmp/config"))
+
+    def test_apparmor_user_namespace_opt_in_runs_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = ssh_namespace(Path(temporary))
+            calls = []
+
+            def fake_ssh(a, config_path, script, arguments):
+                calls.append(script)
+                if script == browser_vm.APPARMOR_USERNS_SCRIPT:
+                    return b"apparmor-userns=disabled\n"
+                if script == browser_vm.SSHD_FORWARDING_SCRIPT:
+                    return b"sshd=forwarding-ok\n"
+                return b"network=preflight-ok\n"
+
+            with mock.patch.object(browser_vm, "ssh_run", fake_ssh):
+                browser_vm.verify_network_prerequisites(args, Path("/tmp/config"))
+            self.assertNotIn(browser_vm.APPARMOR_USERNS_SCRIPT, calls)
+            self.assertIn(browser_vm.SSHD_FORWARDING_SCRIPT, calls)
+
+            calls.clear()
+            with mock.patch.object(browser_vm, "ssh_run", fake_ssh):
+                browser_vm.verify_network_prerequisites(
+                    args, Path("/tmp/config"), configure_userns=True
+                )
+            self.assertEqual(calls[0], browser_vm.APPARMOR_USERNS_SCRIPT)
+            self.assertIn(browser_vm.NETWORK_PREFLIGHT_SCRIPT, calls)
+            self.assertIn(browser_vm.SSHD_FORWARDING_SCRIPT, calls)
 
 
 if __name__ == "__main__":

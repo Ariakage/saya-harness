@@ -18,6 +18,9 @@
 
 use super::{
     BrowserFailure,
+    network::{
+        BrowserNetwork, BrowserNetworkLog, BrowserNetworkSettings, MAX_NETWORK_OBSERVATIONS,
+    },
     worker::{
         self, BrowserEnvironmentFactory, BrowserWorkspaceLease, CHROMIUM_REVISION,
         CHROMIUM_VERSION, ChromiumSandboxEvidence, ChromiumSandboxInspector, IdentityManifest,
@@ -35,6 +38,7 @@ use crate::{
         SandboxPolicy,
     },
     mcp::{McpCatalog, McpLimits, McpToolResult},
+    network::RunNetworkBudget,
     tools::exec::{ExecConfig, ExecPlan, ManagedProcess},
 };
 use async_trait::async_trait;
@@ -676,12 +680,21 @@ fn strict_ssh_config(
     ))
 }
 
+/// One reverse streamlocal forward used as the VM's only browser egress.
+/// sshd creates the socket on the VM; the SSH client connects its local side
+/// to the per-Run broker on host loopback.
+struct ReverseForward {
+    remote_socket: String,
+    local_port: u16,
+}
+
 fn ssh_argv(
     settings: &BrowserVmSettings,
     paths: &VmLocalPaths,
     config_path: &Path,
     script: &str,
     args: &[String],
+    forward: Option<&ReverseForward>,
 ) -> Result<Vec<String>, BoundaryError> {
     let host = settings
         .host
@@ -699,7 +712,7 @@ fn ssh_argv(
         return Err(invalid_config("Browser VM SSH identity is invalid"));
     }
     validate_ssh_paths(paths)?;
-    Ok(vec![
+    let mut argv = vec![
         paths.ssh.display().to_string(),
         "-F".into(),
         config_path.display().to_string(),
@@ -746,6 +759,26 @@ fn ssh_argv(
         "ServerAliveCountMax=3".into(),
         "-o".into(),
         "LogLevel=ERROR".into(),
+    ];
+    if let Some(forward) = forward {
+        // `ssh` uses the first obtained value for each option, so replace the
+        // base ClearAllForwardings=yes instead of appending a later override.
+        // A browser launch adds exactly one reverse streamlocal forward.
+        for value in &mut argv {
+            if value == "ClearAllForwardings=yes" {
+                *value = "ClearAllForwardings=no".into();
+            }
+        }
+        argv.extend([
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-o".into(),
+            "StreamLocalBindUnlink=yes".into(),
+            "-R".into(),
+            format!("{}:127.0.0.1:{}", forward.remote_socket, forward.local_port),
+        ]);
+    }
+    argv.extend([
         "-p".into(),
         port.to_string(),
         "-l".into(),
@@ -754,7 +787,8 @@ fn ssh_argv(
         paths.identity_file.display().to_string(),
         host,
         remote_command(script, args),
-    ])
+    ]);
+    Ok(argv)
 }
 
 fn private_directory(path: &Path) -> Result<(), BoundaryError> {
@@ -787,7 +821,10 @@ struct VmHostEnvironment {
 }
 
 impl VmHostEnvironment {
-    fn create(settings: &BrowserVmSettings) -> Result<Self, BoundaryError> {
+    fn create(
+        settings: &BrowserVmSettings,
+        proxy_port: Option<u16>,
+    ) -> Result<Self, BoundaryError> {
         let paths = settings.preflight_local()?;
         settings.resolved_remote_paths()?;
         let root = fs::canonicalize(std::env::temp_dir())
@@ -814,7 +851,7 @@ impl VmHostEnvironment {
             ] {
                 private_directory(path)?;
             }
-            let policy = host_policy(settings, &base, &paths)?;
+            let policy = host_policy(settings, &base, &paths, proxy_port)?;
             let environment = execution::prepare(&policy)
                 .map_err(|_| vm_unavailable("Browser VM host channel sandbox is unavailable"))?;
             Ok(Self {
@@ -828,8 +865,10 @@ impl VmHostEnvironment {
         }
         result
     }
+}
 
-    fn release(self) {
+impl Drop for VmHostEnvironment {
+    fn drop(&mut self) {
         let _ = self.environment.cleanup();
         let _ = fs::remove_dir_all(&self.base);
     }
@@ -842,6 +881,7 @@ fn host_policy(
     settings: &BrowserVmSettings,
     workspace: &Path,
     paths: &VmLocalPaths,
+    proxy_port: Option<u16>,
 ) -> Result<SandboxPolicy, BoundaryError> {
     let port = settings
         .port
@@ -861,7 +901,7 @@ fn host_policy(
         paths.known_hosts.clone(),
     ];
     policy.protected_paths.clear();
-    policy.network = NetworkPolicy::LoopbackPort { port };
+    policy.network = NetworkPolicy::LoopbackPort { port, proxy_port };
     policy.browser = None;
     Ok(policy)
 }
@@ -902,7 +942,7 @@ impl SshVmCommandRunner {
             .settings
             .preflight_local()
             .map_err(|failure| BrowserFailure::new(failure.0.code, failure.0.message))?;
-        let host = VmHostEnvironment::create(&self.settings).map_err(|_| {
+        let host = VmHostEnvironment::create(&self.settings, None).map_err(|_| {
             vm_unavailable("Browser VM host channel cannot be prepared").into_browser_failure()
         })?;
         let config_path = host.directories.config.join("ssh_config");
@@ -910,8 +950,15 @@ impl SshVmCommandRunner {
             .map_err(|failure| BrowserFailure::new(failure.0.code, failure.0.message))?;
         write_private(&config_path, config.as_bytes())
             .map_err(|failure| BrowserFailure::new(failure.0.code, failure.0.message))?;
-        let argv = ssh_argv(&self.settings, &paths, &config_path, spec.script, spec.args)
-            .map_err(|failure| BrowserFailure::new(failure.0.code, failure.0.message))?;
+        let argv = ssh_argv(
+            &self.settings,
+            &paths,
+            &config_path,
+            spec.script,
+            spec.args,
+            None,
+        )
+        .map_err(|failure| BrowserFailure::new(failure.0.code, failure.0.message))?;
         let mut env = BTreeMap::new();
         env.insert(OsString::from("PATH"), OsString::from("/usr/bin:/bin"));
         env.insert(OsString::from("LANG"), OsString::from("C"));
@@ -934,7 +981,7 @@ impl SshVmCommandRunner {
         )
         .await;
         let _ = host.environment.wait_for_process_cleanup().await;
-        host.release();
+        drop(host);
         result
     }
 }
@@ -1088,29 +1135,82 @@ printf '%s' "$d"
 "#;
 
 const LAUNCH_SCRIPT: &str = r#"set -eu
-cd "$1"
+runroot=$1; sock=$2; port=$3; pidfile=$4; shift 4
 umask 077
-export HOME="$1/home"
-export TMPDIR="$1/tmp"
-export XDG_CONFIG_HOME="$1/config"
-export XDG_CACHE_HOME="$1/home/cache"
-export XDG_DATA_HOME="$1/home/data"
-export XDG_STATE_HOME="$1/home/state"
-export XDG_RUNTIME_DIR="$1/home/runtime"
-# Playwright derives its Unix socket directory from XDG_RUNTIME_DIR plus a
-# fixed "playwright" component and the socket name. A unique Run root under a
-# user-chosen temp root can exceed the 103-byte sun_path limit, so point the
-# sockets at a short directory inside the Run root (removed with it).
-export PWTEST_SOCKETS_DIR="$1/s"
-export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-export LANG=C
-export NO_COLOR=1
-export PATH=/usr/bin:/bin
-export SAYA_WORKER_STDERR="$1/worker.stderr"
-status_file="$1/worker.status"
-pidfile="$2"
-shift 2
-setsid -w sh -c 'printf "%s" "$$" > "$1"; shift; exec "$@" 2> "$SAYA_WORKER_STDERR"' saya-browser-worker "$pidfile" "$@"
+cd "$runroot"
+status_file="$runroot/worker.status"
+stderr_file="$runroot/worker.stderr"
+for tool in sudo unshare socat setpriv ip; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "network=$tool-missing" >&2; exit 41; }
+done
+[ -S "$sock" ] || { echo "network=proxy-socket-missing" >&2; exit 45; }
+sudo -n true >/dev/null 2>&1 || { echo "network=sudo-unavailable" >&2; exit 46; }
+uid=$(id -u)
+gid=$(id -g)
+# The worker and Chromium run inside a fresh network namespace created by
+# root. Only loopback exists there; a socat listener bridges the SSH reverse
+# streamlocal socket to 127.0.0.1:PORT. Privileges are then dropped back to the
+# invoking user before the worker starts, and no host or VM-wide setting is
+# changed. Any failure here is fatal: there is no default-network fallback.
+sudo -n unshare -n -- /bin/sh -c '
+  set -eu
+  ip link set lo up 2>/dev/null || { echo "network=loopback-unavailable" >&2; exit 47; }
+  if [ -n "$(ip -o route show 2>/dev/null)" ]; then
+    echo "network=unexpected-route" >&2
+    exit 48
+  fi
+  uid=$5
+  gid=$6
+  # Run the bridge as the invoking user, not root, so the same-user Run
+  # cleanup can always terminate it. Only loopback setup needs root.
+  setpriv --reuid="$uid" --regid="$gid" --init-groups -- \
+    socat TCP-LISTEN:"$1",bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:"$2" \
+    >/dev/null 2>&1 &
+  sp=$!
+  i=0
+  listening=0
+  while [ "$i" -lt 50 ]; do
+    kill -0 "$sp" 2>/dev/null || break
+    if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q "127.0.0.1:$1 "; then
+      listening=1
+      break
+    fi
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if [ "$listening" = "0" ] && ! command -v ss >/dev/null 2>&1; then
+    # Without ss, give socat a bounded head start; the worker will fail
+    # closed through the proxy if it still is not listening.
+    sleep 1
+    listening=1
+  fi
+  kill -0 "$sp" 2>/dev/null || { echo "network=proxy-start-failed" >&2; exit 49; }
+  [ "$listening" = "1" ] || { echo "network=proxy-not-listening" >&2; exit 50; }
+  stop_proxy() { kill "$sp" 2>/dev/null || true; }
+  trap stop_proxy TERM INT HUP
+  runroot=$3; pidfile=$4; uid=$5; gid=$6; stderr=$7
+  shift 7
+  export HOME="$runroot/home"
+  export TMPDIR="$runroot/tmp"
+  export XDG_CONFIG_HOME="$runroot/config"
+  export XDG_CACHE_HOME="$runroot/home/cache"
+  export XDG_DATA_HOME="$runroot/home/data"
+  export XDG_STATE_HOME="$runroot/home/state"
+  export XDG_RUNTIME_DIR="$runroot/home/runtime"
+  export PWTEST_SOCKETS_DIR="$runroot/s"
+  export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+  export LANG=C
+  export NO_COLOR=1
+  export PATH=/usr/bin:/bin
+  export SAYA_WORKER_STDERR="$stderr"
+  status=0
+  setpriv --reuid="$uid" --regid="$gid" --init-groups -- \
+    setsid -w sh -c '"'"'printf "%s" "$$" > "$1"; shift; exec "$@" 2> "$SAYA_WORKER_STDERR"'"'"' \
+      saya-browser-worker "$pidfile" "$@" || status=$?
+  trap - TERM INT HUP
+  stop_proxy
+  exit "$status"
+' sh "$port" "$sock" "$runroot" "$pidfile" "$uid" "$gid" "$stderr_file" "$@"
 status=$?
 printf '%s\n' "$status" > "$status_file"
 exit "$status"
@@ -1273,6 +1373,11 @@ if [ -s "$p" ]; then
       *) echo "worker=mismatch"; exit 5 ;;
     esac
     pids=$( (echo "$pid"; scan "$pid" 0) | head -n 512 || true )
+    # The proxy bridge (socat) and the sudo/unshare wrappers live outside the
+    # worker's own process group but carry the unique Run root in their argv.
+    # Union them so a Run can never leave a forwarding helper behind.
+    extra=$(related)
+    pids="$pids $extra"
     if ! kill_set "$pids"; then
       echo "worker=alive"; exit 6
     fi
@@ -1866,6 +1971,7 @@ impl WorkerLaunchPlanner for VmWorkerLaunchPlanner {
 fn worker_config_json(
     settings: &BrowserVmSettings,
     run_root: &str,
+    proxy_url: &str,
 ) -> Result<Vec<u8>, BoundaryError> {
     let chromium = settings
         .chromium
@@ -1879,6 +1985,24 @@ fn worker_config_json(
                 "headless": true,
                 "chromiumSandbox": true,
                 "executablePath": chromium,
+                // Playwright passes this to Chromium's --proxy-server. The
+                // address is the loopback listener inside the Run's private
+                // network namespace; no other egress exists there.
+                "proxy": {"server": proxy_url},
+                // No implicit loopback bypass, no QUIC/HTTP3, no direct or
+                // non-proxied WebRTC UDP, and no local name resolution. The
+                // broker performs all DNS work for allowed origins.
+                "args": [
+                    format!("--proxy-server={proxy_url}"),
+                    "--proxy-bypass-list=<-loopback>".to_owned(),
+                    "--disable-quic".to_owned(),
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned(),
+                    "--webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned(),
+                    "--host-resolver-rules=EXCLUDE 127.0.0.1, MAP * ~NOTFOUND".to_owned(),
+                    "--disable-features=DnsOverHttps".to_owned(),
+                    "--no-pings".to_owned(),
+                    "--disable-background-networking".to_owned(),
+                ],
             },
         },
         "outputDir": format!("{run_root}/output"),
@@ -1963,6 +2087,59 @@ struct VmSpawned {
     stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// The launch script emits only these fixed `network=` failure families for a
+/// missing or unusable private-network prerequisite. Anything else stays a
+/// transport failure so a generic worker crash is never mislabeled as a
+/// network policy problem, and there is never a default-VM-egress fallback.
+const NETWORK_FAILURE_PREFIXES: &[&[u8]] = &[
+    b"network=sudo-",
+    b"network=unshare-",
+    b"network=socat-",
+    b"network=setpriv-",
+    b"network=ip-",
+    b"network=loopback-",
+    b"network=unexpected-route",
+    b"network=proxy-",
+    // With ExitOnForwardFailure=yes, an sshd that refuses reverse
+    // streamlocal forwarding terminates the session before LAUNCH_SCRIPT
+    // runs, so the client's own fixed diagnostic is the only sentinel.
+    b"remote port forwarding failed",
+];
+
+fn classify_launch_failure(cancel: &dyn Cancellation, stderr: &[u8]) -> BrowserFailure {
+    if cancel.is_cancelled() {
+        return BrowserFailure::new("cancelled", "Browser VM worker initialization cancelled");
+    }
+    let network_failed = NETWORK_FAILURE_PREFIXES
+        .iter()
+        .any(|prefix| stderr.windows(prefix.len()).any(|window| window == *prefix));
+    if network_failed {
+        BrowserFailure::new(
+            "browser_network_unavailable",
+            "Browser VM network isolation could not be established",
+        )
+    } else {
+        remote_failure("Browser VM worker initialization failed")
+    }
+}
+
+/// Await the bounded stderr drain before classifying a startup failure. The
+/// outer process timeout may have aborted the read loop, so this waits only
+/// for a short bounded moment and then reads whatever the shared deque holds.
+async fn drain_stderr_bounded(
+    stderr_tail: &Arc<Mutex<VecDeque<u8>>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
+) -> Vec<u8> {
+    if let Some(task) = stderr_task {
+        let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+    }
+    stderr_tail
+        .lock()
+        .map(|tail| tail.iter().copied().collect())
+        .unwrap_or_default()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2005,10 +2182,10 @@ fn spawn_remote_worker(
         ));
     };
     let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(stderr_limit)));
-    if let Some(mut stderr) = process.take_stderr() {
+    let stderr_task = if let Some(mut stderr) = process.take_stderr() {
         let tail = stderr_tail.clone();
         let keep = stderr_limit;
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let mut buffer = [0u8; 8192];
             loop {
                 match stderr.read(&mut buffer).await {
@@ -2025,13 +2202,16 @@ fn spawn_remote_worker(
                     }
                 }
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
     Ok(VmSpawned {
         process,
         stdin,
         stdout,
         stderr_tail,
+        stderr_task,
     })
 }
 
@@ -2145,6 +2325,11 @@ struct VmWorkerConnection {
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
     cleanup: Arc<ConnectionCleanup>,
     monitor: AsyncMutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Per-worker broker. Dropping it signals shutdown even when an outer
+    /// caller never reaches `WorkerConnection::shutdown`.
+    network: Option<Arc<BrowserNetwork>>,
+    /// Host Seatbelt environment that carries the exact broker port rule.
+    host: Option<Arc<VmHostEnvironment>>,
 }
 
 impl Drop for VmWorkerConnection {
@@ -2222,6 +2407,18 @@ impl WorkerConnection for VmWorkerConnection {
         if let Err(error) = self.cleanup.terminate(true).await {
             failure = Some(error);
         }
+        // The SSH client is gone, so the reverse forward no longer exists.
+        // Stop the matching broker listener and wait for its connection tasks.
+        if let Some(network) = &self.network
+            && let Err(error) = network.shutdown().await
+        {
+            failure.get_or_insert(BrowserFailure::new(error.0.code, error.0.message));
+        }
+        // The SSH process has been terminated. Wait for the Host channel's
+        // process bookkeeping before the environment tree is dropped.
+        if let Some(host) = &self.host {
+            let _ = host.environment.wait_for_process_cleanup().await;
+        }
         if self.cleanup.done.load(Ordering::Acquire)
             && let Some(monitor) = self.monitor.lock().await.take()
         {
@@ -2271,8 +2468,11 @@ fn map_mcp_failure(failure: BoundaryError) -> BrowserFailure {
 
 /// Fixed worker arguments for the VM backend. Chromium's sandbox is always
 /// enabled; no flag here disables it.
+#[allow(clippy::too_many_arguments)]
 fn worker_launch_arguments(
     run_root: &str,
+    proxy_socket: &str,
+    proxy_port: u16,
     pid_file: &str,
     node: &str,
     cli_js: &str,
@@ -2281,6 +2481,8 @@ fn worker_launch_arguments(
 ) -> Vec<String> {
     vec![
         run_root.to_owned(),
+        proxy_socket.to_owned(),
+        proxy_port.to_string(),
         pid_file.to_owned(),
         node.to_owned(),
         cli_js.to_owned(),
@@ -2301,6 +2503,65 @@ fn worker_launch_arguments(
     ]
 }
 
+/// Host-side factory for the per-worker browser broker. It owns the single
+/// bounded observation log and the single Run-scoped budget exposed by the
+/// provider. Every worker lifecycle and broker restart reuses the same
+/// cumulative bytes, connection attempts and fixed deadline.
+pub struct BrowserNetworkFactory {
+    settings: BrowserNetworkSettings,
+    log: Arc<BrowserNetworkLog>,
+    budget: Arc<RunNetworkBudget>,
+}
+
+impl BrowserNetworkFactory {
+    pub fn new(settings: BrowserNetworkSettings, run_id: &str) -> Result<Self, BoundaryError> {
+        settings.validate()?;
+        if !settings.enabled {
+            return Err(invalid_config("Browser network is disabled"));
+        }
+        let budget = RunNetworkBudget::new(&settings.limits)
+            .map_err(|_| invalid_config("Browser network budget is invalid"))?;
+        Ok(Self {
+            settings,
+            log: Arc::new(BrowserNetworkLog::new(
+                run_id,
+                "vm-starting",
+                MAX_NETWORK_OBSERVATIONS,
+            )),
+            budget,
+        })
+    }
+
+    pub fn observation_log(&self) -> Arc<BrowserNetworkLog> {
+        self.log.clone()
+    }
+
+    async fn start(&self, cancel: &dyn Cancellation) -> Result<BrowserNetwork, BoundaryError> {
+        if cancel.is_cancelled() {
+            return Err(BoundaryError(
+                ErrorInfo {
+                    code: "cancelled".into(),
+                    message: "Browser network start cancelled".into(),
+                },
+                None,
+                None,
+            ));
+        }
+        // The listener is stopped by explicit shutdown or by dropping the
+        // per-worker BrowserNetwork; the broker's own cancel token is not the
+        // only owner of that lifetime. NeverCancel keeps the borrowed launch
+        // cancellation out of a 'static task. The budget is intentionally
+        // shared: restarting the worker must not reset spent capacity.
+        BrowserNetwork::start_with_log_and_budget(
+            &self.settings,
+            self.log.clone(),
+            self.budget.clone(),
+            Arc::new(NeverCancel),
+        )
+        .await
+    }
+}
+
 /// Production launcher. Creates a unique 0700 remote Run root, starts the
 /// pinned worker in its own session/process group with a PID file, and maps
 /// local SSH termination plus remote cleanup to a retryable unknown outcome.
@@ -2308,6 +2569,9 @@ pub struct VmWorkerLauncher {
     settings: BrowserVmSettings,
     runner: Arc<dyn VmCommandRunner>,
     config: ExecConfig,
+    /// Per-Run broker factory. Every worker lifecycle starts a fresh listener
+    /// that shares one bounded observation log with the provider.
+    network: Arc<BrowserNetworkFactory>,
     /// Remote cleanup handles that could not be confirmed yet. They remain
     /// registered even when no connection was established, so a later launch
     /// or shutdown can retry instead of dropping the Run root silently. The
@@ -2329,11 +2593,13 @@ impl VmWorkerLauncher {
         settings: BrowserVmSettings,
         runner: Arc<dyn VmCommandRunner>,
         config: ExecConfig,
+        network: Arc<BrowserNetworkFactory>,
     ) -> Self {
         Self {
             settings,
             runner,
             config,
+            network,
             pending_cleanup: Mutex::new(VecDeque::new()),
         }
     }
@@ -2431,27 +2697,13 @@ impl VmWorkerLauncher {
             ),
         }
     }
-}
-
-#[async_trait]
-impl WorkerLauncher for VmWorkerLauncher {
-    async fn launch(
+    #[allow(clippy::too_many_lines)]
+    async fn launch_with_network(
         &self,
         request: WorkerLaunchRequest,
         cancel: &dyn Cancellation,
+        network: Arc<BrowserNetwork>,
     ) -> Result<Arc<dyn WorkerConnection>, BrowserFailure> {
-        if cancel.is_cancelled() {
-            return Err(BrowserFailure::new(
-                "cancelled",
-                "Browser VM launch cancelled before dispatch",
-            ));
-        }
-        let Some(environment) = request.execution.clone() else {
-            return Err(
-                vm_unavailable("Browser VM requires a prepared host channel")
-                    .into_browser_failure(),
-            );
-        };
         let paths = self.settings.preflight_local().map_err(|_| {
             vm_unavailable("Browser VM local inputs are unavailable").into_browser_failure()
         })?;
@@ -2483,8 +2735,20 @@ impl WorkerLauncher for VmWorkerLauncher {
                 "Browser VM verified worker CLI path is not UTF-8",
             ));
         };
+        // The SSH process may reach only the VM SSH port and this Run's broker
+        // port. The host environment is created after the broker so the
+        // loopback port is exact rather than a range.
+        let host = Arc::new(
+            VmHostEnvironment::create(&self.settings, Some(network.endpoint_port())).map_err(
+                |_| {
+                    vm_unavailable("Browser VM host channel cannot be prepared")
+                        .into_browser_failure()
+                },
+            )?,
+        );
         let config_path = format!("{run_root}/config/config.json");
         let pid_file = format!("{run_root}/worker.pid");
+        let proxy_socket = format!("{run_root}/proxy.sock");
 
         let control: Arc<dyn VmRemoteControl> = Arc::new(RunnerRemoteControl {
             settings: self.settings.clone(),
@@ -2498,10 +2762,11 @@ impl WorkerLauncher for VmWorkerLauncher {
         // dropped launch future cannot lose the remote directory.
         self.register_pending_cleanup(control.clone(), false);
 
-        // Prepare the remote Run root and config while no worker exists.
-        let config = worker_config_json(&self.settings, &run_root).map_err(|_| {
-            vm_unavailable("Browser VM worker config is invalid").into_browser_failure()
-        })?;
+        let vm_proxy_url = format!("http://127.0.0.1:{}", super::network::VM_PROXY_PORT);
+        let config =
+            worker_config_json(&self.settings, &run_root, &vm_proxy_url).map_err(|_| {
+                vm_unavailable("Browser VM worker config is invalid").into_browser_failure()
+            })?;
         let prepare_args = [run_root.clone()];
         let prepared = vm_command_result(
             self.runner
@@ -2547,6 +2812,8 @@ impl WorkerLauncher for VmWorkerLauncher {
 
         let launch_args = worker_launch_arguments(
             &run_root,
+            &proxy_socket,
+            super::network::VM_PROXY_PORT,
             &pid_file,
             &node,
             &cli_js,
@@ -2565,7 +2832,7 @@ impl WorkerLauncher for VmWorkerLauncher {
                     .await);
             }
         };
-        let ssh_config_path = request.directories.config.join("ssh_config");
+        let ssh_config_path = host.directories.config.join("ssh_config");
         if write_private(&ssh_config_path, ssh_config.as_bytes()).is_err() {
             let failure = remote_failure("Browser VM SSH config could not be written");
             return Err(self
@@ -2578,6 +2845,10 @@ impl WorkerLauncher for VmWorkerLauncher {
             &ssh_config_path,
             LAUNCH_SCRIPT,
             &launch_args,
+            Some(&ReverseForward {
+                remote_socket: proxy_socket.clone(),
+                local_port: network.endpoint_port(),
+            }),
         ) {
             Ok(argv) => argv,
             Err(_) => {
@@ -2595,7 +2866,7 @@ impl WorkerLauncher for VmWorkerLauncher {
         env.insert(OsString::from("NO_COLOR"), OsString::from("1"));
         env.insert(
             OsString::from("HOME"),
-            request.directories.work.clone().into_os_string(),
+            host.directories.work.clone().into_os_string(),
         );
         // From here on a remote worker may have been started. Record that
         // observation before spawning the SSH process so a dropped launch
@@ -2603,9 +2874,9 @@ impl WorkerLauncher for VmWorkerLauncher {
         self.update_pending_expect(&control, true);
         let spawned = match spawn_remote_worker(
             &argv,
-            &request.directories.work,
+            &host.directories.work,
             env,
-            environment,
+            host.environment.clone(),
             &self.config,
             request.timeout,
             request.stderr_limit,
@@ -2626,6 +2897,7 @@ impl WorkerLauncher for VmWorkerLauncher {
             stdin,
             stdout,
             stderr_tail,
+            stderr_task,
         } = spawned;
         let client = match crate::mcp::McpClient::connect_stdio(
             "saya-browser-vm-worker",
@@ -2640,11 +2912,11 @@ impl WorkerLauncher for VmWorkerLauncher {
             Err(_) => {
                 let mut process = process;
                 let _ = process.terminate().await;
-                let failure = if cancel.is_cancelled() {
-                    BrowserFailure::new("cancelled", "Browser VM worker initialization cancelled")
-                } else {
-                    remote_failure("Browser VM worker initialization failed")
-                };
+                // The abort path above may race the reader; wait for the
+                // bounded drain before inspecting the tail so a `network=`
+                // sentinel is not lost.
+                let stderr = drain_stderr_bounded(&stderr_tail, stderr_task).await;
+                let failure = classify_launch_failure(cancel, &stderr);
                 return Err(self.cleanup_or_retain(control.clone(), true, failure).await);
             }
         };
@@ -2679,10 +2951,11 @@ impl WorkerLauncher for VmWorkerLauncher {
             let failure = remote_failure("Browser VM worker PID could not be confirmed");
             return Err(self.cleanup_or_retain(control.clone(), true, failure).await);
         };
-        // The connection takes over the remote Run root. Removing the pending
-        // entry and constructing the connection happen without an intervening
-        // await, so a dropped future cannot leave both an orphaned root and no
-        // cleanup owner.
+        network.set_worker_pid(remote_pid);
+        // The connection takes over the remote Run root, the broker and the
+        // host channel environment. Removing the pending entry and
+        // constructing the connection happen without an intervening await, so
+        // a dropped future cannot leave both an orphaned root and no owner.
         self.remove_pending_cleanup(&control);
         let cleanup = Arc::new(ConnectionCleanup::new(control));
         let process = Arc::new(AsyncMutex::new(Some(process)));
@@ -2696,8 +2969,52 @@ impl WorkerLauncher for VmWorkerLauncher {
             stderr_tail,
             cleanup,
             monitor: AsyncMutex::new(Some(monitor)),
+            network: Some(network),
+            host: Some(host),
         }))
     }
+}
+
+#[async_trait]
+impl WorkerLauncher for VmWorkerLauncher {
+    async fn launch(
+        &self,
+        request: WorkerLaunchRequest,
+        cancel: &dyn Cancellation,
+    ) -> Result<Arc<dyn WorkerConnection>, BrowserFailure> {
+        if cancel.is_cancelled() {
+            return Err(BrowserFailure::new(
+                "cancelled",
+                "Browser VM launch cancelled before dispatch",
+            ));
+        }
+        if request.execution.is_none() {
+            return Err(
+                vm_unavailable("Browser VM requires a prepared host channel")
+                    .into_browser_failure(),
+            );
+        }
+        // Start the Run's broker before the VM SSH channel exists so the
+        // reverse forward can target its loopback port. Any failure after this
+        // point shuts the listener down; there is no default-VM-egress path.
+        let network = match self.network.start(cancel).await {
+            Ok(network) => Arc::new(network),
+            Err(error) => {
+                return Err(BrowserFailure::new(error.0.code, error.0.message));
+            }
+        };
+        match self
+            .launch_with_network(request, cancel, network.clone())
+            .await
+        {
+            Ok(connection) => Ok(connection),
+            Err(failure) => {
+                network.shutdown_best_effort().await;
+                Err(failure)
+            }
+        }
+    }
+
     async fn retry_pending_cleanup(&self) -> Result<(), BrowserFailure> {
         // Peek one entry at a time and remove only that entry after a
         // confirmed cleanup. An outer timeout, cancellation or dropped future
@@ -2765,15 +3082,15 @@ impl VmBrowserEnvironmentFactory {
     pub fn new(settings: BrowserVmSettings) -> Result<Self, BoundaryError> {
         settings.preflight_local()?;
         // Preflight once so an unsupported host fails before any worker starts.
-        let environment = VmHostEnvironment::create(&settings)?;
-        environment.release();
+        let environment = VmHostEnvironment::create(&settings, None)?;
+        drop(environment);
         Ok(Self { settings })
     }
 }
 
 impl BrowserEnvironmentFactory for VmBrowserEnvironmentFactory {
     fn prepare(&self) -> Result<Arc<dyn BrowserWorkspaceLease>, BoundaryError> {
-        let host = VmHostEnvironment::create(&self.settings)?;
+        let host = VmHostEnvironment::create(&self.settings, None)?;
         Ok(Arc::new(VmBrowserWorkspaceLease { host }))
     }
 }
@@ -2911,9 +3228,13 @@ impl ChromiumSandboxInspector for VmChromiumSandboxInspector {
 /// backend explicitly; there is no fallback to the native or Host path.
 pub fn assemble_vm_browser_provider(
     settings: BrowserVmSettings,
+    network_settings: BrowserNetworkSettings,
+    run_id: &str,
     exec: ExecConfig,
 ) -> Result<super::worker::PlaywrightMcpProvider, BoundaryError> {
     settings.preflight_local()?;
+    let network = Arc::new(BrowserNetworkFactory::new(network_settings, run_id)?);
+    let observation_log = network.observation_log();
     let runner: Arc<dyn VmCommandRunner> =
         Arc::new(SshVmCommandRunner::new(settings.clone())?.with_exec_config(exec.clone()));
     let verifier = Arc::new(VmWorkerIdentityVerifier::new(
@@ -2925,17 +3246,19 @@ pub fn assemble_vm_browser_provider(
         settings.clone(),
         runner.clone(),
         exec,
+        network,
     ));
     let factory = Arc::new(VmBrowserEnvironmentFactory::new(settings.clone())?);
     let inspector = Arc::new(VmChromiumSandboxInspector::new(settings, runner));
-    super::worker::PlaywrightMcpProvider::with_worker_backend(
+    Ok(super::worker::PlaywrightMcpProvider::with_worker_backend(
         "vm-colima",
         verifier,
         planner,
         launcher,
         factory,
         inspector,
-    )
+    )?
+    .with_network_log(observation_log))
 }
 
 impl BoundaryError {
@@ -2947,8 +3270,36 @@ impl BoundaryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_network_factory() -> Arc<BrowserNetworkFactory> {
+        Arc::new(
+            BrowserNetworkFactory::new(
+                BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["https://example.com".into()],
+                    ..Default::default()
+                },
+                "test-run",
+            )
+            .unwrap(),
+        )
+    }
+
+    struct Cancelled;
+    impl Cancellation for Cancelled {
+        fn is_cancelled(&self) -> bool {
+            true
+        }
+        fn cancelled(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            Box::pin(std::future::ready(()))
+        }
+    }
+
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    use crate::network::BrokerLimits;
 
     fn digest(bytes: &[u8]) -> String {
         sha256_hex(bytes)
@@ -3247,6 +3598,7 @@ mod tests {
             Path::new("/private/tmp/ssh_config"),
             PROBE_SCRIPT,
             &["/opt/file".into()],
+            None,
         )
         .unwrap();
         let joined = argv.join(" ");
@@ -3255,6 +3607,75 @@ mod tests {
         assert!(joined.contains("IdentitiesOnly=yes"));
         assert!(!joined.contains("ForwardAgent=yes"));
         assert!(joined.contains("sh -c '"));
+    }
+
+    #[test]
+    fn reverse_streamlocal_forward_replaces_clear_all_forwardings_and_fails_closed() {
+        let settings = IdentityFixture::new().settings;
+        let paths = VmLocalPaths {
+            ssh: PathBuf::from("/usr/bin/ssh"),
+            identity_file: PathBuf::from("/private/tmp/saya-key"),
+            known_hosts: PathBuf::from("/private/tmp/saya-known-hosts"),
+            colima: PathBuf::from("/usr/local/bin/colima"),
+        };
+        let base = ssh_argv(
+            &settings,
+            &paths,
+            Path::new("/private/tmp/ssh_config"),
+            PROBE_SCRIPT,
+            &[],
+            None,
+        )
+        .unwrap();
+        // Plain identity commands keep every forwarding disabled.
+        assert!(base.iter().any(|value| value == "ClearAllForwardings=yes"));
+        assert!(!base.iter().any(|value| value == "-R"));
+        assert!(!base.iter().any(|value| value == "ExitOnForwardFailure=yes"));
+
+        let forwarded = ssh_argv(
+            &settings,
+            &paths,
+            Path::new("/private/tmp/ssh_config"),
+            PROBE_SCRIPT,
+            &[],
+            Some(&ReverseForward {
+                remote_socket: "/tmp/run/proxy.sock".into(),
+                local_port: 41_234,
+            }),
+        )
+        .unwrap();
+        // ssh uses the first obtained value, so the strict base value must be
+        // replaced rather than shadowed by a later option.
+        assert!(
+            !forwarded
+                .iter()
+                .any(|value| value == "ClearAllForwardings=yes")
+        );
+        assert!(
+            forwarded
+                .iter()
+                .any(|value| value == "ClearAllForwardings=no")
+        );
+        assert!(
+            forwarded
+                .iter()
+                .any(|value| value == "ExitOnForwardFailure=yes")
+        );
+        assert!(
+            forwarded
+                .iter()
+                .any(|value| value == "StreamLocalBindUnlink=yes")
+        );
+        assert_eq!(
+            forwarded.iter().filter(|value| *value == "-R").count(),
+            1,
+            "a browser launch adds exactly one reverse forward: {forwarded:?}"
+        );
+        let index = forwarded
+            .iter()
+            .position(|value| value == "-R")
+            .expect("-R");
+        assert_eq!(forwarded[index + 1], "/tmp/run/proxy.sock:127.0.0.1:41234");
     }
 
     #[test]
@@ -3267,14 +3688,14 @@ mod tests {
             known_hosts: PathBuf::from("/private/tmp/known_hosts"),
             colima: PathBuf::from("/usr/local/bin/colima"),
         };
-        let policy = host_policy(&settings, workspace, &paths).unwrap();
+        let policy = host_policy(&settings, workspace, &paths, None).unwrap();
         assert!(policy.read_roots.is_empty());
         assert_eq!(policy.write_roots, vec![workspace.to_path_buf()]);
         assert!(policy.browser.is_none());
         assert_eq!(policy.read_files.len(), 3);
         assert!(matches!(
             policy.network,
-            NetworkPolicy::LoopbackPort { port } if port == 2222
+            NetworkPolicy::LoopbackPort { port, proxy_port } if port == 2222 && proxy_port.is_none()
         ));
         assert!(!matches!(policy.network, NetworkPolicy::Proxy(_)));
         // The generic default is unchanged: only this purpose gains a
@@ -3357,6 +3778,8 @@ mod tests {
     fn vm_launch_arguments_keep_chromium_sandbox_enabled() {
         let args = worker_launch_arguments(
             "/tmp/runs/one",
+            "/tmp/runs/one/proxy.sock",
+            31281,
             "/tmp/runs/one/worker.pid",
             "/opt/saya/node/bin/node",
             "/opt/saya/worker/node_modules/@playwright/mcp/cli.js",
@@ -3380,6 +3803,242 @@ mod tests {
         ] {
             assert!(!args.iter().any(|value| value == forbidden), "{forbidden}");
         }
+        assert_eq!(args[1], "/tmp/runs/one/proxy.sock");
+        assert_eq!(args[2], "31281");
+        assert_eq!(args[3], "/tmp/runs/one/worker.pid");
+    }
+
+    #[test]
+    fn worker_config_pins_chromium_to_the_run_proxy_without_bypasses() {
+        let settings = IdentityFixture::new().settings;
+        let bytes =
+            worker_config_json(&settings, "/tmp/runs/one", "http://127.0.0.1:40123").unwrap();
+        let config: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let options = &config["browser"]["launchOptions"];
+        assert_eq!(options["proxy"]["server"], "http://127.0.0.1:40123");
+        assert_eq!(options["chromiumSandbox"], true);
+        let args = options["args"].as_array().unwrap();
+        let args: Vec<&str> = args.iter().filter_map(|value| value.as_str()).collect();
+        for required in [
+            "--proxy-server=http://127.0.0.1:40123",
+            "--proxy-bypass-list=<-loopback>",
+            "--disable-quic",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--host-resolver-rules=EXCLUDE 127.0.0.1, MAP * ~NOTFOUND",
+            "--disable-features=DnsOverHttps",
+        ] {
+            assert!(args.contains(&required), "{required}");
+        }
+        assert!(!args.iter().any(|value| value.contains("direct")));
+    }
+
+    #[test]
+    fn launch_script_requires_a_private_network_namespace_and_never_falls_back() {
+        for required in [
+            "sudo -n unshare -n",
+            "ip link set lo up",
+            "ip -o route show",
+            "socat TCP-LISTEN:",
+            "UNIX-CONNECT:",
+            "setpriv --reuid=",
+            "setsid -w",
+            "network=$tool-missing",
+            "network=sudo-unavailable",
+            "network=loopback-unavailable",
+            "network=unexpected-route",
+            "network=proxy-socket-missing",
+            "network=proxy-start-failed",
+            "network=proxy-not-listening",
+        ] {
+            assert!(LAUNCH_SCRIPT.contains(required), "{required}");
+        }
+        assert!(!LAUNCH_SCRIPT.contains("exit 0"));
+    }
+
+    #[test]
+    fn launch_failure_classification_is_explicit_and_never_generalized() {
+        for sentinel in [
+            "network=sudo-missing",
+            "network=unshare-missing",
+            "network=socat-missing",
+            "network=setpriv-missing",
+            "network=ip-missing",
+            "network=sudo-unavailable",
+            "network=loopback-unavailable",
+            "network=unexpected-route",
+            "network=proxy-socket-missing",
+            "network=proxy-start-failed",
+            "network=proxy-not-listening",
+            "remote port forwarding failed for listen path /tmp/run/proxy.sock",
+        ] {
+            let failure = classify_launch_failure(&NeverCancel, sentinel.as_bytes());
+            assert_eq!(
+                failure.code, "browser_network_unavailable",
+                "sentinel {sentinel}"
+            );
+        }
+        let other = classify_launch_failure(&NeverCancel, b"worker crashed for another reason");
+        assert_eq!(other.code, "browser_vm_transport");
+        let unrelated = classify_launch_failure(&NeverCancel, b"network=unrelated-diagnostic");
+        assert_eq!(
+            unrelated.code, "browser_vm_transport",
+            "only fixed network capability prefixes map to browser_network_unavailable"
+        );
+        let cancelled = classify_launch_failure(&Cancelled, b"network=sudo-missing");
+        assert_eq!(cancelled.code, "cancelled");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn network_factory_keeps_one_fixed_run_deadline_across_broker_restarts() {
+        let factory = Arc::new(
+            BrowserNetworkFactory::new(
+                BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["https://example.com".into()],
+                    limits: BrokerLimits {
+                        active_timeout_ms: 10,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                "run-deadline",
+            )
+            .unwrap(),
+        );
+        let first = factory.start(&NeverCancel).await.unwrap();
+        first.shutdown().await.unwrap();
+        tokio::time::advance(Duration::from_millis(11)).await;
+        let failure = match factory.start(&NeverCancel).await {
+            Ok(_) => panic!("an expired Run deadline must not allow a restart"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.0.code, "browser_network_budget",
+            "an expired fixed Run deadline is a budget failure, not an isolation failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn network_factory_never_resets_exhausted_connection_attempts() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let factory = Arc::new(
+            BrowserNetworkFactory::new(
+                BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["https://example.com".into()],
+                    limits: BrokerLimits {
+                        max_total_connections: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                "run-connections",
+            )
+            .unwrap(),
+        );
+        let first = factory.start(&NeverCancel).await.unwrap();
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", first.endpoint_port()))
+            .await
+            .unwrap();
+        stream
+            .write_all(b"CONNECT denied.example:443 HTTP/1.1\r\nHost: denied.example:443\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response).await;
+        assert!(String::from_utf8_lossy(&response).contains("403"));
+        first.shutdown().await.unwrap();
+        drop(stream);
+
+        let restarted = factory.start(&NeverCancel).await.unwrap();
+        let mut denied = tokio::net::TcpStream::connect(("127.0.0.1", restarted.endpoint_port()))
+            .await
+            .unwrap();
+        denied
+            .write_all(b"CONNECT denied.example:443 HTTP/1.1\r\nHost: denied.example:443\r\n\r\n")
+            .await
+            .unwrap();
+        let mut second = Vec::new();
+        let _ = denied.read_to_end(&mut second).await;
+        assert!(
+            second.is_empty(),
+            "an exhausted Run budget must stay exhausted after a restart: {second:?}"
+        );
+        restarted.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn network_factory_never_resets_spent_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = Vec::new();
+                let _ = stream.read_to_end(&mut request).await;
+                let _ = stream.write_all(response).await;
+            }
+        });
+        let rewritten = format!(
+            "GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            origin.trim_start_matches("http://")
+        );
+        let capacity = rewritten.len() as u64 + response.len() as u64 + 1;
+        let factory = Arc::new(
+            BrowserNetworkFactory::new(
+                BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec![origin.clone()],
+                    localhost_development_origin: Some(origin.clone()),
+                    limits: BrokerLimits {
+                        max_total_bytes: capacity,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                "run-bytes",
+            )
+            .unwrap(),
+        );
+        let send = |endpoint: u16, origin: String| async move {
+            let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", endpoint))
+                .await
+                .unwrap();
+            stream
+                .write_all(
+                    format!(
+                        "GET {origin}/ HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                        origin.trim_start_matches("http://")
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            let _ = stream.read_to_end(&mut response).await;
+            response
+        };
+        let first = factory.start(&NeverCancel).await.unwrap();
+        assert!(
+            send(first.endpoint_port(), origin.clone())
+                .await
+                .starts_with(b"HTTP/1.1 200"),
+            "the first request must fit the Run budget"
+        );
+        first.shutdown().await.unwrap();
+        let restarted = factory.start(&NeverCancel).await.unwrap();
+        assert!(
+            !send(restarted.endpoint_port(), origin)
+                .await
+                .starts_with(b"HTTP/1.1 200"),
+            "spent Run bytes must not reset when the broker restarts"
+        );
+        restarted.shutdown().await.unwrap();
     }
 
     #[test]
@@ -3464,7 +4123,12 @@ mod tests {
     async fn cancelled_vm_launch_dispatches_no_remote_command() {
         let settings = IdentityFixture::new().settings;
         let runner = QueueRunner::new(VecDeque::new());
-        let launcher = VmWorkerLauncher::new(settings, runner.clone(), ExecConfig::default());
+        let launcher = VmWorkerLauncher::new(
+            settings,
+            runner.clone(),
+            ExecConfig::default(),
+            test_network_factory(),
+        );
         let cancel = AlreadyCancelled;
         let request = WorkerLaunchRequest {
             argv: Vec::new(),
@@ -3574,9 +4238,11 @@ mod tests {
             fixture.settings.clone(),
             runner.clone(),
             ExecConfig::default(),
+            test_network_factory(),
         ));
         let workspace = tempfile::tempdir().unwrap();
-        let policy = host_policy(&fixture.settings, workspace.path(), &fixture.paths).unwrap();
+        let policy =
+            host_policy(&fixture.settings, workspace.path(), &fixture.paths, None).unwrap();
         let environment = execution::prepare(&policy).unwrap();
         let directories = BrowserSandboxDirectories {
             profile: workspace.path().join("profile"),
@@ -3720,6 +4386,7 @@ mod tests {
             Path::new("/private/tmp/ssh_config"),
             PROBE_SCRIPT,
             &[],
+            None,
         )
         .unwrap();
         assert!(argv.iter().any(|value| value == "::1"));
@@ -3935,6 +4602,7 @@ mod tests {
             settings,
             QueueRunner::new(VecDeque::new()),
             ExecConfig::default(),
+            test_network_factory(),
         );
         let first = DelayedControl::new(30_000);
         let second = DelayedControl::new(30_000);
@@ -4025,7 +4693,12 @@ mod tests {
             pid_file: "/tmp/saya-runs/retained/worker.pid".into(),
             cli_js: "/opt/saya/worker/cli.js".into(),
         });
-        let launcher = VmWorkerLauncher::new(settings, runner.clone(), ExecConfig::default());
+        let launcher = VmWorkerLauncher::new(
+            settings,
+            runner.clone(),
+            ExecConfig::default(),
+            test_network_factory(),
+        );
         let failure = launcher
             .cleanup_or_retain(control, false, remote_failure("prepare failed"))
             .await;
@@ -4312,9 +4985,11 @@ mod tests {
             fixture.settings.clone(),
             runner.clone(),
             ExecConfig::default(),
+            test_network_factory(),
         );
         let workspace = tempfile::tempdir().unwrap();
-        let policy = host_policy(&fixture.settings, workspace.path(), &fixture.paths).unwrap();
+        let policy =
+            host_policy(&fixture.settings, workspace.path(), &fixture.paths, None).unwrap();
         let environment = execution::prepare(&policy).unwrap();
         let directories = BrowserSandboxDirectories {
             profile: workspace.path().join("profile"),

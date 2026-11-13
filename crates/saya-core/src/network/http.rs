@@ -1,12 +1,13 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::timeout;
 
 use super::{
-    BoxStream, BrokerLimits, BrokerState, NetworkError, NetworkErrorKind, NormalizedOrigin,
-    OriginScheme, normalize_target,
+    BoxStream, BrokerLimits, BrokerState, NetworkError, NetworkErrorKind, NetworkObservation,
+    NetworkOutcome, NormalizedOrigin, OriginScheme, normalize_target,
 };
 
 struct Request {
@@ -17,10 +18,13 @@ struct Request {
     content_length: u64,
 }
 
-pub(super) async fn serve(
-    mut client: BoxStream,
-    state: Arc<BrokerState>,
-) -> Result<(), NetworkError> {
+pub(super) async fn serve(client: BoxStream, state: Arc<BrokerState>) -> Result<(), NetworkError> {
+    // The shared counter lets an aborted connection (outer timeout, shutdown
+    // or cancellation) report the bytes that were actually charged instead of
+    // losing them with the task.
+    let bytes = Arc::new(AtomicU64::new(0));
+    let mut observation = ObservationGuard::new(&state, bytes.clone());
+    let mut client = client;
     let parsed = timeout(
         Duration::from_millis(state.policy.limits.header_timeout_ms),
         read_head(&mut client, &state.policy.limits),
@@ -29,10 +33,12 @@ pub(super) async fn serve(
     let (head, buffered) = match parsed {
         Ok(Ok(head)) => head,
         Ok(Err(error)) => {
+            observation.record_error(error.kind);
             reject(&mut client, error.kind).await;
             return Err(error);
         }
         Err(_) => {
+            observation.record_error(NetworkErrorKind::Timeout);
             reject(&mut client, NetworkErrorKind::Timeout).await;
             return Err(NetworkError::new(NetworkErrorKind::Timeout));
         }
@@ -40,21 +46,42 @@ pub(super) async fn serve(
     let request = match parse_request(&head, &state.policy.limits) {
         Ok(request) => request,
         Err(error) => {
+            observation.record_error(error.kind);
             reject(&mut client, error.kind).await;
             return Err(error);
         }
     };
+    observation.origin = Some(request.target.origin.clone());
+    observation.tunneled = request.connect;
     if request.content_length > state.policy.limits.max_connection_bytes {
+        observation.record_error(NetworkErrorKind::LimitExceeded);
         reject(&mut client, NetworkErrorKind::LimitExceeded).await;
         return Err(NetworkError::new(NetworkErrorKind::LimitExceeded));
     }
-    let mut upstream = match state.connect(&request.target.origin).await {
+    let upstream = match state.connect(&request.target.origin).await {
         Ok(stream) => stream,
         Err(error) => {
+            observation.record_error(error.kind);
             reject(&mut client, error.kind).await;
             return Err(error);
         }
     };
+    let result = forward(client, upstream, buffered, &request, &state, &bytes).await;
+    match result {
+        Ok(()) => observation.record_outcome(NetworkOutcome::Allowed),
+        Err(error) => observation.record_error(error.kind),
+    }
+    result
+}
+
+async fn forward(
+    mut client: BoxStream,
+    mut upstream: tokio::net::TcpStream,
+    buffered: Vec<u8>,
+    request: &Request,
+    state: &Arc<BrokerState>,
+    bytes: &AtomicU64,
+) -> Result<(), NetworkError> {
     if request.connect {
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -63,13 +90,13 @@ pub(super) async fn serve(
         if initial > state.policy.limits.max_connection_bytes {
             return Err(NetworkError::new(NetworkErrorKind::LimitExceeded));
         }
-        state.charge(buffered.len())?;
+        state.charge(buffered.len(), bytes)?;
         upstream.write_all(&buffered).await?;
         let (client_read, client_write) = tokio::io::split(client);
         let (server_read, server_write) = upstream.into_split();
         tokio::try_join!(
-            copy_limited(client_read, server_write, state.clone(), initial),
-            copy_limited(server_read, client_write, state, 0),
+            copy_limited(client_read, server_write, state.clone(), initial, bytes),
+            copy_limited(server_read, client_write, state.clone(), 0, bytes),
         )?;
     } else {
         let mut rewritten = format!(
@@ -78,17 +105,17 @@ pub(super) async fn serve(
             request.target.path_and_query,
             request.target.origin.authority()
         );
-        for (name, value) in request.headers {
-            rewritten.push_str(&name);
+        for (name, value) in &request.headers {
+            rewritten.push_str(name);
             rewritten.push_str(": ");
-            rewritten.push_str(&value);
+            rewritten.push_str(value);
             rewritten.push_str("\r\n");
         }
         rewritten.push_str("\r\n");
-        state.charge(rewritten.len())?;
+        state.charge(rewritten.len(), bytes)?;
         upstream.write_all(rewritten.as_bytes()).await?;
         let count = buffered.len().min(request.content_length as usize);
-        state.charge(count)?;
+        state.charge(count, bytes)?;
         upstream.write_all(&buffered[..count]).await?;
         // Only this request body is forwarded. Extra pipelined bytes are never sent upstream.
         let remaining = request.content_length - count as u64;
@@ -108,7 +135,7 @@ pub(super) async fn serve(
                 if read == 0 {
                     return Err(NetworkError::new(NetworkErrorKind::InvalidRequest));
                 }
-                state.charge(read)?;
+                state.charge(read, bytes)?;
                 server_write.write_all(&buffer[..read]).await?;
                 left -= read as u64;
             }
@@ -117,10 +144,89 @@ pub(super) async fn serve(
         };
         tokio::try_join!(
             send_body,
-            copy_limited(server_read, client_write, state.clone(), 0)
+            copy_limited(server_read, client_write, state.clone(), 0, bytes)
         )?;
     }
     Ok(())
+}
+
+/// Records the terminal outcome of one connection. If the connection task is
+/// aborted (for example by the broker's outer connection timeout) before a
+/// result is known, Drop records a timeout rather than losing the attempt.
+struct ObservationGuard<'a> {
+    state: &'a BrokerState,
+    origin: Option<NormalizedOrigin>,
+    tunneled: bool,
+    bytes: Arc<AtomicU64>,
+    started: Instant,
+    recorded: bool,
+}
+
+impl<'a> ObservationGuard<'a> {
+    fn new(state: &'a BrokerState, bytes: Arc<AtomicU64>) -> Self {
+        Self {
+            state,
+            origin: None,
+            tunneled: false,
+            bytes,
+            started: Instant::now(),
+            recorded: false,
+        }
+    }
+
+    fn record_error(&mut self, kind: NetworkErrorKind) {
+        let outcome = match kind {
+            NetworkErrorKind::OriginDenied | NetworkErrorKind::AddressDenied => {
+                NetworkOutcome::Denied
+            }
+            NetworkErrorKind::Timeout => NetworkOutcome::Timeout,
+            NetworkErrorKind::LimitExceeded => NetworkOutcome::Limit,
+            NetworkErrorKind::InvalidRequest
+            | NetworkErrorKind::InvalidTarget
+            | NetworkErrorKind::InvalidPolicy => NetworkOutcome::Malformed,
+            NetworkErrorKind::DnsFailed | NetworkErrorKind::Io => NetworkOutcome::Upstream,
+            // The Run was cancelled or the listener shut down. This is not a
+            // real connection timeout and must stay distinguishable.
+            NetworkErrorKind::Shutdown => NetworkOutcome::Cancelled,
+        };
+        self.record_outcome(outcome);
+    }
+
+    fn record_outcome(&mut self, outcome: NetworkOutcome) {
+        if self.recorded {
+            return;
+        }
+        self.recorded = true;
+        let Some(observer) = &self.state.observer else {
+            return;
+        };
+        // Malformed and oversized requests are recorded even though no target
+        // origin could be normalized. `None` says so explicitly; the broker
+        // never substitutes a guessed origin.
+        observer.observe(NetworkObservation {
+            origin: self.origin.take(),
+            outcome,
+            tunneled: self.tunneled,
+            bytes: self.bytes.load(Ordering::Acquire),
+            elapsed_ms: self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        });
+    }
+}
+
+impl Drop for ObservationGuard<'_> {
+    fn drop(&mut self) {
+        // The connection task only reaches this point without a terminal
+        // result when an outer timeout aborted it or the supervisor is
+        // tearing down every live task. Consult the supervisor's reason so a
+        // Run cancellation or shutdown is not misreported as a timeout, and a
+        // fixed Run deadline is reported as a budget limit.
+        let outcome = match self.state.termination.load(Ordering::Acquire) {
+            super::TERMINATION_CANCELLED => NetworkOutcome::Cancelled,
+            super::TERMINATION_DEADLINE => NetworkOutcome::Limit,
+            _ => NetworkOutcome::Timeout,
+        };
+        self.record_outcome(outcome);
+    }
 }
 
 async fn reject(stream: &mut BoxStream, kind: NetworkErrorKind) {
@@ -282,6 +388,7 @@ async fn copy_limited<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     mut writer: W,
     state: Arc<BrokerState>,
     mut copied: u64,
+    connection_bytes: &AtomicU64,
 ) -> Result<(), NetworkError> {
     let mut buffer = [0u8; 8192];
     loop {
@@ -301,7 +408,7 @@ async fn copy_limited<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         if copied > state.policy.limits.max_connection_bytes {
             return Err(NetworkError::new(NetworkErrorKind::LimitExceeded));
         }
-        state.charge(read)?;
+        state.charge(read, connection_bytes)?;
         timeout(
             Duration::from_millis(state.policy.limits.idle_timeout_ms),
             writer.write_all(&buffer[..read]),

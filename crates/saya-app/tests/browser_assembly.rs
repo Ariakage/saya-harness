@@ -182,7 +182,7 @@ context_window_tokens = 100000
 fn browser_default_off_assembles_nothing() {
     let fixture = Fixture::new();
     let config = fixture.load("[browser]\nenabled=false", "");
-    let provider = assemble_browser_provider(&config, ExecConfig::default()).unwrap();
+    let provider = assemble_browser_provider(&config, ExecConfig::default(), "test-run").unwrap();
     assert!(provider.is_none());
 }
 
@@ -191,7 +191,7 @@ fn enabled_browser_requires_the_worker() {
     let fixture = Fixture::new();
     let mut config = fixture.load("[browser]\nenabled=true", "");
     config.browser.worker.enabled = false;
-    let error = assemble_browser_provider(&config, ExecConfig::default()).unwrap_err();
+    let error = assemble_browser_provider(&config, ExecConfig::default(), "test-run").unwrap_err();
     assert_eq!(error.0.code, "invalid_config");
 }
 
@@ -199,13 +199,14 @@ fn enabled_browser_requires_the_worker() {
 fn host_and_macos_reject_browser_before_any_worker_starts() {
     let fixture = Fixture::new();
     let host = fixture.load("[browser]\nenabled=true", "[sandbox]\nbackend=\"host\"");
-    let error = assemble_browser_provider(&host, ExecConfig::default()).unwrap_err();
+    let error = assemble_browser_provider(&host, ExecConfig::default(), "test-run").unwrap_err();
     assert_eq!(error.0.code, "browser_sandbox_unavailable");
 
     #[cfg(target_os = "macos")]
     {
         let macos = fixture.load("[browser]\nenabled=true", "");
-        let error = assemble_browser_provider(&macos, ExecConfig::default()).unwrap_err();
+        let error =
+            assemble_browser_provider(&macos, ExecConfig::default(), "test-run").unwrap_err();
         assert_eq!(error.0.code, "browser_sandbox_unavailable");
     }
 }
@@ -250,7 +251,7 @@ fn selecting_both_worker_backends_is_rejected() {
     let fixture = Fixture::new();
     let mut config = fixture.load("[browser]\nenabled=true", "");
     config.browser.vm = full_vm_settings();
-    let error = assemble_browser_provider(&config, ExecConfig::default()).unwrap_err();
+    let error = assemble_browser_provider(&config, ExecConfig::default(), "test-run").unwrap_err();
     assert_eq!(error.0.code, "invalid_config");
 }
 
@@ -260,7 +261,7 @@ fn explicit_vm_selection_never_falls_back_to_native() {
     let mut config = fixture.load("[browser]\nenabled=true", "[sandbox]\nbackend=\"host\"");
     config.browser.worker.enabled = false;
     config.browser.vm = full_vm_settings();
-    let error = assemble_browser_provider(&config, ExecConfig::default()).unwrap_err();
+    let error = assemble_browser_provider(&config, ExecConfig::default(), "test-run").unwrap_err();
     // Missing host inputs fail explicitly. The result must never be the
     // native/Host sandbox error, which would mean silent fallback.
     assert!(

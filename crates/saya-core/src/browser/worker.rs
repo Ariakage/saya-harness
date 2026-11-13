@@ -2177,6 +2177,9 @@ pub struct PlaywrightMcpProvider {
     launcher: Arc<dyn WorkerLauncher>,
     environment_factory: Option<Arc<dyn BrowserEnvironmentFactory>>,
     sandbox_inspector: Arc<dyn ChromiumSandboxInspector>,
+    /// Bounded host-side network observations for backends that use the
+    /// browser broker. Native workers keep this unset.
+    network_log: Option<Arc<super::network::BrowserNetworkLog>>,
     inner: AsyncMutex<ProviderInner>,
     call_lock: AsyncMutex<()>,
     shutdown_lock: AsyncMutex<()>,
@@ -2277,6 +2280,7 @@ impl PlaywrightMcpProvider {
             launcher,
             environment_factory,
             sandbox_inspector,
+            network_log: None,
             inner: AsyncMutex::new(ProviderInner {
                 connection: None,
                 generation: 0,
@@ -2294,6 +2298,20 @@ impl PlaywrightMcpProvider {
     pub fn with_sandbox_inspector(mut self, inspector: Arc<dyn ChromiumSandboxInspector>) -> Self {
         self.sandbox_inspector = inspector;
         self
+    }
+
+    /// Attach the bounded observation log used by the VM browser broker.
+    pub fn with_network_log(mut self, log: Arc<super::network::BrowserNetworkLog>) -> Self {
+        self.network_log = Some(log);
+        self
+    }
+
+    /// Bounded, path-free network observations recorded for this Run.
+    pub fn network_observations(&self) -> Vec<super::network::BrowserNetworkObservation> {
+        self.network_log
+            .as_ref()
+            .map(|log| log.observations())
+            .unwrap_or_default()
     }
 
     /// Actual evidence from the last completed Chromium sandbox verification.

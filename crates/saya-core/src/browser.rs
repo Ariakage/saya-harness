@@ -7,6 +7,7 @@
 //! discovery or developer tools. Unknown dispatched actions stop replay until a
 //! fresh snapshot confirms an observable state.
 
+pub mod network;
 pub mod vm;
 pub mod worker;
 
@@ -101,6 +102,49 @@ fn provider_optional_detail(value: Option<&str>) -> Result<(), BrowserFailure> {
     })
 }
 
+/// Classification of a provider-reported final URL.
+///
+/// Redirects and OAuth-style flows legitimately append a fragment, so the
+/// final URL check allows one while still requiring HTTP(S), no user-info and
+/// a valid host. `about:blank` and Chromium's own error page are explicit
+/// provider states with no network origin; they are never treated as malformed
+/// and never participate in an origin cross-check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProviderFinalUrl {
+    Origin(crate::network::NormalizedOrigin),
+    Blank,
+    BrowserError,
+}
+
+fn provider_final_url(value: &str) -> Result<ProviderFinalUrl, BrowserFailure> {
+    let invalid = || {
+        invalid_provider_result("Browser provider returned an invalid final URL outside HTTP(S)")
+    };
+    // Parse the scheme first so `about:blank` is matched on its path instead
+    // of the raw string: Chromium may append a legal query or fragment.
+    let parsed = reqwest::Url::parse(value).map_err(|_| invalid())?;
+    match parsed.scheme() {
+        "about" => {
+            if parsed.path().eq_ignore_ascii_case("blank") {
+                Ok(ProviderFinalUrl::Blank)
+            } else {
+                Err(invalid())
+            }
+        }
+        // Chromium's own network error page is an explicit provider state.
+        // It never represents a reachable network origin and takes no part in
+        // an origin cross-check.
+        "chrome-error" => Ok(ProviderFinalUrl::BrowserError),
+        // HTTP(S) keeps every strict rule: no user-info, a valid host and the
+        // same character restrictions. A fragment is tolerated for redirect
+        // and OAuth-style flows.
+        "http" | "https" => crate::network::normalize_final_target(value)
+            .map(|target| ProviderFinalUrl::Origin(target.origin))
+            .map_err(|_| invalid()),
+        _ => Err(invalid()),
+    }
+}
+
 fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
     BoundaryError(
         ErrorInfo {
@@ -129,6 +173,9 @@ pub struct BrowserSettings {
     /// Explicit dedicated-VM worker. Selecting it never falls back to the
     /// native/Seatbelt/Host backends.
     pub vm: vm::BrowserVmSettings,
+    /// Strict browser network policy. The VM backend never uses the VM's
+    /// default egress; it requires this policy and a host broker.
+    pub network: network::BrowserNetworkSettings,
 }
 impl Default for BrowserSettings {
     fn default() -> Self {
@@ -138,6 +185,7 @@ impl Default for BrowserSettings {
             max_wait_ms: DEFAULT_MAX_WAIT_MS,
             worker: worker::BrowserWorkerSettings::default(),
             vm: vm::BrowserVmSettings::default(),
+            network: network::BrowserNetworkSettings::default(),
         }
     }
 }
@@ -152,9 +200,15 @@ impl BrowserSettings {
         }
         self.worker.validate()?;
         self.vm.validate()?;
+        self.network.validate()?;
         if self.vm.enabled && self.worker.enabled {
             return Err(invalid_config(
                 "Browser must select either the native worker or the VM backend, not both",
+            ));
+        }
+        if self.vm.enabled && !self.network.enabled {
+            return Err(invalid_config(
+                "The VM browser backend requires an explicit browser network policy",
             ));
         }
         Ok(())
@@ -798,12 +852,18 @@ impl BrowserState {
         url: &str,
         cancel: &dyn Cancellation,
     ) -> Result<NavigateView, BoundaryError> {
-        crate::network::normalize_target(url).map_err(|_| {
+        let target = crate::network::normalize_target(url).map_err(|_| {
             failure(
                 "invalid_args",
                 "Browser navigation requires an explicit HTTP(S) URL",
             )
         })?;
+        if self.settings.network.enabled && !self.settings.network.allows_origin(&target.origin) {
+            return Err(failure(
+                "browser_network_denied",
+                "Browser navigation target is outside the Run's allowed origins",
+            ));
+        }
         let page_id = page.to_owned();
         let (session, page) = self.active_page(context, page).await?;
         if cancel.is_cancelled() {
@@ -835,6 +895,29 @@ impl BrowserState {
                     .and_then(|()| provider_optional_detail(action.detail.as_deref()))
                 {
                     return Err(error.into_boundary());
+                }
+                // The broker checks every redirect hop, including ones inside
+                // an opaque CONNECT tunnel. Cross-check the worker-reported
+                // final URL only when this Run actually has a browser network
+                // policy; the native backend runs with `network.enabled =
+                // false` and must not apply an unrelated origin check.
+                if let Some(final_url) = action.url.as_deref() {
+                    match provider_final_url(final_url) {
+                        Ok(ProviderFinalUrl::Origin(origin)) => {
+                            if self.settings.network.enabled
+                                && !self.settings.network.allows_origin(&origin)
+                            {
+                                return Err(failure(
+                                    "network_final_origin_denied",
+                                    "Browser navigation ended at an origin outside the Run's allowed origins",
+                                ));
+                            }
+                        }
+                        // Internal blank pages and the browser's own error page
+                        // are explicit non-network states.
+                        Ok(ProviderFinalUrl::Blank | ProviderFinalUrl::BrowserError) => {}
+                        Err(error) => return Err(error.into_boundary()),
+                    }
                 }
                 Ok(NavigateView {
                     page: page_id,
@@ -2509,6 +2592,201 @@ mod tests {
             "stale_element"
         );
         assert_eq!(provider.snapshot_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn navigate_rejects_targets_outside_the_network_policy_before_dispatch() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = BrowserState::new(
+            BrowserSettings {
+                enabled: true,
+                network: crate::browser::network::BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["http://127.0.0.1:8080".into()],
+                    localhost_development_origin: Some("http://127.0.0.1:8080".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            provider,
+            run.clone(),
+        )
+        .unwrap();
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        let denied = state
+            .navigate(&context, &opened.page, "http://169.254.169.254/", &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.0.code, "browser_network_denied");
+        let allowed = state
+            .navigate(&context, &opened.page, "http://127.0.0.1:8080/", &cancel)
+            .await
+            .unwrap();
+        assert_eq!(allowed.url, "http://127.0.0.1:8080/");
+    }
+
+    #[tokio::test]
+    async fn navigate_accepts_fragments_and_oauth_style_redirects_from_allowed_origins() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = BrowserState::new(
+            BrowserSettings {
+                enabled: true,
+                network: crate::browser::network::BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["http://127.0.0.1:8080".into()],
+                    localhost_development_origin: Some("http://127.0.0.1:8080".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            provider.clone(),
+            run.clone(),
+        )
+        .unwrap();
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        let final_url = "http://127.0.0.1:8080/callback?code=one#access_token=secret";
+        provider.return_next_action_url(final_url);
+        let view = state
+            .navigate(
+                &context,
+                &opened.page,
+                "http://127.0.0.1:8080/login",
+                &cancel,
+            )
+            .await
+            .unwrap();
+        // The fragment is preserved for provenance but never becomes part of
+        // the origin checked against the allowlist.
+        assert_eq!(view.url, final_url);
+
+        provider.return_next_action_url("http://127.0.0.1:8080/#");
+        assert!(
+            state
+                .navigate(&context, &opened.page, "http://127.0.0.1:8080/", &cancel)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn navigate_treats_about_blank_and_browser_error_pages_as_explicit_states() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = make_state(provider.clone(), &run);
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        for final_url in [
+            "about:blank",
+            "about:blank?from=open",
+            "about:blank#section",
+            "about:blank?from=open#section",
+            "ABOUT:blank",
+            "chrome-error://chromewebdata/",
+            "chrome-error://chromewebdata/#ignored",
+        ] {
+            provider.return_next_action_url(final_url);
+            let view = state
+                .navigate(&context, &opened.page, "https://example.invalid/", &cancel)
+                .await
+                .unwrap();
+            assert_eq!(view.url, final_url);
+        }
+        // A non-blank `about:` document and unknown schemes stay invalid
+        // provider results rather than being silently accepted.
+        for final_url in ["about:config", "about:blank/", "data:text/html,x"] {
+            provider.return_next_action_url(final_url);
+            let error = state
+                .navigate(&context, &opened.page, "https://example.invalid/", &cancel)
+                .await
+                .unwrap_err();
+            assert_eq!(error.0.code, "invalid_provider_result", "{final_url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn navigate_rejects_credentialed_or_non_http_final_urls() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = make_state(provider.clone(), &run);
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        for final_url in [
+            "http://user:pass@example.invalid/",
+            "http://user@example.invalid/",
+            "file:///etc/passwd",
+            "data:text/html,secret",
+        ] {
+            provider.return_next_action_url(final_url);
+            let error = state
+                .navigate(&context, &opened.page, "https://example.invalid/", &cancel)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.0.code, "invalid_provider_result",
+                "final URL {final_url}"
+            );
+            // The provider reported no origin that could be authorized and the
+            // error message never echoes the URL or credentials.
+            assert!(!error.0.message.contains("pass"));
+            assert!(!error.0.message.contains("secret"));
+        }
+    }
+
+    #[tokio::test]
+    async fn native_path_without_network_does_not_cross_check_final_origin() {
+        // Default settings have `network.enabled = false`; the final URL is
+        // still syntactically validated but its origin is not compared against
+        // an unrelated policy that this backend never uses.
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = make_state(provider.clone(), &run);
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        provider.return_next_action_url("https://outside.example/path#fragment");
+        let view = state
+            .navigate(&context, &opened.page, "https://allowed.example/", &cancel)
+            .await
+            .unwrap();
+        assert_eq!(view.url, "https://outside.example/path#fragment");
+    }
+
+    #[tokio::test]
+    async fn navigate_still_denies_a_disallowed_final_origin_when_network_is_enabled() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = BrowserState::new(
+            BrowserSettings {
+                enabled: true,
+                network: crate::browser::network::BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["http://127.0.0.1:8080".into()],
+                    localhost_development_origin: Some("http://127.0.0.1:8080".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            provider.clone(),
+            run.clone(),
+        )
+        .unwrap();
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        provider.return_next_action_url("https://outside.example/path");
+        let error = state
+            .navigate(&context, &opened.page, "http://127.0.0.1:8080/", &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "network_final_origin_denied");
     }
 
     #[tokio::test]

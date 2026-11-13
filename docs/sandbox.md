@@ -157,3 +157,11 @@ DEV-055 至 DEV-057 及 DEV-075 已完成统一环境、独立原生后端、网
 ## N3 多入口共享网络预算
 
 `RunNetworkBudget`为base broker及各插件entry listener提供同一Run的连接并发、累计连接、总字节和固定截止时间。origin、DNS／IP校验及更严格的局部限额继续按各listener生效。字节在转发前预留，失败预留保守计入累计额度，活动连接槽沿Drop归还。6项跨listener预算回归及既有网络回归、严格全目标Clippy通过，实际HTTP／原生平台证据按N3记录维护。
+
+## DEV-081A 专用 VM 浏览器网络
+
+专用 VM 后端的页面流量不经过 VM 默认出口。宿主为每个浏览器 worker 生命周期启动一个 `NetworkBroker`，沿用 `RunNetworkBudget` 的连接、字节和截止时间额度；`[browser.network]` 的 `allowed_origins`、`public_web` 与 `localhost_development_origin` 决定逐连接 origin／DNS／地址检查。空 allowlist 且 `public_web=false` 时拒绝启动，`public_web=true` 也只接受完整检查通过的公开地址。通用 broker 默认值没有改变。
+
+宿主 SSH 通道只增加一条反向 streamlocal 转发，指向本次 broker 的 loopback TCP 端口；Seatbelt 只额外允许该端口，以及原有的 Colima 转发 SSH 端口。VM 内的 `127.0.0.1:31281` 属于私有 netns，不是宿主通道端点。VM 内在 `sudo -n unshare -n` 创建的私有网络命名空间中启用 `lo`，确认没有其他路由，由原用户启动 `socat` 把 `127.0.0.1:31281` 桥接到该 Unix socket，随后 worker 以 `setpriv` 回到原 uid／gid 运行。Chromium 保持自有 sandbox，并通过固定代理、`--proxy-bypass-list=<-loopback>`、禁用 QUIC／非代理 WebRTC UDP、`EXCLUDE 127.0.0.1` 的 host resolver 规则和 `--block-service-workers` 约束所有页面连接。
+
+`sudo -n`、`unshare`、`socat`、`setpriv` 缺失，`lo` 无法启用，出现额外路由、代理未监听、反向 socket 缺失或 sshd 拒绝反向 streamlocal 转发时，启动失败关闭并映射为 `browser_network_unavailable`，不会回退 VM 默认网络；预算耗尽或固定 deadline 到期单独返回 `browser_network_budget`。`provision`／`check` 验证 `nsenter` 与 `sudo -n nsenter`，并用 `sshd -T` 检查服务端有效配置允许该转发。取消、SSH 断连与 shutdown 先终止 SSH 进程使转发消失，再由同一 Run 根的关联扫描终止 worker、socat 与包装进程，最后删除 Run 根；broker 监听在同一次清理中停止。网络观察只保留规范化 origin、结果、字节数和耗时，不记录路径、query 或凭据；取消／shutdown 与真实 timeout 分开记录，容量与共享预算拒绝即使 origin 未知也会记录。

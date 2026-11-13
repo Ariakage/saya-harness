@@ -53,6 +53,7 @@ impl SandboxNetworkSettings {
                 localhost_development_origin,
                 limits,
             } => Some(BrokerPolicy {
+                public_web: false,
                 allowed_origins: allowed_origins.clone(),
                 localhost_development_origin: localhost_development_origin.clone(),
                 unix_socket: None,

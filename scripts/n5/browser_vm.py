@@ -13,8 +13,11 @@ Subcommands:
     provision copy the explicit Node, worker tree and headless Chromium inputs
               into the VM, derive the identity manifest from the remote files,
               upload it, and print its digest
-    check     verify the remote manifest, named files, permissions, versions
-              and headless-shell path without changing anything
+    check     verify the remote manifest, named files, permissions, versions,
+              headless-shell path, network prerequisites (sudo/unshare/socat/
+              setpriv/ip route/nsenter and Chromium user-namespace/AppArmor
+              values) and that sshd permits reverse streamlocal forwarding,
+              without changing anything
     destroy   delete the dedicated profile
 
 All commands print one JSON object to stdout. Failures exit nonzero and print
@@ -67,6 +70,77 @@ done
 setsid -w true
 [ -d /proc ] || { echo "missing=procfs"; exit 4; }
 echo "preflight=ok"
+"""
+
+# Every prerequisite the in-VM private-network launch depends on. The check is
+# read-only apart from creating and discarding a throwaway network namespace.
+# Chromium's own sandbox needs unprivileged user namespaces, which AppArmor can
+# restrict on Ubuntu 24.04; the dedicated VM may opt into disabling that
+# restriction during `provision`.
+NETWORK_PREFLIGHT_SCRIPT = r"""set -eu
+for tool in sudo unshare socat setpriv ip nsenter; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "missing=$tool" >&2; exit 4; }
+done
+ip -o route show >/dev/null 2>&1 || { echo "missing=ip-route" >&2; exit 4; }
+sudo -n true >/dev/null 2>&1 || { echo "missing=sudo-n" >&2; exit 4; }
+sudo -n unshare -n -- /bin/sh -c 'set -eu; ip link set lo up; ip -o route show >/dev/null' \
+  || { echo "missing=unshare-net" >&2; exit 4; }
+# The real network test enters the worker's private netns with sudo nsenter.
+sudo -n nsenter -t "$$" -n true >/dev/null 2>&1 \
+  || { echo "missing=sudo-nsenter" >&2; exit 4; }
+# Chromium creates user namespaces for its own sandbox.
+unshare -Ur true >/dev/null 2>&1 || { echo "missing=user-namespace" >&2; exit 4; }
+if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+  clone=$(cat /proc/sys/kernel/unprivileged_userns_clone)
+  [ "$clone" = "1" ] || { echo "missing=unprivileged-userns" >&2; exit 4; }
+fi
+if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)
+  [ "$restrict" = "0" ] || { echo "missing=apparmor-userns" >&2; exit 4; }
+fi
+echo "network=preflight-ok"
+"""
+
+# The runtime's only browser egress is a reverse streamlocal forward. A client
+# that offers `-R` is not enough: sshd must actually permit it. `sshd -T`
+# reports the effective (defaults and includes applied) server policy.
+SSHD_FORWARDING_SCRIPT = r"""set -eu
+sshd_bin=$(command -v sshd 2>/dev/null || true)
+[ -n "$sshd_bin" ] || sshd_bin=/usr/sbin/sshd
+[ -x "$sshd_bin" ] || { echo "sshd=missing" >&2; exit 4; }
+sudo -n true >/dev/null 2>&1 || { echo "sshd=sudo-unavailable" >&2; exit 4; }
+config=$(sudo -n "$sshd_bin" -T 2>/dev/null) || { echo "sshd=query-failed" >&2; exit 4; }
+streamlocal=$(printf '%s\n' "$config" | awk '$1=="allowstreamlocalforwarding"{print $2; exit}')
+case "$streamlocal" in
+  yes|all) ;;
+  '') echo "sshd=streamlocal-forwarding-unset" >&2; exit 4 ;;
+  *) echo "sshd=streamlocal-forwarding-$streamlocal" >&2; exit 4 ;;
+esac
+# Reverse streamlocal forwarding is the only forward used, but sshd
+# deployments commonly gate forwarding as a family; reject an explicit "no".
+tcp=$(printf '%s\n' "$config" | awk '$1=="allowtcpforwarding"{print $2; exit}')
+case "$tcp" in
+  yes|all|'') ;;
+  *) echo "sshd=tcp-forwarding-$tcp" >&2; exit 4 ;;
+esac
+echo "sshd=forwarding-ok"
+"""
+
+# Explicit, dedicated-VM-only opt-in. This never runs on the host and never
+# applies to any other profile: it writes a sysctl drop-in inside the VM so
+# Chromium can create unprivileged user namespaces across reboots.
+APPARMOR_USERNS_SCRIPT = r"""set -eu
+if [ ! -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  echo "apparmor-userns=absent"
+  exit 0
+fi
+sudo -n true >/dev/null 2>&1 || { echo "apparmor-userns=sudo-unavailable" >&2; exit 4; }
+printf '%s\n' 'kernel.apparmor_restrict_unprivileged_userns=0' \
+  | sudo -n tee /etc/sysctl.d/99-saya-browser-userns.conf >/dev/null
+sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
+restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)
+[ "$restrict" = "0" ] || { echo "apparmor-userns=restricted" >&2; exit 4; }
+echo "apparmor-userns=disabled"
 """
 
 
@@ -687,6 +761,35 @@ def command_destroy(args: argparse.Namespace) -> dict:
     return {"action": "destroy", "profile": args.profile}
 
 
+def verify_network_prerequisites(
+    args: argparse.Namespace, config_path: Path, configure_userns: bool = False
+) -> None:
+    """Verify the dedicated VM can satisfy the browser network prerequisites.
+
+    `configure_userns` is an explicit provision-only opt-in for this dedicated
+    VM. It writes a sysctl drop-in inside the VM and never touches the host.
+    `check` always verifies the current value and the required tools.
+    """
+    if configure_userns:
+        output = ssh_run(args, config_path, APPARMOR_USERNS_SCRIPT, []).decode(
+            "utf-8"
+        ).strip()
+        if output not in ("apparmor-userns=disabled", "apparmor-userns=absent"):
+            raise ToolError(f"VM AppArmor user-namespace prerequisite failed: {output}")
+    result = ssh_run(args, config_path, NETWORK_PREFLIGHT_SCRIPT, []).decode(
+        "utf-8"
+    ).strip()
+    if result != "network=preflight-ok":
+        raise ToolError("VM network prerequisites are unavailable")
+    forwarding = ssh_run(args, config_path, SSHD_FORWARDING_SCRIPT, []).decode(
+        "utf-8"
+    ).strip()
+    if forwarding != "sshd=forwarding-ok":
+        raise ToolError(
+            f"VM sshd does not permit the browser reverse streamlocal forward: {forwarding}"
+        )
+
+
 def command_provision(args: argparse.Namespace) -> dict:
     validate_local_executable(args.ssh, "ssh")
     validate_local_executable(args.scp, "scp")
@@ -720,6 +823,11 @@ def command_provision(args: argparse.Namespace) -> dict:
         preflight = ssh_run(args, config_path, PREFLIGHT_SCRIPT, []).decode("utf-8").strip()
         if preflight != "preflight=ok":
             raise ToolError("VM does not provide the required worker runtime tools")
+        verify_network_prerequisites(
+            args,
+            config_path,
+            configure_userns=getattr(args, "configure_apparmor_userns", False),
+        )
         ssh_run(
             args,
             config_path,
@@ -859,6 +967,7 @@ def command_check(args: argparse.Namespace, manifest_bytes: bytes | None = None)
         os.chmod(config_path, 0o600)
         if not valid_digest(args.manifest_sha256):
             raise ToolError("--manifest-sha256 must be lowercase SHA-256")
+        verify_network_prerequisites(args, config_path)
         _, digest, version = verify_remote_identity(
             args,
             config_path,
@@ -913,6 +1022,16 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--node-source", type=Path, required=True)
             command.add_argument("--worker-source", type=Path, required=True)
             command.add_argument("--chromium-source", type=Path, required=True)
+            # Dedicated-VM-only opt-in; never applied to the host.
+            command.add_argument(
+                "--configure-apparmor-userns",
+                action="store_true",
+                help=(
+                    "set kernel.apparmor_restrict_unprivileged_userns=0 inside "
+                    "this dedicated VM so Chromium can create unprivileged "
+                    "user namespaces; never changes the host"
+                ),
+            )
         command.set_defaults(handler=handler)
     return parser
 

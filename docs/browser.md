@@ -1,6 +1,6 @@
 # Browser 能力设计
 
-**更新于 2026-11-13。浏览器能力归 F-10，DEV-079 至 DEV-082 负责接口、worker、策略与界面集成，DEV-083 负责联合验收。DEV-079 已实现宿主接口、受控网页读取与离线测试。DEV-080 的组件已完成 Playwright MCP 启动、身份校验、固定工具映射与生命周期，并按 D-066 增加显式专用 VM 后端；该后端的真实入口已在专用 Colima VM 上实际执行并通过（renderer 的 NoNewPrivs／Seccomp 与合法 sandbox argv、远端 Run 根和进程清理）。native worker 的组件测试通过，但 macOS Seatbelt 与 Linux Bubblewrap 当前都不能完成 Chromium 内层 sandbox 初始化，因此 native 浏览器未取得真实平台验收，也不得视为可用。DEV-081 至 DEV-083 仍未开始，N5 尚未完成，四平台验收尚未执行，本文其余部分保持设计草案。**
+**更新于 2026-11-13。浏览器能力归 F-10，DEV-079 至 DEV-082 负责接口、worker、策略与界面集成，DEV-083 负责联合验收。DEV-079 已实现宿主接口、受控网页读取与离线测试。DEV-080 的组件已完成 Playwright MCP 启动、身份校验、固定工具映射与生命周期，并按 D-066 增加显式专用 VM 后端；该后端的真实入口已在专用 Colima VM 上实际执行并通过（renderer 的 NoNewPrivs／Seccomp 与合法 sandbox argv、远端 Run 根和进程清理）。native worker 的组件测试通过，但 macOS Seatbelt 与 Linux Bubblewrap 当前都不能完成 Chromium 内层 sandbox 初始化，因此 native 浏览器未取得真实平台验收，也不得视为可用。DEV-081A 的 Browser 网络阶段已完成并取得专用 VM 真实网络验收；DEV-081 的登录、文件 broker、截图与后台阶段，以及 DEV-082、DEV-083 仍未开始，N5 尚未完成，四平台验收尚未执行，本文其余部分保持设计草案。**
 
 ## DEV-079 实现状态
 
@@ -12,7 +12,7 @@ DEV-079 只交付宿主侧组件，不包含真实 Chromium 或 Playwright worke
 - registry 新增 `WebRead`、`BrowserRead`、`BrowserWrite`。`browser_open`／`close`／`navigate` 为 `BrowserWrite`；`browser_snapshot`／`wait`／`screenshot` 为 `BrowserRead`；`click`／`fill`／`press`／`download`／`upload` 为 `BrowserWrite`。PLAN 只开放 `WebRead`，两类 Browser 效果均拒绝；已保存观察继续通过 `output_read`／`output_search` 检索。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 走现有独立模型核查；Manual Approval 逐次确认；bypass 仍受 PLAN 与显式 deny 限制。只读运行时既不注册也不执行 Browser 工具。宿主 built-in adapter 通过有界 schema 校验进入既有注册、审批指纹、捕获与持久化路径。
 - OutputStore 新增 `Web`／`Browser` 流。长正文和页面快照经 `capture → save_result_with_outputs → publish` 保存，保留 `output_ref`、coverage 与 truncated 信息。快照捕获包含宿主投影后的 text／elements／document／source 等字段，捕获上限使用 `BrowserSettings.max_snapshot_bytes`；provider、宿主提取、inline 或捕获任一不完整均以 `CaptureCompletion::LimitReached` 记录，`truncated` 一致反映到 `data`、`ToolResult` 与 output metadata。检索到对象但 `retained_bytes = 0`、withheld 或 capture disabled 时，`fetch_url` 与 `browser_snapshot` 回退有界 inline 内容并标记 truncated，不返回空成功。`web_search` 的长结果投影只保留 `result_count` 等元数据，正文经 `output_read`／`output_search` 回取。
 - `AgentRuntime::with_web`／`with_browser` 注册入口已存在。`RuntimeServices` 持有浏览器状态，并在既有 PLAN 清理与 Run shutdown 中先于 environment 与 broker 清理以有界超时调用 provider shutdown；browser 清理失败不会跳过 MCP、插件、environment、broker 与目录清理，首个错误在末尾汇总。清理保留可重启状态，返回 WORK 后显式 `browser_open` 会创建全新 provider 生命周期。`WebSettings`／`BrowserSettings` 默认关闭，配置加载复用 broker policy 执行严格校验；搜索 endpoint 必须严格规范化 HTTP／HTTPS，并拒绝字面私网／回环地址（显式 localhost 开发 origin 除外）；开发 origin 必须是回环地址，回环 allowlist 条目必须同时指定为开发 origin。
-- 生产装配：`saya-app` 接入显式启用的 web；`browser.enabled` 在 `browser.worker.enabled` 时装配 DEV-080 的真实 provider（见下一节），未启用 worker、Host backend 或 macOS Seatbelt 均在 worker／Chromium 启动前明确失败。真实 Linux Chromium sandbox 证据、Playwright worker 的端到端装配、登录、文件 broker、模型图片与跨平台验收仍属后续任务。
+- 生产装配：`saya-app` 接入显式启用的 web；`browser.enabled` 在 `browser.worker.enabled` 时装配 DEV-080 的 native provider，在 `browser.vm.enabled` 时装配显式专用 VM provider（DEV-080 扩展与 DEV-081A 网络）。未启用 worker、Host backend、macOS Seatbelt 或缺少 VM 网络策略均在 worker／Chromium 启动前明确失败。真实 Linux Chromium sandbox 证据、登录、文件 broker、模型图片与跨平台验收仍属后续任务。
 
 ## DEV-080 worker 与生产装配实现状态
 
@@ -29,7 +29,7 @@ DEV-079 只交付宿主侧组件，不包含真实 Chromium 或 Playwright worke
 - 生产装配由 `saya-app::assemble_browser_provider` 完成：`browser.enabled` 必须同时启用 `browser.worker`，否则返回 `invalid_config`；安装根固定包含 Node 父目录、worker root 与 Chromium 包目录，并保持只读。不绑定 workspace、HOME、`.saya` 或凭据目录。`Host` backend 与 macOS Seatbelt 在构造 provider 前通过 `NativeBrowserEnvironmentFactory` 预检返回 `browser_sandbox_unavailable`，不会启动 worker 或 Chromium；Linux 缺少所需嵌套 namespace／procfs／seccomp 能力时保持既有 fail-closed 错误。
 - 每个 worker 生命周期都从 factory 取得全新 `PreparedEnvironment`；profile／output／tmp／work／config 全部位于该 environment 的 Run 私有 scratch。PLAN 清理或显式 shutdown 后再次 `browser_open` 会新建 environment，不复用已关闭的实例。shutdown 先关闭 MCP、终止并 reap worker／Chromium 进程组，再 `wait_for_process_cleanup` 与 `environment.cleanup`；任一步失败保留可重试状态并返回 unknown，下一次启动前必须先完成旧 workspace 清理。
 - 真实 Chromium sandbox 证据：在首次真实 `open`（以及显式 `navigate` 的幂等复查）后，provider 以 worker PID 为根读取宿主 `/proc`，只接受具有匹配 PPid 的后代，在 512 进程与 5 秒上限内等待至少一个 `--type=renderer`。该 renderer 的 argv 不得包含 `--no-sandbox` 或 `--disable-setuid-sandbox`，`/proc/<pid>/status` 必须报告 `NoNewPrivs: 1` 与 `Seccomp: 2`。由于宿主 Bubblewrap 会固定赋予这两个属性，它们不能单独证明 Chromium 初始化了自己的 sandbox；当前实现还要求 Chromium 自有的 `InitializeSandbox` stderr 证据，否则返回 `browser_sandbox_unavailable` 并立即清理 worker 与 environment。上述条件未满足时，native 浏览器不会被报告为已验收。macOS 因外层 Seatbelt 限制不会到达该步骤。
-- 本阶段浏览器 environment 固定为 `NetworkPolicy::Deny`，不声称网页网络可用；`[browser.worker].proxy` 仅校验为无凭据、显式端口的 loopback HTTP 地址并留给 DEV-081 broker 装配，不参与 DEV-080 启动。截图／下载／上传 facts 继续为 false。
+- 本阶段浏览器 environment 固定为 `NetworkPolicy::Deny`，不声称网页网络可用；`[browser.worker].proxy` 仅校验为无凭据、显式端口的 loopback HTTP 地址并留给后续 broker 装配，不参与 DEV-080 启动。截图／下载／上传 facts 继续为 false。
 
 身份 manifest 由宿主生成，文件名可自选，摘要写入 `identity_sha256`。结构为：
 
@@ -59,11 +59,24 @@ worker 文件路径固定为 worker root 下的 `node_modules/@playwright/mcp/cl
 - 身份校验：`VmWorkerIdentityVerifier` 通过同一受控 VM 通道读取远端 manifest 与七个命名文件，在本地核对大小、SHA-256、权限、Node 实际 `--version`、`@playwright/mcp 0.0.85`、`playwright`／`playwright-core 1.66.0-alpha-2026-11-09`、Chromium `158.0.8127.18`／revision 1254 以及 `chrome-headless-shell` 路径。仅远端命令退出成功不构成通过；远端返回的字节与解析结果必须与 manifest 和 pinned 版本一致。native 路径继续使用现有 `verify_worker_identity` 与测试。
 - 生命周期：每次 launch 生成唯一远端 Run 根（0700，basename 保持较短以适配 Unix socket 路径上限），通过受控通道创建目录并写入 worker config；`PREPARE_RUN_SCRIPT` 同时创建 `home`、`home/cache`、`home/data`、`home/state`、`home/runtime`、`s` 等 LAUNCH_SCRIPT 导出的全部 XDG／HOME／TMPDIR／socket 目录，模式均为 0700。worker 以 `setsid -w` 建立独立 session／process group，PID 文件与 `/proc/<pid>/cmdline` 必须在本地核对。MCP 继续复用现有 `McpClient::connect_stdio`、协议版本与七工具 catalogue 校验；worker 在首次启动浏览器后发布新的 catalogue，`open` 与 `close` 在生命周期步骤中重新发现并校验该 catalogue，普通工具调用仍对 stale catalogue 失败关闭。远端 cleanup 将已退出或 zombie 的 PID 视为已消失，按进程组有界清理并删除 Run 根；PID 文件缺失、为空、损坏或对应进程已退出时，以唯一 Run 根为匹配在 `/proc` 中有界扫描相关进程，排除清理 shell 自身（含 `saya-browser-vm` argv），确认终止或证明不存在后才删除 Run 根，`expect_worker` 只作观测，不再产生永久 `worker=unknown`。启动在生成 Run 根后、首个 prepare／launch await 之前就把 cleanup 句柄注册到 launcher 的 pending 队列；成功时由 connection 接管并移除，失败、取消或外层丢弃 launch future 时保留。重试逐项取队首，确认成功后才移除该项；外层 timeout／cancel／drop 保留当前及剩余全部句柄。除显式 shutdown 外，`VmWorkerConnection` 还监视本地 SSH 子进程并实现 Drop 清理：SSH 断连或 worker 退出时自动触发有界远端清理；没有 Tokio runtime 时记录 unknown 而不是假装成功。启动失败或清理失败时，provider 与 `VmWorkerLauncher` 保留可重试清理句柄，下一次 launch／shutdown 必须先确认旧 Run 根清理，不能把第二次尝试报告为新成功。SSH 断连、取消或 Run 结束的清理无法确认时返回 `outcome_unknown`，不把本地 SSH 退出当作远端已清理。
 - 身份／prepare／sandbox／清理调用区分派发前后：命令在派发前被取消返回 `cancelled`；已派发后取消或超时返回 `outcome_unknown`，不会冒充普通身份或清理失败。Zombie／已退出 worker 的 Run 根清理由 `CLEANUP_SCRIPT` 的存活判定处理，并有真实脚本回归覆盖。
-- Sandbox 证据：`VmChromiumSandboxInspector` 使用远端 worker PID 在 VM `/proc` 中查找 `--type=renderer` 后代，要求 argv 未禁用 sandbox、`NoNewPrivs=1`、`Seccomp=2`；宿主 `/proc` 不参与该判断。VM 内普通进程没有这两个属性，因此它们在该环境是可判别证据，而不是宿主 Bubblewrap 的固定赋予。DEV-080 的 VM 网络仍不是受控 Browser 出口，`NetworkPolicy::LoopbackPort` 只覆盖 SSH；broker 由 DEV-081 接入。screenshots／downloads／uploads facts 仍为 false。
+- Sandbox 证据：`VmChromiumSandboxInspector` 使用远端 worker PID 在 VM `/proc` 中查找 `--type=renderer` 后代，要求 argv 未禁用 sandbox、`NoNewPrivs=1`、`Seccomp=2`；宿主 `/proc` 不参与该判断。VM 内普通进程没有这两个属性，因此它们在该环境是可判别证据，而不是宿主 Bubblewrap 的固定赋予。DEV-080 的 VM 网络在本次扩展时仍不是受控 Browser 出口，`NetworkPolicy::LoopbackPort` 只覆盖 SSH；VM broker 由 DEV-081A 接入（见下一节）。screenshots／downloads／uploads facts 仍为 false。
 - 显式工具：`scripts/n5/browser_vm.py` 提供 `create`／`provision`／`check`／`destroy`。`create` 固定 `--mount none` 与 `--ssh-agent=false`；`provision` 只复制调用者给出的 Node、worker 树与 headless Chromium，从远端文件生成 manifest 并上传，不执行 `npm`／`npx`／下载或版本自动更新；`check` 重新核对 manifest 与全部命名文件，`provision` 在上传后复用同一套校验。两者都要求 manifest 自身是常规文件、大小不超过 64 KiB、组／其他不可写，并要求七个命名文件均为常规文件、各自不超过 512 MiB 且大小、摘要与权限符合运行时规则。工具回归在 `scripts/n5/test_browser_vm.py`，由 `just test-tooling` 执行。
 - 实现状态：`crates/saya-core/src/browser/vm.rs`、`crates/saya-app/src/lib.rs` 的显式装配、上述工具与离线测试已完成；`cargo` 单元测试覆盖 SSH 配置、路径注入（含符号链接到含换行目标的反向测试）、回环地址归一化、身份不符、远端 PID／unknown、取消清理、断连／Drop 清理、失败清理句柄保留与重建、无宿主挂载与 loopback-only 网络。宿主通道的 `read_files` 固定为 `ssh`、identity、known-hosts 三个文件，不再包含 `/etc/passwd`。真实 VM 验收入口为 `crates/saya-core/tests/browser_vm_real.rs`，默认 `#[ignore]`，通过 `SAYA_TEST_VM_*` 显式启用。2026-11-13 在专用 Colima VM（profile `saya-browser`，Lima `colima-saya-browser`，`127.0.0.1:58780`）上实际执行该入口通过：MCP 启动、初始 `browser_navigate`、`browser_close` 与 `shutdown` 完成；VM 内 renderer 证据为 `NoNewPrivs=1`、`Seccomp=2`，argv 未包含禁用 sandbox 的选项；运行后远端 Run 根与 worker／Chromium 进程均已清理。该结果只覆盖这一显式 provisioned 环境，不构成 native 浏览器、四平台或 DEV-081 至 DEV-083 的验收。
 
 真实 VM 验收步骤见本文末节与 [开发进度](progress.md)。VM 内 Chromium 与 Playwright 的实际启动、sandbox 证据、取消／断连清理和 Run 根删除必须在显式 provisioned 环境取得证据。
+
+## DEV-081A Browser 网络阶段
+
+DEV-081A 只交付 Browser 网络出口、策略与验收；登录、文件 broker、截图媒体和后台生命周期仍属后续阶段，不能据此宣称 DEV-081 或 N5 完成。
+
+- 新增严格、默认关闭的 `[browser.network]`：`allowed_origins`、`public_web = false`、`localhost_development_origin` 与现有 `BrokerLimits`。启用时必须至少有一个精确 origin 或显式 `public_web = true`；空 allowlist 加 `public_web = false` 直接拒绝。`public_web` 仍对每个连接重新规范化 origin、执行完整 DNS 解析、公开地址、内网／元数据／混合答案检查，不会绕过任何地址规则。开发 origin 必须是回环地址且同时出现在 allowlist 中。通用 `BrokerPolicy` 默认仍是 `public_web = false` 和 `NetworkPolicy::Deny`，现有 broker 行为不变。
+- VM 浏览器不再使用 VM 默认出口。`BrowserNetworkFactory` 在 Run 开始时只创建一个 `Arc<RunNetworkBudget>`，所有 worker 生命周期与 broker 重启共用同一组累计 bytes／连接尝试和固定 deadline；重启不会清零已耗尽的上限。宿主每次 worker 生命周期启动一个 `NetworkBroker` 监听器；长期 SSH 通道只增加一条严格的反向 streamlocal 转发到该 broker 的回环端口；VM 内在 `sudo -n unshare -n` 创建的私有网络命名空间中启用 `lo`、确认不存在额外路由，并以原用户启动 `socat`，把 `127.0.0.1:31281` 接到上述 Unix socket。worker 随后 `setpriv` 回原 uid／gid 启动，Chromium 只使用该 loopback 代理。宿主 Seatbelt 放行两个不同的回环目标：Colima 转发的 VM SSH 端口与本次 Run 的 broker 临时端口；VM 内的 `31281` 属于私有 netns，不是宿主通道端点。通用默认不变。
+- Chromium 保持自有 sandbox。launchOptions 同时在 `proxy.server`、`--proxy-server` 和固定 argv 中给出代理；`--proxy-bypass-list=<-loopback>` 禁止隐式回环直连；禁用 QUIC／HTTP3、非代理 WebRTC UDP 与后台网络；`--host-resolver-rules=EXCLUDE 127.0.0.1, MAP * ~NOTFOUND` 只允许代理 IP 字面量本地解析，页面主机名全部交给 broker；`--block-service-workers`、`--no-pings` 与既有 `--sandbox` 保持。WebSocket 与页面内其他连接同样只能经过该代理；特殊 URL 仍由 Provider 拒绝。
+- 新增有界 `NetworkObservation`（最多 256 条），只记录 Run／worker 关联、规范化 `scheme://host:port`、结果、字节数与耗时。路径、query、headers 和凭据从不记录；CONNECT 隧道明确标记 `tunneled = true`，不声称隧道内 path 可见：broker 只能看到新连接（不同 origin 需要新的 CONNECT）与 worker 上报的最终 origin，不能看到隧道内的明文 redirect。malformed／oversize、监听器容量与共享预算／固定 deadline 拒绝即使无法规范化 origin 也会记录，origin 明确为未知而不是伪造；连接任务被 Run 取消或 shutdown 中止记录 `cancelled`，只有真实连接／空闲超时才记录 `timeout`，固定 deadline 到期记录 `limit`。CONNECT 中途 timeout／drop 读取共享计数，报告已实际转移并计费的 bytes，而不是 0。`browser_navigate` 在派发前核对规范化目标；worker 返回的最终 URL 允许合法 fragment（OAuth 式 redirect）但只接受 HTTP(S)、无 userinfo、有效 host，来源仍以脱敏后的 origin 表示。`about:blank` 通过 URL parser 接受合法 query／fragment，`chrome-error:` 明确分类为浏览器错误页；两者都是非网络状态，不参与 origin cross-check。重定向链的每一跳仍由 broker 实际检查；当 `network.enabled = false`（native 路径）时不对最终 URL 执行无关的 origin cross-check。
+- 网络隔离失败时返回 `browser_network_unavailable`，不会回退到 VM 默认网络。`sudo -n`／`unshare`／`socat`／`setpriv`／`ip` 缺失、`lo` 无法启用、出现额外路由、代理未监听或反向 socket 缺失都会在启动脚本内失败关闭；sshd 拒绝反向 streamlocal 转发时客户端以 `ExitOnForwardFailure` 失败，其固定诊断同样映射为 `browser_network_unavailable`。预算耗尽或固定 deadline 到期则返回独立的 `browser_network_budget`，不与隔离能力失败混淆。读取 stderr 前先终止启动进程，并对有界 drain 任务做有界等待，避免只读到即时 tail；只有固定的 sentinel 映射为网络分类，其他启动失败仍是受控的传输错误。
+- broker、反向转发与 VM 内 `socat` 纳入同一取消、unknown 与清理：launch 失败或取消时关闭 broker；`VmWorkerConnection::shutdown` 在远端清理后停止监听；SSH 退出使反向转发消失；`CLEANUP_SCRIPT` 以唯一 Run 根关联扫描并终止 worker、socat 与包装进程，再删除 Run 根。既有 pending cleanup、Drop、SSH 断连与 unknown 语义保持不变。
+- `scripts/n5/browser_vm.py` 的 `provision`／`check` 在远端验证 `sudo -n`、`unshare -n` 与 `ip route`、`socat`、`setpriv`、`ip`、`nsenter`（含 `sudo -n nsenter`）、Chromium 所需的 unprivileged user namespace 以及当前 `kernel.apparmor_restrict_unprivileged_userns` 值；两者还通过 `sshd -T` 验证服务端有效配置允许 `AllowStreamLocalForwarding`（并拒绝显式的 `AllowTcpForwarding no`），而不是只检查客户端 argv。`provision --configure-apparmor-userns` 是显式 opt-in，只在专用 VM 内写入 `kernel.apparmor_restrict_unprivileged_userns=0` 的 sysctl drop-in，不修改宿主；`check` 始终验证当前值与工具，缺失时受控失败。
+- 真实验收入口为 `crates/saya-core/tests/browser_vm_network_real.rs`，默认 `#[ignore]`。它在宿主启动纯本地静态／重定向／动态／慢页面 fixture，VM 浏览器只经 broker 访问。旁路 canary 建在**浏览器 worker 实际所在的私有 netns** loopback 上：测试先从 broker observation 取得 worker PID，用 `sudo -n nsenter -t <pid> -n` 在该 netns 启动 TCP／UDP canary，再从**同一 netns** 用原始 TCP／UDP 正控制确认两者确实可达并重置计数。动态页随后通过子资源请求与真实 `RTCPeerConnection` STUN 尝试 canary，并在可见 DOM 中记录 `STUN_STARTED` 及最终的 `STUN_DONE`／`STUN_FAILED`；snapshot 必须看到这些标记，证明脚本实际执行。若 Chromium 忽略代理直连，请求会真实命中 canary，因此零命中是有意义的负控制。测试还断言来源、最终 URL、redirect、metadata 拒绝观测、慢页面取消；canary 计数与观察条数随环境变化，不写成固定常量。清理覆盖 Run 根、worker、socat 与 netns canary，leftover 扫描要求全部消失。默认不访问真实外网。该入口已在专用 Colima VM 上实际执行通过；同一环境下的 `browser_vm_real` 也通过，renderer 为 `NoNewPrivs=1`、`Seccomp=2`。
 
 ## 范围与首个实现
 
@@ -174,26 +187,47 @@ Run 结束或取消时停止调度并清理浏览器、worker、临时 profile �
 
    工具会输出 `identity_sha256`、远端路径和 `remote_temp_root`；它不下载、不更新版本，源 package／Chromium 版本与 pinned 值不一致时失败。
 
-3. 使用输出值配置 `[browser.vm]`，显式启用 `[browser]`，然后运行真实入口：
+3. 使用输出值配置 `[browser.vm]` 与 `[browser.network]`，显式启用 `[browser]`，然后运行真实入口。以下为当前专用环境使用的测试输入（均为显式测试值，不是产品默认）：
 
    ```text
+   SAYA_TEST_EXECUTABLE=$PWD/target/release/saya \
    SAYA_TEST_VM_COLIMA=/opt/homebrew/bin/colima \
    SAYA_TEST_VM_SSH=/usr/bin/ssh \
    SAYA_TEST_VM_PROFILE=saya-browser \
    SAYA_TEST_VM_HOST=127.0.0.1 \
-   SAYA_TEST_VM_USER=saya \
-   SAYA_TEST_VM_PORT=2222 \
-   SAYA_TEST_VM_IDENTITY_FILE=$HOME/.ssh/saya-browser-vm \
-   SAYA_TEST_VM_KNOWN_HOSTS=$HOME/.ssh/known_hosts \
-   SAYA_TEST_VM_NODE=/opt/saya/node/bin/node \
-   SAYA_TEST_VM_WORKER_ROOT=/opt/saya/worker \
-   SAYA_TEST_VM_CHROMIUM=/opt/saya/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell \
-   SAYA_TEST_VM_MANIFEST=/opt/saya/identity.json \
-   SAYA_TEST_VM_MANIFEST_SHA256=<provision 输出的摘要> \
-   SAYA_TEST_VM_TEMP_ROOT=/opt/saya/runs \
+   SAYA_TEST_VM_USER=ariakage \
+   SAYA_TEST_VM_PORT=58780 \
+   SAYA_TEST_VM_IDENTITY_FILE=$HOME/.colima/_lima/_config/user \
+   SAYA_TEST_VM_KNOWN_HOSTS=$HOME/.colima/_lima/colima-saya-browser/ssh.known_hosts \
+   SAYA_TEST_VM_NODE=/opt/saya-browser/bin/node \
+   SAYA_TEST_VM_WORKER_ROOT=/opt/saya-browser/worker \
+   SAYA_TEST_VM_CHROMIUM=/opt/saya-browser/chromium_headless_shell-1254/chrome-headless-shell-linux-arm64/chrome-headless-shell \
+   SAYA_TEST_VM_MANIFEST=/opt/saya-browser/worker-manifest.json \
+   SAYA_TEST_VM_MANIFEST_SHA256=e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46 \
+   SAYA_TEST_VM_TEMP_ROOT=/tmp/saya-runs \
+   SAYA_TEST_VM_NETWORK_ORIGINS=https://example.com \
    cargo test -p saya-core --test browser_vm_real -- --ignored --nocapture
+
+   SAYA_TEST_EXECUTABLE=$PWD/target/release/saya \
+   SAYA_TEST_VM_COLIMA=/opt/homebrew/bin/colima \
+   SAYA_TEST_VM_SSH=/usr/bin/ssh \
+   SAYA_TEST_VM_PROFILE=saya-browser \
+   SAYA_TEST_VM_HOST=127.0.0.1 \
+   SAYA_TEST_VM_USER=ariakage \
+   SAYA_TEST_VM_PORT=58780 \
+   SAYA_TEST_VM_IDENTITY_FILE=$HOME/.colima/_lima/_config/user \
+   SAYA_TEST_VM_KNOWN_HOSTS=$HOME/.colima/_lima/colima-saya-browser/ssh.known_hosts \
+   SAYA_TEST_VM_NODE=/opt/saya-browser/bin/node \
+   SAYA_TEST_VM_WORKER_ROOT=/opt/saya-browser/worker \
+   SAYA_TEST_VM_CHROMIUM=/opt/saya-browser/chromium_headless_shell-1254/chrome-headless-shell-linux-arm64/chrome-headless-shell \
+   SAYA_TEST_VM_MANIFEST=/opt/saya-browser/worker-manifest.json \
+   SAYA_TEST_VM_MANIFEST_SHA256=e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46 \
+   SAYA_TEST_VM_TEMP_ROOT=/tmp/saya-runs \
+   cargo test -p saya-core --test browser_vm_network_real -- --ignored --nocapture
    ```
 
-4. 随时以 `python3 -B scripts/n5/browser_vm.py check --manifest-sha256 <摘要> ...` 复核远端 manifest、命名文件大小／SHA-256／权限、Node 版本与 Chromium revision；验收完成后以 `destroy` 删除专用 profile。
+   `browser_vm_real` 在 `SAYA_TEST_VM_NETWORK_ORIGINS` 缺失时使用合法且不会实际访问的默认 fixture origin（`https://example.com`），不会因空 allowlist 而 panic；`browser_vm_network_real` 自建宿主 fixture 与 VM loopback canary，不使用 `public_web` 或默认 VM 直连。
 
-验收记录应包含 VM 内 renderer PID、`NoNewPrivs=1`、`Seccomp=2`、合法 sandbox argv、取消／断连后远端 PID 消失与 Run 根删除结果。native 浏览器若无法取得 Chromium 自有的 `InitializeSandbox` 证据，必须保持 `browser_sandbox_unavailable`，不能以 Bubblewrap 固定赋予的属性替代。本轮已在上述专用 VM 取得 VM 后端的运行与清理证据；native 浏览器、broker 与四平台验收仍未完成，不能宣称 N5 或真实平台验收已经完成。
+4. 随时以 `python3 -B scripts/n5/browser_vm.py check --manifest-sha256 <摘要> ...` 复核远端 manifest、命名文件大小／SHA-256／权限、Node 版本、Chromium revision，以及 `sudo -n`／`unshare`／`socat`／`setpriv`／`ip route` 与 user namespace／AppArmor 当前值；验收完成后以 `destroy` 删除专用 profile。需要让专用 VM 允许 Chromium 创建 unprivileged user namespace 时，使用 `provision --configure-apparmor-userns` 显式设置该 VM 的 sysctl drop-in；该选项不改宿主。
+
+验收记录应包含 VM 内 renderer PID、`NoNewPrivs=1`、`Seccomp=2`、合法 sandbox argv、取消／断连后远端 PID 消失与 Run 根删除结果。native 浏览器若无法取得 Chromium 自有的 `InitializeSandbox` 证据，必须保持 `browser_sandbox_unavailable`，不能以 Bubblewrap 固定赋予的属性替代。本轮已在上述专用 VM 取得 VM 后端的运行、sandbox 与 DEV-081A 网络/清理证据；native 浏览器、完整 DEV-081（登录／文件／截图／后台）与四平台验收仍未完成，不能宣称 N5 或真实平台验收已经完成。

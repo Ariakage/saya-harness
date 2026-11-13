@@ -126,16 +126,24 @@ impl SeatbeltBackend {
                 "(allow network-outbound (remote tcp \"{address}\"))\n"
             ));
         }
-        if let NetworkPolicy::LoopbackPort { port } = &policy.network {
-            // The VM host channel can reach only the forwarded SSH port on
-            // loopback. No DNS, proxy, or general outbound network is allowed.
-            profile.push_str(&format!(
-                "(allow network-outbound (remote tcp \"localhost:{port}\"))\n\
-                 (allow mach-lookup\n\
+        if let NetworkPolicy::LoopbackPort { port, proxy_port } = &policy.network {
+            // The VM host channel can reach only the forwarded SSH port and,
+            // when configured, the per-Run broker port used as the local side
+            // of one reverse streamlocal forward. No DNS, proxy environment or
+            // general outbound network is allowed.
+            let mut rules = format!("(allow network-outbound (remote tcp \"localhost:{port}\"))\n");
+            if let Some(proxy) = proxy_port {
+                rules.push_str(&format!(
+                    "(allow network-outbound (remote tcp \"localhost:{proxy}\"))\n"
+                ));
+            }
+            rules.push_str(
+                "(allow mach-lookup\n\
                    (global-name \"com.apple.system.opendirectoryd.libinfo\")\n\
                    (global-name \"com.apple.system.opendirectoryd.membership\")\n\
-                   (global-name \"com.apple.bsd.dirhelper\"))\n"
-            ));
+                   (global-name \"com.apple.bsd.dirhelper\"))\n",
+            );
+            profile.push_str(&rules);
         }
         let backend = Self {
             profile,

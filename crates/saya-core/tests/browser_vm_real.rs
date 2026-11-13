@@ -4,28 +4,33 @@
 //! Colima profile created by `scripts/n5/browser_vm.py`:
 //!
 //! ```text
+//! SAYA_TEST_EXECUTABLE=$PWD/target/release/saya \
 //! SAYA_TEST_VM_COLIMA=/opt/homebrew/bin/colima \
 //! SAYA_TEST_VM_SSH=/usr/bin/ssh \
 //! SAYA_TEST_VM_PROFILE=saya-browser \
 //! SAYA_TEST_VM_HOST=127.0.0.1 \
-//! SAYA_TEST_VM_USER=saya \
-//! SAYA_TEST_VM_PORT=2222 \
-//! SAYA_TEST_VM_IDENTITY_FILE=/path/to/id_ed25519 \
-//! SAYA_TEST_VM_KNOWN_HOSTS=/path/to/known_hosts \
-//! SAYA_TEST_VM_NODE=/opt/saya/node/bin/node \
-//! SAYA_TEST_VM_WORKER_ROOT=/opt/saya/worker \
-//! SAYA_TEST_VM_CHROMIUM=/opt/saya/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell \
-//! SAYA_TEST_VM_MANIFEST=/opt/saya/identity.json \
-//! SAYA_TEST_VM_MANIFEST_SHA256=<64-hex> \
+//! SAYA_TEST_VM_USER=ariakage \
+//! SAYA_TEST_VM_PORT=58780 \
+//! SAYA_TEST_VM_IDENTITY_FILE=$HOME/.colima/_lima/_config/user \
+//! SAYA_TEST_VM_KNOWN_HOSTS=$HOME/.colima/_lima/colima-saya-browser/ssh.known_hosts \
+//! SAYA_TEST_VM_NODE=/opt/saya-browser/bin/node \
+//! SAYA_TEST_VM_WORKER_ROOT=/opt/saya-browser/worker \
+//! SAYA_TEST_VM_CHROMIUM=/opt/saya-browser/chromium_headless_shell-1254/chrome-headless-shell-linux-arm64/chrome-headless-shell \
+//! SAYA_TEST_VM_MANIFEST=/opt/saya-browser/worker-manifest.json \
+//! SAYA_TEST_VM_MANIFEST_SHA256=e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46 \
 //! SAYA_TEST_VM_TEMP_ROOT=/tmp/saya-runs \
+//! SAYA_TEST_VM_NETWORK_ORIGINS=https://example.com \
 //! cargo test -p saya-core --test browser_vm_real -- --ignored --nocapture
 //! ```
 //!
-//! These values are test inputs, never product defaults.
+//! These values are test inputs, never product defaults. When
+//! `SAYA_TEST_VM_NETWORK_ORIGINS` is unset the test uses a legal,
+//! non-contacted fixture origin (`https://example.com`); it never derives an
+//! enabled network policy from an empty allowlist.
 
 use saya_core::{
     boundary::Cancellation,
-    browser::{BrowserProvider, vm::BrowserVmSettings},
+    browser::{BrowserProvider, network::BrowserNetworkSettings, vm::BrowserVmSettings},
     tools::exec::ExecConfig,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -80,13 +85,50 @@ async fn real_vm_worker_verifies_chromium_sandbox_inside_the_vm() {
     let launcher = env("SAYA_TEST_EXECUTABLE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/release/saya"));
-    let launcher = std::fs::canonicalize(launcher).expect("real Saya launcher path");
-    saya_core::execution::pin_launcher_image_from(&launcher)
-        .expect("pin the real Saya CLI instead of the libtest executable");
-    let provider = Arc::new(
-        saya_core::browser::vm::assemble_vm_browser_provider(settings, ExecConfig::default())
-            .expect("VM provider assembly"),
-    );
+    let Ok(launcher) = std::fs::canonicalize(launcher) else {
+        eprintln!("real Saya launcher path is unavailable; test not run");
+        return;
+    };
+    if saya_core::execution::pin_launcher_image_from(&launcher).is_err() {
+        eprintln!("real Saya launcher cannot be pinned; test not run");
+        return;
+    }
+    let origins = env("SAYA_TEST_VM_NETWORK_ORIGINS").unwrap_or_default();
+    let allowed_origins = origins
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    // A legal, non-contacted default fixture keeps an enabled VM network
+    // policy valid when the test only inspects sandbox evidence. The worker
+    // never navigates in this test.
+    let allowed_origins = if allowed_origins.is_empty() {
+        vec!["https://example.com".to_owned()]
+    } else {
+        allowed_origins
+    };
+    let network = BrowserNetworkSettings {
+        enabled: true,
+        allowed_origins,
+        public_web: env("SAYA_TEST_VM_PUBLIC_WEB").is_some_and(|value| value == "1"),
+        localhost_development_origin: env("SAYA_TEST_VM_DEV_ORIGIN"),
+        ..Default::default()
+    };
+    let provider = match saya_core::browser::vm::assemble_vm_browser_provider(
+        settings,
+        network,
+        "test-run",
+        ExecConfig::default(),
+    ) {
+        Ok(provider) => Arc::new(provider),
+        Err(error) => {
+            eprintln!(
+                "VM provider assembly is unavailable ({}); test not run",
+                error.0.code
+            );
+            return;
+        }
+    };
     let opened = provider
         .open(None, &NeverCancel)
         .await

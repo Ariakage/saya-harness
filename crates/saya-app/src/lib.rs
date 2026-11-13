@@ -155,12 +155,14 @@ pub fn new_session(config: &Config) -> Result<Session, Box<dyn std::error::Error
 /// native provider after verifying its identity and preflighting the native
 /// browser environment. Host execution and macOS Seatbelt fail with
 /// `browser_sandbox_unavailable`. Browser network policy remains
-/// `NetworkPolicy::Deny` for the native provider and `LoopbackPort` (VM SSH
-/// only) for the VM host channel in this increment; `worker.proxy` is reserved
-/// for the later broker stage and is not injected.
+/// `NetworkPolicy::Deny` for the native provider. The VM host channel allows
+/// only the SSH port and the Run broker's loopback port; page traffic reaches
+/// the broker through a reverse streamlocal forward and a namespace-confined
+/// `socat`. `worker.proxy` remains reserved and is not injected.
 pub fn assemble_browser_provider(
     config: &Config,
     exec: ExecConfig,
+    run_id: &str,
 ) -> Result<Option<Arc<PlaywrightMcpProvider>>, BoundaryError> {
     if !config.browser.enabled {
         return Ok(None);
@@ -177,7 +179,12 @@ pub fn assemble_browser_provider(
                 None,
             ));
         }
-        let provider = assemble_vm_browser_provider(config.browser.vm.clone(), exec)?;
+        let provider = assemble_vm_browser_provider(
+            config.browser.vm.clone(),
+            config.browser.network.clone(),
+            run_id,
+            exec,
+        )?;
         return Ok(Some(Arc::new(provider)));
     }
     if !config.browser.worker.enabled {
@@ -218,6 +225,7 @@ pub fn build_runtime(
         work_mode: session.work_mode,
         permissions: launch.permissions,
     };
+    let run_id = run.id.0.to_string();
     let models = config
         .profiles
         .iter()
@@ -396,7 +404,7 @@ pub fn build_runtime(
     if config.output_capture.enabled {
         runtime = runtime.with_output_store(outputs)?;
     }
-    if let Some(provider) = assemble_browser_provider(config, browser_exec)? {
+    if let Some(provider) = assemble_browser_provider(config, browser_exec, &run_id)? {
         runtime = runtime.with_browser(config.browser.clone(), provider)?;
     }
     if config.web.enabled {

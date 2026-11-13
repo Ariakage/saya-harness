@@ -1022,6 +1022,9 @@ fn dev079_web_and_browser_settings_default_off_and_validate_strictly() {
     assert!(!config.browser.enabled);
     assert!(!config.browser.worker.enabled);
     assert!(!config.browser.vm.enabled);
+    assert!(!config.browser.network.enabled);
+    assert!(config.browser.network.allowed_origins.is_empty());
+    assert!(!config.browser.network.public_web);
     assert_eq!(config.browser.vm.connect_timeout_ms, 20_000);
     assert_eq!(config.browser.vm.request_timeout_ms, 120_000);
     assert_eq!(config.browser.vm.cleanup_timeout_ms, 10_000);
@@ -1107,6 +1110,12 @@ fn dev079_web_and_browser_settings_default_off_and_validate_strictly() {
         "[browser.vm]\nidentity_sha256=\"ABC\"",
         "[browser.vm]\ncleanup_timeout_ms=1",
         "[browser.vm]\nstderr_limit_bytes=1",
+        "[browser.network]\nenabled=true",
+        "[browser.network]\nenabled=true\nallowed_origins=[\"https://example.com/path\"]",
+        "[browser.network]\nenabled=true\npublic_web=false\nallowed_origins=[]",
+        "[browser.network]\nenabled=true\nallowed_origins=[\"https://example.com\"]\nlocalhost_development_origin=\"http://127.0.0.1:8080\"",
+        "[browser.network]\nenabled=true\npublic_web=true\n[browser.network.limits]\nmax_connections=0",
+        "[browser.network]\nenabled=true\nallowed_origins=[\"http://127.0.0.1:8080\"]",
     ] {
         let path = write(
             temp.path(),

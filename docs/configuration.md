@@ -191,7 +191,7 @@ HTTP 配置使用 `[mcp.servers.NAME.transport]`，设置 `type = "http"` 与完
 
 ## Web 与 Browser（DEV-079／DEV-080）
 
-Web 读取与浏览器默认关闭。配置加载执行严格校验，未知字段、缺失 origin 或越界限额直接报错。`browser.enabled = true` 必须显式选择 `[browser.worker]` 或 `[browser.vm]` 之一，两者同时启用会被拒绝；`saya-app` 会校验所选后端的身份并为每个生命周期预检宿主 environment。native `Host` backend 与 macOS Seatbelt 在任何 worker／Chromium 启动前返回 `browser_sandbox_unavailable`；VM 后端缺少输入或不可用时返回 `browser_vm_unavailable`，不会回退 native／Host。native 浏览器环境固定使用 `NetworkPolicy::Deny`，VM 宿主通道只使用 `NetworkPolicy::LoopbackPort` 到 VM SSH 端口；两者都不声称已有网页网络，broker 由 DEV-081 接入。worker 与 VM 配置默认关闭，启用时全部身份输入必须显式提供：
+Web 读取与浏览器默认关闭。配置加载执行严格校验，未知字段、缺失 origin 或越界限额直接报错。`browser.enabled = true` 必须显式选择 `[browser.worker]` 或 `[browser.vm]` 之一，两者同时启用会被拒绝；`saya-app` 会校验所选后端的身份并为每个生命周期预检宿主 environment。native `Host` backend 与 macOS Seatbelt 在任何 worker／Chromium 启动前返回 `browser_sandbox_unavailable`；VM 后端缺少输入或不可用时返回 `browser_vm_unavailable`，不会回退 native／Host。native 浏览器环境固定使用 `NetworkPolicy::Deny`；VM 宿主通道使用 `NetworkPolicy::LoopbackPort`，只放行两个宿主回环目标：Colima 转发的 VM SSH 端口（`[browser.vm].port`）与本次 Run 的 broker 临时端口。VM 私有 netns 内承接代理的 `127.0.0.1:31281` 不是宿主通道端点。DEV-081A 起 VM 浏览器只能经宿主 broker 访问网络，没有默认 VM 出口回退；隔离能力失败返回 `browser_network_unavailable`，预算耗尽或固定 deadline 到期返回 `browser_network_budget`。worker 与 VM 配置默认关闭，启用时全部身份输入必须显式提供：
 
 ```toml
 [web]
@@ -253,6 +253,27 @@ connect_timeout_ms = 20000
 request_timeout_ms = 120000
 cleanup_timeout_ms = 10000
 stderr_limit_bytes = 65536
+
+# DEV-081A：VM 浏览器唯一的网络出口。启用 [browser.vm] 时必须同时启用。
+[browser.network]
+enabled = false
+# 精确 origin；空列表且 public_web=false 时拒绝启动。
+allowed_origins = []
+# 允许任意规范化 HTTP(S) origin，但仍逐连接执行完整 DNS、公开地址、
+# 内网／元数据与混合答案检查。
+public_web = false
+# 仅回环的开发 origin，必须同时出现在 allowed_origins。
+# localhost_development_origin = "http://127.0.0.1:8080"
+[browser.network.limits]
+max_connections = 32
+max_total_connections = 1024
+max_connection_bytes = 16777216
+max_total_bytes = 67108864
+header_timeout_ms = 5000
+connect_timeout_ms = 5000
+idle_timeout_ms = 30000
+connection_timeout_ms = 120000
+active_timeout_ms = 1800000
 ```
 
 `fetch_url` 只接受 HTTP／HTTPS 的 GET／HEAD，拒绝 userinfo、fragment、特殊 scheme 和系统 proxy。每次重定向都重新检查 origin、公开地址与完整 DNS 答案，并把连接固定到已核查 IP。DNS 解析与响应体读取同时受 timeout 和取消约束；响应大小、内容类型、UTF-8、超时与取消均有边界。字节截断落在 UTF-8 多字节中间时保留有效前缀并标记 truncated，真正损坏的输入仍报 `invalid_utf8`。非 HTML 内容同样在截断时返回 `truncated = true`；没有 OutputStore、捕获失败或捕获未保留字节时，正文返回有界 16KiB 前缀并标记 truncated，不返回空成功。HTML 提取以任意命名空间的 element handler 排除 script／style／noscript／template（含 SVG／MathML）与 RawText／ScriptData，并避免相邻文本块无空白粘连。搜索 endpoint 必须严格规范化为 HTTP／HTTPS，不能包含 query 或 fragment，其 origin 必须出现在 `allowed_origins` 中；字面私网或回环地址默认拒绝，只有同时显式配置 `localhost_development_origin` 时才允许开发回环；开发 origin 必须是回环地址，回环 allowlist 条目必须同时指定为开发 origin。搜索请求固定为 `GET endpoint?q=<query>&limit=<n>`，响应必须是 `{"results":[{"title","url","snippet"?}]}` 严格 JSON，`url` 必须是可规范化的 HTTP／HTTPS 地址。网页正文和快照分别作为 `Web`／`Browser` 流进入 OutputStore，长内容保留 `output_ref`、coverage 与 truncated；搜索长结果投影只保留 `result_count` 等元数据，正文经 `output_read`／`output_search` 回取；上游、提取、provider 或捕获已截断时使用 `limit_reached` 完成状态，不伪称 `eof` 完整。
@@ -261,7 +282,7 @@ stderr_limit_bytes = 65536
 
 DEV-080 的 `[browser.worker]` 仅描述宿主预置的 Playwright MCP worker，默认关闭且不会安装任何依赖。启用时 Node、worker root、Chromium、身份 manifest 与摘要必须齐全并保持绝对路径；启动前校验 manifest 命名的 Node、`cli.js`、三个 `package.json`、`browsers.json` 和 Chromium 主程序；pinned package 与 Chromium 版本必须精确匹配，Node 版本由 manifest 声明并与其摘要绑定。固定版本为 `@playwright/mcp 0.0.85`、`playwright`／`playwright-core 1.66.0-alpha-2026-11-09` 与 Chromium `158.0.8127.18`（revision 1254）。生产装配按 Node 父目录、worker root 与 Chromium 包目录构造只读安装根，不绑定 workspace、HOME、`.saya` 或凭据目录；`temp_root` 只用于离线 provider 测试，生产 workspace 来自每次启动新建的 `PreparedEnvironment`。`proxy` 仍仅为后续 broker 保留：只接受无凭据、无 path／query／fragment、带显式端口的 loopback HTTP 地址（IPv4 或 IPv6），DEV-080 不会把它注入 Chromium 或 `--proxy-server`，浏览器环境网络保持 Deny。
 
-`[browser.vm]` 按 D-066 保留宿主与 Chromium 双层 sandbox。启用时所有宿主与远端路径必须显式；宿主 `ssh`、identity 与 known-hosts（共三个文件，不含 `/etc/passwd`）由 Seatbelt 精确只读绑定，canonicalize 后的路径再次接受空白、控制字符与引号校验，符号链接目标也不能绕过。`host` 必须是字面回环地址，`[::1]` 等括号形式会归一化为 `::1` 后再进入 HostName 与 argv。写范围仅 run 私有目录，网络只允许到 `host:port` 的 VM loopback SSH，使用 `BatchMode`、`IdentitiesOnly`、严格主机 key 校验并禁止 agent／X11／本地命令／连接复用与 ProxyJump。远端身份校验通过同一受控通道核对 manifest 摘要、命名文件大小／SHA-256／权限、Node 实际版本、`@playwright/mcp`／Playwright 精确版本、Chromium `158.0.8127.18`（revision 1254）和 headless-shell 路径。每个生命周期创建唯一 0700 Run 根，并预先创建 LAUNCH 使用的全部 XDG 目录。SSH 断连、worker 退出、取消或 Run 结束都执行有界远端清理；启动或清理失败保留可重试句柄，外层超时不会丢弃 connection／workspace，无法确认时返回 unknown 并允许重试。VM 内 renderer 证据要求合法 sandbox argv、`NoNewPrivs=1` 与 `Seccomp=2`；native 浏览器还必须取得 Chromium 自有的 `InitializeSandbox` 证据，不能只依赖 Bubblewrap 固定属性。VM 网络在本阶段仍不是受控 Browser 出口；`screenshots`／`downloads`／`uploads` 仍为 false。`scripts/n5/browser_vm.py` 是唯一的显式创建／provision／check／destroy 入口，严格校验本地 canonical 路径、远端生成路径、manifest 结构与 worker-source 目录名，运行时不自动下载或更新版本。
+`[browser.vm]` 按 D-066 保留宿主与 Chromium 双层 sandbox。启用时所有宿主与远端路径必须显式；宿主 `ssh`、identity 与 known-hosts（共三个文件，不含 `/etc/passwd`）由 Seatbelt 精确只读绑定，canonicalize 后的路径再次接受空白、控制字符与引号校验，符号链接目标也不能绕过。`host` 必须是字面回环地址，`[::1]` 等括号形式会归一化为 `::1` 后再进入 HostName 与 argv。写范围仅 run 私有目录，网络只允许到 `host:port` 的 VM loopback SSH，使用 `BatchMode`、`IdentitiesOnly`、严格主机 key 校验并禁止 agent／X11／本地命令／连接复用与 ProxyJump。远端身份校验通过同一受控通道核对 manifest 摘要、命名文件大小／SHA-256／权限、Node 实际版本、`@playwright/mcp`／Playwright 精确版本、Chromium `158.0.8127.18`（revision 1254）和 headless-shell 路径。每个生命周期创建唯一 0700 Run 根，并预先创建 LAUNCH 使用的全部 XDG 目录。SSH 断连、worker 退出、取消或 Run 结束都执行有界远端清理；启动或清理失败保留可重试句柄，外层超时不会丢弃 connection／workspace，无法确认时返回 unknown 并允许重试。VM 内 renderer 证据要求合法 sandbox argv、`NoNewPrivs=1` 与 `Seccomp=2`；native 浏览器还必须取得 Chromium 自有的 `InitializeSandbox` 证据，不能只依赖 Bubblewrap 固定属性。DEV-081A 起 VM 网络只经宿主 broker：宿主启动受 `RunNetworkBudget` 约束的 `NetworkBroker`，SSH 通道增加一条反向 streamlocal 转发，VM 内在 `sudo -n unshare -n` 的私有网络命名空间中由原用户运行 `socat`，worker 再 `setpriv` 回原用户；宿主通道需要放行的两个回环端口是 `[browser.vm].port`（Colima 转发的 VM SSH）和本次 Run 的 broker 临时端口，VM 内 `31281` 只在私有 netns 中。Chromium 被固定到该 loopback 代理，禁用 QUIC、非代理 WebRTC UDP、隐式回环旁路与本地页面名解析。隔离能力失败返回 `browser_network_unavailable`，预算耗尽或固定 deadline 到期返回 `browser_network_budget`，均不回退默认 VM 网络。`screenshots`／`downloads`／`uploads` 仍为 false；登录、文件 broker 与后台阶段仍属 DEV-081 后续工作。`scripts/n5/browser_vm.py` 是唯一的显式创建／provision／check／destroy 入口，严格校验本地 canonical 路径、远端生成路径、manifest 结构与 worker-source 目录名，运行时不自动下载或更新版本。每个 Run 只创建一个共享 `RunNetworkBudget`，所有 worker 生命周期与 broker 重启共用累计 bytes／connections 和固定 deadline；重启不会重置已耗尽的上限。`provision`／`check` 还验证 `sudo -n`、`unshare -n`、`socat`、`setpriv`、`nsenter`、`ip route`、Chromium 所需的 user namespace／AppArmor 当前值，以及 `sshd -T` 报告的有效配置确实允许反向 streamlocal forwarding（`AllowStreamLocalForwarding`，并拒绝显式 `AllowTcpForwarding no`）；`provision --configure-apparmor-userns` 仅在专用 VM 内写入 sysctl drop-in，不修改宿主。
 
 ## 输出捕获与上下文预算
 

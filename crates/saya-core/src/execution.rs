@@ -101,9 +101,13 @@ pub enum NetworkPolicy {
     /// Allow outbound TCP only to a fixed loopback port. This purpose exists for
     /// the host side of the dedicated VM browser backend: the only reachable
     /// service is the VM's forwarded SSH port, never general browser egress.
+    /// `proxy_port` optionally adds the per-Run broker's loopback TCP port,
+    /// which the SSH client reaches for a reverse streamlocal forward.
     /// Generic policies keep `Deny` as their default.
     LoopbackPort {
         port: u16,
+        #[serde(default)]
+        proxy_port: Option<u16>,
     },
 }
 /// Trusted host selection for a browser worker environment. It is never a
@@ -358,12 +362,12 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
             proxy.unix_socket = Some(normalize_path(path)?);
         }
     }
-    if let NetworkPolicy::LoopbackPort { port } = policy.network
-        && port == 0
+    if let NetworkPolicy::LoopbackPort { port, proxy_port } = policy.network
+        && (port == 0 || proxy_port.is_some_and(|proxy| proxy == 0))
     {
         return Err(failure(
             "invalid_sandbox_policy",
-            "loopback TCP policy requires a nonzero port",
+            "loopback TCP policy requires nonzero ports",
         ));
     }
     validate_resources(&policy.resources)?;

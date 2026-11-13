@@ -1,8 +1,11 @@
 //! Per-run HTTP proxy with exact origin authorization and DNS-to-socket pinning.
 //!
-//! CONNECT authorizes a host/port tunnel, so encrypted methods and paths remain opaque. HTTP
-//! requests are individually framed and use a fresh upstream connection. No redirects are followed.
-//! The sandbox must independently prevent direct egress and access to other local sockets.
+//! CONNECT authorizes a host/port tunnel, so the broker cannot see plaintext methods, paths,
+//! queries or redirects inside it. It observes only that a new tunnel was opened (a different
+//! origin requires a new CONNECT) plus whatever final origin the worker reports. Plain HTTP
+//! requests are individually framed and use a fresh upstream connection. No redirects are followed
+//! by the broker. The sandbox must independently prevent direct egress and access to other local
+//! sockets.
 
 mod budget;
 mod http;
@@ -11,7 +14,7 @@ pub use budget::RunNetworkBudget;
 
 pub use policy::{
     BrokerLimits, BrokerPolicy, NetworkTarget, NormalizedOrigin, OriginScheme, is_public_address,
-    normalize_target,
+    normalize_final_target, normalize_target,
 };
 
 use std::fmt;
@@ -20,7 +23,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -65,6 +68,42 @@ impl From<std::io::Error> for NetworkError {
     fn from(_: std::io::Error) -> Self {
         Self::new(NetworkErrorKind::Io)
     }
+}
+
+/// Terminal outcome recorded for one broker connection attempt. Observations
+/// intentionally carry only the normalized origin: paths, queries, headers and
+/// credentials are never retained, and CONNECT tunnels expose no path at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkOutcome {
+    Allowed,
+    Denied,
+    Upstream,
+    Timeout,
+    Limit,
+    Malformed,
+    /// The owning Run was cancelled or the listener shut down before the
+    /// connection reached a terminal result. This is deliberately distinct
+    /// from a real per-connection timeout.
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkObservation {
+    /// `None` when the request was malformed or oversized before a target
+    /// origin could be normalized. The broker never invents an origin for
+    /// traffic it could not identify.
+    pub origin: Option<NormalizedOrigin>,
+    pub outcome: NetworkOutcome,
+    /// True for CONNECT tunnels, where the broker cannot see paths or queries.
+    pub tunneled: bool,
+    pub bytes: u64,
+    pub elapsed_ms: u64,
+}
+
+/// Host-owned observation sink. Implementations must stay bounded and must
+/// never block the broker; the broker calls this from connection tasks.
+pub trait NetworkObserver: Send + Sync {
+    fn observe(&self, observation: NetworkObservation);
 }
 
 type ResolveFuture<'a> =
@@ -168,6 +207,18 @@ impl NetworkBroker {
         budget: Arc<RunNetworkBudget>,
         resolver: Arc<dyn NetworkResolver>,
     ) -> Result<BrokerHandle, NetworkError> {
+        Self::start_scoped_observed(policy, cancel, budget, resolver, None).await
+    }
+
+    /// Same shared Run ceiling and resolver, plus a bounded host observation
+    /// sink. Existing entry points keep recording nothing.
+    pub async fn start_scoped_observed(
+        policy: BrokerPolicy,
+        cancel: Arc<dyn Cancellation>,
+        budget: Arc<RunNetworkBudget>,
+        resolver: Arc<dyn NetworkResolver>,
+        observer: Option<Arc<dyn NetworkObserver>>,
+    ) -> Result<BrokerHandle, NetworkError> {
         policy.validate()?;
         budget.check()?;
         if cancel.is_cancelled() {
@@ -189,6 +240,8 @@ impl NetworkBroker {
         let state = Arc::new(BrokerState {
             policy,
             resolver,
+            observer,
+            termination: Arc::new(AtomicU8::new(TERMINATION_RUNNING)),
             total_bytes: AtomicU64::new(0),
             budget,
         });
@@ -252,11 +305,37 @@ fn bind_loopback_pair(port: u16) -> Result<(TcpListener, TcpListener), NetworkEr
 struct BrokerState {
     policy: BrokerPolicy,
     resolver: Arc<dyn NetworkResolver>,
+    observer: Option<Arc<dyn NetworkObserver>>,
+    /// Why the supervisor stopped accepting. In-flight connection tasks read
+    /// this when they are aborted so shutdown/cancellation is never reported
+    /// as a real timeout.
+    termination: Arc<AtomicU8>,
     total_bytes: AtomicU64,
     budget: Arc<RunNetworkBudget>,
 }
+
+const TERMINATION_RUNNING: u8 = 0;
+const TERMINATION_CANCELLED: u8 = 1;
+const TERMINATION_DEADLINE: u8 = 2;
+
 impl BrokerState {
-    fn charge(&self, bytes: usize) -> Result<(), NetworkError> {
+    fn observe_rejection(&self, outcome: NetworkOutcome) {
+        let Some(observer) = &self.observer else {
+            return;
+        };
+        // Listener-capacity, shared-budget and deadline rejections happen
+        // before any request byte is parsed, so no origin exists. Record the
+        // attempt explicitly instead of dropping it silently.
+        observer.observe(NetworkObservation {
+            origin: None,
+            outcome,
+            tunneled: false,
+            bytes: 0,
+            elapsed_ms: 0,
+        });
+    }
+
+    fn charge(&self, bytes: usize, connection: &AtomicU64) -> Result<(), NetworkError> {
         let count = bytes as u64;
         self.total_bytes
             .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
@@ -266,7 +345,9 @@ impl BrokerState {
             })
             .map(|_| ())
             .map_err(|_| NetworkError::new(NetworkErrorKind::LimitExceeded))?;
-        self.budget.charge(count)
+        self.budget.charge(count)?;
+        connection.fetch_add(count, Ordering::AcqRel);
+        Ok(())
     }
 
     async fn connect(&self, origin: &NormalizedOrigin) -> Result<TcpStream, NetworkError> {
@@ -317,9 +398,18 @@ async fn supervise(
     let mut accepted = 0usize;
     loop {
         tokio::select! { biased;
-            _ = cancel.cancelled() => break,
-            _ = shutdown.changed() => break,
-            _ = &mut lifetime => break,
+            _ = cancel.cancelled() => {
+                state.termination.store(TERMINATION_CANCELLED, Ordering::Release);
+                break;
+            },
+            _ = shutdown.changed() => {
+                state.termination.store(TERMINATION_CANCELLED, Ordering::Release);
+                break;
+            },
+            _ = &mut lifetime => {
+                state.termination.store(TERMINATION_DEADLINE, Ordering::Release);
+                break;
+            },
             Some(_) = jobs.join_next(), if !jobs.is_empty() => {},
             result = listener.accept() => {
                 let Ok((stream, _)) = result else { break; };
@@ -353,9 +443,14 @@ fn spawn_client(
     if jobs.len() >= state.policy.limits.max_connections
         || *accepted >= state.policy.limits.max_total_connections
     {
+        state.observe_rejection(NetworkOutcome::Limit);
         return;
     }
     let Ok(connection) = state.budget.acquire() else {
+        // The shared Run budget (live slots, total attempts or fixed
+        // deadline) rejected this connection before a request could be
+        // parsed. The origin is unknown and must stay that way.
+        state.observe_rejection(NetworkOutcome::Limit);
         return;
     };
     *accepted += 1;

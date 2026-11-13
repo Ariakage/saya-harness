@@ -57,6 +57,18 @@ pub struct NetworkTarget {
 /// Strict normalization shared by the proxy and host-owned HTTP tool clients.
 /// It rejects user-info, fragments, backslashes, control characters and zero ports.
 pub fn normalize_target(value: &str) -> Result<NetworkTarget, NetworkError> {
+    normalize_target_impl(value, false)
+}
+
+/// Normalize a provider-reported final URL. Redirects and OAuth-style flows
+/// legitimately append a fragment, which is never part of the origin and is
+/// not forwarded. Everything else stays as strict as [`normalize_target`]:
+/// only HTTP(S), no user-info and a valid host.
+pub fn normalize_final_target(value: &str) -> Result<NetworkTarget, NetworkError> {
+    normalize_target_impl(value, true)
+}
+
+fn normalize_target_impl(value: &str, allow_fragment: bool) -> Result<NetworkTarget, NetworkError> {
     let invalid = || NetworkError::new(NetworkErrorKind::InvalidTarget);
     if value.len() > 16 * 1024
         || value
@@ -81,7 +93,10 @@ pub fn normalize_target(value: &str) -> Result<NetworkTarget, NetworkError> {
         "https" => OriginScheme::Https,
         _ => return Err(invalid()),
     };
-    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || (!allow_fragment && url.fragment().is_some())
+    {
         return Err(invalid());
     }
     let raw_host = url
@@ -163,6 +178,10 @@ impl Default for BrokerLimits {
 #[serde(default, deny_unknown_fields)]
 pub struct BrokerPolicy {
     pub allowed_origins: Vec<String>,
+    /// Allow any normalized HTTP(S) origin while still applying the complete
+    /// per-connection public-address, DNS and mixed-answer checks. Defaults to
+    /// `false`, so an empty allowlist never grants network access by itself.
+    pub public_web: bool,
     /// One exact HTTP(S) origin whose hostname is localhost or a loopback IP.
     /// It must also appear in allowed_origins and only loopback DNS answers are accepted.
     pub localhost_development_origin: Option<String>,
@@ -214,16 +233,23 @@ impl BrokerPolicy {
 
     pub fn check_origin(&self, origin: &NormalizedOrigin) -> Result<(), NetworkError> {
         self.validate()?;
-        if self
-            .allowed_origins
-            .iter()
-            .filter_map(|origin| NormalizedOrigin::parse(origin).ok())
-            .any(|allowed| allowed == *origin)
-        {
+        if self.allowed_origin(origin) {
             Ok(())
         } else {
             Err(NetworkError::new(NetworkErrorKind::OriginDenied))
         }
+    }
+
+    /// Exact-origin membership check without address work. `public_web`
+    /// accepts any already-normalized HTTP(S) origin; the caller still has to
+    /// run the full DNS and address checks on every connection.
+    pub fn allowed_origin(&self, origin: &NormalizedOrigin) -> bool {
+        self.public_web
+            || self
+                .allowed_origins
+                .iter()
+                .filter_map(|origin| NormalizedOrigin::parse(origin).ok())
+                .any(|allowed| allowed == *origin)
     }
 
     /// All answers must satisfy the policy. A mixed public/private answer set is rejected in full.
@@ -331,6 +357,31 @@ mod tests {
     }
 
     #[test]
+    fn final_targets_allow_fragments_but_keep_every_other_restriction() {
+        let target = normalize_final_target(
+            "https://EXAMPLE.com:443/oauth/callback?code=one#access_token=secret",
+        )
+        .unwrap();
+        assert_eq!(
+            target.origin,
+            NormalizedOrigin::parse("https://example.com").unwrap()
+        );
+        assert_eq!(target.path_and_query, "/oauth/callback?code=one");
+        // A bare `#` remains an explicit empty fragment and is accepted here.
+        assert!(normalize_final_target("https://example.com/#").is_ok());
+        for invalid in [
+            "http://user:pass@example.com/#x",
+            "http://@example.com/#x",
+            "file:///etc/passwd#x",
+            "http://example.com:0/#x",
+            "http://bad_.test/#x",
+        ] {
+            assert!(normalize_final_target(invalid).is_err(), "{invalid}");
+        }
+        assert!(normalize_target("https://example.com/#x").is_err());
+    }
+
+    #[test]
     fn private_metadata_loopback_special_and_mapped_addresses_are_denied() {
         for address in [
             "0.0.0.0",
@@ -402,6 +453,31 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn public_web_still_requires_every_answer_to_be_public() {
+        let policy = BrokerPolicy {
+            public_web: true,
+            ..Default::default()
+        };
+        let origin = NormalizedOrigin::parse("https://example.org").unwrap();
+        assert!(policy.check_origin(&origin).is_ok());
+        assert!(
+            policy
+                .check_addresses(&origin, &["8.8.8.8".parse().unwrap()])
+                .is_ok()
+        );
+        for answers in [
+            vec!["10.0.0.1".parse().unwrap()],
+            vec!["169.254.169.254".parse().unwrap()],
+            vec!["8.8.8.8".parse().unwrap(), "127.0.0.1".parse().unwrap()],
+        ] {
+            assert!(policy.check_addresses(&origin, &answers).is_err());
+        }
+        // An empty allowlist with public_web disabled keeps denying.
+        let closed = BrokerPolicy::default();
+        assert!(closed.check_origin(&origin).is_err());
     }
 
     #[test]
