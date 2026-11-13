@@ -30,7 +30,7 @@
 
 N0与N1已随 **0.2.0正式版**交付，包含候选阶段完善的交互与审查修复，已发布产物的功能和限制保留在[双语发行说明](release-notes-0.2.0.md)。当前N2已接入原生隔离、命令结构事实、stdio／HTTP MCP与凭据管理，最终固定源码的四平台CI、原生、MCP、完整性能及Markdown／TUI验收全部通过。[N2验收记录](n2-validation.md#最终四平台验收)
 
-N3的OutputStore、Compact、检查点、插件／Hooks和模型可编辑全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台验收。N4 Goal已完成独立版本化存储、手动与有限自动编排、持久 worker、TUI／CLI 和故障矩阵本机验收；N5 Browser的DEV-079／DEV-080组件已完成离线实现与测试，DEV-080专用Colima VM真实入口已通过，但native浏览器尚未取得真实平台验收；DEV-081至DEV-083及四平台联合验收未开始。后续版本号和跨平台固定源码证据在发行范围收敛时确定。[N3最终验收](n3-validation.md#四平台最终验收)、[N4验收](n4-validation.md)
+N3的OutputStore、Compact、检查点、插件／Hooks和模型可编辑全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台验收。N4 Goal已完成独立版本化存储、手动与有限自动编排、持久 worker、TUI／CLI 和故障矩阵本机验收；N5 Browser的DEV-079／DEV-080／DEV-081组件已完成离线实现与测试，DEV-080／DEV-081专用Colima VM真实入口已通过，但native浏览器尚未取得真实平台验收；DEV-082／DEV-083及四平台联合验收未开始。后续版本号和跨平台固定源码证据在发行范围收敛时确定。[N3最终验收](n3-validation.md#四平台最终验收)、[N4验收](n4-validation.md)
 
 Goal 的手动与有限自动阶段均已接入独立持久调度，复用执行隔离、检查点、上下文管理和专属 Session 锁。多 Agent Goal 的后续工作归 F-09。
 

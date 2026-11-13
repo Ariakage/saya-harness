@@ -376,6 +376,16 @@ pub fn build_runtime(
     } else if credential_backed || credential_path.exists() {
         return Err("host execution cannot protect the credential store".into());
     }
+    if config.browser.credentials.enabled
+        && let Some(store) = config.browser.credentials.store.as_ref()
+    {
+        // Credential material is protected whenever it is configured, even if
+        // the browser surface itself is disabled for this run.
+        if sandbox.backend == saya_core::execution::BackendKind::Host {
+            return Err("host execution cannot protect the browser credential store".into());
+        }
+        sandbox.protected_paths.push(store.clone());
+    }
     let authorizer: Option<Arc<dyn saya_core::mcp::config::McpHttpAuthorizer>> =
         if credential_backed {
             std::fs::create_dir_all(&config.state_dir)?;
@@ -403,9 +413,6 @@ pub fn build_runtime(
     runtime = runtime.with_media_store(outputs.clone(), selected.multimodal);
     if config.output_capture.enabled {
         runtime = runtime.with_output_store(outputs)?;
-    }
-    if let Some(provider) = assemble_browser_provider(config, browser_exec, &run_id)? {
-        runtime = runtime.with_browser(config.browser.clone(), provider)?;
     }
     if config.web.enabled {
         runtime = runtime.with_web(config.web.clone())?;
@@ -468,6 +475,9 @@ pub fn build_runtime(
         )?;
     } else {
         runtime = runtime.with_secret_registry(registry.clone())?;
+    }
+    if let Some(provider) = assemble_browser_provider(config, browser_exec, &run_id)? {
+        runtime = runtime.with_browser(config.browser.clone(), provider)?;
     }
     let review_profile = config.review.profile.as_ref().unwrap_or(profile);
     runtime = runtime.with_pricing(

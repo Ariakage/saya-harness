@@ -563,6 +563,7 @@ pub(crate) fn sanitize_result(
             data: None,
             error: result.error.as_ref().map(|_| error.0.clone()),
             truncated: true,
+            media_refs: Vec::new(),
         }));
         error
     })
@@ -611,6 +612,7 @@ impl crate::boundary::Tool for WriteTool {
                         message,
                     }),
                     truncated: false,
+                    media_refs: Vec::new(),
                 }
             }
             fn cancelled() -> BoundaryError {
@@ -791,6 +793,7 @@ impl crate::boundary::Tool for WriteTool {
                         data: Some(value),
                         error: None,
                         truncated: false,
+                        media_refs: Vec::new(),
                     },
                     Err(e) => failure("serialization_error", e.to_string()),
                 },

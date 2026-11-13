@@ -947,6 +947,7 @@ async fn execution_rounds_follow_their_tool_results_in_the_visible_conversation(
             data: Some(serde_json::json!({"text":"tool result"})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         },
     }));
     app.event(event(EventPayload::ModelStarted {

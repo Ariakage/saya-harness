@@ -790,6 +790,7 @@ fn result(
         data: Some(data),
         error,
         truncated,
+        media_refs: Vec::new(),
     };
     if serde_json::to_vec(&result)
         .map_err(|_| {
@@ -866,6 +867,7 @@ fn page_result<T: Serialize>(
             data: Some(data),
             error: None,
             truncated: incomplete || next + 1 < all.len(),
+            media_refs: Vec::new(),
         })
         .map_err(|_| error("checkpoint_limit", "Checkpoint page cannot be encoded"))?;
         if encoded.len() > page.max_bytes.unwrap_or(MAX_RESULT_BYTES) {

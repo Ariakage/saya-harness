@@ -97,6 +97,7 @@ fn result(todos: &[TodoItem]) -> ToolResult {
         data: Some(json!({"todos": todos})),
         error: None,
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 fn pair(id: &str, todos: &[TodoItem]) -> Vec<HistoryItem> {

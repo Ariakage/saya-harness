@@ -106,6 +106,7 @@ impl Tool for Adapter {
                 data: Some(json!({"text":"fixture-secret"})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })
         })
     }

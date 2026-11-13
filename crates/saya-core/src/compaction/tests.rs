@@ -608,6 +608,7 @@ async fn blocks_unsafe_cuts_pins_open_groups_and_oversized_single_groups_before_
                 data: None,
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         },
         HistoryItem::UserText("latest".into()),
@@ -1163,6 +1164,7 @@ async fn one_user_long_running_tool_work_can_compact_and_continue_across_all_pro
                     data: Some(json!({"content":"observed evidence ".repeat(240)})),
                     error: None,
                     truncated: false,
+                    media_refs: Vec::new(),
                 },
             });
         }
@@ -1212,6 +1214,7 @@ async fn one_user_long_running_tool_work_can_compact_and_continue_across_all_pro
                 data: Some(json!({"content":"new evidence ".repeat(400)})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
         let mut next = fixture.input();

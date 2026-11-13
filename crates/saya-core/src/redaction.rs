@@ -388,6 +388,7 @@ mod tests {
                 data: Some(json!({"text":text})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             };
             assert!(tool_result(&result, &known).is_err());
         }

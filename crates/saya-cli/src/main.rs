@@ -1670,6 +1670,7 @@ mod report_tests {
                 ),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })),
         );
         let mut value = memory_failure_value(&action, failure);

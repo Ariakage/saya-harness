@@ -1128,12 +1128,14 @@ impl RuntimeServices {
                 data: Some(serde_json::json!({"server":id,"started":true})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
             Err(failure) => ToolResult {
                 ok: false,
                 data: None,
                 error: Some(failure.0.clone()),
                 truncated: false,
+                media_refs: Vec::new(),
             },
         };
         runtime

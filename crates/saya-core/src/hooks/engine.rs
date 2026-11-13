@@ -473,6 +473,7 @@ fn unsaved(record: &HookRecord) -> BoundaryError {
                 message: "Hook result could not be saved".into(),
             }),
             truncated: false,
+            media_refs: Vec::new(),
         })
     });
     BoundaryError(

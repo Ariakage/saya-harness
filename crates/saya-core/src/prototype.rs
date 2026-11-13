@@ -35,6 +35,7 @@ fn failed(code: &str, message: &str) -> ToolResult {
             message: message.into(),
         }),
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 
@@ -557,6 +558,7 @@ async fn run_inner(
                             data: None,
                             error: Some(err.0),
                             truncated: false,
+                            media_refs: Vec::new(),
                         },
                     }
                 } else {

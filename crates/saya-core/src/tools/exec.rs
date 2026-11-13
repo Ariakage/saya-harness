@@ -184,6 +184,7 @@ fn tool_failure(error: BoundaryError) -> ToolResult {
         data: None,
         error: Some(error.0),
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 fn is_base(name: &str) -> bool {
@@ -1324,6 +1325,7 @@ impl Tool for ExecTool {
                 data: Some(data),
                 error,
                 truncated,
+                media_refs: Vec::new(),
             };
             let mut result = super::write::sanitize_result(&result, &secrets)?;
             let mut process_result: ExecResult =

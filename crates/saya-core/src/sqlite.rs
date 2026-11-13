@@ -1008,7 +1008,7 @@ fn recover_transaction(
                         } else {
                             Some(false)
                         };
-                        background_notices.push(serde_json::json!({"job_id":job_id,"outcome":outcome,"result":result,"active":active,"managed":false}));
+                        background_notices.push(serde_json::json!({"job_id":job_id,"outcome":outcome,"result":result.as_ref().map(ToolResult::model_view),"active":active,"managed":false}));
                     }
                 }
                 continue;
@@ -1028,7 +1028,8 @@ fn recover_transaction(
                 }
                 if let Some((job_id, (_, state, raw))) = associated.first() {
                     if state == "running" || state == "unknown" {
-                        ToolResult { ok:false, data:Some(serde_json::json!({"job_id":job_id,"status":"interrupted","outcome":"unknown"})), error:Some(ErrorInfo {code:"outcome_unknown".into(), message:"background operation may have started; do not replay automatically".into()}), truncated:false }
+                        ToolResult { ok:false, data:Some(serde_json::json!({"job_id":job_id,"status":"interrupted","outcome":"unknown"})), error:Some(ErrorInfo {code:"outcome_unknown".into(), message:"background operation may have started; do not replay automatically".into()}), truncated:false, media_refs: Vec::new(),
+                        }
                     } else if let Some(raw) = raw {
                         let child: ToolResult = serde_json::from_str(raw)
                             .map_err(|_| error("storage_corrupt", "invalid background result"))?;
@@ -1039,6 +1040,7 @@ fn recover_transaction(
                             ),
                             error: None,
                             truncated: false,
+                            media_refs: Vec::new(),
                         }
                     } else {
                         return Err(error("storage_corrupt", "background result is missing"));
@@ -1055,18 +1057,24 @@ fn recover_transaction(
                     } else {
                         "not_executed"
                     };
-                    ToolResult {ok:false,data:None,error:Some(ErrorInfo {code:code.into(), message:"background submission was interrupted; no authorization or job was restored".into()}),truncated:false}
+                    ToolResult {ok:false,data:None,error:Some(ErrorInfo {code:code.into(), message:"background submission was interrupted; no authorization or job was restored".into()}),truncated:false, media_refs: Vec::new(),
+                    }
                 }
             } else {
                 match states.get(&call.call_id) {
-                Some((_, state, _)) if state == "running" && call.name == "ask_user" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"input_interrupted".into(), message:"clarification did not complete durably; no answer was restored".into() }), truncated:false },
-                Some((_, state, _)) if state == "running" || state == "unknown" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"outcome_unknown".into(), message:"operation may have started before interruption; do not replay automatically".into() }), truncated:false },
+                Some((_, state, _)) if state == "running" && call.name == "ask_user" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"input_interrupted".into(), message:"clarification did not complete durably; no answer was restored".into() }), truncated:false, media_refs: Vec::new(),
+                },
+                Some((_, state, _)) if state == "running" || state == "unknown" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"outcome_unknown".into(), message:"operation may have started before interruption; do not replay automatically".into() }), truncated:false, media_refs: Vec::new(),
+                },
                 Some((_, _, Some(raw))) => serde_json::from_str(raw).map_err(|_| error("storage_corrupt", "invalid stored tool result"))?,
                 Some((_, state, None)) if state == "succeeded" || state == "failed" || state == "denied" => return Err(error("storage_corrupt", "completed tool result is missing")),
-                Some((_, state, None)) if state == "waiting_confirmation" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false },
+                Some((_, state, None)) if state == "waiting_confirmation" => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false, media_refs: Vec::new(),
+                },
                 Some((_, state, None)) if state != "requested" => return Err(error("storage_corrupt", "invalid stored tool state")),
-                _ if pending => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false },
-                _ => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"not_executed".into(), message:"run ended before this operation was dispatched".into() }), truncated:false },
+                _ if pending => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"needs_confirmation".into(), message:"approval was interrupted; no authorization was restored".into() }), truncated:false, media_refs: Vec::new(),
+                },
+                _ => ToolResult { ok:false, data:None, error:Some(ErrorInfo { code:"not_executed".into(), message:"run ended before this operation was dispatched".into() }), truncated:false, media_refs: Vec::new(),
+                },
             }
             };
             if (call.name == "ask_user" || call.name == "background_start")

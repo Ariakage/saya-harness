@@ -90,6 +90,7 @@ fn model_history_retains_order_call_identity_and_opaque_items()
                     message: "invalid JSON".into(),
                 }),
                 truncated: false,
+                media_refs: Vec::new(),
             },
         },
     ];
@@ -126,6 +127,7 @@ fn tool_event_preserves_call_id_and_structured_failure() -> Result<(), Box<dyn s
                 message: "not authorized".into(),
             }),
             truncated: false,
+            media_refs: Vec::new(),
         },
     };
     assert_eq!(

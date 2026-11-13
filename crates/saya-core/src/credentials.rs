@@ -116,6 +116,34 @@ impl CredentialScope {
         Ok(scope)
     }
 
+    /// Bind one browser form-fill slot to an exact origin. The audience is the
+    /// origin itself; the purpose is recorded as a scope so the same reference
+    /// cannot be reused for an unrelated credential purpose.
+    pub fn for_browser(
+        alias: &str,
+        origin: &crate::network::NormalizedOrigin,
+    ) -> Result<Self, BoundaryError> {
+        if !crate::browser::settings::valid_alias(alias) {
+            return Err(error(
+                "credential_scope",
+                "Browser credential alias is invalid",
+            ));
+        }
+        let scheme = match origin.scheme {
+            crate::network::OriginScheme::Http => "http",
+            crate::network::OriginScheme::Https => "https",
+        };
+        let audience = format!("{scheme}://{}", origin.authority());
+        let scope = Self {
+            server_id: "browser".into(),
+            origin: audience.clone(),
+            audience,
+            scopes: ["browser.form_fill".to_owned()].into_iter().collect(),
+        };
+        scope.validate()?;
+        Ok(scope)
+    }
+
     fn validate(&self) -> Result<(), BoundaryError> {
         if !crate::registry::valid_server_id(&self.server_id)
             || self.audience.len() > 4096

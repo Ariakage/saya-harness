@@ -441,6 +441,7 @@ async fn save_not_started(
                         message: "Hook process was not started".into(),
                     }),
                     truncated: false,
+                    media_refs: Vec::new(),
                 },
             },
             StoreChange::ToolState {
@@ -549,7 +550,8 @@ impl RunningHook {
             let _ = stderr.await;
         }
         let ok = matches!(reason, StopReason::Completed) && status.success();
-        self.store.commit(&[StoreChange::ToolFinished {run_id:self.context.run.id,call_id:self.call.call_id.clone(),result:ToolResult {ok,data:Some(json!({"hook":self.entry,"exit_code":self.exit_code,"cancelled":matches!(reason,StopReason::Cancelled),"timed_out":matches!(reason,StopReason::TimedOut)})),error:None,truncated:false}},StoreChange::ToolState {run_id:self.context.run.id,call_id:self.call.call_id.clone(),state:if ok {ToolState::Succeeded}else {ToolState::Failed}}]).await?;
+        self.store.commit(&[StoreChange::ToolFinished {run_id:self.context.run.id,call_id:self.call.call_id.clone(),result:ToolResult {ok,data:Some(json!({"hook":self.entry,"exit_code":self.exit_code,"cancelled":matches!(reason,StopReason::Cancelled),"timed_out":matches!(reason,StopReason::TimedOut)})),error:None,truncated:false, media_refs: Vec::new(),
+        }},StoreChange::ToolState {run_id:self.context.run.id,call_id:self.call.call_id.clone(),state:if ok {ToolState::Succeeded}else {ToolState::Failed}}]).await?;
         if let Some(plugins) = self.plugins.upgrade() {
             plugins.record(&self.entry, StopEvidence::Stopped)?;
         }

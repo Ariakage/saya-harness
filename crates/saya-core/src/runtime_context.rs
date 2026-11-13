@@ -113,6 +113,8 @@ fn project_tool_result(result: &ToolResult, outputs: &[OutputMetadata]) -> ToolR
         error: result.error.clone(),
         truncated: true,
         data: Some(data),
+        // Host-only artifact references are never exposed to the model.
+        media_refs: Vec::new(),
     }
 }
 
@@ -594,6 +596,7 @@ mod projection_tests {
                 "title": "Example",
                 "elements": elements,
             })),
+            media_refs: Vec::new(),
         };
         assert!(
             serde_json::to_vec(&result).unwrap().len() > 16 * 1024,
@@ -689,6 +692,7 @@ mod projection_tests {
                 error: None,
                 truncated: true,
                 data: Some(serde_json::Value::Object(data)),
+                media_refs: Vec::new(),
             };
             let mut output = metadata("call-withheld", stream);
             output.total_bytes_seen = 32;
@@ -711,6 +715,7 @@ mod projection_tests {
                 "page": "page_should_not_leak",
                 "final_url": "https://example.com",
             })),
+            media_refs: Vec::new(),
         };
         result.data.as_mut().unwrap()["stdout"] = json!("x".repeat(20 * 1024));
         let outputs = vec![metadata("call-exec", OutputStream::Stdout)];

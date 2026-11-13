@@ -534,7 +534,7 @@ fn document(
         HistoryItem::ToolCall(call) => ("assistant_tool_call", json!({"call":call})),
         HistoryItem::ToolResult { call_id, result } => (
             "tool_observation",
-            json!({"call_id":call_id,"result":result}),
+            json!({"call_id":call_id,"result":result.model_view()}),
         ),
         HistoryItem::ProviderItem { protocol, value } => (
             "provider_state",

@@ -79,8 +79,10 @@ impl Tool for McpToolAdapter {
                         message: "MCP tool reported an execution error".into(),
                     }),
                     truncated: result.truncated,
+                    media_refs: Vec::new(),
                 },
                 outputs,
+                media: Vec::new(),
                 capture_errors,
             })
         })
@@ -115,6 +117,7 @@ impl Tool for McpToolAdapter {
                     message: "MCP tool reported an execution error".into(),
                 }),
                 truncated: result.truncated,
+                media_refs: Vec::new(),
             })
         })
     }

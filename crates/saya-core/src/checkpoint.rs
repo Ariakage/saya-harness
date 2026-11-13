@@ -1254,6 +1254,7 @@ impl CheckpointWorkspace {
                     data,
                     error: Some(failure.0.clone()),
                     truncated,
+                    media_refs: Vec::new(),
                 }));
                 failure
             })

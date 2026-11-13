@@ -68,6 +68,7 @@ fn failed(code: &str, message: &str) -> ToolResult {
             message: message.into(),
         }),
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 fn invalid_tool_request(error: &BoundaryError) -> bool {
@@ -775,10 +776,33 @@ impl AgentRuntime {
                 "Browser tools are unavailable in a read-only runtime",
             ));
         }
-        let state = Arc::new(crate::browser::BrowserState::new(
+        let registry = self
+            .secret_source
+            .read()
+            .map_err(|_| {
+                error(
+                    "sensitive_data",
+                    "Dynamic secret registry could not be read for browser credentials",
+                )
+            })?
+            .clone();
+        let registry = match registry {
+            Some(registry) => registry,
+            None if settings.credentials.enabled => {
+                return Err(error(
+                    "invalid_config",
+                    "Browser credential slots require the Run secret registry",
+                ));
+            }
+            None => Arc::new(crate::credentials::SecretRegistry::default()),
+        };
+        let state = Arc::new(crate::browser::BrowserState::new_with_services(
             settings,
             provider,
             self.run.clone(),
+            self.media_store.clone(),
+            Some(self.jobs.clone()),
+            registry,
         )?);
         crate::browser::register_tools(&state, self.dispatcher.as_ref())?;
         self.services.configure_browser(state)?;
@@ -1685,6 +1709,7 @@ impl AgentRuntime {
                                 data: Some(serde_json::json!({"answer": answer})),
                                 error: None,
                                 truncated: false,
+                                media_refs: Vec::new(),
                             }
                         }
                         _ => ToolResult {
@@ -1697,6 +1722,7 @@ impl AgentRuntime {
                                 message: "user input required".into(),
                             }),
                             truncated: false,
+                            media_refs: Vec::new(),
                         },
                     };
                     let result =

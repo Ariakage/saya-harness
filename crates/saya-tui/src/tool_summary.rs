@@ -127,6 +127,7 @@ fn data_summary(data: &Value, truncated: bool) -> Option<(String, bool)> {
             data: Some(data.clone()),
             error: None,
             truncated,
+            media_refs: Vec::new(),
         })?;
         let done = todos
             .iter()
@@ -379,6 +380,7 @@ mod tests {
             data: Some(exec(json!(0), false, false)),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         };
         let finished = summarize_call(
             "exec",

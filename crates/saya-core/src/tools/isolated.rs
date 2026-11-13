@@ -310,6 +310,7 @@ mod tests {
             data: Some(json!({"content":"observed"})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         }
     }
     fn capture(response: &FileWorkerResponse) -> WorkerCapture {
@@ -431,6 +432,7 @@ mod tests {
                 data: None,
                 error: Some(error.clone()),
                 truncated: false,
+                media_refs: Vec::new(),
             },
             boundary_error: Some(error.clone()),
             observed_result: Some(result()),
@@ -454,6 +456,7 @@ mod tests {
             data: None,
             error: Some(error),
             truncated: false,
+            media_refs: Vec::new(),
         };
         invalid.boundary_error.as_mut().unwrap().code = "different".into();
         assert!(decode_capture(capture(&invalid)).unwrap_err().2.is_none());
@@ -473,6 +476,7 @@ mod tests {
                     message: "unconfirmed worker response".into(),
                 }),
                 truncated: false,
+                media_refs: Vec::new(),
             };
             let failure = decode_capture(capture(&fallback)).unwrap_err();
             assert_eq!(failure.0.code, "outcome_unknown");

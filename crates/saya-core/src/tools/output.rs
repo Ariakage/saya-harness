@@ -272,6 +272,7 @@ impl Tool for OutputTool {
                         truncated,
                         data: Some(data),
                         error: None,
+                        media_refs: Vec::new(),
                     }
                 }
                 Err(error) => ToolResult {
@@ -279,6 +280,7 @@ impl Tool for OutputTool {
                     data: None,
                     error: Some(error.0),
                     truncated: false,
+                    media_refs: Vec::new(),
                 },
             })
         })

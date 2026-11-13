@@ -19,6 +19,7 @@ use std::{
 
 pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_AUDIO_VIDEO_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_MESSAGE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
 pub const MEDIA_SCHEME: &str = "saya-media://";
 
@@ -28,6 +29,9 @@ pub enum MediaKind {
     Image,
     Audio,
     Video,
+    /// A bounded generic file artifact. It is stored by the same private
+    /// object backend but is never expanded into model media content.
+    File,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,21 +306,36 @@ pub fn display(text: &str) -> String {
     output
 }
 
-/// Load all durable snapshots referenced by a request's ordered history.
+/// Load durable snapshots that the model may actually expand this turn.
+/// Only user-authored `UserText` markers for Image/Audio/Video are eligible.
+/// Host-written `ToolResult.media_refs` remain GC pins (see
+/// [`history_references`]) but are not loaded here: File artifacts must never
+/// become model media, and later tool-produced image support is added by its
+/// own capability stage instead of being preloaded now.
 pub fn load_history(
     history: &[HistoryItem],
     store: Option<&Arc<OutputStore>>,
     session_id: SessionId,
 ) -> Result<MediaAttachments, BoundaryError> {
     let mut snapshots = MediaAttachments::default();
-    for reference in history_references(history) {
-        let store = store.ok_or_else(|| {
-            failure(
-                "media_unavailable",
-                "durable media storage is not configured",
-            )
-        })?;
-        snapshots.insert(store.load_media(session_id, &reference)?)?;
+    for item in history {
+        let HistoryItem::UserText(text) = item else {
+            continue;
+        };
+        for reference in text_references(text) {
+            let store = store.ok_or_else(|| {
+                failure(
+                    "media_unavailable",
+                    "durable media storage is not configured",
+                )
+            })?;
+            // A File object is a host-side artifact, never model media. Check
+            // its header only so no base64 payload is produced for it.
+            if store.media_kind(session_id, &reference)? == MediaKind::File {
+                continue;
+            }
+            snapshots.insert(store.load_media(session_id, &reference)?)?;
+        }
     }
     Ok(snapshots)
 }
@@ -325,11 +344,20 @@ pub fn load_history(
 pub fn history_references(history: &[HistoryItem]) -> BTreeSet<String> {
     history
         .iter()
-        .filter_map(|item| match item {
-            HistoryItem::UserText(text) => Some(text_references(text)),
-            _ => None,
+        .flat_map(|item| match item {
+            HistoryItem::UserText(text) => text_references(text).into_iter().collect::<Vec<_>>(),
+            // Only the host-written media reference list is authoritative. Page
+            // text, tool output and model-supplied strings never contribute
+            // pins, so a forged `saya-media://` reference cannot keep an
+            // unrelated object alive.
+            HistoryItem::ToolResult { result, .. } => result
+                .media_refs
+                .iter()
+                .filter(|reference| crate::media::parse_reference(reference).is_ok())
+                .cloned()
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
         })
-        .flatten()
         .collect()
 }
 
@@ -349,6 +377,8 @@ fn ensure_supported(kind: MediaKind, capabilities: MediaCapabilities) -> Result<
         MediaKind::Image => capabilities.image,
         MediaKind::Audio => capabilities.audio,
         MediaKind::Video => capabilities.video,
+        // File artifacts are host-side files, never model media.
+        MediaKind::File => false,
     };
     if !supported {
         return Err(failure(
@@ -464,6 +494,20 @@ pub(crate) fn validate_metadata(
                     | "video/x-matroska"
                     | "video/x-msvideo",
             )
+            | (
+                MediaKind::File,
+                "application/octet-stream"
+                    | "application/pdf"
+                    | "application/zip"
+                    | "text/plain"
+                    | "text/csv"
+                    | "application/json"
+                    | "application/xml"
+                    | "image/png"
+                    | "image/jpeg"
+                    | "image/gif"
+                    | "image/webp",
+            )
     );
     if !expected
         || filename.is_empty()
@@ -484,6 +528,7 @@ pub(crate) fn maximum(kind: MediaKind) -> u64 {
     match kind {
         MediaKind::Image => MAX_IMAGE_BYTES,
         MediaKind::Audio | MediaKind::Video => MAX_AUDIO_VIDEO_BYTES,
+        MediaKind::File => MAX_FILE_BYTES,
     }
 }
 
@@ -988,6 +1033,97 @@ mod tests {
     }
 
     #[test]
+    fn file_artifacts_are_pinned_by_host_media_refs_but_never_model_media() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        let file = store
+            .put_file(session, "text/plain", "note.txt", b"artifact")
+            .unwrap();
+        let reference = file.reference.clone();
+        // A page or tool text that merely looks like a media reference is not
+        // a pin; only the host-written ToolResult field is authoritative.
+        let forged = HistoryItem::ToolResult {
+            call_id: "call-1".into(),
+            result: crate::contract::ToolResult {
+                ok: true,
+                data: Some(serde_json::json!({"body": format!("{MEDIA_SCHEME}{reference}")})),
+                error: None,
+                truncated: false,
+                media_refs: Vec::new(),
+            },
+        };
+        assert!(history_references(std::slice::from_ref(&forged)).is_empty());
+        let pinned = HistoryItem::ToolResult {
+            call_id: "call-2".into(),
+            result: crate::contract::ToolResult {
+                ok: true,
+                data: None,
+                error: None,
+                truncated: false,
+                media_refs: vec![reference.clone()],
+            },
+        };
+        assert_eq!(
+            history_references(&[pinned]),
+            BTreeSet::from([reference.clone()])
+        );
+        drop(file);
+        store
+            .collect_garbage(&history_references(&[forged]), 8)
+            .unwrap();
+        assert_eq!(
+            store.load_media(session, &reference).unwrap_err().0.code,
+            "media_unavailable"
+        );
+
+        let file = store
+            .put_file(session, "text/plain", "note.txt", b"artifact")
+            .unwrap();
+        let reference = file.reference.clone();
+        let pinned = HistoryItem::ToolResult {
+            call_id: "call-3".into(),
+            result: crate::contract::ToolResult {
+                ok: true,
+                data: None,
+                error: None,
+                truncated: false,
+                media_refs: vec![reference.clone()],
+            },
+        };
+        drop(file);
+        let collection = store
+            .collect_garbage(&history_references(&[pinned]), 8)
+            .unwrap();
+        assert_eq!(collection.pinned, 1);
+        let (bytes, media, _lease) = store.load_file(session, &reference).unwrap();
+        assert_eq!(bytes, b"artifact");
+        assert_eq!(media.kind, MediaKind::File);
+        // A File artifact is never loaded into model media, even when user
+        // text contains a marker that points at it.
+        let text = format!("[Image 1](<{MEDIA_SCHEME}{reference}>)");
+        let attachments = load_history(
+            &[HistoryItem::UserText(text.clone())],
+            Some(&Arc::new(store.clone())),
+            session,
+        )
+        .unwrap();
+        assert!(attachments.is_empty());
+        assert_eq!(
+            expand_user_with_snapshots(&text, capabilities(), &attachments)
+                .unwrap_err()
+                .0
+                .code,
+            "media_unavailable"
+        );
+    }
+
+    #[test]
     fn changed_snapshot_bytes_fail_the_content_integrity_check() {
         let root = tempfile::tempdir().unwrap();
         let store = OutputStore::open(
@@ -1017,6 +1153,40 @@ mod tests {
         assert_eq!(
             store.load_media(session, &reference).unwrap_err().0.code,
             "media_corrupt"
+        );
+    }
+    #[test]
+    fn tool_result_media_refs_are_gc_pins_but_are_not_preloaded_as_model_media() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        let image = store
+            .put_media(session, MediaKind::Image, "image/png", "image.png", b"png")
+            .unwrap();
+        let reference = image.reference.clone();
+        let pinned = HistoryItem::ToolResult {
+            call_id: "tool-call".into(),
+            result: crate::contract::ToolResult {
+                ok: true,
+                data: None,
+                error: None,
+                truncated: false,
+                media_refs: vec![reference.clone()],
+            },
+        };
+        assert_eq!(
+            history_references(std::slice::from_ref(&pinned)),
+            BTreeSet::from([reference.clone()])
+        );
+        let attachments = load_history(&[pinned], Some(&Arc::new(store.clone())), session).unwrap();
+        assert!(
+            attachments.is_empty(),
+            "tool-produced media must not be preloaded as model content"
         );
     }
 }

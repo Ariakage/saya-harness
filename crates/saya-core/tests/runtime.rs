@@ -2709,6 +2709,7 @@ async fn dynamically_learned_credentials_keep_original_dispatch_and_sanitized_hi
                     ),
                     error: None,
                     truncated: false,
+                    media_refs: Vec::new(),
                 })
             })
         }

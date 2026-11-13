@@ -125,6 +125,7 @@ pub trait Tool: Send + Sync {
             Ok(crate::output_store::CapturedToolResult {
                 result: self.execute(call, context, cancel).await?,
                 outputs: Vec::new(),
+                media: Vec::new(),
                 capture_errors: Vec::new(),
             })
         })

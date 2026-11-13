@@ -553,7 +553,7 @@ fn history(
                         "tool result has no matching call",
                     ));
                 }
-                let content = serde_json::to_string(result)
+                let content = serde_json::to_string(&result.model_view())
                     .map_err(|_| failure("invalid_history", "tool result cannot be serialized"))?;
                 append_message(
                     &mut messages,

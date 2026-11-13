@@ -5,6 +5,7 @@ use crate::{
     boundary::{Cancellation, ToolContext},
     contract::{ApprovalRequest, BoundaryError, ErrorInfo, ToolCall, ToolResult, WorkMode},
     dispatch::{DispatchReview, ToolDispatcher},
+    output_store::SealedMedia,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -142,11 +143,63 @@ pub(crate) fn child_prefix(parent_call_id: &str) -> String {
         .collect();
     format!("background-{digest}-")
 }
+/// Apply the same dynamic secret redaction as foreground dispatch before a
+/// background outcome is stored, returned through `background_status`, or
+/// written to durable history. A redaction failure fails closed.
+fn sanitize_browser_outcome(
+    dispatcher: &ToolDispatcher,
+    outcome: Result<(ToolResult, Vec<SealedMedia>), BoundaryError>,
+) -> Result<(ToolResult, Vec<SealedMedia>), BoundaryError> {
+    match outcome {
+        Ok((mut result, pins)) => {
+            if dispatcher.redact_tool_result(&mut result).is_err() {
+                result = ToolResult {
+                    ok: false,
+                    data: None,
+                    error: Some(ErrorInfo {
+                        code: "sensitive_data".into(),
+                        message: "Background result could not be safely redacted".into(),
+                    }),
+                    truncated: false,
+                    media_refs: Vec::new(),
+                };
+            }
+            Ok((result, pins))
+        }
+        Err(mut error) => {
+            if dispatcher.redact_error(&mut error).is_err() {
+                error = failure(
+                    "sensitive_data",
+                    "Background result could not be safely redacted",
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Only supervisor or durable-storage failures stop further background work.
+/// Tool-level business failures (missing file, denied network target, stale
+/// reference, type/size rejection) are terminal job outcomes, not run fatal
+/// errors.
+fn is_fatal_background_error(error: &BoundaryError) -> bool {
+    matches!(
+        error.0.code.as_str(),
+        "background_error" | "storage_error" | "runtime_error"
+    )
+}
+
 struct Job {
     cancel: JobCancel,
     mutating: bool,
     status: JobStatus,
     origin: BackgroundJobOrigin,
+    /// A failure in this job stops further background dispatch. Browser jobs
+    /// are ordinary tool outcomes and never poison the Run supervisor.
+    fatal_on_error: bool,
+    /// Artifact leases produced by this job. They keep background downloads
+    /// collectable by GC only after the host has consumed the result.
+    _pins: Vec<SealedMedia>,
 }
 /// Immutable host provenance. It is never decoded from a model/tool response.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,6 +452,8 @@ impl BackgroundJobs {
                     run_id: context.run.id,
                     call_id: call.call_id.clone(),
                 },
+                fatal_on_error: true,
+                _pins: Vec::new(),
             },
         );
         state.event(
@@ -477,6 +532,7 @@ impl BackgroundJobs {
                 if let Ok(mut state) = shared.state.lock() {
                     if let Err(error) = &outcome
                         && !matches!(error.0.code.as_str(), "cancelled" | "tool_timeout")
+                        && is_fatal_background_error(error)
                     {
                         state.closed = true;
                         state.fatal = Some(error.clone());
@@ -533,6 +589,231 @@ impl BackgroundJobs {
         );
         Ok(id)
     }
+    /// Start a host-authorized browser operation in the same Run-scoped
+    /// supervisor. The parent call identity is used for the same child-prefix
+    /// association as local background tools, so retired-output provenance is
+    /// verifiable. Browser job failures are ordinary job outcomes and never
+    /// poison the supervisor. A dispatched action that is cancelled remains
+    /// `outcome_unknown` inside the browser state and is never replayed.
+    pub fn start_browser<F>(
+        &self,
+        parent_call_id: &str,
+        context: &ToolContext,
+        tool: &'static str,
+        mutating: bool,
+        operation: F,
+    ) -> Result<String, BoundaryError>
+    where
+        F: FnOnce(
+                Arc<dyn Cancellation>,
+            ) -> Pin<
+                Box<
+                    dyn Future<Output = Result<(ToolResult, Vec<SealedMedia>), BoundaryError>>
+                        + Send
+                        + 'static,
+                >,
+            > + Send
+            + 'static,
+    {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| failure("runtime_error", "Tokio runtime required"))?;
+        let cancel = JobCancel::new();
+        let id = format!("{}{}", child_prefix(parent_call_id), uuid::Uuid::now_v7());
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        if state.closed || self.dispatcher.root_cancellation().is_cancelled() {
+            return Err(failure("cancelled", "run is stopping"));
+        }
+        if state.jobs.len() >= self.max_jobs
+            || state
+                .jobs
+                .values()
+                .filter(|job| matches!(job.status, JobStatus::Running))
+                .count()
+                >= self.max_running
+        {
+            return Err(failure("limit_reached", "background job limit reached"));
+        }
+        let mode = self.dispatcher.mode_controller().snapshot()?;
+        if mode.pending.is_some() || mode.current != context.run.work_mode {
+            return Err(failure("stale_approval", "work mode changed"));
+        }
+        let modes = self.dispatcher.mode_controller();
+        if !modes.begin_shared(mode.revision)? {
+            return Err(failure(
+                "stale_approval",
+                "work mode changed before scheduling",
+            ));
+        }
+        let lease = ModeLease(modes);
+        state.jobs.insert(
+            id.clone(),
+            Job {
+                cancel: cancel.clone(),
+                mutating,
+                status: JobStatus::Running,
+                origin: BackgroundJobOrigin {
+                    session_id: context.run.session_id,
+                    run_id: context.run.id,
+                    call_id: id.clone(),
+                },
+                fatal_on_error: false,
+                _pins: Vec::new(),
+            },
+        );
+        state.event(
+            &id,
+            BackgroundEventKind::Accepted {
+                call_id: id.clone(),
+                tool: tool.into(),
+            },
+        );
+        let shared = self.shared.clone();
+        let dispatcher = self.dispatcher.clone();
+        let redactor = self.dispatcher.clone();
+        let worker_state = shared.clone();
+        let worker_id = id.clone();
+        let tool_timeout = self.tool_timeout;
+        let job_id = id.clone();
+        let signal: Arc<dyn Cancellation> = Arc::new(Combined {
+            root: dispatcher.root_cancellation(),
+            job: cancel.clone(),
+        });
+        let timeout_cancel = cancel;
+        let job_signal = signal.clone();
+        let span = tracing::info_span!(target: "saya::background", "background", session_id = %context.run.session_id.0, run_id = %context.run.id.0, tool = tool, job_id = job_id.as_str());
+        let worker_span = span.clone();
+        let task = runtime.spawn(
+            async move {
+                let _lease = lease;
+                let operation = operation(job_signal.clone());
+                tokio::pin!(operation);
+                tokio::select! {
+                    biased;
+                    result = &mut operation => return result,
+                    () = tokio::time::sleep(tool_timeout), if tool != "exec" => {}
+                }
+                if job_signal.is_cancelled() {
+                    return operation.await;
+                }
+                let cancellation = match worker_state.state.lock() {
+                    Ok(mut state) => {
+                        if job_signal.is_cancelled() {
+                            Ok(false)
+                        } else {
+                            state.request_cancellation(&worker_id, BackgroundCancelReason::Timeout);
+                            Ok(true)
+                        }
+                    }
+                    Err(_) => {
+                        timeout_cancel.cancel();
+                        Err(failure("background_error", "job lock poisoned"))
+                    }
+                };
+                let observed = operation.await;
+                if !cancellation? {
+                    return observed;
+                }
+                match observed {
+                    Err(error) if error.0.code != "cancelled" => Err(error),
+                    observed => {
+                        let mut error = failure("tool_timeout", "background tool timed out");
+                        if let Ok((result, pins)) = observed {
+                            // The operation may have completed after the
+                            // deadline. Keep every produced artifact lease in
+                            // the job record even though the job is reported
+                            // as failed, so GC cannot reclaim a File that the
+                            // caller can still inspect through status.
+                            if !pins.is_empty()
+                                && let Ok(mut state) = worker_state.state.lock()
+                                && let Some(job) = state.jobs.get_mut(&worker_id)
+                            {
+                                job._pins.extend(pins);
+                            }
+                            error.2 = Some(Box::new(result));
+                        }
+                        Err(error)
+                    }
+                }
+            }
+            .instrument(worker_span)
+            .with_current_subscriber(),
+        );
+        runtime.spawn(
+            async move {
+                let outcome = sanitize_browser_outcome(
+                    redactor.as_ref(),
+                    task.await.unwrap_or_else(|_| {
+                        Err(failure(
+                            "background_error",
+                            "background task failed unexpectedly",
+                        ))
+                    }),
+                );
+                if let Ok(mut state) = shared.state.lock() {
+                    if let Err(error) = &outcome
+                        && !matches!(error.0.code.as_str(), "cancelled" | "tool_timeout")
+                        && state.jobs.get(&job_id).is_none_or(|job| job.fatal_on_error)
+                    {
+                        state.closed = true;
+                        state.fatal = Some(error.clone());
+                        let ids: Vec<_> = state
+                            .jobs
+                            .keys()
+                            .filter(|id| *id != &job_id)
+                            .cloned()
+                            .collect();
+                        for id in ids {
+                            state.request_cancellation(&id, BackgroundCancelReason::Failure);
+                        }
+                    }
+                    if let Some(job) = state.jobs.get_mut(&job_id) {
+                        let (status, outcome, pins) = match outcome {
+                            Ok((value, pins)) => {
+                                let outcome = if value.ok {
+                                    BackgroundOutcome::Succeeded
+                                } else if value
+                                    .error
+                                    .as_ref()
+                                    .is_some_and(|e| e.code == "cancelled")
+                                {
+                                    BackgroundOutcome::Cancelled
+                                } else {
+                                    BackgroundOutcome::Failed {
+                                        code: value.error.as_ref().map_or_else(
+                                            || "tool_error".into(),
+                                            |e| e.code.clone(),
+                                        ),
+                                    }
+                                };
+                                (JobStatus::Finished(value), outcome, pins)
+                            }
+                            Err(error) => {
+                                let outcome = if error.0.code == "cancelled" {
+                                    BackgroundOutcome::Cancelled
+                                } else {
+                                    BackgroundOutcome::Failed {
+                                        code: error.0.code.clone(),
+                                    }
+                                };
+                                (JobStatus::Failed(error), outcome, Vec::new())
+                            }
+                        };
+                        job.status = status;
+                        job._pins.extend(pins);
+                        state.event(&job_id, BackgroundEventKind::Finished { outcome });
+                    }
+                }
+                shared.changed.notify_waiters();
+            }
+            .instrument(span)
+            .with_current_subscriber(),
+        );
+        Ok(id)
+    }
     pub fn status(&self, id: &str) -> Result<Option<JobStatus>, BoundaryError> {
         let state = self
             .shared
@@ -540,6 +821,16 @@ impl BackgroundJobs {
             .lock()
             .map_err(|_| failure("background_error", "job lock poisoned"))?;
         Ok(state.jobs.get(id).map(|job| job.status.clone()))
+    }
+    /// A closed supervisor accepts no new work. A retained weak handle can use
+    /// this to avoid re-binding a lifecycle to jobs that already shut down.
+    pub fn is_closed(&self) -> Result<bool, BoundaryError> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| failure("background_error", "job lock poisoned"))?;
+        Ok(state.closed)
     }
     /// Read source identity without exposing a job's arguments or fact body.
     pub(crate) fn origin(&self, id: &str) -> Result<Option<BackgroundJobOrigin>, BoundaryError> {
@@ -802,13 +1093,36 @@ impl BackgroundTools {
             .map_err(|_| failure("invalid_args", "invalid background job ID"))?;
         permit.with_background_control(call, context, || {
             if matches!(kind, BackgroundToolKind::Cancel) {
-                return Ok(tool_result(serde_json::json!({"found":self.jobs.cancel(&args.job_id)?})));
+                return Ok(tool_result(
+                    serde_json::json!({"found":self.jobs.cancel(&args.job_id)?}),
+                ));
             }
             Ok(match self.jobs.status(&args.job_id)? {
                 None => tool_result(serde_json::json!({"status":"not_found"})),
                 Some(JobStatus::Running) => tool_result(serde_json::json!({"status":"running"})),
-                Some(JobStatus::Finished(result)) => tool_result(serde_json::json!({"status":"finished","result":result})),
-                Some(JobStatus::Failed(error)) => tool_result(serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2})),
+                Some(JobStatus::Finished(result)) => {
+                    let media_refs = valid_media_refs(&result.media_refs);
+                    tool_result_with_media(
+                        serde_json::json!({"status":"finished","result":result.model_view()}),
+                        media_refs,
+                    )
+                }
+                Some(JobStatus::Failed(error)) => {
+                    let media_refs = error
+                        .2
+                        .as_deref()
+                        .map(|result| valid_media_refs(&result.media_refs))
+                        .unwrap_or_default();
+                    tool_result_with_media(
+                        serde_json::json!({
+                            "status":"failed",
+                            "error":error.0,
+                            // Host-only artifact references never reach the model.
+                            "observed_result": error.2.as_deref().map(ToolResult::model_view),
+                        }),
+                        media_refs,
+                    )
+                }
             })
         })
     }
@@ -846,6 +1160,25 @@ fn tool_result(data: serde_json::Value) -> ToolResult {
         data: Some(data),
         error: None,
         truncated: false,
+        media_refs: Vec::new(),
+    }
+}
+/// Keep only well-formed durable media references. The model projection still
+/// strips them, while the host-written list pins the artifact during GC.
+fn valid_media_refs(references: &[String]) -> Vec<String> {
+    references
+        .iter()
+        .filter(|reference| crate::media::parse_reference(reference).is_ok())
+        .cloned()
+        .collect()
+}
+fn tool_result_with_media(data: serde_json::Value, media_refs: Vec<String>) -> ToolResult {
+    ToolResult {
+        ok: true,
+        data: Some(data),
+        error: None,
+        truncated: false,
+        media_refs,
     }
 }
 fn tool_error(code: &str, message: &str) -> ToolResult {
@@ -857,6 +1190,7 @@ fn tool_error(code: &str, message: &str) -> ToolResult {
             message: message.into(),
         }),
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 impl crate::boundary::Tool for BackgroundTool {
@@ -969,6 +1303,7 @@ impl crate::boundary::Tool for BackgroundTool {
                                     message: "background operation requires confirmation".into(),
                                 }),
                                 truncated: false,
+                                media_refs: Vec::new(),
                             }
                         }
                         JobSubmission::Denied(reason) => tool_error("permission_denied", reason),
@@ -1028,6 +1363,7 @@ impl crate::boundary::Tool for BackgroundTool {
                                     message: "background control requires confirmation".into(),
                                 }),
                                 truncated: false,
+                                media_refs: Vec::new(),
                             }
                         }
                         Authorization::Denied(reason) => tool_error("permission_denied", reason),

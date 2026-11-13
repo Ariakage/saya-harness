@@ -318,7 +318,28 @@ async fn scenario(
     let run = run(mode, permissions);
     let (dispatcher, context) = dispatcher(root, &run, rules).await.unwrap();
     register_web(&dispatcher, web_settings("https://example.com"), None).unwrap();
-    register_browser(&dispatcher, &run, Arc::new(FixtureProvider::full())).unwrap();
+    let outputs = Arc::new(
+        OutputStore::open(
+            root.join("browser-artifacts"),
+            OutputLimits::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap(),
+    );
+    let state = Arc::new(
+        BrowserState::new(
+            BrowserSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            Arc::new(FixtureProvider::full()),
+            run.clone(),
+        )
+        .unwrap()
+        .with_artifacts(outputs)
+        .unwrap(),
+    );
+    crate::browser::register_tools(&state, &dispatcher).unwrap();
     (dispatcher, context)
 }
 
@@ -2069,12 +2090,16 @@ async fn browser_transfers_are_untrusted_and_dev079_saves_no_screenshot_media() 
     .await;
     let screenshot = screenshot.data.as_ref().unwrap();
     assert_eq!(screenshot["source"], "untrusted_browser");
-    assert!(screenshot["screenshot"].get("media_ref").is_none());
+    assert!(screenshot["screenshot"]["media_ref"].is_string());
     assert_eq!(screenshot["screenshot"]["model_image_attached"], false);
+    assert!(screenshot["screenshot"].get("raw_bytes").is_none());
 
     let download = execute_one(
         &dispatcher,
-        &call("browser_download", json!({"page":page})),
+        &call(
+            "browser_download",
+            json!({"page":page,"document":document,"element_ref":element}),
+        ),
         &context,
         "allow",
         true,
@@ -2082,13 +2107,34 @@ async fn browser_transfers_are_untrusted_and_dev079_saves_no_screenshot_media() 
     .await;
     let download = download.data.as_ref().unwrap();
     assert_eq!(download["source"], "untrusted_browser");
-    assert_eq!(download["download"]["artifact_stored"], false);
+    assert_eq!(download["download"]["artifact_stored"], true);
+    let artifact_ref = download["download"]["artifact_ref"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(download["download"]["media_ref"], artifact_ref);
 
+    let snapshot = execute_one(
+        &dispatcher,
+        &call("browser_snapshot", json!({"page":page})),
+        &context,
+        "allow",
+        true,
+    )
+    .await;
+    let document = snapshot.data.as_ref().unwrap()["document"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let element = snapshot.data.as_ref().unwrap()["elements"][0]["element_ref"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let upload = execute_one(
         &dispatcher,
         &call(
             "browser_upload",
-            json!({"page":page,"document":document,"element_ref":element,"artifact_ref":"artifact_1"}),
+            json!({"page":page,"document":document,"element_ref":element,"artifact_ref":artifact_ref}),
         ),
         &context,
         "allow",
@@ -2098,4 +2144,71 @@ async fn browser_transfers_are_untrusted_and_dev079_saves_no_screenshot_media() 
     let upload = upload.data.as_ref().unwrap();
     assert_eq!(upload["source"], "untrusted_browser");
     assert!(upload["upload"]["document_revision"].is_u64());
+}
+
+#[tokio::test]
+async fn browser_background_navigate_returns_a_job_id_and_cancel_is_unknown() {
+    let temp = tempfile::tempdir().unwrap();
+    let run = run(WorkMode::Work, PermissionMode::Bypass);
+    let (dispatcher, context) = dispatcher(temp.path(), &run, None).await.unwrap();
+    let dispatcher = Arc::new(dispatcher);
+    let provider = Arc::new(FixtureProvider::full().with_delay(5_000));
+    let jobs = Arc::new(
+        crate::background::BackgroundJobs::new(dispatcher.clone(), 2, 4)
+            .unwrap()
+            .with_tool_timeout(std::time::Duration::from_secs(10))
+            .unwrap(),
+    );
+    let state = Arc::new(
+        crate::browser::BrowserState::new(
+            crate::browser::BrowserSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            provider,
+            run.clone(),
+        )
+        .unwrap()
+        .with_background_jobs(jobs.clone()),
+    );
+    crate::browser::register_tools(&state, dispatcher.as_ref()).unwrap();
+
+    let opened = execute_one(
+        dispatcher.as_ref(),
+        &call("browser_open", json!({})),
+        &context,
+        "allow",
+        false,
+    )
+    .await;
+    let page = opened.data.unwrap()["page"].as_str().unwrap().to_string();
+    let started = execute_one(
+        dispatcher.as_ref(),
+        &call(
+            "browser_navigate",
+            json!({"page": page, "url": "https://example.invalid/", "background": true}),
+        ),
+        &context,
+        "allow",
+        false,
+    )
+    .await;
+    let data = started.data.unwrap();
+    assert_eq!(data["status"], "started");
+    let job_id = data["job_id"].as_str().unwrap().to_string();
+    assert!(job_id.starts_with("background-"));
+
+    // Let the browser action actually dispatch before cancelling.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(jobs.cancel(&job_id).unwrap());
+    let status = tokio::time::timeout(std::time::Duration::from_secs(5), jobs.wait(&job_id))
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let crate::background::JobStatus::Failed(error) = status else {
+        panic!("expected an unknown browser background outcome")
+    };
+    assert_eq!(error.0.code, "outcome_unknown");
+    jobs.shutdown().await.unwrap();
 }

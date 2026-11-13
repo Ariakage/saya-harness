@@ -483,6 +483,63 @@ impl OutputStore {
             .put_media(session_id, kind, mime, filename, bytes)
     }
 
+    /// Atomically retain and publish one bounded generic file artifact. The
+    /// same private object backend is used, but `MediaKind::File` is never
+    /// expanded into model image/audio/video content.
+    pub fn put_file(
+        &self,
+        session_id: SessionId,
+        mime: &str,
+        filename: &str,
+        bytes: &[u8],
+    ) -> Result<SealedMedia, BoundaryError> {
+        self.inner.put_media(
+            session_id,
+            crate::media::MediaKind::File,
+            mime,
+            filename,
+            bytes,
+        )
+    }
+
+    /// Load one published generic file artifact with session and content
+    /// verification. Raw bytes are returned so callers never treat the file as
+    /// model media.
+    pub fn load_file(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(Vec<u8>, crate::media::LoadedMedia, OutputLease), BoundaryError> {
+        let (media, lease) = self.load_media_with_lease(session_id, reference)?;
+        if !matches!(
+            media.kind,
+            crate::media::MediaKind::File | crate::media::MediaKind::Image
+        ) {
+            return Err(error(
+                "file_denied",
+                "Artifact reference is not an uploadable file artifact",
+            ));
+        }
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            media.data.as_bytes(),
+        )
+        .map_err(|_| error("media_corrupt", "File artifact content is invalid"))?;
+        Ok((bytes, media, lease))
+    }
+
+    /// Return the validated kind of a published media object without decoding
+    /// its payload. File artifacts use this to remain GC pins only.
+    pub fn media_kind(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<crate::media::MediaKind, BoundaryError> {
+        self.inner
+            .media_kind(session_id, reference)
+            .map(|(kind, _)| kind)
+    }
+
     /// Load a published snapshot after validating session scope and raw SHA-256.
     pub fn load_media(
         &self,
@@ -970,9 +1027,13 @@ pub(crate) fn validate_changes(
 }
 
 /// A host-only adapter return channel, separate from untrusted result data.
+#[derive(Debug)]
 pub struct CapturedToolResult {
     pub result: crate::contract::ToolResult,
     pub outputs: Vec<SealedOutput>,
+    /// Media/file objects created by this adapter. The lease is held until the
+    /// result has committed, so GC cannot reclaim them in between.
+    pub media: Vec<SealedMedia>,
     pub capture_errors: Vec<ErrorInfo>,
 }
 

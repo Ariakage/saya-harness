@@ -61,7 +61,7 @@ TUI 的 Agent 执行期间可以继续提交普通用户消息。消息进入有
 
 开发线按D-046增加 `todo_write` 会话任务清单工具，PLAN可更新任务元数据，Manual Approval每次调用均需批准。完整列表替换、校验限额及恢复规则见[运行时](runtime.md#会话任务清单)。
 
-N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。DEV-080 已完成 Playwright worker 组件与显式 VM 后端，VM 真实入口已验证；native 浏览器未取得真实平台验收。broker 网络、登录、文件 broker 与平台联合验收仍属 DEV-081 至 DEV-083。
+N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。DEV-080 已完成 Playwright worker 组件与显式 VM 后端，VM 真实入口已验证；native 浏览器未取得真实平台验收。broker 网络、登录、文件 broker 与后台取消已由 DEV-081 完成并取得专用 VM 验收，界面与平台联合验收仍属 DEV-082／DEV-083。
 
 工具按下面的顺序处理：
 

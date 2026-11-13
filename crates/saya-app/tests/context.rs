@@ -116,6 +116,7 @@ fn result(id: &str, data: Option<Value>, error: Option<ErrorInfo>) -> HistoryIte
             data,
             error,
             truncated: false,
+            media_refs: Vec::new(),
         },
     }
 }

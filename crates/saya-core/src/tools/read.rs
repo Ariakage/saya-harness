@@ -1035,6 +1035,7 @@ impl crate::boundary::Tool for ReadTool {
                     data: Some(data),
                     error: None,
                     truncated,
+                    media_refs: Vec::new(),
                 },
                 Err(e) => ToolResult {
                     ok: false,
@@ -1044,6 +1045,7 @@ impl crate::boundary::Tool for ReadTool {
                         message: e.message,
                     }),
                     truncated: false,
+                    media_refs: Vec::new(),
                 },
             })
         })

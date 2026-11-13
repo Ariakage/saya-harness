@@ -336,6 +336,7 @@ pub fn fixture(scene: &str) -> State {
                 })),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             };
             state.set_details(Details {
                 title: "Tool details".into(),

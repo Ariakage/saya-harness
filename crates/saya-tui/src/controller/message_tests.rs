@@ -128,6 +128,7 @@ fn todo_result(values: serde_json::Value) -> ToolResult {
         data: Some(json!({"todos": values})),
         error: None,
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 fn todo_history(id: &str, values: serde_json::Value) -> [HistoryItem; 2] {
@@ -197,6 +198,7 @@ async fn thinking_log_rounds_attach_in_event_order_without_empty_answers_or_revi
                 data: Some(json!({"text":"result"})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         },
     );
@@ -428,6 +430,7 @@ async fn todo_snapshots_update_successfully_and_only_a_new_success_can_clear_the
                 data: Some(json!({"todos":[]})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         ),
         (
@@ -744,6 +747,7 @@ async fn requested_exec_arguments_render_before_completion_and_keep_a_readable_s
                 })),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         },
     );

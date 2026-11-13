@@ -238,6 +238,7 @@ impl RetiredOutputAcl {
                 message: "Historical output content depends on retired memory context".into(),
             }),
             truncated: true,
+            media_refs: Vec::new(),
         }))
     }
 
@@ -392,6 +393,7 @@ fn unavailable() -> ToolResult {
                 .into(),
         }),
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 fn mechanical(result: &ToolResult) -> Value {
@@ -409,6 +411,29 @@ fn background_projection(status: &JobStatus, reason: &str) -> ToolResult {
             failure.2.as_ref().map(|result| mechanical(result.as_ref())),
         ),
     };
+    // Preserve only host-written, well-formed references so the projection
+    // continues to pin a background artifact while withholding its body.
+    let media_refs = match status {
+        JobStatus::Finished(result) => result
+            .media_refs
+            .iter()
+            .filter(|reference| crate::media::parse_reference(reference).is_ok())
+            .cloned()
+            .collect(),
+        JobStatus::Failed(failure) => failure
+            .2
+            .as_deref()
+            .map(|result| {
+                result
+                    .media_refs
+                    .iter()
+                    .filter(|reference| crate::media::parse_reference(reference).is_ok())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default(),
+        JobStatus::Running => Vec::new(),
+    };
     ToolResult {
         ok: true,
         data: Some(
@@ -416,6 +441,7 @@ fn background_projection(status: &JobStatus, reason: &str) -> ToolResult {
         ),
         error: None,
         truncated: true,
+        media_refs,
     }
 }
 

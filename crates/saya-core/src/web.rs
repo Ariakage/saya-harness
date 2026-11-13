@@ -966,8 +966,10 @@ impl WebTool {
                         data: Some(data),
                         error: None,
                         truncated,
+                        media_refs: Vec::new(),
                     },
                     outputs: sealed,
+                    media: Vec::new(),
                     capture_errors,
                 })
             }
@@ -1015,8 +1017,10 @@ impl WebTool {
                         data: Some(data),
                         error: None,
                         truncated,
+                        media_refs: Vec::new(),
                     },
                     outputs: sealed,
+                    media: Vec::new(),
                     capture_errors,
                 })
             }

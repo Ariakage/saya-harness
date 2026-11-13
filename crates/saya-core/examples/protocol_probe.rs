@@ -163,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             data: Some(json!({"text":"hello"})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         },
     });
     match turn(model.as_ref(), &request).await {

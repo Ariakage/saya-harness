@@ -7,20 +7,29 @@
 //! discovery or developer tools. Unknown dispatched actions stop replay until a
 //! fresh snapshot confirms an observable state.
 
+pub mod artifacts;
+pub mod credentials;
 pub mod network;
+pub mod settings;
 pub mod vm;
 pub mod worker;
 
 use crate::{
+    background::BackgroundJobs,
     boundary::{Cancellation, Operation, Tool, ToolContext, ToolDefinition},
     contract::{BoundaryError, ErrorInfo, Run, RunId, SessionId, ToolCall, ToolResult},
     dispatch::ToolDispatcher,
     output_store::{
         CaptureCompletion, CapturedToolResult, OutputMetadata, OutputScope, OutputStore,
-        OutputStream, SealedOutput,
+        OutputStream, SealedMedia, SealedOutput,
     },
 };
+use artifacts::BrowserArtifactStore;
+use credentials::BrowserCredentialBroker;
 use serde::{Deserialize, Serialize};
+pub use settings::{
+    BrowserCredentialPurpose, BrowserCredentialSettings, BrowserCredentialSlot, BrowserFileSettings,
+};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -29,7 +38,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
 const DEFAULT_MAX_SNAPSHOT_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_WAIT_MS: u64 = 60_000;
@@ -176,6 +185,10 @@ pub struct BrowserSettings {
     /// Strict browser network policy. The VM backend never uses the VM's
     /// default egress; it requires this policy and a host broker.
     pub network: network::BrowserNetworkSettings,
+    /// Origin-bound fill slots. The model may name only an alias.
+    pub credentials: BrowserCredentialSettings,
+    /// Bounded download/upload file broker.
+    pub files: BrowserFileSettings,
 }
 impl Default for BrowserSettings {
     fn default() -> Self {
@@ -186,6 +199,8 @@ impl Default for BrowserSettings {
             worker: worker::BrowserWorkerSettings::default(),
             vm: vm::BrowserVmSettings::default(),
             network: network::BrowserNetworkSettings::default(),
+            credentials: BrowserCredentialSettings::default(),
+            files: BrowserFileSettings::default(),
         }
     }
 }
@@ -201,6 +216,8 @@ impl BrowserSettings {
         self.worker.validate()?;
         self.vm.validate()?;
         self.network.validate()?;
+        self.credentials.validate()?;
+        self.files.validate()?;
         if self.vm.enabled && self.worker.enabled {
             return Err(invalid_config(
                 "Browser must select either the native worker or the VM backend, not both",
@@ -265,6 +282,10 @@ pub struct BrowserElement {
     pub key: String,
     pub role: String,
     pub name: String,
+    /// Frame identity when the provider reports this element inside a child
+    /// frame. Main-document elements leave it empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,6 +335,16 @@ pub struct BrowserDownload {
 pub struct BrowserUpload {
     pub filename: String,
     pub bytes_sent: u64,
+}
+
+/// A host-staged upload file. Providers copy it into their own Run-private
+/// worker staging area; they never accept a model-supplied host path.
+#[derive(Debug, Clone)]
+pub struct BrowserUploadSource {
+    pub filename: String,
+    pub path: std::path::PathBuf,
+    pub sha256: String,
+    pub size: u64,
 }
 
 /// One host-selected browser backend. Implementations must terminate on
@@ -380,20 +411,25 @@ pub trait BrowserProvider: Send + Sync {
     ) -> Result<BrowserScreenshot, BrowserFailure> {
         Err(BrowserFailure::unsupported("screenshot"))
     }
+    /// Perform one explicit element action and return only a download produced
+    /// by that action. The provider must not treat this as a generic "last
+    /// download" lookup.
     async fn download(
         &self,
         _session: &str,
         _page: &str,
+        _element: &str,
         _cancel: &dyn Cancellation,
     ) -> Result<BrowserDownload, BrowserFailure> {
         Err(BrowserFailure::unsupported("download"))
     }
+    /// Open the element's file chooser and upload exactly one staged file.
     async fn upload(
         &self,
         _session: &str,
         _page: &str,
         _element: &str,
-        _artifact: &str,
+        _upload: &crate::browser::BrowserUploadSource,
         _cancel: &dyn Cancellation,
     ) -> Result<BrowserUpload, BrowserFailure> {
         Err(BrowserFailure::unsupported("upload"))
@@ -401,11 +437,20 @@ pub trait BrowserProvider: Send + Sync {
     async fn shutdown(&self, _cancel: &dyn Cancellation) -> Result<(), BrowserFailure>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ElementTarget {
+    key: String,
+    /// Present only when the element lives inside a child frame.
+    frame: Option<String>,
+}
+
 #[derive(Default)]
 struct PageDocument {
     token: Option<String>,
-    elements: BTreeMap<String, String>,
+    elements: BTreeMap<String, ElementTarget>,
     revision: u64,
+    /// Exact canonical origin observed with the current document token.
+    origin: Option<crate::network::NormalizedOrigin>,
     /// An action on this page may have been dispatched without a confirmed
     /// outcome. Only a fresh snapshot of this page, or a complete close, clears
     /// it. It must never be cleared by another page's snapshot or a new open.
@@ -415,17 +460,27 @@ impl PageDocument {
     fn invalidate(&mut self) {
         self.token = None;
         self.elements.clear();
+        self.origin = None;
         self.revision = self.revision.saturating_add(1);
     }
     fn fail_unknown(&mut self) {
         self.uncertain = true;
         self.invalidate();
     }
-    fn observe(&mut self, token: String, elements: BTreeMap<String, String>) {
+    fn observe(
+        &mut self,
+        token: String,
+        elements: BTreeMap<String, ElementTarget>,
+        origin: Option<crate::network::NormalizedOrigin>,
+    ) {
         self.uncertain = false;
         self.token = Some(token);
         self.elements = elements;
+        self.origin = origin;
         self.revision = self.revision.saturating_add(1);
+    }
+    fn set_origin(&mut self, origin: Option<crate::network::NormalizedOrigin>) {
+        self.origin = origin;
     }
 }
 
@@ -455,9 +510,54 @@ pub struct BrowserState {
     provider: Arc<dyn BrowserProvider>,
     facts: BrowserFacts,
     settings: BrowserSettings,
+    credentials: Option<BrowserCredentialBroker>,
+    artifacts: Option<BrowserArtifactStore>,
+    /// Weak supervisor handle prevents the
+    /// BrowserState → BackgroundJobs → dispatcher → BrowserTool → BrowserState
+    /// ownership cycle. The binding is retained across PLAN cleanup and
+    /// re-armed by an explicit `open`; a closed supervisor is never reused.
+    background: std::sync::Mutex<Option<std::sync::Weak<BackgroundJobs>>>,
+    /// True only while a usable provider/page lifecycle exists. PLAN cleanup
+    /// disables background starts until a later explicit `open`.
+    background_enabled: AtomicBool,
+    /// Per-lifecycle cancellation observed by every provider call. PLAN
+    /// cleanup or Run shutdown signals it so an in-flight `wait` releases its
+    /// page lock instead of blocking cleanup for its full deadline.
+    lifecycle: watch::Sender<bool>,
     run_id: RunId,
     session_id: SessionId,
 }
+/// Cancellation observed by provider calls inside one browser lifecycle. The
+/// external caller cancellation and the state's own shutdown signal both wake
+/// it, so PLAN cleanup can interrupt an in-flight `wait` or navigation instead
+/// of waiting for its page lock to be released by the deadline.
+struct LifecycleCancellation<'a> {
+    outer: &'a dyn Cancellation,
+    lifecycle: watch::Receiver<bool>,
+}
+impl Cancellation for LifecycleCancellation<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.outer.is_cancelled() || *self.lifecycle.borrow()
+    }
+    fn cancelled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let outer = self.outer;
+        let mut lifecycle = self.lifecycle.clone();
+        Box::pin(async move {
+            tokio::select! {
+                biased;
+                () = outer.cancelled() => (),
+                () = async move {
+                    while !*lifecycle.borrow_and_update() {
+                        if lifecycle.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                } => (),
+            }
+        })
+    }
+}
+
 impl std::fmt::Debug for BrowserState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -515,6 +615,10 @@ pub struct ActionResultView {
     pub detail: Option<String>,
     pub document_stale: bool,
     pub document_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_slot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_uses_remaining: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -541,6 +645,10 @@ pub struct DownloadView {
     pub bytes: usize,
     pub sha256: String,
     pub artifact_stored: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -549,6 +657,8 @@ pub struct UploadView {
     pub filename: String,
     pub bytes_sent: u64,
     pub document_revision: u64,
+    pub artifact_ref: String,
+    pub sha256: String,
 }
 
 fn opaque(prefix: &str) -> String {
@@ -633,9 +743,91 @@ impl BrowserState {
             provider,
             facts,
             settings,
+            credentials: None,
+            artifacts: None,
+            background: std::sync::Mutex::new(None),
+            background_enabled: AtomicBool::new(false),
+            lifecycle: watch::channel(false).0,
             run_id: run.id,
             session_id: run.session_id,
         })
+    }
+
+    /// Construct a state with all host-owned services for one Run. Credential
+    /// slots are opened from their private store, File artifacts use the Run's
+    /// OutputStore, and slow actions share the existing background supervisor.
+    pub fn new_with_services(
+        settings: BrowserSettings,
+        provider: Arc<dyn BrowserProvider>,
+        run: Run,
+        outputs: Option<Arc<OutputStore>>,
+        jobs: Option<Arc<BackgroundJobs>>,
+        registry: Arc<crate::credentials::SecretRegistry>,
+    ) -> Result<Self, BoundaryError> {
+        let mut state = Self::new(settings.clone(), provider, run)?;
+        if settings.credentials.enabled {
+            let broker = BrowserCredentialBroker::from_settings(&settings.credentials, registry)?;
+            state = state.with_credentials(broker);
+        }
+        if settings.files.enabled
+            && let Some(outputs) = outputs
+        {
+            state = state.with_artifacts(outputs)?;
+        }
+        if let Some(jobs) = jobs {
+            state = state.with_background_jobs(jobs);
+        }
+        Ok(state)
+    }
+
+    /// Attach origin-bound credential slots. The broker is host-owned and never
+    /// constructed from model input.
+    pub(crate) fn with_credentials(mut self, broker: BrowserCredentialBroker) -> Self {
+        self.credentials = Some(broker);
+        self
+    }
+
+    /// Enable the private file broker. Files are stored in this Run's
+    /// OutputStore and staged under its protected directory.
+    pub(crate) fn with_artifacts(mut self, store: Arc<OutputStore>) -> Result<Self, BoundaryError> {
+        self.artifacts = Some(BrowserArtifactStore::new(store, self.session_id)?);
+        Ok(self)
+    }
+
+    /// Attach the Run's existing background supervisor so slow browser actions
+    /// use the same limits, cancellation, PLAN handling and cleanup. The weak
+    /// binding survives PLAN cleanup; an explicit `open` re-arms it unless the
+    /// supervisor has already closed.
+    pub(crate) fn with_background_jobs(mut self, jobs: Arc<BackgroundJobs>) -> Self {
+        self.background = std::sync::Mutex::new(Some(Arc::downgrade(&jobs)));
+        self.background_enabled.store(true, Ordering::Release);
+        self
+    }
+
+    /// Re-arm the shared background binding for a fresh provider lifecycle.
+    /// Idempotent; a closed or dropped supervisor is never reused.
+    fn rebind_background(&self) {
+        let Ok(mut background) = self.background.lock() else {
+            self.background_enabled.store(false, Ordering::Release);
+            return;
+        };
+        let live = background
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|jobs| jobs.is_closed().is_ok_and(|closed| !closed));
+        if live {
+            self.background_enabled.store(true, Ordering::Release);
+        } else {
+            *background = None;
+            self.background_enabled.store(false, Ordering::Release);
+        }
+    }
+
+    fn observe<'a>(&'a self, cancel: &'a dyn Cancellation) -> LifecycleCancellation<'a> {
+        LifecycleCancellation {
+            outer: cancel,
+            lifecycle: self.lifecycle.subscribe(),
+        }
     }
 
     pub fn facts(&self) -> &BrowserFacts {
@@ -687,6 +879,11 @@ impl BrowserState {
             inner.provider_shutdown = false;
             inner.session.clone()
         };
+        // Re-arm the per-lifecycle cancellation and background binding. This
+        // is what makes `background=true` usable again after PLAN cleanup.
+        self.lifecycle.send_replace(false);
+        self.rebind_background();
+        let cancel = self.observe(cancel);
         let opened = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
@@ -698,7 +895,7 @@ impl BrowserState {
                 )
                 .into_boundary());
             }
-            result = self.provider.open(session.as_deref(), cancel) => result,
+            result = self.provider.open(session.as_deref(), &cancel) => result,
         };
         match opened {
             Ok(opened) => {
@@ -761,6 +958,7 @@ impl BrowserState {
         cancel: &dyn Cancellation,
     ) -> Result<(), BoundaryError> {
         self.verify(context)?;
+        let cancel = self.observe(cancel);
         let (session, pages, open_uncertain, provider_shutdown) = {
             let inner = self.inner.lock().await;
             (
@@ -778,11 +976,11 @@ impl BrowserState {
             guards.push(page.document.lock().await);
         }
         let result = match session.as_deref() {
-            Some(session) => self.provider.close(session, cancel).await,
+            Some(session) => self.provider.close(session, &cancel).await,
             // An unknown open may have created provider resources with no
             // confirmed session identity. Only a full provider shutdown can
             // establish that the provider is clean.
-            None if open_uncertain => self.provider.shutdown(cancel).await,
+            None if open_uncertain => self.provider.shutdown(&cancel).await,
             None => Ok(()),
         };
         drop(guards);
@@ -803,6 +1001,7 @@ impl BrowserState {
                 inner.open_uncertain = false;
                 inner.closed = true;
                 inner.provider_shutdown = session.is_none() && open_uncertain;
+                self.background_enabled.store(false, Ordering::Release);
                 Ok(())
             }
             Err(error) => {
@@ -852,6 +1051,7 @@ impl BrowserState {
         url: &str,
         cancel: &dyn Cancellation,
     ) -> Result<NavigateView, BoundaryError> {
+        let cancel = self.observe(cancel);
         let target = crate::network::normalize_target(url).map_err(|_| {
             failure(
                 "invalid_args",
@@ -864,6 +1064,7 @@ impl BrowserState {
                 "Browser navigation target is outside the Run's allowed origins",
             ));
         }
+        let target_origin = target.origin;
         let page_id = page.to_owned();
         let (session, page) = self.active_page(context, page).await?;
         if cancel.is_cancelled() {
@@ -885,7 +1086,7 @@ impl BrowserState {
                 )
                 .into_boundary());
             }
-            result = self.provider.navigate(&session, &page.key, url, cancel) => result,
+            result = self.provider.navigate(&session, &page.key, url, &cancel) => result,
         };
         document.invalidate();
         drop(document);
@@ -901,6 +1102,7 @@ impl BrowserState {
                 // final URL only when this Run actually has a browser network
                 // policy; the native backend runs with `network.enabled =
                 // false` and must not apply an unrelated origin check.
+                let mut final_origin = Some(target_origin);
                 if let Some(final_url) = action.url.as_deref() {
                     match provider_final_url(final_url) {
                         Ok(ProviderFinalUrl::Origin(origin)) => {
@@ -912,13 +1114,17 @@ impl BrowserState {
                                     "Browser navigation ended at an origin outside the Run's allowed origins",
                                 ));
                             }
+                            final_origin = Some(origin);
                         }
                         // Internal blank pages and the browser's own error page
                         // are explicit non-network states.
-                        Ok(ProviderFinalUrl::Blank | ProviderFinalUrl::BrowserError) => {}
+                        Ok(ProviderFinalUrl::Blank | ProviderFinalUrl::BrowserError) => {
+                            final_origin = None;
+                        }
                         Err(error) => return Err(error.into_boundary()),
                     }
                 }
+                page.document.lock().await.set_origin(final_origin);
                 Ok(NavigateView {
                     page: page_id,
                     url: action.url.unwrap_or_else(|| url.to_owned()),
@@ -944,6 +1150,7 @@ impl BrowserState {
         page: &str,
         cancel: &dyn Cancellation,
     ) -> Result<SnapshotView, BoundaryError> {
+        let cancel = self.observe(cancel);
         let page_id = page.to_owned();
         let (session, page) = self.active_page(context, page).await?;
         let mut document = page.document.lock().await;
@@ -952,7 +1159,7 @@ impl BrowserState {
             _ = cancel.cancelled() => return Err(failure("cancelled", "Browser snapshot cancelled")),
             result = self
                 .provider
-                .snapshot(&session, &page.key, self.settings.max_snapshot_bytes, cancel) => result,
+                .snapshot(&session, &page.key, self.settings.max_snapshot_bytes, &cancel) => result,
         };
         let snapshot = match result {
             Ok(snapshot) => snapshot,
@@ -999,7 +1206,13 @@ impl BrowserState {
             }
             element_bytes += size;
             truncated |= name_truncated || role_truncated;
-            element_map.insert(reference.clone(), element.key.clone());
+            element_map.insert(
+                reference.clone(),
+                ElementTarget {
+                    key: element.key.clone(),
+                    frame: element.frame.clone(),
+                },
+            );
             elements.push(ElementView {
                 element_ref: reference,
                 role,
@@ -1009,7 +1222,11 @@ impl BrowserState {
         if snapshot.elements.len() > elements.len() {
             truncated = true;
         }
-        document.observe(token.clone(), element_map);
+        let origin = match provider_final_url(&snapshot.url) {
+            Ok(ProviderFinalUrl::Origin(origin)) => Some(origin),
+            _ => None,
+        };
+        document.observe(token.clone(), element_map, origin);
         let revision = document.revision;
         drop(document);
         Ok(SnapshotView {
@@ -1028,7 +1245,7 @@ impl BrowserState {
         document: &PageDocument,
         token: &str,
         element: &str,
-    ) -> Result<String, BoundaryError> {
+    ) -> Result<ElementTarget, BoundaryError> {
         if document.uncertain {
             return Err(failure(
                 "outcome_unknown",
@@ -1058,6 +1275,7 @@ impl BrowserState {
         button: Option<&str>,
         cancel: &dyn Cancellation,
     ) -> Result<ActionResultView, BoundaryError> {
+        let cancel = self.observe(cancel);
         let page_id = page.to_owned();
         let (session, page_state) = self.active_page(context, page).await?;
         let mut state = page_state.document.lock().await;
@@ -1076,7 +1294,7 @@ impl BrowserState {
             }
             result = self
                 .provider
-                .click(&session, &page_state.key, &provider_element, button, cancel) => result,
+                .click(&session, &page_state.key, &provider_element.key, button, &cancel) => result,
         };
         state.invalidate();
         let revision = state.revision;
@@ -1095,6 +1313,8 @@ impl BrowserState {
                     detail: action.detail,
                     document_stale: true,
                     document_revision: revision,
+                    credential_slot: None,
+                    credential_uses_remaining: None,
                 })
             }
             Err(error) => {
@@ -1115,6 +1335,7 @@ impl BrowserState {
         text: &str,
         cancel: &dyn Cancellation,
     ) -> Result<ActionResultView, BoundaryError> {
+        let cancel = self.observe(cancel);
         let page_id = page.to_owned();
         let (session, page_state) = self.active_page(context, page).await?;
         let mut state = page_state.document.lock().await;
@@ -1133,7 +1354,7 @@ impl BrowserState {
             }
             result = self
                 .provider
-                .fill(&session, &page_state.key, &provider_element, text, cancel) => result,
+                .fill(&session, &page_state.key, &provider_element.key, text, &cancel) => result,
         };
         state.invalidate();
         let revision = state.revision;
@@ -1152,6 +1373,103 @@ impl BrowserState {
                     detail: action.detail,
                     document_stale: true,
                     document_revision: revision,
+                    credential_slot: None,
+                    credential_uses_remaining: None,
+                })
+            }
+            Err(error) => {
+                if error.uncertain {
+                    page_state.document.lock().await.fail_unknown();
+                }
+                Err(error.into_boundary())
+            }
+        }
+    }
+
+    /// Fill one credential slot. The slot alias is resolved and consumed only
+    /// after the current document token, exact page origin, purpose,
+    /// revocation and remaining uses are verified. Plaintext exists only at
+    /// the provider call boundary and is never placed in the result.
+    pub async fn fill_credential(
+        &self,
+        context: &ToolContext,
+        page: &str,
+        document: &str,
+        element: &str,
+        slot: &str,
+        cancel: &dyn Cancellation,
+    ) -> Result<ActionResultView, BoundaryError> {
+        let cancel = self.observe(cancel);
+        let page_id = page.to_owned();
+        let (session, page_state) = self.active_page(context, page).await?;
+        let mut state = page_state.document.lock().await;
+        let provider_element = Self::verify_document(&state, document, element)?;
+        // Credential material must never cross a frame boundary. The exact
+        // origin observed for this document belongs to the top-level page, so
+        // a child frame could be same-origin by URL but still isolate the
+        // injected value from the origin check. Reject every subframe target.
+        if provider_element.frame.is_some() {
+            return Err(failure(
+                "credential_frame_denied",
+                "Browser credential fill is limited to the top-level document",
+            ));
+        }
+        let origin = state.origin.clone().ok_or_else(|| {
+            failure(
+                "credential_origin_mismatch",
+                "Browser page has no verified origin for credential fill",
+            )
+        })?;
+        let broker = self.credentials.as_ref().ok_or_else(|| {
+            failure(
+                "credential_unavailable",
+                "Browser credential slots are not configured",
+            )
+        })?;
+        let resolved = broker
+            .resolve(slot, &origin)
+            .await
+            .map_err(|error| error.into_boundary())?;
+        if cancel.is_cancelled() {
+            return Err(failure("cancelled", "Browser credential fill cancelled"));
+        }
+        // Consume before dispatch: a dispatched fill whose outcome is unknown
+        // may already have exposed the value and must not be replayed.
+        let remaining = broker
+            .consume(slot)
+            .map_err(|error| error.into_boundary())?;
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                state.fail_unknown();
+                return Err(BrowserFailure::uncertain(
+                    "Browser credential fill was cancelled after dispatch",
+                )
+                .into_boundary());
+            }
+            result = self
+                .provider
+                .fill(&session, &page_state.key, &provider_element.key, resolved.expose(), &cancel) => result,
+        };
+        state.invalidate();
+        let revision = state.revision;
+        drop(state);
+        match result {
+            Ok(action) => {
+                if let Err(error) = provider_optional_url(action.url.as_deref())
+                    .and_then(|()| provider_optional_detail(action.detail.as_deref()))
+                {
+                    page_state.document.lock().await.fail_unknown();
+                    return Err(error.into_boundary());
+                }
+                Ok(ActionResultView {
+                    page: page_id,
+                    url: action.url,
+                    detail: action.detail,
+                    document_stale: true,
+                    document_revision: revision,
+                    credential_slot: Some(resolved.alias.clone()),
+                    credential_uses_remaining: Some(remaining),
                 })
             }
             Err(error) => {
@@ -1171,6 +1489,7 @@ impl BrowserState {
         key: &str,
         cancel: &dyn Cancellation,
     ) -> Result<ActionResultView, BoundaryError> {
+        let cancel = self.observe(cancel);
         let page_id = page.to_owned();
         let (session, page) = self.active_page(context, page).await?;
         let mut state = page.document.lock().await;
@@ -1198,7 +1517,7 @@ impl BrowserState {
                 )
                 .into_boundary());
             }
-            result = self.provider.press(&session, &page.key, key, cancel) => result,
+            result = self.provider.press(&session, &page.key, key, &cancel) => result,
         };
         state.invalidate();
         let revision = state.revision;
@@ -1217,6 +1536,8 @@ impl BrowserState {
                     detail: action.detail,
                     document_stale: true,
                     document_revision: revision,
+                    credential_slot: None,
+                    credential_uses_remaining: None,
                 })
             }
             Err(error) => {
@@ -1235,6 +1556,7 @@ impl BrowserState {
         milliseconds: u64,
         cancel: &dyn Cancellation,
     ) -> Result<ActionResultView, BoundaryError> {
+        let cancel = self.observe(cancel);
         if milliseconds > self.settings.max_wait_ms {
             return Err(failure(
                 "invalid_args",
@@ -1256,7 +1578,7 @@ impl BrowserState {
                 state.invalidate();
                 return Err(failure("cancelled", "Browser wait cancelled"));
             }
-            result = self.provider.wait(&session, &page.key, milliseconds, cancel) => result,
+            result = self.provider.wait(&session, &page.key, milliseconds, &cancel) => result,
         };
         // Waiting never confirms a document revision: conservatively invalidate.
         state.invalidate();
@@ -1273,6 +1595,8 @@ impl BrowserState {
                     detail: action.detail,
                     document_stale: true,
                     document_revision: revision,
+                    credential_slot: None,
+                    credential_uses_remaining: None,
                 })
             }
             Err(error) => {
@@ -1289,7 +1613,8 @@ impl BrowserState {
         context: &ToolContext,
         page: &str,
         cancel: &dyn Cancellation,
-    ) -> Result<ScreenshotView, BoundaryError> {
+    ) -> Result<(ScreenshotView, Option<SealedMedia>), BoundaryError> {
+        let cancel = self.observe(cancel);
         let (session, page) = self.active_page(context, page).await?;
         let mut state = page.document.lock().await;
         if state.uncertain {
@@ -1301,7 +1626,7 @@ impl BrowserState {
         let screenshot = match tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(failure("cancelled", "Browser screenshot cancelled")),
-            result = self.provider.screenshot(&session, &page.key, cancel) => result,
+            result = self.provider.screenshot(&session, &page.key, &cancel) => result,
         } {
             Ok(screenshot) => screenshot,
             Err(error) => {
@@ -1326,33 +1651,60 @@ impl BrowserState {
         }) {
             return Err(error.into_boundary());
         }
-        Ok(ScreenshotView {
-            sha256: digest_hex(&screenshot.bytes),
-            bytes: screenshot.bytes.len(),
-            raw_bytes: screenshot.bytes,
-            mime: screenshot.mime,
-            filename: screenshot.filename,
-            width: screenshot.width,
-            height: screenshot.height,
-            media_ref: None,
-            model_image_attached: false,
-        })
+        let sha256 = digest_hex(&screenshot.bytes);
+        let bytes = screenshot.bytes.len();
+        let filename = screenshot.filename;
+        let mime = screenshot.mime;
+        let mut media_ref = None;
+        let mut sealed_media = None;
+        if self.settings.files.enabled
+            && let Some(artifacts) = self.artifacts.as_ref()
+        {
+            let (stored, sealed) = crate::browser::artifacts::store_image_artifact(
+                artifacts,
+                &filename,
+                &mime,
+                screenshot.width,
+                screenshot.height,
+                screenshot.bytes,
+            )?;
+            media_ref = Some(stored.reference);
+            sealed_media = Some(sealed);
+        }
+        Ok((
+            ScreenshotView {
+                sha256,
+                bytes,
+                raw_bytes: Vec::new(),
+                mime,
+                filename,
+                width: screenshot.width,
+                height: screenshot.height,
+                media_ref,
+                model_image_attached: false,
+            },
+            sealed_media,
+        ))
     }
 
     pub async fn download(
         &self,
         context: &ToolContext,
         page: &str,
+        document: &str,
+        element: &str,
         cancel: &dyn Cancellation,
-    ) -> Result<DownloadView, BoundaryError> {
-        let (session, page) = self.active_page(context, page).await?;
-        let mut state = page.document.lock().await;
-        if state.uncertain {
+    ) -> Result<(DownloadView, Option<SealedMedia>), BoundaryError> {
+        let cancel = self.observe(cancel);
+        if !self.settings.files.enabled || self.artifacts.is_none() {
             return Err(failure(
-                "outcome_unknown",
-                "This page's outcome is unknown; take a fresh snapshot first",
+                "unsupported",
+                "Browser file broker is not configured",
             ));
         }
+        let (session, page_state) = self.active_page(context, page).await?;
+        let mut state = page_state.document.lock().await;
+        let provider_element = Self::verify_document(&state, document, element)?;
         if cancel.is_cancelled() {
             return Err(failure("cancelled", "Browser download cancelled"));
         }
@@ -1365,16 +1717,24 @@ impl BrowserState {
                 )
                 .into_boundary());
             }
-            result = self.provider.download(&session, &page.key, cancel) => result,
+            result = self
+                .provider
+                .download(&session, &page_state.key, &provider_element.key, &cancel) => result,
         } {
             Ok(download) => download,
             Err(error) => {
+                // Every provider download error conservatively invalidates the
+                // document. Known failures stay retryable after a fresh
+                // snapshot; an unknown outcome keeps the page unknown.
                 if error.uncertain {
                     state.fail_unknown();
+                } else {
+                    state.invalidate();
                 }
                 return Err(error.into_boundary());
             }
         };
+        state.invalidate();
         drop(state);
         if let Err(error) = provider_field(
             &download.filename,
@@ -1388,15 +1748,37 @@ impl BrowserState {
                 "Browser provider returned an invalid download type",
             )
         }) {
+            page_state.document.lock().await.invalidate();
             return Err(error.into_boundary());
         }
-        Ok(DownloadView {
-            sha256: digest_hex(&download.bytes),
-            bytes: download.bytes.len(),
-            filename: download.filename,
-            mime: download.mime,
-            artifact_stored: false,
-        })
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| failure("unsupported", "Browser file broker is not configured"))?;
+        let (stored, sealed) = match artifacts.store_download(
+            &download.filename,
+            &download.mime,
+            &download.bytes,
+            self.settings.files.max_download_bytes,
+        ) {
+            Ok(stored) => stored,
+            Err(error) => {
+                page_state.document.lock().await.invalidate();
+                return Err(error);
+            }
+        };
+        Ok((
+            DownloadView {
+                filename: stored.filename,
+                mime: stored.mime,
+                bytes: stored.size as usize,
+                sha256: stored.sha256,
+                artifact_stored: true,
+                artifact_ref: Some(stored.reference.clone()),
+                media_ref: Some(stored.reference),
+            },
+            Some(sealed),
+        ))
     }
 
     pub async fn upload(
@@ -1405,15 +1787,34 @@ impl BrowserState {
         page: &str,
         document: &str,
         element: &str,
-        artifact: &str,
+        artifact_ref: &str,
         cancel: &dyn Cancellation,
     ) -> Result<UploadView, BoundaryError> {
+        let cancel = self.observe(cancel);
+        if !self.settings.files.enabled || self.artifacts.is_none() {
+            return Err(failure(
+                "unsupported",
+                "Browser file broker is not configured",
+            ));
+        }
         let (session, page_state) = self.active_page(context, page).await?;
         let mut state = page_state.document.lock().await;
         let provider_element = Self::verify_document(&state, document, element)?;
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| failure("unsupported", "Browser file broker is not configured"))?;
+        // Only a Session-owned, digest-verified File artifact is accepted.
+        let staged = artifacts.stage_upload(artifact_ref, self.settings.files.max_upload_bytes)?;
         if cancel.is_cancelled() {
             return Err(failure("cancelled", "Browser upload cancelled"));
         }
+        let source = BrowserUploadSource {
+            filename: staged.filename.clone(),
+            path: staged.path.clone(),
+            sha256: staged.sha256.clone(),
+            size: staged.media_size(),
+        };
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
@@ -1425,7 +1826,7 @@ impl BrowserState {
             }
             result = self
                 .provider
-                .upload(&session, &page_state.key, &provider_element, artifact, cancel) => result,
+                .upload(&session, &page_state.key, &provider_element.key, &source, &cancel) => result,
         };
         state.invalidate();
         let revision = state.revision;
@@ -1440,10 +1841,20 @@ impl BrowserState {
                     page_state.document.lock().await.fail_unknown();
                     return Err(error.into_boundary());
                 }
+                if upload.bytes_sent != source.size {
+                    page_state.document.lock().await.fail_unknown();
+                    return Err(failure(
+                        "invalid_provider_result",
+                        "Browser provider did not confirm the complete upload",
+                    ));
+                }
+                let sha256 = staged.sha256.clone();
                 Ok(UploadView {
-                    filename: upload.filename,
+                    filename: source.filename.clone(),
                     bytes_sent: upload.bytes_sent,
                     document_revision: revision,
+                    artifact_ref: staged.reference.clone(),
+                    sha256,
                 })
             }
             Err(error) => {
@@ -1453,6 +1864,22 @@ impl BrowserState {
                 Err(error.into_boundary())
             }
         }
+    }
+
+    /// Load a browser-produced File artifact for a later upload or host
+    /// inspection. A reference that no longer exists is reported explicitly as
+    /// `media_unavailable`; it is never synthesized from model input.
+    pub fn load_artifact(
+        &self,
+        context: &ToolContext,
+        reference: &str,
+    ) -> Result<Vec<u8>, BoundaryError> {
+        self.verify(context)?;
+        let artifacts = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| failure("unsupported", "Browser file broker is not configured"))?;
+        Ok(artifacts.load_artifact(reference)?.bytes)
     }
 
     /// Record that host cleanup could not confirm the provider state. Only a
@@ -1466,6 +1893,13 @@ impl BrowserState {
     /// reports success before the provider confirms it.
     pub async fn shutdown(&self, cancel: &dyn Cancellation) -> Result<(), BoundaryError> {
         let _serial = self.shutdown_lock.lock().await;
+        // Wake any in-flight provider call, notably `wait`, which holds the
+        // page document lock. Cleanup itself uses the caller's cancellation,
+        // not this lifecycle signal, so close/shutdown can still confirm.
+        // The weak background binding is retained; a later explicit `open`
+        // re-arms it unless the supervisor has already closed.
+        self.lifecycle.send_replace(true);
+        self.background_enabled.store(false, Ordering::Release);
         let (session, pages, provider_shutdown, open_uncertain) = {
             let inner = self.inner.lock().await;
             (
@@ -1553,6 +1987,8 @@ struct PageArgs {
 struct NavigateArgs {
     page: String,
     url: String,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1570,7 +2006,18 @@ struct FillArgs {
     page: String,
     document: String,
     element_ref: String,
-    text: String,
+    text: Option<String>,
+    credential_slot: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DownloadArgs {
+    page: String,
+    document: String,
+    element_ref: String,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1586,6 +2033,8 @@ struct PressArgs {
 struct WaitArgs {
     page: String,
     milliseconds: u64,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1615,8 +2064,8 @@ fn definition(kind: BrowserToolKind, settings: &BrowserSettings) -> ToolDefiniti
         ),
         BrowserToolKind::Navigate => (
             "browser_navigate",
-            "Navigate one browser page to an HTTP(S) URL. Existing document and element references become stale.",
-            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"url":{"type":"string","minLength":1,"maxLength":8192}},"required":["page","url"],"additionalProperties":false}),
+            "Navigate one browser page to an HTTP(S) URL. Existing document and element references become stale. Set background=true to return a real job ID for a slow navigation.",
+            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"url":{"type":"string","minLength":1,"maxLength":8192},"background":{"type":"boolean"}},"required":["page","url"],"additionalProperties":false}),
         ),
         BrowserToolKind::Snapshot => (
             "browser_snapshot",
@@ -1630,8 +2079,8 @@ fn definition(kind: BrowserToolKind, settings: &BrowserSettings) -> ToolDefiniti
         ),
         BrowserToolKind::Fill => (
             "browser_fill",
-            "Fill an element reference from the current document token with bounded text. A successful fill invalidates the document.",
-            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"document":{"type":"string","minLength":1,"maxLength":64},"element_ref":{"type":"string","minLength":1,"maxLength":64},"text":{"type":"string","maxLength":65536}},"required":["page","document","element_ref","text"],"additionalProperties":false}),
+            "Fill an element with bounded text or a host-registered origin-bound credential slot. Exactly one of text and credential_slot is required. Filling never submits the form.",
+            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"document":{"type":"string","minLength":1,"maxLength":64},"element_ref":{"type":"string","minLength":1,"maxLength":64},"text":{"type":"string","maxLength":65536},"credential_slot":{"type":"string","minLength":1,"maxLength":64}},"required":["page","document","element_ref"],"oneOf":[{"required":["text"],"not":{"required":["credential_slot"]}},{"required":["credential_slot"],"not":{"required":["text"]}}],"additionalProperties":false}),
         ),
         BrowserToolKind::Press => (
             "browser_press",
@@ -1640,8 +2089,8 @@ fn definition(kind: BrowserToolKind, settings: &BrowserSettings) -> ToolDefiniti
         ),
         BrowserToolKind::Wait => (
             "browser_wait",
-            "Wait a bounded time for the page. This does not confirm a document revision.",
-            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"milliseconds":{"type":"integer","minimum":0,"maximum":settings.max_wait_ms}},"required":["page","milliseconds"],"additionalProperties":false}),
+            "Wait a bounded time for the page. This does not confirm a document revision. Set background=true to return a real job ID.",
+            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"milliseconds":{"type":"integer","minimum":0,"maximum":settings.max_wait_ms},"background":{"type":"boolean"}},"required":["page","milliseconds"],"additionalProperties":false}),
         ),
         BrowserToolKind::Screenshot => (
             "browser_screenshot",
@@ -1650,12 +2099,12 @@ fn definition(kind: BrowserToolKind, settings: &BrowserSettings) -> ToolDefiniti
         ),
         BrowserToolKind::Download => (
             "browser_download",
-            "Request the page's pending download through the host provider. This build returns verified metadata only.",
-            page_schema(),
+            "Click one element in the current document token and accept only the download produced by that action. The host stores a bounded, type-checked File artifact; set background=true to return a real job ID.",
+            serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"document":{"type":"string","minLength":1,"maxLength":64},"element_ref":{"type":"string","minLength":1,"maxLength":64},"background":{"type":"boolean"}},"required":["page","document","element_ref"],"additionalProperties":false}),
         ),
         BrowserToolKind::Upload => (
             "browser_upload",
-            "Upload an authorized artifact reference to an element reference in the current document token. This build verifies metadata through the provider.",
+            "Upload one artifact reference owned by this Session to an element in the current document token. Host file paths are never accepted.",
             serde_json::json!({"type":"object","properties":{"page":{"type":"string","minLength":1,"maxLength":64},"document":{"type":"string","minLength":1,"maxLength":64},"element_ref":{"type":"string","minLength":1,"maxLength":64},"artifact_ref":{"type":"string","minLength":1,"maxLength":256}},"required":["page","document","element_ref","artifact_ref"],"additionalProperties":false}),
         ),
     };
@@ -1719,6 +2168,94 @@ fn capture_snapshot(
 }
 
 impl BrowserTool {
+    fn start_background(
+        &self,
+        parent_call_id: &str,
+        context: &ToolContext,
+        tool: &'static str,
+        mutating: bool,
+        page: String,
+        operation: impl FnOnce(
+            Arc<BrowserState>,
+            ToolContext,
+            Arc<dyn Cancellation>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            (
+                                serde_json::Value,
+                                Vec<String>,
+                                Vec<crate::output_store::SealedMedia>,
+                            ),
+                            BoundaryError,
+                        >,
+                    > + Send,
+            >,
+        > + Send
+        + 'static,
+    ) -> Result<CapturedToolResult, BoundaryError> {
+        if !self.state.background_enabled.load(Ordering::Acquire) {
+            return Err(failure(
+                "unsupported",
+                "Browser background actions require an open browser lifecycle",
+            ));
+        }
+        let jobs = self
+            .state
+            .background
+            .lock()
+            .map_err(|_| failure("background_error", "Browser background lock failed"))?
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .filter(|jobs| jobs.is_closed().is_ok_and(|closed| !closed))
+            .ok_or_else(|| {
+                failure(
+                    "unsupported",
+                    "Browser background actions are not configured for this Run",
+                )
+            })?;
+        let parent_call_id = parent_call_id.to_owned();
+        let state = self.state.clone();
+        let context_owned = context.clone();
+        let job_id =
+            jobs.start_browser(&parent_call_id, context, tool, mutating, move |cancel| {
+                let state = state.clone();
+                let context = context_owned.clone();
+                Box::pin(async move {
+                    let (value, media_refs, pins) = operation(state, context, cancel).await?;
+                    Ok((
+                        ToolResult {
+                            ok: true,
+                            data: Some(value),
+                            error: None,
+                            truncated: false,
+                            media_refs,
+                        },
+                        pins,
+                    ))
+                })
+            })?;
+        Ok(CapturedToolResult {
+            result: ToolResult {
+                ok: true,
+                data: Some(serde_json::json!({
+                    "source": UNTRUSTED_BROWSER,
+                    "status": "started",
+                    "background": true,
+                    "job_id": job_id,
+                    "page": page,
+                })),
+                error: None,
+                truncated: false,
+                media_refs: Vec::new(),
+            },
+            outputs: Vec::new(),
+            media: Vec::new(),
+            capture_errors: Vec::new(),
+        })
+    }
+
     async fn execute_captured(
         &self,
         call: &ToolCall,
@@ -1729,6 +2266,8 @@ impl BrowserTool {
         if cancel.is_cancelled() {
             return Err(failure("cancelled", "Browser action cancelled"));
         }
+        let mut media = Vec::new();
+        let mut media_refs = Vec::new();
         let value = match self.kind {
             BrowserToolKind::Open => {
                 let view = self.state.open(context, cancel).await?;
@@ -1743,6 +2282,34 @@ impl BrowserTool {
                     .map_err(|_| failure("invalid_args", "invalid browser navigate arguments"))?;
                 if !valid_token(&args.page, "page_") {
                     return Err(failure("invalid_args", "invalid browser page identity"));
+                }
+                if args.background {
+                    let page = args.page.clone();
+                    let url = args.url.clone();
+                    return self.start_background(
+                        &call.call_id,
+                        context,
+                        "browser_navigate",
+                        true,
+                        args.page.clone(),
+                        move |state, context, cancel| {
+                            Box::pin(async move {
+                                let view = state
+                                    .navigate(&context, &page, &url, cancel.as_ref())
+                                    .await?;
+                                Ok((
+                                    serde_json::json!({
+                                        "source": UNTRUSTED_BROWSER,
+                                        "page": view.page,
+                                        "url": view.url,
+                                        "document_stale": view.document_stale,
+                                    }),
+                                    Vec::new(),
+                                    Vec::new(),
+                                ))
+                            })
+                        },
+                    );
                 }
                 let view = self
                     .state
@@ -1822,8 +2389,10 @@ impl BrowserTool {
                         data: Some(data),
                         error: None,
                         truncated,
+                        media_refs: Vec::new(),
                     },
                     outputs: sealed,
+                    media: Vec::new(),
                     capture_errors,
                 });
             }
@@ -1855,23 +2424,48 @@ impl BrowserTool {
                 if !valid_token(&args.page, "page_")
                     || !valid_token(&args.document, "doc_")
                     || !valid_token(&args.element_ref, "el_")
-                    || args.text.len() > MAX_FILL_BYTES
-                    || args.text.contains('\0')
                 {
                     return Err(failure("invalid_args", "invalid browser fill arguments"));
                 }
-                let view = self
-                    .state
-                    .fill(
-                        context,
-                        &args.page,
-                        &args.document,
-                        &args.element_ref,
-                        &args.text,
-                        cancel,
-                    )
-                    .await?;
-                serde_json::json!({"source":UNTRUSTED_BROWSER,"page":view.page,"url":view.url,"detail":view.detail,"document_stale":view.document_stale,"document_revision":view.document_revision})
+                let view = match (&args.text, &args.credential_slot) {
+                    (Some(text), None) => {
+                        if text.len() > MAX_FILL_BYTES || text.contains('\0') {
+                            return Err(failure("invalid_args", "invalid browser fill arguments"));
+                        }
+                        self.state
+                            .fill(
+                                context,
+                                &args.page,
+                                &args.document,
+                                &args.element_ref,
+                                text,
+                                cancel,
+                            )
+                            .await?
+                    }
+                    (None, Some(slot)) => {
+                        if !crate::browser::settings::valid_alias(slot) {
+                            return Err(failure("invalid_args", "invalid browser credential slot"));
+                        }
+                        self.state
+                            .fill_credential(
+                                context,
+                                &args.page,
+                                &args.document,
+                                &args.element_ref,
+                                slot,
+                                cancel,
+                            )
+                            .await?
+                    }
+                    _ => {
+                        return Err(failure(
+                            "invalid_args",
+                            "browser fill requires exactly one of text or credential_slot",
+                        ));
+                    }
+                };
+                serde_json::json!({"source":UNTRUSTED_BROWSER,"page":view.page,"url":view.url,"detail":view.detail,"document_stale":view.document_stale,"document_revision":view.document_revision,"credential_slot":view.credential_slot,"credential_uses_remaining":view.credential_uses_remaining})
             }
             BrowserToolKind::Press => {
                 let args: PressArgs = serde_json::from_str(&call.arguments)
@@ -1896,6 +2490,36 @@ impl BrowserTool {
                 if !valid_token(&args.page, "page_") {
                     return Err(failure("invalid_args", "invalid browser page identity"));
                 }
+                if args.background {
+                    let page = args.page.clone();
+                    let milliseconds = args.milliseconds;
+                    return self.start_background(
+                        &call.call_id,
+                        context,
+                        "browser_wait",
+                        false,
+                        args.page.clone(),
+                        move |state, context, cancel| {
+                            Box::pin(async move {
+                                let view = state
+                                    .wait(&context, &page, milliseconds, cancel.as_ref())
+                                    .await?;
+                                Ok((
+                                    serde_json::json!({
+                                        "source": UNTRUSTED_BROWSER,
+                                        "page": view.page,
+                                        "url": view.url,
+                                        "detail": view.detail,
+                                        "document_stale": view.document_stale,
+                                        "document_revision": view.document_revision,
+                                    }),
+                                    Vec::new(),
+                                    Vec::new(),
+                                ))
+                            })
+                        },
+                    );
+                }
                 let view = self
                     .state
                     .wait(context, &args.page, args.milliseconds, cancel)
@@ -1904,23 +2528,76 @@ impl BrowserTool {
             }
             BrowserToolKind::Screenshot => {
                 let page = parse_page(call)?;
-                let view = self.state.screenshot(context, &page, cancel).await?;
+                let (view, sealed) = self.state.screenshot(context, &page, cancel).await?;
+                media_refs = view.media_ref.clone().into_iter().collect();
+                media.extend(sealed);
                 let encoded = serde_json::to_value(&view).map_err(|_| {
                     failure(
                         "serialization_error",
                         "Browser screenshot cannot be encoded",
                     )
                 })?;
-                // DEV-079 returns verified metadata only. Screenshot media is
-                // captured and injected by DEV-082 once pinned storage exists.
                 serde_json::json!({
                     "source":UNTRUSTED_BROWSER,
                     "screenshot":encoded,
                 })
             }
             BrowserToolKind::Download => {
-                let page = parse_page(call)?;
-                let view = self.state.download(context, &page, cancel).await?;
+                let args: DownloadArgs = serde_json::from_str(&call.arguments)
+                    .map_err(|_| failure("invalid_args", "invalid browser download arguments"))?;
+                if !valid_token(&args.page, "page_")
+                    || !valid_token(&args.document, "doc_")
+                    || !valid_token(&args.element_ref, "el_")
+                {
+                    return Err(failure(
+                        "invalid_args",
+                        "invalid browser download arguments",
+                    ));
+                }
+                if args.background {
+                    let page = args.page.clone();
+                    let document = args.document.clone();
+                    let element = args.element_ref.clone();
+                    return self.start_background(
+                        &call.call_id,
+                        context,
+                        "browser_download",
+                        true,
+                        args.page.clone(),
+                        move |state, context, cancel| {
+                            Box::pin(async move {
+                                let (view, sealed) = state
+                                    .download(&context, &page, &document, &element, cancel.as_ref())
+                                    .await?;
+                                let media_refs =
+                                    view.media_ref.clone().into_iter().collect::<Vec<_>>();
+                                // The supervisor holds the artifact lease in
+                                // its job state until the Run ends, so GC
+                                // cannot reclaim it before status/upload.
+                                Ok((
+                                    serde_json::json!({
+                                        "source": UNTRUSTED_BROWSER,
+                                        "download": view,
+                                    }),
+                                    media_refs,
+                                    sealed.into_iter().collect(),
+                                ))
+                            })
+                        },
+                    );
+                }
+                let (view, sealed) = self
+                    .state
+                    .download(
+                        context,
+                        &args.page,
+                        &args.document,
+                        &args.element_ref,
+                        cancel,
+                    )
+                    .await?;
+                media_refs = view.media_ref.clone().into_iter().collect();
+                media.extend(sealed);
                 serde_json::json!({
                     "source":UNTRUSTED_BROWSER,
                     "download":serde_json::to_value(view).map_err(|_| {
@@ -1951,6 +2628,7 @@ impl BrowserTool {
                         cancel,
                     )
                     .await?;
+                media_refs.push(view.artifact_ref.clone());
                 serde_json::json!({
                     "source":UNTRUSTED_BROWSER,
                     "upload":serde_json::to_value(view).map_err(|_| {
@@ -1965,8 +2643,10 @@ impl BrowserTool {
                 data: Some(value),
                 error: None,
                 truncated: false,
+                media_refs,
             },
             outputs: Vec::new(),
+            media,
             capture_errors: Vec::new(),
         })
     }
@@ -2064,8 +2744,14 @@ pub struct FixtureProvider {
     snapshot_truncated: AtomicBool,
     override_action_url: Mutex<Option<String>>,
     override_title: Mutex<Option<String>>,
+    override_download: Mutex<Option<BrowserDownload>>,
+    download_failure: Mutex<Option<(String, bool)>>,
+    last_upload: Mutex<Option<BrowserUploadSource>>,
+    last_fill: Mutex<Option<String>>,
+    fill_count: AtomicU64,
     shutdown_delay_ms: u64,
     next_element: AtomicU64,
+    framed_element: AtomicBool,
 }
 impl FixtureProvider {
     pub fn new(facts: BrowserFacts) -> Self {
@@ -2087,8 +2773,14 @@ impl FixtureProvider {
             snapshot_truncated: AtomicBool::new(false),
             override_action_url: Mutex::new(None),
             override_title: Mutex::new(None),
+            override_download: Mutex::new(None),
+            download_failure: Mutex::new(None),
+            last_upload: Mutex::new(None),
+            last_fill: Mutex::new(None),
+            fill_count: AtomicU64::new(0),
             shutdown_delay_ms: 0,
             next_element: AtomicU64::new(1),
+            framed_element: AtomicBool::new(false),
         }
     }
     pub fn full() -> Self {
@@ -2105,6 +2797,11 @@ impl FixtureProvider {
     }
     pub fn with_shutdown_delay(mut self, delay_ms: u64) -> Self {
         self.shutdown_delay_ms = delay_ms;
+        self
+    }
+    /// Report the fixture element as belonging to a child frame.
+    pub fn with_framed_element(mut self) -> Self {
+        self.framed_element = AtomicBool::new(true);
         self
     }
     pub fn fail_next_unknown(&self) {
@@ -2151,6 +2848,39 @@ impl FixtureProvider {
         if let Ok(mut value) = self.override_title.lock() {
             *value = Some(title.into());
         }
+    }
+    /// Make the next download action return this exact provider payload.
+    pub fn return_next_download(&self, download: BrowserDownload) {
+        if let Ok(mut value) = self.override_download.lock() {
+            *value = Some(download);
+        }
+    }
+    /// Make the next download call fail with a known or unknown provider error.
+    pub fn fail_next_download(&self, code: &str, uncertain: bool) {
+        if let Ok(mut value) = self.download_failure.lock() {
+            *value = Some((code.into(), uncertain));
+        }
+    }
+    fn take_download_failure(&self) -> Option<(String, bool)> {
+        self.download_failure
+            .lock()
+            .ok()
+            .and_then(|mut value| value.take())
+    }
+    pub fn fill_count(&self) -> u64 {
+        self.fill_count.load(Ordering::Acquire)
+    }
+    pub fn last_fill(&self) -> Option<String> {
+        self.last_fill.lock().ok().and_then(|value| value.clone())
+    }
+    pub fn last_upload(&self) -> Option<BrowserUploadSource> {
+        self.last_upload.lock().ok().and_then(|value| value.clone())
+    }
+    fn take_override_download(&self) -> Option<BrowserDownload> {
+        self.override_download
+            .lock()
+            .ok()
+            .and_then(|mut value| value.take())
     }
     fn take_override_action_url(&self) -> Option<String> {
         self.override_action_url
@@ -2358,6 +3088,10 @@ impl BrowserProvider for FixtureProvider {
                     key,
                     role: "button".into(),
                     name: "Submit".into(),
+                    frame: self
+                        .framed_element
+                        .load(Ordering::Acquire)
+                        .then(|| "f1".to_owned()),
                 }],
                 truncated: self.take_snapshot_truncated(),
             })
@@ -2402,6 +3136,15 @@ impl BrowserProvider for FixtureProvider {
         Self::cancelled(cancel)?;
         if self.take_stall_action() {
             std::future::pending::<()>().await;
+        }
+        if self.take_unknown() {
+            return Err(BrowserFailure::uncertain(
+                "fixture fill may have been dispatched",
+            ));
+        }
+        self.fill_count.fetch_add(1, Ordering::AcqRel);
+        if let Ok(mut value) = self.last_fill.lock() {
+            *value = Some(text.to_owned());
         }
         Ok(BrowserAction {
             url: None,
@@ -2456,33 +3199,44 @@ impl BrowserProvider for FixtureProvider {
         &self,
         _session: &str,
         _page: &str,
+        _element: &str,
         cancel: &dyn Cancellation,
     ) -> Result<BrowserDownload, BrowserFailure> {
         Self::cancelled(cancel)?;
         if self.take_stall_action() {
             std::future::pending::<()>().await;
         }
-        Ok(BrowserDownload {
+        if let Some((code, uncertain)) = self.take_download_failure() {
+            return Err(if uncertain {
+                BrowserFailure::uncertain("fixture download outcome is unknown")
+            } else {
+                BrowserFailure::new(code, "fixture download failed")
+            });
+        }
+        Ok(self.take_override_download().unwrap_or(BrowserDownload {
             filename: "download.txt".into(),
             mime: "text/plain".into(),
             bytes: b"fixture download".to_vec(),
-        })
+        }))
     }
     async fn upload(
         &self,
         _session: &str,
         _page: &str,
         _element: &str,
-        artifact: &str,
+        source: &BrowserUploadSource,
         cancel: &dyn Cancellation,
     ) -> Result<BrowserUpload, BrowserFailure> {
         Self::cancelled(cancel)?;
         if self.take_stall_action() {
             std::future::pending::<()>().await;
         }
+        if let Ok(mut value) = self.last_upload.lock() {
+            *value = Some(source.clone());
+        }
         Ok(BrowserUpload {
-            filename: artifact.into(),
-            bytes_sent: 7,
+            filename: source.filename.clone(),
+            bytes_sent: source.size,
         })
     }
     async fn shutdown(&self, cancel: &dyn Cancellation) -> Result<(), BrowserFailure> {
@@ -2501,7 +3255,13 @@ impl BrowserProvider for FixtureProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{PermissionMode, RunId, WorkMode};
+    use crate::{
+        contract::{PermissionMode, RunId, WorkMode},
+        credentials::{
+            CredentialScope, CredentialValue, FileCredentialStore, SecretRegistry, SecretValue,
+        },
+        network::NormalizedOrigin,
+    };
     use std::sync::atomic::AtomicBool;
 
     struct NeverCancel;
@@ -2553,6 +3313,95 @@ mod tests {
             run.clone(),
         )
         .unwrap()
+    }
+
+    fn allowed_settings(origin: &str) -> BrowserSettings {
+        BrowserSettings {
+            enabled: true,
+            network: crate::browser::network::BrowserNetworkSettings {
+                enabled: true,
+                allowed_origins: vec![origin.into(), "http://other.example".into()],
+                localhost_development_origin: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn credential_state(
+        root: &std::path::Path,
+        origin: &str,
+        max_uses: u32,
+    ) -> (Arc<FixtureProvider>, BrowserState, Run, FileCredentialStore) {
+        let registry = Arc::new(SecretRegistry::default());
+        let store = FileCredentialStore::open(root.join("credentials"), registry.clone()).unwrap();
+        let scope =
+            CredentialScope::for_browser("login", &NormalizedOrigin::parse(origin).unwrap())
+                .unwrap();
+        store
+            .create(
+                scope,
+                CredentialValue::Secret(SecretValue::new("super-secret-value").unwrap()),
+            )
+            .await
+            .unwrap();
+        let settings = BrowserSettings {
+            credentials: BrowserCredentialSettings {
+                enabled: true,
+                store: Some(root.join("credentials")),
+                slots: vec![BrowserCredentialSlot {
+                    alias: "login".into(),
+                    credential_ref: store.list().await.unwrap().first().unwrap().reference,
+                    origin: origin.into(),
+                    purpose: BrowserCredentialPurpose::FormFill,
+                    max_uses,
+                }],
+            },
+            ..allowed_settings(origin)
+        };
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let broker = BrowserCredentialBroker::new(&settings.credentials, store.clone()).unwrap();
+        let state = BrowserState::new(settings, provider.clone(), run.clone())
+            .unwrap()
+            .with_credentials(broker);
+        (provider, state, run, store)
+    }
+
+    async fn artifact_state(
+        root: &std::path::Path,
+        provider: Arc<FixtureProvider>,
+        run: &Run,
+    ) -> (BrowserState, Arc<OutputStore>) {
+        let outputs = Arc::new(
+            OutputStore::open(
+                root.join("outputs"),
+                crate::output_store::OutputLimits::default(),
+                Arc::new(SecretRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let state = make_state(provider, run)
+            .with_artifacts(outputs.clone())
+            .unwrap();
+        (state, outputs)
+    }
+
+    async fn open_document(
+        state: &BrowserState,
+        context: &ToolContext,
+        url: &str,
+    ) -> (String, SnapshotView) {
+        let opened = state.open(context, &NeverCancel).await.unwrap();
+        state
+            .navigate(context, &opened.page, url, &NeverCancel)
+            .await
+            .unwrap();
+        let snapshot = state
+            .snapshot(context, &opened.page, &NeverCancel)
+            .await
+            .unwrap();
+        (opened.page, snapshot)
     }
 
     #[tokio::test]
@@ -3209,7 +4058,13 @@ mod tests {
         ] {
             let provider = Arc::new(FixtureProvider::full());
             let run = make_run();
-            let state = make_state(provider.clone(), &run);
+            let root = tempfile::tempdir().unwrap();
+            let (state, outputs) = if matches!(action, Action::Upload | Action::Download) {
+                let (state, outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+                (state, Some(outputs))
+            } else {
+                (make_state(provider.clone(), &run), None)
+            };
             let context = make_context(run);
             let opened = state.open(&context, &NeverCancel).await.unwrap();
             let snapshot = state
@@ -3244,19 +4099,31 @@ mod tests {
                     .press(&context, &opened.page, &document, "Enter", &cancel)
                     .await
                     .unwrap_err(),
-                Action::Upload => state
-                    .upload(
-                        &context,
-                        &opened.page,
-                        &document,
-                        &element,
-                        "artifact_1",
-                        &cancel,
-                    )
-                    .await
-                    .unwrap_err(),
+                Action::Upload => {
+                    let artifact = outputs
+                        .as_ref()
+                        .unwrap()
+                        .put_file(
+                            context.run.session_id,
+                            "text/plain",
+                            "upload.txt",
+                            b"upload bytes",
+                        )
+                        .unwrap();
+                    state
+                        .upload(
+                            &context,
+                            &opened.page,
+                            &document,
+                            &element,
+                            &artifact.reference,
+                            &cancel,
+                        )
+                        .await
+                        .unwrap_err()
+                }
                 Action::Download => state
-                    .download(&context, &opened.page, &cancel)
+                    .download(&context, &opened.page, &document, &element, &cancel)
                     .await
                     .unwrap_err(),
             };
@@ -3384,6 +4251,555 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn credential_fill_injects_only_at_the_final_boundary_and_never_leaks_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let (provider, state, run, _store) = credential_state(root.path(), origin, 3).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+        let view = state
+            .fill_credential(
+                &context,
+                &page,
+                &snapshot.document,
+                &snapshot.elements[0].element_ref,
+                "login",
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(provider.fill_count(), 1);
+        assert_eq!(provider.last_fill().as_deref(), Some("super-secret-value"));
+        assert_eq!(view.credential_slot.as_deref(), Some("login"));
+        assert_eq!(view.credential_uses_remaining, Some(2));
+        let encoded = serde_json::to_string(&view).unwrap();
+        assert!(!encoded.contains("super-secret-value"));
+        assert!(!encoded.contains("super-secret"));
+    }
+
+    #[tokio::test]
+    async fn credential_fill_rejects_wrong_origin_stale_document_and_exhausted_uses() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let (provider, state, run, _store) = credential_state(root.path(), origin, 1).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+
+        // A stale document token is rejected before the slot is consumed.
+        let fresh = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        assert_eq!(
+            state
+                .fill_credential(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &fresh.elements[0].element_ref,
+                    "login",
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "stale_element"
+        );
+        assert_eq!(provider.fill_count(), 0);
+
+        // A different page origin cannot use the slot.
+        provider.return_next_action_url("http://other.example/");
+        state
+            .navigate(&context, &page, "http://other.example/", &NeverCancel)
+            .await
+            .unwrap();
+        let other = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        assert_eq!(
+            state
+                .fill_credential(
+                    &context,
+                    &page,
+                    &other.document,
+                    &other.elements[0].element_ref,
+                    "login",
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "credential_origin_mismatch"
+        );
+        assert_eq!(provider.fill_count(), 0);
+
+        // One successful use exhausts max_uses=1.
+        provider.return_next_action_url(format!("{origin}/login"));
+        state
+            .navigate(&context, &page, &format!("{origin}/login"), &NeverCancel)
+            .await
+            .unwrap();
+        let again = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        state
+            .fill_credential(
+                &context,
+                &page,
+                &again.document,
+                &again.elements[0].element_ref,
+                "login",
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        let after = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        assert_eq!(
+            state
+                .fill_credential(
+                    &context,
+                    &page,
+                    &after.document,
+                    &after.elements[0].element_ref,
+                    "login",
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "credential_uses_exhausted"
+        );
+        assert_eq!(provider.fill_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_fill_consumes_a_use_conservatively() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let (provider, state, run, _store) = credential_state(root.path(), origin, 2).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+        provider.fail_next_unknown();
+        assert_eq!(
+            state
+                .fill_credential(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    "login",
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "outcome_unknown"
+        );
+        let recovered = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        let view = state
+            .fill_credential(
+                &context,
+                &page,
+                &recovered.document,
+                &recovered.elements[0].element_ref,
+                "login",
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(view.credential_uses_remaining, Some(0));
+    }
+
+    #[tokio::test]
+    async fn fill_adapter_requires_exactly_one_input_and_hides_credential_values() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let (provider, state, run, _store) = credential_state(root.path(), origin, 2).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+        let state = Arc::new(state);
+        let tool = BrowserTool {
+            state: state.clone(),
+            kind: BrowserToolKind::Fill,
+        };
+        let base = serde_json::json!({
+            "page": page,
+            "document": snapshot.document,
+            "element_ref": snapshot.elements[0].element_ref,
+        });
+        let schema = tool.definition().input_schema;
+        assert_eq!(schema["oneOf"].as_array().unwrap().len(), 2);
+
+        let mut both = base.clone();
+        both["text"] = serde_json::json!("plain");
+        both["credential_slot"] = serde_json::json!("login");
+        let both = ToolCall {
+            call_id: "fill-both".into(),
+            name: "browser_fill".into(),
+            arguments: both.to_string(),
+        };
+        assert_eq!(
+            tool.execute_captured(&both, &context, &NeverCancel, None)
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "invalid_args"
+        );
+        let neither = ToolCall {
+            call_id: "fill-neither".into(),
+            name: "browser_fill".into(),
+            arguments: base.to_string(),
+        };
+        assert_eq!(
+            tool.execute_captured(&neither, &context, &NeverCancel, None)
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "invalid_args"
+        );
+        let mut slot = base;
+        slot["credential_slot"] = serde_json::json!("login");
+        let slot = ToolCall {
+            call_id: "fill-slot".into(),
+            name: "browser_fill".into(),
+            arguments: slot.to_string(),
+        };
+        let result = tool
+            .execute_captured(&slot, &context, &NeverCancel, None)
+            .await
+            .unwrap();
+        assert_eq!(provider.fill_count(), 1);
+        let data = result.result.data.unwrap();
+        assert_eq!(data["credential_slot"], "login");
+        assert!(!data.to_string().contains("super-secret-value"));
+        assert!(result.media.is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_stores_a_type_checked_file_artifact_and_sanitizes_names() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, _outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, "http://allowed.example/dl").await;
+        provider.return_next_download(BrowserDownload {
+            filename: "../../escape.txt".into(),
+            mime: "text/plain".into(),
+            bytes: b"downloaded bytes".to_vec(),
+        });
+        let (view, _sealed) = state
+            .download(
+                &context,
+                &page,
+                &snapshot.document,
+                &snapshot.elements[0].element_ref,
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(view.filename, "escape.txt");
+        assert_eq!(view.mime, "text/plain");
+        assert!(view.artifact_stored);
+        assert_eq!(view.bytes, 16);
+        let reference = view.artifact_ref.clone().unwrap();
+        assert_eq!(
+            state.load_artifact(&context, &reference).unwrap(),
+            b"downloaded bytes"
+        );
+        assert_eq!(view.artifact_ref, view.media_ref);
+    }
+
+    #[tokio::test]
+    async fn download_rejects_oversize_and_executable_payloads() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let mut settings = BrowserSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        settings.files.max_download_bytes = 8;
+        let outputs = Arc::new(
+            OutputStore::open(
+                root.path().join("outputs"),
+                crate::output_store::OutputLimits::default(),
+                Arc::new(SecretRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let state = BrowserState::new(settings, provider.clone(), run.clone())
+            .unwrap()
+            .with_artifacts(outputs)
+            .unwrap();
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, "http://allowed.example/dl").await;
+        provider.return_next_download(BrowserDownload {
+            filename: "large.txt".into(),
+            mime: "text/plain".into(),
+            bytes: vec![b'x'; 9],
+        });
+        assert_eq!(
+            state
+                .download(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "file_too_large"
+        );
+        let snapshot = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        provider.return_next_download(BrowserDownload {
+            filename: "malware.bin".into(),
+            mime: "application/octet-stream".into(),
+            bytes: b"MZ\x90\x00".to_vec(),
+        });
+        assert_eq!(
+            state
+                .download(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "file_type_denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_accepts_only_session_artifacts_and_cleans_private_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, "http://allowed.example/form").await;
+
+        // Arbitrary host paths and foreign-session artifacts are rejected.
+        for reference in [
+            "/etc/passwd",
+            "../artifact",
+            "media_00000000000000000000000000000000_0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            assert!(
+                state
+                    .upload(
+                        &context,
+                        &page,
+                        &snapshot.document,
+                        &snapshot.elements[0].element_ref,
+                        reference,
+                        &NeverCancel,
+                    )
+                    .await
+                    .is_err(),
+                "reference {reference} must be rejected"
+            );
+        }
+        let other = outputs
+            .put_file(
+                SessionId::new(),
+                "text/plain",
+                "other.txt",
+                b"other session",
+            )
+            .unwrap();
+        assert_eq!(
+            state
+                .upload(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    &other.reference,
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "media_denied"
+        );
+
+        let artifact = outputs
+            .put_file(
+                context.run.session_id,
+                "text/plain",
+                "note.txt",
+                b"upload bytes",
+            )
+            .unwrap();
+        let snapshot = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        let view = state
+            .upload(
+                &context,
+                &page,
+                &snapshot.document,
+                &snapshot.elements[0].element_ref,
+                &artifact.reference,
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(view.filename, "note.txt");
+        assert_eq!(view.bytes_sent, 12);
+        assert_eq!(view.artifact_ref, artifact.reference);
+        let staged = provider.last_upload().unwrap();
+        assert_eq!(staged.size, 12);
+        assert!(!staged.path.exists(), "staging file must be removed");
+    }
+
+    #[tokio::test]
+    async fn cancelled_download_and_upload_report_unknown_without_replay() {
+        for download in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let provider = Arc::new(FixtureProvider::full());
+            let run = make_run();
+            let (state, outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+            let context = make_context(run);
+            let (page, snapshot) =
+                open_document(&state, &context, "http://allowed.example/file").await;
+            provider.stall_next_action();
+            let flag = Arc::new(AtomicBool::new(false));
+            let cancel = SwitchCancel(flag.clone());
+            let trigger = flag.clone();
+            let task = tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                trigger.store(true, Ordering::Release);
+            });
+            let error = if download {
+                state
+                    .download(
+                        &context,
+                        &page,
+                        &snapshot.document,
+                        &snapshot.elements[0].element_ref,
+                        &cancel,
+                    )
+                    .await
+                    .unwrap_err()
+            } else {
+                let artifact = outputs
+                    .put_file(
+                        context.run.session_id,
+                        "text/plain",
+                        "note.txt",
+                        b"upload bytes",
+                    )
+                    .unwrap();
+                state
+                    .upload(
+                        &context,
+                        &page,
+                        &snapshot.document,
+                        &snapshot.elements[0].element_ref,
+                        &artifact.reference,
+                        &cancel,
+                    )
+                    .await
+                    .unwrap_err()
+            };
+            task.await.unwrap();
+            assert_eq!(error.0.code, "outcome_unknown");
+            // A fresh snapshot is the only recovery point; the dispatched
+            // action itself is never replayed.
+            assert!(state.snapshot(&context, &page, &NeverCancel).await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn revoked_credential_fill_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let (provider, state, run, store) = credential_state(root.path(), origin, 2).await;
+        let context = make_context(run);
+        let (page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+        let reference = store.list().await.unwrap()[0].reference;
+        store
+            .revoke(
+                reference,
+                &CredentialScope::for_browser("login", &NormalizedOrigin::parse(origin).unwrap())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .fill_credential(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    "login",
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "credential_revoked"
+        );
+        assert_eq!(provider.fill_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn screenshot_artifact_is_usable_for_upload_and_holds_its_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+        let context = make_context(run);
+        let (page, _) = open_document(&state, &context, "http://allowed.example/shot").await;
+        let (view, sealed) = state
+            .screenshot(&context, &page, &NeverCancel)
+            .await
+            .unwrap();
+        let reference = view.media_ref.clone().unwrap();
+        assert!(!view.model_image_attached);
+        assert!(sealed.is_some());
+        // The lease held by the captured result prevents GC from reclaiming it.
+        assert_eq!(
+            outputs
+                .collect_garbage(&std::collections::BTreeSet::new(), 8)
+                .unwrap()
+                .leased,
+            1
+        );
+        assert!(
+            !state
+                .load_artifact(&context, &reference)
+                .unwrap()
+                .is_empty()
+        );
+        drop(sealed);
+        assert_eq!(
+            outputs
+                .collect_garbage(&std::collections::BTreeSet::new(), 8)
+                .unwrap()
+                .removed,
+            1
+        );
+        assert_eq!(
+            state
+                .load_artifact(&context, &reference)
+                .unwrap_err()
+                .0
+                .code,
+            "media_unavailable"
+        );
+    }
+
+    #[tokio::test]
     async fn state_rejects_other_runs() {
         let provider = Arc::new(FixtureProvider::full());
         let run = make_run();
@@ -3405,5 +4821,342 @@ mod tests {
                 .code,
             "invalid_run"
         );
+    }
+    #[tokio::test]
+    async fn credential_fill_rejects_elements_inside_a_child_frame() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let registry = Arc::new(SecretRegistry::default());
+        let store =
+            FileCredentialStore::open(root.path().join("credentials"), registry.clone()).unwrap();
+        let scope =
+            CredentialScope::for_browser("login", &NormalizedOrigin::parse(origin).unwrap())
+                .unwrap();
+        store
+            .create(
+                scope,
+                CredentialValue::Secret(SecretValue::new("super-secret-value").unwrap()),
+            )
+            .await
+            .unwrap();
+        let settings = BrowserSettings {
+            credentials: BrowserCredentialSettings {
+                enabled: true,
+                store: Some(root.path().join("credentials")),
+                slots: vec![BrowserCredentialSlot {
+                    alias: "login".into(),
+                    credential_ref: store.list().await.unwrap()[0].reference,
+                    origin: origin.into(),
+                    purpose: BrowserCredentialPurpose::FormFill,
+                    max_uses: 1,
+                }],
+            },
+            ..allowed_settings(origin)
+        };
+        let provider = Arc::new(FixtureProvider::full().with_framed_element());
+        let run = make_run();
+        let broker = BrowserCredentialBroker::new(&settings.credentials, store.clone()).unwrap();
+        let state = BrowserState::new(settings, provider.clone(), run.clone())
+            .unwrap()
+            .with_credentials(broker);
+        let context = make_context(run);
+        let (_page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+        // A normal snapshot still exposes the reference for text fills...
+        assert!(
+            state
+                .fill(
+                    &context,
+                    &snapshot.page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    "visible text",
+                    &NeverCancel,
+                )
+                .await
+                .is_ok()
+        );
+        let (_page, snapshot) = open_document(&state, &context, &format!("{origin}/login")).await;
+        // ...but credential material never crosses a frame boundary.
+        let error = state
+            .fill_credential(
+                &context,
+                &snapshot.page,
+                &snapshot.document,
+                &snapshot.elements[0].element_ref,
+                "login",
+                &NeverCancel,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "credential_frame_denied");
+    }
+
+    #[tokio::test]
+    async fn download_errors_conservatively_invalidate_the_document() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, _outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+        let context = make_context(run);
+        let (page, mut snapshot) =
+            open_document(&state, &context, "http://allowed.example/files").await;
+
+        for code in [
+            "download_missing",
+            "invalid_provider_result",
+            "file_path_denied",
+            "file_too_large",
+            "file_broker",
+        ] {
+            provider.fail_next_download(code, false);
+            let error = state
+                .download(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.0.code, code);
+            // A known failure keeps the page usable only through a fresh
+            // observation; the old document must not be replayed.
+            assert_eq!(
+                state
+                    .download(
+                        &context,
+                        &page,
+                        &snapshot.document,
+                        &snapshot.elements[0].element_ref,
+                        &NeverCancel,
+                    )
+                    .await
+                    .unwrap_err()
+                    .0
+                    .code,
+                "stale_element"
+            );
+            snapshot = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        }
+
+        // An unknown outcome stays unknown until a fresh snapshot.
+        provider.fail_next_download("download_missing", true);
+        assert_eq!(
+            state
+                .download(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "outcome_unknown"
+        );
+        assert_eq!(
+            state
+                .download(
+                    &context,
+                    &page,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "outcome_unknown"
+        );
+        let recovered = state.snapshot(&context, &page, &NeverCancel).await.unwrap();
+        assert!(!recovered.document.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_an_in_flight_wait_instead_of_waiting_for_the_lock() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = Arc::new(make_state(provider, &run));
+        let context = make_context(run);
+        let opened = state.open(&context, &NeverCancel).await.unwrap();
+        let waiter = {
+            let state = state.clone();
+            let context = context.clone();
+            let page = opened.page.clone();
+            tokio::spawn(async move { state.wait(&context, &page, 30_000, &NeverCancel).await })
+        };
+        // Give the wait time to enter the provider with the document lock held.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let started = std::time::Instant::now();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            state.shutdown(&NeverCancel),
+        )
+        .await
+        .expect("shutdown waited for the full wait deadline")
+        .expect("shutdown");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "shutdown did not interrupt the in-flight wait"
+        );
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("wait task did not finish")
+            .unwrap();
+        assert_eq!(result.unwrap_err().0.code, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn background_binding_rearms_after_plan_shutdown_and_rejects_closed_jobs() {
+        use crate::{
+            approvals::{ApprovalSetup, PermissionRevision, Preauthorizations},
+            background::JobStatus,
+            boundary::Store,
+            contract::{ModelProtocol, Session, WorkMode},
+            memory::MemoryStore,
+            mode::ModeController,
+            permissions::{PermissionConfig, Policy},
+            tools::{
+                exec::ExecConfig,
+                read::{ReadLimits, ReadTools},
+            },
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+        let run = Run {
+            id: RunId::new(),
+            session_id: SessionId::new(),
+            work_mode: WorkMode::Work,
+            permissions: crate::contract::PermissionMode::Bypass,
+        };
+        let session = Session {
+            id: run.session_id,
+            workspace: root.path().to_path_buf(),
+            work_mode: WorkMode::Work,
+            profile: "fixture".into(),
+            protocol: ModelProtocol::ChatCompletions,
+            model: "fixture".into(),
+            history: Vec::new(),
+        };
+        store
+            .commit(&[
+                crate::boundary::StoreChange::Session(session),
+                crate::boundary::StoreChange::RunStarted(run.clone()),
+            ])
+            .await
+            .unwrap();
+        let modes = ModeController::new(WorkMode::Work);
+        let dispatcher = Arc::new(
+            ToolDispatcher::new(
+                Arc::new(Policy::new(root.path(), PermissionConfig::default()).unwrap()),
+                modes.clone(),
+                PermissionRevision::new(modes.clone(), crate::contract::PermissionMode::Bypass),
+                store,
+                ApprovalSetup {
+                    run_id: run.id,
+                    session_id: run.session_id,
+                    initial_permissions: crate::contract::PermissionMode::Bypass,
+                    preauthorizations: Preauthorizations::default(),
+                    known_secrets: Vec::new(),
+                    cancellation: Arc::new(NeverCancel),
+                },
+                Arc::new(ReadTools::new(root.path(), &[], true, ReadLimits::default()).unwrap()),
+                ExecConfig::default(),
+            )
+            .unwrap(),
+        );
+        let jobs = Arc::new(
+            BackgroundJobs::new(dispatcher, 1, 2)
+                .unwrap()
+                .with_tool_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+        );
+        let state = Arc::new(
+            BrowserState::new_with_services(
+                BrowserSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+                Arc::new(FixtureProvider::full()),
+                run.clone(),
+                None,
+                Some(jobs.clone()),
+                Arc::new(SecretRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let context = ToolContext {
+            run: run.clone(),
+            workspace: root.path().to_path_buf(),
+        };
+        let tool = BrowserTool {
+            state: state.clone(),
+            kind: BrowserToolKind::Navigate,
+        };
+        let opened = state.open(&context, &NeverCancel).await.unwrap();
+        let call = |page: &str, call_id: &str| ToolCall {
+            call_id: call_id.into(),
+            name: "browser_navigate".into(),
+            arguments: serde_json::json!({
+                "page": page,
+                "url": "http://allowed.example/next",
+                "background": true,
+            })
+            .to_string(),
+        };
+
+        // PLAN cleanup: the provider and background gate close. A background
+        // action must fail explicitly rather than silently starting.
+        state.shutdown(&NeverCancel).await.unwrap();
+        let error = tool
+            .execute_captured(
+                &call(&opened.page, "bg-plan-closed"),
+                &context,
+                &NeverCancel,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "unsupported");
+
+        // An explicit open re-arms the same shared supervisor.
+        let reopened = state.open(&context, &NeverCancel).await.unwrap();
+        let captured = tool
+            .execute_captured(
+                &call(&reopened.page, "bg-after-plan"),
+                &context,
+                &NeverCancel,
+                None,
+            )
+            .await
+            .unwrap();
+        let data = captured.result.data.unwrap();
+        assert_eq!(data["status"], "started");
+        let job_id = data["job_id"].as_str().unwrap().to_owned();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), jobs.wait(&job_id))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(status, JobStatus::Finished(result) if result.ok));
+
+        // A closed supervisor is never reused, even after a later open.
+        jobs.shutdown().await.unwrap();
+        let third = state.open(&context, &NeverCancel).await.unwrap();
+        let error = tool
+            .execute_captured(
+                &call(&third.page, "bg-closed-jobs"),
+                &context,
+                &NeverCancel,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "unsupported");
     }
 }

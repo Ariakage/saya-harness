@@ -63,6 +63,7 @@ fn result(id: &str) -> HistoryItem {
             data: Some(json!({"content":"a bounded page"})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         },
     }
 }
@@ -802,6 +803,7 @@ fn single_user_long_tool_loops_can_compact_with_source_bound_verbatim_user_repla
                     data: Some(json!({"content":"retained evidence ".repeat(100)})),
                     error: None,
                     truncated: false,
+                    media_refs: Vec::new(),
                 },
             });
         }

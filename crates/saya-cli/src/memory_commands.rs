@@ -394,6 +394,7 @@ fn commit_output(outcome: MemoryCommitOutcome) -> Result<Value, BoundaryError> {
                 data: Some(value),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })),
         ));
     }

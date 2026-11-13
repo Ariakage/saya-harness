@@ -627,6 +627,44 @@ impl Inner {
         ))
     }
 
+    /// Read only the validated media header. File artifacts use this to stay
+    /// GC pins without decoding their payload as base64.
+    pub(super) fn media_kind(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(crate::media::MediaKind, OutputLease), BoundaryError> {
+        let (id, digest) = crate::media::parse_reference(reference)?;
+        let mut file = self.open_file(&media_name(id)).map_err(|_| {
+            media_error(
+                "media_unavailable",
+                "Media snapshot is missing or inaccessible",
+            )
+        })?;
+        lock(&file, libc::LOCK_SH)?;
+        private_file(&file)?;
+        let header = self.media_header(&mut file, id)?;
+        if header.sha256 != digest {
+            return Err(media_error(
+                "media_corrupt",
+                "Media reference digest does not match",
+            ));
+        }
+        if header.session_id != session_id {
+            return Err(media_error(
+                "media_denied",
+                "Media snapshot belongs to another session",
+            ));
+        }
+        if !self.published(id, digest)? {
+            return Err(media_error(
+                "media_unavailable",
+                "Media snapshot has not been durably published",
+            ));
+        }
+        Ok((header.kind, OutputLease { _file: file }))
+    }
+
     pub(super) fn reserve(
         &self,
         scope: OutputScope,

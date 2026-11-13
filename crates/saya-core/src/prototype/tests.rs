@@ -93,6 +93,7 @@ impl Tool for FakeTool {
                 data: Some(json!({"call_id":call.call_id})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })
         })
     }
@@ -1165,6 +1166,7 @@ impl Tool for SwitchingTool {
                 data: Some(json!({})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })
         })
     }

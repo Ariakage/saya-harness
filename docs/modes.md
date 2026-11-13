@@ -24,7 +24,7 @@ BUILD 的职责包含端到端实现和交付，不能将其缩减为执行构�
 执行规则已确定：
 
 - PLAN 输出计划文字；工作区内的计划文档同样属于文件，不在 PLAN 下修改。通用 exec 被禁用，不依据命令名称猜测只读。显式配置的受限 `fetch_url`／`web_search` 属于只读 URL 读取，可在 PLAN 使用；`browser_open`、`browser_navigate`、`browser_snapshot`、`browser_click` 等主动 Browser 工具在 PLAN 一律拒绝。
-- WORK 首先通过本地文件与命令工具完成通用任务，按目标交付文件或结果。N5 开发线已交付 DEV-079 宿主 Web／Browser 组件与 DEV-080 Playwright worker、固定工具映射和显式 VM 后端；VM 后端真实入口已在专用 Colima VM 验证，native 浏览器仍未取得真实平台验收。broker 网络、登录、文件 broker 与联合验收仍属 DEV-081 至 DEV-083，不得把离线组件或单一 VM 证据写成完整浏览器能力已经可用。
+- WORK 首先通过本地文件与命令工具完成通用任务，按目标交付文件或结果。N5 开发线已交付 DEV-079 宿主 Web／Browser 组件与 DEV-080 Playwright worker、固定工具映射和显式 VM 后端；VM 后端真实入口已在专用 Colima VM 验证，native 浏览器仍未取得真实平台验收。broker 网络、登录、文件 broker 与后台取消已由 DEV-081 完成并取得专用 VM 验收，界面与联合验收仍属 DEV-082／DEV-083，不得把单一 VM 证据写成四平台能力已经可用。
 
 PLAN 的会话保存、日志与缓存保持目标工作区不变，存储在基线 B-18 的工作区外 XDG 目录；重叠时启动检查失败，不默默写入工作区。
 

@@ -590,6 +590,7 @@ impl AgentRuntime {
                 data: Some(data),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })
         });
         let outcome=tokio::select! {

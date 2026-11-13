@@ -144,6 +144,12 @@ fn chat_user_content(
                             "file_data":media::data_url(&item)
                         }
                     }),
+                    media::MediaKind::File => {
+                        return Err(failure(
+                            "unsupported_media",
+                            "file artifacts are never model media",
+                        ));
+                    }
                 },
             })
         })
@@ -243,7 +249,7 @@ fn chat_history(
                         "tool result has no matching call",
                     ));
                 }
-                let content = serde_json::to_string(result)
+                let content = serde_json::to_string(&result.model_view())
                     .map_err(|_| failure("invalid_history", "tool result cannot be serialized"))?;
                 messages.push(json!({"role":"tool","tool_call_id":call_id,"content":content}));
             }

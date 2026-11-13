@@ -460,6 +460,7 @@ async fn ui_queries_preserve_unknown_truncation_and_run_call_links_without_agent
                             message: "bounded output".into(),
                         }),
                         truncated: true,
+                        media_refs: Vec::new(),
                     },
                 }])
                 .await

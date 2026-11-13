@@ -803,6 +803,7 @@ impl ManagedMemoryTools {
             data: Some(value),
             error: None,
             truncated,
+            media_refs: Vec::new(),
         };
         let _ = encode(&result, self.limits.max_result_bytes)?;
         Ok(result)
@@ -841,6 +842,7 @@ impl ManagedMemoryTools {
             data: Some(value),
             error: unknown.then_some(info.clone()),
             truncated: omitted > 0 || entries_omitted > 0,
+            media_refs: Vec::new(),
         };
         if let Err(error) = encode(&result, self.limits.max_result_bytes) {
             return Err(BoundaryError(
@@ -853,6 +855,7 @@ impl ManagedMemoryTools {
                     ),
                     error: unknown.then_some(info),
                     truncated: true,
+                    media_refs: Vec::new(),
                 })),
             ));
         }

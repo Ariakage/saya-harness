@@ -98,6 +98,7 @@ fn tool_result() -> ToolResult {
         data: Some(serde_json::json!({"result":"saved"})),
         error: None,
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 
@@ -982,6 +983,7 @@ async fn recovery_links_background_launch_and_child_without_replay()
                 data: Some(serde_json::json!({"status":"started","job_id":job_id})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             };
             changes.push(StoreChange::ToolFinished {
                 run_id: run.id,

@@ -275,6 +275,7 @@ fn failed(error: ErrorInfo) -> ToolResult {
         data: None,
         error: Some(error),
         truncated: false,
+        media_refs: Vec::new(),
     }
 }
 fn protocol_failure(code: &str, message: &str) -> FileWorkerResponse {

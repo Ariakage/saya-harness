@@ -353,6 +353,29 @@ impl ToolDispatcher {
         values.dedup();
         Ok(values)
     }
+    /// Redact one tool result with the same dynamic registry used for
+    /// foreground dispatch. Background jobs call this before persisting or
+    /// returning a result.
+    pub(crate) fn redact_tool_result(&self, result: &mut ToolResult) -> Result<(), BoundaryError> {
+        let redacted = crate::redaction::tool_result(result, &self.current_secrets()?)?;
+        *result = redacted;
+        Ok(())
+    }
+    /// Redact an error message and any preserved observed result.
+    pub(crate) fn redact_error(&self, error: &mut BoundaryError) -> Result<(), BoundaryError> {
+        let mut value = serde_json::json!({"code":error.0.code,"message":error.0.message});
+        crate::redaction::redact(&mut value, &self.current_secrets()?)?;
+        if let Some(code) = value.get("code").and_then(serde_json::Value::as_str) {
+            error.0.code = code.to_owned();
+        }
+        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
+            error.0.message = message.to_owned();
+        }
+        if let Some(result) = error.2.as_mut() {
+            self.redact_tool_result(result)?;
+        }
+        Ok(())
+    }
     pub(crate) fn register_control_definition(
         &self,
         definition: crate::boundary::ToolDefinition,
@@ -789,6 +812,7 @@ impl ToolDispatcher {
                 data: None,
                 error: Some(error.0),
                 truncated: false,
+                media_refs: Vec::new(),
             };
             store
                 .commit(&[StoreChange::ToolIntent {
@@ -864,6 +888,7 @@ impl ToolDispatcher {
                         data: None,
                         error: Some(error.0.clone()),
                         truncated: false,
+                        media_refs: Vec::new(),
                     },
                 };
                 save_result(store.as_ref(), call, context, &result).await?;
@@ -906,6 +931,7 @@ impl ToolDispatcher {
                         data: None,
                         error: Some(error.0.clone()),
                         truncated: false,
+                        media_refs: Vec::new(),
                     },
                 };
                 if result.ok && crate::tools::todo::result_todos(&result).is_none() {
@@ -919,6 +945,7 @@ impl ToolDispatcher {
                                     .into(),
                         }),
                         truncated: false,
+                        media_refs: Vec::new(),
                     };
                 }
                 save_result(store.as_ref(), call, context, &result).await?;
@@ -952,6 +979,7 @@ impl ToolDispatcher {
                             data: None,
                             error: Some(error.0.clone()),
                             truncated: false,
+                            media_refs: Vec::new(),
                         };
                         save_result(store.as_ref(), call, context, &result).await?;
                         Err(error)
@@ -1084,8 +1112,10 @@ impl ToolDispatcher {
                             data: None,
                             error: Some(error.0),
                             truncated: false,
+                            media_refs: Vec::new(),
                         },
                         outputs: Vec::new(),
+                        media: Vec::new(),
                         capture_errors: Vec::new(),
                     },
                 };
@@ -1259,6 +1289,7 @@ impl ToolDispatcher {
                     .map(|observed| serde_json::json!({"observed_result":observed})),
                 error: Some(error.0),
                 truncated: false,
+                media_refs: Vec::new(),
             },
         };
         let result = crate::tools::write::sanitize_result(&result, &self.current_secrets()?)?;

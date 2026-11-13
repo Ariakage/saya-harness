@@ -280,6 +280,7 @@ async fn remote_result(
                 stdin: None,
                 timeout: Duration::from_secs(30),
                 stderr_limit: 16 * 1024,
+                stdout_limit: 512 * 1024,
             },
             cancel,
         )
@@ -669,6 +670,7 @@ async fn vm_browser_network_is_broker_only_and_cleans_everything() {
                 stdin: None,
                 timeout: Duration::from_secs(30),
                 stderr_limit: 16 * 1024,
+                stdout_limit: 512 * 1024,
             },
             &NeverCancel,
         )

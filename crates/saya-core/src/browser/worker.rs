@@ -56,7 +56,7 @@ pub const WORKER_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Worker tools that this provider may call. Discovery of other worker tools
 /// never adds a model tool.
-pub const MAPPED_WORKER_TOOLS: [&str; 7] = [
+pub const MAPPED_WORKER_TOOLS: [&str; 8] = [
     "browser_navigate",
     "browser_snapshot",
     "browser_click",
@@ -64,6 +64,7 @@ pub const MAPPED_WORKER_TOOLS: [&str; 7] = [
     "browser_press_key",
     "browser_wait_for",
     "browser_close",
+    "browser_file_upload",
 ];
 
 pub(crate) const CLI_JS_PATH: &str = "node_modules/@playwright/mcp/cli.js";
@@ -79,6 +80,9 @@ const WORKER_PAGE: &str = "worker_page";
 /// Bounded re-discovery attempts for a lifecycle operation that races the
 /// worker's own catalogue update. The request is never dispatched while stale.
 const CATALOG_RESYNC_ATTEMPTS: usize = 3;
+/// Provider-side bound for a single download read. BrowserState enforces the
+/// configured lower limit before storing the artifact.
+const PROVIDER_MAX_DOWNLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 fn error(code: &str, message: impl Into<String>) -> BoundaryError {
     BoundaryError(
@@ -860,6 +864,161 @@ impl Drop for TempArtifacts {
     }
 }
 
+/// Validate a host-supplied upload name without rewriting it. The page must
+/// receive exactly the artifact's stored name; only unsafe path components are
+/// rejected.
+fn validate_worker_filename(value: &str) -> Result<&str, BrowserFailure> {
+    let name = value
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .ok_or_else(|| {
+            BrowserFailure::new("file_name_invalid", "Browser upload name is invalid")
+        })?;
+    if name != value
+        || name.starts_with('.')
+        || name.len() > 128
+        || name.chars().any(char::is_control)
+        || name.contains('\0')
+    {
+        return Err(BrowserFailure::new(
+            "file_name_invalid",
+            "Browser upload name is unsafe",
+        ));
+    }
+    Ok(name)
+}
+
+/// Remove a staging directory unless it was disarmed after a complete write.
+struct UploadDirectoryGuard {
+    path: Option<PathBuf>,
+}
+
+impl Drop for UploadDirectoryGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
+}
+
+fn stage_worker_upload(
+    work_dir: &Path,
+    filename: &str,
+    bytes: &[u8],
+    cancel: &dyn Cancellation,
+) -> Result<PathBuf, BrowserFailure> {
+    if cancel.is_cancelled() {
+        return Err(BrowserFailure::new(
+            "cancelled",
+            "Browser upload staging cancelled",
+        ));
+    }
+    let name = validate_worker_filename(filename)?;
+    let uploads = work_dir.join("uploads");
+    match DirBuilder::new().mode(0o700).create(&uploads) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => {
+            return Err(BrowserFailure::new(
+                "file_broker",
+                "Browser upload staging directory cannot be created",
+            ));
+        }
+    }
+    let metadata = fs::symlink_metadata(&uploads)
+        .map_err(|_| BrowserFailure::new("file_broker", "Browser upload staging is unavailable"))?;
+    // SAFETY: geteuid has no pointer arguments or ownership requirements.
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(BrowserFailure::new(
+            "file_broker",
+            "Browser upload staging must be a private owned directory",
+        ));
+    }
+    // A per-upload directory keeps the page-visible basename identical to the
+    // artifact name while remaining collision-free.
+    let directory = uploads.join(format!("upload-{}", uuid::Uuid::now_v7().simple()));
+    DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|_| {
+            BrowserFailure::new(
+                "file_broker",
+                "Browser upload staging directory cannot be created",
+            )
+        })?;
+    let mut guard = UploadDirectoryGuard {
+        path: Some(directory.clone()),
+    };
+    let path = directory.join(name);
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(&path).map_err(|_| {
+        BrowserFailure::new(
+            "file_broker",
+            "Browser upload staging file cannot be created",
+        )
+    })?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| {
+            BrowserFailure::new(
+                "file_broker",
+                "Browser upload staging file cannot be written or synced",
+            )
+        })?;
+    drop(file);
+    if cancel.is_cancelled() {
+        return Err(BrowserFailure::new(
+            "cancelled",
+            "Browser upload staging cancelled",
+        ));
+    }
+    guard.path = None;
+    Ok(path)
+}
+
+struct UploadCleanupCancel;
+impl Cancellation for UploadCleanupCancel {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    fn cancelled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// Best-effort staging cleanup for a cancelled or dropped upload. Failure is
+/// never reported as a successful upload; the Run-private directory is also
+/// covered by the worker/Run cleanup path.
+struct RemoteUploadGuard {
+    connection: Option<Arc<dyn WorkerConnection>>,
+    path: String,
+}
+
+impl Drop for RemoteUploadGuard {
+    fn drop(&mut self) {
+        let Some(connection) = self.connection.take() else {
+            return;
+        };
+        let path = std::mem::take(&mut self.path);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            let _ = connection.remove_upload(&path, &UploadCleanupCancel).await;
+        });
+    }
+}
+
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), BoundaryError> {
     let mut options = OpenOptions::new();
     options
@@ -1546,6 +1705,45 @@ pub trait WorkerConnection: Send + Sync {
         generation: u64,
         cancel: &dyn Cancellation,
     ) -> Result<McpToolResult, BrowserFailure>;
+    /// Copy one host-staged upload into the worker's Run-private staging area
+    /// and return the absolute path the worker may pass to
+    /// `browser_file_upload`.
+    async fn put_upload(
+        &self,
+        _filename: &str,
+        _bytes: &[u8],
+        _cancel: &dyn Cancellation,
+    ) -> Result<String, BrowserFailure> {
+        Err(BrowserFailure::unsupported("upload staging"))
+    }
+    /// Remove one staging upload after the fixed upload tool call. The path is
+    /// the value previously returned by `put_upload`.
+    async fn remove_upload(
+        &self,
+        _path: &str,
+        _cancel: &dyn Cancellation,
+    ) -> Result<(), BrowserFailure> {
+        Ok(())
+    }
+    /// Read one download file produced by this worker. Implementations must
+    /// confine the path to the Run's output directory and stay bounded.
+    async fn read_download(
+        &self,
+        _path: &str,
+        _max_bytes: usize,
+        _cancel: &dyn Cancellation,
+    ) -> Result<Vec<u8>, BrowserFailure> {
+        Err(BrowserFailure::unsupported("download read"))
+    }
+    /// List regular files currently present in the Run-private download
+    /// directory. Only the provider's own event for this click may name a
+    /// download; this listing proves the named file is newly produced.
+    async fn list_downloads(
+        &self,
+        _cancel: &dyn Cancellation,
+    ) -> Result<BTreeSet<String>, BrowserFailure> {
+        Err(BrowserFailure::unsupported("download listing"))
+    }
     async fn shutdown(&self) -> Result<(), BrowserFailure>;
 }
 
@@ -1556,6 +1754,8 @@ struct RealWorkerConnection {
     generation: std::sync::atomic::AtomicU64,
     pid: u32,
     stderr_tail: Arc<std::sync::Mutex<VecDeque<u8>>>,
+    work_dir: PathBuf,
+    output_dir: PathBuf,
 }
 
 #[async_trait]
@@ -1605,6 +1805,165 @@ impl WorkerConnection for RealWorkerConnection {
             .call_tool(name, arguments, generation, cancel)
             .await
             .map_err(map_mcp_failure)
+    }
+
+    async fn put_upload(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        cancel: &dyn Cancellation,
+    ) -> Result<String, BrowserFailure> {
+        let path = stage_worker_upload(&self.work_dir, filename, bytes, cancel)?;
+        path.to_str().map(str::to_owned).ok_or_else(|| {
+            BrowserFailure::new("file_broker", "Browser upload staging path is not UTF-8")
+        })
+    }
+
+    async fn remove_upload(
+        &self,
+        path: &str,
+        _cancel: &dyn Cancellation,
+    ) -> Result<(), BrowserFailure> {
+        let uploads = fs::canonicalize(self.work_dir.join("uploads")).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser upload staging is unavailable")
+        })?;
+        let candidate = match fs::canonicalize(path) {
+            Ok(candidate) => candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => {
+                return Err(BrowserFailure::new(
+                    "file_broker",
+                    "Browser upload staging file is unavailable",
+                ));
+            }
+        };
+        if !candidate.starts_with(&uploads) {
+            return Err(BrowserFailure::new(
+                "file_path_denied",
+                "Browser upload staging path is outside its directory",
+            ));
+        }
+        match fs::remove_file(&candidate) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(BrowserFailure::new(
+                    "file_broker",
+                    "Browser upload staging file cannot be removed",
+                ));
+            }
+        }
+        // Each upload lives in its own private directory so the page receives
+        // the original file name unchanged. Remove that directory as well.
+        if let Some(directory) = candidate.parent()
+            && directory.parent() == Some(uploads.as_path())
+        {
+            let _ = fs::remove_dir(directory);
+        }
+        Ok(())
+    }
+
+    async fn read_download(
+        &self,
+        path: &str,
+        max_bytes: usize,
+        cancel: &dyn Cancellation,
+    ) -> Result<Vec<u8>, BrowserFailure> {
+        if cancel.is_cancelled() {
+            return Err(BrowserFailure::new(
+                "cancelled",
+                "Browser download read cancelled",
+            ));
+        }
+        let root = fs::canonicalize(&self.output_dir).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser output directory is unavailable")
+        })?;
+        let candidate = if path.contains(['/', '\\']) {
+            fs::canonicalize(path).map_err(|_| {
+                BrowserFailure::new("file_broker", "Browser download file is unavailable")
+            })?
+        } else {
+            fs::canonicalize(root.join(path)).map_err(|_| {
+                BrowserFailure::new("file_broker", "Browser download file is unavailable")
+            })?
+        };
+        if !candidate.starts_with(&root) {
+            return Err(BrowserFailure::new(
+                "file_path_denied",
+                "Browser download path is outside the Run output directory",
+            ));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+        let file = options.open(&candidate).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser download file cannot be opened")
+        })?;
+        let metadata = file.metadata().map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser download file cannot be inspected")
+        })?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes as u64 {
+            return Err(BrowserFailure::new(
+                "file_too_large",
+                "Browser download file is not a bounded regular file",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        std::io::Read::read_to_end(&mut &file, &mut bytes).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser download file cannot be read")
+        })?;
+        if bytes.len() as u64 != metadata.len() || bytes.is_empty() {
+            return Err(BrowserFailure::new(
+                "file_broker",
+                "Browser download file changed while being read",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    async fn list_downloads(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<BTreeSet<String>, BrowserFailure> {
+        if cancel.is_cancelled() {
+            return Err(BrowserFailure::new(
+                "cancelled",
+                "Browser download listing cancelled",
+            ));
+        }
+        let root = fs::canonicalize(&self.output_dir).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser output directory is unavailable")
+        })?;
+        let entries = fs::read_dir(&root).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser output directory cannot be listed")
+        })?;
+        let mut names = BTreeSet::new();
+        for entry in entries {
+            let entry = entry.map_err(|_| {
+                BrowserFailure::new("file_broker", "Browser output directory cannot be listed")
+            })?;
+            let file_type = entry.file_type().map_err(|_| {
+                BrowserFailure::new("file_broker", "Browser output entry cannot be inspected")
+            })?;
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if name.starts_with('.')
+                || name.contains('\0')
+                || name.ends_with(".crdownload")
+                || name.ends_with(".part")
+                || name.ends_with(".tmp")
+                || worker_metadata_file(&name)
+            {
+                continue;
+            }
+            names.insert(name);
+        }
+        Ok(names)
     }
 
     async fn shutdown(&self) -> Result<(), BrowserFailure> {
@@ -1795,6 +2154,8 @@ impl WorkerLauncher for ManagedProcessLauncher {
             generation: std::sync::atomic::AtomicU64::new(0),
             pid,
             stderr_tail,
+            work_dir: request.directories.work.clone(),
+            output_dir: request.directories.output.clone(),
         }))
     }
 }
@@ -1919,6 +2280,29 @@ fn validate_catalog(catalog: &McpCatalog) -> Result<(), BrowserFailure> {
             ));
         }
     }
+    // The file-input tool is mapped for the host file broker. Its exact
+    // descriptive text is not part of the host contract, but the argument
+    // shape must still be the pinned `paths: string[]` form.
+    let upload = catalog
+        .tools
+        .iter()
+        .find(|tool| tool.name == "browser_file_upload")
+        .ok_or_else(|| {
+            BrowserFailure::new(
+                "worker_catalog",
+                "Browser worker is missing its file upload tool",
+            )
+        })?;
+    let paths = upload
+        .input_schema
+        .get("properties")
+        .and_then(|properties| properties.get("paths"));
+    if !paths.is_some_and(|paths| paths.get("type").and_then(Value::as_str) == Some("array")) {
+        return Err(BrowserFailure::new(
+            "worker_catalog",
+            "Browser worker file upload schema is not the pinned shape",
+        ));
+    }
     Ok(())
 }
 
@@ -1988,6 +2372,54 @@ fn result_detail(text: &str) -> Option<String> {
     })
 }
 
+/// Playwright writes its own snapshot files into the same output directory.
+/// They are not downloads and must not participate in the directory diff.
+fn worker_metadata_file(name: &str) -> bool {
+    name.starts_with("page-") && (name.ends_with(".yml") || name.ends_with(".yaml"))
+}
+
+/// Extract the worker's own download event from the fixed `### Download`
+/// section. Page titles, snapshot bodies and prose elsewhere in the result are
+/// never searched for a path. Exactly one well-formed event is accepted.
+fn download_path(text: &str) -> Result<Option<String>, BrowserFailure> {
+    let Some(lines) = section_body(text, "### Download") else {
+        return Ok(None);
+    };
+    let mut paths = Vec::new();
+    for line in lines {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("- Downloaded file ") else {
+            continue;
+        };
+        let Some(start) = rest.rfind(" to \"") else {
+            continue;
+        };
+        let path = &rest[start + 5..];
+        let Some(path) = path.strip_suffix('"') else {
+            continue;
+        };
+        if path.is_empty()
+            || path.len() > 4096
+            || path.chars().any(char::is_control)
+            || path.contains('\0')
+        {
+            continue;
+        }
+        paths.push(path.to_owned());
+    }
+    match paths.len() {
+        0 => Ok(None),
+        1 => Ok(paths.pop()),
+        _ => Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser download section names more than one file",
+        )),
+    }
+}
+
 fn snapshot_yaml(text: &str) -> Option<String> {
     let lines = section_body(text, "### Snapshot")?;
     let mut body = Vec::new();
@@ -2007,76 +2439,481 @@ fn snapshot_yaml(text: &str) -> Option<String> {
     None
 }
 
-fn parse_quoted(input: &str) -> Option<String> {
-    let mut chars = input.chars();
-    if chars.next()? != '"' {
-        return None;
-    }
-    let mut output = String::new();
-    let mut escaped = false;
-    for character in chars {
-        if escaped {
-            output.push(match character {
-                'n' => '\n',
-                'r' => '\r',
-                't' => '\t',
-                other => other,
-            });
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == '"' {
-            return Some(output);
-        } else {
-            output.push(character);
-        }
-    }
-    None
+const MAX_ARIA_LINE_BYTES: usize = 16 * 1024;
+const MAX_ARIA_NAME_BYTES: usize = 4096;
+const MAX_ARIA_REF_BYTES: usize = 1024;
+
+fn invalid_snapshot(message: &'static str) -> BrowserFailure {
+    BrowserFailure::new("invalid_provider_result", message)
 }
 
-fn parse_elements(yaml: &str) -> Vec<BrowserElement> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ElementReference {
+    Main,
+    Frame(String),
+}
+
+/// Parse exactly the reference grammar emitted by the pinned provider:
+/// `e<digits>` for the main document and `f<digits>e<digits>` for an element
+/// owned by a child frame. A malformed value fails the whole snapshot instead
+/// of being ignored with its subtree.
+fn parse_element_reference(key: &str) -> Result<ElementReference, BrowserFailure> {
+    if key.is_empty() || key.len() > MAX_ARIA_REF_BYTES {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an invalid element reference",
+        ));
+    }
+    let bytes = key.as_bytes();
+    let mut index = 0usize;
+    let mut frame = None;
+    if bytes[0] == b'f' {
+        let start = index;
+        index += 1;
+        let digits = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index == digits {
+            return Err(invalid_snapshot(
+                "Browser snapshot contains an invalid frame reference",
+            ));
+        }
+        frame = Some(key[start..index].to_owned());
+    }
+    if bytes.get(index) != Some(&b'e') {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an invalid element reference",
+        ));
+    }
+    index += 1;
+    let digits = index;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if index == digits || index != bytes.len() {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an invalid element reference",
+        ));
+    }
+    Ok(match frame {
+        Some(frame) => ElementReference::Frame(frame),
+        None => ElementReference::Main,
+    })
+}
+
+/// Decode one JSON (double-quoted) string and return the remaining input.
+/// Accessible names are always JSON-encoded by the provider, so a bracket that
+/// looks like `[ref=...]` inside the name is data, never a key.
+fn parse_quoted(input: &str) -> Result<(String, &str), BrowserFailure> {
+    if !input.starts_with('"') {
+        return Err(invalid_snapshot(
+            "Browser snapshot name is not a quoted string",
+        ));
+    }
+    let tokens: Vec<(usize, char)> = input.char_indices().collect();
+    let mut position = 1usize;
+    let mut output = String::new();
+    while position < tokens.len() {
+        let (_, character) = tokens[position];
+        position += 1;
+        match character {
+            '"' => {
+                if output.len() > MAX_ARIA_NAME_BYTES {
+                    return Err(invalid_snapshot("Browser snapshot name is too long"));
+                }
+                let rest = tokens.get(position).map_or("", |(byte, _)| &input[*byte..]);
+                return Ok((output, rest));
+            }
+            '\\' => {
+                let Some((_, escape)) = tokens.get(position).copied() else {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot name has an incomplete escape",
+                    ));
+                };
+                position += 1;
+                match escape {
+                    '"' => output.push('"'),
+                    '\\' => output.push('\\'),
+                    '/' => output.push('/'),
+                    'b' => output.push('\u{8}'),
+                    'f' => output.push('\u{c}'),
+                    'n' => output.push('\n'),
+                    'r' => output.push('\r'),
+                    't' => output.push('\t'),
+                    'u' => {
+                        let mut code = 0u32;
+                        for _ in 0..4 {
+                            let Some((_, digit)) = tokens.get(position).copied() else {
+                                return Err(invalid_snapshot(
+                                    "Browser snapshot name has an incomplete unicode escape",
+                                ));
+                            };
+                            position += 1;
+                            let Some(value) = digit.to_digit(16) else {
+                                return Err(invalid_snapshot(
+                                    "Browser snapshot name has an invalid unicode escape",
+                                ));
+                            };
+                            code = code.saturating_mul(16).saturating_add(value);
+                        }
+                        let mut scalar = code;
+                        if (0xd800..=0xdbff).contains(&code) {
+                            let pair = tokens.get(position..position.saturating_add(6));
+                            let mut paired = false;
+                            if let Some(pair) = pair
+                                && pair[0].1 == '\\'
+                                && pair[1].1 == 'u'
+                            {
+                                let mut low = 0u32;
+                                let mut valid = true;
+                                for (_, digit) in &pair[2..] {
+                                    match digit.to_digit(16) {
+                                        Some(value) => {
+                                            low = low.saturating_mul(16).saturating_add(value)
+                                        }
+                                        None => {
+                                            valid = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if valid && (0xdc00..=0xdfff).contains(&low) {
+                                    scalar = 0x10000u32
+                                        .saturating_add((code - 0xd800) << 10)
+                                        .saturating_add(low - 0xdc00);
+                                    position += 6;
+                                    paired = true;
+                                }
+                            }
+                            if !paired {
+                                scalar = 0xfffd;
+                            }
+                        } else if (0xdc00..=0xdfff).contains(&code) {
+                            scalar = 0xfffd;
+                        }
+                        output.push(char::from_u32(scalar).unwrap_or('\u{fffd}'));
+                    }
+                    _ => {
+                        return Err(invalid_snapshot(
+                            "Browser snapshot name has an unsupported escape",
+                        ));
+                    }
+                }
+            }
+            character if character < '\u{20}' => {
+                return Err(invalid_snapshot(
+                    "Browser snapshot name contains a control character",
+                ));
+            }
+            other => output.push(other),
+        }
+    }
+    Err(invalid_snapshot("Browser snapshot name is unterminated"))
+}
+
+/// Split a YAML key from its optional inline text. The serializer emits
+/// `role "name" [props...]`, optionally followed by `: text`. Only the props
+/// region may contain `[ref=...]`; brackets and quotes in the name are never
+/// searched for keys.
+fn split_key_and_text(content: &str) -> Result<(String, &str), BrowserFailure> {
+    if content.len() > MAX_ARIA_LINE_BYTES {
+        return Err(invalid_snapshot("Browser snapshot line is too long"));
+    }
+    if let Some(rest) = content.strip_prefix('\'') {
+        // YAML single-quoted key. A doubled apostrophe is one literal quote.
+        let mut key = String::new();
+        let mut chars = rest.char_indices();
+        while let Some((index, character)) = chars.next() {
+            if character == '\'' {
+                if let Some((_, '\'')) = chars.clone().next() {
+                    chars.next();
+                    key.push('\'');
+                    continue;
+                }
+                let remainder = &rest[index + 1..];
+                if !remainder.is_empty() && !remainder.starts_with(':') {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot contains an unrecognized line",
+                    ));
+                }
+                return Ok((key, remainder));
+            }
+            key.push(character);
+        }
+        return Err(invalid_snapshot("Browser snapshot key is unterminated"));
+    }
+    let mut in_name = false;
+    let mut escaped = false;
+    let mut bracket_depth = 0usize;
+    for (index, character) in content.char_indices() {
+        if in_name {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_name = false;
+            }
+            continue;
+        }
+        match character {
+            '"' if bracket_depth == 0 => in_name = true,
+            '[' => bracket_depth = bracket_depth.saturating_add(1),
+            ']' => {
+                if bracket_depth == 0 {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot contains an unbalanced property",
+                    ));
+                }
+                bracket_depth -= 1;
+            }
+            ':' if bracket_depth == 0 => {
+                let remainder = &content[index + 1..];
+                if !remainder.is_empty() && !remainder.starts_with(' ') {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot contains an unrecognized line",
+                    ));
+                }
+                return Ok((content[..index].to_owned(), remainder));
+            }
+            _ => {}
+        }
+    }
+    if in_name || bracket_depth != 0 {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an unterminated property",
+        ));
+    }
+    Ok((content.to_owned(), ""))
+}
+
+fn valid_property_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Parse one `[key]` or `[key=value]` property and return its remainder.
+fn parse_property(input: &str) -> Result<(&str, Option<&str>, &str), BrowserFailure> {
+    let bytes = input.as_bytes();
+    let mut index = 1usize;
+    let mut quote = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active) = quote {
+            if byte == b'\\' {
+                index = index.saturating_add(2);
+                if index > bytes.len() {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot property has an incomplete escape",
+                    ));
+                }
+                continue;
+            }
+            if byte == active {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' => {
+                quote = Some(byte);
+                index += 1;
+            }
+            b'[' => {
+                return Err(invalid_snapshot("Browser snapshot property is not flat"));
+            }
+            b']' => {
+                let inner = &input[1..index];
+                if inner.is_empty() || inner.bytes().any(|byte| byte.is_ascii_control()) {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot contains an invalid property",
+                    ));
+                }
+                let (name, value) = match inner.split_once('=') {
+                    Some((name, value)) => (name, Some(value)),
+                    None => (inner, None),
+                };
+                if !valid_property_name(name) {
+                    return Err(invalid_snapshot(
+                        "Browser snapshot contains an invalid property",
+                    ));
+                }
+                return Ok((name, value, &input[index + 1..]));
+            }
+            _ => index += 1,
+        }
+    }
+    Err(invalid_snapshot(
+        "Browser snapshot property is unterminated",
+    ))
+}
+
+#[derive(Debug)]
+struct SnapshotLine {
+    role: String,
+    name: String,
+    reference: Option<String>,
+    reference_kind: Option<ElementReference>,
+    is_iframe: bool,
+}
+
+fn parse_element_line(key: &str) -> Result<SnapshotLine, BrowserFailure> {
+    if key.is_empty() || key.len() > MAX_ARIA_LINE_BYTES {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an invalid element line",
+        ));
+    }
+    let role_end = key.find([' ', '[', ':']).unwrap_or(key.len());
+    let role = &key[..role_end];
+    if role.is_empty()
+        || role.len() > 64
+        || !role
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an invalid element role",
+        ));
+    }
+    let mut rest = key[role_end..].trim_start_matches(' ');
+    let mut name = String::new();
+    if rest.starts_with('"') {
+        let (parsed, remainder) = parse_quoted(rest)?;
+        name = parsed;
+        rest = remainder;
+        if !rest.is_empty() && !rest.starts_with([' ', '[', ':']) {
+            return Err(invalid_snapshot(
+                "Browser snapshot contains an unrecognized name suffix",
+            ));
+        }
+    }
+    let mut reference = None;
+    let mut reference_kind = None;
+    loop {
+        rest = rest.trim_start_matches(' ');
+        if rest.is_empty() || rest.starts_with(':') {
+            break;
+        }
+        if !rest.starts_with('[') {
+            return Err(invalid_snapshot(
+                "Browser snapshot contains an unrecognized property",
+            ));
+        }
+        let (property, value, remainder) = parse_property(rest)?;
+        rest = remainder;
+        if property != "ref" {
+            continue;
+        }
+        if reference.is_some() {
+            return Err(invalid_snapshot(
+                "Browser snapshot contains duplicate element references",
+            ));
+        }
+        let Some(value) = value else {
+            return Err(invalid_snapshot(
+                "Browser snapshot contains an empty element reference",
+            ));
+        };
+        reference_kind = Some(parse_element_reference(value)?);
+        reference = Some(value.to_owned());
+    }
+    Ok(SnapshotLine {
+        role: role.to_owned(),
+        name,
+        reference,
+        reference_kind,
+        is_iframe: role == "iframe",
+    })
+}
+
+fn validate_property_line(content: &str) -> Result<(), BrowserFailure> {
+    let Some((name, _value)) = content[1..].split_once(':') else {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an unrecognized property line",
+        ));
+    };
+    if !valid_property_name(name) {
+        return Err(invalid_snapshot(
+            "Browser snapshot contains an invalid property line",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_elements(yaml: &str) -> Result<Vec<BrowserElement>, BrowserFailure> {
     let mut elements = Vec::new();
     let mut seen = BTreeSet::new();
+    // (indent, frame label applying to deeper children)
+    let mut scopes: Vec<(usize, Option<String>)> = Vec::new();
+    let mut unnamed_frames = 0u64;
     for line in yaml.lines() {
         let line = line.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        while scopes
+            .last()
+            .is_some_and(|(child_indent, _)| *child_indent >= indent)
+        {
+            scopes.pop();
+        }
         let Some(content) = line.trim_start().strip_prefix("- ") else {
-            continue;
+            return Err(invalid_snapshot(
+                "Browser snapshot contains an unrecognized line",
+            ));
         };
-        let role_end = content.find([' ', '[', ':']).unwrap_or(content.len());
-        let role = &content[..role_end];
-        if role.is_empty()
-            || !role
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
+        if content.starts_with('/') {
+            validate_property_line(content)?;
             continue;
         }
-        let rest = &content[role_end..];
-        let name = parse_quoted(rest.trim_start()).unwrap_or_default();
-        let Some(reference_start) = rest.find("[ref=") else {
-            continue;
-        };
-        let reference_rest = &rest[reference_start + 5..];
-        let Some(reference_end) = reference_rest.find(']') else {
-            continue;
-        };
-        let key = &reference_rest[..reference_end];
-        if key.is_empty()
-            || key.len() > 1024
-            || !key
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-            || !seen.insert(key.to_owned())
-        {
+        let (key, _text) = split_key_and_text(content)?;
+        let parsed = parse_element_line(&key)?;
+        // `- text: ...` is the serializer's text node, not an element.
+        if parsed.role == "text" {
             continue;
         }
-        elements.push(BrowserElement {
-            key: key.to_owned(),
-            role: role.to_owned(),
-            name,
-        });
+        let parent_frame = scopes.last().and_then(|(_, frame)| frame.clone());
+        let (frame, child_frame) = if parsed.is_iframe {
+            let child = match &parsed.reference_kind {
+                Some(ElementReference::Frame(frame)) => frame.clone(),
+                Some(ElementReference::Main) => {
+                    format!("frame:{}", parsed.reference.as_deref().unwrap_or("unknown"))
+                }
+                None => {
+                    unnamed_frames += 1;
+                    format!("frame@{unnamed_frames}")
+                }
+            };
+            // The iframe node itself is a child-frame boundary, so a credential
+            // fill can never target it even at the top level.
+            (
+                parent_frame.clone().or_else(|| Some(child.clone())),
+                Some(child),
+            )
+        } else {
+            (parent_frame.clone(), parent_frame)
+        };
+        if let Some(reference) = parsed.reference {
+            if !seen.insert(reference.clone()) {
+                return Err(invalid_snapshot(
+                    "Browser snapshot contains duplicate element references",
+                ));
+            }
+            elements.push(BrowserElement {
+                key: reference,
+                role: parsed.role,
+                name: parsed.name,
+                frame,
+            });
+        }
+        scopes.push((indent, child_frame));
     }
-    elements
+    Ok(elements)
 }
 
 fn parse_action(text: &str, fallback_url: Option<&str>) -> BrowserAction {
@@ -2098,10 +2935,11 @@ fn parse_snapshot(text: &str, result_truncated: bool) -> Result<BrowserSnapshot,
     let yaml = snapshot_yaml(text);
     let truncated = result_truncated || yaml.is_none();
     let body = yaml.unwrap_or_default();
+    let elements = parse_elements(&body)?;
     Ok(BrowserSnapshot {
         url,
         title,
-        elements: parse_elements(&body),
+        elements,
         text: body,
         truncated,
     })
@@ -2715,8 +3553,8 @@ impl BrowserProvider for PlaywrightMcpProvider {
         BrowserFacts {
             provider: format!("playwright-mcp-{PLAYWRIGHT_MCP_VERSION}"),
             screenshots: false,
-            downloads: false,
-            uploads: false,
+            downloads: true,
+            uploads: true,
         }
     }
 
@@ -2957,6 +3795,175 @@ impl BrowserProvider for PlaywrightMcpProvider {
             .call("browser_press_key", json!({"key": key}), cancel)
             .await?;
         Ok(parse_action(first_text(&result)?, None))
+    }
+
+    async fn download(
+        &self,
+        session: &str,
+        page: &str,
+        element: &str,
+        cancel: &dyn Cancellation,
+    ) -> Result<super::BrowserDownload, BrowserFailure> {
+        self.check_page(session, page).await?;
+        let (connection, _) = self.connected().await?;
+        // The download directory is the structural proof of which file this
+        // click produced. No generic "last download" lookup is allowed.
+        let before = connection.list_downloads(cancel).await?;
+        // The click is the only action allowed to produce an accepted
+        // download. Nothing is looked up from a previous action.
+        let result = self
+            .call("browser_click", json!({"target": element}), cancel)
+            .await?;
+        let mut text = first_text(&result)?.to_owned();
+        let mut event = download_path(&text)?;
+        let mut selected: Option<(String, String)> = None;
+        for attempt in 0..20 {
+            let after = connection.list_downloads(cancel).await?;
+            let created: Vec<String> = after.difference(&before).cloned().collect();
+            if created.len() > 1 {
+                return Err(BrowserFailure::new(
+                    "invalid_provider_result",
+                    "Browser action created more than one new download file",
+                ));
+            }
+            if let Some(name) = created.first() {
+                if let Some(event_path) = &event {
+                    if event_path.contains("..") {
+                        return Err(BrowserFailure::new(
+                            "file_path_denied",
+                            "Browser download path contains traversal components",
+                        ));
+                    }
+                    let event_name = event_path
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .filter(|event_name| !event_name.is_empty())
+                        .ok_or_else(|| {
+                            BrowserFailure::new(
+                                "invalid_provider_result",
+                                "Browser download path is invalid",
+                            )
+                        })?;
+                    if event_name != name {
+                        return Err(BrowserFailure::new(
+                            "invalid_provider_result",
+                            "Browser download event does not match the new file",
+                        ));
+                    }
+                }
+                selected = Some((name.clone(), name.clone()));
+                break;
+            }
+            if attempt == 19 {
+                break;
+            }
+            // A download may finish just after the click result; poll both the
+            // trusted event section and the provider's output directory.
+            let waited = self
+                .call("browser_wait_for", json!({"time": 0.1}), cancel)
+                .await?;
+            text.push('\n');
+            text.push_str(first_text(&waited).unwrap_or_default());
+            event = download_path(&text)?;
+        }
+        let Some((filename, target)) = selected else {
+            return Err(BrowserFailure::new(
+                "download_missing",
+                "The element action did not create exactly one new download file",
+            ));
+        };
+        let bytes = connection
+            .read_download(&target, PROVIDER_MAX_DOWNLOAD_BYTES, cancel)
+            .await?;
+        Ok(super::BrowserDownload {
+            filename,
+            // The host re-detects the real type from the magic bytes.
+            mime: "application/octet-stream".into(),
+            bytes,
+        })
+    }
+
+    async fn upload(
+        &self,
+        session: &str,
+        page: &str,
+        element: &str,
+        source: &super::BrowserUploadSource,
+        cancel: &dyn Cancellation,
+    ) -> Result<super::BrowserUpload, BrowserFailure> {
+        self.check_page(session, page).await?;
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+        let mut file = options.open(&source.path).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser upload staging file is unavailable")
+        })?;
+        let metadata = file.metadata().map_err(|_| {
+            BrowserFailure::new(
+                "file_broker",
+                "Browser upload staging file cannot be inspected",
+            )
+        })?;
+        if !metadata.is_file() || metadata.len() != source.size {
+            return Err(BrowserFailure::new(
+                "file_broker",
+                "Browser upload staging file changed",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(source.size as usize);
+        std::io::Read::read_to_end(&mut file, &mut bytes).map_err(|_| {
+            BrowserFailure::new("file_broker", "Browser upload staging file cannot be read")
+        })?;
+        if bytes.len() as u64 != source.size || sha256_hex(&bytes) != source.sha256 {
+            return Err(BrowserFailure::new(
+                "file_broker",
+                "Browser upload staging content changed",
+            ));
+        }
+        // Open the page's file chooser with the explicit document element.
+        self.call("browser_click", json!({"target": element}), cancel)
+            .await?;
+        let (connection, _) = self.connected().await?;
+        let remote = connection
+            .put_upload(&source.filename, &bytes, cancel)
+            .await?;
+        // If cancellation drops this future between staging and cleanup, the
+        // guard still removes the Run-private staging directory.
+        let mut guard = RemoteUploadGuard {
+            connection: Some(connection.clone()),
+            path: remote.clone(),
+        };
+        let result = self
+            .call(
+                "browser_file_upload",
+                json!({"paths": [remote.clone()]}),
+                cancel,
+            )
+            .await;
+        let cleanup = connection.remove_upload(&remote, cancel).await;
+        if cleanup.is_ok() {
+            guard.connection = None;
+        }
+        let result = result?;
+        // The file chooser already consumed the staged file. If cleanup cannot
+        // be confirmed after a successful upload, the operation must not be
+        // retried as an ordinary failure: the page may already hold the file.
+        cleanup.map_err(|_| {
+            BrowserFailure::uncertain(
+                "Browser upload completed but staging cleanup could not be confirmed",
+            )
+        })?;
+        if result.is_error {
+            return Err(BrowserFailure::new(
+                "worker_tool_error",
+                "Browser worker could not upload the file",
+            ));
+        }
+        Ok(super::BrowserUpload {
+            filename: source.filename.clone(),
+            bytes_sent: source.size,
+        })
     }
 
     async fn wait(

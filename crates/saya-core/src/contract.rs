@@ -121,6 +121,21 @@ pub struct ToolResult {
     pub data: Option<Value>,
     pub error: Option<ErrorInfo>,
     pub truncated: bool,
+    /// Host-only durable artifact/media references produced by this exact
+    /// tool action. The host inserts this field; untrusted tool data never
+    /// does, and the model projection clears it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_refs: Vec<String>,
+}
+
+impl ToolResult {
+    /// Model-facing projection. Host-only artifact references never cross the
+    /// provider boundary, even when the complete result is serialized.
+    pub fn model_view(&self) -> Self {
+        let mut projected = self.clone();
+        projected.media_refs.clear();
+        projected
+    }
 }
 
 /// Persisted execution state; `Unknown` must never be treated as not executed.

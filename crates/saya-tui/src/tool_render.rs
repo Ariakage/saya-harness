@@ -281,6 +281,7 @@ mod tests {
                 message: "controlled failure".into(),
             }),
             truncated: true,
+            media_refs: Vec::new(),
         });
         assert!(text.contains("Result · failed"));
         assert!(text.contains("Error: fixture"));
@@ -314,6 +315,7 @@ mod tests {
                 })),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
             Some(Duration::from_millis(1240)),
         );

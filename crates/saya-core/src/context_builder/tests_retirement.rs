@@ -39,6 +39,7 @@ pub(crate) fn fixture(
                 data: Some(json!({"text":"FORGOTTEN_VALUE"})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         },
         HistoryItem::ToolResult {
@@ -53,6 +54,7 @@ pub(crate) fn fixture(
                     message: "FORGOTTEN_VALUE".into(),
                 }),
                 truncated: true,
+                media_refs: Vec::new(),
             },
         },
         HistoryItem::AssistantText(
@@ -71,6 +73,7 @@ pub(crate) fn fixture(
                 data: Some(json!({"text":"fresh observation"})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         },
     ];

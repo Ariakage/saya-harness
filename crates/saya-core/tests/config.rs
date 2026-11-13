@@ -1135,3 +1135,39 @@ fn dev079_web_and_browser_settings_default_off_and_validate_strictly() {
         assert_eq!(error.0.code, "invalid_config", "{table}");
     }
 }
+
+#[test]
+fn browser_credentials_validate_without_browser_enablement_and_require_https() {
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("credentials");
+    let credential_ref = "018f4f7e-7a3c-7c4e-9f5a-123456789abc";
+    for (origin, accepted) in [
+        ("https://login.example", true),
+        ("http://localhost:8080", true),
+        ("http://127.0.0.1:8080", true),
+        ("http://login.example", false),
+    ] {
+        let text = format!(
+            "{}\n[browser]\nenabled = false\n[browser.credentials]\nenabled = true\nstore = \"{}\"\n[[browser.credentials.slots]]\nalias = \"login\"\ncredential_ref = \"{credential_ref}\"\norigin = \"{origin}\"\npurpose = \"form_fill\"\nmax_uses = 1\n",
+            fixture(),
+            store.display(),
+        );
+        let path = write(temp.path(), "config.toml", &text);
+        let result = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            test_env(temp.path()),
+            temp.path(),
+        );
+        if accepted {
+            let config = result.expect("valid credential slot rejected");
+            assert!(!config.browser.enabled);
+            assert!(config.browser.credentials.enabled);
+        } else {
+            let error = result.err().expect("HTTP credential slot accepted");
+            assert_eq!(error.0.code, "invalid_config");
+        }
+    }
+}

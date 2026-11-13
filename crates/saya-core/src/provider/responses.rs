@@ -400,6 +400,12 @@ fn responses_user_content(
                         "filename":item.filename,
                         "file_data":media::data_url(&item)
                     }),
+                    media::MediaKind::File => {
+                        return Err(failure(
+                            "unsupported_media",
+                            "file artifacts are never model media",
+                        ));
+                    }
                 },
             })
         })
@@ -448,7 +454,7 @@ fn history(
                         "tool result has no matching call",
                     ));
                 }
-                let content = serde_json::to_string(result)
+                let content = serde_json::to_string(&result.model_view())
                     .map_err(|_| failure("invalid_history", "tool result cannot be serialized"))?;
                 input.push(
                     json!({"type":"function_call_output","call_id":call_id,"output":content}),

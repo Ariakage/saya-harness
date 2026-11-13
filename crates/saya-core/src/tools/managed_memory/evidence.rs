@@ -278,7 +278,7 @@ impl<'a> Index<'a> {
                 };
                 let (value, probe) = probe(
                     tools,
-                    json!({"name":call.name,"arguments":call.arguments,"result":result}),
+                    json!({"name":call.name,"arguments":call.arguments,"result":result.model_view()}),
                 )?;
                 let safe_name = value.get("name").cloned().ok_or_else(invalid)?;
                 let safe_arguments = value
@@ -507,6 +507,7 @@ pub(super) fn page(
             data: Some(serde_json::to_value(&page).map_err(|_| invalid())?),
             error: None,
             truncated: page.truncated,
+            media_refs: Vec::new(),
         };
         if encode(&result, tools.limits.max_result_bytes).is_err() {
             page.entries.pop();

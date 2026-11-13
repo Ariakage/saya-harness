@@ -30,4 +30,4 @@ DEV-043 提供 `SqliteStore::read_snapshot`。稳定校验数据库与WAL后在�
 
 ## 上下文与输出存储
 
-N3 已接入 OutputStore、CompactionRecord 和 ContextView。原始历史、模型请求投影、输出引用与摘要检查点分别保存来源和水位，存储结构沿用版本化迁移与备份规则；OutputStore另以私有内容对象保存工具输出和用户媒体快照。具体格式、权限、引用及回收边界见[上下文设计](context-management.md)，固定源码验收和后续增量分别见[N3验收](n3-validation.md)与[开发进度](progress.md)。
+N3 已接入 OutputStore、CompactionRecord 和 ContextView。原始历史、模型请求投影、输出引用与摘要检查点分别保存来源和水位，存储结构沿用版本化迁移与备份规则；OutputStore另以私有内容对象保存工具输出、用户媒体快照和 DEV-081 浏览器 `File`／截图 artifact。`File` 对象可以发布、读取和按 lease／pin 回收，但不会作为模型媒体注入；历史工具结果的宿主 `media_refs` 是 GC pin 来源，页面或工具正文中的伪造引用无效。具体格式、权限、引用及回收边界见[上下文设计](context-management.md)，固定源码验收和后续增量分别见[N3验收](n3-validation.md)与[开发进度](progress.md)。

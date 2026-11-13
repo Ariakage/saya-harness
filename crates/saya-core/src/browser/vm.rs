@@ -45,7 +45,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::{OsStr, OsString},
     fs::{self, DirBuilder, File, OpenOptions},
     io::Write,
@@ -516,6 +516,8 @@ pub struct VmCommandSpec<'a> {
     pub stdin: Option<&'a [u8]>,
     pub timeout: Duration,
     pub stderr_limit: usize,
+    /// Bound for stdout. File reads raise this above the default control size.
+    pub stdout_limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -976,6 +978,7 @@ impl SshVmCommandRunner {
             &config,
             spec.timeout,
             spec.stderr_limit,
+            spec.stdout_limit,
             spec.stdin,
             cancel,
         )
@@ -1036,6 +1039,7 @@ async fn spawn_and_collect(
     config: &ExecConfig,
     timeout: Duration,
     stderr_limit: usize,
+    stdout_limit: usize,
     input: Option<&[u8]>,
     cancel: &dyn Cancellation,
 ) -> Result<VmCommandOutput, BrowserFailure> {
@@ -1067,7 +1071,7 @@ async fn spawn_and_collect(
             "Browser VM SSH stderr is unavailable",
         ));
     };
-    let stdout_task = tokio::spawn(drain_bounded(stdout, 512 * 1024));
+    let stdout_task = tokio::spawn(drain_bounded(stdout, stdout_limit));
     let stderr_task = tokio::spawn(drain_bounded(stderr, stderr_limit));
     if let Some(input) = input
         && let Some(mut stdin) = process.take_stdin()
@@ -1630,6 +1634,7 @@ impl VmWorkerIdentityVerifier {
                         stdin: None,
                         timeout,
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     cancel,
                 )
@@ -1716,6 +1721,7 @@ impl WorkerIdentityVerifier for VmWorkerIdentityVerifier {
                         stdin: None,
                         timeout,
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     cancel,
                 )
@@ -1891,6 +1897,7 @@ impl WorkerIdentityVerifier for VmWorkerIdentityVerifier {
                         stdin: None,
                         timeout,
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     cancel,
                 )
@@ -2019,7 +2026,108 @@ fn worker_config_json(
 #[async_trait]
 pub trait VmRemoteControl: Send + Sync {
     async fn terminate(&self, expect_worker: bool) -> Result<(), BrowserFailure>;
+    /// Copy one host-staged upload into the Run's private remote staging area.
+    async fn put_upload(
+        &self,
+        _filename: &str,
+        _bytes: &[u8],
+        _cancel: &dyn Cancellation,
+    ) -> Result<String, BrowserFailure> {
+        Err(BrowserFailure::unsupported("VM upload staging"))
+    }
+    /// Remove one Run-private staging upload.
+    async fn remove_upload(
+        &self,
+        _path: &str,
+        _cancel: &dyn Cancellation,
+    ) -> Result<(), BrowserFailure> {
+        Ok(())
+    }
+    /// Read one worker-produced download under the Run's output directory.
+    async fn read_download(
+        &self,
+        _path: &str,
+        _max_bytes: usize,
+        _cancel: &dyn Cancellation,
+    ) -> Result<Vec<u8>, BrowserFailure> {
+        Err(BrowserFailure::unsupported("VM download read"))
+    }
+    /// List regular files in the Run's remote output directory.
+    async fn list_downloads(
+        &self,
+        _cancel: &dyn Cancellation,
+    ) -> Result<BTreeSet<String>, BrowserFailure> {
+        Err(BrowserFailure::unsupported("VM download listing"))
+    }
 }
+
+const UPLOAD_SCRIPT: &str = r#"set -eu
+root=$1
+name=$2
+case "$name" in
+  ''|.*|-*|*/*|*\\*) exit 2 ;;
+esac
+mkdir -p "$root/uploads"
+chmod 700 "$root/uploads"
+umask 077
+tmp="$root/uploads/.upload.$$.tmp"
+cleanup() { rm -f -- "$tmp"; }
+trap cleanup EXIT HUP INT TERM
+cat > "$tmp"
+chmod 600 "$tmp"
+[ ! -e "$root/uploads/$name" ] || exit 3
+mv -f -- "$tmp" "$root/uploads/$name"
+trap - EXIT HUP INT TERM
+printf '%s\n' "$root/uploads/$name"
+"#;
+
+const REMOVE_UPLOAD_SCRIPT: &str = r#"set -eu
+root=$1
+path=$2
+case "$path" in
+  "$root"/uploads/*) rest=${path#"$root"/uploads/} ;;
+  *) exit 2 ;;
+esac
+case "$rest" in
+  ''|.*|*/*|*\\*) exit 2 ;;
+esac
+rm -f -- "$path"
+"#;
+
+const DOWNLOAD_READ_SCRIPT: &str = r#"set -eu
+root=$1
+path=$2
+max=$3
+case "$path" in
+  "$root"/output/*) ;;
+  *) exit 2 ;;
+esac
+case "$path" in
+  */../*|*/..|../*|..|*/./*|*/.) exit 2 ;;
+esac
+[ -f "$path" ] && [ ! -L "$path" ] || exit 3
+size=$(stat -c%s "$path")
+[ "$size" -ge 1 ] && [ "$size" -le "$max" ] || exit 4
+cat "$path"
+"#;
+
+const LIST_DOWNLOADS_SCRIPT: &str = r#"set -eu
+root=$1
+dir="$root/output"
+case "$dir" in
+  *..*) exit 2 ;;
+esac
+[ -d "$dir" ] || exit 0
+for f in "$dir"/*; do
+  [ -e "$f" ] || continue
+  [ -f "$f" ] && [ ! -L "$f" ] || continue
+  b=${f##*/}
+  case "$b" in
+    .*) continue ;;
+  esac
+  printf '%s\n' "$b"
+done
+"#;
 
 struct RunnerRemoteControl {
     settings: BrowserVmSettings,
@@ -2053,6 +2161,7 @@ impl VmRemoteControl for RunnerRemoteControl {
                         stdin: None,
                         timeout,
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     &NeverCancel,
                 )
@@ -2070,8 +2179,218 @@ impl VmRemoteControl for RunnerRemoteControl {
         }
         Ok(())
     }
-}
 
+    async fn put_upload(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        cancel: &dyn Cancellation,
+    ) -> Result<String, BrowserFailure> {
+        let name = filename
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|name| {
+                !name.is_empty()
+                    && *name != "."
+                    && *name != ".."
+                    && !name.starts_with('.')
+                    && name.len() <= 128
+                    && !name.chars().any(char::is_control)
+            })
+            .ok_or_else(|| {
+                BrowserFailure::new("file_name_invalid", "Browser VM upload name is unsafe")
+            })?;
+        let args = [self.run_root.clone(), name.to_owned()];
+        let timeout = Duration::from_millis(self.settings.request_timeout_ms.max(15_000));
+        let output = vm_command_result(
+            self.runner
+                .run(
+                    VmCommandSpec {
+                        script: UPLOAD_SCRIPT,
+                        args: &args,
+                        stdin: Some(bytes),
+                        timeout,
+                        stderr_limit: 16 * 1024,
+                        stdout_limit: 16 * 1024,
+                    },
+                    cancel,
+                )
+                .await,
+            "Browser VM upload staging",
+        )?;
+        if !output.succeeded() {
+            return Err(remote_failure(
+                "Browser VM upload staging could not be confirmed",
+            ));
+        }
+        let path = String::from_utf8(output.stdout)
+            .map_err(|_| remote_failure("Browser VM upload path is invalid"))?
+            .trim()
+            .to_owned();
+        if !path.starts_with(&format!("{}/uploads/", self.run_root)) || path.len() > 4096 {
+            return Err(remote_failure(
+                "Browser VM upload staging could not be confirmed",
+            ));
+        }
+        Ok(path)
+    }
+
+    async fn remove_upload(
+        &self,
+        path: &str,
+        cancel: &dyn Cancellation,
+    ) -> Result<(), BrowserFailure> {
+        let expected = format!("{}/uploads/", self.run_root);
+        let staged = path.strip_prefix(&expected).unwrap_or_default();
+        if staged.is_empty()
+            || staged.starts_with('.')
+            || staged.contains(['/', '\\'])
+            || path.len() > 4096
+        {
+            return Err(BrowserFailure::new(
+                "file_path_denied",
+                "Browser VM upload staging path is outside the Run staging directory",
+            ));
+        }
+        let args = [self.run_root.clone(), path.to_owned()];
+        let timeout = Duration::from_millis(self.settings.cleanup_timeout_ms.max(15_000));
+        let output = vm_command_result(
+            self.runner
+                .run(
+                    VmCommandSpec {
+                        script: REMOVE_UPLOAD_SCRIPT,
+                        args: &args,
+                        stdin: None,
+                        timeout,
+                        stderr_limit: 16 * 1024,
+                        stdout_limit: 16 * 1024,
+                    },
+                    cancel,
+                )
+                .await,
+            "Browser VM upload staging cleanup",
+        )?;
+        if !output.succeeded() {
+            return Err(BrowserFailure::new(
+                "file_broker",
+                "Browser VM upload staging could not be removed",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn read_download(
+        &self,
+        path: &str,
+        max_bytes: usize,
+        cancel: &dyn Cancellation,
+    ) -> Result<Vec<u8>, BrowserFailure> {
+        let expected = format!("{}/output/", self.run_root);
+        // Playwright reports a path relative to the worker cwd in some
+        // versions. Resolve it against the Run root, but never accept `..`
+        // components or a path outside the Run output directory.
+        let resolved = if path.starts_with('/') {
+            path.to_owned()
+        } else if path.contains(['/', '\\']) {
+            format!("{}/{}", self.run_root, path)
+        } else {
+            format!("{}/output/{}", self.run_root, path)
+        };
+        let relative = resolved.strip_prefix(&expected).unwrap_or_default();
+        // Reject traversal components, not a `..` substring inside a legal
+        // basename such as `invoice..txt`.
+        let components_ok = !relative.is_empty()
+            && relative
+                .split(['/', '\\'])
+                .all(|component| !component.is_empty() && component != "." && component != "..");
+        if !components_ok || resolved.len() > 4096 || resolved.chars().any(char::is_control) {
+            return Err(BrowserFailure::new(
+                "file_path_denied",
+                "Browser VM download path is outside the Run output directory",
+            ));
+        }
+        let args = [self.run_root.clone(), resolved, max_bytes.to_string()];
+        let timeout = Duration::from_millis(self.settings.request_timeout_ms.max(15_000));
+        let output = vm_command_result(
+            self.runner
+                .run(
+                    VmCommandSpec {
+                        script: DOWNLOAD_READ_SCRIPT,
+                        args: &args,
+                        stdin: None,
+                        timeout,
+                        stderr_limit: 16 * 1024,
+                        stdout_limit: max_bytes.saturating_add(1024),
+                    },
+                    cancel,
+                )
+                .await,
+            "Browser VM download read",
+        )?;
+        if !output.succeeded() || output.stdout.is_empty() || output.stdout.len() > max_bytes {
+            return Err(remote_failure(
+                "Browser VM download file could not be read within its limit",
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    async fn list_downloads(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<BTreeSet<String>, BrowserFailure> {
+        let args = [self.run_root.clone()];
+        let timeout = Duration::from_millis(self.settings.request_timeout_ms.max(15_000));
+        let output = vm_command_result(
+            self.runner
+                .run(
+                    VmCommandSpec {
+                        script: LIST_DOWNLOADS_SCRIPT,
+                        args: &args,
+                        stdin: None,
+                        timeout,
+                        stderr_limit: 16 * 1024,
+                        stdout_limit: 256 * 1024,
+                    },
+                    cancel,
+                )
+                .await,
+            "Browser VM download listing",
+        )?;
+        if !output.succeeded() {
+            return Err(remote_failure(
+                "Browser VM download directory could not be listed",
+            ));
+        }
+        let text = std::str::from_utf8(&output.stdout)
+            .map_err(|_| remote_failure("Browser VM download listing is invalid"))?;
+        let mut names = BTreeSet::new();
+        for line in text.lines() {
+            let name = line.trim_end_matches('\r');
+            if name.is_empty()
+                || name.len() > 255
+                || name.contains('/')
+                || name.contains('\0')
+                || name.chars().any(char::is_control)
+                || name.starts_with('.')
+            {
+                return Err(remote_failure(
+                    "Browser VM download listing contains an unsafe name",
+                ));
+            }
+            if name.ends_with(".crdownload")
+                || name.ends_with(".part")
+                || name.ends_with(".tmp")
+                || (name.starts_with("page-")
+                    && (name.ends_with(".yml") || name.ends_with(".yaml")))
+            {
+                continue;
+            }
+            names.insert(name.to_owned());
+        }
+        Ok(names)
+    }
+}
 struct NeverCancel;
 impl Cancellation for NeverCancel {
     fn is_cancelled(&self) -> bool {
@@ -2386,6 +2705,45 @@ impl WorkerConnection for VmWorkerConnection {
             .call_tool(name, arguments, generation, cancel)
             .await
             .map_err(map_mcp_failure)
+    }
+
+    async fn put_upload(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        cancel: &dyn Cancellation,
+    ) -> Result<String, BrowserFailure> {
+        self.cleanup
+            .control
+            .put_upload(filename, bytes, cancel)
+            .await
+    }
+
+    async fn remove_upload(
+        &self,
+        path: &str,
+        cancel: &dyn Cancellation,
+    ) -> Result<(), BrowserFailure> {
+        self.cleanup.control.remove_upload(path, cancel).await
+    }
+
+    async fn read_download(
+        &self,
+        path: &str,
+        max_bytes: usize,
+        cancel: &dyn Cancellation,
+    ) -> Result<Vec<u8>, BrowserFailure> {
+        self.cleanup
+            .control
+            .read_download(path, max_bytes, cancel)
+            .await
+    }
+
+    async fn list_downloads(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<BTreeSet<String>, BrowserFailure> {
+        self.cleanup.control.list_downloads(cancel).await
     }
 
     async fn shutdown(&self) -> Result<(), BrowserFailure> {
@@ -2777,6 +3135,7 @@ impl VmWorkerLauncher {
                         stdin: Some(&config),
                         timeout: Duration::from_millis(self.settings.connect_timeout_ms),
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     cancel,
                 )
@@ -2934,6 +3293,7 @@ impl VmWorkerLauncher {
                         stdin: None,
                         timeout: Duration::from_millis(self.settings.connect_timeout_ms),
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     cancel,
                 )
@@ -3160,6 +3520,7 @@ impl ChromiumSandboxInspector for VmChromiumSandboxInspector {
                             self.settings.cleanup_timeout_ms.max(15_000),
                         ),
                         stderr_limit: 16 * 1024,
+                        stdout_limit: 512 * 1024,
                     },
                     cancel,
                 )
@@ -3298,6 +3659,74 @@ mod tests {
 
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    #[test]
+    fn upload_script_preserves_original_name_and_cleans_partial_staging() {
+        use std::{
+            io::Write as _,
+            process::{Command, Stdio},
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let root_text = root.path().to_str().unwrap().to_owned();
+        let run = |name: &str, input: &[u8]| {
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg(UPLOAD_SCRIPT)
+                .arg("sh")
+                .arg(&root_text)
+                .arg(name)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            child.wait_with_output().unwrap()
+        };
+
+        let output = run("invoice 2026.txt", b"payload");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            root.path()
+                .join("uploads/invoice 2026.txt")
+                .to_str()
+                .unwrap()
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("uploads/invoice 2026.txt")).unwrap(),
+            b"payload"
+        );
+
+        // A `..` inside a basename is not traversal and must be preserved.
+        let output = run("archive..tar", b"dots");
+        assert!(output.status.success());
+        assert_eq!(
+            std::fs::read(root.path().join("uploads/archive..tar")).unwrap(),
+            b"dots"
+        );
+
+        // A refused move must remove the temporary file, not leave a partial.
+        std::fs::create_dir(root.path().join("uploads/blocked.txt")).unwrap();
+        let output = run("blocked.txt", b"payload");
+        assert!(!output.status.success());
+        let partial: Vec<String> = std::fs::read_dir(root.path().join("uploads"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".upload."))
+            .collect();
+        assert!(partial.is_empty(), "partial staging remained: {partial:?}");
+
+        for name in ["../escape.txt", "dir/name.txt", ".hidden", "-rf", ".."] {
+            assert!(!run(name, b"x").status.success(), "{name} was accepted");
+        }
+    }
 
     use crate::network::BrokerLimits;
 

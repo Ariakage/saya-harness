@@ -42,6 +42,7 @@ impl Fixture {
             data: Some(json!({"text":"tool-body-marker"})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         };
         let session = Session {
             id: SessionId::new(),

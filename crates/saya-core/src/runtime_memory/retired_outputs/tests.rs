@@ -36,6 +36,7 @@ fn observed() -> ToolResult {
             message: FORGOTTEN.into(),
         }),
         truncated: true,
+        media_refs: Vec::new(),
     }
 }
 
@@ -658,5 +659,37 @@ fn selectors_and_unfinished_or_malformed_provider_groups_fail_closed() {
     assert_eq!(
         code(RetiredOutputAcl::build(&split, &[retired])),
         "invalid_history"
+    );
+}
+
+#[test]
+fn background_projection_keeps_only_valid_host_media_pins() {
+    let valid = format!("media_{}_{}", uuid::Uuid::now_v7().simple(), "a".repeat(64));
+    let mut status = JobStatus::Finished(observed());
+    if let JobStatus::Finished(result) = &mut status {
+        result.media_refs = vec![valid.clone(), "not-a-media-reference".into()];
+    }
+    let projection = background_projection(&status, "memory_context_changed");
+    assert_eq!(projection.media_refs, vec![valid.clone()]);
+    assert_eq!(projection.data.as_ref().unwrap()["body_withheld"], true);
+
+    let mut failed = observed();
+    failed.media_refs = vec![valid.clone(), "../escape".into()];
+    let projection = background_projection(
+        &JobStatus::Failed(BoundaryError(
+            ErrorInfo {
+                code: "outcome_unknown".into(),
+                message: FORGOTTEN.into(),
+            },
+            None,
+            Some(Box::new(failed)),
+        )),
+        "unverified_job_origin",
+    );
+    assert_eq!(projection.media_refs, vec![valid]);
+    assert!(
+        !serde_json::to_string(&projection)
+            .unwrap()
+            .contains(FORGOTTEN)
     );
 }

@@ -143,6 +143,7 @@ impl Fixture {
                 data: Some(json!({"text":"A verified workspace convention."})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
     }
@@ -632,6 +633,7 @@ fn evidence_pages_keep_original_ordinals_after_projection_and_allow_append_only_
                 data: Some(page),
                 error: None,
                 truncated: true,
+                media_refs: Vec::new(),
             },
         });
         arguments = json!({"cursor":cursor});
@@ -764,6 +766,7 @@ fn memory_tool_results_never_become_independent_fact_sources_or_new_evidence_sel
                 data: Some(json!({"text":"An old memory fact to launder."})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
         let mut args: Value =
@@ -869,6 +872,7 @@ fn evidence_reports_actual_success_failure_unknown_and_truncation_without_source
                     _ => Some(failure("command_failed", "Failed").0),
                 },
                 truncated: index == 2,
+                media_refs: Vec::new(),
             },
         });
     }

@@ -199,6 +199,7 @@ impl Tool for TodoTool {
                 data: Some(serde_json::json!({"todos": todos})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             })
         })
     }

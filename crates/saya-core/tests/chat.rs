@@ -318,6 +318,7 @@ async fn interleaved_tool_fragments_round_trip_with_original_ids()
                 data: Some(json!({"value":"ok"})),
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
     }
@@ -758,6 +759,7 @@ async fn reasoning_is_opaque_and_replayed_per_turn_after_sqlite_restore()
                         data: Some(json!({"text":"a"})),
                         error: None,
                         truncated: false,
+                        media_refs: Vec::new(),
                     },
                 });
             }

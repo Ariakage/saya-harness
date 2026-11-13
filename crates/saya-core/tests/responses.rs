@@ -416,6 +416,7 @@ async fn preserves_reasoning_and_tool_items_in_original_order_on_replay()
             data: Some(json!({"text":"hello"})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         },
     });
     assert_eq!(collect(&model, &req).await?.2, "done");
@@ -896,6 +897,7 @@ async fn multiple_function_calls_preserve_order_and_each_call_id()
                 data: None,
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
     }

@@ -371,6 +371,7 @@ async fn publication_recovers_only_atomic_host_records_and_query_obeys_manual_an
             data: Some(json!({"output_refs":[sealed.metadata]})),
             error: None,
             truncated: false,
+            media_refs: Vec::new(),
         };
         assert!(
             store

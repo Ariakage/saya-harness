@@ -635,6 +635,7 @@ async fn preserves_signed_thinking_and_groups_tool_results_in_order()
                 data: None,
                 error: None,
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
     }

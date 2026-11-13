@@ -27,7 +27,7 @@ N2 执行层通过 `ExecutionBackend` 和 `PreparedEnvironment` 接入独立 Sea
 
 统一工具注册表维护本地及 MCP 工具的稳定名称、schema、宿主分类和目录代次。stdio 服务启动先经过命令许可与意图记录，HTTP 连接由宿主管理，外部工具调用复用运行时权限、预算、取消和持久化。宿主私有凭据存储、引用绑定、刷新／撤销及管理入口见[MCP 与凭据](mcp.md)。
 
-N3 的 ContextBuilder、OutputStore、Compact／检查点、全局记忆与可执行插件已接入共享运行入口并完成固定源码验收，设计见[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。DEV-079 已提供 `BrowserProvider` 宿主接口与受限 Web 读取；真实 Chromium／Playwright worker 仍属后续规划，设计见[Browser](browser.md)。PLAN 只开放宿主分类为 `WebRead` 的显式受限 `fetch_url`／`web_search`，不注册或执行任何主动 Browser 工具（`BrowserRead`／`BrowserWrite`）。
+N3 的 ContextBuilder、OutputStore、Compact／检查点、全局记忆与可执行插件已接入共享运行入口并完成固定源码验收，设计见[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。DEV-079 已提供 `BrowserProvider` 宿主接口与受限 Web 读取；DEV-080／DEV-081 已接入固定 Playwright MCP worker、专用 VM 后端、受控 broker、凭据与文件 broker，真实 VM 验收范围见[Browser](browser.md)与[开发进度](progress.md)，native 浏览器仍不可用。PLAN 只开放宿主分类为 `WebRead` 的显式受限 `fetch_url`／`web_search`，不注册或执行任何主动 Browser 工具（`BrowserRead`／`BrowserWrite`）。
 
 运行时通过输入、控制与事件／结果接口连接界面。终端格式、TUI 组件和 GUI 状态管理不进入核心循环；结果与事件使用 B-17 的 schema v1。内部 Rust 函数签名按实现处理，0.1 不承诺独立 SDK 稳定性。
 

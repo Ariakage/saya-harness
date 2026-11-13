@@ -18,6 +18,7 @@ fn fixture() -> SessionSnapshot {
             message: "tool-body-value".into(),
         }),
         truncated: true,
+        media_refs: Vec::new(),
     };
     SessionSnapshot {
         created_at: "2026-11-08T00:00:00Z".into(),
@@ -314,6 +315,7 @@ fn redacted_fallback_does_not_guess_between_repeated_legacy_history_identities()
                     message: "run ended before dispatch".into(),
                 }),
                 truncated: false,
+                media_refs: Vec::new(),
             },
         });
         let export = SessionExport::from_snapshot(&snapshot, ExportOptions::default(), &[])?;
