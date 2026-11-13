@@ -54,6 +54,19 @@ impl Pty {
         );
         let master = unsafe { fs::File::from_raw_fd(master) };
         let slave = unsafe { fs::File::from_raw_fd(slave) };
+        // A fresh PTY has a zero-sized window; give the terminal UI a stable
+        // viewport so its details pane actually renders.
+        let size = libc::winsize {
+            ws_row: 40,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the descriptor is owned above and the winsize pointer is valid.
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ as _, &size) },
+            0
+        );
         let fd = slave.as_raw_fd();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_saya"));
         cmd.env_clear()
@@ -199,6 +212,42 @@ impl Pty {
             }
             if Instant::now() >= deadline {
                 panic!("chat did not exit");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn finish_preview(mut self) -> std::process::ExitStatus {
+        // The preview handles SIGTERM by leaving its loop through the same
+        // terminal guard, which exercises restoration without relying on a
+        // synthetic key event from the PTY master.
+        // SAFETY: the child PID is owned by this test process.
+        assert_eq!(
+            unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) },
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            // Keep draining frames; otherwise the PTY buffer fills and the
+            // process cannot reach its signal handler.
+            let _ = self.read_output(10);
+            if let Some(status) = self.child.try_wait().unwrap() {
+                // Drain the final screen-control bytes so a missing alternate
+                // screen restore cannot pass unnoticed.
+                let drain_deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < drain_deadline {
+                    match self.read_output(50) {
+                        Ok(true) => {}
+                        _ => break,
+                    }
+                }
+                assert!(
+                    self.buffer.windows(8).any(|w| w == b"\x1b[?1049l"),
+                    "preview did not leave the alternate screen"
+                );
+                return status;
+            }
+            if Instant::now() >= deadline {
+                panic!("preview did not exit");
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -937,5 +986,22 @@ fn switching_from_build_to_plan_during_model_call_blocks_generated_write() {
     assert!(
         second.contains("mode_denied") || second.contains("permission_denied"),
         "{second}"
+    );
+}
+
+#[test]
+fn tui_preview_renders_browser_artifact_details_and_restores_the_terminal() {
+    let temp = TempDir::new().unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["tui-preview", "browser"]);
+    pty.until("Action · screenshot · completed");
+    pty.until("URL: https://allowed.example/final");
+    pty.until("Artifact: media_demo");
+    pty.until("Masked: yes");
+    let status = pty.finish_preview();
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "preview did not exit through its signal path"
     );
 }

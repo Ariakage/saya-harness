@@ -168,7 +168,20 @@ fn chat_history(
     let mut text: Option<String> = None;
     let mut calls = Vec::new();
     let mut reasoning: Option<String> = None;
+    let mut images: Vec<Value> = Vec::new();
     let mut pending = HashSet::new();
+    // A reference may be attached to more than one host tool result. Emit each
+    // loaded image once so the wire total stays within the loader's budget.
+    let mut emitted_images = HashSet::new();
+    // Tool-produced images use a separate user content message adjacent to the
+    // tool result. They are never folded into tool text or the tool result
+    // payload, so the protocol keeps its native image block.
+    fn flush_images(messages: &mut Vec<Value>, images: &mut Vec<Value>) {
+        if images.is_empty() {
+            return;
+        }
+        messages.push(json!({"role":"user","content":Value::Array(std::mem::take(images))}));
+    }
     fn flush(
         messages: &mut Vec<Value>,
         text: &mut Option<String>,
@@ -217,6 +230,7 @@ fn chat_history(
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
+                flush_images(&mut messages, &mut images);
                 messages.push(json!({
                     "role":"user",
                     "content":chat_user_content(value, capabilities, snapshots, expand)?
@@ -230,6 +244,7 @@ fn chat_history(
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
+                flush_images(&mut messages, &mut images);
                 text = Some(value.clone());
             }
             HistoryItem::ToolCall(call) => {
@@ -239,6 +254,7 @@ fn chat_history(
                 {
                     return Err(failure("invalid_history", "invalid or duplicate tool call"));
                 }
+                flush_images(&mut messages, &mut images);
                 calls.push(json!({"id":call.call_id,"type":"function","function":{"name":call.name,"arguments":call.arguments}}));
             }
             HistoryItem::ToolResult { call_id, result } => {
@@ -252,12 +268,26 @@ fn chat_history(
                 let content = serde_json::to_string(&result.model_view())
                     .map_err(|_| failure("invalid_history", "tool result cannot be serialized"))?;
                 messages.push(json!({"role":"tool","tool_call_id":call_id,"content":content}));
+                if expand {
+                    for image in snapshots.tool_result_images(result)? {
+                        if let Some(reference) = &image.reference
+                            && !emitted_images.insert(reference.clone())
+                        {
+                            continue;
+                        }
+                        images.push(json!({
+                            "type":"image_url",
+                            "image_url":{"url":media::data_url(&image),"detail":"auto"}
+                        }));
+                    }
+                }
             }
             HistoryItem::ProviderItem { protocol, value } => {
                 flush(&mut messages, &mut text, &mut calls, &mut reasoning)?;
                 if *protocol != ModelProtocol::ChatCompletions || !pending.is_empty() {
                     return Err(failure("invalid_history", "incompatible provider history"));
                 }
+                flush_images(&mut messages, &mut images);
                 let valid_assistant = match history.get(index + 1) {
                     Some(HistoryItem::AssistantText(text)) => !text.is_empty(),
                     Some(HistoryItem::ToolCall(_)) => true,
@@ -286,6 +316,7 @@ fn chat_history(
     if !pending.is_empty() {
         return Err(failure("invalid_history", "tool results are incomplete"));
     }
+    flush_images(&mut messages, &mut images);
     Ok(messages)
 }
 

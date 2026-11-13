@@ -71,7 +71,7 @@ DEV-038／039 已将模型组装、`build_runtime`、会话准备／恢复与 `e
 | 对话 | 流式文本、多行编辑、滚动、代码块、清楚的用户／assistant／工具来源 |
 | 状态栏 | 工作区、profile／model、四工作模式、权限、运行状态与用量 |
 | 确认与澄清 | 参数与原因、批准／拒绝、过期提示、输入问题和取消 |
-| 工具详情 | 执行中、结果、错误、截断、unknown 与关联 ID |
+| 工具详情 | 执行中、结果、错误、截断、unknown、关联 ID、浏览器动作、来源、版本、产物与遮蔽状态 |
 | 会话 | 新建、浏览、恢复、等待输入及导出 |
 | 后台任务 | 当前运行的任务列表、输出与取消结果 |
 | 控制 | 当前／待切换模式、空闲权限设置、停止与退出 |
@@ -160,7 +160,7 @@ Assistant正文使用CommonMark／GFM解析，支持普通段落、ATX／Setext�
 
 正文统一经过控制字符净化，字符实体保留源码。渲染属于视图投影，会话存储及导出使用原始消息。有界缓存按消息、源码指纹和宽度复用已排版结果，输入、结构、单元格和总显示量超限均有可见回退或截断提示。
 
-debug构建可运行 `saya tui-preview syntax`打开共享场景的交互预览，←／→切换、s／r选择source／render、q退出。现有 `render_preview`继续提供离线文本和单元格JSON快照。布局场景覆盖审批与澄清弹窗、`/ps`后台任务、Help／工具详情侧栏、命令面板、补全、Memory，以及Skills／MCP／Plugins／Sessions选择器；命令示例见[预览入口](markdown-rendering.md#debug-预览)。
+debug构建可运行 `saya tui-preview syntax`打开共享场景的交互预览，←／→切换、s／r选择source／render、q退出。`browser`场景显示浏览器截图产物的action、URL、page／document revision、masked、`model_image_capability`与artifact元数据。现有 `render_preview`继续提供离线文本和单元格JSON快照。布局场景覆盖审批与澄清弹窗、`/ps`后台任务、Help／工具详情侧栏、命令面板、补全、Memory，以及Skills／MCP／Plugins／Sessions选择器；命令示例见[预览入口](markdown-rendering.md#debug-预览)。
 
 ## DEV-049 运行控制
 

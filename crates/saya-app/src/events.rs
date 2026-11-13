@@ -294,7 +294,9 @@ impl EventWriter {
                         payloads.push(EventPayload::ToolFinished {
                             call_id: call_id.clone(),
                             name: name.clone(),
-                            result: result.clone(),
+                            // Interface events never expose host-only durable
+                            // media references; artifact IDs remain in `data`.
+                            result: result.model_view(),
                         });
                     }
                 }

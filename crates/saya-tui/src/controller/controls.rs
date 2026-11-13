@@ -288,10 +288,15 @@ impl App {
                     text::approval_field(text::APPROVAL_LABEL, &request.approval_id),
                     text::approval_field(text::MODE_LABEL, format_args!("{:?}", request.work_mode)),
                     text::approval_field(text::WORKSPACE_LABEL, request.cwd.display()),
-                    String::new(),
-                    request.operation_summary.clone(),
-                    String::new(),
                 ];
+                if let Some(action) =
+                    crate::tool_render::approval_action(&request.tool, &request.arguments)
+                {
+                    lines.push(text::approval_field(crate::i18n::browser::ACTION, action));
+                }
+                lines.push(String::new());
+                lines.push(request.operation_summary.clone());
+                lines.push(String::new());
                 lines.extend(
                     crate::tool_render::call(&request.tool, &request.arguments, None)
                         .lines()

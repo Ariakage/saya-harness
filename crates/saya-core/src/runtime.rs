@@ -803,6 +803,7 @@ impl AgentRuntime {
             self.media_store.clone(),
             Some(self.jobs.clone()),
             registry,
+            self.media_capabilities,
         )?);
         crate::browser::register_tools(&state, self.dispatcher.as_ref())?;
         self.services.configure_browser(state)?;
@@ -1020,8 +1021,6 @@ impl AgentRuntime {
                     history.push(HistoryItem::UserText(skills.context_data().to_string()));
                 }
                 history.extend(session.history.iter().cloned());
-                let media =
-                    crate::media::load_history(&history, self.media_store.as_ref(), session.id)?;
                 let request = ModelRequest {
                     request_id,
                     purpose: ModelPurpose::Execution,
@@ -1030,7 +1029,7 @@ impl AgentRuntime {
                     dynamic_instructions,
                     max_output_tokens: None,
                     history,
-                    media: Arc::new(media),
+                    media: Default::default(),
                     tools,
                 };
                 Ok::<_, BoundaryError>((request, record))

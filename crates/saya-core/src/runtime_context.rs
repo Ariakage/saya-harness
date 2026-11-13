@@ -113,8 +113,73 @@ fn project_tool_result(result: &ToolResult, outputs: &[OutputMetadata]) -> ToolR
         error: result.error.clone(),
         truncated: true,
         data: Some(data),
-        // Host-only artifact references are never exposed to the model.
-        media_refs: Vec::new(),
+        // Keep host GC pins and eligible images across output projection.
+        media_refs: result.media_refs.clone(),
+    }
+}
+
+// Reuse one bounded media snapshot across counting and dispatch.
+type MediaKey = Vec<(bool, Vec<String>)>;
+struct ProjectedMediaCounter<'a> {
+    runtime: &'a AgentRuntime,
+    session_id: crate::contract::SessionId,
+    inner: Option<&'a dyn context_builder::RequestCounter>,
+    snapshot: Mutex<Option<(MediaKey, std::sync::Arc<crate::media::MediaAttachments>)>>,
+}
+impl ProjectedMediaCounter<'_> {
+    fn attach(&self, mut request: ModelRequest) -> Result<ModelRequest, BoundaryError> {
+        if request.purpose != crate::contract::ModelPurpose::Execution {
+            return Ok(request);
+        }
+        let key: MediaKey = request
+            .history
+            .iter()
+            .filter_map(|item| {
+                let (user, references) = match item {
+                    HistoryItem::UserText(text) => (
+                        true,
+                        crate::media::text_references(text)
+                            .into_iter()
+                            .collect::<Vec<_>>(),
+                    ),
+                    HistoryItem::ToolResult { result, .. } => (false, result.media_refs.clone()),
+                    _ => return None,
+                };
+                (!references.is_empty()).then_some((user, references))
+            })
+            .collect();
+        let mut slot = self
+            .snapshot
+            .lock()
+            .map_err(|_| error("media_unavailable", "Media snapshot lock failed"))?;
+        if slot.as_ref().is_none_or(|(cached, _)| cached != &key) {
+            // Drop the previous bounded payload before loading a new projection.
+            *slot = None;
+            let media = crate::media::load_history(
+                &request.history,
+                self.runtime.media_store.as_ref(),
+                self.session_id,
+                self.runtime.media_capabilities,
+            )?;
+            *slot = Some((key, std::sync::Arc::new(media)));
+        }
+        if let Some((_, media)) = slot.as_ref() {
+            request.media = media.clone();
+        }
+        Ok(request)
+    }
+}
+impl context_builder::RequestCounter for ProjectedMediaCounter<'_> {
+    fn count(
+        &self,
+        request: &ModelRequest,
+        identity: &CountingIdentity,
+        fingerprint: &str,
+    ) -> Result<context_builder::CountEvidence, BoundaryError> {
+        let hydrated = self.attach(request.clone())?;
+        self.inner
+            .ok_or_else(|| error("context_counter", "Request counter is unavailable"))?
+            .count(&hydrated, identity, fingerprint)
     }
 }
 
@@ -126,8 +191,17 @@ impl AgentRuntime {
         memory_frame: Option<&super::managed_memory::MemoryFrame>,
         skill_frame: Option<&crate::skills::ActiveSkillSet>,
     ) -> Result<ModelRequest, BoundaryError> {
+        let media_counter = ProjectedMediaCounter {
+            runtime: self,
+            session_id: session.id,
+            inner: self.model.request_counter(),
+            snapshot: Mutex::new(None),
+        };
+        let counter = media_counter
+            .inner
+            .map(|_| &media_counter as &dyn context_builder::RequestCounter);
         let Some(state) = &self.context_state else {
-            return Ok(request);
+            return media_counter.attach(request);
         };
         let model = ModeBoundCompactionModel {
             inner: self.model.clone(),
@@ -264,8 +338,7 @@ impl AgentRuntime {
             output_projections: &projections,
             group_retirements: &retirements,
         };
-        let built =
-            context_builder::build(make_input(view.as_ref()), self.model.request_counter())?;
+        let built = context_builder::build(make_input(view.as_ref()), counter)?;
         let forced = state.requested.swap(false, Ordering::AcqRel);
         let prefix = if forced {
             built
@@ -322,7 +395,7 @@ impl AgentRuntime {
                     },
                     &model,
                     &self.budget,
-                    self.model.request_counter(),
+                    counter,
                     self.cancel.as_ref(),
                 )
                 .await;
@@ -368,13 +441,10 @@ impl AgentRuntime {
             state.rebuild.store(true, Ordering::Release);
             // Rebuild from the committed host record. Model-returned control
             // state never replaces the current runtime policy.
-            let rebuilt = context_builder::build(
-                make_input(Some(&checkpoint.view)),
-                self.model.request_counter(),
-            )?;
-            return dispatchable(rebuilt);
+            let rebuilt = context_builder::build(make_input(Some(&checkpoint.view)), counter)?;
+            return media_counter.attach(dispatchable(rebuilt)?);
         }
-        dispatchable(built)
+        media_counter.attach(dispatchable(built)?)
     }
 
     fn context_versions(&self) -> Result<Vec<crate::compaction::ContextVersion>, BoundaryError> {
@@ -596,7 +666,7 @@ mod projection_tests {
                 "title": "Example",
                 "elements": elements,
             })),
-            media_refs: Vec::new(),
+            media_refs: vec!["media_fixture".into()],
         };
         assert!(
             serde_json::to_vec(&result).unwrap().len() > 16 * 1024,
@@ -674,6 +744,7 @@ mod projection_tests {
         assert_eq!(data["document_revision"], 3);
         assert_eq!(data["url"], "https://example.com/page");
         assert_eq!(data["elements"].as_array().unwrap().len(), 40);
+        assert_eq!(result.media_refs, vec!["media_fixture".to_owned()]);
         assert!(
             data["output_refs"]
                 .as_array()

@@ -465,6 +465,9 @@ fn history(
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut messages = Vec::new();
     let mut pending = HashSet::new();
+    // A reference may be attached to more than one host tool result. Emit each
+    // loaded image once so the wire total stays within the loader's budget.
+    let mut emitted_images = HashSet::new();
     let mut index = 0;
     while index < items.len() {
         match &items[index] {
@@ -555,6 +558,35 @@ fn history(
                 }
                 let content = serde_json::to_string(&result.model_view())
                     .map_err(|_| failure("invalid_history", "tool result cannot be serialized"))?;
+                let content = if expand {
+                    let images = snapshots
+                        .tool_result_images(result)?
+                        .into_iter()
+                        .filter(|image| match &image.reference {
+                            Some(reference) => emitted_images.insert(reference.clone()),
+                            None => true,
+                        })
+                        .collect::<Vec<_>>();
+                    if images.is_empty() {
+                        Value::String(content)
+                    } else {
+                        let mut blocks = Vec::with_capacity(images.len().saturating_add(1));
+                        blocks.push(json!({"type":"text","text":content}));
+                        for image in images {
+                            blocks.push(json!({
+                                "type":"image",
+                                "source":{
+                                    "type":"base64",
+                                    "media_type":image.mime,
+                                    "data":image.data
+                                }
+                            }));
+                        }
+                        Value::Array(blocks)
+                    }
+                } else {
+                    Value::String(content)
+                };
                 append_message(
                     &mut messages,
                     "user",

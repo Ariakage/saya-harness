@@ -18,6 +18,7 @@ use tokio::signal::unix::{SignalKind, signal};
 pub const SCENES: &[&str] = &[
     "chat",
     "approval",
+    "browser",
     "attachments",
     "question",
     "background",
@@ -261,6 +262,46 @@ pub fn fixture(scene: &str) -> State {
             state.set_details(Details {
                 title: crate::i18n::view::APPROVAL_REQUIRED.into(),
                 lines,
+            });
+        }
+        "browser" => {
+            let arguments = serde_json::json!({"page": "page_demo"});
+            let result = saya_core::contract::ToolResult {
+                ok: true,
+                data: Some(serde_json::json!({
+                    "source": "untrusted_browser",
+                    "screenshot": {
+                        "page": "page_demo",
+                        "document_revision": 4,
+                        "url": "https://allowed.example/final",
+                        "url_observation": "last_confirmed",
+                        "mime": "image/png",
+                        "filename": "screenshot-demo.png",
+                        "width": 1280,
+                        "height": 720,
+                        "bytes": 4096,
+                        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                        "artifact_ref": "media_demo",
+                        "masked": true,
+                        "model_image_capability": "enabled",
+                        "model_image_status": "artifact_saved: enabled"
+                    }
+                })),
+                error: None,
+                truncated: false,
+                media_refs: Vec::new(),
+            };
+            state.set_details(Details {
+                title: "Browser tool".into(),
+                lines: tool_render::call_and_result(
+                    "browser_screenshot",
+                    &arguments,
+                    &result,
+                    None,
+                )
+                .lines()
+                .map(str::to_owned)
+                .collect(),
             });
         }
         "attachments" => {
@@ -1096,12 +1137,13 @@ mod tests {
             "plugins",
             "sessions",
             "tool",
+            "browser",
             "sidebar",
         ] {
             assert!(SCENES.contains(&scene), "missing preview scene {scene}");
             let state = fixture(scene);
             match scene {
-                "approval" | "question" | "background" | "help" | "tool" => {
+                "approval" | "question" | "background" | "help" | "tool" | "browser" => {
                     assert!(state.details.is_some(), "{scene}");
                 }
                 "commands" => assert!(state.command_palette.is_some()),

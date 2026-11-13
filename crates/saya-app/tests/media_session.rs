@@ -75,8 +75,13 @@ multimodal.image = true
     .await
     .unwrap();
     let media_store = resumed.media.clone();
-    let attachments =
-        media::load_history(&resumed.session.history, Some(&media_store), id).unwrap();
+    let attachments = media::load_history(
+        &resumed.session.history,
+        Some(&media_store),
+        id,
+        resumed.media_capabilities,
+    )
+    .unwrap();
     let saya_core::contract::HistoryItem::UserText(text) = &resumed.session.history[0] else {
         panic!("missing user history")
     };

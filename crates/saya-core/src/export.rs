@@ -86,6 +86,32 @@ fn result_summary(result: &Value) -> Value {
     }
     json!({"ok":result["ok"],"truncated":result["truncated"],"error_code":result["error"]["code"],"body_omitted":true})
 }
+
+/// Project one tool result for export. Transcript keeps the body when the
+/// caller opted into tools but never exposes host-only media references; Full
+/// retains syntactically validated opaque references for diagnosis.
+fn export_result(result: &Value, include: bool, full: bool) -> Value {
+    if !include {
+        return result_summary(result);
+    }
+    let mut projected = result.clone();
+    let Some(references) = projected
+        .get_mut("media_refs")
+        .and_then(Value::as_array_mut)
+    else {
+        return projected;
+    };
+    if !full {
+        references.clear();
+    } else {
+        references.retain(|value| {
+            value
+                .as_str()
+                .is_some_and(|reference| crate::media::parse_reference(reference).is_ok())
+        });
+    }
+    projected
+}
 fn selected_call(call: &Value, include: bool) -> Value {
     if include {
         return call.clone();
@@ -195,7 +221,7 @@ fn history(
             HistoryItem::ToolResult { call_id, result } => {
                 let raw = serde_json::to_value(result)
                     .map_err(|_| error("export_error", "cannot encode tool result"))?;
-                json!({"ordinal":ordinal,"kind":"tool_result","run_id":associations.get(call_id),"call_id":call_id,"result":if include {raw}else{result_summary(&raw)}})
+                json!({"ordinal":ordinal,"kind":"tool_result","run_id":associations.get(call_id),"call_id":call_id,"result":export_result(&raw,include,full)})
             }
             HistoryItem::ProviderItem { protocol, value } => {
                 if !full {
@@ -297,11 +323,7 @@ impl SessionExport {
                     "call_id": stored["call_id"],
                     "state": stored["state"],
                     "call": selected_call(&stored["call"], options.include_tools),
-                    "result": if options.include_tools {
-                        stored["result"].clone()
-                    } else {
-                        result_summary(&stored["result"])
-                    }
+                    "result": export_result(&stored["result"], options.include_tools, full)
                 })
             })
             .collect::<Vec<_>>();
@@ -312,6 +334,8 @@ impl SessionExport {
                 let mut job = job.clone();
                 if !options.include_tools {
                     job["result"] = result_summary(&job["result"]);
+                } else {
+                    job["result"] = export_result(&job["result"], true, full);
                 }
                 job
             })

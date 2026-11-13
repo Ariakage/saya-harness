@@ -1,4 +1,5 @@
 //! Human-readable projections of canonical tool records and results.
+use crate::i18n::browser as browser_text;
 use crate::i18n::tool as text;
 use saya_core::contract::{ToolCall, ToolResult};
 use serde_json::Value;
@@ -82,6 +83,9 @@ pub(crate) fn command_text(arguments: &Value) -> Option<String> {
 }
 
 pub(crate) fn call(name: &str, arguments: &Value, elapsed: Option<Duration>) -> String {
+    if name.starts_with("browser_") {
+        return browser_call(name, arguments, elapsed);
+    }
     let mut lines = Vec::new();
     if name == "exec" {
         lines.push(text::COMMAND.into());
@@ -120,6 +124,108 @@ pub(crate) fn call(name: &str, arguments: &Value, elapsed: Option<Duration>) -> 
     lines.push(text::ARGUMENTS.into());
     append_object(&mut lines, arguments, 2);
     lines.join("\n")
+}
+
+fn browser_call(name: &str, arguments: &Value, elapsed: Option<Duration>) -> String {
+    let action = browser_text::action(name);
+    let mut lines = vec![format!("{}: {action}", browser_text::ACTION)];
+    for (key, label) in [
+        ("page", browser_text::PAGE),
+        ("document", browser_text::DOCUMENT),
+        ("element_ref", browser_text::ELEMENT),
+        ("url", browser_text::URL),
+        ("key", browser_text::KEY),
+        ("button", browser_text::BUTTON),
+        ("milliseconds", browser_text::MILLISECONDS),
+        ("artifact_ref", browser_text::ARTIFACT),
+        ("credential_slot", browser_text::CREDENTIAL_SLOT),
+    ] {
+        if let Some(value) = arguments.get(key) {
+            lines.push(format!(
+                "  {label}: {}",
+                crate::editor::safe_text(&scalar(value))
+            ));
+        }
+    }
+    if let Some(value) = arguments.get("text").and_then(Value::as_str) {
+        lines.push(format!(
+            "  {}: {} {}",
+            browser_text::TEXT_LABEL,
+            value.len(),
+            browser_text::TEXT_BYTES
+        ));
+    } else if arguments.get("text").is_some() {
+        lines.push(format!("  {}: <structured>", browser_text::TEXT_LABEL));
+    }
+    if arguments.get("background").and_then(Value::as_bool) == Some(true) {
+        lines.push(format!("  {}", browser_text::BACKGROUND));
+    }
+    if let Some(elapsed) = elapsed {
+        lines.push(String::new());
+        lines.push(format!(
+            "{}: {}",
+            text::OBSERVED_DURATION,
+            crate::i18n::summary::duration(elapsed)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// One-line action label for approval prompts. Fill text is represented by its
+/// length so a model-supplied value is not replayed into the interface.
+pub(crate) fn approval_action(name: &str, arguments: &Value) -> Option<String> {
+    if !name.starts_with("browser_") {
+        return None;
+    }
+    let action = browser_text::action(name);
+    let Some(object) = arguments.as_object() else {
+        return Some(format!("{action} · arguments withheld"));
+    };
+    let mut parts = vec![action.to_owned()];
+    let mut unknown = Vec::new();
+    for (key, value) in object {
+        match key.as_str() {
+            "page" => parts.push(format!("{} {}", browser_text::PAGE, scalar(value))),
+            "document" => parts.push(format!("{} {}", browser_text::DOCUMENT, scalar(value))),
+            "element_ref" => parts.push(format!("{} {}", browser_text::ELEMENT, scalar(value))),
+            "url" => parts.push(scalar(value)),
+            "key" => parts.push(format!("{} {}", browser_text::KEY, scalar(value))),
+            "button" => parts.push(format!("{} {}", browser_text::BUTTON, scalar(value))),
+            "milliseconds" => {
+                parts.push(format!("{} {}", browser_text::MILLISECONDS, scalar(value)))
+            }
+            "artifact_ref" => parts.push(format!("{} {}", browser_text::ARTIFACT, scalar(value))),
+            "credential_slot" => parts.push(format!(
+                "{} {}",
+                browser_text::CREDENTIAL_SLOT,
+                scalar(value)
+            )),
+            "text" => match value.as_str() {
+                Some(text) => parts.push(format!(
+                    "{} {} {}",
+                    browser_text::TEXT_LABEL,
+                    text.len(),
+                    browser_text::TEXT_BYTES
+                )),
+                None => parts.push(format!("{} <structured>", browser_text::TEXT_LABEL)),
+            },
+            "background" => {
+                if value.as_bool() == Some(true) {
+                    parts.push(browser_text::BACKGROUND.into());
+                }
+            }
+            other => unknown.push(other.to_owned()),
+        }
+    }
+    if !unknown.is_empty() {
+        unknown.sort();
+        parts.push(format!("{}: {}", text::ARGUMENTS, unknown.join(",")));
+    }
+    Some(
+        crate::editor::safe_text(&parts.join(" · "))
+            .replace('\n', " ")
+            .replace('\t', "    "),
+    )
 }
 
 fn exec_result(data: &Value) -> Option<Vec<String>> {
@@ -200,6 +306,177 @@ pub(crate) fn result(result: &ToolResult) -> String {
     lines.join("\n")
 }
 
+pub(crate) fn result_named(name: &str, result: &ToolResult) -> String {
+    if name.starts_with("browser_") {
+        return browser_result(name, result);
+    }
+    crate::tool_render::result(result)
+}
+
+fn browser_result(name: &str, result: &ToolResult) -> String {
+    let safe = crate::editor::safe_text;
+    let mut lines = vec![format!(
+        "{} · {} · {}",
+        browser_text::ACTION,
+        browser_text::action(name),
+        if result.ok {
+            text::COMPLETED
+        } else {
+            text::FAILED
+        }
+    )];
+    if result.truncated {
+        lines.push(text::OUTPUT_TRUNCATED.into());
+    }
+    if let Some(error) = &result.error {
+        lines.push(format!("{}: {}", text::ERROR, safe(&error.code)));
+        lines.push(format!("{}: {}", text::MESSAGE, safe(&error.message)));
+    }
+    let Some(data) = result.data.as_ref() else {
+        return lines.join("\n");
+    };
+    if let Some(source) = data.get("source").and_then(Value::as_str) {
+        lines.push(format!("  {}: {}", browser_text::SOURCE, safe(source)));
+    }
+    // Screenshot/download/upload results keep their record in a nested object;
+    // page and revision live there, not at the top level.
+    let nested = ["screenshot", "download", "upload"]
+        .iter()
+        .find_map(|key| data.get(*key).map(|value| (*key, value)));
+    let record = nested.map_or(data, |(_, value)| value);
+    if nested.is_none() {
+        for (key, label) in [
+            ("page", browser_text::PAGE),
+            ("document", browser_text::DOCUMENT),
+            ("document_revision", browser_text::REVISION),
+            ("url", browser_text::URL),
+            ("title", browser_text::TITLE),
+        ] {
+            if let Some(value) = record.get(key) {
+                lines.push(format!("  {label}: {}", safe(&scalar(value))));
+            }
+        }
+        for (key, label) in [
+            ("detail", browser_text::DETAIL),
+            ("status", browser_text::STATUS),
+        ] {
+            if let Some(value) = record.get(key) {
+                lines.push(format!("  {label}: {}", safe(&scalar(value))));
+            }
+        }
+        if record.get("document_stale").and_then(Value::as_bool) == Some(true) {
+            lines.push(format!("  {}", browser_text::DOCUMENT_STALE));
+        }
+        if record.get("background").and_then(Value::as_bool) == Some(true) {
+            lines.push(format!("  {}", browser_text::BACKGROUND));
+        }
+    }
+    if data.get("closed").and_then(Value::as_bool) == Some(true) {
+        lines.push(format!("  {}", browser_text::CLOSED));
+    }
+    if let Some(job) = record.get("job_id").and_then(Value::as_str) {
+        lines.push(format!("  {}: {}", browser_text::JOB, safe(job)));
+    }
+    if let Some(elements) = record.get("elements").and_then(Value::as_array) {
+        lines.push(format!(
+            "  {}: {} {}",
+            browser_text::ELEMENT,
+            elements.len(),
+            browser_text::ELEMENTS
+        ));
+    }
+    if let Some(outputs) = data.get("output_refs").and_then(Value::as_array) {
+        lines.push(format!(
+            "  {}: {}",
+            browser_text::OUTPUT_REFS,
+            outputs.len()
+        ));
+        for output in outputs {
+            if let Some(reference) = output.get("output_ref").and_then(Value::as_str) {
+                lines.push(format!("    {}", safe(reference)));
+            }
+        }
+    }
+    for (key, label) in [
+        ("preview", browser_text::PREVIEW),
+        ("text", browser_text::TEXT),
+    ] {
+        if let Some(value) = data.get(key).and_then(Value::as_str) {
+            let value = bound_inline(value, 2048);
+            lines.push(format!("  {label}: {}", safe(&value)));
+        }
+    }
+    if let Some((label, value)) = nested {
+        lines.push(String::new());
+        lines.push(format!("{label}:"));
+        for (field, field_label) in [
+            ("page", browser_text::PAGE),
+            ("url", browser_text::URL),
+            ("url_observation", browser_text::URL_OBSERVATION),
+            ("document_revision", browser_text::REVISION),
+            ("filename", browser_text::FILENAME),
+            ("mime", browser_text::MIME),
+            ("bytes", browser_text::SIZE),
+            ("bytes_sent", browser_text::BYTES_SENT),
+            ("width", browser_text::WIDTH),
+            ("height", browser_text::HEIGHT),
+            ("sha256", browser_text::SHA256),
+            ("artifact_ref", browser_text::ARTIFACT),
+        ] {
+            if let Some(field_value) = value.get(field) {
+                lines.push(format!("  {field_label}: {}", safe(&scalar(field_value))));
+            }
+        }
+        if let Some(stored) = value.get("artifact_stored").and_then(Value::as_bool) {
+            lines.push(format!(
+                "  {}: {}",
+                browser_text::ARTIFACT_STORED,
+                if stored {
+                    browser_text::YES
+                } else {
+                    browser_text::NO
+                }
+            ));
+        }
+        if let Some(masked) = value.get("masked").and_then(Value::as_bool) {
+            lines.push(format!(
+                "  {}: {}",
+                browser_text::MASKED,
+                if masked {
+                    browser_text::YES
+                } else {
+                    browser_text::NO
+                }
+            ));
+        }
+        if let Some(capability) = value.get("model_image_capability").and_then(Value::as_str) {
+            lines.push(format!(
+                "  {}: {}",
+                browser_text::MODEL_IMAGE_CAPABILITY,
+                safe(capability)
+            ));
+        }
+        if let Some(status) = value.get("model_image_status").and_then(Value::as_str) {
+            lines.push(format!("  {}: {}", browser_text::MODEL_IMAGE, safe(status)));
+        }
+    }
+    if record.get("truncated").and_then(Value::as_bool) == Some(true) {
+        lines.push(format!("  {}", browser_text::TRUNCATED));
+    }
+    lines.join("\n")
+}
+
+fn bound_inline(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_owned();
+    }
+    let mut end = limit;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &value[..end])
+}
+
 pub(crate) fn call_and_result(
     name: &str,
     arguments: &Value,
@@ -209,7 +486,7 @@ pub(crate) fn call_and_result(
     format!(
         "{}\n\n{}",
         call(name, arguments, elapsed),
-        crate::tool_render::result(result)
+        result_named(name, result)
     )
 }
 
@@ -254,7 +531,11 @@ pub(crate) fn record_lines(records: &[Value]) -> Vec<String> {
             .cloned()
             .and_then(|value| serde_json::from_value::<ToolResult>(value).ok());
         if let Some(tool_result) = parsed_result {
-            lines.extend(result(&tool_result).lines().map(|line| format!("  {line}")));
+            lines.extend(
+                result_named(name, &tool_result)
+                    .lines()
+                    .map(|line| format!("  {line}")),
+            );
         }
         lines.push(String::new());
     }
@@ -289,6 +570,128 @@ mod tests {
         assert!(text.contains("files: a.rs, b.rs"));
         assert!(text.contains("exit_code: 2"));
         assert!(!text.contains('{'));
+    }
+
+    #[test]
+    fn browser_call_shows_key_button_wait_artifact_and_hides_fill_text() {
+        let rendered = call(
+            "browser_press",
+            &json!({
+                "page": "page_demo",
+                "document": "doc_demo",
+                "key": "Enter"
+            }),
+            None,
+        );
+        assert!(rendered.contains("Key: Enter"));
+        assert!(rendered.contains("Document: doc_demo"));
+
+        let rendered = call(
+            "browser_click",
+            &json!({
+                "page": "page_demo",
+                "document": "doc_demo",
+                "element_ref": "el_demo",
+                "button": "right"
+            }),
+            None,
+        );
+        assert!(rendered.contains("Button: right"));
+
+        let rendered = call(
+            "browser_wait",
+            &json!({"page": "page_demo", "milliseconds": 250}),
+            None,
+        );
+        assert!(rendered.contains("Milliseconds: 250"));
+
+        let rendered = call(
+            "browser_upload",
+            &json!({
+                "page": "page_demo",
+                "document": "doc_demo",
+                "element_ref": "el_demo",
+                "artifact_ref": "media_demo"
+            }),
+            None,
+        );
+        assert!(rendered.contains("Artifact: media_demo"));
+
+        let rendered = call(
+            "browser_fill",
+            &json!({
+                "page": "page_demo",
+                "document": "doc_demo",
+                "element_ref": "el_demo",
+                "text": "secret\u{1b}[31m"
+            }),
+            None,
+        );
+        assert!(rendered.contains("Text: 11 text bytes"));
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn browser_call_and_result_use_specific_labels_and_hide_host_fields() {
+        let call = call(
+            "browser_fill",
+            &json!({
+                "page": "page_demo",
+                "document": "doc_demo",
+                "element_ref": "el_demo",
+                "credential_slot": "login"
+            }),
+            None,
+        );
+        assert!(call.contains("Action: fill"));
+        assert!(call.contains("Page: page_demo"));
+        assert!(call.contains("Credential slot: login"));
+        assert!(!call.contains("Argument"));
+
+        let result = result_named(
+            "browser_screenshot",
+            &ToolResult {
+                ok: true,
+                data: Some(json!({
+                    "source": "untrusted_browser",
+                    "screenshot": {
+                        "page": "page_demo",
+                        "document_revision": 2,
+                        "url": "https://allowed.example/final",
+                        "url_observation": "last_confirmed",
+                        "mime": "image/png",
+                        "bytes": 42,
+                        "sha256": "abcdef",
+                        "artifact_ref": "media_demo",
+                        "masked": true,
+                        "model_image_capability": "disabled",
+                        "model_image_status": "artifact_saved: disabled",
+                        "media_ref": "media_demo"
+                    }
+                })),
+                error: None,
+                truncated: false,
+                media_refs: vec!["media_demo".into()],
+            },
+        );
+        for expected in [
+            "Action · screenshot · completed",
+            "Page: page_demo",
+            "Revision: 2",
+            "URL: https://allowed.example/final",
+            "URL observation: last_confirmed",
+            "MIME: image/png",
+            "Size: 42",
+            "SHA-256: abcdef",
+            "Artifact: media_demo",
+            "Masked: yes",
+            "Model image capability: disabled",
+            "Model image: artifact_saved: disabled",
+        ] {
+            assert!(result.contains(expected), "{expected}: {result}");
+        }
+        assert!(!result.contains("media_ref"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use saya_core::{
     boundary::{Cancellation, Model, ModelRequest, ModelUpdate, Store, ToolDefinition},
     contract::{
         HistoryItem, ModelProtocol, ModelPurpose, PermissionMode, Run, RunId, RunStatus, Session,
-        SessionId, ToolResult, WorkMode,
+        SessionId, ToolCall, ToolResult, WorkMode,
     },
     memory::MemoryStore,
     permissions::{PermissionConfig, Policy},
@@ -233,6 +233,7 @@ async fn enabled_media_is_sent_as_chat_content_parts() -> Result<(), Box<dyn std
         &req.history,
         Some(&store),
         session_id,
+        capabilities,
     )?);
     std::fs::remove_file(&image)?;
     std::fs::remove_file(&audio)?;
@@ -268,6 +269,264 @@ async fn enabled_media_is_sent_as_chat_content_parts() -> Result<(), Box<dyn std
             .as_str()
             .is_some_and(|url| url.starts_with("data:video/mp4;base64,"))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_result_images_become_adjacent_user_content_only_when_enabled()
+-> Result<(), Box<dyn std::error::Error>> {
+    let response = json!({
+        "choices":[{
+            "index":0,
+            "finish_reason":"stop",
+            "message":{"role":"assistant","content":"ok"}
+        }],
+        "usage":{"prompt_tokens":9,"completion_tokens":1}
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let root = tempfile::tempdir()?;
+    let store = Arc::new(saya_core::output_store::OutputStore::open(
+        root.path().join("outputs"),
+        Default::default(),
+        Arc::new(saya_core::credentials::SecretRegistry::default()),
+    )?);
+    let session_id = SessionId::new();
+    let image = store.put_media(
+        session_id,
+        saya_core::media::MediaKind::Image,
+        "image/png",
+        "shot.png",
+        b"\x89PNG\r\n\x1a\nfixture",
+    )?;
+    let history = vec![
+        HistoryItem::ToolCall(ToolCall {
+            call_id: "call-1".into(),
+            name: "browser_screenshot".into(),
+            arguments: "{}".into(),
+        }),
+        HistoryItem::ToolResult {
+            call_id: "call-1".into(),
+            result: ToolResult {
+                ok: true,
+                data: Some(json!({"source":"untrusted_browser"})),
+                error: None,
+                truncated: false,
+                media_refs: vec![image.reference.clone()],
+            },
+        },
+    ];
+    let mut cfg = settings(false);
+    cfg.multimodal = saya_core::config::MediaCapabilities {
+        image: true,
+        audio: false,
+        video: false,
+    };
+    let capabilities = cfg.multimodal;
+    let model = ChatModel::new(transport(url)?, cfg, ChatCompatibility::default());
+    let mut req = request();
+    req.history = history.clone();
+    req.media = Arc::new(saya_core::media::load_history(
+        &history,
+        Some(&store),
+        session_id,
+        capabilities,
+    )?);
+    collect(&model, &req).await?;
+
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    let messages = body["messages"].as_array().ok_or("missing messages")?;
+    let tool = messages
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .ok_or("missing tool message")?;
+    let tool_content = tool["content"].as_str().ok_or("tool content not text")?;
+    assert!(!tool_content.contains("base64"));
+    assert!(!tool_content.contains(image.reference.as_str()));
+    let user = messages
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "user")
+        .ok_or("missing image user message")?;
+    let parts = user["content"].as_array().ok_or("missing image parts")?;
+    let image_part = parts
+        .iter()
+        .find(|part| part["type"] == "image_url")
+        .ok_or("missing image part")?;
+    assert!(
+        image_part["image_url"]["url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:image/png;base64,"))
+    );
+
+    // With images disabled the same history yields no eligible tool image, so
+    // the provider never constructs an image block.
+    let disabled = saya_core::config::MediaCapabilities {
+        image: false,
+        audio: false,
+        video: false,
+    };
+    let media = saya_core::media::load_history(&history, Some(&store), session_id, disabled)?;
+    let HistoryItem::ToolResult { result, .. } = &history[1] else {
+        return Err("missing tool result".into());
+    };
+    assert!(media.tool_result_images(result)?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn duplicate_tool_image_references_are_emitted_once_across_results()
+-> Result<(), Box<dyn std::error::Error>> {
+    let response = json!({
+        "choices":[{
+            "index":0,
+            "finish_reason":"stop",
+            "message":{"role":"assistant","content":"ok"}
+        }],
+        "usage":{"prompt_tokens":9,"completion_tokens":1}
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let root = tempfile::tempdir()?;
+    let store = Arc::new(saya_core::output_store::OutputStore::open(
+        root.path().join("outputs"),
+        Default::default(),
+        Arc::new(saya_core::credentials::SecretRegistry::default()),
+    )?);
+    let session_id = SessionId::new();
+    let image = store.put_media(
+        session_id,
+        saya_core::media::MediaKind::Image,
+        "image/png",
+        "shot.png",
+        b"\x89PNG\r\n\x1a\nfixture",
+    )?;
+    let result = ToolResult {
+        ok: true,
+        data: Some(json!({"source":"untrusted_browser"})),
+        error: None,
+        truncated: false,
+        media_refs: vec![image.reference.clone()],
+    };
+    let history = vec![
+        HistoryItem::ToolCall(ToolCall {
+            call_id: "call-1".into(),
+            name: "browser_screenshot".into(),
+            arguments: "{}".into(),
+        }),
+        HistoryItem::ToolResult {
+            call_id: "call-1".into(),
+            result: result.clone(),
+        },
+        HistoryItem::ToolCall(ToolCall {
+            call_id: "call-2".into(),
+            name: "browser_screenshot".into(),
+            arguments: "{}".into(),
+        }),
+        HistoryItem::ToolResult {
+            call_id: "call-2".into(),
+            result: result.clone(),
+        },
+    ];
+    let mut cfg = settings(false);
+    cfg.multimodal = saya_core::config::MediaCapabilities {
+        image: true,
+        audio: false,
+        video: false,
+    };
+    let capabilities = cfg.multimodal;
+    let model = ChatModel::new(transport(url)?, cfg, ChatCompatibility::default());
+    let mut req = request();
+    req.history = history.clone();
+    req.media = Arc::new(saya_core::media::load_history(
+        &history,
+        Some(&store),
+        session_id,
+        capabilities,
+    )?);
+    collect(&model, &req).await?;
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    let images = body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|part| part["type"] == "image_url")
+        .count();
+    assert_eq!(
+        images, 1,
+        "duplicate references must not duplicate wire bytes"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_image_profile_sends_no_tool_image_block() -> Result<(), Box<dyn std::error::Error>>
+{
+    let response = json!({
+        "choices":[{
+            "index":0,
+            "finish_reason":"stop",
+            "message":{"role":"assistant","content":"ok"}
+        }],
+        "usage":{"prompt_tokens":9,"completion_tokens":1}
+    })
+    .to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let root = tempfile::tempdir()?;
+    let store = Arc::new(saya_core::output_store::OutputStore::open(
+        root.path().join("outputs"),
+        Default::default(),
+        Arc::new(saya_core::credentials::SecretRegistry::default()),
+    )?);
+    let session_id = SessionId::new();
+    let image = store.put_media(
+        session_id,
+        saya_core::media::MediaKind::Image,
+        "image/png",
+        "shot.png",
+        b"\x89PNG\r\n\x1a\nfixture",
+    )?;
+    let history = vec![
+        HistoryItem::ToolCall(ToolCall {
+            call_id: "call-1".into(),
+            name: "browser_screenshot".into(),
+            arguments: "{}".into(),
+        }),
+        HistoryItem::ToolResult {
+            call_id: "call-1".into(),
+            result: ToolResult {
+                ok: true,
+                data: Some(json!({"source":"untrusted_browser","artifact_ref":"media_demo"})),
+                error: None,
+                truncated: false,
+                media_refs: vec![image.reference.clone()],
+            },
+        },
+    ];
+    let capabilities = saya_core::config::MediaCapabilities {
+        image: false,
+        audio: false,
+        video: false,
+    };
+    let mut cfg = settings(false);
+    cfg.multimodal = capabilities;
+    let model = ChatModel::new(transport(url)?, cfg, ChatCompatibility::default());
+    let mut req = request();
+    req.history = history.clone();
+    req.media = Arc::new(saya_core::media::load_history(
+        &history,
+        Some(&store),
+        session_id,
+        capabilities,
+    )?);
+    collect(&model, &req).await?;
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    let serialized = body.to_string();
+    assert!(!serialized.contains("image_url"));
+    assert!(!serialized.contains("data:image"));
+    assert!(!serialized.contains(image.reference.as_str()));
     Ok(())
 }
 

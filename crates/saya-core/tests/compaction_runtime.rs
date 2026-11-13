@@ -148,6 +148,377 @@ impl Model for SummaryModel {
         })
     }
 }
+struct ImageCountingModel {
+    summary: SummaryModel,
+    adapter: saya_core::provider::chat::ChatModel,
+    counted_media: Mutex<Vec<Arc<saya_core::media::MediaAttachments>>>,
+}
+impl saya_core::context_builder::RequestCounter for ImageCountingModel {
+    fn count(
+        &self,
+        request: &ModelRequest,
+        identity: &saya_core::context_builder::CountingIdentity,
+        fingerprint: &str,
+    ) -> Result<saya_core::context_builder::CountEvidence, BoundaryError> {
+        let counter = self.adapter.request_counter().unwrap();
+        let evidence = counter.count(request, identity, fingerprint)?;
+        if request.purpose == ModelPurpose::Execution && !request.media.is_empty() {
+            let mut without_images = request.clone();
+            let mut images = 0;
+            for item in &mut without_images.history {
+                if let HistoryItem::ToolResult { result, .. } = item {
+                    images += request.media.tool_result_images(result)?.len();
+                    result.media_refs.clear();
+                }
+            }
+            let baseline = counter.count(&without_images, identity, fingerprint)?;
+            assert!(evidence.input_tokens >= baseline.input_tokens + images as u64 * 2048);
+            self.counted_media
+                .lock()
+                .unwrap()
+                .push(request.media.clone());
+        }
+        Ok(evidence)
+    }
+}
+impl Model for ImageCountingModel {
+    fn request_counter(&self) -> Option<&dyn saya_core::context_builder::RequestCounter> {
+        Some(self)
+    }
+    fn start<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        self.summary.start(request, cancel)
+    }
+}
+fn image_counting_model() -> ImageCountingModel {
+    use saya_core::provider::{
+        ModelSettings,
+        chat::{ChatCompatibility, ChatModel},
+        transport::{Authentication, HttpConfig, HttpTransport},
+    };
+    ImageCountingModel {
+        summary: SummaryModel::default(),
+        counted_media: Mutex::new(vec![]),
+        adapter: ChatModel::new(
+            Arc::new(
+                HttpTransport::new(HttpConfig {
+                    base_url: "http://127.0.0.1:1".into(),
+                    allow_remote_http: false,
+                    authentication: Authentication::None,
+                    headers_env: Default::default(),
+                    connect_timeout: std::time::Duration::from_secs(1),
+                    idle_timeout: std::time::Duration::from_secs(1),
+                    total_timeout: std::time::Duration::from_secs(1),
+                })
+                .unwrap(),
+            ),
+            ModelSettings {
+                profile: "fixture".into(),
+                model: "fixture".into(),
+                context_window_tokens: 64_000,
+                extra_safety_tokens: 0,
+                max_output_tokens: 2048,
+                multimodal: saya_core::config::MediaCapabilities {
+                    image: true,
+                    audio: false,
+                    video: false,
+                },
+                upstream_max_output_tokens: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                thinking_effort: None,
+                strict_tools: false,
+                stream: false,
+            },
+            ChatCompatibility::default(),
+        ),
+    }
+}
+fn image_group(call_id: &str, reference: String) -> Vec<HistoryItem> {
+    vec![
+        HistoryItem::ToolCall(saya_core::contract::ToolCall {
+            call_id: call_id.into(),
+            name: "browser_screenshot".into(),
+            arguments: "{}".into(),
+        }),
+        HistoryItem::ToolResult {
+            call_id: call_id.into(),
+            result: saya_core::contract::ToolResult {
+                ok: true,
+                data: None,
+                error: None,
+                truncated: false,
+                media_refs: vec![reference],
+            },
+        },
+    ]
+}
+
+#[tokio::test]
+async fn checkpoint_media_is_resolved_only_after_projection_and_shared_with_counting()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        config::MediaCapabilities, credentials::SecretRegistry, media::MediaKind,
+        output_store::OutputStore,
+    };
+    let temp = tempfile::tempdir()?;
+    let (mut session, run) = fixture(temp.path(), ModelProtocol::ChatCompletions);
+    let missing = format!("media_{}_{}", "0".repeat(32), "0".repeat(64));
+    session
+        .history
+        .splice(1..1, image_group("old", missing.clone()));
+    let store = Arc::new(MemoryStore::default());
+    let media = Arc::new(OutputStore::open(
+        temp.path().join("outputs"),
+        Default::default(),
+        Arc::new(SecretRegistry::default()),
+    )?);
+    // Establish a valid current checkpoint while tool images are disabled. The
+    // missing historical object must not be opened by the later enabled request.
+    let mut compact = runtime(
+        temp.path(),
+        run,
+        Arc::new(SummaryModel::default()),
+        store.clone(),
+        64,
+    )?
+    .with_media_store(media.clone(), MediaCapabilities::default());
+    assert_eq!(
+        compact.compact(&mut session).await?.status,
+        RunStatus::Completed
+    );
+    let saved = store.context_checkpoint(session.id).await?.unwrap();
+    assert!(saved.view.covered_prefix > 3);
+    let image = media.put_media(
+        session.id,
+        MediaKind::Image,
+        "image/png",
+        "current.png",
+        b"current image",
+    )?;
+    let file = media.put_file(session.id, "image/png", "artifact.png", b"never an image")?;
+    session
+        .history
+        .extend(image_group("current", image.reference.clone()));
+    session
+        .history
+        .extend(image_group("file", file.reference.clone()));
+    session
+        .history
+        .push(HistoryItem::UserText("Use current evidence".into()));
+    store
+        .commit(&[StoreChange::Session(session.clone())])
+        .await?;
+    let model = Arc::new(image_counting_model());
+    let run = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    let mut engine = runtime(temp.path(), run, model.clone(), store.clone(), 64)?.with_media_store(
+        media.clone(),
+        MediaCapabilities {
+            image: true,
+            audio: false,
+            video: false,
+        },
+    );
+    let result = engine.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Completed, "{:?}", result.error);
+    {
+        let seen = model.summary.0.lock().unwrap();
+        let request = seen
+            .iter()
+            .find(|r| r.purpose == ModelPurpose::Execution)
+            .unwrap();
+        assert!(!saya_core::media::history_references(&request.history).contains(&missing));
+        assert!(saya_core::media::history_references(&session.history).contains(&missing));
+        let mut images = 0;
+        for item in &request.history {
+            if let HistoryItem::ToolResult { call_id, result } = item {
+                let loaded = request.media.tool_result_images(result)?;
+                if call_id == "file" {
+                    assert!(loaded.is_empty());
+                }
+                images += loaded.len();
+            }
+        }
+        assert_eq!(images, 1);
+        let counted = model.counted_media.lock().unwrap();
+        assert!(!counted.is_empty());
+        assert!(
+            counted
+                .iter()
+                .all(|snapshot| Arc::ptr_eq(snapshot, &request.media))
+        );
+    }
+    // A missing object still used by the final projection must fail closed.
+    session
+        .history
+        .extend(image_group("missing-current", missing));
+    session
+        .history
+        .push(HistoryItem::UserText("Inspect missing evidence".into()));
+    let run = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    store
+        .commit(&[StoreChange::Session(session.clone())])
+        .await?;
+    let mut engine = runtime(
+        temp.path(),
+        run,
+        Arc::new(image_counting_model()),
+        store,
+        64,
+    )?
+    .with_media_store(
+        media,
+        MediaCapabilities {
+            image: true,
+            audio: false,
+            video: false,
+        },
+    );
+    let result = engine.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Failed);
+    assert_eq!(result.error.unwrap().code, "media_unavailable");
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_fitting_reuses_projected_media_snapshot() -> Result<(), Box<dyn std::error::Error>>
+{
+    use saya_core::{
+        config::MediaCapabilities, credentials::SecretRegistry, media::MediaKind,
+        output_store::OutputStore,
+    };
+    let temp = tempfile::tempdir()?;
+    let (mut session, run) = fixture(temp.path(), ModelProtocol::ChatCompletions);
+    let media = Arc::new(OutputStore::open(
+        temp.path().join("outputs"),
+        Default::default(),
+        Arc::new(SecretRegistry::default()),
+    )?);
+    let image = media.put_media(
+        session.id,
+        MediaKind::Image,
+        "image/png",
+        "current.png",
+        b"current image",
+    )?;
+    session.history = vec![HistoryItem::UserText("Inspect this image".into())];
+    session
+        .history
+        .extend(image_group("current", image.reference.clone()));
+    let model = Arc::new(image_counting_model());
+    let mut engine = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        64,
+    )?
+    .with_context_settings(
+        ContextBudget::new(64_000, 63_000, 1),
+        false,
+        Default::default(),
+    )?
+    .with_media_store(
+        media,
+        MediaCapabilities {
+            image: true,
+            audio: false,
+            video: false,
+        },
+    );
+    let result = engine.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Completed, "{:?}", result.error);
+    let seen = model.summary.0.lock().unwrap();
+    let request = seen
+        .iter()
+        .find(|r| r.purpose == ModelPurpose::Execution)
+        .unwrap();
+    assert!(request.max_output_tokens.unwrap() < 63_000);
+    let counted = model.counted_media.lock().unwrap();
+    assert!(
+        counted.len() >= 2,
+        "output fitting must recount the request"
+    );
+    assert!(
+        counted
+            .iter()
+            .all(|snapshot| Arc::ptr_eq(snapshot, &request.media))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn execution_without_context_state_loads_final_media()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::{
+        config::MediaCapabilities, credentials::SecretRegistry, media::MediaKind,
+        output_store::OutputStore,
+    };
+    let temp = tempfile::tempdir()?;
+    let (mut session, run) = fixture(temp.path(), ModelProtocol::ChatCompletions);
+    let media = Arc::new(OutputStore::open(
+        temp.path().join("outputs"),
+        Default::default(),
+        Arc::new(SecretRegistry::default()),
+    )?);
+    let image = media.put_media(
+        session.id,
+        MediaKind::Image,
+        "image/png",
+        "current.png",
+        b"current image",
+    )?;
+    session.history = vec![HistoryItem::UserText("Inspect this image".into())];
+    session
+        .history
+        .extend(image_group("current", image.reference.clone()));
+    let model = Arc::new(image_counting_model());
+    let mut engine = runtime_without_context(
+        temp.path(),
+        run,
+        model.clone(),
+        Arc::new(MemoryStore::default()),
+        64,
+    )?
+    .with_media_store(
+        media,
+        MediaCapabilities {
+            image: true,
+            audio: false,
+            video: false,
+        },
+    );
+    let result = engine.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Completed, "{:?}", result.error);
+    assert!(model.counted_media.lock().unwrap().is_empty());
+    let seen = model.summary.0.lock().unwrap();
+    let request = seen
+        .iter()
+        .find(|r| r.purpose == ModelPurpose::Execution)
+        .unwrap();
+    let result = request
+        .history
+        .iter()
+        .find_map(|item| match item {
+            HistoryItem::ToolResult { result, .. } => Some(result),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(request.media.tool_result_images(result)?.len(), 1);
+    Ok(())
+}
+
 fn fixture(root: &Path, protocol: ModelProtocol) -> (Session, Run) {
     let session = Session {
         id: SessionId::new(),
@@ -179,6 +550,16 @@ fn runtime(
     store: Arc<dyn Store>,
     model_requests: usize,
 ) -> Result<AgentRuntime, BoundaryError> {
+    runtime_without_context(root, run, model, store, model_requests)?
+        .with_context_budget(ContextBudget::new(64_000, 2048, 6401))
+}
+fn runtime_without_context(
+    root: &Path,
+    run: Run,
+    model: Arc<dyn Model>,
+    store: Arc<dyn Store>,
+    model_requests: usize,
+) -> Result<AgentRuntime, BoundaryError> {
     AgentRuntime::new(RuntimeSetup {
         run,
         model,
@@ -196,8 +577,7 @@ fn runtime(
             model_requests,
             ..RuntimeLimits::default()
         },
-    })?
-    .with_context_budget(ContextBudget::new(64_000, 2048, 6401))
+    })
 }
 
 #[tokio::test]

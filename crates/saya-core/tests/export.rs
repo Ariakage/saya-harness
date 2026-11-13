@@ -121,6 +121,63 @@ fn full_selection_retains_safe_structure_and_optional_tool_content()
     Ok(())
 }
 #[test]
+fn transcript_never_export_host_media_refs_but_full_keeps_validated_ones()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut snapshot = fixture();
+    let valid = format!("media_{}_{}", "a".repeat(32), "b".repeat(64));
+    let forged = "forged-reference".to_owned();
+    for item in &mut snapshot.session.history {
+        if let HistoryItem::ToolResult { result, .. } = item {
+            result.media_refs = vec![valid.clone(), forged.clone()];
+        }
+    }
+    let mut stored = snapshot.tool_calls[0]["result"].clone();
+    stored["media_refs"] = json!([valid.clone(), forged.clone()]);
+    snapshot.tool_calls[0]["result"] = stored;
+
+    for scope in [ExportScope::Transcript, ExportScope::Full] {
+        let export = SessionExport::from_snapshot(
+            &snapshot,
+            ExportOptions {
+                scope,
+                include_tools: true,
+                ..ExportOptions::default()
+            },
+            &[],
+        )?;
+        let text = String::from_utf8(export.to_json()?)?;
+        assert_eq!(text.contains(&valid), scope == ExportScope::Full);
+        assert!(!text.contains(&forged));
+        if scope == ExportScope::Transcript {
+            for item in &export.history {
+                if item["kind"] == "tool_result" {
+                    assert!(item["result"]["media_refs"].as_array().unwrap().is_empty());
+                }
+            }
+            assert!(
+                export.tool_calls[0]["result"]["media_refs"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        } else {
+            assert_eq!(
+                export.tool_calls[0]["result"]["media_refs"]
+                    .as_array()
+                    .unwrap()
+                    .as_slice(),
+                [json!(valid.clone())]
+            );
+        }
+    }
+    // Sanity: the stored session itself still carries the host-only pin.
+    let raw_history = serde_json::to_string(&snapshot.session.history)?;
+    assert!(raw_history.contains(&valid));
+    assert!(raw_history.contains(&forged));
+    Ok(())
+}
+
+#[test]
 fn redaction_precedes_utf8_truncation_and_reports_bounded_coverage()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut snapshot = fixture();

@@ -1,3 +1,4 @@
+mod approval;
 mod chat;
 mod events;
 mod export;
@@ -508,12 +509,18 @@ impl ApprovalHandler for Terminal {
         cancel: &'a dyn Cancellation,
     ) -> Operation<'a, Option<bool>> {
         Box::pin(async move {
-            let args = serde_json::to_string(&request.arguments)
-                .map_err(|_| cli_error("terminal_error", "cannot format approval"))?;
+            let arguments = approval::argument_lines(&request.tool, &request.arguments);
+            let operation = if request.operation_summary.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "Operation: {}\n",
+                    safe_terminal_text(&request.operation_summary)
+                )
+            };
             let prompt = format!(
-                "\nApproval required\nTool: {}\nArguments: {}\nWorking directory: {}\nMode: {:?}\nAllow this call? [y/N] ",
+                "\nApproval required\nTool: {}\n{operation}{arguments}Working directory: {}\nMode: {:?}\nAllow this call? [y/N] ",
                 safe_terminal_text(&request.tool),
-                args,
                 safe_terminal_text(&request.cwd.to_string_lossy()),
                 request.work_mode
             );

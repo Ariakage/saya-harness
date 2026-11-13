@@ -98,7 +98,10 @@ fn provider_url(value: &str) -> Result<(), BrowserFailure> {
 }
 
 fn provider_optional_url(value: Option<&str>) -> Result<(), BrowserFailure> {
-    value.map_or(Ok(()), provider_url)
+    value.map_or(Ok(()), |url| {
+        provider_url(url)?;
+        provider_final_url(url).map(|_| ())
+    })
 }
 
 fn provider_optional_detail(value: Option<&str>) -> Result<(), BrowserFailure> {
@@ -238,6 +241,11 @@ impl BrowserSettings {
 pub struct BrowserFacts {
     pub provider: String,
     pub screenshots: bool,
+    /// A screenshot may be exposed only when the provider can mask passwords,
+    /// one-time codes, credential-slot elements and marked sensitive inputs
+    /// before capture. A provider that cannot do this must leave both flags
+    /// false and return `browser_capability_disabled`.
+    pub screenshot_masking: bool,
     pub downloads: bool,
     pub uploads: bool,
 }
@@ -322,6 +330,9 @@ pub struct BrowserScreenshot {
     pub bytes: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    /// True only when the provider masked passwords, one-time codes,
+    /// credential-slot elements and marked sensitive inputs before capture.
+    pub masked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +462,9 @@ struct PageDocument {
     revision: u64,
     /// Exact canonical origin observed with the current document token.
     origin: Option<crate::network::NormalizedOrigin>,
+    /// Last provider-confirmed URL for this page. Used only for host metadata
+    /// and never as an authorization decision.
+    url: Option<String>,
     /// An action on this page may have been dispatched without a confirmed
     /// outcome. Only a fresh snapshot of this page, or a complete close, clears
     /// it. It must never be cleared by another page's snapshot or a new open.
@@ -461,6 +475,7 @@ impl PageDocument {
         self.token = None;
         self.elements.clear();
         self.origin = None;
+        self.url = None;
         self.revision = self.revision.saturating_add(1);
     }
     fn fail_unknown(&mut self) {
@@ -472,15 +487,21 @@ impl PageDocument {
         token: String,
         elements: BTreeMap<String, ElementTarget>,
         origin: Option<crate::network::NormalizedOrigin>,
+        url: String,
     ) {
         self.uncertain = false;
         self.token = Some(token);
         self.elements = elements;
         self.origin = origin;
+        self.url = Some(url);
         self.revision = self.revision.saturating_add(1);
     }
-    fn set_origin(&mut self, origin: Option<crate::network::NormalizedOrigin>) {
-        self.origin = origin;
+    fn confirm_action(&mut self, action: &BrowserAction) -> Result<(), BrowserFailure> {
+        provider_optional_url(action.url.as_deref())
+            .and_then(|()| provider_optional_detail(action.detail.as_deref()))?;
+        // Metadata only: an action never establishes document authorization.
+        self.url = action.url.clone();
+        Ok(())
     }
 }
 
@@ -512,6 +533,9 @@ pub struct BrowserState {
     settings: BrowserSettings,
     credentials: Option<BrowserCredentialBroker>,
     artifacts: Option<BrowserArtifactStore>,
+    /// The profile image capability observed when this Run was configured.
+    /// Screenshot metadata reports this declaration, never a per-request fact.
+    model_image_capability: bool,
     /// Weak supervisor handle prevents the
     /// BrowserState → BackgroundJobs → dispatcher → BrowserTool → BrowserState
     /// ownership cycle. The binding is retained across PLAN cleanup and
@@ -624,17 +648,36 @@ pub struct ActionResultView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScreenshotView {
+    /// Page token the screenshot was taken from.
+    pub page: String,
+    /// Last provider-confirmed URL, not an observation at capture time.
+    /// The page may navigate autonomously between provider confirmations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Explicitly qualifies `url`; capture itself does not observe a URL.
+    pub url_observation: String,
+    pub document_revision: u64,
     pub mime: String,
     pub filename: String,
     pub width: u32,
     pub height: u32,
     pub bytes: usize,
     pub sha256: String,
+    /// Sensitive fields and credential slots were masked before capture.
+    pub masked: bool,
     #[serde(skip)]
     pub raw_bytes: Vec<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Host-only durable media reference. Providers never receive it; the
+    /// interface uses `artifact_ref`.
+    #[serde(skip_serializing)]
     pub media_ref: Option<String>,
-    pub model_image_attached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_ref: Option<String>,
+    /// The selected profile's image capability when this screenshot was taken.
+    /// This is a capability declaration, not a per-request injection fact.
+    pub model_image_capability: String,
+    /// Explains whether the saved image can be offered to the model.
+    pub model_image_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -647,7 +690,8 @@ pub struct DownloadView {
     pub artifact_stored: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Host-only durable reference; the interface and model use `artifact_ref`.
+    #[serde(skip_serializing)]
     pub media_ref: Option<String>,
 }
 
@@ -745,6 +789,7 @@ impl BrowserState {
             settings,
             credentials: None,
             artifacts: None,
+            model_image_capability: false,
             background: std::sync::Mutex::new(None),
             background_enabled: AtomicBool::new(false),
             lifecycle: watch::channel(false).0,
@@ -763,8 +808,10 @@ impl BrowserState {
         outputs: Option<Arc<OutputStore>>,
         jobs: Option<Arc<BackgroundJobs>>,
         registry: Arc<crate::credentials::SecretRegistry>,
+        media_capabilities: crate::config::MediaCapabilities,
     ) -> Result<Self, BoundaryError> {
         let mut state = Self::new(settings.clone(), provider, run)?;
+        state.model_image_capability = media_capabilities.image;
         if settings.credentials.enabled {
             let broker = BrowserCredentialBroker::from_settings(&settings.credentials, registry)?;
             state = state.with_credentials(broker);
@@ -778,6 +825,22 @@ impl BrowserState {
             state = state.with_background_jobs(jobs);
         }
         Ok(state)
+    }
+
+    /// Screenshots need a masking provider plus the bounded file broker and
+    /// artifact store. Registration and execution share this exact predicate.
+    pub(crate) fn screenshot_available(&self) -> bool {
+        self.facts.screenshots
+            && self.facts.screenshot_masking
+            && self.settings.files.enabled
+            && self.artifacts.is_some()
+    }
+
+    /// Declare whether the selected profile can accept images. Screenshot
+    /// metadata reports this declaration; it is not a per-request fact.
+    pub fn with_model_image_capability(mut self, enabled: bool) -> Self {
+        self.model_image_capability = enabled;
+        self
     }
 
     /// Attach origin-bound credential slots. The broker is host-owned and never
@@ -931,7 +994,10 @@ impl BrowserState {
                     page.clone(),
                     Arc::new(Page {
                         key: opened.page,
-                        document: AsyncMutex::new(PageDocument::default()),
+                        document: AsyncMutex::new(PageDocument {
+                            url: opened.url.clone(),
+                            ..PageDocument::default()
+                        }),
                     }),
                 );
                 Ok(OpenView {
@@ -1064,7 +1130,6 @@ impl BrowserState {
                 "Browser navigation target is outside the Run's allowed origins",
             ));
         }
-        let target_origin = target.origin;
         let page_id = page.to_owned();
         let (session, page) = self.active_page(context, page).await?;
         if cancel.is_cancelled() {
@@ -1089,7 +1154,6 @@ impl BrowserState {
             result = self.provider.navigate(&session, &page.key, url, &cancel) => result,
         };
         document.invalidate();
-        drop(document);
         match result {
             Ok(action) => {
                 if let Err(error) = provider_optional_url(action.url.as_deref())
@@ -1102,7 +1166,6 @@ impl BrowserState {
                 // final URL only when this Run actually has a browser network
                 // policy; the native backend runs with `network.enabled =
                 // false` and must not apply an unrelated origin check.
-                let mut final_origin = Some(target_origin);
                 if let Some(final_url) = action.url.as_deref() {
                     match provider_final_url(final_url) {
                         Ok(ProviderFinalUrl::Origin(origin)) => {
@@ -1114,26 +1177,23 @@ impl BrowserState {
                                     "Browser navigation ended at an origin outside the Run's allowed origins",
                                 ));
                             }
-                            final_origin = Some(origin);
                         }
                         // Internal blank pages and the browser's own error page
                         // are explicit non-network states.
-                        Ok(ProviderFinalUrl::Blank | ProviderFinalUrl::BrowserError) => {
-                            final_origin = None;
-                        }
+                        Ok(ProviderFinalUrl::Blank | ProviderFinalUrl::BrowserError) => {}
                         Err(error) => return Err(error.into_boundary()),
                     }
                 }
-                page.document.lock().await.set_origin(final_origin);
+                document.url = action.url.clone();
+                let final_url = action.url.unwrap_or_else(|| url.to_owned());
                 Ok(NavigateView {
                     page: page_id,
-                    url: action.url.unwrap_or_else(|| url.to_owned()),
+                    url: final_url,
                     document_stale: true,
                 })
             }
             Err(error) => {
                 if error.uncertain {
-                    let mut document = page.document.lock().await;
                     document.fail_unknown();
                 }
                 Err(error.into_boundary())
@@ -1226,7 +1286,7 @@ impl BrowserState {
             Ok(ProviderFinalUrl::Origin(origin)) => Some(origin),
             _ => None,
         };
-        document.observe(token.clone(), element_map, origin);
+        document.observe(token.clone(), element_map, origin, snapshot.url.clone());
         let revision = document.revision;
         drop(document);
         Ok(SnapshotView {
@@ -1298,13 +1358,10 @@ impl BrowserState {
         };
         state.invalidate();
         let revision = state.revision;
-        drop(state);
         match result {
             Ok(action) => {
-                if let Err(error) = provider_optional_url(action.url.as_deref())
-                    .and_then(|()| provider_optional_detail(action.detail.as_deref()))
-                {
-                    page_state.document.lock().await.fail_unknown();
+                if let Err(error) = state.confirm_action(&action) {
+                    state.fail_unknown();
                     return Err(error.into_boundary());
                 }
                 Ok(ActionResultView {
@@ -1319,7 +1376,7 @@ impl BrowserState {
             }
             Err(error) => {
                 if error.uncertain {
-                    page_state.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                 }
                 Err(error.into_boundary())
             }
@@ -1358,13 +1415,10 @@ impl BrowserState {
         };
         state.invalidate();
         let revision = state.revision;
-        drop(state);
         match result {
             Ok(action) => {
-                if let Err(error) = provider_optional_url(action.url.as_deref())
-                    .and_then(|()| provider_optional_detail(action.detail.as_deref()))
-                {
-                    page_state.document.lock().await.fail_unknown();
+                if let Err(error) = state.confirm_action(&action) {
+                    state.fail_unknown();
                     return Err(error.into_boundary());
                 }
                 Ok(ActionResultView {
@@ -1379,7 +1433,7 @@ impl BrowserState {
             }
             Err(error) => {
                 if error.uncertain {
-                    page_state.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                 }
                 Err(error.into_boundary())
             }
@@ -1453,13 +1507,10 @@ impl BrowserState {
         };
         state.invalidate();
         let revision = state.revision;
-        drop(state);
         match result {
             Ok(action) => {
-                if let Err(error) = provider_optional_url(action.url.as_deref())
-                    .and_then(|()| provider_optional_detail(action.detail.as_deref()))
-                {
-                    page_state.document.lock().await.fail_unknown();
+                if let Err(error) = state.confirm_action(&action) {
+                    state.fail_unknown();
                     return Err(error.into_boundary());
                 }
                 Ok(ActionResultView {
@@ -1474,7 +1525,7 @@ impl BrowserState {
             }
             Err(error) => {
                 if error.uncertain {
-                    page_state.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                 }
                 Err(error.into_boundary())
             }
@@ -1521,13 +1572,10 @@ impl BrowserState {
         };
         state.invalidate();
         let revision = state.revision;
-        drop(state);
         match result {
             Ok(action) => {
-                if let Err(error) = provider_optional_url(action.url.as_deref())
-                    .and_then(|()| provider_optional_detail(action.detail.as_deref()))
-                {
-                    page.document.lock().await.fail_unknown();
+                if let Err(error) = state.confirm_action(&action) {
+                    state.fail_unknown();
                     return Err(error.into_boundary());
                 }
                 Ok(ActionResultView {
@@ -1542,7 +1590,7 @@ impl BrowserState {
             }
             Err(error) => {
                 if error.uncertain {
-                    page.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                 }
                 Err(error.into_boundary())
             }
@@ -1583,11 +1631,10 @@ impl BrowserState {
         // Waiting never confirms a document revision: conservatively invalidate.
         state.invalidate();
         let revision = state.revision;
-        drop(state);
         match result {
             Ok(action) => {
-                provider_optional_url(action.url.as_deref())
-                    .and_then(|()| provider_optional_detail(action.detail.as_deref()))
+                state
+                    .confirm_action(&action)
                     .map_err(BrowserFailure::into_boundary)?;
                 Ok(ActionResultView {
                     page: page_id,
@@ -1601,7 +1648,7 @@ impl BrowserState {
             }
             Err(error) => {
                 if error.uncertain {
-                    page.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                 }
                 Err(error.into_boundary())
             }
@@ -1614,7 +1661,14 @@ impl BrowserState {
         page: &str,
         cancel: &dyn Cancellation,
     ) -> Result<(ScreenshotView, Option<SealedMedia>), BoundaryError> {
+        if !self.screenshot_available() {
+            return Err(failure(
+                "browser_capability_disabled",
+                "Browser screenshot requires a masking provider plus the bounded file broker and artifact store",
+            ));
+        }
         let cancel = self.observe(cancel);
+        let page_token = page.to_owned();
         let (session, page) = self.active_page(context, page).await?;
         let mut state = page.document.lock().await;
         if state.uncertain {
@@ -1623,6 +1677,9 @@ impl BrowserState {
                 "This page's outcome is unknown; take a fresh snapshot first",
             ));
         }
+        let document_revision = state.revision;
+        let url = state.url.clone();
+        let page_id = page_token;
         let screenshot = match tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(failure("cancelled", "Browser screenshot cancelled")),
@@ -1636,43 +1693,53 @@ impl BrowserState {
                 return Err(error.into_boundary());
             }
         };
-        drop(state);
         if let Err(error) = provider_field(
             &screenshot.mime,
             MAX_PROVIDER_MIME_BYTES,
             "Browser provider returned an invalid screenshot type",
-        )
-        .and_then(|()| {
-            provider_field(
-                &screenshot.filename,
-                MAX_PROVIDER_FILENAME_BYTES,
-                "Browser provider returned an invalid screenshot filename",
-            )
-        }) {
+        ) {
             return Err(error.into_boundary());
+        }
+        // An unmasked capture is never a successful screenshot: the host must
+        // not persist or expose it.
+        if !screenshot.masked {
+            return Err(failure(
+                "browser_capability_disabled",
+                "Browser provider did not confirm sensitive-field masking",
+            ));
         }
         let sha256 = digest_hex(&screenshot.bytes);
         let bytes = screenshot.bytes.len();
-        let filename = screenshot.filename;
         let mime = screenshot.mime;
-        let mut media_ref = None;
-        let mut sealed_media = None;
-        if self.settings.files.enabled
-            && let Some(artifacts) = self.artifacts.as_ref()
-        {
-            let (stored, sealed) = crate::browser::artifacts::store_image_artifact(
-                artifacts,
-                &filename,
-                &mime,
-                screenshot.width,
-                screenshot.height,
-                screenshot.bytes,
-            )?;
-            media_ref = Some(stored.reference);
-            sealed_media = Some(sealed);
-        }
+        let extension = match mime.as_str() {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            other => {
+                return Err(failure(
+                    "invalid_provider_result",
+                    format!("Browser screenshot type is not supported: {other}"),
+                ));
+            }
+        };
+        // The host, not the provider, chooses the stored file name.
+        let filename = format!("screenshot-{}.{extension}", uuid::Uuid::now_v7().simple());
+        let (stored, sealed) = crate::browser::artifacts::store_image_artifact(
+            self.artifacts.as_ref().ok_or_else(|| {
+                failure("browser_capability_disabled", "Image store is unavailable")
+            })?,
+            &filename,
+            &mime,
+            screenshot.width,
+            screenshot.height,
+            screenshot.bytes,
+        )?;
         Ok((
             ScreenshotView {
+                page: page_id,
+                url,
+                url_observation: "last_confirmed".into(),
+                document_revision,
                 sha256,
                 bytes,
                 raw_bytes: Vec::new(),
@@ -1680,10 +1747,22 @@ impl BrowserState {
                 filename,
                 width: screenshot.width,
                 height: screenshot.height,
-                media_ref,
-                model_image_attached: false,
+                masked: true,
+                media_ref: Some(stored.reference.clone()),
+                artifact_ref: Some(stored.reference),
+                model_image_capability: if self.model_image_capability {
+                    "enabled".into()
+                } else {
+                    "disabled".into()
+                },
+                model_image_status: if self.model_image_capability {
+                    "artifact_saved: the selected profile declares image input enabled; the image is injected only if it remains in the next Execution request"
+                } else {
+                    "artifact_saved: the selected profile declares image input disabled; the image is not injected"
+                }
+                .into(),
             },
-            sealed_media,
+            Some(sealed),
         ))
     }
 
@@ -1735,7 +1814,6 @@ impl BrowserState {
             }
         };
         state.invalidate();
-        drop(state);
         if let Err(error) = provider_field(
             &download.filename,
             MAX_PROVIDER_FILENAME_BYTES,
@@ -1748,7 +1826,7 @@ impl BrowserState {
                 "Browser provider returned an invalid download type",
             )
         }) {
-            page_state.document.lock().await.invalidate();
+            state.invalidate();
             return Err(error.into_boundary());
         }
         let artifacts = self
@@ -1763,7 +1841,7 @@ impl BrowserState {
         ) {
             Ok(stored) => stored,
             Err(error) => {
-                page_state.document.lock().await.invalidate();
+                state.invalidate();
                 return Err(error);
             }
         };
@@ -1830,7 +1908,6 @@ impl BrowserState {
         };
         state.invalidate();
         let revision = state.revision;
-        drop(state);
         match result {
             Ok(upload) => {
                 if let Err(error) = provider_field(
@@ -1838,11 +1915,11 @@ impl BrowserState {
                     MAX_PROVIDER_FILENAME_BYTES,
                     "Browser provider returned an invalid upload filename",
                 ) {
-                    page_state.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                     return Err(error.into_boundary());
                 }
                 if upload.bytes_sent != source.size {
-                    page_state.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                     return Err(failure(
                         "invalid_provider_result",
                         "Browser provider did not confirm the complete upload",
@@ -1859,7 +1936,7 @@ impl BrowserState {
             }
             Err(error) => {
                 if error.uncertain {
-                    page_state.document.lock().await.fail_unknown();
+                    state.fail_unknown();
                 }
                 Err(error.into_boundary())
             }
@@ -2094,7 +2171,7 @@ fn definition(kind: BrowserToolKind, settings: &BrowserSettings) -> ToolDefiniti
         ),
         BrowserToolKind::Screenshot => (
             "browser_screenshot",
-            "Capture a bounded screenshot through the host provider. This build returns verified metadata and does not attach model images.",
+            "Capture a bounded screenshot with sensitive fields masked before capture. The host saves an Image artifact and returns source, mime, size and SHA-256 metadata; the image is offered to the model only when its profile enables images.",
             page_schema(),
         ),
         BrowserToolKind::Download => (
@@ -2705,7 +2782,7 @@ pub(crate) fn register_tools(
         dispatcher.register_builtin_adapter(tool.definition(), Arc::new(tool))?;
     }
     for (enabled, kind) in [
-        (facts.screenshots, BrowserToolKind::Screenshot),
+        (state.screenshot_available(), BrowserToolKind::Screenshot),
         (facts.downloads, BrowserToolKind::Download),
         (facts.uploads, BrowserToolKind::Upload),
     ] {
@@ -2742,7 +2819,9 @@ pub struct FixtureProvider {
     stall_open: AtomicBool,
     stall_action: AtomicBool,
     snapshot_truncated: AtomicBool,
+    screenshot_unmasked: AtomicBool,
     override_action_url: Mutex<Option<String>>,
+    omit_navigation_url: AtomicBool,
     override_title: Mutex<Option<String>>,
     override_download: Mutex<Option<BrowserDownload>>,
     download_failure: Mutex<Option<(String, bool)>>,
@@ -2771,7 +2850,9 @@ impl FixtureProvider {
             stall_open: AtomicBool::new(false),
             stall_action: AtomicBool::new(false),
             snapshot_truncated: AtomicBool::new(false),
+            screenshot_unmasked: AtomicBool::new(false),
             override_action_url: Mutex::new(None),
+            omit_navigation_url: AtomicBool::new(false),
             override_title: Mutex::new(None),
             override_download: Mutex::new(None),
             download_failure: Mutex::new(None),
@@ -2787,6 +2868,7 @@ impl FixtureProvider {
         Self::new(BrowserFacts {
             provider: "fixture".into(),
             screenshots: true,
+            screenshot_masking: true,
             downloads: true,
             uploads: true,
         })
@@ -2802,6 +2884,11 @@ impl FixtureProvider {
     /// Report the fixture element as belonging to a child frame.
     pub fn with_framed_element(mut self) -> Self {
         self.framed_element = AtomicBool::new(true);
+        self
+    }
+    /// Simulate a provider that captures without masking sensitive fields.
+    pub fn with_unmasked_screenshot(mut self) -> Self {
+        self.screenshot_unmasked = AtomicBool::new(true);
         self
     }
     pub fn fail_next_unknown(&self) {
@@ -2837,7 +2924,7 @@ impl FixtureProvider {
     pub fn truncate_next_snapshot(&self) {
         self.snapshot_truncated.store(true, Ordering::Release);
     }
-    /// Make the next navigation report this provider-side final URL.
+    /// Make the next action report this provider-side final URL.
     pub fn return_next_action_url(&self, url: impl Into<String>) {
         if let Ok(mut value) = self.override_action_url.lock() {
             *value = Some(url.into());
@@ -3050,7 +3137,7 @@ impl BrowserProvider for FixtureProvider {
             .take_override_action_url()
             .unwrap_or_else(|| url.to_owned());
         Ok(BrowserAction {
-            url: Some(final_url),
+            url: (!self.omit_navigation_url.swap(false, Ordering::AcqRel)).then_some(final_url),
             detail: Some("navigated".into()),
         })
     }
@@ -3121,7 +3208,7 @@ impl BrowserProvider for FixtureProvider {
             ));
         }
         Ok(BrowserAction {
-            url: None,
+            url: self.take_override_action_url(),
             detail: Some(format!("clicked {}", button.unwrap_or("left"))),
         })
     }
@@ -3147,7 +3234,7 @@ impl BrowserProvider for FixtureProvider {
             *value = Some(text.to_owned());
         }
         Ok(BrowserAction {
-            url: None,
+            url: self.take_override_action_url(),
             detail: Some(format!("filled {} bytes", text.len())),
         })
     }
@@ -3163,7 +3250,7 @@ impl BrowserProvider for FixtureProvider {
             std::future::pending::<()>().await;
         }
         Ok(BrowserAction {
-            url: None,
+            url: self.take_override_action_url(),
             detail: Some(format!("pressed {key}")),
         })
     }
@@ -3193,6 +3280,7 @@ impl BrowserProvider for FixtureProvider {
             bytes: b"\x89PNG\r\n\x1a\nfixture".to_vec(),
             width: 640,
             height: 480,
+            masked: !self.screenshot_unmasked.load(Ordering::Acquire),
         })
     }
     async fn download(
@@ -3385,6 +3473,22 @@ mod tests {
             .with_artifacts(outputs.clone())
             .unwrap();
         (state, outputs)
+    }
+
+    fn stored_media_files(outputs: &Arc<OutputStore>) -> usize {
+        std::fs::read_dir(outputs.protected_path())
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| name.ends_with(".media"))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     async fn open_document(
@@ -4507,6 +4611,10 @@ mod tests {
             b"downloaded bytes"
         );
         assert_eq!(view.artifact_ref, view.media_ref);
+        // The host-only durable reference is never part of the interface data.
+        let encoded = serde_json::to_value(&view).unwrap();
+        assert!(encoded.get("media_ref").is_none());
+        assert!(encoded["artifact_ref"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -4753,6 +4861,239 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn screenshot_url_is_last_confirmed_and_actions_replace_or_clear_it() {
+        let root = tempfile::tempdir().unwrap();
+        let origin = "https://allowed.example";
+        let (provider, state, run, _) = credential_state(root.path(), origin, 32).await;
+        let (_, outputs) = artifact_state(root.path(), provider.clone(), &run).await;
+        let state = state.with_artifacts(outputs).unwrap();
+        let context = make_context(run);
+        let opened = state.open(&context, &NeverCancel).await.unwrap();
+        let (shot, _) = state
+            .screenshot(&context, &opened.page, &NeverCancel)
+            .await
+            .unwrap();
+        assert_eq!(shot.url.as_deref(), Some("about:blank"));
+        assert_eq!(shot.url_observation, "last_confirmed");
+        for action in ["click", "fill", "credential", "press", "wait"] {
+            for final_url in [
+                Some("http://other.example/next"),
+                None,
+                Some("file:///secret"),
+            ] {
+                state
+                    .navigate(&context, &opened.page, origin, &NeverCancel)
+                    .await
+                    .unwrap();
+                let snapshot = state
+                    .snapshot(&context, &opened.page, &NeverCancel)
+                    .await
+                    .unwrap();
+                if let Some(url) = final_url {
+                    provider.return_next_action_url(url);
+                }
+                let element = &snapshot.elements[0].element_ref;
+                let result = match action {
+                    "click" => {
+                        state
+                            .click(
+                                &context,
+                                &opened.page,
+                                &snapshot.document,
+                                element,
+                                None,
+                                &NeverCancel,
+                            )
+                            .await
+                    }
+                    "fill" => {
+                        state
+                            .fill(
+                                &context,
+                                &opened.page,
+                                &snapshot.document,
+                                element,
+                                "text",
+                                &NeverCancel,
+                            )
+                            .await
+                    }
+                    "credential" => {
+                        state
+                            .fill_credential(
+                                &context,
+                                &opened.page,
+                                &snapshot.document,
+                                element,
+                                "login",
+                                &NeverCancel,
+                            )
+                            .await
+                    }
+                    "press" => {
+                        state
+                            .press(
+                                &context,
+                                &opened.page,
+                                &snapshot.document,
+                                "Enter",
+                                &NeverCancel,
+                            )
+                            .await
+                    }
+                    _ => state.wait(&context, &opened.page, 0, &NeverCancel).await,
+                };
+                let (_, page) = state.active_page(&context, &opened.page).await.unwrap();
+                let document = page.document.lock().await;
+                assert!(document.token.is_none(), "{action}");
+                assert!(document.origin.is_none(), "{action}");
+                if final_url == Some("file:///secret") {
+                    assert_eq!(
+                        result.unwrap_err().0.code,
+                        "invalid_provider_result",
+                        "{action}"
+                    );
+                    assert!(document.url.is_none(), "{action}");
+                } else {
+                    result.unwrap();
+                    assert_eq!(document.url.as_deref(), final_url, "{action}");
+                }
+                let uncertain = document.uncertain;
+                drop(document);
+                if !uncertain {
+                    let (shot, _) = state
+                        .screenshot(&context, &opened.page, &NeverCancel)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        shot.url.as_deref(),
+                        final_url.filter(|url| *url != "file:///secret"),
+                        "{action}"
+                    );
+                    assert_eq!(shot.url_observation, "last_confirmed");
+                    assert_eq!(
+                        state
+                            .press(
+                                &context,
+                                &opened.page,
+                                &snapshot.document,
+                                "Enter",
+                                &NeverCancel
+                            )
+                            .await
+                            .unwrap_err()
+                            .0
+                            .code,
+                        "stale_element"
+                    );
+                } else {
+                    assert_eq!(
+                        state
+                            .screenshot(&context, &opened.page, &NeverCancel)
+                            .await
+                            .unwrap_err()
+                            .0
+                            .code,
+                        "outcome_unknown"
+                    );
+                    state
+                        .snapshot(&context, &opened.page, &NeverCancel)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn navigate_only_caches_a_validated_provider_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, _) = artifact_state(root.path(), provider.clone(), &run).await;
+        let context = make_context(run);
+        let (page_id, snapshot) = open_document(&state, &context, "https://allowed.example").await;
+        for final_url in [
+            Some("https://other.example/next"),
+            None,
+            Some("file:///secret"),
+        ] {
+            if let Some(url) = final_url {
+                provider.return_next_action_url(url);
+            } else {
+                provider.omit_navigation_url.store(true, Ordering::Release);
+            }
+            let result = state
+                .navigate(&context, &page_id, "https://allowed.example", &NeverCancel)
+                .await;
+            if final_url == Some("file:///secret") {
+                assert_eq!(result.unwrap_err().0.code, "invalid_provider_result");
+            } else {
+                result.unwrap();
+            }
+            let (shot, _) = state
+                .screenshot(&context, &page_id, &NeverCancel)
+                .await
+                .unwrap();
+            assert_eq!(
+                shot.url.as_deref(),
+                final_url.filter(|url| *url != "file:///secret")
+            );
+            let (_, page) = state.active_page(&context, &page_id).await.unwrap();
+            let document = page.document.lock().await;
+            assert!(document.origin.is_none());
+            assert!(document.token.is_none());
+        }
+        assert_eq!(
+            state
+                .press(
+                    &context,
+                    &page_id,
+                    &snapshot.document,
+                    "Enter",
+                    &NeverCancel
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "stale_element"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_action_clears_last_confirmed_url() {
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = make_state(provider.clone(), &run);
+        let context = make_context(run);
+        let (page_id, snapshot) = open_document(&state, &context, "https://allowed.example").await;
+        provider.fail_next_unknown();
+        assert_eq!(
+            state
+                .click(
+                    &context,
+                    &page_id,
+                    &snapshot.document,
+                    &snapshot.elements[0].element_ref,
+                    None,
+                    &NeverCancel
+                )
+                .await
+                .unwrap_err()
+                .0
+                .code,
+            "outcome_unknown"
+        );
+        let (_, page) = state.active_page(&context, &page_id).await.unwrap();
+        let document = page.document.lock().await;
+        assert!(document.url.is_none());
+        assert!(document.origin.is_none());
+        assert!(document.token.is_none());
+        assert!(document.uncertain);
+    }
+
+    #[tokio::test]
     async fn screenshot_artifact_is_usable_for_upload_and_holds_its_lease() {
         let root = tempfile::tempdir().unwrap();
         let provider = Arc::new(FixtureProvider::full());
@@ -4765,7 +5106,14 @@ mod tests {
             .await
             .unwrap();
         let reference = view.media_ref.clone().unwrap();
-        assert!(!view.model_image_attached);
+        assert_eq!(view.model_image_capability, "disabled");
+        assert!(view.masked);
+        assert!(view.model_image_status.contains("artifact_saved"));
+        assert!(view.model_image_status.contains("not injected"));
+        assert_eq!(view.artifact_ref.as_deref(), Some(reference.as_str()));
+        assert!(view.filename.starts_with("screenshot-"));
+        assert_eq!(view.page, page);
+        assert!(view.document_revision >= 1);
         assert!(sealed.is_some());
         // The lease held by the captured result prevents GC from reclaiming it.
         assert_eq!(
@@ -4797,6 +5145,198 @@ mod tests {
                 .code,
             "media_unavailable"
         );
+    }
+
+    #[tokio::test]
+    async fn screenshot_artifact_survives_reopen_and_is_pinned_by_tool_history() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, outputs) = artifact_state(root.path(), provider, &run).await;
+        let context = make_context(run.clone());
+        let (page, _) = open_document(&state, &context, "http://allowed.example/shot").await;
+        let (view, sealed) = state
+            .screenshot(&context, &page, &NeverCancel)
+            .await
+            .unwrap();
+        let reference = view.media_ref.clone().unwrap();
+        let result = crate::contract::ToolResult {
+            ok: true,
+            data: Some(
+                serde_json::json!({"source": "untrusted_browser", "screenshot": {"mime": view.mime, "bytes": view.bytes, "sha256": view.sha256}}),
+            ),
+            error: None,
+            truncated: false,
+            media_refs: vec![reference.clone()],
+        };
+        let history = [crate::contract::HistoryItem::ToolResult {
+            call_id: "shot-call".into(),
+            result: result.clone(),
+        }];
+        assert!(
+            crate::media::history_references(&history).contains(&reference),
+            "host media refs must remain GC pins"
+        );
+        drop(sealed);
+        drop(state);
+        let reopened = Arc::new(
+            OutputStore::open(
+                outputs.protected_path(),
+                crate::output_store::OutputLimits::default(),
+                Arc::new(SecretRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let media = reopened.load_media(run.session_id, &reference).unwrap();
+        assert_eq!(media.kind, crate::media::MediaKind::Image);
+        assert_eq!(media.mime, "image/png");
+        let capabilities = crate::config::MediaCapabilities {
+            image: true,
+            audio: false,
+            video: false,
+        };
+        let attachments =
+            crate::media::load_history(&history, Some(&reopened), run.session_id, capabilities)
+                .unwrap();
+        assert_eq!(attachments.tool_result_images(&result).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn screenshot_capability_requires_masking_support() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::new(BrowserFacts {
+            provider: "fixture".into(),
+            screenshots: true,
+            screenshot_masking: false,
+            downloads: true,
+            uploads: true,
+        }));
+        let run = make_run();
+        let (state, outputs) = artifact_state(root.path(), provider, &run).await;
+        let context = make_context(run);
+        let (page, _) = open_document(&state, &context, "http://allowed.example/shot").await;
+        let error = state
+            .screenshot(&context, &page, &NeverCancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "browser_capability_disabled");
+        // Nothing was persisted for an unconfirmed capability.
+        assert_eq!(stored_media_files(&outputs), 0);
+    }
+
+    #[tokio::test]
+    async fn unmasked_provider_result_is_never_persisted() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full().with_unmasked_screenshot());
+        let run = make_run();
+        let (state, outputs) = artifact_state(root.path(), provider, &run).await;
+        let context = make_context(run);
+        let (page, _) = open_document(&state, &context, "http://allowed.example/shot").await;
+        let error = state
+            .screenshot(&context, &page, &NeverCancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "browser_capability_disabled");
+        assert_eq!(stored_media_files(&outputs), 0);
+    }
+
+    #[tokio::test]
+    async fn screenshot_registration_requires_the_file_broker_and_artifact_store() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        // Facts alone are insufficient: without a configured file broker and
+        // artifact store the tool is neither registered nor executable.
+        let state = make_state(provider.clone(), &run);
+        assert!(!state.screenshot_available());
+        let context = make_context(run.clone());
+        let opened = state.open(&context, &NeverCancel).await.unwrap();
+        let error = state
+            .screenshot(&context, &opened.page, &NeverCancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error.0.code, "browser_capability_disabled");
+
+        let (state, _outputs) = artifact_state(root.path(), provider, &run).await;
+        assert!(state.screenshot_available());
+
+        let outputs = Arc::new(
+            OutputStore::open(
+                root.path().join("disabled-outputs"),
+                crate::output_store::OutputLimits::default(),
+                Arc::new(SecretRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let mut settings = BrowserSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        settings.files.enabled = false;
+        let disabled = BrowserState::new(settings, Arc::new(FixtureProvider::full()), run).unwrap();
+        // `with_artifacts` is only reached by the host when files are enabled,
+        // but the predicate itself must still reject the configuration.
+        let disabled = disabled.with_artifacts(outputs).unwrap();
+        assert!(!disabled.screenshot_available());
+    }
+
+    #[tokio::test]
+    async fn screenshot_metadata_reports_the_profile_capability_declaration() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, _outputs) = artifact_state(root.path(), provider, &run).await;
+        let state = state.with_model_image_capability(true);
+        let context = make_context(run);
+        let (page, _) = open_document(&state, &context, "http://allowed.example/shot").await;
+        let (view, _sealed) = state
+            .screenshot(&context, &page, &NeverCancel)
+            .await
+            .unwrap();
+        assert_eq!(view.model_image_capability, "enabled");
+        assert!(view.model_image_status.contains("image input enabled"));
+        assert!(view.model_image_status.contains("injected only if"));
+        // Data carries the public artifact reference but never the host-only
+        // durable reference.
+        let encoded = serde_json::to_value(&view).unwrap();
+        assert!(encoded.get("media_ref").is_none());
+        assert_eq!(encoded["artifact_ref"].as_str(), view.media_ref.as_deref());
+    }
+
+    #[tokio::test]
+    async fn screenshot_tool_result_uses_the_nested_host_shape() {
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let (state, _outputs) = artifact_state(root.path(), provider, &run).await;
+        let state = state.with_model_image_capability(true);
+        let context = make_context(run);
+        let (page, _) = open_document(&state, &context, "http://allowed.example/shot").await;
+        let tool = BrowserTool {
+            state: Arc::new(state),
+            kind: BrowserToolKind::Screenshot,
+        };
+        let call = ToolCall {
+            call_id: "shot-call".into(),
+            name: "browser_screenshot".into(),
+            arguments: serde_json::json!({"page": page}).to_string(),
+        };
+        let capture = tool
+            .execute_captured(&call, &context, &NeverCancel, None)
+            .await
+            .unwrap();
+        assert_eq!(capture.result.media_refs.len(), 1);
+        let data = capture.result.data.as_ref().unwrap();
+        assert!(data.get("page").is_none());
+        assert!(data.get("document_revision").is_none());
+        let screenshot = data.get("screenshot").unwrap();
+        assert_eq!(screenshot["page"], page);
+        assert!(screenshot["document_revision"].as_u64().unwrap() >= 1);
+        assert_eq!(screenshot["model_image_capability"], "enabled");
+        assert!(screenshot.get("media_ref").is_none());
+        assert!(screenshot["artifact_ref"].as_str().is_some());
+        assert!(screenshot["bytes"].as_u64().unwrap() > 0);
+        assert!(screenshot["sha256"].as_str().unwrap().len() == 64);
     }
 
     #[tokio::test]
@@ -4920,6 +5460,11 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(error.0.code, code);
+            let (shot, _) = state
+                .screenshot(&context, &page, &NeverCancel)
+                .await
+                .unwrap();
+            assert!(shot.url.is_none());
             // A known failure keeps the page usable only through a fresh
             // observation; the old document must not be replayed.
             assert_eq!(
@@ -5087,6 +5632,7 @@ mod tests {
                 None,
                 Some(jobs.clone()),
                 Arc::new(SecretRegistry::default()),
+                crate::config::MediaCapabilities::default(),
             )
             .unwrap(),
         );

@@ -230,12 +230,18 @@ fn display_permission(mode: PermissionMode) -> &'static str {
 fn show_prompt(console: &mut Console, request: &UiRequest, config: &Config) -> io::Result<()> {
     match request {
         UiRequest::Approval(request, _) => {
-            let args = serde_json::to_string(&request.arguments)
-                .unwrap_or_else(|_| "<unavailable>".into());
+            let operation = if request.operation_summary.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "Operation: {}\n",
+                    safe_terminal_text(&request.operation_summary)
+                )
+            };
+            let arguments = crate::approval::argument_lines(&request.tool, &request.arguments);
             let text = format!(
-                "\nApproval required\nTool: {}\nArguments: {}\nWorking directory: {}\nMode: {}\nAllow this call? [y/N] ",
+                "\nApproval required\nTool: {}\n{operation}{arguments}Working directory: {}\nMode: {}\nAllow this call? [y/N] ",
                 safe_terminal_text(&request.tool),
-                args,
                 safe_terminal_text(&request.cwd.to_string_lossy()),
                 display_mode(request.work_mode)
             );
@@ -255,6 +261,7 @@ fn show_prompt(console: &mut Console, request: &UiRequest, config: &Config) -> i
         }
     }
 }
+
 enum ProfileSelection {
     Selected,
     Exit,
@@ -327,10 +334,10 @@ fn job_display(status: Option<saya_core::background::JobStatus>, config: &Config
         None => serde_json::json!({"status":"not_found"}),
         Some(JobStatus::Running) => serde_json::json!({"status":"running"}),
         Some(JobStatus::Finished(result)) => {
-            serde_json::json!({"status":"finished","result":result})
+            serde_json::json!({"status":"finished","result":result.model_view()})
         }
         Some(JobStatus::Failed(error)) => {
-            serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2})
+            serde_json::json!({"status":"failed","error":error.0,"observed_result":error.2.as_deref().map(saya_core::contract::ToolResult::model_view)})
         }
     };
     let secrets = config
@@ -805,6 +812,48 @@ mod tests {
         assert!(!interrupt_active(&mut cancelling, &cancel));
         assert!(cancel.is_cancelled());
         assert!(interrupt_active(&mut cancelling, &cancel));
+    }
+
+    #[test]
+    fn job_display_keeps_public_artifacts_without_host_media_fields() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        std::fs::write(&path, "schema_version=1\n[defaults]\nprofile='fixture'\n[profiles.fixture]\nprotocol='openai-chat-completions'\nbase_url='http://127.0.0.1:1/v1'\nmodel='fixture'\nauth='none'\ncontext_window_tokens=128000\n").unwrap();
+        let config = config::load(
+            Overrides {
+                config: Some(path),
+                ..Default::default()
+            },
+            Environment::from_pairs([("HOME".into(), root.path().as_os_str().into())]),
+            root.path(),
+        )
+        .unwrap();
+        let reference = format!("media_{}_{}", "a".repeat(32), "b".repeat(64));
+        let result = saya_core::contract::ToolResult {
+            ok: true,
+            data: Some(
+                serde_json::json!({"source":"untrusted_browser","download":{"artifact_ref":reference,"bytes":12}}),
+            ),
+            error: None,
+            truncated: false,
+            media_refs: vec![reference.clone()],
+        };
+        let mut failed = cli_error("tool_timeout", "observed after deadline");
+        failed.2 = Some(Box::new(result.clone()));
+        for status in [
+            saya_core::background::JobStatus::Finished(result),
+            saya_core::background::JobStatus::Failed(failed),
+        ] {
+            let rendered = job_display(Some(status), &config);
+            let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            let result = value
+                .get("result")
+                .or_else(|| value.get("observed_result"))
+                .unwrap();
+            assert!(result.get("media_refs").is_none());
+            assert_eq!(result["data"]["download"]["artifact_ref"], reference);
+            assert!(!rendered.contains("media_refs"));
+        }
     }
 
     #[tokio::test]

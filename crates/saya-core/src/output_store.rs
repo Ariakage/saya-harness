@@ -540,6 +540,18 @@ impl OutputStore {
             .map(|(kind, _)| kind)
     }
 
+    /// Return the validated kind and raw byte length without decoding the
+    /// payload. Callers use this to enforce aggregate budgets before loading.
+    pub fn media_info(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(crate::media::MediaKind, u64), BoundaryError> {
+        self.inner
+            .media_kind_size(session_id, reference)
+            .map(|(kind, size, _)| (kind, size))
+    }
+
     /// Load a published snapshot after validating session scope and raw SHA-256.
     pub fn load_media(
         &self,

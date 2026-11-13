@@ -634,6 +634,17 @@ impl Inner {
         session_id: SessionId,
         reference: &str,
     ) -> Result<(crate::media::MediaKind, OutputLease), BoundaryError> {
+        self.media_kind_size(session_id, reference)
+            .map(|(kind, _, lease)| (kind, lease))
+    }
+
+    /// Read the validated header without touching the payload, so callers can
+    /// enforce aggregate budgets before allocating base64 content.
+    pub(super) fn media_kind_size(
+        &self,
+        session_id: SessionId,
+        reference: &str,
+    ) -> Result<(crate::media::MediaKind, u64, OutputLease), BoundaryError> {
         let (id, digest) = crate::media::parse_reference(reference)?;
         let mut file = self.open_file(&media_name(id)).map_err(|_| {
             media_error(
@@ -662,7 +673,7 @@ impl Inner {
                 "Media snapshot has not been durably published",
             ));
         }
-        Ok((header.kind, OutputLease { _file: file }))
+        Ok((header.kind, header.byte_len, OutputLease { _file: file }))
     }
 
     pub(super) fn reserve(

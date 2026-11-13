@@ -1634,6 +1634,24 @@ async fn procfs_sandbox_evidence_rejects_disabled_or_unrelated_processes() {
     );
 }
 
+#[tokio::test]
+async fn pinned_worker_never_declares_masked_screenshot_capability() {
+    let fixture = fixture_identity();
+    let provider =
+        PlaywrightMcpProvider::new(fixture.settings.clone(), FakeLauncher::new(vec![])).unwrap();
+    let facts = provider.facts();
+    assert!(!facts.screenshots);
+    assert!(!facts.screenshot_masking);
+    assert!(facts.downloads);
+    assert!(facts.uploads);
+    let cancel = SwitchCancel(Arc::new(AtomicBool::new(false)));
+    let error = provider
+        .screenshot("session", "page", &cancel)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "browser_capability_disabled");
+}
+
 #[test]
 fn install_roots_cover_node_worker_and_chromium_package_only() {
     let fixture = fixture_identity();

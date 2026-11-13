@@ -421,13 +421,26 @@ fn history(
 ) -> Result<Vec<Value>, BoundaryError> {
     let mut input = Vec::new();
     let mut pending = HashSet::new();
+    // A reference may be attached to more than one host tool result. Emit each
+    // loaded image once so the wire total stays within the loader's budget.
+    let mut emitted_images = HashSet::new();
+    let mut images: Vec<Value> = Vec::new();
     let mut index = 0;
+    // Tool images follow their function_call_output as a native user image
+    // message; image bytes never enter the function output text.
+    fn flush_images(input: &mut Vec<Value>, images: &mut Vec<Value>) {
+        if images.is_empty() {
+            return;
+        }
+        input.push(json!({"role":"user","content":Value::Array(std::mem::take(images))}));
+    }
     while index < items.len() {
         match &items[index] {
             HistoryItem::UserText(text) => {
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
+                flush_images(&mut input, &mut images);
                 input.push(json!({
                     "role":"user",
                     "content":responses_user_content(text, capabilities, snapshots, expand)?
@@ -437,6 +450,7 @@ fn history(
                 if !pending.is_empty() {
                     return Err(failure("invalid_history", "tool results are incomplete"));
                 }
+                flush_images(&mut input, &mut images);
                 if !text.is_empty() {
                     input.push(json!({"role":"assistant","content":text}));
                 }
@@ -445,6 +459,7 @@ fn history(
                 if call.call_id.is_empty() || !pending.insert(call.call_id.clone()) {
                     return Err(failure("invalid_history", "duplicate tool call"));
                 }
+                flush_images(&mut input, &mut images);
                 input.push(json!({"type":"function_call","call_id":call.call_id,"name":call.name,"arguments":call.arguments}));
             }
             HistoryItem::ToolResult { call_id, result } => {
@@ -459,11 +474,25 @@ fn history(
                 input.push(
                     json!({"type":"function_call_output","call_id":call_id,"output":content}),
                 );
+                if expand {
+                    for image in snapshots.tool_result_images(result)? {
+                        if let Some(reference) = &image.reference
+                            && !emitted_images.insert(reference.clone())
+                        {
+                            continue;
+                        }
+                        images.push(json!({
+                            "type":"input_image",
+                            "image_url":media::data_url(&image)
+                        }));
+                    }
+                }
             }
             HistoryItem::ProviderItem {
                 protocol: ModelProtocol::Responses,
                 value,
             } => {
+                flush_images(&mut input, &mut images);
                 let parsed = parse_output_item_for_replay(value)?;
                 match parsed {
                     Some(HistoryItem::ToolCall(call)) => {
@@ -500,6 +529,7 @@ fn history(
     if !pending.is_empty() {
         return Err(failure("invalid_history", "tool results are incomplete"));
     }
+    flush_images(&mut input, &mut images);
     Ok(input)
 }
 fn parse_output_item_for_replay(item: &Value) -> Result<Option<HistoryItem>, BoundaryError> {

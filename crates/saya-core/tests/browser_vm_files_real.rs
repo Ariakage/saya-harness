@@ -511,6 +511,7 @@ async fn real_vm_credentials_files_background_and_cleanup() {
             Some(outputs.clone()),
             Some(jobs.clone()),
             registry,
+            saya_core::config::MediaCapabilities::default(),
         )
         .unwrap(),
     );
@@ -1174,6 +1175,17 @@ async fn real_vm_credentials_files_background_and_cleanup() {
         !tree_contains(&root.path().join("artifacts"), "alice-secret"),
         "credential plaintext leaked into the artifact store"
     );
+
+    // DEV-082: the pinned Playwright MCP worker has no screenshot mask input.
+    // The production VM provider must therefore refuse the capability instead
+    // of returning an unmasked image.
+    assert!(!state.facts().screenshots);
+    assert!(!state.facts().screenshot_masking);
+    let screenshot_error = state
+        .screenshot(&context, &after_plan.page, &NeverCancel)
+        .await
+        .expect_err("screenshot must be disabled without masking support");
+    assert_eq!(screenshot_error.0.code, "browser_capability_disabled");
 
     jobs.shutdown().await.unwrap();
     state.shutdown(&NeverCancel).await.expect("state shutdown");

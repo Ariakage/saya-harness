@@ -689,6 +689,77 @@ pub(crate) mod messages {
     }
 }
 
+pub(crate) mod browser {
+    pub const ACTION: &str = "Action";
+    pub const PAGE: &str = "Page";
+    pub const DOCUMENT: &str = "Document";
+    pub const REVISION: &str = "Revision";
+    pub const URL: &str = "URL";
+    pub const URL_OBSERVATION: &str = "URL observation";
+    pub const TITLE: &str = "Title";
+    pub const SOURCE: &str = "Source";
+    pub const ELEMENT: &str = "Element";
+    pub const CREDENTIAL_SLOT: &str = "Credential slot";
+    pub const TEXT_LABEL: &str = "Text";
+    pub const TEXT_BYTES: &str = "text bytes";
+    pub const KEY: &str = "Key";
+    pub const BUTTON: &str = "Button";
+    pub const MILLISECONDS: &str = "Milliseconds";
+    pub const ARTIFACT_STORED: &str = "Stored";
+    pub const DOCUMENT_STALE: &str = "Document stale";
+    pub const DETAIL: &str = "Detail";
+    pub const PREVIEW: &str = "Preview";
+    pub const TEXT: &str = "Text";
+    pub const STATUS: &str = "Status";
+    pub const TRUNCATED: &str = "Truncated";
+    pub const BYTES_SENT: &str = "Bytes sent";
+    pub const MODEL_IMAGE_CAPABILITY: &str = "Model image capability";
+    pub const WIDTH: &str = "Width";
+    pub const HEIGHT: &str = "Height";
+    pub const OUTPUT: &str = "Output";
+    pub const OUTPUT_REFS: &str = "Output refs";
+    pub const ARTIFACT: &str = "Artifact";
+    pub const FILENAME: &str = "File";
+    pub const MIME: &str = "MIME";
+    pub const SIZE: &str = "Size";
+    pub const SHA256: &str = "SHA-256";
+    pub const MASKED: &str = "Masked";
+    pub const MODEL_IMAGE: &str = "Model image";
+    pub const JOB: &str = "Job";
+    pub const BACKGROUND: &str = "background";
+    pub const CLOSED: &str = "closed";
+    pub const OPEN: &str = "open";
+    pub const CLOSE: &str = "close";
+    pub const NAVIGATE: &str = "navigate";
+    pub const SNAPSHOT: &str = "snapshot";
+    pub const CLICK: &str = "click";
+    pub const FILL: &str = "fill";
+    pub const PRESS: &str = "press";
+    pub const WAIT: &str = "wait";
+    pub const SCREENSHOT: &str = "screenshot";
+    pub const DOWNLOAD: &str = "download";
+    pub const UPLOAD: &str = "upload";
+    pub const ELEMENTS: &str = "elements";
+    pub const YES: &str = "yes";
+    pub const NO: &str = "no";
+    pub fn action(name: &str) -> &str {
+        match name.strip_prefix("browser_").unwrap_or(name) {
+            "open" => OPEN,
+            "close" => CLOSE,
+            "navigate" => NAVIGATE,
+            "snapshot" => SNAPSHOT,
+            "click" => CLICK,
+            "fill" => FILL,
+            "press" => PRESS,
+            "wait" => WAIT,
+            "screenshot" => SCREENSHOT,
+            "download" => DOWNLOAD,
+            "upload" => UPLOAD,
+            other => other,
+        }
+    }
+}
+
 pub(crate) mod summary {
     use super::common;
     use std::time::Duration;

@@ -2,7 +2,7 @@
 
 use crate::{
     config::MediaCapabilities,
-    contract::{BoundaryError, ErrorInfo, HistoryItem, SessionId},
+    contract::{BoundaryError, ErrorInfo, HistoryItem, SessionId, ToolResult},
     output_store::{OutputLease, OutputStore, SealedMedia},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -21,6 +21,8 @@ pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_AUDIO_VIDEO_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_MESSAGE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum host-written tool images injected into one model request.
+pub const MAX_TOOL_IMAGES: usize = 8;
 pub const MEDIA_SCHEME: &str = "saya-media://";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,27 +47,48 @@ pub struct LoadedMedia {
     pub size: u64,
 }
 
+/// Why a host-written tool media reference is not eligible for model injection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OmittedReason {
+    /// File artifacts are host-side evidence and are never model media.
+    FileArtifact,
+    /// Tool results may inject images only; audio and video stay host-side.
+    NotAnImage,
+    /// The selected profile does not enable the image modality.
+    CapabilityDisabled,
+    /// This request already carries the maximum number or byte budget of tool
+    /// images. The object stays a GC pin but is not offered to the model.
+    LimitExceeded,
+}
+
 /// Verified snapshots indexed by their durable reference. The payload is never
 /// serialized into the neutral context fingerprint or session history.
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct MediaAttachments(BTreeMap<String, LoadedMedia>);
+pub struct MediaAttachments {
+    items: BTreeMap<String, LoadedMedia>,
+    /// Tool-result references that the host deliberately keeps out of model
+    /// content. Providers use this to distinguish a File or capability-gated
+    /// reference from a genuinely missing object.
+    omitted: BTreeMap<String, OmittedReason>,
+}
 impl std::fmt::Debug for MediaAttachments {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MediaAttachments")
-            .field("references", &self.0.keys().collect::<Vec<_>>())
+            .field("references", &self.items.keys().collect::<Vec<_>>())
+            .field("omitted", &self.omitted.keys().collect::<Vec<_>>())
             .finish()
     }
 }
 impl MediaAttachments {
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.items.is_empty()
     }
     pub fn insert(&mut self, media: LoadedMedia) -> Result<(), BoundaryError> {
         let reference = media
             .reference
             .clone()
             .ok_or_else(|| failure("media_corrupt", "media snapshot has no durable reference"))?;
-        if let Some(existing) = self.0.get(&reference)
+        if let Some(existing) = self.items.get(&reference)
             && existing != &media
         {
             return Err(failure(
@@ -73,11 +96,73 @@ impl MediaAttachments {
                 "media reference has conflicting snapshots",
             ));
         }
-        self.0.insert(reference, media);
+        self.omitted.remove(&reference);
+        self.items.insert(reference, media);
         Ok(())
     }
+    fn omit(&mut self, reference: String, reason: OmittedReason) {
+        self.items.remove(&reference);
+        self.omitted.insert(reference, reason);
+    }
     fn get(&self, reference: &str) -> Option<&LoadedMedia> {
-        self.0.get(reference)
+        self.items.get(reference)
+    }
+    /// Image snapshots produced by host tool actions that are eligible for the
+    /// next model request. Only Image objects from `ToolResult.media_refs` are
+    /// considered; File artifacts and capability-gated objects are skipped.
+    /// A reference that is neither loaded nor explicitly omitted fails closed.
+    pub fn tool_result_images(
+        &self,
+        result: &ToolResult,
+    ) -> Result<Vec<LoadedMedia>, BoundaryError> {
+        let mut images = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut retained = 0u64;
+        let mut encoded = 0u64;
+        for reference in &result.media_refs {
+            parse_reference(reference)?;
+            if !seen.insert(reference) {
+                continue;
+            }
+            match self.items.get(reference) {
+                Some(media) if media.kind == MediaKind::Image => {
+                    retained = retained.saturating_add(media.size);
+                    encoded = encoded.saturating_add(media.data.len() as u64);
+                    if media.size == 0
+                        || media.size > maximum(MediaKind::Image)
+                        || retained > MAX_MESSAGE_MEDIA_BYTES
+                        || encoded > MAX_MESSAGE_MEDIA_BYTES
+                    {
+                        return Err(failure(
+                            "media_too_large",
+                            "tool image media exceeds its byte limit",
+                        ));
+                    }
+                    images.push(media.clone());
+                }
+                Some(_) => {
+                    return Err(failure(
+                        "media_corrupt",
+                        "tool media snapshot kind is not injectable",
+                    ));
+                }
+                None => match self.omitted.get(reference) {
+                    Some(
+                        OmittedReason::FileArtifact
+                        | OmittedReason::NotAnImage
+                        | OmittedReason::CapabilityDisabled
+                        | OmittedReason::LimitExceeded,
+                    ) => {}
+                    None => {
+                        return Err(failure(
+                            "media_unavailable",
+                            "tool media snapshot is unavailable",
+                        ));
+                    }
+                },
+            }
+        }
+        Ok(images)
     }
 }
 
@@ -307,37 +392,131 @@ pub fn display(text: &str) -> String {
 }
 
 /// Load durable snapshots that the model may actually expand this turn.
-/// Only user-authored `UserText` markers for Image/Audio/Video are eligible.
-/// Host-written `ToolResult.media_refs` remain GC pins (see
-/// [`history_references`]) but are not loaded here: File artifacts must never
-/// become model media, and later tool-produced image support is added by its
-/// own capability stage instead of being preloaded now.
+/// User-authored `UserText` markers remain eligible for Image/Audio/Video.
+/// Host-written `ToolResult.media_refs` contribute only Image objects, and only
+/// when the selected profile enables images; File artifacts never become model
+/// media. Tool images are selected from the effective request history only:
+/// entries already removed by compaction or retirement are never passed here,
+/// and the loader caps one request at [`MAX_TOOL_IMAGES`] references whose raw
+/// bytes and base64 encoding both stay within [`MAX_MESSAGE_MEDIA_BYTES`]. The
+/// full session history still pins every reference through
+/// [`history_references`].
 pub fn load_history(
     history: &[HistoryItem],
     store: Option<&Arc<OutputStore>>,
     session_id: SessionId,
+    capabilities: MediaCapabilities,
 ) -> Result<MediaAttachments, BoundaryError> {
     let mut snapshots = MediaAttachments::default();
+    let mut tool_images = 0usize;
+    let mut tool_raw_bytes = 0u64;
+    let mut tool_base64_bytes = 0u64;
     for item in history {
-        let HistoryItem::UserText(text) = item else {
-            continue;
-        };
-        for reference in text_references(text) {
-            let store = store.ok_or_else(|| {
-                failure(
-                    "media_unavailable",
-                    "durable media storage is not configured",
-                )
-            })?;
-            // A File object is a host-side artifact, never model media. Check
-            // its header only so no base64 payload is produced for it.
-            if store.media_kind(session_id, &reference)? == MediaKind::File {
-                continue;
+        match item {
+            HistoryItem::UserText(text) => {
+                for reference in text_references(text) {
+                    let store = store.ok_or_else(|| {
+                        failure(
+                            "media_unavailable",
+                            "durable media storage is not configured",
+                        )
+                    })?;
+                    // A File object is a host-side artifact, never model media.
+                    // Check its header only so no base64 payload is produced.
+                    let kind = store.media_kind(session_id, &reference)?;
+                    if kind == MediaKind::File {
+                        continue;
+                    }
+                    snapshots.insert(store.load_media(session_id, &reference)?)?;
+                }
             }
-            snapshots.insert(store.load_media(session_id, &reference)?)?;
+            HistoryItem::ToolResult { result, .. } => {
+                for reference in &result.media_refs {
+                    parse_reference(reference)?;
+                    let store = store.ok_or_else(|| {
+                        failure(
+                            "media_unavailable",
+                            "durable media storage is not configured",
+                        )
+                    })?;
+                    if snapshots.items.contains_key(reference) {
+                        // The same object may be attached to several results;
+                        // count and load it once per request.
+                        continue;
+                    }
+                    if !capabilities.image {
+                        // The profile cannot accept any tool image, so the
+                        // header is unnecessary; the reference stays a pin.
+                        snapshots.omit(reference.clone(), OmittedReason::CapabilityDisabled);
+                        continue;
+                    }
+                    if tool_images >= MAX_TOOL_IMAGES {
+                        // Do not open further objects: this request already has
+                        // the maximum number of usable tool images.
+                        snapshots.omit(reference.clone(), OmittedReason::LimitExceeded);
+                        continue;
+                    }
+                    let (kind, size) = store.media_info(session_id, reference)?;
+                    match kind {
+                        MediaKind::Image => {
+                            // Only the header was read. Skip objects that
+                            // would exceed either aggregate budget, and never
+                            // let one extra reference turn a valid request into
+                            // an error.
+                            if !tool_image_budget_allows(tool_raw_bytes, tool_base64_bytes, size) {
+                                snapshots.omit(reference.clone(), OmittedReason::LimitExceeded);
+                                continue;
+                            }
+                            let media = store.load_media(session_id, reference)?;
+                            let encoded = media.data.len() as u64;
+                            if media.size != size
+                                || !tool_image_budget_allows(
+                                    tool_raw_bytes,
+                                    tool_base64_bytes,
+                                    media.size,
+                                )
+                                || tool_base64_bytes
+                                    .checked_add(encoded)
+                                    .is_none_or(|total| total > MAX_MESSAGE_MEDIA_BYTES)
+                            {
+                                snapshots.omit(reference.clone(), OmittedReason::LimitExceeded);
+                                continue;
+                            }
+                            tool_images += 1;
+                            tool_raw_bytes = tool_raw_bytes.saturating_add(media.size);
+                            tool_base64_bytes = tool_base64_bytes.saturating_add(encoded);
+                            snapshots.insert(media)?;
+                        }
+                        MediaKind::File => {
+                            snapshots.omit(reference.clone(), OmittedReason::FileArtifact);
+                        }
+                        MediaKind::Audio | MediaKind::Video => {
+                            snapshots.omit(reference.clone(), OmittedReason::NotAnImage);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     Ok(snapshots)
+}
+
+/// Return true when adding `size` raw bytes keeps both the raw and base64
+/// aggregate within the per-message limit.
+pub(crate) fn tool_image_budget_allows(current_raw: u64, current_base64: u64, size: u64) -> bool {
+    if size == 0 || size > maximum(MediaKind::Image) {
+        return false;
+    }
+    let Some(encoded) = size.checked_add(2).map(|value| value / 3 * 4) else {
+        return false;
+    };
+    current_raw
+        .checked_add(size)
+        .is_some_and(|total| total <= MAX_MESSAGE_MEDIA_BYTES)
+        && current_base64
+            .checked_add(encoded)
+            .is_some_and(|total| total <= MAX_MESSAGE_MEDIA_BYTES)
 }
 
 /// References which must be pinned when the caller runs OutputStore GC.
@@ -964,6 +1143,7 @@ mod tests {
             &[HistoryItem::UserText(captured_text.clone())],
             Some(&Arc::new(reopened)),
             session,
+            capabilities(),
         )
         .unwrap();
         let parts =
@@ -1111,6 +1291,7 @@ mod tests {
             &[HistoryItem::UserText(text.clone())],
             Some(&Arc::new(store.clone())),
             session,
+            capabilities(),
         )
         .unwrap();
         assert!(attachments.is_empty());
@@ -1156,7 +1337,7 @@ mod tests {
         );
     }
     #[test]
-    fn tool_result_media_refs_are_gc_pins_but_are_not_preloaded_as_model_media() {
+    fn tool_result_images_are_injected_only_for_enabled_image_profiles() {
         let root = tempfile::tempdir().unwrap();
         let store = OutputStore::open(
             root.path().join("outputs"),
@@ -1166,27 +1347,285 @@ mod tests {
         .unwrap();
         let session = SessionId::new();
         let image = store
-            .put_media(session, MediaKind::Image, "image/png", "image.png", b"png")
+            .put_media(
+                session,
+                MediaKind::Image,
+                "image/png",
+                "image.png",
+                b"png image",
+            )
             .unwrap();
         let reference = image.reference.clone();
+        let result = crate::contract::ToolResult {
+            ok: true,
+            data: None,
+            error: None,
+            truncated: false,
+            media_refs: vec![reference.clone()],
+        };
         let pinned = HistoryItem::ToolResult {
             call_id: "tool-call".into(),
-            result: crate::contract::ToolResult {
-                ok: true,
-                data: None,
-                error: None,
-                truncated: false,
-                media_refs: vec![reference.clone()],
-            },
+            result: result.clone(),
         };
         assert_eq!(
             history_references(std::slice::from_ref(&pinned)),
             BTreeSet::from([reference.clone()])
         );
-        let attachments = load_history(&[pinned], Some(&Arc::new(store.clone())), session).unwrap();
+        let attachments = load_history(
+            std::slice::from_ref(&pinned),
+            Some(&Arc::new(store.clone())),
+            session,
+            capabilities(),
+        )
+        .unwrap();
+        let images = attachments.tool_result_images(&result).unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].kind, MediaKind::Image);
+        assert_eq!(
+            STANDARD.decode(&images[0].data).unwrap(),
+            b"png image".to_vec()
+        );
+
+        // Disabled image capability keeps the reference as a GC pin but never
+        // produces model content.
+        let disabled = MediaCapabilities {
+            image: false,
+            audio: true,
+            video: true,
+        };
+        let attachments = load_history(
+            std::slice::from_ref(&pinned),
+            Some(&Arc::new(store.clone())),
+            session,
+            disabled,
+        )
+        .unwrap();
+        assert!(attachments.tool_result_images(&result).unwrap().is_empty());
+
+        // File artifacts are never model media even with images enabled.
+        let file = store
+            .put_file(session, "text/plain", "note.txt", b"artifact")
+            .unwrap();
+        let file_result = crate::contract::ToolResult {
+            ok: true,
+            data: None,
+            error: None,
+            truncated: false,
+            media_refs: vec![file.reference.clone()],
+        };
+        let file_pinned = HistoryItem::ToolResult {
+            call_id: "file-call".into(),
+            result: file_result.clone(),
+        };
+        let attachments = load_history(
+            std::slice::from_ref(&file_pinned),
+            Some(&Arc::new(store.clone())),
+            session,
+            capabilities(),
+        )
+        .unwrap();
         assert!(
-            attachments.is_empty(),
-            "tool-produced media must not be preloaded as model content"
+            attachments
+                .tool_result_images(&file_result)
+                .unwrap()
+                .is_empty()
+        );
+
+        // A syntactically valid host-written reference with no object fails
+        // closed instead of silently disappearing.
+        let missing = crate::contract::ToolResult {
+            ok: true,
+            data: None,
+            error: None,
+            truncated: false,
+            media_refs: vec![format!("media_{}_{}", "0".repeat(32), "0".repeat(64))],
+        };
+        assert_eq!(
+            attachments.tool_result_images(&missing).unwrap_err().0.code,
+            "media_unavailable"
+        );
+    }
+
+    #[test]
+    fn tool_images_stop_at_the_reference_budget_without_failing_the_request() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        let mut references = Vec::new();
+        for index in 0..(MAX_TOOL_IMAGES + 2) {
+            let image = store
+                .put_media(
+                    session,
+                    MediaKind::Image,
+                    "image/png",
+                    "image.png",
+                    format!("image-{index}").as_bytes(),
+                )
+                .unwrap();
+            references.push(image.reference.clone());
+        }
+        let result = crate::contract::ToolResult {
+            ok: true,
+            data: None,
+            error: None,
+            truncated: false,
+            media_refs: references.clone(),
+        };
+        let history = [HistoryItem::ToolResult {
+            call_id: "many-images".into(),
+            result: result.clone(),
+        }];
+        let attachments = load_history(
+            &history,
+            Some(&Arc::new(store.clone())),
+            session,
+            capabilities(),
+        )
+        .unwrap();
+        let images = attachments.tool_result_images(&result).unwrap();
+        assert_eq!(images.len(), MAX_TOOL_IMAGES);
+        // Every reference still stays a GC pin.
+        assert_eq!(
+            history_references(&history),
+            references.into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn tool_image_budget_counts_raw_and_base64_bytes() {
+        let encoded = |size: u64| size.div_ceil(3) * 4;
+        let five = 5 * MAX_IMAGE_BYTES;
+        assert!(!tool_image_budget_allows(
+            five,
+            5 * encoded(MAX_IMAGE_BYTES),
+            MAX_IMAGE_BYTES
+        ));
+        let four = 4 * MAX_IMAGE_BYTES;
+        assert!(tool_image_budget_allows(
+            four,
+            4 * encoded(MAX_IMAGE_BYTES),
+            MAX_IMAGE_BYTES
+        ));
+        assert!(!tool_image_budget_allows(0, 0, 0));
+        assert!(!tool_image_budget_allows(0, 0, MAX_IMAGE_BYTES + 1));
+        assert!(!tool_image_budget_allows(
+            MAX_MESSAGE_MEDIA_BYTES,
+            0,
+            MAX_IMAGE_BYTES
+        ));
+    }
+
+    #[test]
+    fn only_the_effective_request_history_offers_tool_images() {
+        let root = tempfile::tempdir().unwrap();
+        let store = OutputStore::open(
+            root.path().join("outputs"),
+            Default::default(),
+            Arc::new(SecretRegistry::default()),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        let dropped = store
+            .put_media(
+                session,
+                MediaKind::Image,
+                "image/png",
+                "dropped.png",
+                b"dropped",
+            )
+            .unwrap();
+        let kept = store
+            .put_media(session, MediaKind::Image, "image/png", "kept.png", b"kept")
+            .unwrap();
+        let kept_result = crate::contract::ToolResult {
+            ok: true,
+            data: None,
+            error: None,
+            truncated: false,
+            media_refs: vec![kept.reference.clone()],
+        };
+        // The dropped ToolResult was replaced by a compact summary and is not
+        // part of the effective request history passed to the loader.
+        let projected = [
+            HistoryItem::UserText(
+                serde_json::json!({"saya_context_summary_v1": "prior work"}).to_string(),
+            ),
+            HistoryItem::ToolResult {
+                call_id: "kept".into(),
+                result: kept_result.clone(),
+            },
+        ];
+        let attachments = load_history(
+            &projected,
+            Some(&Arc::new(store.clone())),
+            session,
+            capabilities(),
+        )
+        .unwrap();
+        assert_eq!(
+            attachments.tool_result_images(&kept_result).unwrap().len(),
+            1
+        );
+        let dropped_result = crate::contract::ToolResult {
+            ok: true,
+            data: None,
+            error: None,
+            truncated: false,
+            media_refs: vec![dropped.reference.clone()],
+        };
+        // The dropped reference was never selected, so no snapshot exists and
+        // no forged history item can resurrect it.
+        assert_eq!(
+            attachments
+                .tool_result_images(&dropped_result)
+                .unwrap_err()
+                .0
+                .code,
+            "media_unavailable"
+        );
+        // The full durable history still pins both objects independently.
+        assert!(
+            history_references(&[
+                HistoryItem::ToolResult {
+                    call_id: "dropped".into(),
+                    result: dropped_result,
+                },
+                HistoryItem::ToolResult {
+                    call_id: "kept".into(),
+                    result: kept_result,
+                },
+            ])
+            .len()
+                == 2
+        );
+
+        // A selected reference whose object disappeared fails explicitly.
+        let missing_history = [HistoryItem::ToolResult {
+            call_id: "missing".into(),
+            result: crate::contract::ToolResult {
+                ok: true,
+                data: None,
+                error: None,
+                truncated: false,
+                media_refs: vec![format!("media_{}_{}", "0".repeat(32), "0".repeat(64))],
+            },
+        }];
+        assert_eq!(
+            load_history(
+                &missing_history,
+                Some(&Arc::new(store)),
+                session,
+                capabilities(),
+            )
+            .unwrap_err()
+            .0
+            .code,
+            "media_unavailable"
         );
     }
 }

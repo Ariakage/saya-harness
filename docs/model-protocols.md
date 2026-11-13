@@ -24,6 +24,8 @@ Compact、Review等非Execution请求不装载或展开媒体快照，也不访�
 
 OpenAI 当前没有统一的原生视频content type，因此视频使用带 `video/*` MIME 的文件输入。此映射仍要求目标模型和网关实际支持视频文件，成功解析请求不代表已完成视频理解；服务拒绝时沿正常协议错误返回。真实模型、时长、帧率、音轨和采样行为尚未互操作验收。
 
+DEV-082 起，宿主还按 `profile.multimodal.image` 把宿主工具产生的图片注入下一次 Execution 请求。只读取本次 request history 中未被 Compact／retirement 丢弃、由宿主写入 `ToolResult.media_refs` 且实际类型为 Image 的对象；File artifact 永不进入模型，工具产生的音频／视频也不注入。每个请求最多 8 张工具图片，聚合原始字节与 base64 均不超过 64 MiB；多个工具结果合并到 wire 后同样受该上限约束，不能按结果分别绕过。Chat Completions 在该 tool 消息之后附加一条仅含 `image_url` 的 user 内容；Responses 在 `function_call_output` 之后附加一条 `input_image` 的 user 内容；Anthropic Messages 把 base64 `image` block 放入同一 `tool_result` 的 content 数组。三种协议的 tool 文本都只序列化 `model_view()`（不含 `media_refs`），不把 base64 或内部分配引用写进文本或历史。图片能力关闭时不产生任何 image block，但截图结果仍以 `artifact_ref`、`mime`、`size`、`sha256`、`model_image_capability` 与 `model_image_status` 明确说明能力声明和未注入状态。Compact、Review 等非 Execution 请求不注入工具图片。逐图 8MiB 上限、输入预算和协议计数仍沿用现有检查。
+
 ## Chat Completions
 
 `provider::chat::ChatModel` 使用明确的模型、profile、上下文窗口和输出上限。它以本地历史构造消息，显式发送 `store: false`，支持流式与完整 JSON、文本和多个工具调用，并在流完整结束后才返回完整调用；工具结果按原始 call ID 回传。usage 可用时保留 provider 数字。长度截断、拒绝、格式错误和缺少终止标志不会作为成功返回。收到非文本流事件后也不自动重试。

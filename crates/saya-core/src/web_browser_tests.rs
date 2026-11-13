@@ -281,16 +281,25 @@ fn register_browser(
     dispatcher: &ToolDispatcher,
     run: &Run,
     provider: Arc<FixtureProvider>,
+    artifact_root: Option<&Path>,
 ) -> Result<(), BoundaryError> {
-    let state = Arc::new(BrowserState::new(
+    let state = BrowserState::new(
         BrowserSettings {
             enabled: true,
             ..Default::default()
         },
         provider,
         run.clone(),
-    )?);
-    crate::browser::register_tools(&state, dispatcher)
+    )?;
+    let state = match artifact_root {
+        Some(root) => state.with_artifacts(Arc::new(OutputStore::open(
+            root.join("browser-artifacts"),
+            OutputLimits::default(),
+            Arc::new(SecretRegistry::default()),
+        )?))?,
+        None => state,
+    };
+    crate::browser::register_tools(&Arc::new(state), dispatcher)
 }
 
 fn web_settings(origin: &str) -> WebSettings {
@@ -360,7 +369,13 @@ async fn exact_tool_surface_and_plan_read_only_filtering() {
         None,
     )
     .unwrap();
-    register_browser(&dispatcher, &run, Arc::new(FixtureProvider::full())).unwrap();
+    register_browser(
+        &dispatcher,
+        &run,
+        Arc::new(FixtureProvider::full()),
+        Some(temp.path()),
+    )
+    .unwrap();
 
     let names = |mode| {
         let mut names = dispatcher
@@ -681,7 +696,7 @@ async fn unknown_browser_action_is_not_replayed_by_dispatch() {
     let run = run(WorkMode::Work, PermissionMode::Auto);
     let (dispatcher, context) = dispatcher(temp.path(), &run, None).await.unwrap();
     let provider = Arc::new(FixtureProvider::full());
-    register_browser(&dispatcher, &run, provider.clone()).unwrap();
+    register_browser(&dispatcher, &run, provider.clone(), None).unwrap();
     let opened = execute_one(
         &dispatcher,
         &call("browser_open", json!({})),
@@ -2012,7 +2027,7 @@ async fn read_only_runtime_never_registers_or_dispatches_browser_tools() {
 
     // The dispatcher boundary also hides and rejects browser effects.
     let (dispatcher, context) = dispatcher(temp.path(), &run, None).await.unwrap();
-    register_browser(&dispatcher, &run, Arc::new(FixtureProvider::full())).unwrap();
+    register_browser(&dispatcher, &run, Arc::new(FixtureProvider::full()), None).unwrap();
     register_web(&dispatcher, web_settings("https://example.com"), None).unwrap();
     let dispatcher = dispatcher.restrict_to_read_only();
     let names = dispatcher
@@ -2090,8 +2105,14 @@ async fn browser_transfers_are_untrusted_and_dev079_saves_no_screenshot_media() 
     .await;
     let screenshot = screenshot.data.as_ref().unwrap();
     assert_eq!(screenshot["source"], "untrusted_browser");
-    assert!(screenshot["screenshot"]["media_ref"].is_string());
-    assert_eq!(screenshot["screenshot"]["model_image_attached"], false);
+    assert!(screenshot["screenshot"]["artifact_ref"].is_string());
+    assert!(screenshot["screenshot"].get("media_ref").is_none());
+    assert_eq!(screenshot["screenshot"]["masked"], true);
+    assert_eq!(
+        screenshot["screenshot"]["model_image_capability"],
+        "disabled"
+    );
+    assert!(screenshot["screenshot"]["model_image_status"].is_string());
     assert!(screenshot["screenshot"].get("raw_bytes").is_none());
 
     let download = execute_one(
@@ -2112,7 +2133,8 @@ async fn browser_transfers_are_untrusted_and_dev079_saves_no_screenshot_media() 
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(download["download"]["media_ref"], artifact_ref);
+    assert!(download["download"].get("media_ref").is_none());
+    assert!(!artifact_ref.is_empty());
 
     let snapshot = execute_one(
         &dispatcher,

@@ -1,7 +1,7 @@
 //! Short labels derived from canonical tool result payloads.
 use crate::{
     editor::safe_text,
-    i18n::{summary, tool as text},
+    i18n::{browser as browser_text, summary, tool as text},
     view::MAX_MESSAGE_BYTES,
 };
 use saya_core::{
@@ -68,6 +68,9 @@ pub(crate) fn summarize_call(
     result: Option<&ToolResult>,
     elapsed: Option<std::time::Duration>,
 ) -> Option<ToolSummary> {
+    if name.starts_with("browser_") {
+        return browser_call_summary(name, result);
+    }
     if name != "exec" {
         return result.and_then(|result| {
             serde_json::to_string(result)
@@ -117,6 +120,100 @@ pub(crate) fn summarize_call(
         ok,
         truncated,
         running,
+    })
+}
+
+fn browser_call_summary(name: &str, result: Option<&ToolResult>) -> Option<ToolSummary> {
+    let action = browser_text::action(name);
+    let Some(result) = result else {
+        return Some(ToolSummary {
+            text: format!("{action} · {}", text::RUNNING),
+            ok: true,
+            truncated: false,
+            running: true,
+        });
+    };
+    if !result.ok {
+        let error = result.error.as_ref()?;
+        return Some(ToolSummary {
+            text: one_line(
+                &format!(
+                    "{action} · {} · {}",
+                    one_line(&error.code, 32),
+                    one_line(&error.message, 64)
+                ),
+                120,
+            ),
+            ok: false,
+            truncated: result.truncated,
+            running: false,
+        });
+    }
+    let data = result.data.as_ref()?;
+    let mut parts = vec![action.to_owned()];
+    // Screenshot/download/upload records are nested; page and revision must be
+    // read from the real object rather than assumed at the top level.
+    let nested = ["screenshot", "download", "upload"]
+        .iter()
+        .find_map(|key| data.get(*key).map(|value| (*key, value)));
+    let record = nested.map_or(data, |(_, value)| value);
+    if let Some(page) = record.get("page").and_then(Value::as_str) {
+        parts.push(format!("{} {}", browser_text::PAGE, one_line(page, 48)));
+    }
+    if let Some(revision) = record.get("document_revision").and_then(Value::as_u64) {
+        parts.push(format!("{} {revision}", browser_text::REVISION));
+    }
+    if let Some(url) = record.get("url").and_then(Value::as_str) {
+        parts.push(one_line(url, 80));
+    }
+    if let Some(job) = record.get("job_id").and_then(Value::as_str) {
+        parts.push(format!("{} {}", browser_text::JOB, one_line(job, 40)));
+    }
+    if data.get("closed").and_then(Value::as_bool) == Some(true) {
+        parts.push(browser_text::CLOSED.into());
+    }
+    if let Some((_, value)) = nested {
+        if let Some(mime) = value.get("mime").and_then(Value::as_str) {
+            parts.push(one_line(mime, 48));
+        }
+        if let Some(bytes) = value.get("bytes").and_then(Value::as_u64) {
+            parts.push(format!("{bytes} {}", text::BYTES));
+        }
+        if let Some(bytes) = value.get("bytes_sent").and_then(Value::as_u64) {
+            parts.push(format!("{bytes} {}", text::BYTES));
+        }
+        if value.get("masked").and_then(Value::as_bool) == Some(true) {
+            parts.push(format!("{} {}", browser_text::MASKED, browser_text::YES));
+        }
+        if let Some(sha) = value.get("sha256").and_then(Value::as_str) {
+            let short = sha.get(..12).unwrap_or(sha);
+            parts.push(format!("{} {short}", browser_text::SHA256));
+        }
+        // The public artifact reference is needed to chain browser_upload; the
+        // host-only media reference never participates in interface text.
+        if let Some(artifact) = value.get("artifact_ref").and_then(Value::as_str) {
+            parts.push(format!(
+                "{} {}",
+                browser_text::ARTIFACT,
+                one_line(artifact, 24)
+            ));
+        }
+    }
+    if let Some(outputs) = data.get("output_refs").and_then(Value::as_array)
+        && let Some(first) = outputs.first().and_then(|value| value.get("output_ref"))
+        && let Some(reference) = first.as_str()
+    {
+        parts.push(format!(
+            "{} {}",
+            browser_text::OUTPUT,
+            one_line(reference, 24)
+        ));
+    }
+    Some(ToolSummary {
+        text: one_line(&parts.join(" · "), 160),
+        ok: true,
+        truncated: result.truncated,
+        running: false,
     })
 }
 
@@ -556,6 +653,97 @@ mod tests {
             MAX_SUMMARY_BYTES
         );
         assert!(one_line("text", 0).is_empty());
+    }
+
+    #[test]
+    fn browser_summaries_show_the_action_source_revision_and_artifact_metadata() {
+        let result = ToolResult {
+            ok: true,
+            data: Some(json!({
+                "source": "untrusted_browser",
+                "screenshot": {
+                    "page": "page_demo",
+                    "document_revision": 3,
+                    "url": "https://a.test/",
+                    "mime": "image/png",
+                    "bytes": 42,
+                    "sha256": "0123456789abcdef0123456789abcdef",
+                    "artifact_ref": "media_demo",
+                    "masked": true,
+                    "model_image_capability": "disabled",
+                    "model_image_status": "artifact_saved"
+                }
+            })),
+            error: None,
+            truncated: false,
+            media_refs: Vec::new(),
+        };
+        let summary = summarize_call(
+            "browser_screenshot",
+            &json!({"page": "page_demo"}),
+            Some(&result),
+            None,
+        )
+        .unwrap();
+        assert!(summary.ok && !summary.running);
+        for expected in [
+            "screenshot",
+            "Page page_demo",
+            "Revision 3",
+            "https://a.test/",
+            "image/png",
+            "42 bytes",
+            "SHA-256",
+            "Masked yes",
+            "Artifact media_demo",
+        ] {
+            assert!(
+                summary.text.contains(expected),
+                "{expected}: {}",
+                summary.text
+            );
+        }
+        assert!(!summary.text.contains("media_ref"));
+
+        let running = summarize_call("browser_navigate", &json!({}), None, None).unwrap();
+        assert!(running.running);
+        assert!(running.text.starts_with("navigate · running"));
+
+        let unknown = ToolResult {
+            ok: false,
+            data: None,
+            error: Some(saya_core::contract::ErrorInfo {
+                code: "outcome_unknown".into(),
+                message: "may have started".into(),
+            }),
+            truncated: false,
+            media_refs: Vec::new(),
+        };
+        let summary = summarize_call("browser_click", &json!({}), Some(&unknown), None).unwrap();
+        assert!(!summary.ok);
+        assert!(summary.text.contains("outcome_unknown"));
+    }
+
+    #[test]
+    fn browser_summary_shows_each_output_reference_once() {
+        let result = ToolResult {
+            ok: true,
+            data: Some(
+                json!({"source":"untrusted_browser","page":"page_demo","document_revision":3,"output_refs":[{"output_ref":"output_demo"}]}),
+            ),
+            error: None,
+            truncated: true,
+            media_refs: Vec::new(),
+        };
+        let summary = summarize_call(
+            "browser_snapshot",
+            &json!({"page":"page_demo"}),
+            Some(&result),
+            None,
+        )
+        .unwrap();
+        assert!(summary.truncated);
+        assert_eq!(summary.text.matches("Output output_demo").count(), 1);
     }
 
     #[test]

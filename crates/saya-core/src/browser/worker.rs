@@ -56,13 +56,14 @@ pub const WORKER_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Worker tools that this provider may call. Discovery of other worker tools
 /// never adds a model tool.
-pub const MAPPED_WORKER_TOOLS: [&str; 8] = [
+pub const MAPPED_WORKER_TOOLS: [&str; 9] = [
     "browser_navigate",
     "browser_snapshot",
     "browser_click",
     "browser_type",
     "browser_press_key",
     "browser_wait_for",
+    "browser_take_screenshot",
     "browser_close",
     "browser_file_upload",
 ];
@@ -2242,6 +2243,26 @@ fn expected_worker_schemas() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
+            // The pinned worker exposes no masking parameter. This schema is
+            // pinned so identity checks are exact and so the absence of a mask
+            // input is an explicit capability boundary, not an accident.
+            "browser_take_screenshot",
+            json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {
+                    "element": {"description": "Human-readable element description used to obtain permission to interact with the element", "type": "string"},
+                    "target": {"description": "Exact target element reference from the page snapshot, or a unique element selector", "type": "string"},
+                    "type": {"description": "Image format for the screenshot. If unset, inferred from the filename extension, otherwise png.", "enum": ["png", "jpeg", "webp"], "type": "string"},
+                    "filename": {"description": "File name to save the screenshot to. Relative file names are resolved against the workspace root. If not specified, the screenshot is saved into the output directory as `page-{timestamp}.{png|jpeg|webp}`.", "type": "string"},
+                    "fullPage": {"description": "When true, takes a screenshot of the full scrollable page, instead of the currently visible viewport. Cannot be used with element screenshots.", "type": "boolean"},
+                    "scale": {"default": "css", "description": "Image resolution scale. \"css\" produces a screenshot sized in CSS pixels (smaller, consistent across devices). \"device\" produces a high-resolution screenshot using device pixels (larger, accounts for the device pixel ratio). Default is css.", "enum": ["css", "device"], "type": "string"}
+                },
+                "required": ["scale"],
+                "type": "object"
+            }),
+        ),
+        (
             "browser_close",
             json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3552,7 +3573,11 @@ impl BrowserProvider for PlaywrightMcpProvider {
     fn facts(&self) -> BrowserFacts {
         BrowserFacts {
             provider: format!("playwright-mcp-{PLAYWRIGHT_MCP_VERSION}"),
+            // The pinned schema has no `mask` input, so the worker cannot
+            // perform the required pre-capture masking. The host refuses the
+            // capability instead of returning an unmasked screenshot.
             screenshots: false,
+            screenshot_masking: false,
             downloads: true,
             uploads: true,
         }
@@ -3797,6 +3822,20 @@ impl BrowserProvider for PlaywrightMcpProvider {
         Ok(parse_action(first_text(&result)?, None))
     }
 
+    async fn screenshot(
+        &self,
+        _session: &str,
+        _page: &str,
+        _cancel: &dyn Cancellation,
+    ) -> Result<super::BrowserScreenshot, BrowserFailure> {
+        // `browser_take_screenshot` in the pinned worker has no mask input.
+        // Returning bytes here would expose passwords and one-time codes, so
+        // the provider reports an explicit disabled capability.
+        Err(BrowserFailure::new(
+            "browser_capability_disabled",
+            "The pinned Playwright MCP worker cannot mask sensitive fields before capture",
+        ))
+    }
     async fn download(
         &self,
         session: &str,
