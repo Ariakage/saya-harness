@@ -277,9 +277,21 @@ def bounded_process(arguments, cwd, env, timeout=120):
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
     finally:
+        group_survived = False
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            group_survived = True
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
         for reader in readers:
             reader.join(timeout=5)
-    if timed_out or exceeded.is_set() or any(reader.is_alive() for reader in readers):
-        reason="candidate process timed out" if timed_out else "candidate output exceeded the bounded capture" if exceeded.is_set() else "candidate output pipes did not close"
+    if timed_out or exceeded.is_set() or any(reader.is_alive() for reader in readers) or group_survived:
+        reason="candidate process timed out" if timed_out else "candidate output exceeded the bounded capture" if exceeded.is_set() else "candidate process group outlived main process" if group_survived else "candidate output pipes did not close"
         raise ProcessFailure(reason,process.returncode,outputs,time.monotonic()-started)
     return process.returncode, *(bytes(output).decode("utf-8", "replace") for output in outputs), time.monotonic() - started

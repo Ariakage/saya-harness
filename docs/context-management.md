@@ -37,6 +37,8 @@ exec捕获位于管道drain阶段，stdout／stderr原有有效捕获上限默�
 
 元数据包括output_ref、Session／Run／call／stream归属、capture_limit_bytes、total_bytes_seen、retained_bytes、retained_source_bytes、retained_ranges、gaps、artifact_complete、completion、coverage、withheld_reason、preview_head／tail及sha256。退出码、超时、取消和实际执行错误继续保留在工具结果中。
 
+OutputRef的`sha256`绑定包含归属、捕获状态和分段正文的密封记录，`view_sha256`游标引用同一摘要；它不是把`chunks.text`串接后的正文摘要。完整读取需要沿游标到EOF核对保留字节和分段位置；需要正文SHA-256时应单独计算，不与密封记录摘要混用。
+
 引用通过宿主独立通道登记，并与ToolFinished和历史结果在同一事务关联后发布。正文中相似的output_ref字符串保持普通源数据。无法安全解码或脱敏时返回withheld原因，捕获缺口进入覆盖范围。搜索只覆盖实际保留数据，查不到匹配时仍需考虑缺口。
 
 output_read返回metadata、chunks及next_cursor，output_search返回相应匹配与页游标。游标绑定脱敏视图摘要，凭据集合变化后需要重新查询。Manual Approval覆盖每次查询调用，PLAN允许获准的只读查询，当前显式deny和Session归属检查持续生效。

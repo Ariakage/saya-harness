@@ -225,6 +225,27 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(value["uncertainties"][0]["evidence"], "observed")
         self.assertEqual(value["references"], ["output:controlled"])
 
+    def test_exited_parent_cannot_leave_live_owned_group_with_closed_output(self):
+        import os
+        import signal
+        from fixture import ProcessFailure
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_file = root / 'child.pid'
+            program = ('import pathlib, subprocess, sys; '
+                       'child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"], '
+                       'stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); '
+                       'pathlib.Path(sys.argv[1]).write_text(str(child.pid))')
+            try:
+                with self.assertRaisesRegex(ProcessFailure, 'process group'):
+                    bounded_process([sys.executable, '-I', '-c', program, str(pid_file)], root, {}, timeout=10)
+            finally:
+                if pid_file.exists():
+                    try:
+                        os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_process_capture_and_source_hash_are_bounded_and_content_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

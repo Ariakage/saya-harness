@@ -1,8 +1,18 @@
 # 开发进度
 
-**更新于2026-11-12。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-14。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
+
+## N5 Browser 本机联合阶段
+
+2026-11-14，DEV-079、DEV-080、DEV-081 网络与凭据／文件阶段、DEV-082 分别已提交为 `5a61152`、`058bb9e`、`e2587fe`、`f1bbc5c`、`1443291`。DEV-083 的正常 CLI／TUI／专用 Colima VM 联合阶段通过 21 项、截图 disabled 1 项，未把禁用算作成功；N5 与 DEV-083 全范围仍未完成。完整范围、失败轮次与复跑入口见 [N5 验收](n5-validation.md)，对外能力与限制见 [中英双语说明](release-notes-n5.md)。
+
+固定程序来自 Rust 源码 `1443291511a294a141908633296e0d304f68f8bb`、标准 `just release` 与 macOS 15.0 部署目标，SHA-256 为 `86c08738d627d3b54314957675f82f1e23398fab212b4a02fe1410a9f82a0135`。最终报告 `target/n5/dev083-browser-final/run-jfraywh6/evidence.json` 实际记录 Execution 135、Review 8、Compact 1；覆盖 PLAN 三权限、独立审核、逐调用批准／拒绝、长快照／检索／完整分页、实际下载／同 Session 上传、后台取消后新观察恢复、前台取消的持久 unknown、插件资源与显式 Compact／Session 恢复。11 组真实 PTY、48 帧审批均验证，完整终端属性和 fd flags 恢复，清理未使用强制 SIGKILL，远端前后 Run 根与关联进程均为空。
+
+本轮补强验收夹具的启动前 canonical 基线、持续 PTY 读取失败清理、父进程退出后所属进程组回收与完整 OutputRef 字节核验。密封记录摘要和正文摘要分别校验／记录，不改变运行时摘要契约；缺前提、非空 VM 基线和截图严格要求均失败关闭。`just test-tooling` 144 项通过（含 36 项 N5 用例），日志 `target/n5/dev083-tooling-final.log`；同一固定程序再次通过完整 smoke、文本 journey、5 项审查回归和 28 组 TUI，日志 `target/n5/dev083-smoke-lifecycle.log`；修复夹具后重新通过三协议 34 条 CLI、15 条 TUI 旅程，报告 `target/n5/dev083-n3-{cli,tui}-lifecycle.json`。同一固定程序的原生隔离报告为 18 passed、1 not_run（未提供 Linux delegated cgroup），性能 v2 的 21 项核对通过。DEV-082 的 1650 项 Rust 门禁与真实 VM 三入口继续归属其固定源码；本阶段未修改 Rust 源码，曾通过标准 `just release` 重建并核对固定哈希，最终冻结矩阵期间未重建或替换程序。
+
+生产截图仍缺可靠预捕获遮蔽，native Browser 与当前 N5 新增四平台证据尚缺；受控 provider、VM 与历史发行证据不得替代。本轮只交付可验证的本机联合阶段及验收工具，版本号未变，未推送或发布。
 
 ## N4 Goal 编排
 
@@ -519,7 +529,7 @@ R-02已修复并完成独立复核，本地稳定试用程序使用本次最终�
 | N2 隔离与 MCP | DEV-054 至 DEV-061、DEV-075 | 完成（四平台验收） | 原生隔离、受控网络、命令结构事实、MCP与凭据通过最终源码CI、原生／性能／MCP／Markdown与TUI验收，见[N2记录](n2-validation.md#最终四平台验收) |
 | N3 上下文与扩展 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 完成（四平台验收） | 16项共享运行入口通过四端Rust、原生、性能、MCP、插件、CLI与TUI联合矩阵，固定源码 `e1da373`，见[N3最终验收](n3-validation.md#四平台最终验收) |
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 完成（本机受控验收） | 独立版本化 Goal 存储、专属 Session、手动／有限自动 Run、租约恢复、预算、证据核验、重规划、CLI／TUI 与报告通过本机 PTY／故障矩阵，见[N4验收](n4-validation.md) |
-| N5 Browser | DEV-079 至 DEV-083 | DEV-079 完成（组件与离线测试），DEV-080 组件完成且显式VM后端真实入口已验证（native浏览器未取得真实平台验收，Seatbelt／Bubblewrap 无法完成 Chromium 内层 sandbox 初始化），DEV-081A 网络阶段完成且专用VM真实网络验收通过，DEV-081 登录／文件 broker／后台／unknown 阶段完成且专用VM真实验收通过，DEV-082 完成截图宿主／模型图片注入／CLI／TUI（pinned worker 无遮蔽输入，生产截图显式禁用），DEV-083 待开始 | `BrowserProvider`／`BrowserState`、受控 `fetch_url`／显式 endpoint `web_search`、固定工具面、三权限分类、Web／Browser OutputStore 流、Playwright MCP worker 启动／身份校验／固定工具映射、`saya-app` 生产装配、Run 私有目录映射、每次新建 environment、renderer sandbox 证据路径与 shutdown 清理已通过离线测试（native 真实平台证据未取得）；按D-066新增显式Colima VM后端、严格SSH宿主通道、远端身份与生命周期校验、显式provision工具及离线回归，专用Colima VM真实入口已执行通过（渲染器NoNewPrivs/Seccomp证据、远端Run根与进程清理）；真实 Chromium／Playwright 四平台端到端与联合验收未开始；DEV-081A 的宿主 broker、SSH 反向转发、VM 私有 network namespace／socat、Chromium 固定代理、网络观测与真实 VM 网络验收已完成；DEV-081 的 origin 绑定凭据槽、显式元素下载／artifact 上传、File 媒体生命周期、后台取消与 unknown 提交已完成并通过专用 VM 真实入口；DEV-082 的三协议工具图片注入、Image artifact GC／恢复、截图遮蔽能力门禁、CLI／TUI 摘要／详情／审批与 PTY 终端恢复已完成本机验证，生产 worker／VM 因 pinned schema 无 `mask` 输入而显式返回 `browser_capability_disabled` |
+| N5 Browser | DEV-079 至 DEV-083 | DEV-079 完成（组件与离线测试），DEV-080 组件完成且显式VM后端真实入口已验证（native浏览器未取得真实平台验收，Seatbelt／Bubblewrap 无法完成 Chromium 内层 sandbox 初始化），DEV-081A 网络阶段完成且专用VM真实网络验收通过，DEV-081 登录／文件 broker／后台／unknown 阶段完成且专用VM真实验收通过，DEV-082 完成截图宿主／模型图片注入／CLI／TUI（pinned worker 无遮蔽输入，生产截图显式禁用），DEV-083 本机联合阶段通过（21 passed、1 disabled；生产截图、native Browser 与新增四平台证据仍缺） | `BrowserProvider`／`BrowserState`、受控 `fetch_url`／显式 endpoint `web_search`、固定工具面、三权限分类、Web／Browser OutputStore 流、Playwright MCP worker 启动／身份校验／固定工具映射、`saya-app` 生产装配、Run 私有目录映射、每次新建 environment、renderer sandbox 证据路径与 shutdown 清理已通过离线测试（native 真实平台证据未取得）；按D-066新增显式Colima VM后端、严格SSH宿主通道、远端身份与生命周期校验、显式provision工具及离线回归，专用Colima VM真实入口已执行通过（渲染器NoNewPrivs/Seccomp证据、远端Run根与进程清理）；真实 Chromium／Playwright 四平台端到端尚未完成；本机联合结果与限制见[N5验收](n5-validation.md)；DEV-081A 的宿主 broker、SSH 反向转发、VM 私有 network namespace／socat、Chromium 固定代理、网络观测与真实 VM 网络验收已完成；DEV-081 的 origin 绑定凭据槽、显式元素下载／artifact 上传、File 媒体生命周期、后台取消与 unknown 提交已完成并通过专用 VM 真实入口；DEV-082 的三协议工具图片注入、Image artifact GC／恢复、截图遮蔽能力门禁、CLI／TUI 摘要／详情／审批与 PTY 终端恢复已完成本机验证，生产 worker／VM 因 pinned schema 无 `mask` 输入而显式返回 `browser_capability_disabled` |
 
 ### 全局记忆规划补充
 

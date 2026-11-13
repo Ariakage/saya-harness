@@ -84,6 +84,8 @@ just tui-preview syntax
 | [N3 验收](docs/n3-validation.md) | 上下文、插件／Hooks 与全局记忆的四平台固定源码验收 |
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
+| [N5 Browser 验收](docs/n5-validation.md) | 本机／专用 VM 证据、联合矩阵与未满足的退出条件 |
+| [N5 中英双语说明](docs/release-notes-n5.md) | Browser 开发线功能、权限、兼容性与截图限制 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
 | [TUI 布局](docs/tui-design.md) | 参考布局、侧栏、输入区与预览 |
 | [TUI 验证](docs/tui-validation.md) | 候选及后续源码的真实终端验收 |
@@ -100,7 +102,7 @@ just tui-preview syntax
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。N4 Goal 已完成本机实现与受控验收。Browser 和 GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)、[N4验收](docs/n4-validation.md)
+0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。N4 Goal 已完成本机实现与受控验收。N5 Browser 已交付受控 Web、托管 worker、专用 VM 网络与文件 broker、CLI／TUI 和按能力启用的媒体链路；本机／专用 VM 联合阶段 21 passed、1 disabled，见 [N5 验收](docs/n5-validation.md)。生产截图、native Browser 与新增四平台证据仍有缺口，不标为全范围完成。GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)、[N4验收](docs/n4-validation.md)
 
 ## 许可证
 

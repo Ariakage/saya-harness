@@ -64,6 +64,7 @@ test-tooling:
     python3 -B scripts/release/test_script_helpers.py
     python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py'
     python3 -B scripts/n5/test_browser_vm.py
+    python3 -I -B scripts/n5/test_acceptance.py
 
 # 验证显式指定程序的 CLI、会话、审查回归和 TUI
 smoke binary:

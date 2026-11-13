@@ -35,6 +35,23 @@ def generated_profile(command):
 
 
 class ScriptHelpersTest(unittest.TestCase):
+    def test_terminal_close_reaps_owned_processes_after_persistent_read_failure(self):
+        terminal = tui_journey.Terminal([sys.executable, '-I', '-c', 'input()'],
+                                       Path.cwd(), os.environ)
+        try:
+            with mock.patch.object(terminal, 'pump', side_effect=RuntimeError('controlled PTY read failure')):
+                with self.assertRaisesRegex(RuntimeError, 'controlled PTY read failure'):
+                    terminal.close()
+            self.assertIsNotNone(terminal.process.poll())
+            self.assertIsNotNone(terminal.process.supervisor.poll())
+            for descriptor in (terminal.master, terminal.slave):
+                with self.assertRaises(OSError) as error:
+                    os.fstat(descriptor)
+                self.assertEqual(error.exception.errno, errno.EBADF)
+        finally:
+            if terminal.process.poll() is None:
+                terminal.close()
+
     def test_status_parser_excludes_activity_particles_from_status(self):
         for width, permission, expected in [
             (80, 'auto', 'auto'),

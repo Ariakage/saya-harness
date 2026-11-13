@@ -32,6 +32,8 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [N3验收](n3-validation.md) | 上下文、插件／Hooks、记忆与联合矩阵 | 完成四平台验收 |
 | [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | N3 已实现并接入共享运行入口 |
 | [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | DEV-079 至 DEV-081 已提交并有专用 VM 证据；DEV-082 界面与模型图片链路已完成本机验收，固定 worker 仍禁用截图，联合验收见开发进度 |
+| [N5 Browser 验收](n5-validation.md) | Browser／原生隔离／Compact／插件与终端联合证据 | 本机／专用 VM 联合阶段21 passed、1 disabled；生产截图、native Browser 与新增四平台证据仍有缺口 |
+| [N5 中英双语说明](release-notes-n5.md) | Browser 工具、权限、VM、媒体与兼容性限制 | 未发布的开发线说明，版本号未变 |
 | [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | DEV-047 至 DEV-053 已完成候选验收，后续交互完善见开发进度 |
 | [Markdown与调试预览](markdown-rendering.md) | 语法、Unicode数学、图表、脚注导航与source／render | 本地开发线，验收见开发进度 |
 | [TUI 布局设计](tui-design.md) | 参考布局、尺寸、面板和预览 | 当前开发线设计与实现说明 |

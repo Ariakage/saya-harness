@@ -610,13 +610,25 @@ class Terminal:
             raise RuntimeError('alternate screen was not entered and restored')
 
     def close(self):
-        # After the slow-reader assertion, release pending output before the
-        # controlling session leader exits. Darwin may otherwise drain on exit.
-        for _ in range(16):
-            self.pump(0)
-        self.process.close(lambda: self.pump(0.01))
-        os.close(self.master)
-        os.close(self.slave)
+        failure = None
+
+        def drain(timeout=0):
+            nonlocal failure
+            try:
+                self.pump(timeout)
+            except Exception as error:
+                if failure is None:
+                    failure = error
+
+        try:
+            for _ in range(16):
+                drain()
+            self.process.close(lambda: drain(0.01))
+        finally:
+            os.close(self.master)
+            os.close(self.slave)
+        if failure is not None:
+            raise failure
 
 
 def protocol_stream(protocol, text='', call=None, pieces=None, chat_usage=None, chat_reasoning=None, thinking=None):
