@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dev-dependencies]
+png = "0.18.0"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time", "test-util"] }
 

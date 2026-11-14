@@ -14,6 +14,8 @@
 
 生产截图仍缺可靠预捕获遮蔽，native Browser 与当前 N5 新增四平台证据尚缺；受控 provider、VM 与历史发行证据不得替代。本轮只交付可验证的本机联合阶段及验收工具，版本号未变，未推送或发布。
 
+后续全范围补齐先加入专用 VM 的真实像素特征回归：固定 Chromium `158.0.8127.18`（revision `6449d9f9a6a906edff724b7b220199b3fde4615c`）在暂停 renderer 后，普通、密码与 closed-shadow 合成字段实际未绘入 PNG，非敏感区域保留；原始 style 与计时状态恢复。显式入口 1 passed，日志 `target/n5/fullscope-primitives-real-final.log`，独立清理 inventory 为空；该调查仅验证单 renderer 原语，没有开启生产截图或完成导航／OOPIF／取消屏障，详见 [N5 截图边界](n5-validation.md#截图与媒体边界)。
+
 ## N4 Goal 编排
 
 2026-11-12，按D-064完成DEV-069至DEV-074。新增独立版本化`data_dir/goals/goals.sqlite3`、严格Goal／Step／验收证据模型、revision CAS、worker lease、dispatch intent、预算usage及未知结果恢复。Goal绑定专属Session与工作区，每个Step通过现有AgentRuntime、权限、Sandbox、Compact、检查点、工具派发和Session锁执行。

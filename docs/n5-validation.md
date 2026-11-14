@@ -106,6 +106,16 @@ e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46
 
 ## 截图与媒体边界
 
+### 真实遮蔽原语调查（尚未生产接入）
+
+新增[专用 VM 像素回归](../crates/saya-core/tests/browser_screenshot_real.rs)，仅使用合成字段与 `about:blank`。实际固定 Chromium 返回 `HeadlessChrome/158.0.8127.18`、revision `6449d9f9a6a906edff724b7b220199b3fde4615c`。在已确认的双层 sandbox 内，暂停 renderer 后通过原生 DOM/CSS 遍历并隐藏普通、密码和 closed-shadow 输入；宿主独立解码实际 PNG，逐点核对三处敏感区域为白色、非敏感绿色区域仍保留，同时核对暂停期间计时不变、原始 style 精确恢复后计时继续。PNG 解码依赖仅用于测试。
+
+显式入口实际为 1 passed、0 failed、0 ignored，日志 `target/n5/fullscope-primitives-real-final.log`；此前原语轮次及独立空 inventory 分别保留在 `target/n5/fullscope-cdp-real.log`、`target/n5/fullscope-primitives-inventory.log`。该入口在默认 Rust 门禁中仍为 ignored，缺少显式 VM 输入或平台不符不得返回通过。单 renderer 的特征回归不证明流式文档、导航提交、新 target、OOPIF 或取消恢复的生产事务屏障，不能据此开启截图 facts 或计为 N5 截图验收完成。
+
+这一测试增量的最终 `RUST_TEST_THREADS=1 just check` 通过 71 个测试二进制、1650 passed、0 failed、13 ignored，含格式、严格 Clippy 与 release 构建，日志 `target/n5/fullscope-primitives-check-final.log`；`just test-tooling` 144 项通过，日志 `target/n5/fullscope-primitives-tooling.log`。新增的 ignored 入口已按上一段单独显式执行，不把其余 ignored 算作实跑。初次门禁中的常量平台断言被严格 Clippy 拒绝，已改用仍会在错误平台失败的 OS 断言；初始日志保留在 `target/n5/fullscope-primitives-check.log`。运行时源码未改，release 程序仍为本文固定 SHA-256。
+
+### 生产边界
+
 - 生产 worker 缺少截图前真实遮蔽契约，`browser_screenshot` 不注册；直接调用为 `browser_capability_disabled`，不保存未遮蔽图片。
 - 受控 provider 已验证截图宿主成功路径、lease／GC／恢复和三协议原生图片块。它不是生产 worker 的像素级遮蔽证据。
 - 开启 profile 图片能力时，只从有效请求历史选择宿主 Image 引用，最多 8 个，raw 与 base64 聚合各不超过 64 MiB；File 永不注入，Compact／Review 不扩展媒体。
