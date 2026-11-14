@@ -18,7 +18,17 @@
 
 后续生命周期增量修复旧 sandbox 证据缓存、核验中断后的连接复用，以及启动目录／清理 await 丢失句柄或 unknown 的分支。启动隔离覆盖初始导航与目录刷新，直到 sandbox 核验完成；close 后证据作废。worker 定向 48 项与完整 `RUST_TEST_THREADS=1 just check` 的 1660 项通过（71 个测试二进制、0 failed、13 ignored，含格式、严格 Clippy、release 构建），日志 `target/n5/fullscope-lifecycle-{worker-green,check}.log`。新程序 SHA-256 为 `c1e20194d690efae1a9403a1c0892b62d78c146fa38c6da3365902305c2c7a91`、最低部署目标 15.0；真实 VM 四入口各 1 passed，close／reopen／snapshot 重新取得有效证据，独立清理 inventory 为空；同一程序通过完整 CLI／TUI smoke。详见 [生命周期增量证据](n5-validation.md#生命周期核验与启动清理增量)。本次仅本地验证与阶段提交，推送及新增四平台远端验收等待项目负责人再次授权；生产截图与 N5 全范围仍未完成。
 
-D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建。当前本机约 37 GiB 可用空间，未满足固定源码 Linux 构建文档的 100 GB 前提，也未确认独立构建环境；不清理归属不明的缓存，不将原语回归冒充生产截图。后续先补齐 Linux VM 宿主通道及本地可验证增量，新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068待实现)
+D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建。本轮 Akari 卷独立测量约 31 GiB 可用空间，未满足固定源码 Linux 构建文档的 100 GB 前提，也未确认独立构建环境；不清理归属不明的缓存，不将原语回归冒充生产截图。后续先补齐 Linux VM 宿主通道及本地可验证增量，新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068待实现)
+
+## Linux VM 宿主通道本机定向验收
+
+2026-11-14，新增 Linux Auto／Bubblewrap 宿主通道、固定 SSH／broker 双桥、精确 IPv4／IPv6 字面地址、受管 relay 与合成只读账号视图。修复空 broker 就绪探测消耗连接额度、活跃 socket 路径替换后的误删，以及私有 Unix socket 路径超长；保留完整 UUID 位的紧凑目录名与短 socket 名通过 94 字节目录转发和 64 字节 TMPDIR 真实 prepare 回归，7 项 relay 实际 IO 测试通过。
+
+三个旧 VM 测试现已强制显式程序和必需配置，最新四个固定测试程序的 16 项前提负控均在预期边界失败。新增真实表单提交字节、请求到达后的在途取消及严格清理扫描断言；真实 VM 四入口各 1 passed，前后独立 inventory 为空。最新 macOS 完整门禁为 1672 passed、0 failed、13 ignored，11 个 suite 的 144 项工具回归及固定程序的 5 项审查／28 组 TUI smoke 通过。release SHA-256 为 `d3c9e061cc5fed584fac42cb9ecd7c3513cf2505c9ab8ff7c6a91287f633583f`，最低部署目标 15.0；同一程序重跑完整 Browser 联合矩阵为 21 passed、1 disabled，截图禁用不计为成功。
+
+Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链接已通过，使用工作区内离线 vendor、经签名和摘要核对的 Ubuntu linker 输入、Clang／LLD 及匹配的 Zig C 运行库，保留必需 ARM 勘误参数和 C 检查运行库。最新程序在 Ubuntu 24.04 ARM64 专用 VM、`6.8.0-117-generic` 内核上实际通过 12 项定向检查：7 项 relay、启动协议、长路径 prepare、root payload、公钥认证／错误 host key 及 uid 501／CapEff=0／NoNewPrivs=1 payload；双目标、TCP／UDP／Unix／高位 FD 负控与精确只读文件边界得到核验，程序前后摘要一致，fixture 与关联进程已清理。未改变 VM 全局工具或 sysctl；宿主进程属性不是 Chromium sandbox 证据。
+
+提交范围仅为本地已验证的宿主通道及真实验收加固增量，**不代表 Linux workspace 全量运行或 N5 全范围完成**。旧 Linux I/O 失败与 Zig linker 不支持勘误参数的轮次保留，不作为当前成功证据；共享 Colima 未重启或调整，可控构建／验证输出继续使用工作区 TMPDIR。专用 VM 缺少原生编译工具链及 workspace 运行前提，完整 Linux workspace 尚未执行；生产捕获事务、native Browser 与新增四平台仍缺，未推送或发布，远端验收等待再次授权。[证据及阻碍](n5-validation.md#linux-vm-宿主通道增量)
 
 ## N4 Goal 编排
 

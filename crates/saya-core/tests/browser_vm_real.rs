@@ -1,6 +1,6 @@
 //! Real dedicated-VM browser worker integration entry point.
 //!
-//! Ignored by default. Run it explicitly on a macOS host with a provisioned
+//! Ignored by default. Run it explicitly on a macOS or Linux host with a provisioned
 //! Colima profile created by `scripts/n5/browser_vm.py`:
 //!
 //! ```text
@@ -49,50 +49,43 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn path(name: &str) -> Option<PathBuf> {
-    env(name).map(PathBuf::from)
+fn required(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("missing explicit test input {name}"))
+}
+
+fn path(name: &str) -> PathBuf {
+    PathBuf::from(required(name))
 }
 
 #[tokio::test]
 #[ignore = "requires a provisioned Colima browser VM and SAYA_TEST_VM_* inputs"]
 async fn real_vm_worker_verifies_chromium_sandbox_inside_the_vm() {
-    if !cfg!(target_os = "macos") {
-        eprintln!("real VM integration requires macOS; test not run");
-        return;
-    }
+    let launcher = std::fs::canonicalize(required("SAYA_TEST_EXECUTABLE"))
+        .expect("explicit Saya launcher path");
+    saya_core::execution::pin_launcher_image_from(&launcher)
+        .expect("pin the explicit Saya CLI instead of the libtest executable");
     let settings = BrowserVmSettings {
         enabled: true,
-        colima: path("SAYA_TEST_VM_COLIMA"),
-        ssh: path("SAYA_TEST_VM_SSH"),
-        profile: env("SAYA_TEST_VM_PROFILE"),
-        host: env("SAYA_TEST_VM_HOST"),
-        user: env("SAYA_TEST_VM_USER"),
-        port: env("SAYA_TEST_VM_PORT").and_then(|port| port.parse().ok()),
-        identity_file: path("SAYA_TEST_VM_IDENTITY_FILE"),
-        known_hosts: path("SAYA_TEST_VM_KNOWN_HOSTS"),
-        node: env("SAYA_TEST_VM_NODE"),
-        worker_root: env("SAYA_TEST_VM_WORKER_ROOT"),
-        chromium: env("SAYA_TEST_VM_CHROMIUM"),
-        identity_manifest: env("SAYA_TEST_VM_MANIFEST"),
-        identity_sha256: env("SAYA_TEST_VM_MANIFEST_SHA256"),
-        remote_temp_root: env("SAYA_TEST_VM_TEMP_ROOT"),
+        colima: Some(path("SAYA_TEST_VM_COLIMA")),
+        ssh: Some(path("SAYA_TEST_VM_SSH")),
+        profile: Some(required("SAYA_TEST_VM_PROFILE")),
+        host: Some(required("SAYA_TEST_VM_HOST")),
+        user: Some(required("SAYA_TEST_VM_USER")),
+        port: Some(
+            required("SAYA_TEST_VM_PORT")
+                .parse()
+                .expect("valid SAYA_TEST_VM_PORT"),
+        ),
+        identity_file: Some(path("SAYA_TEST_VM_IDENTITY_FILE")),
+        known_hosts: Some(path("SAYA_TEST_VM_KNOWN_HOSTS")),
+        node: Some(required("SAYA_TEST_VM_NODE")),
+        worker_root: Some(required("SAYA_TEST_VM_WORKER_ROOT")),
+        chromium: Some(required("SAYA_TEST_VM_CHROMIUM")),
+        identity_manifest: Some(required("SAYA_TEST_VM_MANIFEST")),
+        identity_sha256: Some(required("SAYA_TEST_VM_MANIFEST_SHA256")),
+        remote_temp_root: Some(required("SAYA_TEST_VM_TEMP_ROOT")),
         ..Default::default()
     };
-    if settings.ssh.is_none() || settings.identity_sha256.is_none() {
-        eprintln!("SAYA_TEST_VM_* environment is not configured; test not run");
-        return;
-    }
-    let launcher = env("SAYA_TEST_EXECUTABLE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/release/saya"));
-    let Ok(launcher) = std::fs::canonicalize(launcher) else {
-        eprintln!("real Saya launcher path is unavailable; test not run");
-        return;
-    };
-    if saya_core::execution::pin_launcher_image_from(&launcher).is_err() {
-        eprintln!("real Saya launcher cannot be pinned; test not run");
-        return;
-    }
     let origins = env("SAYA_TEST_VM_NETWORK_ORIGINS").unwrap_or_default();
     let allowed_origins = origins
         .split(',')
@@ -114,21 +107,15 @@ async fn real_vm_worker_verifies_chromium_sandbox_inside_the_vm() {
         localhost_development_origin: env("SAYA_TEST_VM_DEV_ORIGIN"),
         ..Default::default()
     };
-    let provider = match saya_core::browser::vm::assemble_vm_browser_provider(
-        settings,
-        network,
-        "test-run",
-        ExecConfig::default(),
-    ) {
-        Ok(provider) => Arc::new(provider),
-        Err(error) => {
-            eprintln!(
-                "VM provider assembly is unavailable ({}); test not run",
-                error.0.code
-            );
-            return;
-        }
-    };
+    let provider = Arc::new(
+        saya_core::browser::vm::assemble_vm_browser_provider(
+            settings,
+            network,
+            "test-run",
+            ExecConfig::default(),
+        )
+        .expect("VM provider assembly"),
+    );
     let opened = provider
         .open(None, &NeverCancel)
         .await

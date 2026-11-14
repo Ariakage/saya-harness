@@ -33,7 +33,11 @@ use saya_core::{
     browser::{
         BrowserCredentialPurpose, BrowserCredentialSettings, BrowserCredentialSlot,
         BrowserFileSettings, BrowserProvider, BrowserSettings, BrowserState,
-        network::BrowserNetworkSettings, vm::BrowserVmSettings, vm::assemble_vm_browser_provider,
+        network::BrowserNetworkSettings,
+        vm::{
+            BrowserVmSettings, SshVmCommandRunner, VmCommandRunner, VmCommandSpec,
+            assemble_vm_browser_provider,
+        },
     },
     contract::{
         ModelProtocol, PermissionMode, Run, RunId, Session, SessionId, ToolResult, WorkMode,
@@ -71,37 +75,37 @@ impl Cancellation for NeverCancel {
     }
 }
 
-fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+fn required(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("missing explicit test input {name}"))
 }
 
-fn path(name: &str) -> Option<PathBuf> {
-    env(name).map(PathBuf::from)
+fn path(name: &str) -> PathBuf {
+    PathBuf::from(required(name))
 }
 
 fn vm_settings() -> BrowserVmSettings {
     BrowserVmSettings {
         enabled: true,
-        colima: path("SAYA_TEST_VM_COLIMA"),
-        ssh: path("SAYA_TEST_VM_SSH"),
-        profile: env("SAYA_TEST_VM_PROFILE"),
-        host: env("SAYA_TEST_VM_HOST"),
-        user: env("SAYA_TEST_VM_USER"),
-        port: env("SAYA_TEST_VM_PORT").and_then(|port| port.parse().ok()),
-        identity_file: path("SAYA_TEST_VM_IDENTITY_FILE"),
-        known_hosts: path("SAYA_TEST_VM_KNOWN_HOSTS"),
-        node: env("SAYA_TEST_VM_NODE"),
-        worker_root: env("SAYA_TEST_VM_WORKER_ROOT"),
-        chromium: env("SAYA_TEST_VM_CHROMIUM"),
-        identity_manifest: env("SAYA_TEST_VM_MANIFEST"),
-        identity_sha256: env("SAYA_TEST_VM_MANIFEST_SHA256"),
-        remote_temp_root: env("SAYA_TEST_VM_TEMP_ROOT"),
+        colima: Some(path("SAYA_TEST_VM_COLIMA")),
+        ssh: Some(path("SAYA_TEST_VM_SSH")),
+        profile: Some(required("SAYA_TEST_VM_PROFILE")),
+        host: Some(required("SAYA_TEST_VM_HOST")),
+        user: Some(required("SAYA_TEST_VM_USER")),
+        port: Some(
+            required("SAYA_TEST_VM_PORT")
+                .parse()
+                .expect("valid SAYA_TEST_VM_PORT"),
+        ),
+        identity_file: Some(path("SAYA_TEST_VM_IDENTITY_FILE")),
+        known_hosts: Some(path("SAYA_TEST_VM_KNOWN_HOSTS")),
+        node: Some(required("SAYA_TEST_VM_NODE")),
+        worker_root: Some(required("SAYA_TEST_VM_WORKER_ROOT")),
+        chromium: Some(required("SAYA_TEST_VM_CHROMIUM")),
+        identity_manifest: Some(required("SAYA_TEST_VM_MANIFEST")),
+        identity_sha256: Some(required("SAYA_TEST_VM_MANIFEST_SHA256")),
+        remote_temp_root: Some(required("SAYA_TEST_VM_TEMP_ROOT")),
         ..Default::default()
     }
-}
-
-fn configured() -> bool {
-    vm_settings().ssh.is_some() && vm_settings().identity_sha256.is_some()
 }
 
 struct FixtureHits {
@@ -386,28 +390,77 @@ fn element(snapshot: &saya_core::browser::SnapshotView, role: &str, needle: &str
         .clone()
 }
 
+const CLEANUP_SCAN_SCRIPT: &str = r#"set -eu
+exec /usr/bin/python3 -I - "$1" <<'PY'
+import json,stat,sys
+from pathlib import Path
+root=Path(sys.argv[1])
+try:
+    metadata=root.lstat()
+except FileNotFoundError:
+    roots=[]
+else:
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise RuntimeError('Run root is not a directory')
+    roots=sorted(path.name for path in root.iterdir())
+prefix=(str(root).rstrip('/')+'/').encode()
+prefixes=(prefix,b'--user-data-dir='+prefix,b'--config='+prefix,b'UNIX-CONNECT:'+prefix)
+processes=[]
+for path in Path('/proc').iterdir():
+    if not path.name.isdecimal():
+        continue
+    try:
+        arguments=(path/'cmdline').read_bytes().split(bytes([0]))
+    except (FileNotFoundError,ProcessLookupError):
+        continue
+    if any(argument.startswith(prefixes) for argument in arguments):
+        processes.append({'pid':int(path.name),'program':arguments[0].decode(errors='replace')})
+print(json.dumps({'run_roots':roots,'related_processes':processes}))
+print('scan=done')
+PY
+"#;
+
+#[test]
+fn cleanup_scan_rejects_a_directory_it_cannot_list() {
+    use std::os::unix::{
+        fs::{MetadataExt, PermissionsExt},
+        process::CommandExt,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let directory = root.path().join("runs");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .args(["-c", CLEANUP_SCAN_SCRIPT, "cleanup-scan"])
+        .arg(&directory)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir("/");
+    if root.path().metadata().unwrap().uid() == 0 {
+        command.uid(65534).gid(65534);
+    }
+    let output = command.output();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let output = output.unwrap();
+    assert!(
+        !output.status.success(),
+        "unreadable roots are not empty roots"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("PermissionError"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("scan=done"));
+}
+
 #[tokio::test]
 #[ignore = "requires a provisioned Colima browser VM and SAYA_TEST_VM_* inputs"]
 async fn real_vm_credentials_files_background_and_cleanup() {
-    if !cfg!(target_os = "macos") {
-        eprintln!("real VM integration requires macOS; test not run");
-        return;
-    }
-    if !configured() {
-        eprintln!("SAYA_TEST_VM_* environment is not configured; test not run");
-        return;
-    }
-    let launcher = env("SAYA_TEST_EXECUTABLE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/release/saya"));
-    let Ok(launcher) = std::fs::canonicalize(launcher) else {
-        eprintln!("real Saya launcher path is unavailable; test not run");
-        return;
-    };
-    if saya_core::execution::pin_launcher_image_from(&launcher).is_err() {
-        eprintln!("real Saya launcher cannot be pinned; test not run");
-        return;
-    }
+    let launcher = std::fs::canonicalize(required("SAYA_TEST_EXECUTABLE"))
+        .expect("explicit Saya launcher path");
+    saya_core::execution::pin_launcher_image_from(&launcher)
+        .expect("pin the explicit Saya CLI instead of the libtest executable");
+    let vm = vm_settings();
 
     let (port, hits) = spawn_fixture().await;
     let origin = format!("http://127.0.0.1:{port}");
@@ -496,7 +549,7 @@ async fn real_vm_credentials_files_background_and_cleanup() {
     );
     let provider = Arc::new(
         assemble_vm_browser_provider(
-            vm_settings(),
+            vm.clone(),
             network,
             &run.id.0.to_string(),
             ExecConfig::default(),
@@ -588,6 +641,26 @@ async fn real_vm_credentials_files_background_and_cleanup() {
             .code,
         "credential_origin_mismatch"
     );
+    state
+        .click(
+            &context,
+            &page,
+            &stale.document,
+            &element(&stale, "button", "submit"),
+            None,
+            &NeverCancel,
+        )
+        .await
+        .expect("explicit credential form submission");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while hits.submissions.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        hits.submissions.lock().unwrap().as_slice(),
+        &["user=alice-secret".to_owned()]
+    );
+
     // A second use is refused after the first successful fill.
     state
         .navigate(&context, &page, &format!("{origin}/login"), &NeverCancel)
@@ -660,14 +733,7 @@ async fn real_vm_credentials_files_background_and_cleanup() {
         "pseudo ref name was mistaken for an element key: {click:?}"
     );
 
-    // The submitted form actually received the injected value.
-    state
-        .navigate(&context, &page, &format!("{origin}/login"), &NeverCancel)
-        .await
-        .unwrap();
-    // The Run's single use was consumed by the earlier successful fill; the
-    // fixture side observed no automatic submission from filling.
-    assert!(hits.submissions.lock().unwrap().is_empty());
+    assert_eq!(hits.submissions.lock().unwrap().len(), 1);
 
     // --- Download through an explicit element click. ---
     state
@@ -1207,46 +1273,42 @@ async fn real_vm_credentials_files_background_and_cleanup() {
     assert_eq!(bytes, b"downloaded bytes");
 
     // No Run root, worker or socat remains in the dedicated VM.
-    let settings = vm_settings();
-    let output = std::process::Command::new(settings.ssh.as_ref().unwrap())
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "IdentitiesOnly=yes",
-            "-o",
-            "StrictHostKeyChecking=yes",
-            "-o",
-            &format!(
-                "UserKnownHostsFile={}",
-                settings.known_hosts.as_ref().unwrap().display()
-            ),
-            "-i",
-            settings.identity_file.as_ref().unwrap().to_str().unwrap(),
-            "-p",
-            &settings.port.unwrap().to_string(),
-            &format!(
-                "{}@{}",
-                settings.user.as_ref().unwrap(),
-                settings.host.as_ref().unwrap()
-            ),
-            &format!(
-                "ls -A {} 2>/dev/null; ps -eo args | grep '[s]aya-browser-vm-' || true",
-                settings
-                    .remote_temp_root
-                    .as_deref()
-                    .unwrap_or("/tmp/saya-runs")
-            ),
-        ])
-        .output()
-        .expect("ssh cleanup inspection");
-    let text = String::from_utf8_lossy(&output.stdout);
-    let leftovers = text
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.contains("pgrep"))
-        .collect::<Vec<_>>();
+    let temp_root = vm.remote_temp_root.clone().expect("explicit VM Run root");
+    let runner = SshVmCommandRunner::new(vm).expect("cleanup inspection SSH runner");
+    let output = runner
+        .run(
+            VmCommandSpec {
+                script: CLEANUP_SCAN_SCRIPT,
+                args: &[temp_root],
+                stdin: None,
+                timeout: Duration::from_secs(30),
+                stderr_limit: 16 * 1024,
+                stdout_limit: 512 * 1024,
+            },
+            &NeverCancel,
+        )
+        .await
+        .expect("SSH cleanup inspection");
     assert!(
-        leftovers.is_empty(),
-        "remote Run residue remains: {leftovers:?}"
+        output.succeeded(),
+        "SSH cleanup inspection failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut lines = text.lines();
+    let inventory: serde_json::Value =
+        serde_json::from_str(lines.next().expect("cleanup inventory")).unwrap();
+    assert_eq!(lines.next(), Some("scan=done"));
+    assert!(lines.next().is_none());
+    assert!(
+        inventory["run_roots"].as_array().unwrap().is_empty(),
+        "{inventory}"
+    );
+    assert!(
+        inventory["related_processes"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{inventory}"
     );
 }

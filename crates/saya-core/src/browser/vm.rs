@@ -34,8 +34,7 @@ use crate::{
     boundary::Cancellation,
     contract::{BoundaryError, ErrorInfo},
     execution::{
-        self, BackendKind, BrowserSandboxDirectories, NetworkPolicy, PreparedEnvironment,
-        SandboxPolicy,
+        self, BrowserSandboxDirectories, NetworkPolicy, PreparedEnvironment, SandboxPolicy,
     },
     mcp::{McpCatalog, McpLimits, McpToolResult},
     network::RunNetworkBudget,
@@ -378,9 +377,9 @@ impl BrowserVmSettings {
         if !self.enabled {
             return Err(invalid_config("Browser VM backend is disabled"));
         }
-        if !cfg!(target_os = "macos") {
+        if !cfg!(any(target_os = "macos", target_os = "linux")) {
             return Err(vm_unavailable(
-                "the Colima browser VM backend is only available on macOS",
+                "the Colima browser VM backend requires macOS or Linux native isolation",
             ));
         }
         let ssh = self
@@ -815,7 +814,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), BoundaryError> {
         .map_err(|_| invalid_config("Browser VM private file cannot be written"))
 }
 
-/// One run-private host channel tree plus its prepared Seatbelt environment.
+/// One run-private host channel tree plus its prepared native environment.
 struct VmHostEnvironment {
     environment: PreparedEnvironment,
     base: PathBuf,
@@ -888,13 +887,13 @@ fn host_policy(
     let port = settings
         .port
         .ok_or_else(|| invalid_config("Browser VM port is missing"))?;
-    settings
+    let host = settings
         .host
         .as_deref()
         .and_then(normalized_loopback_host)
+        .and_then(|host| host.parse().ok())
         .ok_or_else(|| invalid_config("Browser VM host is not a loopback literal"))?;
     let mut policy = SandboxPolicy::workspace(workspace.to_path_buf());
-    policy.backend = BackendKind::Seatbelt;
     policy.read_roots.clear();
     policy.write_roots = vec![workspace.to_path_buf()];
     policy.read_files = vec![
@@ -903,7 +902,11 @@ fn host_policy(
         paths.known_hosts.clone(),
     ];
     policy.protected_paths.clear();
-    policy.network = NetworkPolicy::LoopbackPort { port, proxy_port };
+    policy.network = NetworkPolicy::LoopbackPort {
+        host,
+        port,
+        proxy_port,
+    };
     policy.browser = None;
     Ok(policy)
 }
@@ -3631,6 +3634,7 @@ impl BoundaryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::BackendKind;
     fn test_network_factory() -> Arc<BrowserNetworkFactory> {
         Arc::new(
             BrowserNetworkFactory::new(
@@ -3658,7 +3662,9 @@ mod tests {
     }
 
     use serde_json::json;
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    #[cfg(target_os = "macos")]
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn upload_script_preserves_original_name_and_cleans_partial_staging() {
@@ -4124,7 +4130,7 @@ mod tests {
         assert_eq!(policy.read_files.len(), 3);
         assert!(matches!(
             policy.network,
-            NetworkPolicy::LoopbackPort { port, proxy_port } if port == 2222 && proxy_port.is_none()
+            NetworkPolicy::LoopbackPort { port, proxy_port, .. } if port == 2222 && proxy_port.is_none()
         ));
         assert!(!matches!(policy.network, NetworkPolicy::Proxy(_)));
         // The generic default is unchanged: only this purpose gains a
@@ -4133,6 +4139,43 @@ mod tests {
             SandboxPolicy::workspace(PathBuf::from("/tmp")).network,
             NetworkPolicy::Deny
         ));
+    }
+
+    #[test]
+    fn host_channel_selects_the_native_backend_for_its_platform() {
+        let settings = IdentityFixture::new().settings;
+        let paths = VmLocalPaths {
+            ssh: "/usr/bin/ssh".into(),
+            identity_file: "/private/key".into(),
+            known_hosts: "/private/known_hosts".into(),
+            colima: "/usr/bin/colima".into(),
+        };
+        let policy = host_policy(&settings, Path::new("/private/vm-host"), &paths, None).unwrap();
+        assert_eq!(policy.backend, BackendKind::Auto);
+    }
+
+    #[test]
+    fn host_channel_policy_preserves_the_exact_loopback_literal() {
+        let mut settings = IdentityFixture::new().settings;
+        let paths = VmLocalPaths {
+            ssh: "/usr/bin/ssh".into(),
+            identity_file: "/private/key".into(),
+            known_hosts: "/private/known_hosts".into(),
+            colima: "/usr/bin/colima".into(),
+        };
+        for (host, expected) in [("127.0.0.2", "127.0.0.2"), ("[::1]", "::1")] {
+            settings.host = Some(host.into());
+            let policy = host_policy(
+                &settings,
+                Path::new("/private/vm-host"),
+                &paths,
+                Some(31234),
+            )
+            .unwrap();
+            let network = serde_json::to_value(policy.network).unwrap();
+            assert_eq!(network["host"], expected);
+            assert_eq!(network["proxy_port"], 31234);
+        }
     }
 
     #[tokio::test]
@@ -4596,7 +4639,9 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     struct SwitchCancel(Arc<AtomicBool>);
+    #[cfg(target_os = "macos")]
     impl Cancellation for SwitchCancel {
         fn is_cancelled(&self) -> bool {
             self.0.load(Ordering::Acquire)
@@ -4609,11 +4654,13 @@ mod tests {
     }
 
     /// Runner that flips cancellation after it confirms the remote Run root.
+    #[cfg(target_os = "macos")]
     struct PrepareThenCancel {
         cancel: Arc<AtomicBool>,
         calls: AtomicUsize,
     }
 
+    #[cfg(target_os = "macos")]
     #[async_trait]
     impl VmCommandRunner for PrepareThenCancel {
         async fn run(

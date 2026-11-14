@@ -19,6 +19,13 @@ use std::{
     sync::Arc,
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NamespaceBridge {
+    pub socket: PathBuf,
+    pub endpoint: std::net::SocketAddr,
+}
+
 pub const WORKER_RPC_MAX_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -310,7 +317,7 @@ mod launch {
     use super::*;
     #[cfg(target_os = "linux")]
     use std::{
-        net::{SocketAddr, TcpStream},
+        net::TcpStream,
         os::unix::fs::MetadataExt,
         process::{Child, Stdio},
         time::{Duration, Instant},
@@ -322,16 +329,14 @@ mod launch {
     struct Launch {
         socat: Option<PathBuf>,
         socat_identity: Option<(u64, u64)>,
-        socket: Option<PathBuf>,
-        port: Option<u16>,
+        bridges: Vec<NamespaceBridge>,
         env_fd: i32,
         argv: Vec<OsString>,
     }
     fn parse(args: &[OsString]) -> io::Result<Launch> {
         let mut socat = None;
         let mut socat_identity = None;
-        let mut socket = None;
-        let mut port = None;
+        let mut bridges: Option<Vec<NamespaceBridge>> = None;
         let mut env_fd = None;
         let mut argv = Vec::new();
         let invalid = || io::Error::from_raw_os_error(libc::EINVAL);
@@ -354,15 +359,24 @@ mod launch {
                         inode.parse().map_err(|_| invalid())?,
                     ));
                 }
-                Some("--socket") if socket.is_none() => socket = Some(PathBuf::from(value)),
-                Some("--port") if port.is_none() => {
-                    port = Some(
-                        value
-                            .to_str()
-                            .and_then(|value| value.parse::<u16>().ok())
-                            .filter(|port| *port != 0)
-                            .ok_or_else(invalid)?,
-                    );
+                Some("--bridges") if bridges.is_none() => {
+                    let value = value
+                        .to_str()
+                        .filter(|value| value.len() <= 16 * 1024)
+                        .ok_or_else(invalid)?;
+                    let parsed: Vec<NamespaceBridge> =
+                        serde_json::from_str(value).map_err(|_| invalid())?;
+                    if !(1..=2).contains(&parsed.len())
+                        || parsed.iter().any(|bridge| {
+                            !bridge.endpoint.ip().is_loopback() || bridge.endpoint.port() == 0
+                        })
+                        || (parsed.len() == 2
+                            && (parsed[0].socket == parsed[1].socket
+                                || parsed[0].endpoint == parsed[1].endpoint))
+                    {
+                        return Err(invalid());
+                    }
+                    bridges = Some(parsed);
                 }
                 Some("--env-fd") if env_fd.is_none() => {
                     env_fd = Some(
@@ -380,19 +394,16 @@ mod launch {
         if argv.is_empty() || !Path::new(&argv[0]).is_absolute() {
             return Err(invalid());
         }
-        let fields = [
-            socat.is_some(),
-            socat_identity.is_some(),
-            socket.is_some(),
-            port.is_some(),
-        ];
+        let fields = [socat.is_some(), socat_identity.is_some(), bridges.is_some()];
         if fields.iter().any(|value| *value) && !fields.iter().all(|value| *value) {
             return Err(invalid());
         }
         #[cfg(target_os = "linux")]
-        if let Some(socket) = &socket
-            && !super::super::linux::safe_socat_path(socket)
-        {
+        if bridges.as_ref().is_some_and(|bridges| {
+            bridges
+                .iter()
+                .any(|bridge| !super::super::linux::safe_socat_path(&bridge.socket))
+        }) {
             return Err(invalid());
         }
         #[cfg(target_os = "macos")]
@@ -402,8 +413,7 @@ mod launch {
         Ok(Launch {
             socat,
             socat_identity,
-            socket,
-            port,
+            bridges: bridges.unwrap_or_default(),
             env_fd: env_fd.ok_or_else(invalid)?,
             argv,
         })
@@ -433,14 +443,9 @@ mod launch {
     fn execute(launch: Launch) -> io::Result<i32> {
         let environment = super::super::transport::read_environment(launch.env_fd)?;
         #[cfg(target_os = "linux")]
-        let bridge = start_bridge(&launch)?;
+        let bridges = start_bridges(&launch)?;
         #[cfg(target_os = "macos")]
-        let _ = (
-            &launch.socat,
-            launch.socat_identity,
-            &launch.socket,
-            launch.port,
-        );
+        let _ = (&launch.socat, launch.socat_identity, &launch.bridges);
         #[cfg(target_os = "linux")]
         let filter = super::super::prepare_linux_payload_filter()?;
         let mut descriptors = super::super::fds::DescriptorSanitizer::prepare()?;
@@ -461,53 +466,60 @@ mod launch {
         }
         let status = payload.status()?;
         #[cfg(target_os = "linux")]
-        drop(bridge);
+        drop(bridges);
         Ok(status
             .code()
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)))
     }
     #[cfg(target_os = "linux")]
-    fn start_bridge(launch: &Launch) -> io::Result<Option<Bridge>> {
-        let (Some(socat), Some(identity), Some(socket), Some(port)) = (
-            &launch.socat,
-            launch.socat_identity,
-            &launch.socket,
-            launch.port,
-        ) else {
-            return Ok(None);
+    fn start_bridges(launch: &Launch) -> io::Result<Vec<Bridge>> {
+        let (Some(socat), Some(identity)) = (&launch.socat, launch.socat_identity) else {
+            return Ok(Vec::new());
         };
         verify_bridge_program(socat, identity)?;
-        let socket = socket
-            .to_str()
-            .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
-        let mut command = Command::new(socat);
-        command
-            .args([
-                format!("TCP4-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork"),
-                format!("UNIX-CONNECT:{socket}"),
-            ])
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0);
-        let mut descriptors = super::super::fds::DescriptorSanitizer::prepare()?;
-        // SAFETY: descriptor storage was allocated before fork.
-        unsafe {
-            command.pre_exec(move || descriptors.mark_close_on_exec());
-        }
-        let group = Bridge(command.spawn()?);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let endpoint = SocketAddr::from(([127, 0, 0, 1], port));
-        loop {
-            if TcpStream::connect_timeout(&endpoint, Duration::from_millis(50)).is_ok() {
-                return Ok(Some(group));
+        let mut bridges = Vec::new();
+        for bridge in &launch.bridges {
+            let socket = bridge
+                .socket
+                .to_str()
+                .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
+            let address = match bridge.endpoint.ip() {
+                std::net::IpAddr::V4(host) => format!(
+                    "TCP4-LISTEN:{},bind={host},reuseaddr,fork,max-children=32",
+                    bridge.endpoint.port()
+                ),
+                std::net::IpAddr::V6(host) => format!(
+                    "TCP6-LISTEN:{},bind=[{host}],ipv6only=1,reuseaddr,fork,max-children=32",
+                    bridge.endpoint.port()
+                ),
+            };
+            let mut command = Command::new(socat);
+            command
+                .args([address, format!("UNIX-CONNECT:{socket}")])
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0);
+            let mut descriptors = super::super::fds::DescriptorSanitizer::prepare()?;
+            // SAFETY: descriptor storage was allocated before fork.
+            unsafe {
+                command.pre_exec(move || descriptors.mark_close_on_exec());
             }
-            if Instant::now() >= deadline {
-                return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
+            let group = Bridge(command.spawn()?);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                if TcpStream::connect_timeout(&bridge.endpoint, Duration::from_millis(50)).is_ok() {
+                    bridges.push(group);
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            std::thread::sleep(Duration::from_millis(10));
         }
+        Ok(bridges)
     }
     #[cfg(target_os = "linux")]
     fn verify_bridge_program(path: &Path, identity: (u64, u64)) -> io::Result<()> {
@@ -548,6 +560,54 @@ mod launch {
             let _ = self.0.wait();
         }
     }
+    #[cfg(test)]
+    mod protocol_tests {
+        use super::*;
+
+        #[test]
+        fn private_bridge_list_is_platform_gated_and_bounded() {
+            let valid = r#"[{"socket":"/private/ssh.sock","endpoint":"127.0.0.2:2222"},{"socket":"/private/broker.sock","endpoint":"[::1]:31234"}]"#;
+            let arguments = |bridges: &str| {
+                [
+                    "--socat",
+                    "/private/saya-socat",
+                    "--socat-identity",
+                    "12:34",
+                    "--bridges",
+                    bridges,
+                    "--env-fd",
+                    "3",
+                    "--",
+                    "/usr/bin/true",
+                ]
+                .map(OsString::from)
+            };
+            #[cfg(target_os = "linux")]
+            assert!(parse(&arguments(valid)).is_ok());
+            #[cfg(target_os = "macos")]
+            assert!(parse(&arguments(valid)).is_err());
+            for invalid in [
+                "[]".to_string(),
+                valid.replace("127.0.0.2", "192.0.2.1"),
+                valid.replace(":2222", ":0"),
+                valid.replace("/private/ssh.sock", "/private/ssh,sock"),
+                valid.replace("[::1]:31234", "127.0.0.2:2222"),
+                valid.replace("/private/broker.sock", "/private/ssh.sock"),
+                format!(
+                    "[{},{}]",
+                    &valid[1..valid.len() - 1],
+                    &valid[1..valid.len() - 1]
+                ),
+                " ".repeat(16 * 1024 + 1),
+            ] {
+                assert!(
+                    parse(&arguments(&invalid)).is_err(),
+                    "accepted invalid bridge list"
+                );
+            }
+        }
+    }
+
     #[cfg(all(test, target_os = "linux"))]
     mod tests {
         use super::*;
@@ -560,10 +620,8 @@ mod launch {
                 "/private/saya-socat",
                 "--socat-identity",
                 "12:34",
-                "--socket",
-                "/private/broker.sock",
-                "--port",
-                "1234",
+                "--bridges",
+                r#"[{"socket":"/private/broker.sock","endpoint":"127.0.0.1:1234"}]"#,
                 "--env-fd",
                 "3",
                 "--",

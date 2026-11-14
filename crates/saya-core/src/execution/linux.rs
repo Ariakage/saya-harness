@@ -1,7 +1,8 @@
 //! Bubblewrap filesystem views with a base filter and payload-only socket filter.
 use super::{
     BrowserSandboxDirectories, BrowserSandboxProfile, NetworkPolicy, PreparedCommand,
-    SandboxPolicy, browser_unavailable, failure, unavailable,
+    SandboxPolicy, browser_unavailable, failure, loopback::LoopbackRelay, unavailable,
+    worker::NamespaceBridge,
 };
 use crate::contract::BoundaryError;
 use std::{
@@ -18,13 +19,15 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 pub(super) struct LinuxBackend {
     bwrap: PathBuf,
     socat: Option<BridgeProgram>,
+    bridges: Vec<NamespaceBridge>,
+    relay: Mutex<Option<LoopbackRelay>>,
     args: Vec<OsString>,
     filter_path: PathBuf,
     mount_fds: Vec<Arc<fs::File>>,
@@ -97,6 +100,24 @@ const BROWSER_SYSTEM_READ_ROOTS: [&str; 18] = [
 impl LinuxBackend {
     pub(super) fn helper_path(&self) -> &Path {
         &self.helper_path
+    }
+    pub(super) fn shutdown_relay(&self) -> Result<(), BoundaryError> {
+        let mut relay = self.relay.lock().map_err(|_| {
+            failure(
+                "sandbox_cleanup_unknown",
+                "loopback relay cleanup lock is poisoned",
+            )
+        })?;
+        if let Some(active) = relay.as_mut() {
+            active.shutdown().map_err(|_| {
+                failure(
+                    "sandbox_cleanup_unknown",
+                    "loopback relay shutdown could not be confirmed",
+                )
+            })?;
+        }
+        *relay = None;
+        Ok(())
     }
     pub(super) fn prepare(policy: &SandboxPolicy, scratch: &Path) -> Result<Self, BoundaryError> {
         Self::prepare_with_profile(policy, scratch, None)
@@ -263,6 +284,39 @@ impl LinuxBackend {
                 bind(&mut args, &mut mount_fds, "--bind-fd", path, path)?;
             }
         }
+        if matches!(policy.network, NetworkPolicy::LoopbackPort { .. }) {
+            // SAFETY: numeric identity queries have no side effects.
+            let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+            for (name, contents) in [
+                (
+                    "passwd",
+                    format!("saya:x:{uid}:{gid}::/nonexistent:/bin/false\n"),
+                ),
+                ("group", format!("saya:x:{gid}:\n")),
+                (
+                    "nsswitch.conf",
+                    "passwd: files\ngroup: files\nhosts: files\n".into(),
+                ),
+            ] {
+                let path = scratch.join(format!("account-{name}"));
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(super::io_error)?;
+                file.write_all(contents.as_bytes())
+                    .map_err(super::io_error)?;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o400))
+                    .map_err(super::io_error)?;
+                bind(
+                    &mut args,
+                    &mut mount_fds,
+                    "--ro-bind-fd",
+                    &path,
+                    &PathBuf::from("/etc").join(name),
+                )?;
+            }
+        }
         let helper_path = scratch.join("saya-worker");
         // /proc/self/exe pins the image actually running, including when its
         // original workspace pathname has been replaced or unlinked.
@@ -325,62 +379,86 @@ impl LinuxBackend {
                 }
             }
         }
-        let socat = match &policy.network {
-            NetworkPolicy::Deny => None,
+        let mut relay = None;
+        let bridges = match &policy.network {
+            NetworkPolicy::Deny => Vec::new(),
             NetworkPolicy::Proxy(proxy) => {
                 if proxy.endpoint.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
                     return Err(unavailable("Linux proxy bridges require IPv4 loopback"));
                 }
-                let path = proxy.unix_socket.as_deref().ok_or_else(|| {
+                let socket = proxy.unix_socket.clone().ok_or_else(|| {
                     unavailable("Linux proxy isolation requires a private Unix socket")
                 })?;
-                if !safe_socat_path(path) {
-                    return Err(failure(
-                        "invalid_sandbox_policy",
-                        "Unix bridge path contains unsupported socat address characters",
-                    ));
-                }
-                let metadata = fs::metadata(path).map_err(super::io_error)?;
-                use std::os::unix::fs::FileTypeExt;
-                if !metadata.file_type().is_socket() {
-                    return Err(failure(
-                        "invalid_sandbox_policy",
-                        "proxy bridge path must be a Unix socket",
-                    ));
-                }
-                if policy.write_roots.iter().any(|root| path.starts_with(root)) {
-                    return Err(failure(
-                        "invalid_sandbox_policy",
-                        "proxy bridge socket must be outside writable roots",
-                    ));
-                }
-                args.extend([
-                    OsString::from("--ro-bind"),
-                    path.as_os_str().to_owned(),
-                    path.as_os_str().to_owned(),
-                ]);
-                let source =
-                    trusted_program(&["/usr/bin/socat", "/bin/socat", "/usr/local/bin/socat"])?;
-                let (program, file) = BridgeProgram::pin(&source, scratch)
-                    .map_err(|_| unavailable("trusted socat program could not be pinned"))?;
-                bind_descriptor(
-                    &mut args,
-                    &mut mount_fds,
-                    "--ro-bind-fd",
-                    file,
-                    &program.path,
-                );
-                Some(program)
+                vec![NamespaceBridge {
+                    socket,
+                    endpoint: proxy.endpoint,
+                }]
             }
-            NetworkPolicy::LoopbackPort { .. } => {
-                return Err(unavailable(
-                    "Linux loopback TCP isolation is not implemented for the VM host channel",
+            NetworkPolicy::LoopbackPort {
+                host,
+                port,
+                proxy_port,
+            } => {
+                let mut endpoints = vec![std::net::SocketAddr::new(*host, *port)];
+                if let Some(proxy) = proxy_port {
+                    endpoints.push(std::net::SocketAddr::from(([127, 0, 0, 1], *proxy)));
+                }
+                let active = LoopbackRelay::start(scratch, &endpoints)
+                    .map_err(|_| unavailable("private loopback relays could not be started"))?;
+                let bridges = active.bridges().to_vec();
+                relay = Some(active);
+                bridges
+            }
+        };
+        for bridge in &bridges {
+            let path = &bridge.socket;
+            if !safe_socat_path(path) {
+                return Err(failure(
+                    "invalid_sandbox_policy",
+                    "Unix bridge path contains unsupported socat address characters",
                 ));
             }
+            let metadata = fs::metadata(path).map_err(super::io_error)?;
+            use std::os::unix::fs::FileTypeExt;
+            if !metadata.file_type().is_socket() {
+                return Err(failure(
+                    "invalid_sandbox_policy",
+                    "bridge path must be a Unix socket",
+                ));
+            }
+            if policy.write_roots.iter().any(|root| path.starts_with(root)) {
+                return Err(failure(
+                    "invalid_sandbox_policy",
+                    "bridge socket must be outside writable roots",
+                ));
+            }
+            args.extend([
+                OsString::from("--ro-bind"),
+                path.as_os_str().to_owned(),
+                path.as_os_str().to_owned(),
+            ]);
+        }
+        let socat = if bridges.is_empty() {
+            None
+        } else {
+            let source =
+                trusted_program(&["/usr/bin/socat", "/bin/socat", "/usr/local/bin/socat"])?;
+            let (program, file) = BridgeProgram::pin(&source, scratch)
+                .map_err(|_| unavailable("trusted socat program could not be pinned"))?;
+            bind_descriptor(
+                &mut args,
+                &mut mount_fds,
+                "--ro-bind-fd",
+                file,
+                &program.path,
+            );
+            Some(program)
         };
         let backend = Self {
             bwrap,
             socat,
+            bridges,
+            relay: Mutex::new(relay),
             args,
             filter_path,
             mount_fds,
@@ -440,24 +518,26 @@ impl LinuxBackend {
         command.args.push(command.cwd.clone().into_os_string());
         command.args.push(self.helper_path.clone().into_os_string());
         command.args.push("__saya-sandbox-launch".into());
-        if let NetworkPolicy::Proxy(proxy) = &command.environment.policy.network {
-            let socket = proxy
-                .unix_socket
-                .as_ref()
-                .ok_or_else(|| unavailable("Linux proxy socket is unavailable"))?;
+        if !self.bridges.is_empty() {
             let socat = self
                 .socat
                 .as_ref()
                 .ok_or_else(|| unavailable("socat is unavailable"))?;
+            let bridges = serde_json::to_string(&self.bridges)
+                .map_err(|_| failure("invalid_sandbox_policy", "bridge list cannot be encoded"))?;
+            if bridges.len() > 16 * 1024 {
+                return Err(failure(
+                    "invalid_sandbox_policy",
+                    "bridge list exceeds the launcher limit",
+                ));
+            }
             command.args.extend([
                 OsString::from("--socat"),
                 socat.path.clone().into_os_string(),
                 OsString::from("--socat-identity"),
                 format!("{}:{}", socat.device, socat.inode).into(),
-                OsString::from("--socket"),
-                socket.clone().into_os_string(),
-                OsString::from("--port"),
-                proxy.endpoint.port().to_string().into(),
+                OsString::from("--bridges"),
+                bridges.into(),
             ]);
         }
         command.bootstrap_index = Some(command.args.len());

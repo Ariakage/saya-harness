@@ -136,11 +136,6 @@ const PAUSED_MASK_PROBE: &str = r#"async (page) => {
 #[tokio::test]
 #[ignore = "requires the explicit dedicated VM; characterizes paused-renderer pre-capture masking"]
 async fn paused_renderer_paints_masks_inside_closed_shadow_and_restores_state() {
-    assert_eq!(
-        std::env::consts::OS,
-        "macos",
-        "requires the selected macOS VM host"
-    );
     let image = std::fs::canonicalize(required("SAYA_TEST_EXECUTABLE")).unwrap();
     saya_core::execution::pin_launcher_image_from(&image).unwrap();
     let settings = settings();

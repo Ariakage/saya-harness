@@ -126,7 +126,10 @@ impl SeatbeltBackend {
                 "(allow network-outbound (remote tcp \"{address}\"))\n"
             ));
         }
-        if let NetworkPolicy::LoopbackPort { port, proxy_port } = &policy.network {
+        if let NetworkPolicy::LoopbackPort {
+            port, proxy_port, ..
+        } = &policy.network
+        {
             // The VM host channel can reach only the forwarded SSH port and,
             // when configured, the per-Run broker port used as the local side
             // of one reverse streamlocal forward. No DNS, proxy environment or

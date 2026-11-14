@@ -1,6 +1,6 @@
 //! Real dedicated-VM browser network acceptance entry point.
 //!
-//! Ignored by default. Run it explicitly on a macOS host with a provisioned
+//! Ignored by default. Run it explicitly on a macOS or Linux host with a provisioned
 //! Colima profile (created by `scripts/n5/browser_vm.py`) and the
 //! `SAYA_TEST_VM_*` inputs described in `docs/browser.md`:
 //!
@@ -41,6 +41,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::oneshot,
 };
 
 struct NeverCancel;
@@ -68,31 +69,35 @@ impl Cancellation for SwitchCancel {
     }
 }
 
-fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+fn required(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("missing explicit test input {name}"))
 }
 
-fn path(name: &str) -> Option<PathBuf> {
-    env(name).map(PathBuf::from)
+fn path(name: &str) -> PathBuf {
+    PathBuf::from(required(name))
 }
 
 fn settings() -> BrowserVmSettings {
     BrowserVmSettings {
         enabled: true,
-        colima: path("SAYA_TEST_VM_COLIMA"),
-        ssh: path("SAYA_TEST_VM_SSH"),
-        profile: env("SAYA_TEST_VM_PROFILE"),
-        host: env("SAYA_TEST_VM_HOST"),
-        user: env("SAYA_TEST_VM_USER"),
-        port: env("SAYA_TEST_VM_PORT").and_then(|port| port.parse().ok()),
-        identity_file: path("SAYA_TEST_VM_IDENTITY_FILE"),
-        known_hosts: path("SAYA_TEST_VM_KNOWN_HOSTS"),
-        node: env("SAYA_TEST_VM_NODE"),
-        worker_root: env("SAYA_TEST_VM_WORKER_ROOT"),
-        chromium: env("SAYA_TEST_VM_CHROMIUM"),
-        identity_manifest: env("SAYA_TEST_VM_MANIFEST"),
-        identity_sha256: env("SAYA_TEST_VM_MANIFEST_SHA256"),
-        remote_temp_root: env("SAYA_TEST_VM_TEMP_ROOT"),
+        colima: Some(path("SAYA_TEST_VM_COLIMA")),
+        ssh: Some(path("SAYA_TEST_VM_SSH")),
+        profile: Some(required("SAYA_TEST_VM_PROFILE")),
+        host: Some(required("SAYA_TEST_VM_HOST")),
+        user: Some(required("SAYA_TEST_VM_USER")),
+        port: Some(
+            required("SAYA_TEST_VM_PORT")
+                .parse()
+                .expect("valid SAYA_TEST_VM_PORT"),
+        ),
+        identity_file: Some(path("SAYA_TEST_VM_IDENTITY_FILE")),
+        known_hosts: Some(path("SAYA_TEST_VM_KNOWN_HOSTS")),
+        node: Some(required("SAYA_TEST_VM_NODE")),
+        worker_root: Some(required("SAYA_TEST_VM_WORKER_ROOT")),
+        chromium: Some(required("SAYA_TEST_VM_CHROMIUM")),
+        identity_manifest: Some(required("SAYA_TEST_VM_MANIFEST")),
+        identity_sha256: Some(required("SAYA_TEST_VM_MANIFEST_SHA256")),
+        remote_temp_root: Some(required("SAYA_TEST_VM_TEMP_ROOT")),
         ..Default::default()
     }
 }
@@ -132,12 +137,16 @@ const DYNAMIC_TEMPLATE: &str = "<title>dynamic-ok</title><body>DYNAMIC_MARKER\
 /// Host fixture: static, redirect, dynamic (with netns canary subresources and
 /// a real RTCPeerConnection STUN attempt), slow, and a provider 403 for
 /// anything not explicitly routed.
-async fn spawn_fixture(canary: Arc<Mutex<Option<(u16, u16)>>>) -> (u16, Arc<AtomicU64>) {
+async fn spawn_fixture(
+    canary: Arc<Mutex<Option<(u16, u16)>>>,
+) -> (u16, Arc<AtomicU64>, oneshot::Receiver<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicU64::new(0));
     let counter = hits.clone();
+    let (slow_started, slow_received) = oneshot::channel();
     tokio::spawn(async move {
+        let mut slow_started = Some(slow_started);
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 break;
@@ -167,6 +176,9 @@ async fn spawn_fixture(canary: Arc<Mutex<Option<(u16, u16)>>>) -> (u16, Arc<Atom
                     }
                 }
                 "/slow" => {
+                    if let Some(started) = slow_started.take() {
+                        let _ = started.send(());
+                    }
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nslow".to_owned()
                 }
@@ -176,7 +188,7 @@ async fn spawn_fixture(canary: Arc<Mutex<Option<(u16, u16)>>>) -> (u16, Arc<Atom
             let _ = stream.write_all(response.as_bytes()).await;
         }
     });
-    (port, hits)
+    (port, hits, slow_received)
 }
 
 // The canary nodes are started inside the worker's private network namespace
@@ -340,29 +352,16 @@ fn worker_pid(
 #[tokio::test]
 #[ignore = "requires a provisioned Colima browser VM and SAYA_TEST_VM_* inputs"]
 async fn vm_browser_network_is_broker_only_and_cleans_everything() {
-    if !cfg!(target_os = "macos") {
-        eprintln!("real VM network integration requires macOS; test not run");
-        return;
-    }
-    let settings = settings();
-    if settings.ssh.is_none() || settings.identity_sha256.is_none() {
-        eprintln!("SAYA_TEST_VM_* environment is not configured; test not run");
-        return;
-    }
-    let launcher = env("SAYA_TEST_EXECUTABLE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/release/saya"));
-    let Ok(launcher) = std::fs::canonicalize(launcher) else {
-        eprintln!("real Saya launcher path is unavailable; test not run");
-        return;
-    };
+    let launcher = std::fs::canonicalize(required("SAYA_TEST_EXECUTABLE"))
+        .expect("explicit Saya launcher path");
     saya_core::execution::pin_launcher_image_from(&launcher)
-        .expect("pin the real Saya CLI instead of the libtest executable");
+        .expect("pin the explicit Saya CLI instead of the libtest executable");
+    let settings = settings();
 
     let temp_root = settings
         .remote_temp_root
         .clone()
-        .unwrap_or_else(|| "/tmp/saya-runs".into());
+        .expect("explicit SAYA_TEST_VM_TEMP_ROOT");
     let unique = format!(
         "{}-{}",
         std::process::id(),
@@ -383,7 +382,7 @@ async fn vm_browser_network_is_broker_only_and_cleans_everything() {
         .expect("SAYA_TEST_VM_NODE is required");
 
     let canary_ports = Arc::new(Mutex::new(None));
-    let (fixture_port, fixture_hits) = spawn_fixture(canary_ports.clone()).await;
+    let (fixture_port, fixture_hits, slow_received) = spawn_fixture(canary_ports.clone()).await;
     let origin = format!("http://127.0.0.1:{fixture_port}");
     let network = BrowserNetworkSettings {
         enabled: true,
@@ -599,26 +598,27 @@ async fn vm_browser_network_is_broker_only_and_cleans_everything() {
         )
         .await;
 
-    // Slow page cancellation: either the entry check reports `cancelled` or a
-    // dispatched navigation reports `outcome_unknown`. Neither may hang.
     let cancel = Arc::new(AtomicBool::new(false));
     let token = SwitchCancel(cancel.clone());
     let slow_url = format!("{origin}/slow");
-    let slow = provider.navigate(&session, &page, &slow_url, &token);
     let result = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        cancel.store(true, Ordering::Release);
-        slow.await
+        let (result, ()) = tokio::join!(
+            provider.navigate(&session, &page, &slow_url, &token),
+            async {
+                tokio::time::timeout(Duration::from_secs(10), slow_received)
+                    .await
+                    .expect("the slow request must reach the fixture before cancellation")
+                    .expect("slow fixture closed before receiving the request");
+                cancel.store(true, Ordering::Release);
+            }
+        );
+        result
     })
     .await
     .expect("slow navigation must terminate after cancellation");
-    match result {
-        Ok(_) => panic!("the slow page must not complete successfully after cancellation"),
-        Err(failure) => assert!(
-            matches!(failure.code.as_str(), "cancelled" | "outcome_unknown"),
-            "unexpected slow-page failure: {failure:?}"
-        ),
-    }
+    let failure =
+        result.expect_err("the slow page must not complete successfully after cancellation");
+    assert_eq!(failure.code, "outcome_unknown", "{failure:?}");
 
     let observed = provider.network_observations();
     assert!(

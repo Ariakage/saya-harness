@@ -31,6 +31,8 @@ pub use worker::{
 };
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "linux", test))]
+mod loopback;
 #[cfg(target_os = "macos")]
 mod seatbelt;
 
@@ -98,13 +100,11 @@ pub enum NetworkPolicy {
     #[default]
     Deny,
     Proxy(ProxyEndpoint),
-    /// Allow outbound TCP only to a fixed loopback port. This purpose exists for
-    /// the host side of the dedicated VM browser backend: the only reachable
-    /// service is the VM's forwarded SSH port, never general browser egress.
-    /// `proxy_port` optionally adds the per-Run broker's loopback TCP port,
-    /// which the SSH client reaches for a reverse streamlocal forward.
-    /// Generic policies keep `Deny` as their default.
+    /// The dedicated VM's literal loopback SSH destination. Linux preserves the
+    /// address; Seatbelt restricts localhost ports. `proxy_port` adds the
+    /// per-Run broker at 127.0.0.1 without granting general browser egress.
     LoopbackPort {
+        host: std::net::IpAddr,
         port: u16,
         #[serde(default)]
         proxy_port: Option<u16>,
@@ -362,12 +362,16 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
             proxy.unix_socket = Some(normalize_path(path)?);
         }
     }
-    if let NetworkPolicy::LoopbackPort { port, proxy_port } = policy.network
-        && (port == 0 || proxy_port.is_some_and(|proxy| proxy == 0))
+    if let NetworkPolicy::LoopbackPort {
+        host,
+        port,
+        proxy_port,
+    } = policy.network
+        && (!host.is_loopback() || port == 0 || proxy_port.is_some_and(|proxy| proxy == 0))
     {
         return Err(failure(
             "invalid_sandbox_policy",
-            "loopback TCP policy requires nonzero ports",
+            "loopback TCP policy requires a loopback literal and nonzero ports",
         ));
     }
     validate_resources(&policy.resources)?;
@@ -382,10 +386,10 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
         backend => backend,
     };
     if let NetworkPolicy::LoopbackPort { .. } = policy.network
-        && backend != BackendKind::Seatbelt
+        && !matches!(backend, BackendKind::Seatbelt | BackendKind::Bubblewrap)
     {
         return Err(unavailable(
-            "loopback TCP network policy is only implemented by the Seatbelt backend",
+            "loopback TCP network policy requires a native isolation backend",
         ));
     }
     if policy.browser.is_some() {
@@ -431,7 +435,18 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
     let base = [std::env::temp_dir(), PathBuf::from("/var/tmp")].into_iter().filter_map(|path| fs::canonicalize(path).ok()).find(|path| {
         (browser || !path.starts_with(&policy.workspace)) && !policy.write_roots.iter().any(|root| path.starts_with(root))
     }).ok_or_else(|| failure("unsupported_fs_policy", "no private runtime directory is available outside the workspace and writable roots"))?;
-    let scratch = base.join(format!("saya-sandbox-{}", uuid::Uuid::now_v7()));
+    let run_id = uuid::Uuid::now_v7();
+    #[cfg(target_os = "linux")]
+    let runtime_id = if matches!(&policy.network, NetworkPolicy::LoopbackPort { .. }) {
+        // Preserve all UUID bits while leaving room for filesystem Unix socket paths.
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(run_id.as_bytes())
+    } else {
+        run_id.to_string()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let runtime_id = run_id.to_string();
+    let scratch = base.join(format!("saya-sandbox-{runtime_id}"));
     fs::DirBuilder::new()
         .mode(0o700)
         .create(&scratch)
@@ -855,6 +870,10 @@ impl PreparedEnvironment {
                 "owned processes must be reaped before environment cleanup",
             ));
         }
+        #[cfg(target_os = "linux")]
+        if let Some(backend) = &self.inner.linux {
+            backend.shutdown_relay()?;
+        }
         if let Some(group) = &self.inner.cgroup {
             group.cleanup()?;
         }
@@ -954,10 +973,17 @@ impl PreparedCommand {
 }
 impl Drop for Environment {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        let relay_stopped = self
+            .linux
+            .as_ref()
+            .is_none_or(|backend| backend.shutdown_relay().is_ok());
+        #[cfg(not(target_os = "linux"))]
+        let relay_stopped = true;
         if let Some(group) = &self.cgroup {
             let _ = group.cleanup();
         }
-        if self.active_processes.load(Ordering::Acquire) == 0 {
+        if relay_stopped && self.active_processes.load(Ordering::Acquire) == 0 {
             let _ = fs::remove_dir_all(&self.scratch);
         }
     }
@@ -1169,6 +1195,58 @@ fn browser_unavailable(message: impl Into<String>) -> BoundaryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires the supported Linux kernel and pinned native isolation tools"]
+    fn linux_loopback_policy_prepares_a_private_vm_host_channel() {
+        if std::env::var_os("SAYA_TEST_LOOPBACK_LONG_PATH_CHILD").is_none() {
+            let directory = tempfile::tempdir().expect("long runtime base fixture");
+            let padding = 64usize
+                .checked_sub(directory.path().as_os_str().len() + 1)
+                .expect("test TMPDIR leaves room for a 64-byte runtime base");
+            assert!(padding > 0);
+            let base = directory.path().join("t".repeat(padding));
+            fs::create_dir(&base).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "execution::tests::linux_loopback_policy_prepares_a_private_vm_host_channel",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("SAYA_TEST_LOOPBACK_LONG_PATH_CHILD", "1")
+                .env("TMPDIR", &base)
+                .env("TMP", &base)
+                .env("TEMP", &base)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "long runtime base: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let workspace = tempfile::tempdir().expect("private host channel workspace");
+        let ssh = std::net::TcpListener::bind("127.0.0.1:0").expect("SSH endpoint fixture");
+        let proxy = std::net::TcpListener::bind("127.0.0.1:0").expect("broker endpoint fixture");
+        let mut policy = SandboxPolicy::workspace(workspace.path().into());
+        policy.read_roots.clear();
+        policy.protected_paths.clear();
+        policy.network = NetworkPolicy::LoopbackPort {
+            host: std::net::Ipv4Addr::LOCALHOST.into(),
+            port: ssh.local_addr().expect("SSH port").port(),
+            proxy_port: Some(proxy.local_addr().expect("broker port").port()),
+        };
+        let environment = prepare(&policy).expect("private loopback host channel");
+        assert_eq!(environment.identity().backend, BackendKind::Bubblewrap);
+        let runtime = environment.runtime_directory().to_path_buf();
+        environment.cleanup().expect("host channel cleanup");
+        assert!(!runtime.exists());
+    }
+
     #[test]
     fn generic_policy_reports_no_browser_evidence_and_keeps_host_behavior() {
         let workspace = tempfile::tempdir().expect("workspace");

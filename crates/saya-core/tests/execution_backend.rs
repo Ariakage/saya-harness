@@ -166,6 +166,21 @@ fn invalid_paths_proxy_and_resource_limits_fail_before_launch() {
     );
 }
 #[test]
+fn invalid_vm_host_addresses_are_rejected_before_native_preparation() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut policy = SandboxPolicy::workspace(workspace.path().into());
+    policy.network = NetworkPolicy::LoopbackPort {
+        host: "192.0.2.1".parse().unwrap(),
+        port: 2222,
+        proxy_port: None,
+    };
+    assert_eq!(
+        execution::prepare(&policy).unwrap_err().0.code,
+        "invalid_sandbox_policy"
+    );
+}
+
+#[test]
 fn host_rejects_aggregate_limits_and_explicit_delegation() {
     let workspace = tempfile::tempdir().expect("workspace");
     let delegated = tempfile::tempdir().expect("delegation fixture");

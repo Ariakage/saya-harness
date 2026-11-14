@@ -75,6 +75,79 @@ e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46
 
 这一增量只在本地验证与提交；按项目负责人最新要求，不推送，新增四平台远端验收等待再次授权。N5 全范围仍未完成。
 
+## Linux VM 宿主通道增量
+
+2026-11-14，VM 宿主通道改为按 Auto 选择 macOS Seatbelt／Linux Bubblewrap；Linux 保留私有 netns、通用 Seccomp、匿名 pair 的内核身份／行为探测与固定 socat 镜像校验。`LoopbackPort` 增加精确 `host`，最多桥接 SSH 与本次 broker 两个固定目标；没有 Host、宿主 netns 或 IPv4 回退。账号解析只使用合成只读 passwd／group／NSS 文件，三项 SSH `read_files` 不扩大为目录授权。实现边界见 [Browser](browser.md#dev-080-vm-后端扩展) 与 [Sandbox](sandbox.md#linux-原生实现)。
+
+离线 Linux 输入归档 `target/n5/linux-host-channel/source-native-green.tar` 的 SHA-256 为 `94fca3dbfafe3bc824b96fce5964254dbcb6d096b3e3eef23aa4945edafbdda4`，显式包含新增 relay 与 Linux 入口，不包含用户既有 `CONTRIBUTING.md` 或实际凭据。Ubuntu 22.04 ARM 用户空间使用 Rust 1.99.1、单并发、关闭 dev debug／incremental，在现有 Colima default 的 `6.8.0-117-generic` 内核中断网构建；这是受控 VM／容器证据，不是 Ubuntu 22.04 原生宿主四平台验收。固定 Linux dev 程序摘要为 `12ac0f03d1c586928c8989911df6d45c5a2c8c9a14f12a059aa21daacabbc770`。
+
+| 检查 | 实际结果 | 本机证据 |
+| --- | --- | --- |
+| 受管 relay | 双目标转发、IPv6 活动连接关闭、部分启动失败、重复清理后的路径重用均通过 | `target/n5/linux-host-channel/relay-green-reuse.log` |
+| Linux 启动协议与 prepare | 两条有界记录、无效／重复目标拒绝、私有通道 prepare 各 1 passed | `target/n5/linux-host-channel/native-green.log` |
+| Linux payload 与真实 SSH | 两入口各 1 passed；均覆盖 `127.0.0.2` 与 `::1`。SSH 公钥认证成功、错误 host key 拒绝；payload 只达 SSH／broker，其他 TCP／UDP 无命中，命名 Unix 拒绝，精确文件只读且父目录内容隐藏，512 及以上故意设为可继承的宿主 UDP FD 未进入 payload | `target/n5/linux-host-channel/native-green.log` |
+| Linux core 全量 | 同一测试程序在带 init 的夹具中 689 passed、0 failed、1 ignored；显式 prepare 入口另行运行，不把 ignored 算通过 | `target/n5/linux-host-channel/linux-core-init.log` |
+| 非 root 原生通道 | 专用 VM 中 uid 501、CapEff=0、NoNewPrivs=1 的宿主进程执行两种地址的真实 payload 回归，1 passed；fixture 已删除 | `target/n5/linux-host-channel/native-nonroot-vm.log` |
+| macOS 完整 Rust 门禁 | 1668 passed、0 failed、13 ignored，格式、workspace 全目标严格 Clippy 与 release 构建通过 | `target/n5/linux-host-channel/macos-check.log` |
+| Python 工具回归 | 11 个 suite、144 项通过 | `target/n5/linux-host-channel/tooling.log` |
+
+非 root 验证复用已预置专用 VM 的 namespace 前提，仅在私有 mount namespace 的临时 `/usr/local/bin` 视图安装固定 Bubblewrap 0.13.1，未改变 VM 全局工具或 sysctl。程序、测试入口和工具的转移前后摘要一致；宿主进程的 CapEff／NoNewPrivs 观测不是 Chromium sandbox 证据。
+
+失败记录保留：初始 `prepare-red.log` 明确只支持 Seatbelt；`relay-red-final.log` 三项因 Unsupported 失败；`relay-reuse-red.log` 复现清理误删复用路径；`protocol-red-fixedenv.log` 复现未支持双桥记录；`native-red.log` 的 payload 因缺账号解析失败。SSH 夹具最初正控制失败不计产品红灯，改用私有账号目录后正控制通过，`nss-green-ssh-red.log` 随后才在 Linux preflight 平台拒绝处失败。缺 vendor 的 `protocol-red.log` 是准备失败，不是行为验收。
+
+默认 Colima 的非 root 最小 `unshare`／Bubblewrap 正控制同样因 namespace 能力被拒绝，记录于 `rootless-preflight.log`／`native-rootless.log`，未修改其 `apparmor_restrict_unprivileged_userns=1`。无 init 的首轮 Linux core 有三项 orphan 清理失败，记录于 `linux-core.log`；增加实际 init 回收前提后，同一程序全量通过，不修改或放宽清理断言。原有容器外层的测试权限不作为产品隔离能力；产品缺少所需内核／LSM／工具条件时仍失败关闭。
+
+### 初次平台门禁阻塞（历史输入）
+
+系统卷空间耗尽时，本阶段没有标为完成，也没有创建新的阶段 commit 或推送。当时独立测量系统卷仅约 100 MiB 可用，Akari 工作区卷约 34 GiB；本会话可丢弃的临时输出仅约 1.6 MiB，不能据此恢复系统卷空间。没有删除归属不明的缓存、其他会话数据或共享 VM 磁盘，也没有重启／调整共享 Colima VM。
+
+该轮 Linux 全 workspace 的源码输入归档为 `source-platform-final.tar`（SHA-256 `996302652b1dde41e1d81a5202452155a83cbb077a3897db728c819a844890ef`），不包含随后补强的源码。全部失败测试名称、失败 target 与分轮计数另存于 `target/n5/linux-host-channel/verification-summary.json`，保留原始日志，不把无法执行的后续入口算作成功。`linux-workspace-check.log`／`linux-workspace-final.log` 暴露仅供 macOS 使用的测试辅助类型与 AtomicBool 导入未做平台门控，已按实际使用范围修复，未关闭 lint。随后 `linux-platform-final.log` 的格式与全目标严格 Clippy 通过，重新构建的 dev 程序仍为 `12ac0f03…`；但 workspace 测试出现 `Input/output error (os error 5)`、临时 SQLite 数据不可读等失败，完整 Linux 门禁**没有通过**，不能以此前 core／定向入口成功替代。
+
+macOS 中间轮 `macos-check-final.log` 的 `queued_compaction_at_the_last_execution_call_runs_after_completion_without_a_second_user_turn` 曾因 sandbox prepare 的 `Stale NFS file handle (os error 70)` 失败；随后 `macos-platform-final.log` 完整门禁通过，未放宽断言或增加隐式重试。该轮固定 `73df58171170d80ecc73f44d81671f25265c6c74f4a8770af5525d4af0ba2862` 程序通过 smoke／文本 journey、5 项审查回归及 28 组 TUI；真实 VM 四入口各 1 passed，前后独立 Run 根／关联进程均为空，程序摘要一致，日志为 `macos-smoke.log`／`macos-real-vm.log`。截图仍只验证原语，不是生产截图事务。
+
+固定旧测试程序复现了三个真实 VM 入口在缺少显式输入时仍以成功返回；`entrypoints-baseline/missing-input-results.json` 记录 `browser_vm_real`、`browser_vm_network_real`、`browser_vm_files_real` 的 exit=0，而原本已严格检查输入的 `browser_screenshot_real` 为 exit=101。旧程序与失败记录保留；修复及最终源码的重验见下节，不把旧归档或旧测试程序当作后续增量的身份。
+
+### 通道与真实验收断言补强
+
+闲置临时项已按授权迁移到工作区私有归档；后续构建、日志与可控临时输出使用工作区 TMPDIR，不改变系统临时目录链接或全局配置。活动 IPC、工具运行目录及带 Git 元数据的目录保留，不能把迁移描述为删除整个 `/private/tmp`。
+
+受管 relay 新增两项实际 IO 红绿回归：活跃期间替换 socket 路径后，清理按类型及 device／inode 核对，不直接删除替换物；HTTP broker 桥收到首字节后才连接上游，空就绪探测不会先消耗 `max_total_connections=1` 的唯一额度，SSH 服务端先发 banner 仍正常。旧实现确实在两个新断言处失败，修复后 6 项通过，证据为 `relay-review-red.log`／`relay-review-green.log`。
+
+三个旧 VM 入口不再缺前提时成功返回：必须提供并固定 `SAYA_TEST_EXECUTABLE`，必需 VM 字段和端口严格解析，provider 装配失败也失败；不使用默认 release 路径，不按 macOS 之外的平台成功跳过。最新四个测试程序在 `entrypoints-shortpaths/harnesses.json` 记录程序与 Rust 源码 SHA-256，其源码摘要与真实 VM 运行一致；四入口各自的缺输入、缺 VM 设置、程序不存在、程序不可固定共 16 项负控均以 exit=101 在对应前提边界拒绝，实际错误和失败计数均经核对，证据为 `entrypoints-shortpaths/negative/results.json`。较早的 `entrypoints-final/` 冻结轮保留自己的程序身份。截图入口原本已严格拒绝缺前提，本次仅移除 macOS-only 限制。
+
+凭据／文件入口先证明 fill 未自动提交，再显式点击 submit，核对 fixture 实收 `user=alice-secret`（合成测试值），保留 origin／frame／stale／次数拒绝。网络入口以 oneshot 确认慢请求实际到达后才取消，要求派发后的 `outcome_unknown`，不再以未 poll 的入口取消代替。清理扫描使用有界受控 SSH、结构化目录／进程清单和完成标记，不吞权限或 I/O 错误；新增不可列目录的默认回归先在旧扫描上失败，修复后通过，证据为 `cleanup-scan-red.log`／`cleanup-scan-green.log`。
+
+| 最新本机检查 | 实际结果 | `target/n5/linux-host-channel/` 下证据 |
+| --- | --- | --- |
+| 完整 macOS Rust 门禁 | 1672 passed、0 failed、13 ignored；格式、全目标严格 Clippy、release 构建通过 | `shortpaths-macos-check.log` |
+| Python 工具回归 | 11 个 suite、144 项通过 | `shortpaths-tooling.log` |
+| CLI／TUI smoke | 离线 PLAN、文本 journey、5 项审查及 28 组 TUI 旅程通过 | `shortpaths-smoke.log` |
+| 强化后的真实专用 VM | sandbox 生命周期、网络、凭据／文件／后台、遮蔽原语四入口各 1 passed、0 failed、0 ignored | `shortpaths-macos-real-and-joint.log` |
+| 完整 Browser 联合矩阵 | 21 passed、1 disabled、0 failed；Execution 135、Review 8、Compact 1；11 组 PTY 退出无强制 SIGKILL | `shortpaths-browser-joint/run-7wcz2abb/evidence.json` |
+| 独立清理与身份 | 前后 Run 根和关联进程均为空；四份测试源码与固定程序前后摘要一致 | `shortpaths-macos-vm-inventory-{before,after}.json`、`shortpaths-macos-vm-identity.json` |
+| 前提负控 | 四个新固定测试程序的 16 项均以 exit=101 在预期边界拒绝 | `entrypoints-shortpaths/negative/results.json` |
+
+本轮 release SHA-256 为 `d3c9e061cc5fed584fac42cb9ecd7c3513cf2505c9ab8ff7c6a91287f633583f`，Mach-O 最低部署目标 15.0、构建 SDK 27.0；程序由标准门禁构建，冻结后复跑真实 VM、完整联合矩阵与 smoke，最终再次核对身份。`final-macos-check.log`／`strict-*` 的 1671 项与 `73df5817…` 程序保留为较早输入，不用于替代本轮结果。最新源码归档与逐文件摘要另存于 `source-shortpaths-final.tar`／`source-shortpaths-final.json`，汇总为 `shortpaths-stage-signoff.json`；它们记录当前工作树，不伪称独立构建来源证明，也不复用旧归档摘要。上述完整 Browser 结果仍是 macOS ARM 宿主与显式 Linux ARM 专用 VM，不是 Linux 宿主或四平台 Browser 成功证据。
+
+### Linux 交叉链接与定向实跑
+
+共享 default Colima 的 image／overlayfs 读写仍出现 I/O 错误，`linux-sysroot-probe/copy.log` 记录只读复制 CRT 也因 overlay mount 失败；没有重启、调整或修复共享 VM。健康专用 VM 缺少 `/usr/lib/gcc/aarch64-linux-gnu`，无法直接导出完整 GNU linker 输入，失败记录为 `cross-tools/sysroot-list.log`。
+
+最初 Zig linker 不支持必需 `--fix-cortex-a53-843419` 的失败保留在 `cross-tests.jsonl`／`cross-tests-errors.json`。最终继续用 Zig 编译 C，以 Clang 和 GNU-flavor LLD 链接，保留该 ARM 勘误参数；补入同一 Zig 工具链实际使用的 ARM64 UBSAN 与 compiler runtime，不关闭 C 检查。工作区私有 linker sysroot 来自 Ubuntu Jammy 官方索引，经独立公钥 GPG 验签及 Size／SHA-256 核对，仅提取 28 项所需输入，绝对库别名重定位为私有根内的相对链接；16 项离线工具回归通过，不执行包脚本或安装全局工具。最终 manifest 为 `apt-link-sysroot-20261114-4/manifest.json`（SHA-256 `6c1d9303acb411fde13b5b86c93c315f5820b26c53e57a1af5430b00dac6c846`）。最新 GNU target workspace 全目标严格 Clippy 与完整测试程序 `--no-run` 链接均通过，日志为 `shortpaths-linux-clippy.log`、`cross-tests-shortpaths.jsonl`／`.log`；离线 vendor、Cargo 配置和编译缓存均位于工作区。
+
+第一次链接成功后的真实 prepare 暴露 Unix socket 路径超长，失败轮保留在 `cross-native-vm.log`，当时失败后也确认清理。新增 94 字节私有目录的实际转发回归在旧实现复现 `SUN_LEN` 错误；改为保留完整 UUID 位的 URL-safe 无填充 Base64 目录名及 `r0`／`r1` 短 socket 名，红绿证据为 `relay-longpath-{red,green}.log`。Linux prepare 入口在独立子进程中强制 64 字节 TMPDIR，不改父进程全局环境；broker canary 使用先发 HTTP 请求再读取响应的真实 client-first 协议，SSH 仍允许服务端先发。
+
+| 最新 Linux 实际执行 | 结果 | `target/n5/linux-host-channel/` 下证据 |
+| --- | --- | --- |
+| relay、启动协议与长路径 prepare | 7＋1＋1 passed，0 failed、0 ignored | `shortpaths-native-vm.log` |
+| root payload 与真实 SSH | 两入口各 1 passed，保留 `127.0.0.2`／`::1`、双目标和 TCP／UDP／Unix／高位 FD 负控；公钥认证成功、错误 host key 拒绝 | 同上 |
+| uid 501 payload | CapEff=0、NoNewPrivs=1 的宿主进程实际执行，1 passed | 同上 |
+| 身份与清理 | 共 12 passed；转移前后程序 SHA-256 一致、root 临时目录基线恢复、关联进程为空、fixture 已删除；独立 Browser inventory 前后为空 | `cross-native-shortpaths/{inputs,remote-identity-before,outcome}.json`、`cleanup.log`，`shortpaths-native-inventory-{before,after}.json` |
+
+Linux dev 程序 SHA-256 为 `8a9f6b0eb735eeb0c4f3d01870aed55d9e53473c16ee6e9d24db8a916dc8a4a6`。实际执行环境为专用 VM 的 Ubuntu 24.04／glibc 2.39／ARM64／`6.8.0-117-generic`，不是 Ubuntu 22.04 原生宿主验收；Bubblewrap 0.13.1 只安装到本次私有 mount namespace 的临时视图，未改变全局工具、sshd 或 sysctl。该 VM 没有完整原生 Rust／C 编译工具链及编译期绝对 workspace 路径，当前 Linux workspace 全量运行仍未完成；不使用假编译器、隐藏失败入口或放宽清理断言凑成功，宿主进程属性也不作为 Chromium renderer 证据。
+
+本阶段只交付已验证的宿主通道与真实验收加固增量，不提供生产捕获事务、Linux 侧完整 Chromium 联合矩阵或新增四平台证据；不改变截图 facts，N5 全范围仍未完成。所有推送与新增远端验收继续等待项目负责人再次授权。
+
 ## DEV-083 联合矩阵
 
 [真实入口工具](../scripts/n5/acceptance.py)只使用显式程序、本地模型与本地网页，不 provision、不下载、不访问付费服务。缺少 `SAYA_TEST_VM_*` 前提必须失败并留证，不能把未运行算为通过。本轮新增 Browser 场景使用受控 Chat Completions fixture；三协议正常入口回归单列，不扩称为三协议 Browser 联合实跑。
@@ -143,7 +216,7 @@ e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46
 
 ## 定制捕获引擎的构建前提
 
-[D-068](decisions.md) 已确认允许扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium；它不是完成证明。[引擎实施边界](browser.md#托管捕获引擎扩展d-068待实现)保留预捕获遮蔽、事务屏障与双层 sandbox。固定源码的 Linux 构建文档要求至少 100 GB 空闲空间，本机 Akari 卷当前仅约 37 GiB；尚无已确认满足条件的独立构建环境。默认 Linux 工具链的原生 ARM 路径也不能据已有 VM 原语结果推定可用。
+[D-068](decisions.md) 已确认允许扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium；它不是完成证明。[引擎实施边界](browser.md#托管捕获引擎扩展d-068待实现)保留预捕获遮蔽、事务屏障与双层 sandbox。固定源码的 Linux 构建文档要求至少 100 GB 空闲空间，本轮 Akari 卷独立测量约 31 GiB 可用，证据为 `target/n5/linux-host-channel/capture-preconditions-20261114.json`；尚无已确认满足条件的独立构建环境。默认 Linux 工具链的原生 ARM 路径也不能据已有 VM 原语结果推定可用。
 
 未下载完整引擎源码、未运行或部署定制构建，未清理归属不明的构建或用户缓存。生产截图继续禁用；四平台远端验收按项目负责人最新要求等待再次授权，不以旧源码、TCG 可行性调查或交叉编译代替实际宿主成功证据。
 
@@ -174,4 +247,4 @@ python3 -B scripts/n2/verify_performance.py target/n5/native-evidence.json --sam
 1. 固定生产 Browser 的可靠预捕获遮蔽及真实截图成功证据。
 2. 当前 N5 源码的 native Browser 与新增四平台固定源码联合／发行证据；既有 N2／N3 四平台报告不得移作本轮证据。
 
-本轮未推送、未创建发行、未使用真实外网或付费模型；版本号未变。完成声明以实际证据为准，不以模型文字或安全拒绝代替尚缺功能。
+本轮未推送、未创建发行，Browser 验收只访问本地网页 fixture，未使用真实外网页面或付费模型；构建准备中的官方依赖下载不算 Browser 外网验收。版本号未变，完成声明以实际证据为准，不以模型文字或安全拒绝代替尚缺功能。
