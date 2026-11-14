@@ -16,6 +16,8 @@
 
 后续全范围补齐先加入专用 VM 的真实像素特征回归：固定 Chromium `158.0.8127.18`（revision `6449d9f9a6a906edff724b7b220199b3fde4615c`）在暂停 renderer 后，普通、密码与 closed-shadow 合成字段实际未绘入 PNG，非敏感区域保留；原始 style 与计时状态恢复。显式入口 1 passed，日志 `target/n5/fullscope-primitives-real-final.log`，独立清理 inventory 为空；该调查仅验证单 renderer 原语，没有开启生产截图或完成导航／OOPIF／取消屏障，详见 [N5 截图边界](n5-validation.md#截图与媒体边界)。
 
+后续生命周期增量修复旧 sandbox 证据缓存、核验中断后的连接复用，以及启动目录／清理 await 丢失句柄或 unknown 的分支。启动隔离覆盖初始导航与目录刷新，直到 sandbox 核验完成；close 后证据作废。worker 定向 48 项与完整 `RUST_TEST_THREADS=1 just check` 的 1660 项通过（71 个测试二进制、0 failed、13 ignored，含格式、严格 Clippy、release 构建），日志 `target/n5/fullscope-lifecycle-{worker-green,check}.log`。新程序 SHA-256 为 `c1e20194d690efae1a9403a1c0892b62d78c146fa38c6da3365902305c2c7a91`、最低部署目标 15.0；真实 VM 四入口各 1 passed，close／reopen／snapshot 重新取得有效证据，独立清理 inventory 为空；同一程序通过完整 CLI／TUI smoke。详见 [生命周期增量证据](n5-validation.md#生命周期核验与启动清理增量)。本次仅本地验证与阶段提交，推送及新增四平台远端验收等待项目负责人再次授权；生产截图与 N5 全范围仍未完成。
+
 ## N4 Goal 编排
 
 2026-11-12，按D-064完成DEV-069至DEV-074。新增独立版本化`data_dir/goals/goals.sqlite3`、严格Goal／Step／验收证据模型、revision CAS、worker lease、dispatch intent、预算usage及未知结果恢复。Goal绑定专属Session与工作区，每个Step通过现有AgentRuntime、权限、Sandbox、Compact、检查点、工具派发和Session锁执行。

@@ -157,6 +157,31 @@ async fn real_vm_worker_verifies_chromium_sandbox_inside_the_vm() {
         .close(&opened.session, &NeverCancel)
         .await
         .expect("VM worker close");
+    assert_eq!(provider.sandbox_evidence().await, None);
+    let reopened = provider
+        .open(None, &NeverCancel)
+        .await
+        .expect("VM worker reopen");
+    provider
+        .snapshot(&reopened.session, &reopened.page, 64 * 1024, &NeverCancel)
+        .await
+        .expect("reopened VM page snapshot");
+    let refreshed = provider
+        .sandbox_evidence()
+        .await
+        .expect("sandbox evidence after reopening and observing the page");
+    assert!(refreshed.no_new_privs);
+    assert_eq!(refreshed.seccomp_mode, 2);
+    assert!(refreshed.sandbox_arguments_valid);
+    eprintln!(
+        "vm reopened_renderer_pid={} no_new_privs={} seccomp={}",
+        refreshed.renderer_pid, refreshed.no_new_privs, refreshed.seccomp_mode
+    );
+    provider
+        .close(&reopened.session, &NeverCancel)
+        .await
+        .expect("reopened VM worker close");
+    assert_eq!(provider.sandbox_evidence().await, None);
     provider
         .shutdown(&NeverCancel)
         .await

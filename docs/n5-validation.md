@@ -55,6 +55,26 @@ e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46
 
 这些结果只覆盖显式预置 VM，不是 native Browser 或四平台证据。`stderr_initialize_sandbox=false` 是观测值，不作为成功断言；VM renderer 的证据与 native 后端所需的内层 sandbox 证据分别处理。
 
+## 生命周期核验与启动清理增量
+
+2026-11-14，provider 不再永久复用首次 renderer 的 sandbox 证据：成功页面 MCP 调用后重新采样，close／shutdown 作废旧证据。核验开始即隔离生命周期，核验失败、外层 timeout 丢弃 future 或清理失败时禁止继续派发；显式 close／shutdown 确认清理后才允许重建。该证据只表示最近一次完成的采样，不声称持续或全部 renderer 的瞬时保证。
+
+启动进程在首次 catalogue await 前注册 connection／workspace，隔离覆盖初始导航和导航后的 catalogue 刷新，直到 sandbox 核验完成；协议／目录拒绝和外层丢弃不会遗失进程清理句柄。初始导航后目录或 sandbox 核验失败，且清理未确认时返回 `outcome_unknown`，不因 provider session 尚未建立而吞掉未知状态。新增启动回归分别先在连接复用、丢失 shutdown 重试和错误的已知失败断言上失败；证据保留为 `target/n5/fullscope-sandbox-startup-red.log`、`fullscope-sandbox-catalog-timeout-red.log` 和 `fullscope-sandbox-post-navigation-timeout-red.log`。
+
+本轮运行时增量使用新的标准 release，SHA-256 为 `c1e20194d690efae1a9403a1c0892b62d78c146fa38c6da3365902305c2c7a91`，Mach-O 最低部署目标为 15.0；不复用本文历史固定程序的验收结论。
+
+| 检查 | 实际结果 | 证据 |
+| --- | --- | --- |
+| worker 定向回归 | 48 passed、0 failed | `target/n5/fullscope-lifecycle-worker-green.log` |
+| 完整 Rust 门禁 | 71 个测试二进制、1660 passed、0 failed、13 ignored，格式、严格 Clippy、release 构建通过 | `target/n5/fullscope-lifecycle-check.log` |
+| Python 工具回归 | 11 个 suite、144 项通过 | `target/n5/fullscope-lifecycle-tooling.log` |
+| 真实专用 VM | 生命周期、网络、凭据／文件／后台与遮蔽原语四入口各 1 passed、0 failed、0 ignored；运行前后程序摘要一致 | `target/n5/fullscope-lifecycle-vm.log` |
+| CLI／TUI smoke | 离线 PLAN、文本会话、5 项审查回归及 28 组真实 TUI 旅程通过 | `target/n5/fullscope-lifecycle-smoke.log` |
+
+真实生命周期入口实际执行 close／reopen／snapshot；本轮采样 renderer PID 分别为 133754、133857，均为 `NoNewPrivs=1`、`Seccomp=2` 且 argv 未禁用 sandbox，不把 PID 必须改变作为通过条件。前置独立空基线与最终独立清理检查分别保存在 `target/n5/fullscope-sandbox-final-inventory-after.log`、`target/n5/fullscope-lifecycle-inventory-after.log`，远端 Run 根及关联进程均为空。截图入口仍只验证合成页面原语，生产截图 facts 保持 false。此前 1659 项门禁及 `3f0b7bd4…` 程序的复跑日志继续保留，不冒充最终增量证据。
+
+这一增量只在本地验证与提交；按项目负责人最新要求，不推送，新增四平台远端验收等待再次授权。N5 全范围仍未完成。
+
 ## DEV-083 联合矩阵
 
 [真实入口工具](../scripts/n5/acceptance.py)只使用显式程序、本地模型与本地网页，不 provision、不下载、不访问付费服务。缺少 `SAYA_TEST_VM_*` 前提必须失败并留证，不能把未运行算为通过。本轮新增 Browser 场景使用受控 Chat Completions fixture；三协议正常入口回归单列，不扩称为三协议 Browser 联合实跑。

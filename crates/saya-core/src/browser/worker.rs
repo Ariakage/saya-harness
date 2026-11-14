@@ -3023,6 +3023,7 @@ struct ProviderInner {
     /// takes the only reference away. A later retry still sees the workspace.
     workspace: Option<Arc<AsyncMutex<ActiveWorkspace>>>,
     sandbox_evidence: Option<ChromiumSandboxEvidence>,
+    sandbox_unusable: bool,
 }
 
 /// Playwright MCP implementation of [`BrowserProvider`].
@@ -3147,6 +3148,7 @@ impl PlaywrightMcpProvider {
                 page: None,
                 workspace: None,
                 sandbox_evidence: None,
+                sandbox_unusable: false,
             }),
             call_lock: AsyncMutex::new(()),
             shutdown_lock: AsyncMutex::new(()),
@@ -3180,6 +3182,11 @@ impl PlaywrightMcpProvider {
 
     async fn connected(&self) -> Result<(Arc<dyn WorkerConnection>, u64), BrowserFailure> {
         let inner = self.inner.lock().await;
+        if inner.sandbox_unusable {
+            return Err(BrowserFailure::uncertain(
+                "Browser sandbox verification or cleanup is incomplete; close the browser before reuse",
+            ));
+        }
         match &inner.connection {
             Some(connection) => Ok((connection.clone(), inner.generation)),
             None => Err(BrowserFailure::new(
@@ -3225,6 +3232,11 @@ impl PlaywrightMcpProvider {
         inner: &mut ProviderInner,
         cancel: &dyn Cancellation,
     ) -> Result<(), BrowserFailure> {
+        if inner.sandbox_unusable {
+            return Err(BrowserFailure::uncertain(
+                "Browser worker must finish shutdown before it can be relaunched",
+            ));
+        }
         if inner.connection.is_some() {
             return Ok(());
         }
@@ -3314,6 +3326,10 @@ impl PlaywrightMcpProvider {
                 return Self::discard_workspace(inner, workspace, failure).await;
             }
         };
+        // Catalogue awaits must retain cleanup ownership if this future is dropped.
+        inner.connection = Some(connection.clone());
+        inner.sandbox_evidence = None;
+        inner.sandbox_unusable = true;
         if connection.protocol_version().as_deref() != Some(WORKER_PROTOCOL_VERSION) {
             return self
                 .discard_launch(
@@ -3382,12 +3398,12 @@ impl PlaywrightMcpProvider {
     ) -> Result<(), BrowserFailure> {
         // Reap the worker and Chromium group before releasing the environment.
         if connection.shutdown().await.is_err() {
-            inner.connection = Some(connection);
-            inner.workspace = Some(workspace);
             return Err(BrowserFailure::uncertain(
                 "Browser worker startup cleanup could not be confirmed",
             ));
         }
+        inner.connection = None;
+        inner.generation = 0;
         let released = {
             let mut workspace = workspace.lock().await;
             workspace.release().await.is_ok()
@@ -3407,6 +3423,7 @@ impl PlaywrightMcpProvider {
         {
             inner.workspace = None;
         }
+        inner.sandbox_unusable = false;
         Err(failure)
     }
 
@@ -3444,21 +3461,30 @@ impl PlaywrightMcpProvider {
                 "Browser worker reported a tool error. The call was not replayed",
             ));
         }
+        if let Err(failure) = self.verify_sandbox(&connection, cancel).await {
+            if self.shutdown_resources().await.is_err() {
+                return Err(BrowserFailure::uncertain(
+                    "Browser sandbox verification failed and worker cleanup could not be confirmed",
+                ));
+            }
+            return Err(failure);
+        }
         Ok(result)
     }
 
-    /// Verify Chromium's own sandbox after the first real launch. Offline
-    /// connections report no PID and are skipped. The evidence is stored and
-    /// logged without page content.
     async fn verify_sandbox(
         &self,
         connection: &Arc<dyn WorkerConnection>,
         cancel: &dyn Cancellation,
     ) -> Result<(), BrowserFailure> {
-        if self.inner.lock().await.sandbox_evidence.is_some() {
-            return Ok(());
+        {
+            let mut inner = self.inner.lock().await;
+            inner.sandbox_evidence = None;
+            // Dropping this future must not make an unverified lifecycle reusable.
+            inner.sandbox_unusable = true;
         }
         let Some(pid) = connection.process_id() else {
+            self.inner.lock().await.sandbox_unusable = false;
             return Ok(());
         };
         let stderr = connection.stderr_tail();
@@ -3472,25 +3498,9 @@ impl PlaywrightMcpProvider {
             sandbox_arguments_valid = evidence.sandbox_arguments_valid,
             stderr_initializes_sandbox = evidence.stderr_initializes_sandbox
         );
-        self.inner.lock().await.sandbox_evidence = Some(evidence);
-        Ok(())
-    }
-
-    /// Recheck sandbox evidence after an explicit navigation. This is
-    /// idempotent and does not rerun once evidence is recorded.
-    async fn ensure_sandbox_verified(
-        &self,
-        cancel: &dyn Cancellation,
-    ) -> Result<(), BrowserFailure> {
-        if self.inner.lock().await.sandbox_evidence.is_some() {
-            return Ok(());
-        }
-        let (connection, _) = self.connected().await?;
-        if let Err(failure) = self.verify_sandbox(&connection, cancel).await {
-            let _guard = self.call_lock.lock().await;
-            let _ = self.shutdown_resources().await;
-            return Err(failure);
-        }
+        let mut inner = self.inner.lock().await;
+        inner.sandbox_evidence = Some(evidence);
+        inner.sandbox_unusable = false;
         Ok(())
     }
 
@@ -3503,7 +3513,9 @@ impl PlaywrightMcpProvider {
         // only connection/workspace so a retry can continue and cannot
         // report a second false success.
         let (connection, workspace) = {
-            let inner = self.inner.lock().await;
+            let mut inner = self.inner.lock().await;
+            inner.sandbox_evidence = None;
+            inner.sandbox_unusable = true;
             (inner.connection.clone(), inner.workspace.clone())
         };
         if connection.is_none() && workspace.is_none() {
@@ -3516,6 +3528,7 @@ impl PlaywrightMcpProvider {
             inner.session = None;
             inner.page = None;
             inner.sandbox_evidence = None;
+            inner.sandbox_unusable = false;
             return Ok(());
         }
         let mut process_failed = false;
@@ -3558,6 +3571,7 @@ impl PlaywrightMcpProvider {
             inner.session = None;
             inner.page = None;
             inner.sandbox_evidence = None;
+            inner.sandbox_unusable = false;
         }
         self.launcher.retry_pending_cleanup().await.map_err(|_| {
             BrowserFailure::uncertain(
@@ -3662,15 +3676,21 @@ impl BrowserProvider for PlaywrightMcpProvider {
         // Starting the browser publishes the worker's post-launch catalogue;
         // capture that generation so the page lifecycle stays approved.
         if let Err(failure) = self.resync_catalog(&connection, cancel).await {
-            let _ = self.shutdown_resources().await;
+            if self.shutdown_resources().await.is_err() {
+                return Err(BrowserFailure::uncertain(
+                    "Browser catalogue verification failed and worker cleanup could not be confirmed",
+                ));
+            }
             return Err(failure);
         }
         let text = first_text(&result).unwrap_or_default();
         let url = page_fields(text).0.unwrap_or_else(|| "about:blank".into());
         if let Err(failure) = self.verify_sandbox(&connection, cancel).await {
-            // Insufficient real sandbox evidence terminates the lifecycle; do
-            // not leave a worker or Chromium running.
-            let _ = self.shutdown_resources().await;
+            if self.shutdown_resources().await.is_err() {
+                return Err(BrowserFailure::uncertain(
+                    "Browser sandbox verification failed and worker cleanup could not be confirmed",
+                ));
+            }
             return Err(failure);
         }
         let mut inner = self.inner.lock().await;
@@ -3685,23 +3705,28 @@ impl BrowserProvider for PlaywrightMcpProvider {
 
     async fn close(&self, session: &str, cancel: &dyn Cancellation) -> Result<(), BrowserFailure> {
         let _guard = self.call_lock.lock().await;
-        {
+        let sandbox_unusable = {
             let inner = self.inner.lock().await;
             if inner.session.is_none() && inner.page.is_none() {
-                return Ok(());
-            }
-            if inner.session.as_deref() != Some(session) {
+                if !inner.sandbox_unusable {
+                    return Ok(());
+                }
+            } else if inner.session.as_deref() != Some(session) {
                 return Err(BrowserFailure::new(
                     "invalid_provider_result",
                     "Browser provider session is unknown",
                 ));
             }
-        }
+            inner.sandbox_unusable
+        };
         if cancel.is_cancelled() {
             return Err(BrowserFailure::new(
                 "cancelled",
                 "Browser worker close cancelled before dispatch",
             ));
+        }
+        if sandbox_unusable {
+            return self.shutdown_resources().await;
         }
         let (connection, _) = self.connected().await?;
         // `browser_close` is the lifecycle counterpart of `open`'s initial
@@ -3741,6 +3766,7 @@ impl BrowserProvider for PlaywrightMcpProvider {
         let mut inner = self.inner.lock().await;
         inner.session = None;
         inner.page = None;
+        inner.sandbox_evidence = None;
         Ok(())
     }
 
@@ -3756,7 +3782,6 @@ impl BrowserProvider for PlaywrightMcpProvider {
             .call("browser_navigate", json!({"url": url}), cancel)
             .await?;
         let action = parse_action(first_text(&result)?, Some(url));
-        self.ensure_sandbox_verified(cancel).await?;
         Ok(action)
     }
 

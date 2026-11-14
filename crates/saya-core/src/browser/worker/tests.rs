@@ -244,10 +244,16 @@ enum FakeReply {
     Cancelled,
 }
 
+enum FakeCatalogReply {
+    Ready(Result<McpCatalog, BrowserFailure>),
+    Hang,
+}
+
 struct FakeConnection {
     protocol: String,
     generation: AtomicU64,
     catalog: Mutex<McpCatalog>,
+    catalog_replies: Mutex<VecDeque<FakeCatalogReply>>,
     calls: Mutex<Vec<(String, Value)>>,
     replies: Mutex<VecDeque<FakeReply>>,
     shutdowns: AtomicUsize,
@@ -265,6 +271,7 @@ impl FakeConnection {
             protocol: WORKER_PROTOCOL_VERSION.into(),
             generation: AtomicU64::new(catalog.generation),
             catalog: Mutex::new(catalog),
+            catalog_replies: Mutex::new(VecDeque::new()),
             calls: Mutex::new(Vec::new()),
             replies: Mutex::new(VecDeque::new()),
             shutdowns: AtomicUsize::new(0),
@@ -291,6 +298,20 @@ impl FakeConnection {
 
     fn push(&self, reply: FakeReply) {
         self.replies.lock().unwrap().push_back(reply);
+    }
+
+    fn queue_catalog_reply(&self, reply: Result<McpCatalog, BrowserFailure>) {
+        self.catalog_replies
+            .lock()
+            .unwrap()
+            .push_back(FakeCatalogReply::Ready(reply));
+    }
+
+    fn queue_catalog_hang(&self) {
+        self.catalog_replies
+            .lock()
+            .unwrap()
+            .push_back(FakeCatalogReply::Hang);
     }
 
     fn set_generation(&self, generation: u64) {
@@ -370,7 +391,12 @@ impl WorkerConnection for FakeConnection {
     }
 
     async fn list_tools(&self, _cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure> {
-        Ok(self.catalog.lock().unwrap().clone())
+        let reply = self.catalog_replies.lock().unwrap().pop_front();
+        match reply {
+            Some(FakeCatalogReply::Ready(reply)) => reply,
+            Some(FakeCatalogReply::Hang) => std::future::pending().await,
+            None => Ok(self.catalog.lock().unwrap().clone()),
+        }
     }
 
     async fn call_tool(
@@ -1024,6 +1050,174 @@ async fn catalog_missing_schema_drift_and_protocol_fail_closed() {
 }
 
 #[tokio::test]
+async fn startup_rejection_cannot_reuse_a_connection_with_pending_cleanup() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let rejected = FakeConnection::new(pinned_catalog()).with_protocol("2099-01-01");
+    rejected.shutdown_failure.store(true, Ordering::Release);
+    let fresh = FakeConnection::new(pinned_catalog());
+    let launcher = FakeLauncher::new(vec![Ok(rejected.clone()), Ok(fresh.clone())]);
+    let provider = provider_with_factory(
+        &fixture,
+        launcher.clone(),
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    );
+    assert!(
+        provider
+            .open(None, &NeverCancel)
+            .await
+            .unwrap_err()
+            .uncertain
+    );
+    let failure = provider.open(None, &NeverCancel).await.unwrap_err();
+    assert!(failure.uncertain);
+    assert!(rejected.calls().is_empty());
+    assert_eq!(launcher.launch_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+
+    rejected.shutdown_failure.store(false, Ordering::Release);
+    provider.shutdown(&NeverCancel).await.unwrap();
+    provider.open(None, &NeverCancel).await.unwrap();
+    assert_eq!(launcher.launch_count(), 2);
+    assert!(rejected.calls().is_empty());
+    assert_eq!(fresh.calls().len(), 1);
+    provider.shutdown(&NeverCancel).await.unwrap();
+    assert_eq!(factory.releases.load(Ordering::Acquire), 2);
+}
+
+#[tokio::test]
+async fn startup_discard_timeout_retains_the_connection_for_shutdown_retry() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_protocol("2099-01-01");
+    connection.hang_next_shutdown();
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    );
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(50), provider.open(None, &NeverCancel)).await;
+    assert!(outcome.is_err());
+    assert_eq!(connection.shutdown_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+    provider.shutdown(&NeverCancel).await.unwrap();
+    assert_eq!(connection.shutdown_count(), 2);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+    assert!(connection.calls().is_empty());
+}
+
+#[tokio::test]
+async fn startup_catalog_timeout_retains_the_unverified_connection() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog());
+    connection.queue_catalog_hang();
+    let fresh = FakeConnection::new(pinned_catalog());
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone()), Ok(fresh)]);
+    let provider = provider_with_factory(
+        &fixture,
+        launcher.clone(),
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    );
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(50), provider.open(None, &NeverCancel)).await;
+    assert!(outcome.is_err());
+    assert!(
+        provider
+            .open(None, &NeverCancel)
+            .await
+            .unwrap_err()
+            .uncertain
+    );
+    assert_eq!(launcher.launch_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+    assert!(connection.calls().is_empty());
+
+    provider.shutdown(&NeverCancel).await.unwrap();
+    assert_eq!(connection.shutdown_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+    provider.open(None, &NeverCancel).await.unwrap();
+    assert_eq!(launcher.launch_count(), 2);
+    provider.shutdown(&NeverCancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_post_navigation_catalog_timeout_requires_cleanup_before_reuse() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog());
+    connection.queue_catalog_reply(Ok(pinned_catalog()));
+    connection.queue_catalog_hang();
+    let fresh = FakeConnection::new(pinned_catalog());
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone()), Ok(fresh.clone())]);
+    let provider = provider_with_factory(
+        &fixture,
+        launcher.clone(),
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    );
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(50), provider.open(None, &NeverCancel)).await;
+    assert!(outcome.is_err());
+    assert_eq!(connection.calls().len(), 1);
+    assert!(
+        provider
+            .open(None, &NeverCancel)
+            .await
+            .unwrap_err()
+            .uncertain
+    );
+    assert_eq!(connection.calls().len(), 1);
+    assert_eq!(launcher.launch_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+
+    provider
+        .close("worker_session", &NeverCancel)
+        .await
+        .unwrap();
+    assert_eq!(connection.shutdown_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+    provider.open(None, &NeverCancel).await.unwrap();
+    assert_eq!(launcher.launch_count(), 2);
+    assert_eq!(fresh.calls().len(), 1);
+    provider.shutdown(&NeverCancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_catalog_resync_failure_with_unconfirmed_cleanup_is_unknown() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog());
+    connection.queue_catalog_reply(Ok(pinned_catalog()));
+    connection.queue_catalog_reply(Err(BrowserFailure::new(
+        "worker_transport",
+        "Catalogue refresh failed before a session was confirmed",
+    )));
+    connection.shutdown_failure.store(true, Ordering::Release);
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    );
+    let failure = provider.open(None, &NeverCancel).await.unwrap_err();
+    assert!(failure.uncertain);
+    assert_eq!(failure.code, "outcome_unknown");
+    assert_eq!(connection.calls().len(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+    connection.shutdown_failure.store(false, Ordering::Release);
+    provider.shutdown(&NeverCancel).await.unwrap();
+    assert_eq!(connection.shutdown_count(), 2);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
 async fn dispatched_unknown_cancel_and_catalog_changes_are_not_retried() {
     let fixture = fixture_identity();
     let connection = FakeConnection::new(pinned_catalog());
@@ -1285,16 +1479,22 @@ fn provider_with_factory(
 }
 
 struct FixedInspector {
-    evidence: Result<ChromiumSandboxEvidence, BrowserFailure>,
+    evidence: Mutex<Result<ChromiumSandboxEvidence, BrowserFailure>>,
     calls: AtomicUsize,
+    hang_next: AtomicBool,
 }
 
 impl FixedInspector {
     fn new(evidence: Result<ChromiumSandboxEvidence, BrowserFailure>) -> Arc<Self> {
         Arc::new(Self {
-            evidence,
+            evidence: Mutex::new(evidence),
             calls: AtomicUsize::new(0),
+            hang_next: AtomicBool::new(false),
         })
+    }
+
+    fn set_evidence(&self, evidence: Result<ChromiumSandboxEvidence, BrowserFailure>) {
+        *self.evidence.lock().unwrap() = evidence;
     }
 
     fn calls(&self) -> usize {
@@ -1311,7 +1511,10 @@ impl ChromiumSandboxInspector for FixedInspector {
         _cancel: &dyn Cancellation,
     ) -> Result<ChromiumSandboxEvidence, BrowserFailure> {
         self.calls.fetch_add(1, Ordering::AcqRel);
-        self.evidence.clone()
+        if self.hang_next.swap(false, Ordering::AcqRel) {
+            std::future::pending::<()>().await;
+        }
+        self.evidence.lock().unwrap().clone()
     }
 }
 
@@ -1424,7 +1627,7 @@ async fn sandbox_verification_failure_cleans_worker_and_environment() {
 }
 
 #[tokio::test]
-async fn sandbox_evidence_is_recorded_once_after_real_open() {
+async fn sandbox_evidence_tracks_the_renderer_after_navigation() {
     let fixture = fixture_identity();
     let environment_root = tempfile::tempdir().unwrap();
     let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
@@ -1446,8 +1649,12 @@ async fn sandbox_evidence_is_recorded_once_after_real_open() {
     .with_sandbox_inspector(inspector.clone());
 
     let opened = provider.open(None, &NeverCancel).await.unwrap();
-    assert_eq!(provider.sandbox_evidence().await, Some(evidence));
-    assert_eq!(inspector.calls(), 1);
+    assert_eq!(provider.sandbox_evidence().await, Some(evidence.clone()));
+    let next = ChromiumSandboxEvidence {
+        renderer_pid: 79,
+        ..evidence
+    };
+    inspector.set_evidence(Ok(next.clone()));
     provider
         .navigate(
             &opened.session,
@@ -1457,11 +1664,212 @@ async fn sandbox_evidence_is_recorded_once_after_real_open() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        inspector.calls(),
-        1,
-        "evidence is verified once per worker lifecycle"
+    assert_eq!(provider.sandbox_evidence().await, Some(next));
+    provider.shutdown(&NeverCancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn sandbox_evidence_is_invalidated_when_the_page_closes() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_pid(77);
+    let launcher = FakeLauncher::new(vec![Ok(connection)]);
+    let evidence = ChromiumSandboxEvidence {
+        renderer_pid: 78,
+        no_new_privs: true,
+        seccomp_mode: 2,
+        sandbox_arguments_valid: true,
+        stderr_initializes_sandbox: true,
+    };
+    let inspector = FixedInspector::new(Ok(evidence.clone()));
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory as Arc<dyn BrowserEnvironmentFactory>,
+    )
+    .with_sandbox_inspector(inspector.clone());
+    let opened = provider.open(None, &NeverCancel).await.unwrap();
+    provider.close(&opened.session, &NeverCancel).await.unwrap();
+    assert_eq!(provider.sandbox_evidence().await, None);
+
+    let next = ChromiumSandboxEvidence {
+        renderer_pid: 79,
+        ..evidence
+    };
+    inspector.set_evidence(Ok(next.clone()));
+    provider.open(None, &NeverCancel).await.unwrap();
+    assert_eq!(provider.sandbox_evidence().await, Some(next));
+    provider.shutdown(&NeverCancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn sandbox_failure_after_navigation_terminates_the_lifecycle() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_pid(77);
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let inspector = FixedInspector::new(Ok(ChromiumSandboxEvidence {
+        renderer_pid: 78,
+        no_new_privs: true,
+        seccomp_mode: 2,
+        sandbox_arguments_valid: true,
+        stderr_initializes_sandbox: true,
+    }));
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    )
+    .with_sandbox_inspector(inspector.clone());
+    let opened = provider.open(None, &NeverCancel).await.unwrap();
+    inspector.set_evidence(Err(BrowserFailure::new(
+        "browser_sandbox_unavailable",
+        "Replacement renderer sandbox was not witnessed",
+    )));
+    let failure = provider
+        .navigate(
+            &opened.session,
+            &opened.page,
+            "https://example.test/next",
+            &NeverCancel,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert_eq!(provider.sandbox_evidence().await, None);
+    assert_eq!(connection.shutdown_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+    assert!(
+        provider
+            .snapshot(&opened.session, &opened.page, 1024, &NeverCancel)
+            .await
+            .is_err()
     );
+    provider.shutdown(&NeverCancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn sandbox_failure_with_pending_cleanup_blocks_further_dispatch() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_pid(77);
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let evidence = ChromiumSandboxEvidence {
+        renderer_pid: 78,
+        no_new_privs: true,
+        seccomp_mode: 2,
+        sandbox_arguments_valid: true,
+        stderr_initializes_sandbox: true,
+    };
+    let inspector = FixedInspector::new(Ok(evidence.clone()));
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    )
+    .with_sandbox_inspector(inspector.clone());
+    let opened = provider.open(None, &NeverCancel).await.unwrap();
+    connection.shutdown_failure.store(true, Ordering::Release);
+    inspector.set_evidence(Err(BrowserFailure::new(
+        "browser_sandbox_unavailable",
+        "Replacement renderer sandbox was not witnessed",
+    )));
+    assert!(
+        provider
+            .snapshot(&opened.session, &opened.page, 1024, &NeverCancel)
+            .await
+            .is_err()
+    );
+    assert_eq!(provider.sandbox_evidence().await, None);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+    inspector.set_evidence(Ok(evidence));
+    let dispatched = connection.calls().len();
+    let failure = provider
+        .click(&opened.session, &opened.page, "e1", None, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert!(failure.uncertain);
+    assert_eq!(connection.calls().len(), dispatched);
+    connection.shutdown_failure.store(false, Ordering::Release);
+    provider.close(&opened.session, &NeverCancel).await.unwrap();
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+    assert_eq!(connection.calls().len(), dispatched);
+    provider.shutdown(&NeverCancel).await.unwrap();
+}
+
+#[tokio::test]
+async fn sandbox_failure_during_open_reports_unconfirmed_cleanup_as_unknown() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_pid(77);
+    connection.shutdown_failure.store(true, Ordering::Release);
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let inspector = FixedInspector::new(Err(BrowserFailure::new(
+        "browser_sandbox_unavailable",
+        "Initial renderer sandbox was not witnessed",
+    )));
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    )
+    .with_sandbox_inspector(inspector);
+    let failure = provider.open(None, &NeverCancel).await.unwrap_err();
+    assert!(
+        failure.uncertain,
+        "unconfirmed cleanup requires full shutdown recovery"
+    );
+    assert_eq!(factory.releases.load(Ordering::Acquire), 0);
+    connection.shutdown_failure.store(false, Ordering::Release);
+    provider.shutdown(&NeverCancel).await.unwrap();
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn sandbox_verification_dropped_by_timeout_quarantines_the_lifecycle() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_pid(77);
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let inspector = FixedInspector::new(Ok(ChromiumSandboxEvidence {
+        renderer_pid: 78,
+        no_new_privs: true,
+        seccomp_mode: 2,
+        sandbox_arguments_valid: true,
+        stderr_initializes_sandbox: true,
+    }));
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    )
+    .with_sandbox_inspector(inspector.clone());
+    let opened = provider.open(None, &NeverCancel).await.unwrap();
+    inspector.hang_next.store(true, Ordering::Release);
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(20),
+        provider.snapshot(&opened.session, &opened.page, 1024, &NeverCancel),
+    )
+    .await;
+    assert!(
+        outcome.is_err(),
+        "the new verification must be awaiting evidence"
+    );
+    assert_eq!(provider.sandbox_evidence().await, None);
+    let dispatched = connection.calls().len();
+    let failure = provider
+        .press(&opened.session, &opened.page, "Enter", &NeverCancel)
+        .await
+        .unwrap_err();
+    assert!(failure.uncertain);
+    assert_eq!(connection.calls().len(), dispatched);
+    provider.close(&opened.session, &NeverCancel).await.unwrap();
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
     provider.shutdown(&NeverCancel).await.unwrap();
 }
 
