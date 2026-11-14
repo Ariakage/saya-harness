@@ -50,6 +50,16 @@ worker 文件路径固定为 worker root 下的 `node_modules/@playwright/mcp/cl
 
 本机真实集成入口为 `crates/saya-core/tests/browser_worker_real.rs`，默认 `#[ignore]`，通过 `SAYA_TEST_NODE`、`SAYA_TEST_WORKER_ROOT`、`SAYA_TEST_CHROMIUM_BIN`、`SAYA_TEST_IDENTITY_MANIFEST` 显式启用。测试 fixture 使用固定 headless-shell，而不是本环境会崩溃的完整 Chrome：macOS 为 `target/n5/browser-cache-mirror/chromium_headless_shell-1254/chrome-headless-shell-mac-arm64/chrome-headless-shell` 与 `target/n5/mac-worker-manifest.json`，Linux ARM 为 `/opt/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux-arm64/chrome-headless-shell` 与容器内 `/opt/browsers/worker-manifest.json`。这些是测试输入，不是产品默认值；产品只接受宿主显式配置的绝对路径与 manifest。
 
+## 托管捕获引擎扩展（D-068，待实现）
+
+项目负责人已确认允许扩展托管引擎的捕获与固定身份契约，必要时引入定制 Chromium。普通 CDP 的 renderer 暂停、DOM／CSS 遮蔽原语不等于导航提交、绘制与捕获之间的完整事务屏障，不能单独据此开启生产截图。
+
+后续实现必须在生成图片前完成字段遮蔽，并证明捕获没有跨越未经授权的文档、页面激活或绘制帧；closed-shadow、子 frame 与独立合成内容不能因普通选择器不可见而漏过。私有协议只接受宿主构造的固定捕获请求，不接受模型脚本、selector 或自定义遮蔽规则。超时、取消或恢复状态不能确认时，应隔离并关闭 worker、返回 unknown，而不是返回待事后修补的图片。D-066 的双层 sandbox、现有网络／凭据／PLAN／审批边界不变。
+
+固定身份需关联精确上游源码、审核后的补丁、DEPS／工具链／构建参数与配方，以及各架构产物及分发摘要。现有 v1 manifest 只校验明确命名的文件，不声称覆盖整个安装树或证明定制构建来源；最终协议、身份格式与分发产物仍待实际实现和验收，不以配置声明代替构建证明。
+
+当前未构建或部署定制引擎，生产 `screenshots`／`screenshot_masking` 保持 false。固定源码的[Linux 构建要求](https://github.com/chromium/chromium/blob/6449d9f9a6a906edff724b7b220199b3fde4615c/docs/linux/build_instructions.md#system-requirements)列出 x86-64 构建机与至少 100 GB 空闲空间；本机 ARM 宿主的 Akari 卷当前仅约 37 GiB 可用，且默认 Linux 工具链不能直接假定为原生 ARM 构建路径。尚未确认有满足条件的独立构建环境，也没有清理归属不明的 Rust 或用户缓存。实际生产事务与四平台成功证据仍是未完成项。
+
 ## DEV-080 VM 后端扩展
 
 原生 macOS Seatbelt 无法在 Chromium 重初始化其 sandbox 时继续保持外层限制，Linux Bubblewrap browser profile 的 `setgroups=deny` 也会阻止 Chromium 内层 namespace 初始化。按 D-066，DEV-080 增加显式 `colima` VM 后端：worker 与 Chromium 在专用 VM 内运行，宿主只运行受控 `ssh` 客户端，因此 Chromium 自有 sandbox 不被削弱。该扩展不改变 native 组件或既有失败边界；`browser.enabled` 选择 VM 时不会回退到 native／Host。
