@@ -308,6 +308,16 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 临时目录与缓存补丁对应的四文件原始 git diff 为 14,894 字节，SHA-256 `5c0821c0ae9a89fc67d3878c239cfb953c359944d186b405bdd0bb5a81ab7725`。分发缓存补丁省略空白上下文行的单字符前缀，以通过仓库尾随空白检查；第 89 轮在默认 git apply 下顺序应用两组补丁，逐文件结果仍与实际工具副本一致。四份原始／修改文件的摘要、两组独立 index 顺序应用后的逐文件比对、HEAD／refs 不变、25 份缓存复核及真实入口／测试日志摘要，统一见 `evidence/depot-patch-89.json`。初次封存第 81 轮因错误假定缓冲日志必须以 OK 结尾而拒绝，保留失败日志；修正为逐 suite 核对真实摘要且拒绝 FAILED／ERROR／FAIL 后才接受，不把实际失败的第 80、84 轮项目门禁算作通过。后续同步必须绑定固定上游和完整组合补丁，不得继续使用仅含两文件的旧身份；源码内嵌的同修订 depot_tools 仍需在正确同步／hooks 顺序中核对适用补丁。上述相对证据均位于 `target/n5/capture-toolchain-20261115/`。此阶段未完成全量 DEPS、pre-hooks／hooks、GN 或 Chromium 构建，生产截图仍关闭、身份仍为 v1，N5 全范围未完成，未推送或新增远端验收。
 
+### 根 DEPS 选择与完整缓存
+
+第 88 轮同步带 `--nohooks --noprehooks --no-history --shallow --jobs=2`，实际在 1800 秒上限被终止，`evidence/deps-sync-88.json` 保留 `dependencies_synced=false`；活跃任务包含 Git 输入，没有新的工作区外临时目录写入拒绝，不能把单个依赖已有对象或部分完成标记当成全量同步。第 92 轮只读枚举因标准库临时目录探测被完全禁写而未启动；第 93 轮仅允许构建根内 `t/` 的临时探测，继续拒绝网络和源码写入，真实 gclient 枚举得到根配置的 237 个选择：147 Git、43 CIPD、47 GCS，见 `evidence/deps-inventory-93.json`。这是根选择清单，不是递归依赖的验收证明。
+
+预取按固定 DEPS 的 name、bucket、object、generation、大小和 SHA 匹配真实选择；各 HTTPS 范围要求精确 Content-Range 和字节数，拼合后仍核验完整 SHA。第 94、98、100 轮分别只完成 38、45、46 个对象，SSL 错误、90 秒请求超时、未启动范围和部分响应均保留，不关闭 TLS 校验或接纳残缺输入。续取重新核对旧完整文件与范围，复用记录不冒充本轮网络成功；第 103 轮仅请求最后一个范围并完成全部 47 个对象，共 687,108,624 字节，随后逐一独立复核大小、SHA、普通文件类型和只读 mode0400。报告 `evidence/gcs-prefetch-103.json` 的 SHA-256 为 `3655c972a5bffb9ea3be9266b2f30d706b945738e0a3bfa6d3ab8212600d0d4e`。预取没有解包或写入原生完成标记，使用 `-O` 禁用断言的入口负控明确拒绝。
+
+第 106 轮通过真实 `GClient／GcsDependency` 从新缓存导入 18,015,920 字节 sysroot，总计约 8.2 秒。解释器审计实际观察到缓存读取；透传观察器保存的真实 gsutil 操作只有一次 stat、没有 cp，stat 约 3.2 秒、退出 0 且原始 stderr 为空，外层 stderr 也为空。原生摘要、大小、解包、`usr/include/stdio.h` 与原生标记核对通过，见 `evidence/gcs-import-106.json`、`data/gcs-import-106/{cache-read-events,gsutil-operations}.json`；不能把该单对象导入扩称为全量同步。
+
+第 107 轮重新通过独立 index 的两组补丁顺序应用、逐文件比对及 HEAD／refs 检查；四文件组合 diff 仍为 `5c0821c0ae9a89fc67d3878c239cfb953c359944d186b405bdd0bb5a81ab7725`，未改变固定工具源码。封存 `evidence/depot-patch-107.json` 绑定新导入证据和 47 份缓存，旧第 89 轮仍只认证其原来的 25 份输入。构建环境现显式指向 `data/gcs-prefetch-103/cache`，环境脚本 SHA-256 为 `ef92cb4ef960a9ab2eec9624231a7b1c54451acff1541912c113bf2c42040833`；上述相对路径均位于 `target/n5/capture-toolchain-20261115/`。**全部 DEPS、pre-hooks／hooks、GN、定制引擎及生产捕获仍未完成**，截图关闭、身份 v1 与新增远端验收限制不变，N5 全范围未完成，未推送。
+
 ## 复跑入口
 
 先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SAYA_TEST_VM_*` 输入，程序身份与源码归属另行保留。
