@@ -1,6 +1,6 @@
 # 开发进度
 
-**更新于2026-11-14。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-15。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -28,7 +28,15 @@ D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用�
 
 Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链接已通过，使用工作区内离线 vendor、经签名和摘要核对的 Ubuntu linker 输入、Clang／LLD 及匹配的 Zig C 运行库，保留必需 ARM 勘误参数和 C 检查运行库。最新程序在 Ubuntu 24.04 ARM64 专用 VM、`6.8.0-117-generic` 内核上实际通过 12 项定向检查：7 项 relay、启动协议、长路径 prepare、root payload、公钥认证／错误 host key 及 uid 501／CapEff=0／NoNewPrivs=1 payload；双目标、TCP／UDP／Unix／高位 FD 负控与精确只读文件边界得到核验，程序前后摘要一致，fixture 与关联进程已清理。未改变 VM 全局工具或 sysctl；宿主进程属性不是 Chromium sandbox 证据。
 
-提交范围仅为本地已验证的宿主通道及真实验收加固增量，**不代表 Linux workspace 全量运行或 N5 全范围完成**。旧 Linux I/O 失败与 Zig linker 不支持勘误参数的轮次保留，不作为当前成功证据；共享 Colima 未重启或调整，可控构建／验证输出继续使用工作区 TMPDIR。专用 VM 缺少原生编译工具链及 workspace 运行前提，完整 Linux workspace 尚未执行；生产捕获事务、native Browser 与新增四平台仍缺，未推送或发布，远端验收等待再次授权。[证据及阻碍](n5-validation.md#linux-vm-宿主通道增量)
+提交范围仅为本地已验证的宿主通道及真实验收加固增量，**不代表 Linux workspace 全量运行或 N5 全范围完成**。旧 Linux I/O 失败与 Zig linker 不支持勘误参数的轮次保留，不作为当前成功证据；共享 Colima 未重启或调整，可控构建／验证输出继续使用工作区 TMPDIR。该历史专用 VM 当时缺少原生编译工具链及 workspace 运行前提，完整门禁随后在下一节的独立环境完成；生产捕获事务、native Browser 与新增四平台仍缺，未推送或发布，远端验收等待再次授权。[证据及阻碍](n5-validation.md#linux-vm-宿主通道增量)
+
+## Linux ARM 完整原生门禁
+
+2026-11-15，在工作区卷创建无宿主挂载、无 SSH agent 转发的独立 Ubuntu 22.04.5 ARM VM；只对新环境安装真实 Rust 1.99.1／GCC 11.4／Just 1.59.0 与官方 HWE `6.8.0-149-generic`，未调整原有共享／Browser VM。Linux Browser 环境测试现于独立进程提前固定真实 CLI，实际执行隔离 payload；不再误用 libtest 镜像或把缺能力当成功。生产 Rust、Seccomp 与权限规则未改。
+
+源码 `557f865` 加固定测试补丁在 Linux 通过完整 `just check`：1686 passed、0 failed、17 ignored，含格式、全目标严格 Clippy、标准 release；11 个 suite 的 144 项工具回归及固定程序的 5 项审查／28 组 TUI smoke 通过。Linux 宿主通道 12 项显式实跑全部通过、0 ignored，覆盖长 TMPDIR、root SSH、uid501／CapEff=0／NoNewPrivs=1 与目录／进程清理；原生对抗为 18 passed、1 not_run（未提供 delegated cgroup），性能 v2 的 21 项核对通过。Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02d4192660d30`。同期 macOS 完整门禁仍为 1672 passed、0 failed、13 ignored，工具 144 项与完整 smoke 通过，release 哈希保持 `d3c9e061…`。
+
+初始内核身份拒绝、umask0002、libtest launcher 及无 Git 元数据的失败均保留；三组同程序 umask 对照与真实 Git bundle 分别证明环境原因，未放宽安全门槛、伪造编译器／来源或隐藏失败入口。输入、程序、分轮结果与未测范围见 [Linux ARM 验收](n5-validation.md#linux-arm-完整原生门禁)。这不是生产 Chromium、macOS15 运行环境或四平台成功证据；生产截图和 N5 全范围仍未完成，未推送或运行新增远端验收。
 
 ## N4 Goal 编排
 

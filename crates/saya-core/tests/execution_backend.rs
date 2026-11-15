@@ -535,6 +535,45 @@ fn requested_cgroup_limits_use_only_the_explicitly_delegated_tree() {
 #[cfg(target_os = "linux")]
 #[test]
 fn browser_environment_binds_install_read_only_and_private_directories() {
+    const CHILD: &str = "SAYA_TEST_BROWSER_ENV_CHILD";
+    let image = std::env::var_os("SAYA_TEST_EXECUTABLE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_exe()
+                .expect("test image")
+                .parent()
+                .and_then(Path::parent)
+                .expect("Cargo test profile")
+                .join("saya")
+        });
+    let image =
+        fs::canonicalize(image).expect("set SAYA_TEST_EXECUTABLE to a built Saya CLI image");
+    if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // The launcher pin is process-wide and other tests may already have prepared it.
+        let output = Command::new(std::env::current_exe().expect("test image"))
+            .args([
+                "--exact",
+                "browser_environment_binds_install_read_only_and_private_directories",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env("SAYA_TEST_EXECUTABLE", &image)
+            .output()
+            .expect("isolated browser environment fixture");
+        assert!(
+            output.status.success(),
+            "browser environment fixture failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed; 0 ignored"),
+            "browser environment fixture did not execute exactly one test"
+        );
+        return;
+    }
+    execution::pin_launcher_image_from(&image).expect("pin real browser fixture launcher");
     let installation = tempfile::tempdir().expect("installation root");
     fs::write(installation.path().join("marker.txt"), "SAYA_INSTALL").expect("install marker");
     let outside = tempfile::tempdir().expect("outside root");
@@ -543,22 +582,8 @@ fn browser_environment_binds_install_read_only_and_private_directories() {
     let policy = SandboxPolicy::browser(BrowserSandboxProfile {
         install_roots: vec![install.clone()],
     });
-    let environment = match execution::prepare(&policy) {
-        Ok(environment) => environment,
-        Err(error)
-            if matches!(
-                error.0.code.as_str(),
-                "sandbox_capability_unavailable" | "browser_sandbox_unavailable"
-            ) =>
-        {
-            eprintln!(
-                "native browser backend unavailable on this host: {}",
-                error.0.message
-            );
-            return;
-        }
-        Err(error) => panic!("browser preparation failed: {}", error.0.message),
-    };
+    let environment = execution::prepare(&policy)
+        .unwrap_or_else(|error| panic!("browser preparation failed: {}", error.0.message));
     let directories = environment
         .browser_directories()
         .expect("run-private browser directories")

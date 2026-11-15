@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-14：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段完成 21 passed、1 disabled，三协议 CLI／TUI 回归通过。生产截图、native Browser 及新增四平台证据仍未满足，DEV-083 全范围与 N5 不标为完成。**
+**2026-11-15：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段完成 21 passed、1 disabled，三协议 CLI／TUI 回归通过。Linux ARM 独立 VM 已通过完整原生 Rust 门禁、工具回归、CLI／TUI smoke 及宿主通道定向验收；这不是生产 Chromium 或四平台证据。生产截图、native Browser 及新增四平台证据仍未满足，DEV-083 全范围与 N5 不标为完成。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
 
@@ -144,9 +144,37 @@ macOS 中间轮 `macos-check-final.log` 的 `queued_compaction_at_the_last_execu
 | uid 501 payload | CapEff=0、NoNewPrivs=1 的宿主进程实际执行，1 passed | 同上 |
 | 身份与清理 | 共 12 passed；转移前后程序 SHA-256 一致、root 临时目录基线恢复、关联进程为空、fixture 已删除；独立 Browser inventory 前后为空 | `cross-native-shortpaths/{inputs,remote-identity-before,outcome}.json`、`cleanup.log`，`shortpaths-native-inventory-{before,after}.json` |
 
-Linux dev 程序 SHA-256 为 `8a9f6b0eb735eeb0c4f3d01870aed55d9e53473c16ee6e9d24db8a916dc8a4a6`。实际执行环境为专用 VM 的 Ubuntu 24.04／glibc 2.39／ARM64／`6.8.0-117-generic`，不是 Ubuntu 22.04 原生宿主验收；Bubblewrap 0.13.1 只安装到本次私有 mount namespace 的临时视图，未改变全局工具、sshd 或 sysctl。该 VM 没有完整原生 Rust／C 编译工具链及编译期绝对 workspace 路径，当前 Linux workspace 全量运行仍未完成；不使用假编译器、隐藏失败入口或放宽清理断言凑成功，宿主进程属性也不作为 Chromium renderer 证据。
+Linux dev 程序 SHA-256 为 `8a9f6b0eb735eeb0c4f3d01870aed55d9e53473c16ee6e9d24db8a916dc8a4a6`。实际执行环境为专用 VM 的 Ubuntu 24.04／glibc 2.39／ARM64／`6.8.0-117-generic`，不是 Ubuntu 22.04 原生宿主验收；Bubblewrap 0.13.1 只安装到本次私有 mount namespace 的临时视图，未改变全局工具、sshd 或 sysctl。该历史环境当时没有完整原生 Rust／C 编译工具链及编译期绝对 workspace 路径，上述定向阶段没有完成 Linux workspace 全量运行；后续独立环境的完整结果见下一节。不使用假编译器、隐藏失败入口或放宽清理断言凑成功，宿主进程属性也不作为 Chromium renderer 证据。
 
 本阶段只交付已验证的宿主通道与真实验收加固增量，不提供生产捕获事务、Linux 侧完整 Chromium 联合矩阵或新增四平台证据；不改变截图 facts，N5 全范围仍未完成。所有推送与新增远端验收继续等待项目负责人再次授权。
+
+## Linux ARM 完整原生门禁
+
+2026-11-15，在工作区卷创建独立 Lima `n5arm22` VM：Ubuntu 22.04.5／glibc 2.35／ARM64，4 CPU、4 GiB RAM、24 GiB 虚拟磁盘；无宿主目录挂载、不转发 SSH agent，磁盘实际位于 `target/n5/vmf1/_lima/n5arm22/disk`。原有 Ubuntu 24.04 Browser Colima VM 未重启、调整或改全局工具。新环境使用真实 Rust 1.99.1、GCC 11.4、Just 1.59.0 与 Bubblewrap 0.13.1，Rust／C canary 均实际编译并执行；不是交叉链接或编译器替身。
+
+源码基线为 `557f865a1b884b43d228bf48f591770899b21620`，源码归档 SHA-256 为 `6d42adf72f66aa98e09e7cc80cb71a86362565de354bafd34f20cdd98940b878`。新增的 `execution_backend.rs` 测试夹具补丁 SHA-256 为 `94356a9cb186bc7b2e1a411469422107bc4b774ab43da2567d2a570b042f140f`，仅让 Linux Browser 环境测试在独立进程中先固定真实 CLI，再准备并实际执行 payload；缺少程序或能力时不再成功跳过。生产 Rust 源码、权限和 Seccomp 规则未改。原生构建仅关闭 dev 调试信息与增量缓存、使用单编译／测试并发，release 优化配置未覆盖。完整 Git bundle 补齐归档不包含的真实 Git 元数据；没有伪造 revision、覆盖工作区文件或复制宿主 Git 配置。输入、Git tree 与实际工作树补丁分别记录于下表对应证据，仍不构成独立构建来源证明。
+
+| 本轮检查 | 实际结果 | `target/n5/linux-full-20261115/` 下证据 |
+| --- | --- | --- |
+| Linux 完整 Rust 门禁 | 1686 passed、0 failed、17 ignored；格式、全目标严格 Clippy、标准 release 构建通过 | `logs/ubuntu22-arm-full-workspace-04.log` |
+| Linux Python 工具回归 | 11 个 suite、144 项通过 | 同上 |
+| Linux CLI／TUI smoke | PLAN 往返、会话 journey、5 项审查、28 组真实 TUI 旅程通过 | 同上，`evidence/ubuntu22-arm-native-workspace-result-04.json` |
+| Linux 原生对抗／性能 | 18 passed、1 not_run（未提供 delegated cgroup）；性能 v2 的 21 项核对通过，每指标 3 次采样 | `evidence/ubuntu22-arm-native-acceptance-06.json`、`logs/ubuntu22-arm-native-acceptance-06.log` |
+| Linux 宿主通道定向实跑 | relay 7、启动协议 1、64 字节 TMPDIR 准备 1、root payload 1、root SSH 1、uid 501／CapEff=0／NoNewPrivs=1 payload 1；合计 12 passed、0 failed、0 ignored；私有临时根和关联进程恢复基线 | `evidence/ubuntu22-arm-host-channel-07.json` |
+| 同期 macOS 完整门禁 | 1672 passed、0 failed、13 ignored，含格式、严格 Clippy 与 release；工具 144 项及完整 CLI／TUI smoke 通过 | `logs/macos-fixture-{check,tooling,smoke}-03.log` |
+| 输入与程序身份 | 基线、测试补丁、环境／配方逐文件 SHA-256，真实 Git tree 与工作树一致；固定程序前后相同 | `evidence/ubuntu22-arm-source-inputs-03.json`、`ubuntu22-arm-git-source-04.json`、`ubuntu22-arm-workspace-runner-result-04.json` |
+
+Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02d4192660d30`，66,611,320 字节；已复制保全于 `frozen-linux/saya`。macOS release 仍为 `d3c9e061cc5fed584fac42cb9ecd7c3513cf2505c9ab8ff7c6a91287f633583f`，标准重建后与冻结程序相同。两端 `just check` 的 ignored 数量与单独显式入口分别记录，不把忽略、缺前提或 fixture 宿主属性计为 Chromium 成功。密封汇总 `evidence/linux-native-stage-signoff-20261115.json` 核对输入、脚本、日志及报告的逐文件 SHA-256；`stage_verified=true` 仅确认这一阶段，`n5_full_acceptance=false` 保留全部未满足范围。
+
+保留的失败轮次与整改如下：
+
+- 初始 Ubuntu `5.15.0-198-generic` 未满足已确认的内核修复身份门槛，完整 Rust 记录 1540 passed、146 failed、17 ignored；仅在新 VM 安装官方 HWE 后实际启动 `6.8.0-149-generic`，没有放宽 gate 或伪造 uname。第二轮仍有 4 个失败 target、47 项失败，原始日志均保留。
+- `umask=0002` 使普通测试夹具产生组可写目录。内存、日志与 CLI 的三组同程序对照均为 0002 失败、0022 通过；只固定验收 Shell 的 umask，不修改生产权限拒绝。对照为 `evidence/ubuntu22-arm-umask-red-green.json`。
+- 测试 harness 被误当成 payload launcher 时，实际返回 `Unrecognized option: 'env-fd'`。真实 CLI 提前 pin 与独立进程修正后，原失败测试和完整 workspace 均通过；红测为 `logs/ubuntu22-arm-browser-launcher-red.log`。
+- 第三轮 Rust 与 release 已通过，但工具回归在编译器调用之前因归档缺少 Git 元数据失败，未执行 smoke；第四轮补入经过核验的真实 bundle 后整链通过。没有修改编译失败证据测试或伪造 Git 输出。
+- 宿主通道编排的第 04 轮缺少显式 `--ignored` 被实际计数检查拒绝，第 05 轮错误地给 root 使用 uid501／0700 的 socket 祖先，第 06 轮切换用户时被 sudo 清除了测试程序变量。分别修正显式调用、按 UID 分离临时根及精确重建测试环境；未放宽命名空间的目录访问或继承任意宿主环境。第 07 轮全部实跑并核对清理，失败报告未改写为成功。
+
+本轮完成 Linux ARM 的完整原生 workspace 门禁和这一阶段回归，不代表 native Chromium、生产截图、macOS 15 运行环境或四平台联合完成。截图 facts 保持 false，新增远端验收与推送仍未进行。
 
 ## DEV-083 联合矩阵
 

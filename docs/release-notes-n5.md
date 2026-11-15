@@ -25,6 +25,7 @@ N5 将受控网页读取与托管 Chromium 接入共享运行时。CLI、文本�
 - Rust 的 `NetworkPolicy::LoopbackPort` 现在要求显式 `host` 字段；Linux 保留该回环字面地址，Seatbelt 仍按 localhost 端口限制。CLI 的显式 VM 配置字段不变。
 - PLAN 在全部权限模式下拒绝主动 Browser 工具。`auto` 的写动作经过独立核查；Manual Approval 逐工具确认；bypass 不绕过 PLAN、显式 deny、网络和 sandbox 硬边界。
 - 当前真实 Browser 证据来自 macOS ARM 宿主与显式预置的 Linux ARM 专用 VM。native Seatbelt／Bubblewrap 无法完成 Chromium 内层 sandbox 初始化时明确失败，不使用 `--no-sandbox` 绕过。VM 证据不等于 native 或四平台 Browser 支持。
+- Linux ARM 独立 Ubuntu 22.04 VM 已通过完整原生 workspace 门禁、工具回归、CLI／TUI smoke 与宿主通道实跑；这是该平台的运行时回归证据，不是 native Chromium、macOS15 运行环境或新增四平台 Browser 支持。
 - 固定 worker 的截图接口没有真实截图前遮蔽契约，生产 `browser_screenshot` 不注册，直接调用返回 `browser_capability_disabled`；受控 provider 的成功测试不能冒充生产截图验收。固定脚本或页面 CSS 也不能被当成动态页面的完整隐私保证。
 - 截图元数据的 `url_observation = last_confirmed` 表示最近一次 provider 确认 URL，不保证页面自主导航后的瞬时来源。
 - `artifact_ref` 是公开的不透明句柄，可与存储引用值相同，但不包含宿主路径或凭据，不授予跨 Session 访问。宿主 `media_refs` 字段只承担可信媒体选择与 GC pin。
@@ -55,6 +56,7 @@ N5 connects controlled web reads and managed Chromium to the shared runtime. CLI
 - The Rust `NetworkPolicy::LoopbackPort` variant now requires an explicit `host` field. Linux preserves that loopback literal; Seatbelt still restricts localhost ports. The explicit CLI VM configuration fields are unchanged.
 - PLAN denies active Browser tools in every permission mode. In auto mode, write actions undergo independent review; Manual Approval confirms every tool. Bypass does not override PLAN, explicit deny rules, network restrictions, or sandbox boundaries.
 - Current real Browser evidence covers a macOS ARM host and an explicitly provisioned Linux ARM VM. Native Seatbelt/Bubblewrap paths fail explicitly when Chromium's inner sandbox cannot initialize; `--no-sandbox` is not used. VM evidence is not native or four-platform Browser acceptance.
+- A separate Linux ARM Ubuntu 22.04 VM now passes the complete native workspace gate, tooling regressions, CLI/TUI smoke, and host-channel execution checks. This establishes runtime regression evidence for that environment, not native Chromium, macOS 15 runtime validation, or new four-platform Browser support.
 - The pinned worker has no reliable pre-capture masking contract. Production `browser_screenshot` is not registered, and direct calls return `browser_capability_disabled`. Successful controlled-provider tests do not establish production screenshot support. A fixed script or page CSS is not a complete privacy guarantee for dynamic pages.
 - Screenshot metadata uses `url_observation = last_confirmed`: the most recent provider-confirmed URL, not an atomic observation after autonomous page navigation.
 - Public `artifact_ref` handles may share the storage-reference value but contain neither host paths nor credentials and grant no cross-Session access. The host `media_refs` field controls trusted media selection and GC pinning.

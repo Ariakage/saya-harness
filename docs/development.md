@@ -84,6 +84,14 @@ GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner
 
 核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 用于运行时、异步 HTTP、工具与 CLI。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
 
+Linux 的 `browser_environment_binds_install_read_only_and_private_directories` 在独立测试进程中固定真实 CLI 镜像，再实际执行 Bubblewrap payload；缺少程序或原生隔离前提时明确失败。完整 workspace 测试会构建 Cargo profile 下的 `saya`；单独运行 core 测试或固定测试程序时，先构建 CLI，或显式设置 `SAYA_TEST_EXECUTABLE` 为兼容 CLI 的绝对路径。该变量仅供测试夹具使用，不是产品配置，也不能以测试 harness 或简化 bootstrap 代替真实 launcher。
+
+验收 Shell 使用 `umask 022`。部分内存／日志测试夹具使用普通目录创建 API，`umask 0002` 会产生组可写目录；生产权限检查应继续拒绝这些目录，不能通过放宽权限规则使测试通过。需要时仅对本轮检查设置 umask，不修改用户已有数据权限：
+
+```bash
+(umask 022; RUST_TEST_THREADS=1 just check)
+```
+
 CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明；未构建或未 smoke 验证的产物不标记已支持。
 
 ## 只读工具开发状态
