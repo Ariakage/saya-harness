@@ -272,9 +272,17 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 私有 Mojo 使用同一固定源码的真实 parser、C++ 模板预编译和 typemap 生成器；保留 `gfx::Size`／`gfx::PointF` 原生映射，variant、shared、message IDs 三组生成均实际退出 0。284 份输入逐一核对 Git blob 与 SHA-256；最初一个模板的 EOF 传输失败保留，后续补齐后才执行。报告为 `evidence/{mojo-generator-inputs-36,mojo-generation-37}.json`，位于上述工具链目录。该独立生成未覆盖完整 GN feature／import 配置，也不是 C++ 编译或链接成功证据。
 
-草案已封存为 `target/n5/capture-patch-20261115/data/patch-identity-44/capture-draft.patch`，62,982 字节，SHA-256 `a2cba7371192f7c982e5a7decf2ed70e2d8c3db79fbc23b12386121ad86930dc`。修改前输入按固定 revision、Git blob 和 SHA-256 核对，补丁通过独立 index 上的 `git apply --cached --check`；未改源码工作树、HEAD 或 refs。逐文件身份见同目录根下的 `evidence/patch-identity-44.json`。草案包含预绘制敏感子树抑制、透明清零、滚动几何、文档／激活关联、错误分类及绝对期限复核；**仍未编译、部署或作为生产实现提交**，静态检查不证明这些行为正确。
+草案已封存为 `target/n5/capture-patch-20261115/data/patch-identity-44/capture-draft.patch`，62,982 字节，SHA-256 `a2cba7371192f7c982e5a7decf2ed70e2d8c3db79fbc23b12386121ad86930dc`。修改前输入按固定 revision、Git blob 和 SHA-256 核对，补丁通过独立 index 上的 `git apply --cached --check`；未改源码工作树、HEAD 或 refs。逐文件身份见 `target/n5/capture-patch-20261115/evidence/patch-identity-44.json`。草案包含预绘制敏感子树抑制、透明清零、滚动几何、文档／激活关联、错误分类及绝对期限复核；**仍未编译、部署或作为生产实现提交**，静态检查不证明这些行为正确。
 
 新增的八项真实原生契约覆盖字段与 closed-shadow、同文档陈旧 context、Canvas 新绘制、内联编辑区、滚动视口、透明像素、不完整绘制与原生期限。前六项在 `target/n5/cap1/logs/native-contract-red-16.log`、加强后的整片内联区域在 `native-inline-region-red-19.log`、后两项在 `native-error-contract-red-32.log` 均实际止于旧引擎缺少私有命令；没有原生 GREEN。最新 `capture-contract-workspace-33.log` 的完整 `just check` 为 1672 passed、0 failed、21 ignored，含格式、严格 Clippy 和 release；忽略项不算原生验收。此前 `capture-contract-workspace-20.log` 的终端慢输出失败与后续锁中毒保留，原断言复验 `terminal-recheck-22.log` 的 9 项及后续完整门禁通过，未放宽测试。生产截图与身份 v2 仍未交付，N5 全范围仍未完成，未推送。
+
+### 固定完整源码与专用捕获环境
+
+2026-11-15，固定 Chromium revision 的 474,351 个唯一 blob 已全部补齐。逐批 Git 续接与原始文件补传失败均保留；最后 13 个对象改用有界分段，复用的旧部分字节不单独算通过，只有完整 Git blob 摘要匹配后才写入对象库。最终一个分段的 EOF 在独立目录重取后才拼合；没有导入不完整官方快照、清理 pack 或改写 refs。`git fsck --full --strict --no-dangling` 实际退出 0，安全展开后 HEAD 仍为 `6449d9f9a6a906edff724b7b220199b3fde4615c`，当时工作树 clean；Git tree 清单与 DEPS 的 SHA-256 分别为 `90d47707b34d633d8f74852bbfb79ae54a1c80da4a73128a2e89c42a2ee5d818`、`3cc6c8cf39333b06915b52ee89352fa0c74607929d74b8e9f41b868c6595be81`。报告为 `target/n5/capture-toolchain-20261115/evidence/source-checkout-50.json`；分段与重取记录为 `source-ranges-47.json`、`source-range-retry-49.json`。完整源码不等于 DEPS、hooks、GN 或引擎构建通过。后续首次 DEPS 同步在 vpython 派生包构建器试图写入 `/tmp` 时被工作区写入约束拒绝，报告为同目录 `deps-sync-51.json`；没有放行目录外写入、绕过 vpython 或将其记作同步成功。
+
+本任务独有 `n5cap` VM 已恢复私有 usernet，正常 cloud-init 完成；退出码 2 来自上游配置弃用告警，实际 `errors=[]`，当前 instance-id 与 boot-done 匹配。停机磁盘副本和失败日志保留，未格式化或调整原有共享／Browser VM。实际 Lima 资源为 2 CPU／2 GiB、Ubuntu 24.04 ARM64／`6.8.0-117-generic`，无宿主挂载、无 SSH agent 转发。首次 rsync 安装引起的启动等待及随后 Chromium 大依赖下载的超时保留；后者从该 VM 的 APT 元数据绑定剩余 23 包的完整 SHA-256，经 HTTPS 分段预取、宿主与 VM 双重核对后交回正常 `apt-get --no-download` 安装。不使用 `--print-uris` 的 MD5 作为完整性门槛，不换镜像源或绕过签名，不改旧 VM 的工具或 sysctl。
+
+固定 stock runtime 已通过七个命名文件及 manifest 校验；仍是身份 v1，不声称封闭整个安装树。`target/n5/cap1/logs/runtime-baseline-48.log` 的真实原语基线 1 passed，固定 Chromium 版本／revision 匹配，renderer 的 NoNewPrivs=1、Seccomp=2 与合法 sandbox argv 断言通过；closed-shadow／密码合成字段未绘入图片、绿色正控制保留，页面样式及暂停后计时恢复。独立前后 inventory 的 Run 条目与关联进程均为空。环境报告为 `target/n5/cap1/evidence/runtime-provision-46.json`，包预载记录为 `package-preload-45.json`，inventory 为 `data/runtime-baseline-48/{before,after}.json`。该成功仅证明新专用环境可执行已有原语，**不是原生生产捕获、native Browser 或四平台成功**；N5 全范围仍未完成，未推送。
 
 ## 复跑入口
 

@@ -58,6 +58,12 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 
 八项原生真实契约均仍止于旧引擎缺少私有命令，没有原生 GREEN；最新完整 Rust 门禁为 1672 passed、0 failed、21 ignored，格式、严格 Clippy 和 release 通过。前一轮终端慢输出失败和锁中毒保留，原断言的 9 项复验及后续完整门禁通过。草案与未完成测试继续留在工作区，未作为生产实现提交；截图关闭、身份 v1 与新增远端验收限制不变，N5 全范围仍未完成，未推送。
 
+## 固定完整源码与专用捕获环境
+
+2026-11-15，固定 Chromium revision 的 474,351 个唯一 blob 已全部补齐，严格全量对象检查通过，完整工作树安全展开且当时 clean，DEPS 摘要匹配；原始分批／分段的失败与重取证据保留，不将部分归档当成完整源码。本任务新建 `n5cap` VM 的正常启动、已核验依赖安装、stock runtime provision 与真实原语基线均通过；NoNewPrivs／Seccomp／sandbox argv 断言及前后空 inventory 得到验证，未改原有共享／Browser VM。[完整来源、包校验与限制](n5-validation.md#固定完整源码与专用捕获环境)分别记录。
+
+该阶段只补齐完整源码及可用的专用捕获环境，不代表 DEPS／hooks／GN、定制引擎、生产截图或四平台通过。后续首次 DEPS 同步因 vpython 派生包尝试写入 `/tmp` 被工作区写入约束拒绝，未放宽边界或绕过 bootstrap。仍未启用截图 facts 或身份 v2，N5 全范围仍未完成，未推送或新增远端验收。
+
 ## 专用 VM 创建上下文保护
 
 2026-11-15，修复专用 Browser VM 创建命令沿用 Colima 默认全局激活的问题。`create` 显式传入 `--activate=false`，保留无宿主挂载、无 SSH agent 转发，避免切换宿主 Docker／Kubernetes／Incus 上下文。新增回归先在缺参数时失败，最小修复后通过；`just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `target/n5/capture-toolchain-20261115/logs/vm-context-{red,green,tooling}-12.log`。本阶段只修改 Python 工具及说明，未重跑 Rust 门禁、创建新 VM 或开启生产截图；N5 全范围仍未完成，未推送。
