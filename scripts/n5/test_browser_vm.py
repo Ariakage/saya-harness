@@ -128,6 +128,10 @@ class CreationTests(unittest.TestCase):
         self.assertIn("--ssh-agent=false", argv)
         self.assertNotIn("--mount-type", argv)
 
+    def test_create_preserves_global_client_context(self):
+        argv = browser_vm.colima_start_argv(namespace())
+        self.assertIn("--activate=false", argv)
+
     def test_destroy_is_explicit_and_forced(self):
         argv = browser_vm.colima_delete_argv(namespace())
         self.assertEqual(argv[1:4], ["delete", "--profile", "saya-browser"])

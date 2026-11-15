@@ -280,6 +280,7 @@ def colima_start_argv(args: argparse.Namespace) -> list[str]:
         "none",
         # The VM must never receive the host SSH agent.
         "--ssh-agent=false",
+        "--activate=false",
     ]
     return argv
 
