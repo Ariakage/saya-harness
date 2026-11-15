@@ -258,6 +258,14 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 尚未运行或部署定制 Chromium，未实现生产捕获事务或身份 v2。本阶段已重新核对四份完整归档、25,515 个文件／链接条目与实际 ELF，密封汇总为 `target/n5/capture-toolchain-20261115/evidence/toolchain-stage-signoff.json`；汇总明确 `target_stdlib_verified`、`gn_generation_verified`、`chromium_build_verified`、`production_capture_verified` 与 `n5_full_acceptance` 均为 false。生产截图继续禁用；四平台远端验收按项目负责人最新要求等待再次授权，不以工具链探针、TCG 可行性调查或交叉产物代替实际平台成功证据。
 
+### 固定 bootstrap 与 GN
+
+2026-11-15，固定 depot_tools `b86fc981b72ab966f8260f73b4eca600b3b12677` 的原生 CIPD 客户端 2.9.2（SHA-256 `4ac2fa37f23486d249a2d71ff5084b6207c00cfa55928dad577fe99f0376ab71`）完成 15 个 Mac ARM bootstrap 包的正式部署。包共 268,172,212 字节，逐包核对 instance、完整摘要、ZIP 路径与展开大小，并由原客户端 `pkg-inspect`／`pkg-deploy` 验证；完整离线 `ensure` 通过，固定入口的 Python 为 3.11.8。实际执行了 gclient 入口；其 `--version` 输出为帮助，不把它记作数字版本，身份仍由固定提交决定。报告为 `target/n5/capture-toolchain-20261115/evidence/{cipd-packages-17,depot-deploy-18}.json`。
+
+同一 DEPS 的 `gn/gn/mac-arm64` 已通过原客户端正式获取、检查与部署；instance 为 `phtG5eQKjHsVLHUJ3vtBlBU6H_pRwldzL4kqKWh1LOkC`，1,087,354 字节的包 SHA-256 为 `a61b46e5e40a8c7b152c7509defb4194153a1ffa51c257732f892a2968752ce9`，实际 `gn --version` 为 `2603 (938087829fcb)`。已用该程序格式化捕获草案的 GN 文件；**未执行 GN 生成或定制 headless_shell 编译**。原始报告为 `evidence/gn-input-23.json`，重新核对全部 bootstrap 包、客户端、depot_tools 提交及实际 GN 版本的汇总为 `evidence/bootstrap-stage-signoff-28.json`，两者均位于上述工具链目录。
+
+完整 Chromium 工作树仍在补齐；逐批 Git 传输超时和官方固定快照在 1200 秒仅取得 23,363,584 字节的失败均保留。快照的 `download_complete` 为 false，未调用导入器，不将部分归档当成完整源码。原生捕获的 C++／Mojo／PDL 草案仅保留于工作区 `target/`，尚未编译、部署或提交为生产实现；既有引擎的六项显式原生用例均在缺少私有命令处失败，不能证明草案正确。生产截图 facts、身份 v1 和已发布能力均未改变。此阶段的成功仅限固定 bootstrap 与 GN；N5 全范围仍未完成，未推送或新增远端验收。
+
 ## 复跑入口
 
 先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SAYA_TEST_VM_*` 输入，程序身份与源码归属另行保留。

@@ -46,6 +46,12 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 
 [输入、失败轮次与边界](n5-validation.md#固定宿主工具链与跨目标执行)保留在工作区；生产捕获、身份 v2、native Browser 与四平台仍未完成，没有开启截图 facts、推送或新增远端验收。
 
+## 固定引擎 bootstrap 与 GN
+
+2026-11-15，固定 depot_tools 的原生 CIPD 客户端完成 15 个 Mac ARM bootstrap 包（268,172,212 字节）的摘要／instance 核对、正式部署与完整离线 `ensure`，实际执行 gclient 入口；未使用 bootstrap 绕过选项。同一 DEPS 的 Mac ARM GN 包完成正式获取、检查与部署，实际版本为 `2603 (938087829fcb)`，并用于格式化捕获草案的 GN 文件。全部包、客户端、提交和 GN 版本已重新核对，汇总为 `target/n5/capture-toolchain-20261115/evidence/bootstrap-stage-signoff-28.json`；[详细身份与失败范围](n5-validation.md#固定-bootstrap-与-gn)保留完整摘要与原始报告。
+
+完整 Chromium 工作树仍在补齐，官方固定快照超时且未导入；捕获草案仅在 `target/`，未编译或部署。该阶段不代表 GN 生成、目标 std、headless_shell 或生产截图成功；身份 v1 与截图关闭状态保持不变，N5 全范围仍未完成，未推送或新增远端验收。
+
 ## 专用 VM 创建上下文保护
 
 2026-11-15，修复专用 Browser VM 创建命令沿用 Colima 默认全局激活的问题。`create` 显式传入 `--activate=false`，保留无宿主挂载、无 SSH agent 转发，避免切换宿主 Docker／Kubernetes／Incus 上下文。新增回归先在缺参数时失败，最小修复后通过；`just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `target/n5/capture-toolchain-20261115/logs/vm-context-{red,green,tooling}-12.log`。本阶段只修改 Python 工具及说明，未重跑 Rust 门禁、创建新 VM 或开启生产截图；N5 全范围仍未完成，未推送。
