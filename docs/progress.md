@@ -18,7 +18,7 @@
 
 后续生命周期增量修复旧 sandbox 证据缓存、核验中断后的连接复用，以及启动目录／清理 await 丢失句柄或 unknown 的分支。启动隔离覆盖初始导航与目录刷新，直到 sandbox 核验完成；close 后证据作废。worker 定向 48 项与完整 `RUST_TEST_THREADS=1 just check` 的 1660 项通过（71 个测试二进制、0 failed、13 ignored，含格式、严格 Clippy、release 构建），日志 `target/n5/fullscope-lifecycle-{worker-green,check}.log`。新程序 SHA-256 为 `c1e20194d690efae1a9403a1c0892b62d78c146fa38c6da3365902305c2c7a91`、最低部署目标 15.0；真实 VM 四入口各 1 passed，close／reopen／snapshot 重新取得有效证据，独立清理 inventory 为空；同一程序通过完整 CLI／TUI smoke。详见 [生命周期增量证据](n5-validation.md#生命周期核验与启动清理增量)。本次仅本地验证与阶段提交，推送及新增四平台远端验收等待项目负责人再次授权；生产截图与 N5 全范围仍未完成。
 
-D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建。本轮 Akari 卷独立测量约 31 GiB 可用空间，未满足固定源码 Linux 构建文档的 100 GB 前提，也未确认独立构建环境；不清理归属不明的缓存，不将原语回归冒充生产截图。后续先补齐 Linux VM 宿主通道及本地可验证增量，新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068待实现)
+D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建生产引擎。2026-11-14 的约 31 GiB 余量保留为历史测量；后续核对并回收已确认可再生缓存后，余量与工具链探针见[固定引擎工具链准备](#固定引擎工具链准备)，不清理归属不明的缓存、不把原语或交叉编译探针冒充生产截图。新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068待实现)
 
 ## Linux VM 宿主通道本机定向验收
 
@@ -37,6 +37,14 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 源码 `557f865` 加固定测试补丁在 Linux 通过完整 `just check`：1686 passed、0 failed、17 ignored，含格式、全目标严格 Clippy、标准 release；11 个 suite 的 144 项工具回归及固定程序的 5 项审查／28 组 TUI smoke 通过。Linux 宿主通道 12 项显式实跑全部通过、0 ignored，覆盖长 TMPDIR、root SSH、uid501／CapEff=0／NoNewPrivs=1 与目录／进程清理；原生对抗为 18 passed、1 not_run（未提供 delegated cgroup），性能 v2 的 21 项核对通过。Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02d4192660d30`。同期 macOS 完整门禁仍为 1672 passed、0 failed、13 ignored，工具 144 项与完整 smoke 通过，release 哈希保持 `d3c9e061…`。
 
 初始内核身份拒绝、umask0002、libtest launcher 及无 Git 元数据的失败均保留；三组同程序 umask 对照与真实 Git bundle 分别证明环境原因，未放宽安全门槛、伪造编译器／来源或隐藏失败入口。输入、程序、分轮结果与未测范围见 [Linux ARM 验收](n5-validation.md#linux-arm-完整原生门禁)。这不是生产 Chromium、macOS15 运行环境或四平台成功证据；生产截图和 N5 全范围仍未完成，未推送或运行新增远端验收。
+
+## 固定引擎工具链准备
+
+2026-11-15，在工作区卷核对可再生 Cargo 中间文件的归属、格式和全部硬链接，持有四个 profile 构建锁并重新核对占用后，回收 169,521 个 inode、525,390 个路径；期间余量实测由 41,713,999,872 升至 106,195,374,080 字节。不清理未知项，保留程序、动态库、源码、用户文件与验收证据；149 个程序路径的前后摘要一致，不把分配量估算当成实际回收承诺。
+
+固定 Chromium DEPS 的 Mac ARM Clang／LLD 24、Rust 工具链、Linux ARM sysroot／运行库共 324,108,436 字节，已核对 generation、大小与完整摘要。宿主实际编译的 C++／Rust 联合 ELF 在独立 Ubuntu 22.04 ARM VM 的 uid501、`6.8.0-149-generic` 内核上运行成功，远端临时程序和目录已清理；SHA-256 为 `0008bb6a83b52960ac93dfcb97903d889844a54f87fb0b68b0db782ad2c091d9`。Rust 部分是 `no_core` ABI 探针，不证明目标 std 或 Chromium 链接；项目自身仍为 Rust 1.99.1。构建写入范围的正负控制通过，不代表 CIPD／vpython 或全量构建已经通过。
+
+[输入、失败轮次与边界](n5-validation.md#固定宿主工具链与跨目标执行)保留在工作区；生产捕获、身份 v2、native Browser 与四平台仍未完成，没有开启截图 facts、推送或新增远端验收。
 
 ## N4 Goal 编排
 
@@ -207,7 +215,7 @@ DEV-078实现manifest／lock的离线结构、语义、SemVer、feature／能力
 
 本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 just check`，格式、全workspace全目标严格Clippy、986项Rust测试与优化构建通过。新增17项OutputStore、19项ContextBuilder、5项运行时边界、1项三协议wire计数及1项MCP长输出回归。计数测试核对真实HTTP请求体，并确认计数期间没有请求。发布故障回归核对副作用只发生一次。日志见 `target/n3/dev076-062-workspace.log`。独立复核后继续修复结果投影状态保留与单用户长任务切点，DEV-062保持验收中，自动／手动Compact和全局记忆正常入口继续开发。
 
-DEV-084／087的GlobalMemoryStore独立组件新增可读Markdown、事实粒度来源、当前workspace过滤、纯提案、幂等提交、排他锁、WAL恢复、私有ledger及索引历史。33项定向测试通过，包含源元数据和旧updated_at在forget后经旧索引／rollback抑制的回归。独立复核确认修复，入口／投影／界面由后续任务接线。[组件格式与保证](memory.md#dev-084087-存储组件)
+DEV-084／087的GlobalMemoryStore独立组件新增可读Markdown、事实粒度来源、当前workspace过滤、纯提案、幂等提交、排他锁、WAL恢复、私有ledger及索引历史。33项定向测试通过，包含源元数据和旧updated_at在forget后经旧索引／rollback抑制的回归。独立复核确认修复，入口／投影／界面由后续任务接线。[组件格式与保证](memory.md)
 
 项目负责人提供四份压缩／续接／系统组装参考，以及三份记忆参考，要求提示词使用纯英文。已形成英文Compact与Continuation草案并记录四份压缩来源的SHA和取舍，当前源码已接入14份英文提示词，包含结构化Compact、固定前缀条件式续接与有来源的Memory Context，协议与正常运行验收继续按DEV-063／077维护。[提示词来源与接入契约](prompt/drafts/n3/README.md)
 

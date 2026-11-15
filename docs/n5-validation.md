@@ -244,9 +244,19 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 ## 定制捕获引擎的构建前提
 
-[D-068](decisions.md) 已确认允许扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium；它不是完成证明。[引擎实施边界](browser.md#托管捕获引擎扩展d-068待实现)保留预捕获遮蔽、事务屏障与双层 sandbox。固定源码的 Linux 构建文档要求至少 100 GB 空闲空间，本轮 Akari 卷独立测量约 31 GiB 可用，证据为 `target/n5/linux-host-channel/capture-preconditions-20261114.json`；尚无已确认满足条件的独立构建环境。默认 Linux 工具链的原生 ARM 路径也不能据已有 VM 原语结果推定可用。
+[D-068](decisions.md) 已确认允许扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium；它不是完成证明。[引擎实施边界](browser.md#托管捕获引擎扩展d-068待实现)保留预捕获遮蔽、事务屏障与双层 sandbox。固定源码的 Linux 构建文档要求 x86-64 构建机与至少 100 GB 空闲空间。2026-11-14 的约 31 GiB 余量保留为历史测量，不能当成后续清理后的现值；Linux ARM VM 的运行时验收也不证明标准 Linux 构建工具链支持 ARM 宿主。
 
-未下载完整引擎源码、未运行或部署定制构建，未清理归属不明的构建或用户缓存。生产截图继续禁用；四平台远端验收按项目负责人最新要求等待再次授权，不以旧源码、TCG 可行性调查或交叉编译代替实际宿主成功证据。
+### 固定宿主工具链与跨目标执行
+
+2026-11-15，按唯一 `(device, inode)` 核对四个 Cargo profile 的可再生中间产物，并在 `target/` 内定位全部相关硬链接。实际回收 169,521 个 inode、525,390 个路径，候选唯一分配量为 64,388,321,280 字节；回收期间工作区可用量由 41,713,999,872 升至 106,195,374,080 字节。后者是当时的可用空间实测变化，包含并行 I/O 与文件系统影响，不把 `st_blocks` 计量直接当作空间承诺。四个 `.cargo-lock` 均以非阻塞独占锁持有，重新检查未见 Cargo／rustc 或打开的候选文件；分析器仍运行，不宣称取得所有用户进程的未来使用保证。841 个未知或保护 inode 未提升为可回收项；全部程序、动态库、源码、日志、证据和用户 `CONTRIBUTING.md` 保留。149 个受保护程序路径（81 个唯一 inode）的前后摘要一致；已重建的当前 `execution_backend` 与历史冻结副本分别核对，不要求二者冒充同一程序。证据为 `target/n5/engine-cache-inventory/reclaim-applied-01/result.json`。
+
+从固定 Chromium `6449d9f9a6a906edff724b7b220199b3fde4615c` 的 DEPS 绑定官方对象、generation、精确大小与完整 SHA-256，实际取得 Mac ARM64 Clang／LLD 24、同修订的 Rust 工具链、Linux ARM64 sysroot 和 Linux 编译运行库，共 324,108,436 字节。大请求超时与不完整响应保留；续传使用有界范围、核对 `Content-Range`，拼合后仍要求完整固定摘要一致。下载与解包各使用工作区内独立数据目录，未执行归档内安装脚本；工具、sysroot 的文件／链接清单与摘要在 `target/n5/capture-toolchain-20261115/evidence/`。POSIX sysroot 中 systemd 单元名的字面反斜线不作为路径分隔符，仍保留绝对路径、`..`、特殊文件、越界链接、权限与资源上限检查。
+
+固定宿主 Clang／LLD 24 与 Rust 1.101.0-nightly 已实际启动；项目自身仍使用 Rust 1.99.1。独立 C++／Rust ABI 探针经 `aarch64-linux-gnu` 目标与固定 sysroot、运行库链接，保留 `--fix-cortex-a53-843419`；ELF SHA-256 为 `0008bb6a83b52960ac93dfcb97903d889844a54f87fb0b68b0db782ad2c091d9`。同一字节在独立 Ubuntu 22.04 ARM VM 的 uid501、`6.8.0-149-generic` 内核上实跑，输出 `SAYA_CAPTURE_TOOLCHAIN_ARM64_OK`，远端临时程序与目录已清理。Rust 部分明确使用 `no_core`，**不证明目标 std 或 Chromium 链接成功**；固定 GN 配置的目标 std 从源码构建，不能把宿主包缺少预编译 Linux std 误判为默认阻断。完整报告为 `target/n5/capture-toolchain-20261115/evidence/standalone-canary-06.json`。
+
+构建写入约束的真实正负控制已通过：允许两个任务目录内写入，拒绝修改目录外的、由当前用户拥有且模式为 0600 的可写对照文件。后续构建使用任务私有 HOME／TMPDIR／缓存与独立写入限制，不仅依赖缓存环境变量；该对照不是 CIPD、vpython 或完整构建已经通过的证明。固定 depot_tools `b86fc981b72ab966f8260f73b4eca600b3b12677` 已取得；完整源码展开、GN 生成、目标 std 与 headless_shell 的端到端构建仍不属于上述探针成功范围。
+
+尚未运行或部署定制 Chromium，未实现生产捕获事务或身份 v2。本阶段已重新核对四份完整归档、25,515 个文件／链接条目与实际 ELF，密封汇总为 `target/n5/capture-toolchain-20261115/evidence/toolchain-stage-signoff.json`；汇总明确 `target_stdlib_verified`、`gn_generation_verified`、`chromium_build_verified`、`production_capture_verified` 与 `n5_full_acceptance` 均为 false。生产截图继续禁用；四平台远端验收按项目负责人最新要求等待再次授权，不以工具链探针、TCG 可行性调查或交叉产物代替实际平台成功证据。
 
 ## 复跑入口
 

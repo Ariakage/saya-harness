@@ -1,6 +1,6 @@
 # Browser 能力设计
 
-**更新于 2026-11-14。浏览器能力归 F-10，DEV-079 至 DEV-082 负责接口、worker、策略与界面集成，DEV-083 负责联合验收。DEV-079 已实现宿主接口、受控网页读取与离线测试。DEV-080 的组件已完成 Playwright MCP 启动、身份校验、固定工具映射与生命周期，并按 D-066 增加显式专用 VM 后端；该后端的真实入口已在专用 Colima VM 上实际执行并通过（renderer 的 NoNewPrivs／Seccomp 与合法 sandbox argv、远端 Run 根和进程清理）。native worker 的组件测试通过，但 macOS Seatbelt 与 Linux Bubblewrap 当前都不能完成 Chromium 内层 sandbox 初始化，因此 native 浏览器未取得真实平台验收，也不得视为可用。DEV-081A 的 Browser 网络阶段已完成并取得专用 VM 真实网络验收；DEV-081 的登录凭据槽、文件 broker、后台取消与 unknown 提交阶段也已完成并取得专用 VM 真实验收（表单凭据填充、实际下载／上传、错误 origin、后台取消、Run 清理与引用恢复）。DEV-082 已实现截图宿主／产物／模型图片注入与 CLI／TUI 展示，并在本机离线与 PTY 验证；pinned `@playwright/mcp 0.0.85` 的 `browser_take_screenshot` schema 没有 `mask` 参数，无法在截图生成前执行真实遮蔽，因此 worker／VM 的 `screenshots` 与 `screenshot_masking` fact 均为 `false`，生产截图返回 `browser_capability_disabled`，不返回未遮蔽图片；只有具备遮蔽能力的 provider 才注册 `browser_screenshot`。DEV-083 的本机／专用 VM 联合阶段已完成 21 passed、1 disabled，三协议 CLI／TUI 回归通过；生产截图、native Browser 与新增四平台固定源码证据仍未满足，N5 全范围尚未完成。**
+**更新于 2026-11-15。浏览器能力归 F-10，DEV-079 至 DEV-082 负责接口、worker、策略与界面集成，DEV-083 负责联合验收。DEV-079 已实现宿主接口、受控网页读取与离线测试。DEV-080 的组件已完成 Playwright MCP 启动、身份校验、固定工具映射与生命周期，并按 D-066 增加显式专用 VM 后端；该后端的真实入口已在专用 Colima VM 上实际执行并通过（renderer 的 NoNewPrivs／Seccomp 与合法 sandbox argv、远端 Run 根和进程清理）。native worker 的组件测试通过，但 macOS Seatbelt 与 Linux Bubblewrap 当前都不能完成 Chromium 内层 sandbox 初始化，因此 native 浏览器未取得真实平台验收，也不得视为可用。DEV-081A 的 Browser 网络阶段已完成并取得专用 VM 真实网络验收；DEV-081 的登录凭据槽、文件 broker、后台取消与 unknown 提交阶段也已完成并取得专用 VM 真实验收（表单凭据填充、实际下载／上传、错误 origin、后台取消、Run 清理与引用恢复）。DEV-082 已实现截图宿主／产物／模型图片注入与 CLI／TUI 展示，并在本机离线与 PTY 验证；pinned `@playwright/mcp 0.0.85` 的 `browser_take_screenshot` schema 没有 `mask` 参数，无法在截图生成前执行真实遮蔽，因此 worker／VM 的 `screenshots` 与 `screenshot_masking` fact 均为 `false`，生产截图返回 `browser_capability_disabled`，不返回未遮蔽图片；只有具备遮蔽能力的 provider 才注册 `browser_screenshot`。DEV-083 的本机／专用 VM 联合阶段已完成 21 passed、1 disabled，三协议 CLI／TUI 回归通过；生产截图、native Browser 与新增四平台固定源码证据仍未满足，N5 全范围尚未完成。**
 
 ## DEV-079 实现状态
 
@@ -58,7 +58,7 @@ worker 文件路径固定为 worker root 下的 `node_modules/@playwright/mcp/cl
 
 固定身份需关联精确上游源码、审核后的补丁、DEPS／工具链／构建参数与配方，以及各架构产物及分发摘要。现有 v1 manifest 只校验明确命名的文件，不声称覆盖整个安装树或证明定制构建来源；最终协议、身份格式与分发产物仍待实际实现和验收，不以配置声明代替构建证明。
 
-当前未构建或部署定制引擎，生产 `screenshots`／`screenshot_masking` 保持 false。固定源码的[Linux 构建要求](https://github.com/chromium/chromium/blob/6449d9f9a6a906edff724b7b220199b3fde4615c/docs/linux/build_instructions.md#system-requirements)列出 x86-64 构建机与至少 100 GB 空闲空间；本轮 ARM 宿主的 Akari 卷独立测量约 31 GiB 可用，且默认 Linux 工具链不能直接假定为原生 ARM 构建路径。尚未确认有满足条件的独立构建环境，也没有清理归属不明的 Rust 或用户缓存。实际生产事务与四平台成功证据仍是未完成项。
+当前未构建或部署定制引擎，生产 `screenshots`／`screenshot_masking` 保持 false。固定源码的[Linux 构建要求](https://github.com/chromium/chromium/blob/6449d9f9a6a906edff724b7b220199b3fde4615c/docs/linux/build_instructions.md#system-requirements)列出 x86-64 构建机与至少 100 GB 空闲空间，不能直接当作 ARM Linux 宿主支持证明。2026-11-15 已核对并回收身份闭合的可再生 Cargo 中间产物，保留程序、动态库、源码及历史证据；工作区余量曾实测达到 106,195,374,080 字节，旧约 31 GiB 数值仅属历史时点。固定 DEPS 的 Mac ARM Clang／LLD 24、Rust 工具链及 Linux ARM sysroot／运行库已完成独立 C++／Rust 跨目标执行探针，并在 Linux ARM VM 中实跑；Rust 探针为 `no_core`，不是目标 std、GN 生成或 headless_shell 构建证明。项目自身仍使用 Rust 1.99.1。[完整范围与原始证据](n5-validation.md#固定宿主工具链与跨目标执行)分别记录工具完整摘要、失败轮次、写入边界和未验证项；生产事务、身份 v2 与四平台成功证据仍未完成。
 
 ## DEV-080 VM 后端扩展
 
