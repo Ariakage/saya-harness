@@ -294,6 +294,20 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 项目 `just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `logs/project-tooling-55.log`；此前构建专用 PATH 不含 `just` 的第 54 轮未启动，后明确使用已存在的任务执行器重跑。上述相对证据路径均位于 `target/n5/capture-toolchain-20261115/`。该阶段仅证明临时目录修复、真实工具入口和相关回归，**不证明 DEPS／hooks／GN、引擎编译或生产捕获成功**；八项原生捕获仍无 GREEN，截图关闭与身份 v1 保持不变，未推送或新增远端验收。
 
+### 固定 SDK 查询与原生依赖缓存
+
+2026-11-15，`xcrun` 的 SDK build 查询虽曾退出 0，仍因系统缓存写入被拒绝而向 stderr 报错；第 66、67 轮不算干净成功，`--no-cache` 也不能禁止缓存写入。核对实际工具实现后，以绝对 `xcrun_db` 指向工作区缓存，第 68 轮四项真实查询均退出 0 且 stderr 为空；第 71 轮未修改的正式 `build/config/apple/sdk_info.py` 也通过相同约束，生成链接仅位于任务输出内。SDK 为 27.0／26A425，52,589 条文件／目录／链接、931,393,813 文件字节的 canonical tree SHA-256 为 `17e860dfd2454374e088331f45693e0e8b7aceef0af1530c96b1ff0774cde5c5`；不跟随树内链接，不修改 Xcode。查询脚本和实际查询库身份分别记录于 `evidence/sdk-query-71.json`，完整 SDK 身份见 `evidence/sdk-identity-68.json`；这不是全部 Xcode 工具已封闭或 GN 生成成功的证明。
+
+第 60 轮真实 `gclient sync --nohooks --noprehooks --no-history --shallow --jobs=2` 在 1800 秒上限被终止，报告 `evidence/deps-sync-60.json` 的 `dependencies_synced=false`。日志显示固定 trace／sysroot 的传输停滞，没有新的临时目录拒绝。第 69 轮默认端点与第 72 轮显式 TLS 校验的 XML 端点对照中，真实 stat 约 3–4.5 秒成功，但两次 cp 均在 180 秒超时；同一对象的 curl 全量请求在 120 秒只取得 3,031,031 字节，完整摘要不匹配。第 70 轮已主动停止，不作为成功证据；也不能据此声称实际发生了未校验证书的传输，原程序默认启用校验。原始报告 `evidence/gcs-transport-{69,72}.json`、部分下载和失败日志全部保留。
+
+[固定 GCS 缓存补丁](../scripts/n5/patches/depot-tools-gcs-cache.patch)基于同一上游 `b86fc981b72ab966f8260f73b4eca600b3b12677`，11,279 字节，SHA-256 `11d68313ff90b2e9f40f07330ef85cebd3e6a438788876c568c36ec7e98cb818`。仅在 POSIX 构建中显式设置绝对 `GCLIENT_GCS_DOWNLOAD_CACHE` 时启用，以固定小写 SHA-256 作为文件名；拒绝非普通文件、符号链接、错误大小与摘要，FIFO 不阻塞，坏输入不静默回退。缓存未配置或缺失时保留原下载路径；缓存命中后仍由原生方法验证 SHA／大小、验证及解包归档、通过真实 gsutil 查询 executable metadata，最后才写原生完成标记。没有设置 `GCLIENT_TEST`、复制提取树或手写完成标记。
+
+定向测试包含有效缓存、缺失／未配置、等长坏摘要、独立大小错误、非法 key、相对目录、symlink、带 5 秒子进程期限的 FIFO，以及远端 stat 失败时不写完成标记。第 73、75、76 轮 RED 分别保留，最终 10 项与完整 gclient 98 项在 `logs/{gcs-cache-green,gclient-suite}-79.log` 通过；完整下载工具 31 项见 `logs/depot-download-suite-80.log`，原有未关闭文件 ResourceWarning 保留。项目 `just test-tooling` 的 11 个 suite、145 项见 `logs/project-tooling-86.log`；期间暴露的显式临时目录问题与 PTY 测试策略分别见[进度记录](progress.md#原生验收的显式临时目录)，固定构建写入策略未扩大。
+
+第 74 轮预取完成 4 份工具链／sysroot 归档和 21 个固定 trace，共 25 个真实缓存输入，逐一核对完整大小和 SHA，未写原生标记。范围下载逐段验证 Content-Range，拼合后仍要求完整摘要匹配，记录为 `evidence/gcs-prefetch-74.json`。第 79 轮真实单 sysroot 导入虽成功，但未独立记录缓存命中和内部 stat stderr，不用外围空 stderr 推定内部无告警。第 85 轮保留真实执行路径，以解释器文件打开审计记录实际缓存读取，并以不替换返回值的透传观察器保存真实 gsutil 操作；只观察到一次 stat、没有 cp，stat 退出 0 且原始 stderr 为空。18,015,920 字节 sysroot 的原生摘要、解包、stdio.h 与原生标记核对通过，总计约 7.5 秒；报告和原始 metadata 分别为 `evidence/gcs-import-85.json`、`data/gcs-import-85/gsutil-operations.json`。这仅证明一个真实对象导入，**不证明全部 DEPS 同步**。
+
+临时目录与缓存补丁对应的四文件原始 git diff 为 14,894 字节，SHA-256 `5c0821c0ae9a89fc67d3878c239cfb953c359944d186b405bdd0bb5a81ab7725`。分发缓存补丁省略空白上下文行的单字符前缀，以通过仓库尾随空白检查；第 89 轮在默认 git apply 下顺序应用两组补丁，逐文件结果仍与实际工具副本一致。四份原始／修改文件的摘要、两组独立 index 顺序应用后的逐文件比对、HEAD／refs 不变、25 份缓存复核及真实入口／测试日志摘要，统一见 `evidence/depot-patch-89.json`。初次封存第 81 轮因错误假定缓冲日志必须以 OK 结尾而拒绝，保留失败日志；修正为逐 suite 核对真实摘要且拒绝 FAILED／ERROR／FAIL 后才接受，不把实际失败的第 80、84 轮项目门禁算作通过。后续同步必须绑定固定上游和完整组合补丁，不得继续使用仅含两文件的旧身份；源码内嵌的同修订 depot_tools 仍需在正确同步／hooks 顺序中核对适用补丁。上述相对证据均位于 `target/n5/capture-toolchain-20261115/`。此阶段未完成全量 DEPS、pre-hooks／hooks、GN 或 Chromium 构建，生产截图仍关闭、身份仍为 v1，N5 全范围未完成，未推送或新增远端验收。
+
 ## 复跑入口
 
 先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SAYA_TEST_VM_*` 输入，程序身份与源码归属另行保留。

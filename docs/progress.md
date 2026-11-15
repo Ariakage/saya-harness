@@ -70,6 +70,12 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 
 完整上游测试曾因 macOS Unix socket 路径过长失败，后改用同一构建根内更短的 `t/` 临时目录通过；原目录和失败日志保留，写入范围未扩大。上游原有文件未关闭的 `ResourceWarning` 仍保留记录，不称为零告警。[完整摘要与验证范围](n5-validation.md#固定构建工具的工作区临时目录)分别记录；本阶段不证明 DEPS／hooks／GN、定制引擎或生产捕获完成，未开启截图或身份 v2，未推送。
 
+## 固定 SDK 查询与依赖缓存
+
+2026-11-15，固定源码的正式 SDK 查询脚本在原构建写入约束下通过，实际 SDK 为 27.0／26A425；`xcrun_db` 显式指向工作区缓存，不放行其原先尝试写入的系统目录。52,589 条 SDK 文件／目录／链接的身份已记录，未修改 Xcode。第 60 轮 DEPS 同步的 1800 秒传输超时保留；默认与 XML 端点的对照均未解决大对象传输，不将它们记作成功。
+
+新增固定 [GCS 缓存补丁](../scripts/n5/patches/depot-tools-gcs-cache.patch)，仅在显式绝对目录下按固定 SHA 查找输入，拒绝坏摘要／大小、符号链接与 FIFO，缓存缺失才走原下载；原生摘要、大小、解包、真实 metadata 与完成标记流程保留。10 项回归先 RED 后 GREEN，完整 gclient 98 项、下载工具 31 项与项目工具 145 项通过；上游既有 ResourceWarning 未隐藏。25 个真实输入重新核验，第 85 轮单 sysroot 实际导入通过，文件打开审计观察到缓存读取、未发生网络 cp，透传观察器保存的真实 stat 为退出 0 且 stderr 为空。两组补丁通过独立 index 顺序应用与逐文件核对，完整组合身份见 `target/n5/capture-toolchain-20261115/evidence/depot-patch-89.json`。[输入摘要、失败轮次与严格边界](n5-validation.md#固定-sdk-查询与原生依赖缓存)分别保留；本阶段不代表全部 DEPS／pre-hooks／hooks／GN、定制引擎或生产捕获成功，未开启截图或身份 v2，未推送。
+
 ## 原生验收的显式临时目录
 
 2026-11-15，N5 构建环境中的工具门禁暴露原生验收入口硬编码 `/var/tmp`，绕过显式 `TMPDIR`。入口现尊重显式目录，未设置时仍保留原默认；回归检查真实生成的编译输入位于请求目录、编译失败诊断完整且临时目录清理。先观察目录外写入被拒绝的 RED，再经最小修复通过；定向日志为 `target/n5/capture-toolchain-20261115/logs/native-temp-{red-83,green-84}.log`。

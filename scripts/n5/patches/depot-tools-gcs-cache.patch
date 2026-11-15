@@ -1,0 +1,257 @@
+diff --git a/gclient.py b/gclient.py
+index 1bd193b..e244110 100755
+--- a/gclient.py
++++ b/gclient.py
+@@ -93,6 +93,7 @@ import pprint
+ import re
+ import sys
+ import shutil
++import stat
+ import tarfile
+ import tempfile
+ import time
+@@ -3355,11 +3356,36 @@ class GcsDependency(Dependency):
+                 with tarfile.open(self.artifact_output_file, "w:gz") as tar:
+                     tar.add(copy_dir, arcname=os.path.basename(copy_dir))
+         else:
+-            code, _, err = gsutil.check_call(
+-                "cp", self.url, self.artifact_output_file
+-            )
+-            if code and err:
+-                raise Exception(f"{code}: {err}")
++            cache_dir = os.environ.get("GCLIENT_GCS_DOWNLOAD_CACHE")
++            cache_file = None
++            if cache_dir:
++                if not os.path.isabs(cache_dir):
++                    raise ValueError("GCS cache directory must be absolute")
++                if not re.fullmatch(r"[0-9a-f]{64}", self.sha256sum):
++                    raise ValueError("invalid GCS cache key")
++                cache_file = os.path.join(cache_dir, self.sha256sum)
++            if cache_file and os.path.lexists(cache_file):
++                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
++                with os.fdopen(os.open(cache_file, flags), "rb") as cached:
++                    info = os.fstat(cached.fileno())
++                    if not stat.S_ISREG(info.st_mode):
++                        raise ValueError("GCS cache entry is not a regular file")
++                    if info.st_size != self.size_bytes:
++                        raise ValueError("GCS cache size does not match expected size")
++                    remaining = self.size_bytes + 1
++                    with open(self.artifact_output_file, "wb") as output:
++                        while remaining:
++                            data = cached.read(min(1024 * 1024, remaining))
++                            if not data:
++                                break
++                            output.write(data)
++                            remaining -= len(data)
++            else:
++                code, _, err = gsutil.check_call(
++                    "cp", self.url, self.artifact_output_file
++                )
++                if code and err:
++                    raise Exception(f"{code}: {err}")
+             # Check that something actually downloaded into the path
+             if not os.path.exists(self.artifact_output_file):
+                 raise Exception(
+diff --git a/tests/gclient_test.py b/tests/gclient_test.py
+index a21e7e7..811e5b4 100755
+--- a/tests/gclient_test.py
++++ b/tests/gclient_test.py
+@@ -8,6 +8,7 @@ See gclient_smoketest.py for integration tests.
+ """
+
+ import contextlib
++import hashlib
+ import io
+ import json
+ import logging
+@@ -15,6 +16,7 @@ import ntpath
+ import os
+ import queue
+ import shutil
++import subprocess
+ import sys
+ import tarfile
+ import tempfile
+@@ -2744,6 +2746,182 @@ class GcsDependencyTest(trial_dir.TestCase):
+         self.assertFalse(os.path.exists(content_file))
+
+
++class GcsDownloadCacheTest(trial_dir.TestCase):
++    """Exercise cache inputs through native hash, extraction and markers."""
++
++    def setUp(self):
++        super().setUp()
++        env = mock.patch.dict(os.environ)
++        env.start()
++        self.addCleanup(env.stop)
++        # The upstream test shortcut bypasses the validations tested here.
++        os.environ.pop("GCLIENT_TEST", None)
++        self.cache_dir = os.path.join(self.root_dir, "private-cache")
++        os.mkdir(self.cache_dir, mode=0o700)
++        os.environ["GCLIENT_GCS_DOWNLOAD_CACHE"] = self.cache_dir
++        self.tar_path = os.path.join(self.root_dir, "fixture.tar.gz")
++        with tarfile.open(self.tar_path, "w:gz") as tar:
++            member = tarfile.TarInfo("extracted_dir/file.txt")
++            payload = b"cache integration payload\n"
++            member.size = len(payload)
++            tar.addfile(member, io.BytesIO(payload))
++        with open(self.tar_path, "rb") as f:
++            self.archive = f.read()
++        self.sha256 = hashlib.sha256(self.archive).hexdigest()
++        self.cache_file = os.path.join(self.cache_dir, self.sha256)
++        parent = mock.MagicMock()
++        parent.name = "src"
++        parent.root.root_dir = self.root_dir
++        self.dep = gclient.GcsDependency(
++            parent=parent,
++            name="test_dep",
++            bucket="fake_bucket",
++            object_name="payload.tar.gz",
++            sha256sum=self.sha256,
++            output_file=None,
++            size_bytes=len(self.archive),
++            gcs_root=gclient_scm.GcsRoot(self.root_dir),
++            custom_vars={},
++            should_process=True,
++            relative=False,
++            condition=None,
++        )
++        self.allow_copy = True
++        self.stat_result = (0, "", "")
++        boundary = mock.patch.object(
++            gclient.download_from_google_storage.Gsutil,
++            "check_call",
++            new=self._gsutil_call,
++        )
++        boundary.start()
++        self.addCleanup(boundary.stop)
++
++    def _gsutil_call(self, *args):
++        if args == ("cp", self.dep.url, self.dep.artifact_output_file):
++            if not self.allow_copy:
++                raise AssertionError("network copy forbidden for cache hit")
++            shutil.copyfile(self.tar_path, self.dep.artifact_output_file)
++            return 0, "", ""
++        if args == ("stat", self.dep.url):
++            return self.stat_result
++        raise AssertionError("unexpected external GCS operation: %r" % (args,))
++
++    def _write_cache(self, data):
++        with open(self.cache_file, "wb") as f:
++            f.write(data)
++
++    def _assert_payload(self):
++        with open(os.path.join(self.dep.output_dir,
++                               "extracted_dir", "file.txt"), "rb") as f:
++            self.assertEqual(f.read(), b"cache integration payload\n")
++
++    def _assert_complete(self):
++        self._assert_payload()
++        with open(self.dep.hash_file) as f:
++            self.assertEqual(f.read(), self.sha256 + "\n")
++        with open(self.dep.migration_toggle_file) as f:
++            self.assertEqual(f.read(), "1\n")
++        content_names = os.path.join(
++            self.dep.output_dir, ".payload_tar_gz_content_names")
++        with open(content_names) as f:
++            self.assertEqual(json.load(f), ["extracted_dir/file.txt"])
++
++    def _assert_incomplete(self):
++        self.assertFalse(os.path.exists(self.dep.hash_file))
++        self.assertFalse(os.path.exists(self.dep.migration_toggle_file))
++
++    def _assert_cache_rejected(self, exception, pattern):
++        self.allow_copy = False
++        with self.assertRaisesRegex(exception, pattern):
++            self.dep.DownloadGoogleStorage()
++        self._assert_incomplete()
++        self.assertFalse(os.path.exists(os.path.join(
++            self.dep.output_dir, "extracted_dir", "file.txt")))
++
++    def test_invalid_digest_cannot_select_a_cache_path(self):
++        self.dep.sha256sum = "../outside"
++        with open(os.path.join(self.root_dir, "outside"), "wb") as output:
++            output.write(self.archive)
++        with self.assertRaisesRegex(Exception, "cache key"):
++            self.dep.DownloadGoogleStorage()
++        self._assert_incomplete()
++        self.assertFalse(os.path.exists(self.dep.artifact_output_file))
++
++    def test_relative_cache_directory_is_rejected(self):
++        os.environ["GCLIENT_GCS_DOWNLOAD_CACHE"] = "private-cache"
++        with self.assertRaisesRegex(ValueError, "absolute"):
++            self.dep.DownloadGoogleStorage()
++        self._assert_incomplete()
++        self.assertFalse(os.path.exists(self.dep.artifact_output_file))
++
++    def test_valid_cache_extracts_without_network_copy(self):
++        self._write_cache(self.archive)
++        self.allow_copy = False
++        self.dep.DownloadGoogleStorage()
++        self._assert_complete()
++
++    def test_same_size_bad_sha_cache_fails_without_fallback(self):
++        bad = bytes([self.archive[0] ^ 1]) + self.archive[1:]
++        self._write_cache(bad)
++        self._assert_cache_rejected(Exception, "sha256sum does not match")
++
++    def test_wrong_size_cache_fails_without_fallback(self):
++        for expected in (len(self.archive) - 1, len(self.archive) + 1):
++            with self.subTest(expected_size=expected):
++                self._write_cache(self.archive)
++                self.dep.size_bytes = expected
++                self._assert_cache_rejected(Exception, "size")
++                self.assertFalse(os.path.exists(self.dep.artifact_output_file))
++
++    @unittest.skipIf(sys.platform == "win32" or not hasattr(os, "symlink"),
++                     "symlink requires platform support and privileges")
++    def test_symlink_cache_fails_without_fallback(self):
++        os.symlink(self.tar_path, self.cache_file)
++        self._assert_cache_rejected((OSError, ValueError), "symbolic|regular|follow")
++
++    @unittest.skipUnless(hasattr(os, "mkfifo") and hasattr(os, "O_NONBLOCK"),
++                         "FIFO and nonblocking open require POSIX")
++    def test_fifo_cache_is_rejected_without_blocking_or_fallback(self):
++        if os.environ.get("GCLIENT_GCS_FIFO_CHILD") != "1":
++            env = dict(os.environ, GCLIENT_GCS_FIFO_CHILD="1",
++                       TMPDIR=self.root_dir, TMP=self.root_dir, TEMP=self.root_dir)
++            try:
++                result = subprocess.run(
++                    [sys.executable, "-I", "-B", os.path.abspath(__file__),
++                     "GcsDownloadCacheTest.test_fifo_cache_is_rejected_without_blocking_or_fallback"],
++                    cwd=self.root_dir, env=env, stdout=subprocess.PIPE,
++                    stderr=subprocess.STDOUT, timeout=5, check=False,
++                )
++            except subprocess.TimeoutExpired:
++                self.fail("GCS cache FIFO read blocked")
++            self.assertEqual(result.returncode, 0, result.stdout.decode())
++            return
++        os.mkfifo(self.cache_file, mode=0o600)
++        self._assert_cache_rejected(ValueError, "regular file")
++
++    def test_cache_miss_downloads_and_writes_native_markers(self):
++        self.dep.DownloadGoogleStorage()
++        self._assert_complete()
++
++    def test_unset_cache_preserves_native_download(self):
++        self._write_cache(b"ignored because caching is disabled")
++        os.environ.pop("GCLIENT_GCS_DOWNLOAD_CACHE")
++        self.dep.DownloadGoogleStorage()
++        self._assert_complete()
++
++    @unittest.skipIf(sys.platform in ("win32", "cygwin"),
++                     "native executable metadata stat is POSIX-only")
++    def test_cache_stat_failure_propagates_without_completion_markers(self):
++        self._write_cache(self.archive)
++        self.allow_copy = False
++        self.stat_result = (1, "", "controlled stat failure")
++        with self.assertRaisesRegex(Exception, "controlled stat failure"):
++            self.dep.DownloadGoogleStorage()
++        # Upstream extracts before the executable-metadata stat.
++        self._assert_payload()
++        self._assert_incomplete()
++
++
+ if __name__ == "__main__":
+     sys.stdout = gclient_utils.MakeFileAutoFlush(sys.stdout)
+     sys.stdout = gclient_utils.MakeFileAnnotated(sys.stdout)
