@@ -4,6 +4,7 @@
 //! with the pinned offline worker tree:
 //!
 //! ```text
+//! SAYA_TEST_EXECUTABLE=/path/to/saya \
 //! SAYA_TEST_NODE=/path/to/node \
 //! SAYA_TEST_WORKER_ROOT=/path/to/worker-root \
 //! SAYA_TEST_CHROMIUM_BIN=/path/to/chrome-headless-shell \
@@ -27,7 +28,7 @@ use saya_core::{
     tools::exec::ExecConfig,
 };
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, process::Command, sync::Arc, time::Duration};
 
 struct NeverCancel;
 impl Cancellation for NeverCancel {
@@ -47,26 +48,51 @@ fn manifest_digest(path: &std::path::Path) -> String {
         .collect()
 }
 
-#[tokio::test]
-#[ignore = "requires SAYA_TEST_NODE, SAYA_TEST_WORKER_ROOT, SAYA_TEST_CHROMIUM_BIN and SAYA_TEST_IDENTITY_MANIFEST pointing at the pinned offline worker this host supports"]
-async fn real_playwright_worker_verifies_chromium_sandbox() {
-    if !cfg!(target_os = "linux") {
-        eprintln!("real worker integration requires a Linux host; test not run");
-        return;
+#[test]
+fn real_worker_entry_rejects_missing_prerequisites() {
+    let mut command = Command::new(std::env::current_exe().expect("test image"));
+    command.args([
+        "--ignored",
+        "--exact",
+        "real_playwright_worker_verifies_chromium_sandbox",
+        "--nocapture",
+    ]);
+    for name in [
+        "SAYA_TEST_EXECUTABLE",
+        "SAYA_TEST_NODE",
+        "SAYA_TEST_WORKER_ROOT",
+        "SAYA_TEST_CHROMIUM_BIN",
+        "SAYA_TEST_IDENTITY_MANIFEST",
+    ] {
+        command.env_remove(name);
     }
-    let (Some(node), Some(worker_root), Some(chromium), Some(identity_manifest)) = (
-        std::env::var_os("SAYA_TEST_NODE"),
-        std::env::var_os("SAYA_TEST_WORKER_ROOT"),
-        std::env::var_os("SAYA_TEST_CHROMIUM_BIN"),
-        std::env::var_os("SAYA_TEST_IDENTITY_MANIFEST"),
-    ) else {
-        eprintln!("real worker environment is not configured; test not run");
-        return;
-    };
-    let node = PathBuf::from(node);
-    let worker_root = PathBuf::from(worker_root);
-    let chromium = PathBuf::from(chromium);
-    let identity_manifest = PathBuf::from(identity_manifest);
+    let output = command.output().expect("real entry negative control");
+    assert!(
+        !output.status.success(),
+        "missing real Browser prerequisites were counted as success: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("0 passed; 1 failed"));
+}
+
+fn required_path(name: &str) -> PathBuf {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("missing explicit real Browser prerequisite {name}"))
+}
+
+#[tokio::test]
+#[ignore = "requires explicit SAYA_TEST_EXECUTABLE and pinned offline worker inputs on a supported Linux host"]
+async fn real_playwright_worker_verifies_chromium_sandbox() {
+    assert_eq!(std::env::consts::OS, "linux", "real Browser requires Linux");
+    let image = std::fs::canonicalize(required_path("SAYA_TEST_EXECUTABLE"))
+        .expect("explicit real CLI image");
+    saya_core::execution::pin_launcher_image_from(&image).expect("real CLI launcher image");
+    let node = required_path("SAYA_TEST_NODE");
+    let worker_root = required_path("SAYA_TEST_WORKER_ROOT");
+    let chromium = required_path("SAYA_TEST_CHROMIUM_BIN");
+    let identity_manifest = required_path("SAYA_TEST_IDENTITY_MANIFEST");
     assert!(node.is_file(), "Node is unavailable");
     assert!(worker_root.is_dir(), "worker root is unavailable");
     assert!(chromium.is_file(), "Chromium is unavailable");
@@ -93,15 +119,29 @@ async fn real_playwright_worker_verifies_chromium_sandbox() {
     );
     let provider = PlaywrightMcpProvider::managed(settings, factory, ExecConfig::default())
         .expect("production provider");
-
-    let opened = provider
-        .open(None, &NeverCancel)
+    let outcome = tokio::time::timeout(Duration::from_secs(40), async {
+        let opened = provider
+            .open(None, &NeverCancel)
+            .await
+            .map_err(|error| format!("real worker open: {error:?}"))?;
+        let evidence = provider
+            .sandbox_evidence()
+            .await
+            .ok_or_else(|| "Chromium sandbox evidence is missing".to_owned())?;
+        provider
+            .close(&opened.session, &NeverCancel)
+            .await
+            .map_err(|error| format!("real worker close: {error:?}"))?;
+        Ok::<_, String>(evidence)
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(30), provider.shutdown(&NeverCancel))
         .await
-        .expect("real worker open");
-    let evidence = provider
-        .sandbox_evidence()
-        .await
-        .expect("Chromium sandbox evidence");
+        .expect("bounded real worker cleanup")
+        .expect("real worker shutdown");
+    let evidence = outcome
+        .expect("bounded real Browser probe")
+        .expect("real Browser probe");
     assert!(evidence.no_new_privs, "renderer NoNewPrivs is not 1");
     assert_eq!(
         evidence.seccomp_mode, 2,
@@ -111,6 +151,10 @@ async fn real_playwright_worker_verifies_chromium_sandbox() {
         evidence.sandbox_arguments_valid,
         "renderer command line disables its sandbox"
     );
+    assert!(
+        evidence.stderr_initializes_sandbox,
+        "Chromium sandbox initialization was not witnessed"
+    );
     eprintln!(
         "renderer_pid={} no_new_privs={} seccomp={} stderr_initialize_sandbox={}",
         evidence.renderer_pid,
@@ -118,13 +162,4 @@ async fn real_playwright_worker_verifies_chromium_sandbox() {
         evidence.seccomp_mode,
         evidence.stderr_initializes_sandbox
     );
-
-    provider
-        .close(&opened.session, &NeverCancel)
-        .await
-        .expect("real worker close");
-    provider
-        .shutdown(&NeverCancel)
-        .await
-        .expect("real worker shutdown");
 }

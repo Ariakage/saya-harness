@@ -3,12 +3,15 @@
 //! This module owns the process/transport side of the browser provider. The
 //! worker runtime, Node executable, Chromium executable and identity manifest
 //! are supplied explicitly by the host. Nothing here installs, downloads or
-//! discovers a package manager. The exact files named by the manifest are
-//! verified; no claim is made about the rest of the worker tree.
+//! discovers a package manager. Named files and the complete Node, worker and
+//! Chromium installation trees are verified before launch.
 //!
 //! Model-facing tools remain the fixed [`super::BrowserProvider`] surface. The
 //! worker catalogue is only used to prove that the pinned tools and schemas are
 //! present; its additional tools are never mapped or exposed.
+
+mod installation;
+pub(crate) use installation::InstallationTrees;
 
 use super::{
     BrowserAction, BrowserElement, BrowserFacts, BrowserFailure, BrowserOpened, BrowserProvider,
@@ -40,7 +43,7 @@ use std::{
     },
     path::{Component, Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{io::AsyncReadExt, sync::Mutex as AsyncMutex};
 
@@ -276,6 +279,7 @@ pub fn browser_install_roots(
 #[serde(deny_unknown_fields)]
 pub(crate) struct IdentityManifest {
     pub(crate) schema_version: u32,
+    pub(crate) installation_trees: InstallationTrees,
     pub(crate) node: VersionedIdentity,
     pub(crate) worker_cli_js: FileIdentity,
     pub(crate) mcp_package: VersionedIdentity,
@@ -309,8 +313,8 @@ pub(crate) struct ChromiumIdentity {
     pub(crate) revision: u32,
 }
 
-/// Absolute host inputs that passed identity verification. This covers the
-/// named files only, not every file below the worker root.
+/// Absolute host inputs whose named files and installation trees were verified.
+/// This does not attest the source or build provenance of an engine.
 #[derive(Debug, Clone)]
 pub struct VerifiedWorkerIdentity {
     pub node: PathBuf,
@@ -466,14 +470,29 @@ fn check_file_metadata(
 fn read_identity_bytes(
     mut file: File,
     expected: &ExpectedFile<'_>,
+    checkpoint: &mut dyn FnMut() -> Result<(), BoundaryError>,
 ) -> Result<Vec<u8>, BoundaryError> {
     let before = file
         .metadata()
         .map_err(|_| identity_error("Browser worker identity cannot be inspected"))?;
     check_file_metadata(&before, expected, false)?;
     let mut bytes = Vec::with_capacity(before.len() as usize);
-    file.read_to_end(&mut bytes)
-        .map_err(|_| identity_error("Browser worker identity cannot be read"))?;
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        checkpoint()?;
+        let count = file
+            .read(&mut buffer)
+            .map_err(|_| identity_error("Browser worker identity cannot be read"))?;
+        if count == 0 {
+            break;
+        }
+        if bytes.len() as u64 + count as u64 > expected.size {
+            return Err(identity_error(
+                "Browser worker identity changed while being read",
+            ));
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
     let after = file
         .metadata()
         .map_err(|_| identity_error("Browser worker identity cannot be rechecked"))?;
@@ -494,6 +513,7 @@ fn verify_identity_digest(
     mut file: File,
     expected: &ExpectedFile<'_>,
     executable: bool,
+    checkpoint: &mut dyn FnMut() -> Result<(), BoundaryError>,
 ) -> Result<(), BoundaryError> {
     let before = file
         .metadata()
@@ -503,6 +523,7 @@ fn verify_identity_digest(
     let mut buffer = [0u8; 64 * 1024];
     let mut total = 0u64;
     loop {
+        checkpoint()?;
         let count = file
             .read(&mut buffer)
             .map_err(|_| identity_error("Browser worker identity cannot be read"))?;
@@ -559,12 +580,35 @@ fn manifest_expected_digest(settings: &BrowserWorkerSettings) -> &str {
     settings.identity_sha256.as_deref().unwrap_or_default()
 }
 
-/// Verify the exact identity files named by the manifest before a worker is
-/// launched. Configuration and worker directories are not recursively audited.
+/// Verify named files and closed installation trees against a v2 manifest.
+/// Reads are bounded by the configured connection deadline; no process is launched.
 pub fn verify_worker_identity(
     settings: &BrowserWorkerSettings,
 ) -> Result<VerifiedWorkerIdentity, BoundaryError> {
+    verify_worker_identity_checked(settings, None)
+}
+
+fn verify_worker_identity_checked(
+    settings: &BrowserWorkerSettings,
+    cancel: Option<&dyn Cancellation>,
+) -> Result<VerifiedWorkerIdentity, BoundaryError> {
     settings.validate()?;
+    let deadline = Instant::now() + Duration::from_millis(settings.connect_timeout_ms);
+    let mut checkpoint = || {
+        if cancel.is_some_and(Cancellation::is_cancelled) {
+            return Err(error(
+                "cancelled",
+                "Browser worker identity verification cancelled",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(identity_error(
+                "Browser worker identity verification exceeded its deadline",
+            ));
+        }
+        Ok(())
+    };
+    checkpoint()?;
     let node = settings
         .node
         .as_ref()
@@ -619,11 +663,12 @@ pub fn verify_worker_identity(
     }
     let manifest: IdentityManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|_| identity_error("Browser worker manifest is invalid"))?;
-    if manifest.schema_version != 1 {
+    if manifest.schema_version != 2 {
         return Err(identity_error(
             "Browser worker manifest schema version is unsupported",
         ));
     }
+    manifest.installation_trees.validate()?;
     for digest in [
         &manifest.node.sha256,
         &manifest.worker_cli_js.sha256,
@@ -644,6 +689,7 @@ pub fn verify_worker_identity(
         open_absolute_file(node)?,
         &expected_versioned(&manifest.node),
         true,
+        &mut checkpoint,
     )?;
     if manifest.node.version.is_empty() {
         return Err(identity_error("Browser worker node version is missing"));
@@ -652,6 +698,7 @@ pub fn verify_worker_identity(
     let cli_bytes = read_identity_bytes(
         open_under_root(worker_root, Path::new(CLI_JS_PATH))?,
         &expected(&manifest.worker_cli_js),
+        &mut checkpoint,
     )?;
     if cli_bytes.is_empty() {
         return Err(identity_error("Browser worker CLI is empty"));
@@ -660,6 +707,7 @@ pub fn verify_worker_identity(
     let mcp_package_bytes = read_identity_bytes(
         open_under_root(worker_root, Path::new(MCP_PACKAGE_PATH))?,
         &expected_versioned(&manifest.mcp_package),
+        &mut checkpoint,
     )?;
     let mcp_package = parse_package(&mcp_package_bytes, "@playwright/mcp")?;
     if mcp_package.version != PLAYWRIGHT_MCP_VERSION
@@ -673,6 +721,7 @@ pub fn verify_worker_identity(
     let playwright_package_bytes = read_identity_bytes(
         open_under_root(worker_root, Path::new(PLAYWRIGHT_PACKAGE_PATH))?,
         &expected_versioned(&manifest.playwright_package),
+        &mut checkpoint,
     )?;
     let playwright_package = parse_package(&playwright_package_bytes, "playwright")?;
     if playwright_package.version != PLAYWRIGHT_VERSION
@@ -686,6 +735,7 @@ pub fn verify_worker_identity(
     let playwright_core_bytes = read_identity_bytes(
         open_under_root(worker_root, Path::new(PLAYWRIGHT_CORE_PACKAGE_PATH))?,
         &expected_versioned(&manifest.playwright_core_package),
+        &mut checkpoint,
     )?;
     let playwright_core = parse_package(&playwright_core_bytes, "playwright-core")?;
     if playwright_core.version != PLAYWRIGHT_VERSION
@@ -699,6 +749,7 @@ pub fn verify_worker_identity(
     let browsers_bytes = read_identity_bytes(
         open_under_root(worker_root, Path::new(BROWSERS_JSON_PATH))?,
         &expected(&manifest.playwright_core_browsers_json),
+        &mut checkpoint,
     )?;
     let browsers = parse_browsers(&browsers_bytes)?;
     let Some(record) = browsers
@@ -728,7 +779,22 @@ pub fn verify_worker_identity(
         open_absolute_file(chromium)?,
         &expected_chromium(&manifest.chromium),
         true,
+        &mut checkpoint,
     )?;
+    for (root, expected) in [
+        (node.parent(), &manifest.installation_trees.node),
+        (
+            Some(worker_root.as_path()),
+            &manifest.installation_trees.worker,
+        ),
+        (chromium.parent(), &manifest.installation_trees.chromium),
+    ] {
+        installation::verify_tree(
+            root.ok_or_else(|| identity_error("Browser installation root is missing"))?,
+            expected,
+            &mut checkpoint,
+        )?;
+    }
 
     Ok(VerifiedWorkerIdentity {
         node: node.clone(),
@@ -1644,11 +1710,18 @@ impl WorkerIdentityVerifier for LocalWorkerIdentityVerifier {
                 "Browser worker identity check cancelled before dispatch",
             ));
         }
-        verify_worker_identity(&self.settings).map_err(|_| {
-            BrowserFailure::new(
-                "worker_identity",
-                "Browser worker identity changed before launch",
-            )
+        verify_worker_identity_checked(&self.settings, Some(cancel)).map_err(|failure| {
+            if failure.0.code == "cancelled" {
+                BrowserFailure::new(
+                    "cancelled",
+                    "Browser worker identity verification cancelled before launch",
+                )
+            } else {
+                BrowserFailure::new(
+                    "worker_identity",
+                    "Browser worker identity changed before launch",
+                )
+            }
         })
     }
 }

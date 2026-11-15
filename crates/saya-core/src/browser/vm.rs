@@ -1120,6 +1120,8 @@ done
 const CAT_SCRIPT: &str = "set -eu\ncat -- \"$1\"\n";
 
 const NODE_VERSION_SCRIPT: &str = "set -eu\n\"$1\" --version\n";
+const INSTALLATION_PROBE_SCRIPT: &str = "set -eu\ncd /\nexec env -i PATH=/usr/bin:/bin \"$1\" --no-addons - \"$2\" \"$3\" \"$4\" \"$5\"\n";
+const INSTALLATION_PROBE: &str = include_str!("worker/installation_probe.js");
 
 const PREPARE_RUN_SCRIPT: &str = r#"set -eu
 d="$1"
@@ -1574,11 +1576,15 @@ fn check_probe(
 fn parse_manifest(bytes: &[u8]) -> Result<IdentityManifest, BrowserFailure> {
     let manifest: IdentityManifest = serde_json::from_slice(bytes)
         .map_err(|_| identity_failure("Browser VM identity manifest is invalid"))?;
-    if manifest.schema_version != 1 {
+    if manifest.schema_version != 2 {
         return Err(identity_failure(
             "Browser VM identity manifest schema version is unsupported",
         ));
     }
+    manifest
+        .installation_trees
+        .validate()
+        .map_err(|_| identity_failure("Browser VM installation tree identity is invalid"))?;
     for digest in [
         &manifest.node.sha256,
         &manifest.worker_cli_js.sha256,
@@ -1887,6 +1893,55 @@ impl WorkerIdentityVerifier for VmWorkerIdentityVerifier {
         {
             return Err(identity_failure(
                 "Browser VM Chromium version does not match the pinned version",
+            ));
+        }
+
+        let parent = |path: &str| {
+            Path::new(path)
+                .parent()
+                .and_then(Path::to_str)
+                .map(str::to_owned)
+                .ok_or_else(|| identity_failure("Browser VM installation root is missing"))
+        };
+        let tree_args = [
+            remote.node.clone(),
+            parent(&remote.node)?,
+            remote.worker_root.clone(),
+            parent(&remote.chromium)?,
+            self.settings.connect_timeout_ms.to_string(),
+        ];
+        let tree_probe = vm_command_result(
+            self.runner
+                .run(
+                    VmCommandSpec {
+                        script: INSTALLATION_PROBE_SCRIPT,
+                        args: &tree_args,
+                        stdin: Some(INSTALLATION_PROBE.as_bytes()),
+                        timeout,
+                        stderr_limit: 16 * 1024,
+                        stdout_limit: 4096,
+                    },
+                    cancel,
+                )
+                .await,
+            "Browser VM installation tree probe",
+        )?;
+        if !tree_probe.succeeded()
+            || !tree_probe.stderr.is_empty()
+            || tree_probe.stdout.len() > 4096
+        {
+            return Err(identity_failure(
+                "Browser VM installation tree probe failed",
+            ));
+        }
+        let trees: worker::InstallationTrees = serde_json::from_slice(&tree_probe.stdout)
+            .map_err(|_| identity_failure("Browser VM installation tree probe is invalid"))?;
+        trees
+            .validate()
+            .map_err(|_| identity_failure("Browser VM installation tree probe is invalid"))?;
+        if trees != manifest.installation_trees {
+            return Err(identity_failure(
+                "Browser VM installation tree differs from its manifest",
             ));
         }
 
@@ -3770,13 +3825,14 @@ mod tests {
         playwright_package: Vec<u8>,
         playwright_core_package: Vec<u8>,
         browsers: Vec<u8>,
+        installation_probe: Vec<u8>,
         node_version: Vec<u8>,
     }
 
     impl IdentityFixture {
         fn new() -> Self {
             let manifest_path = "/opt/saya/identity.json";
-            let node_path = "/opt/saya/node";
+            let node_path = "/opt/saya/node/bin/node";
             let worker_root = "/opt/saya/worker";
             let cli_path = format!("{worker_root}/{}", worker::CLI_JS_PATH);
             let mcp_path = format!("{worker_root}/{}", worker::MCP_PACKAGE_PATH);
@@ -3799,8 +3855,14 @@ mod tests {
             }))
             .unwrap();
             let chromium = b"pinned chromium".to_vec();
+            let installation_trees = json!({
+                "node": {"sha256": digest(b"node installation"), "entries": 2, "bytes": node.len()},
+                "worker": {"sha256": digest(b"worker installation"), "entries": 12, "bytes": cli.len() + mcp_package.len() + playwright_package.len() + playwright_core_package.len() + browsers.len()},
+                "chromium": {"sha256": digest(b"engine installation"), "entries": 2, "bytes": chromium.len()},
+            });
             let manifest_bytes = serde_json::to_vec_pretty(&json!({
-                "schema_version": 1,
+                "schema_version": 2,
+                "installation_trees": installation_trees,
                 "node": {"sha256": digest(&node), "size": node.len(), "version": "v22.23.0"},
                 "worker_cli_js": {"sha256": digest(&cli), "size": cli.len()},
                 "mcp_package": {"sha256": digest(&mcp_package), "size": mcp_package.len(), "version": PLAYWRIGHT_MCP_VERSION},
@@ -3879,6 +3941,7 @@ mod tests {
                 playwright_package,
                 playwright_core_package,
                 browsers,
+                installation_probe: serde_json::to_vec(&installation_trees).unwrap(),
                 node_version: b"v22.23.0\n".to_vec(),
             }
         }
@@ -3891,6 +3954,7 @@ mod tests {
                 self.playwright_package.clone(),
                 self.playwright_core_package.clone(),
                 self.browsers.clone(),
+                self.installation_probe.clone(),
                 self.node_version.clone(),
             ]
             .into_iter()
@@ -4192,7 +4256,20 @@ mod tests {
             identity.chromium,
             PathBuf::from(fixture.settings.chromium.clone().unwrap())
         );
-        assert_eq!(runner.calls(), 7);
+        assert_eq!(runner.calls(), 8);
+    }
+
+    #[tokio::test]
+    async fn rejects_remote_installation_tree_mismatches() {
+        let fixture = IdentityFixture::new();
+        let mut outputs = fixture.outputs();
+        let mut trees: Value = serde_json::from_slice(&fixture.installation_probe).unwrap();
+        trees["worker"]["sha256"] = json!("0".repeat(64));
+        outputs[6] = success(serde_json::to_vec(&trees).unwrap());
+        let verifier = VmWorkerIdentityVerifier::new(fixture.settings, QueueRunner::new(outputs));
+        let failure = verifier.verify(&NeverCancel).await.unwrap_err();
+        assert_eq!(failure.code, "worker_identity");
+        assert!(failure.message.contains("installation tree"), "{failure:?}");
     }
 
     #[tokio::test]
@@ -4227,7 +4304,7 @@ mod tests {
 
         let fixture = IdentityFixture::new();
         let mut outputs = fixture.outputs();
-        outputs[6] = success(b"v20.0.0\n".to_vec());
+        outputs[7] = success(b"v20.0.0\n".to_vec());
         let verifier =
             VmWorkerIdentityVerifier::new(fixture.settings.clone(), QueueRunner::new(outputs));
         assert_eq!(

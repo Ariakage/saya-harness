@@ -71,20 +71,27 @@ fn fixture_identity() -> IdentityFixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let worker_root = root.join("worker");
-    let node_path = root.join("node");
-    let chromium_path = root.join("chromium");
+    let node_path = root.join("node/bin/node");
+    let chromium_path = root.join("engine/chrome-headless-shell");
+    fs::create_dir_all(node_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(chromium_path.parent().unwrap()).unwrap();
     let manifest_path = root.join("worker-identity.json");
     let temp_root = root.join("temp");
     fs::create_dir(&temp_root).unwrap();
     for path in [
         worker_root.join("node_modules/@playwright/mcp"),
         worker_root.join("node_modules/playwright"),
-        worker_root.join("node_modules/playwright-core"),
+        worker_root.join("node_modules/playwright-core/lib"),
     ] {
         fs::create_dir_all(path).unwrap();
     }
     write_mode(&node_path, b"node binary", 0o755);
     write_mode(&chromium_path, b"chromium binary", 0o755);
+    write_mode(
+        &worker_root.join("node_modules/playwright-core/lib/coreBundle.js"),
+        b"pinned dependency",
+        0o644,
+    );
     write_mode(&worker_root.join(CLI_JS_PATH), b"// pinned worker\n", 0o644);
     write_mode(
         &worker_root.join(MCP_PACKAGE_PATH),
@@ -123,7 +130,16 @@ fn fixture_identity() -> IdentityFixture {
     let chromium_bytes = fs::read(&chromium_path).unwrap();
 
     let manifest = IdentityManifest {
-        schema_version: 1,
+        schema_version: 2,
+        installation_trees: InstallationTrees {
+            node: serde_json::from_value(fixture_tree_identity(node_path.parent().unwrap()))
+                .unwrap(),
+            worker: serde_json::from_value(fixture_tree_identity(&worker_root)).unwrap(),
+            chromium: serde_json::from_value(fixture_tree_identity(
+                chromium_path.parent().unwrap(),
+            ))
+            .unwrap(),
+        },
         node: VersionedIdentity {
             sha256: sha256_hex(&node_bytes),
             size: node_bytes.len() as u64,
@@ -190,6 +206,402 @@ impl IdentityFixture {
         write_mode(&self.manifest_path, &bytes, 0o600);
         self.settings.identity_sha256 = Some(sha256_hex(&bytes));
     }
+}
+
+fn fixture_tree_identity(root: &Path) -> Value {
+    fn text(hash: &mut Sha256, value: &[u8]) {
+        hash.update((value.len() as u32).to_be_bytes());
+        hash.update(value);
+    }
+    fn walk(path: &Path, relative: &Path, hash: &mut Sha256, entries: &mut u64, bytes: &mut u64) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        *entries += 1;
+        let kind = if metadata.is_dir() {
+            b'D'
+        } else if metadata.is_file() {
+            b'F'
+        } else {
+            assert!(metadata.is_symlink());
+            b'L'
+        };
+        hash.update([kind]);
+        text(hash, relative.as_os_str().as_bytes());
+        let mode = if kind == b'L' {
+            0o777
+        } else {
+            metadata.mode() & 0o7777
+        };
+        hash.update(mode.to_be_bytes());
+        if metadata.is_file() {
+            let contents = fs::read(path).unwrap();
+            *bytes += contents.len() as u64;
+            hash.update((contents.len() as u64).to_be_bytes());
+            hash.update(Sha256::digest(contents));
+        } else if metadata.is_symlink() {
+            text(hash, fs::read_link(path).unwrap().as_os_str().as_bytes());
+        } else {
+            let mut children = fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            children.sort();
+            for child in children {
+                walk(
+                    &path.join(&child),
+                    &relative.join(child),
+                    hash,
+                    entries,
+                    bytes,
+                );
+            }
+        }
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"saya-browser-installation-v2\0");
+    let mut entries = 0;
+    let mut bytes = 0;
+    walk(root, Path::new(""), &mut hash, &mut entries, &mut bytes);
+    let digest = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    json!({"sha256": digest, "entries": entries, "bytes": bytes})
+}
+
+fn seal_fixture_installations(fixture: &mut IdentityFixture) {
+    let mut manifest = serde_json::to_value(&fixture.manifest).unwrap();
+    manifest["schema_version"] = json!(2);
+    manifest["installation_trees"] = json!({
+        "node": fixture_tree_identity(fixture.node_path.parent().unwrap()),
+        "worker": fixture_tree_identity(&fixture.worker_root),
+        "chromium": fixture_tree_identity(fixture.chromium_path.parent().unwrap()),
+    });
+    let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+    write_mode(&fixture.manifest_path, &bytes, 0o600);
+    fixture.settings.identity_sha256 = Some(sha256_hex(&bytes));
+}
+
+async fn run_installation_probe(fixture: &IdentityFixture) -> std::process::Output {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    assert_eq!(
+        std::env::consts::OS,
+        "linux",
+        "VM identity probes require Linux"
+    );
+    let node = PathBuf::from(
+        std::env::var_os("SAYA_TEST_IDENTITY_NODE")
+            .expect("explicit host Node is required for the real identity probe"),
+    );
+    assert!(
+        node.is_absolute() && node.is_file(),
+        "explicit host Node is unavailable"
+    );
+    let script = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/browser/worker/installation_probe.js"),
+    )
+    .expect("production installation probe asset");
+    let mut child = tokio::process::Command::new(node)
+        .args(["--no-addons", "-"])
+        .arg(fixture.node_path.parent().unwrap())
+        .arg(&fixture.worker_root)
+        .arg(fixture.chromium_path.parent().unwrap())
+        .arg("20000")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &fixture.temp_root)
+        .env("TMPDIR", &fixture.temp_root)
+        .env("TMP", &fixture.temp_root)
+        .env("TEMP", &fixture.temp_root)
+        .current_dir(&fixture.temp_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("real Node probe process");
+    let mut stdin = child.stdin.take().expect("probe stdin");
+    stdin.write_all(&script).await.expect("probe script");
+    drop(stdin);
+    tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+        .await
+        .expect("bounded real installation probe")
+        .expect("installation probe output")
+}
+
+#[tokio::test]
+#[ignore = "requires explicit SAYA_TEST_IDENTITY_NODE on a Linux host"]
+async fn installation_probe_matches_native_closed_trees() {
+    let mut fixture = fixture_identity();
+    write_mode(&fixture.worker_root.join("\u{e000}.js"), b"bmp", 0o644);
+    write_mode(&fixture.worker_root.join("\u{10000}.js"), b"astral", 0o644);
+    std::os::unix::fs::symlink(
+        "node_modules/playwright-core/lib/coreBundle.js",
+        fixture.worker_root.join("bundle-link.js"),
+    )
+    .unwrap();
+    seal_fixture_installations(&mut fixture);
+    verify_worker_identity(&fixture.settings).expect("native sealed tree verification");
+    let output = run_installation_probe(&fixture).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    assert!(output.stdout.len() <= 4096);
+    let actual: InstallationTrees = serde_json::from_slice(&output.stdout)
+        .expect("installation probe must return complete tree identities");
+    let manifest: IdentityManifest =
+        serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+    assert_eq!(actual, manifest.installation_trees);
+}
+
+#[tokio::test]
+#[ignore = "requires explicit SAYA_TEST_IDENTITY_NODE on a Linux host"]
+async fn installation_probe_rejects_unsafe_members() {
+    for case in [
+        "escape", "dangling", "cycle", "hardlink", "fifo", "writable",
+    ] {
+        let fixture = fixture_identity();
+        let path = fixture.worker_root.join("unsafe");
+        match case {
+            "escape" => std::os::unix::fs::symlink("../node/bin/node", &path).unwrap(),
+            "dangling" => std::os::unix::fs::symlink("missing", &path).unwrap(),
+            "cycle" => std::os::unix::fs::symlink("unsafe", &path).unwrap(),
+            "hardlink" => fs::hard_link(
+                fixture
+                    .worker_root
+                    .join("node_modules/playwright-core/lib/coreBundle.js"),
+                fixture.directory.path().join("external-alias"),
+            )
+            .unwrap(),
+            "fifo" => {
+                let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                // SAFETY: the private fixture path remains alive throughout mkfifo.
+                assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            }
+            "writable" => {
+                fs::set_permissions(&fixture.worker_root, fs::Permissions::from_mode(0o777))
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let output = run_installation_probe(&fixture).await;
+        assert!(
+            !output.status.success(),
+            "unsafe {case} member was accepted"
+        );
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            output.stderr,
+            b"Browser installation tree verification failed\n"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires explicit SAYA_TEST_IDENTITY_NODE on a Linux host"]
+async fn installation_probe_preserves_utf8_bom_names_and_link_targets() {
+    let mut fixture = fixture_identity();
+    write_mode(
+        &fixture.worker_root.join("\u{feff}asset.js"),
+        b"export{}",
+        0o644,
+    );
+    std::os::unix::fs::symlink("\u{feff}asset.js", fixture.worker_root.join("asset-link")).unwrap();
+    seal_fixture_installations(&mut fixture);
+    verify_worker_identity(&fixture.settings).expect("native UTF-8 installation identity");
+    let output = run_installation_probe(&fixture).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let actual: InstallationTrees = serde_json::from_slice(&output.stdout).unwrap();
+    let manifest: IdentityManifest =
+        serde_json::from_slice(&fs::read(&fixture.manifest_path).unwrap()).unwrap();
+    assert_eq!(actual, manifest.installation_trees);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires explicit SAYA_TEST_IDENTITY_NODE on a Linux host"]
+async fn installation_probe_rejects_in_place_mutation() {
+    assert_probe_rejects_in_place_mutation(false).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires explicit SAYA_TEST_IDENTITY_NODE on a Linux host"]
+async fn installation_probe_rejects_prefix_mutation_in_same_timestamp_tick() {
+    assert_probe_rejects_in_place_mutation(true).await;
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_probe_rejects_in_place_mutation(same_timestamp_tick: bool) {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    let fixture = fixture_identity();
+    let target = fixture
+        .worker_root
+        .join("node_modules/playwright-core/lib/coreBundle.js");
+    let audit = fixture.directory.path().join("mutation-audit.json");
+    let node = PathBuf::from(
+        std::env::var_os("SAYA_TEST_IDENTITY_NODE")
+            .expect("explicit host Node is required for the real identity probe"),
+    );
+    assert!(node.is_absolute() && node.is_file());
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/browser/worker/installation_probe.js");
+    // The same-tick case normalizes only timestamp observations, not file I/O.
+    let bootstrap = br#"
+'use strict';
+const fs = require('node:fs');
+const vm = require('node:vm');
+const { performance } = require('node:perf_hooks');
+const crypto = require('node:crypto');
+require('node:util');
+const [source, node, worker, chromium, target, audit, clock] = process.argv.slice(2);
+const script = new vm.Script(fs.readFileSync(source, 'utf8'), {filename:source});
+const context = vm.createContext({require, process, Buffer, performance});
+const originalOpen = fs.openSync;
+const originalRead = fs.readSync;
+const originalLstat = fs.lstatSync;
+const originalStat = fs.fstatSync;
+const writer = originalOpen(target, 'r+');
+const writerIdentity = originalStat(writer, {bigint:true});
+const prefix = Buffer.alloc(512, 98);
+const unchangedPrefix = Buffer.alloc(512, 97);
+const originalContents = Buffer.alloc(1024, 97);
+let scanner = null;
+const report = {injected:false, refreshed:false, timestamp_observation:clock};
+function signature(info) {
+  return Object.fromEntries(['dev','ino','mode','nlink','size','mtimeNs','ctimeNs']
+    .map(key => [key, String(info[key])]));
+}
+function observedMetadata(info) {
+  if (clock === 'same-tick' && info.dev === writerIdentity.dev && info.ino === writerIdentity.ino) {
+    info.mtimeNs = 0n;
+    info.ctimeNs = 0n;
+  }
+  return info;
+}
+fs.fstatSync = function(...args) {
+  const info = Reflect.apply(originalStat, fs, args);
+  if (args[0] === scanner && !report.injected)
+    report.before = signature(info);
+  return observedMetadata(info);
+};
+fs.lstatSync = function(...args) {
+  if (!report.refreshed && typeof args[0] === 'string' &&
+      args[0].endsWith('/coreBundle.js') && fs.realpathSync(args[0]) === target) {
+    report.refreshed_bytes = fs.writeSync(writer, unchangedPrefix, 0, unchangedPrefix.length, 0);
+    report.refreshed = true;
+  }
+  return observedMetadata(Reflect.apply(originalLstat, fs, args));
+};
+fs.openSync = function(...args) {
+  const fd = Reflect.apply(originalOpen, fs, args);
+  if (fs.readlinkSync('/proc/self/fd/' + fd) === target) scanner = fd;
+  return fd;
+};
+fs.readSync = function(...args) {
+  const count = Reflect.apply(originalRead, fs, args);
+  if (args[0] === scanner && count > 0 && !report.injected) {
+    report.read_count = count;
+    report.written = fs.writeSync(writer, prefix, 0, prefix.length, 0);
+    report.after = signature(Reflect.apply(originalStat, fs, [scanner, {bigint:true}]));
+    report.injected = true;
+    report.offset = fs.readFileSync('/proc/self/fdinfo/' + scanner, 'utf8')
+      .match(/^pos:\s*(\d+)/m)[1];
+    fs.writeFileSync(audit, JSON.stringify(report));
+  }
+  return count;
+};
+process.argv = [process.execPath, '-', node, worker, chromium, '20000'];
+try {
+  fs.writeFileSync(writer, originalContents);
+  script.runInContext(context, {timeout:25000});
+} finally {
+  fs.openSync = originalOpen;
+  fs.readSync = originalRead;
+  fs.lstatSync = originalLstat;
+  fs.fstatSync = originalStat;
+  fs.closeSync(writer);
+  report.final_sha256 = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+  fs.writeFileSync(audit, JSON.stringify(report));
+}
+"#;
+    let mut child = tokio::process::Command::new(node)
+        .args(["--no-addons", "-"])
+        .arg(source)
+        .arg(fixture.node_path.parent().unwrap())
+        .arg(&fixture.worker_root)
+        .arg(fixture.chromium_path.parent().unwrap())
+        .arg(&target)
+        .arg(&audit)
+        .arg(if same_timestamp_tick {
+            "same-tick"
+        } else {
+            "real"
+        })
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &fixture.temp_root)
+        .env("TMPDIR", &fixture.temp_root)
+        .env("TMP", &fixture.temp_root)
+        .env("TEMP", &fixture.temp_root)
+        .current_dir(&fixture.temp_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("real Node probe process");
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(bootstrap).await.unwrap();
+    drop(stdin);
+    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+        .await
+        .expect("bounded real installation probe")
+        .unwrap();
+    let observation: Value = serde_json::from_slice(&fs::read(audit).unwrap()).unwrap();
+    assert_eq!(
+        observation["timestamp_observation"],
+        if same_timestamp_tick {
+            "same-tick"
+        } else {
+            "real"
+        },
+        "{observation}"
+    );
+    assert_eq!(observation["refreshed"], true, "{observation}");
+    assert_eq!(observation["refreshed_bytes"], 512, "{observation}");
+    assert_eq!(observation["injected"], true, "{observation}");
+    assert_eq!(observation["read_count"], 1024, "{observation}");
+    assert_eq!(observation["offset"], "1024", "{observation}");
+    assert_eq!(observation["written"], 512, "{observation}");
+    let mut changed = vec![b'a'; 1024];
+    changed[..512].fill(b'b');
+    assert_eq!(fs::read(target).unwrap(), changed);
+    assert_eq!(observation["final_sha256"], sha256_hex(&changed));
+    eprintln!("in-place probe audit: {observation}");
+    assert!(
+        !output.status.success(),
+        "changed tree accepted: {observation}; stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"Browser installation tree verification failed\n"
+    );
 }
 
 fn pinned_catalog() -> McpCatalog {
@@ -568,6 +980,402 @@ fn verifies_each_pinned_identity_file() {
 }
 
 #[test]
+fn installation_tree_matches_portable_golden_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir(directory.path().join("lib")).unwrap();
+    fs::set_permissions(
+        directory.path().join("lib"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    write_mode(&directory.path().join("empty"), b"", 0o644);
+    write_mode(&directory.path().join("lib/core.js"), b"export{}", 0o644);
+    std::os::unix::fs::symlink("lib/core.js", directory.path().join("alias")).unwrap();
+    let expected = installation::TreeIdentity {
+        sha256: "7806fc4375d6d69b9139c1fe18869de403a12a33db8873cc53d74e3cea570b28".into(),
+        entries: 5,
+        bytes: 8,
+    };
+    installation::verify_tree(directory.path(), &expected, &mut || Ok(()))
+        .expect("portable tree identity must normalize only symbolic-link mode");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn installation_tree_rejects_in_place_mutation() {
+    use std::os::{fd::AsRawFd, unix::fs::FileExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = directory.path().join("bundle.js");
+    // A separate, smaller case than the historical 70,000-byte read witness.
+    let original = vec![b'a'; 1024];
+    // Independent wire encoding: D(empty,0755), F(bundle.js,0644,1024,sha256(a*1024)).
+    assert_eq!(
+        sha256_hex(&original),
+        "2edc986847e209b4016e141a6dc8716d3207350f416969382d431539bf292e4a"
+    );
+    let expected = installation::TreeIdentity {
+        sha256: "0aed29db35930c1ad59ab314baccd3ff2465931e049e60e6d10ea76fb765bc11".into(),
+        entries: 2,
+        bytes: 1024,
+    };
+    write_mode(&path, &original, 0o644);
+    installation::verify_tree(directory.path(), &expected, &mut || Ok(())).unwrap();
+    let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let signature = |m: fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.mode(),
+            m.nlink(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    let mut injected = false;
+    let mut observation = None;
+    let mut reader_seen = false;
+    let mut refreshes = 0;
+    let writer_name = writer.as_raw_fd().to_string();
+    // Refresh unchanged bytes only before the scanner opens its reader and captures metadata.
+    // Once a reader exists, preserve all metadata and wait for a real read to complete.
+    let result = installation::verify_tree(directory.path(), &expected, &mut || {
+        if !injected {
+            for entry in fs::read_dir("/proc/self/fd").unwrap() {
+                let fd = entry.unwrap().path();
+                if fd.file_name().unwrap() == writer_name.as_str()
+                    || fs::read_link(&fd).ok().as_deref() != Some(path.as_path())
+                {
+                    continue;
+                }
+                reader_seen = true;
+                let info = fs::read_to_string(
+                    Path::new("/proc/self/fdinfo").join(fd.file_name().unwrap()),
+                )
+                .unwrap();
+                if info
+                    .lines()
+                    .any(|line| line.split_whitespace().collect::<Vec<_>>() == ["pos:", "1024"])
+                {
+                    let before = signature(fs::metadata(&fd).unwrap());
+                    writer.write_all_at(&[b'b'; 512], 0).unwrap();
+                    let after = signature(fs::metadata(&fd).unwrap());
+                    observation = Some((before, after));
+                    injected = true;
+                    break;
+                }
+            }
+            if !reader_seen {
+                writer.write_all_at(&[b'a'; 512], 0).unwrap();
+                refreshes += 1;
+            }
+        }
+        Ok(())
+    });
+    assert!(injected, "no real scanner read at offset 1024 observed");
+    assert!(refreshes > 0);
+    let mut changed = original;
+    changed[..512].fill(b'b');
+    assert_eq!(fs::read(&path).unwrap(), changed);
+    eprintln!("in-place native audit: {observation:?}; result={result:?}");
+    assert!(result.is_err(), "changed tree accepted: {observation:?}");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires explicit Linux user and mount namespace prerequisites"]
+async fn installation_tree_rejects_cross_device_symlink() {
+    use std::{
+        ffi::CString,
+        os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    };
+
+    const PARENT_NAMESPACES: &str = "SAYA_TEST_INSTALLATION_PARENT_NAMESPACES";
+    if let Ok(parent) = std::env::var(PARENT_NAMESPACES) {
+        let parent: Value = serde_json::from_str(&parent).unwrap();
+        // SAFETY: getuid has no pointer arguments or side effects.
+        assert_eq!(unsafe { libc::getuid() }, 0);
+        for name in ["user", "mnt"] {
+            assert_ne!(
+                fs::read_link(format!("/proc/self/ns/{name}")).unwrap(),
+                PathBuf::from(parent[name].as_str().unwrap())
+            );
+        }
+        let mut fixture = fixture_identity();
+        let target = "node_modules/playwright-core/lib/coreBundle.js";
+        let link = fixture.worker_root.join("foreign-link");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        seal_fixture_installations(&mut fixture);
+        verify_worker_identity(&fixture.settings).expect("same-device positive control");
+        let backing = fixture.directory.path().join("backing");
+        fs::create_dir(&backing).unwrap();
+        let backing_c = CString::new(backing.as_os_str().as_bytes()).unwrap();
+        // SAFETY: C strings are live and the process has a private mount namespace.
+        let mounted = unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                backing_c.as_ptr(),
+                c"tmpfs".as_ptr(),
+                0,
+                c"size=1m,mode=755".as_ptr().cast(),
+            )
+        };
+        assert_eq!(mounted, 0, "{}", std::io::Error::last_os_error());
+        let source = backing.join("link");
+        std::os::unix::fs::symlink(target, &source).unwrap();
+        let source_c = CString::new(source.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the live path is opened without following its final symlink.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_open_tree,
+                libc::AT_FDCWD,
+                source_c.as_ptr(),
+                1u32 | libc::O_CLOEXEC as u32 | libc::AT_SYMLINK_NOFOLLOW as u32,
+            )
+        };
+        assert!(descriptor >= 0, "{}", std::io::Error::last_os_error());
+        // SAFETY: a successful open_tree returns a new descriptor owned here.
+        let descriptor = unsafe { OwnedFd::from_raw_fd(i32::try_from(descriptor).unwrap()) };
+        let link_c = CString::new(link.as_os_str().as_bytes()).unwrap();
+        // SAFETY: both paths are live and the cloned mount belongs to this namespace.
+        let moved = unsafe {
+            libc::syscall(
+                libc::SYS_move_mount,
+                descriptor.as_raw_fd(),
+                c"".as_ptr(),
+                libc::AT_FDCWD,
+                link_c.as_ptr(),
+                4u32,
+            )
+        };
+        assert_eq!(moved, 0, "{}", std::io::Error::last_os_error());
+        let root_dev = fs::metadata(&fixture.worker_root).unwrap().dev();
+        let metadata = fs::symlink_metadata(&link).unwrap();
+        assert!(metadata.is_symlink());
+        assert_eq!(metadata.nlink(), 1);
+        assert_ne!(metadata.dev(), root_dev);
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new(target));
+        assert_eq!(
+            fs::read(&link).unwrap(),
+            fs::read(fixture.worker_root.join(target)).unwrap()
+        );
+        eprintln!(
+            "cross-device installation link: root_dev={root_dev} link_dev={}",
+            metadata.dev()
+        );
+        let failure = verify_worker_identity(&fixture.settings)
+            .expect_err("a foreign-device installation symlink must be rejected");
+        assert_eq!(failure.0.code, "worker_identity");
+        return;
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let namespaces = json!({
+        "user": fs::read_link("/proc/self/ns/user").unwrap(),
+        "mnt": fs::read_link("/proc/self/ns/mnt").unwrap(),
+    });
+    let mut child = tokio::process::Command::new("/usr/bin/unshare");
+    child
+        .args([
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "--fork",
+            "--kill-child",
+        ])
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "browser::worker::tests::installation_tree_rejects_cross_device_symlink",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(
+            PARENT_NAMESPACES,
+            serde_json::to_string(&namespaces).unwrap(),
+        )
+        .env("TMPDIR", directory.path())
+        .env("TMP", directory.path())
+        .env("TEMP", directory.path())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(60), child.output())
+        .await
+        .expect("bounded private namespace test")
+        .expect("real namespace test child");
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn accepts_sealed_internal_installation_links() {
+    let mut fixture = fixture_identity();
+    std::os::unix::fs::symlink(
+        "./coreBundle.js",
+        fixture
+            .worker_root
+            .join("node_modules/playwright-core/lib/internal-link.js"),
+    )
+    .unwrap();
+    seal_fixture_installations(&mut fixture);
+    verify_worker_identity(&fixture.settings).expect("sealed internal installation link");
+}
+
+#[test]
+fn rejects_sealed_escaping_installation_links() {
+    let mut fixture = fixture_identity();
+    std::os::unix::fs::symlink("../node/bin/node", fixture.worker_root.join("escape")).unwrap();
+    seal_fixture_installations(&mut fixture);
+    assert!(verify_worker_identity(&fixture.settings).is_err());
+}
+
+#[test]
+fn rejects_sealed_cyclic_installation_links() {
+    let mut fixture = fixture_identity();
+    std::os::unix::fs::symlink("second", fixture.worker_root.join("first")).unwrap();
+    std::os::unix::fs::symlink("first", fixture.worker_root.join("second")).unwrap();
+    seal_fixture_installations(&mut fixture);
+    assert!(verify_worker_identity(&fixture.settings).is_err());
+}
+
+#[test]
+fn rejects_legacy_named_file_only_manifest() {
+    let fixture = fixture_identity();
+    let mut manifest = serde_json::to_value(&fixture.manifest).unwrap();
+    manifest["schema_version"] = json!(1);
+    manifest
+        .as_object_mut()
+        .unwrap()
+        .remove("installation_trees");
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    write_mode(&fixture.manifest_path, &bytes, 0o600);
+    let settings = BrowserWorkerSettings {
+        identity_sha256: Some(sha256_hex(&bytes)),
+        ..fixture.settings
+    };
+    assert!(
+        verify_worker_identity(&settings).is_err(),
+        "a named-file-only manifest was accepted"
+    );
+}
+
+#[test]
+fn rejects_unpinned_worker_dependency_changes() {
+    let fixture = fixture_identity();
+    write_mode(
+        &fixture
+            .worker_root
+            .join("node_modules/playwright-core/lib/coreBundle.js"),
+        b"unsafe dependency",
+        0o644,
+    );
+    let error = verify_worker_identity(&fixture.settings)
+        .expect_err("a changed executable dependency was accepted");
+    assert_eq!(error.0.code, "worker_identity");
+}
+
+#[test]
+fn rejects_unpinned_worker_installation_members() {
+    let fixture = fixture_identity();
+    write_mode(
+        &fixture.worker_root.join("node_modules/injected.js"),
+        b"unexpected dependency",
+        0o644,
+    );
+    let error = verify_worker_identity(&fixture.settings)
+        .expect_err("an extra installation member was accepted");
+    assert_eq!(error.0.code, "worker_identity");
+}
+
+#[test]
+fn rejects_unpinned_engine_installation_members() {
+    let fixture = fixture_identity();
+    write_mode(
+        &fixture
+            .chromium_path
+            .parent()
+            .unwrap()
+            .join("resources.pak"),
+        b"unexpected engine resource",
+        0o644,
+    );
+    let error = verify_worker_identity(&fixture.settings)
+        .expect_err("an extra engine resource was accepted");
+    assert_eq!(error.0.code, "worker_identity");
+}
+
+#[test]
+fn rejects_unpinned_node_installation_members() {
+    let fixture = fixture_identity();
+    write_mode(
+        &fixture.node_path.parent().unwrap().join("injected.js"),
+        b"unexpected node dependency",
+        0o644,
+    );
+    assert!(
+        verify_worker_identity(&fixture.settings).is_err(),
+        "an extra Node installation member was accepted"
+    );
+}
+
+#[test]
+fn rejects_installation_files_with_external_hard_links() {
+    let fixture = fixture_identity();
+    fs::hard_link(
+        fixture
+            .worker_root
+            .join("node_modules/playwright-core/lib/coreBundle.js"),
+        fixture.directory.path().join("external-bundle-alias"),
+    )
+    .unwrap();
+    assert!(
+        verify_worker_identity(&fixture.settings).is_err(),
+        "an installation file with an external alias was accepted"
+    );
+}
+
+#[test]
+fn rejects_writable_installation_directories() {
+    let fixture = fixture_identity();
+    fs::set_permissions(&fixture.worker_root, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(
+        verify_worker_identity(&fixture.settings).is_err(),
+        "a writable installation directory was accepted"
+    );
+}
+
+#[tokio::test]
+async fn identity_verification_observes_cancellation_while_reading() {
+    struct AfterChecks(AtomicUsize);
+    impl Cancellation for AfterChecks {
+        fn is_cancelled(&self) -> bool {
+            self.0.fetch_add(1, Ordering::AcqRel) >= 3
+        }
+        fn cancelled(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            Box::pin(std::future::pending())
+        }
+    }
+    let fixture = fixture_identity();
+    let verifier = LocalWorkerIdentityVerifier::new(fixture.settings);
+    let error = verifier
+        .verify(&AfterChecks(AtomicUsize::new(0)))
+        .await
+        .expect_err("identity verification ignored cancellation while reading");
+    assert_eq!(error.code, "cancelled");
+}
+
+#[test]
 fn rejects_manifest_and_file_digest_mismatches() {
     let mut fixture = fixture_identity();
     fixture.manifest.node.sha256 = "0".repeat(64);
@@ -662,7 +1470,7 @@ fn rejects_unpinned_versions_and_manifest_fields() {
     assert!(verify_worker_identity(&fixture.settings).is_err());
 
     let mut fixture = fixture_identity();
-    fixture.manifest.schema_version = 2;
+    fixture.manifest.schema_version = 3;
     fixture.rewrite_manifest();
     assert!(verify_worker_identity(&fixture.settings).is_err());
 }

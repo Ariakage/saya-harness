@@ -1,6 +1,6 @@
 # 开发进度
 
-**更新于2026-11-15。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-16。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
@@ -19,6 +19,28 @@
 后续生命周期增量修复旧 sandbox 证据缓存、核验中断后的连接复用，以及启动目录／清理 await 丢失句柄或 unknown 的分支。启动隔离覆盖初始导航与目录刷新，直到 sandbox 核验完成；close 后证据作废。worker 定向 48 项与完整 `RUST_TEST_THREADS=1 just check` 的 1660 项通过（71 个测试二进制、0 failed、13 ignored，含格式、严格 Clippy、release 构建），日志 `target/n5/fullscope-lifecycle-{worker-green,check}.log`。新程序 SHA-256 为 `c1e20194d690efae1a9403a1c0892b62d78c146fa38c6da3365902305c2c7a91`、最低部署目标 15.0；真实 VM 四入口各 1 passed，close／reopen／snapshot 重新取得有效证据，独立清理 inventory 为空；同一程序通过完整 CLI／TUI smoke。详见 [生命周期增量证据](n5-validation.md#生命周期核验与启动清理增量)。本次仅本地验证与阶段提交，推送及新增四平台远端验收等待项目负责人再次授权；生产截图与 N5 全范围仍未完成。
 
 D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建生产引擎。2026-11-14 的约 31 GiB 余量保留为历史测量；后续核对并回收已确认可再生缓存后，余量与工具链探针见[固定引擎工具链准备](#固定引擎工具链准备)，不清理归属不明的缓存、不把原语或交叉编译探针冒充生产截图。新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068待实现)
+
+## 安装树身份 v2 本机阶段
+
+2026-11-16，启动前身份校验扩展为严格 schema v2：保留七个命名文件，并绑定 Node、worker、Chromium 三棵安装树的成员、权限、链接与内容。Rust、固定 Node 探针和 provision 工具按同一字节规范校验；常规文件在同一 FD 上双读，保留总期限、取消和元数据检查。v1 明确拒绝，必须向新远端根重新 provision，不能覆盖旧安装或自动降级；这不是原子／不可变快照，也不是定制构建来源证明。
+
+真实同 tick 改写的 Rust／Node 回归先 RED 后 GREEN；UTF-8 BOM 名称／链接目标的 Node 差异同样先复现再修复。第 172 轮仍因测试读取旧 fixture manifest 失败，已修正为比较重新密封的磁盘 manifest；第 175 轮六项定向测试全部通过，不隐藏失败轮。第 179 轮独立 namespace 的真实挂载复现 Rust 漏掉跨设备链接拒绝；第 181 轮持久回归在正确拒绝断言上 RED，链接分支补齐设备检查后，第 182 轮跨设备、Rust 改写及五项 Node 探针共七项全部 GREEN。旧失败程序独立备份，日志和工作区基线不变。
+
+修复后的 macOS 第 184 轮完整 `just check` 为 1686 passed、0 failed、25 ignored；168 项工具回归及同一新 release 的 CLI／TUI smoke 通过。程序 SHA-256 为 `28cb78cac5143d9e84cf2b7cc394fe8ef3cbd48269868451fd06613295fd887c`，最低部署目标 15.0／SDK 27.0，第 176 轮旧 `7fa2eeea…` 程序另行独立备份。Linux 第 168 轮的 1701 passed、0 failed、22 ignored、五项 Node 探针、167 项工具通过与 1 平台 skip、同程序 smoke 均保留为修复前历史。第 185 轮修复后完整门禁在 chat 等待未保存结果处超时，结果为 1700 passed、1 failed、23 ignored；后续 release、显式探针、工具和 smoke 未运行。第 186 轮使用同一 debug 程序及原断言／超时，精确用例 1 项和完整 chat 套件 21 项均通过，只说明未再次复现，根因未确认，不追改第 185 轮失败。
+
+最终 Linux 第 187 轮不覆盖或重写源码，在相同八文件输入上通过完整 `just check`：1701 passed、0 failed、23 ignored；显式运行五项 Node 探针与跨设备持久回归共 6 项，全部通过、0 ignored；工具回归 167 passed、1 平台 skip，以及同新程序 CLI／TUI smoke 通过。新 release SHA-256 为 `550445a6d7f225e2e756d17935ee7699fbac93e70ac482605080f4aa9b36db4b`；第 168 轮旧 `36549c0f…` 程序及 rlib 已独立备份，源码、历史报告、配置、资源与 VM 约束前后守卫通过，所属进程组回收。来源仍是 `557f865` 加列明八文件及保留的 Linux 测试补丁，不宣称等同宿主 HEAD 全树。
+
+第 190 轮在专用 `n5cap` VM 的全新根完成正常 schema v2 provision／check，并由当前 Rust `VmWorkerIdentityVerifier` 经生产 `SshVmCommandRunner` 与固定 Node 探针取得真实正控；添加未声明常规文件后，在完整安装树边界返回已知 `worker_identity` 拒绝；仅删除该自有文件后再次通过。三次 Rust 校验未启动 Browser，宿主输入、素材和 VM 身份／配置前后不变，临时项与关联进程为空。第 188 轮因 Cargo 同名库的不同 profile 解析失败，未执行部署或 Rust 校验，失败记录保留；第 190 轮只按实际 Cargo JSON 中与 core 完全相同的 profile 唯一选择依赖，不按文件名 glob 或修改时间猜测。
+
+安装树身份 v2 本机阶段已完成上述验证；门禁 ignored 包含尚未完成的真实截图入口，不计作截图成功。[逐轮证据与未验证范围](n5-validation.md#安装树身份-v2-本机阶段)另行记录；受限 stdio worker、native 生产核验、定制引擎与新增四平台仍待补齐，截图 facts 保持 false，N5 全范围未完成，未推送或发布。
+
+## 固定递归依赖与捕获构建图
+
+2026-11-16，固定配方的递归 `gclient sync` 与 `revinfo --actual` 已通过；第 174 轮移除 `--noprehooks` 后，正常 pre-DEPS 阶段完成。选中的七份递归 DEPS 没有 pre-hook 动作，因此动作清单为空，不宣称执行了动作。第 177 轮为源码内嵌 depot_tools 应用与外层相同的已验证四文件补丁；第 178 轮正式 `gclient runhooks --verbose` 退出 0，来源与配方守卫通过，未修改宿主 Xcode、license 或系统临时目录。
+
+第 180 轮将已封存的 23 文件捕获草案原样应用到完整 Chromium 源码，真实 GN 生成了 Linux ARM64 `headless_shell` 构建图，实际为 38,072 targets／5,134 files。`use_remoteexec=false`、`use_siso=false`；SDK、源码、DEPS、补丁、Git 元数据与参数前后均绑定核验。当前仅完成依赖、hooks 与 GN 前置，尚无定制引擎编译／链接或生产捕获成功证据；本地编译另行记录，不开启截图。[逐轮身份与边界](n5-validation.md#固定递归同步hooks-与捕获构建图)保留原始报告；这不是未经定制的原始 small checkout 全选、native Browser 或四平台验收，未推送或运行新增远端 CI。
+
+以下较早阶段按各自验证时点保留；其中身份 v1、旧程序摘要和工具准备状态不替代上述当前输入。
 
 ## Linux VM 宿主通道本机定向验收
 

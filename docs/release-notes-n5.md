@@ -9,7 +9,7 @@ N5 将受控网页读取与托管 Chromium 接入共享运行时。CLI、文本�
 ### 已实现
 
 - 默认关闭的 `fetch_url` 与显式 endpoint `web_search`；有界正文、重定向与 DNS／地址检查、低信任来源和输出检索。
-- 固定版本 Playwright MCP worker、身份摘要校验、Run 私有临时会话及有界关闭。模型只看宿主注册的操作，不能调用任意脚本或安装工具。
+- 固定版本 Playwright MCP worker、schema v2 安装身份校验、Run 私有临时会话及有界关闭。除七个命名文件外，绑定 Node、worker、Chromium 三棵树的成员、权限、链接及文件内容；文件在同一 FD 上双读复核，保留取消、期限和元数据边界。模型只看宿主注册的操作，不能调用任意脚本或安装工具。
 - 成功页面调用后重新采样 sandbox 证据，close 后作废旧证据；启动核验或清理超时／失败时保留句柄并阻止连接复用，未确认清理明确返回 unknown。
 - 显式专用 Colima VM 后端，保留宿主隔离与 Chromium 自有 sandbox。创建工具不激活宿主全局客户端上下文；浏览器通过 VM 私有网络命名空间、SSH 反向通道和宿主 broker 出网，不回退默认网络。
 - Linux VM 宿主通道使用 Bubblewrap、原有 Seccomp 与固定目标双桥，保留 IPv4／IPv6 字面地址，只读暴露三个 SSH 文件及合成账号视图。空 broker 就绪探测不消耗 Run 连接额度，relay 清理核对 socket 身份；紧凑私有目录与短 socket 名已通过 64 字节 TMPDIR 的真实准备回归，保留完整 UUID 位。缺原生前提时失败关闭，不回退 Host。
@@ -22,6 +22,7 @@ N5 将受控网页读取与托管 Chromium 接入共享运行时。CLI、文本�
 ### 兼容性与限制
 
 - Web／Browser 必须显式配置，不自动安装、下载或更新浏览器运行时。配置、版本与 VM 前提见 [Browser](browser.md) 和[配置说明](configuration.md)。
+- 安装身份 v2 是不兼容变更：旧 v1 manifest 被拒绝，必须在新远端根重新 provision 并更新显式路径与摘要；已有根不会被覆盖。树校验不是原子／不可变安装快照，也不证明定制 Chromium 的构建来源；历史验收继续归属其原源码与输入。
 - Rust 的 `NetworkPolicy::LoopbackPort` 现在要求显式 `host` 字段；Linux 保留该回环字面地址，Seatbelt 仍按 localhost 端口限制。CLI 的显式 VM 配置字段不变。
 - PLAN 在全部权限模式下拒绝主动 Browser 工具。`auto` 的写动作经过独立核查；Manual Approval 逐工具确认；bypass 不绕过 PLAN、显式 deny、网络和 sandbox 硬边界。
 - 当前真实 Browser 证据来自 macOS ARM 宿主与显式预置的 Linux ARM 专用 VM。native Seatbelt／Bubblewrap 无法完成 Chromium 内层 sandbox 初始化时明确失败，不使用 `--no-sandbox` 绕过。VM 证据不等于 native 或四平台 Browser 支持。
@@ -41,7 +42,7 @@ N5 connects controlled web reads and managed Chromium to the shared runtime. CLI
 ### Implemented
 
 - Opt-in `fetch_url` and explicitly configured `web_search`, with bounded content, redirect and DNS/address checks, low-trust provenance, and retained-output retrieval.
-- A version-pinned Playwright MCP worker, identity digest verification, Run-private temporary sessions, and bounded shutdown. The model receives only host-registered operations, not arbitrary scripting or installation tools.
+- A version-pinned Playwright MCP worker, schema v2 installation identity verification, Run-private temporary sessions, and bounded shutdown. In addition to seven named files, it binds members, permissions, links, and file contents in the Node, worker, and Chromium trees. Files are read twice through the same descriptor, retaining cancellation, deadline, and metadata checks. The model receives only host-registered operations, not arbitrary scripting or installation tools.
 - Sandbox evidence is sampled again after successful page calls and invalidated on close. Startup verification or cleanup timeouts/failures retain cleanup handles and block connection reuse; unconfirmed cleanup is explicitly unknown.
 - An explicit dedicated Colima VM backend preserving host isolation and Chromium's own sandbox. The creation tool leaves the host's global client context unchanged. Browser egress uses a private VM network namespace, a reverse SSH channel, and the host broker, with no default-network fallback.
 - The Linux VM host channel uses Bubblewrap, the existing Seccomp filter, and two fixed-destination bridges. It preserves IPv4/IPv6 literals and exposes only three read-only SSH files plus synthetic account data. Empty broker readiness probes do not consume the Run connection budget, and relay cleanup checks socket identity. Compact private directory names and short socket names retain every UUID bit and pass real preparation with a 64-byte TMPDIR. Missing native prerequisites fail closed without falling back to Host.
@@ -54,6 +55,7 @@ N5 connects controlled web reads and managed Chromium to the shared runtime. CLI
 ### Compatibility and limitations
 
 - Web/Browser features require explicit configuration. No runtime is installed, downloaded, or updated automatically. See [Browser](browser.md) and [configuration](configuration.md) for pinned versions and VM prerequisites.
+- Installation identity v2 is a breaking change: v1 manifests are rejected. Re-provision into a new remote root and explicitly update paths and the digest; existing roots are not overwritten. Tree verification is neither an atomic/immutable installation snapshot nor proof of a custom Chromium build's provenance. Historical acceptance remains bound to its original sources and inputs.
 - The Rust `NetworkPolicy::LoopbackPort` variant now requires an explicit `host` field. Linux preserves that loopback literal; Seatbelt still restricts localhost ports. The explicit CLI VM configuration fields are unchanged.
 - PLAN denies active Browser tools in every permission mode. In auto mode, write actions undergo independent review; Manual Approval confirms every tool. Bypass does not override PLAN, explicit deny rules, network restrictions, or sandbox boundaries.
 - Current real Browser evidence covers a macOS ARM host and an explicitly provisioned Linux ARM VM. Native Seatbelt/Bubblewrap paths fail explicitly when Chromium's inner sandbox cannot initialize; `--no-sandbox` is not used. VM evidence is not native or four-platform Browser acceptance.

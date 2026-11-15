@@ -35,6 +35,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import stat
+import struct
+import time
 
 PLAYWRIGHT_MCP_VERSION = "0.0.85"
 PLAYWRIGHT_VERSION = "1.66.0-alpha-2026-11-09"
@@ -45,6 +48,7 @@ CHROMIUM_VERSION = "158.0.8127.18"
 # remote file and must satisfy the same regular-file and permission rules.
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_IDENTITY_FILE_BYTES = 512 * 1024 * 1024
+MAX_TREE_ENTRIES = 65536
 
 CLI_JS = "node_modules/@playwright/mcp/cli.js"
 MCP_PACKAGE = "node_modules/@playwright/mcp/package.json"
@@ -154,6 +158,202 @@ def sha256_bytes(data: bytes) -> str:
 
 def valid_digest(value: str) -> bool:
     return len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
+
+
+def _tree_text(value: str) -> bytes:
+    try:
+        data = value.encode("utf-8", "strict")
+    except UnicodeError as error:
+        raise ToolError("installation tree path is not UTF-8") from error
+    if len(data) > 4096 or any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+        raise ToolError("installation tree path is unsafe or too long")
+    return data
+
+
+def _metadata_identity(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_nlink,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _open_tree_root(path: Path) -> int:
+    if not path.is_absolute() or ".." in path.parts:
+        raise ToolError("installation tree root must be an absolute safe path")
+    _tree_text(str(path))
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in path.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                            os.O_NONBLOCK, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def installation_tree(path: Path) -> dict:
+    """Hash a bounded installation without following directory or member links."""
+    deadline = time.monotonic() + 20
+    hasher = hashlib.sha256(b"saya-browser-installation-v2\0")
+    members = {}
+    total = 0
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+    def tick():
+        if time.monotonic() >= deadline:
+            raise ToolError("installation tree deadline exceeded")
+
+    def unchanged(before, after):
+        if _metadata_identity(before) != _metadata_identity(after):
+            raise ToolError("installation tree changed during verification")
+
+    def scan(parent, name, relative, depth, device):
+        nonlocal total
+        tick()
+        if len(members) >= MAX_TREE_ENTRIES:
+            raise ToolError("installation tree entry limit exceeded")
+        encoded = _tree_text(relative)
+        before = os.fstat(parent) if name is None else os.stat(
+            name, dir_fd=parent, follow_symlinks=False)
+        if before.st_dev != device:
+            raise ToolError("installation tree crosses a device boundary")
+        mode = stat.S_IMODE(before.st_mode)
+        if stat.S_ISDIR(before.st_mode):
+            kind = b"D"
+        elif stat.S_ISREG(before.st_mode):
+            kind = b"F"
+        elif stat.S_ISLNK(before.st_mode):
+            kind = b"L"
+        else:
+            raise ToolError("installation tree contains a special file")
+        if kind == b"D" and depth > 128:
+            raise ToolError("installation tree directory depth limit exceeded")
+        if kind == b"L" and before.st_nlink != 1:
+            raise ToolError("installation tree contains a hardlinked symlink")
+        if kind != b"L" and (mode & 0o6022 or not mode & 0o400 or
+                              (kind == b"D" and not mode & 0o100)):
+            raise ToolError("installation tree permissions are unsafe")
+        # Link permission bits differ by platform and do not gate dereferencing.
+        encoded_mode = 0o777 if kind == b"L" else mode
+        hasher.update(kind + struct.pack(">I", len(encoded)) + encoded + struct.pack(">I", encoded_mode))
+        members[relative] = (kind, None)
+        if kind == b"L":
+            target = os.readlink(name, dir_fd=parent)
+            target_bytes = _tree_text(target)
+            hasher.update(struct.pack(">I", len(target_bytes)) + target_bytes)
+            members[relative] = (kind, target)
+            unchanged(before, os.stat(name, dir_fd=parent, follow_symlinks=False))
+            return
+        descriptor = os.dup(parent) if name is None else os.open(
+            name, flags | (os.O_DIRECTORY if kind == b"D" else 0), dir_fd=parent)
+        try:
+            unchanged(before, os.fstat(descriptor))
+            if kind == b"D":
+                names = []
+                with os.scandir(descriptor) as entries:
+                    for entry in entries:
+                        tick()
+                        if len(members) + len(names) >= MAX_TREE_ENTRIES:
+                            raise ToolError("installation tree entry limit exceeded")
+                        names.append(entry.name)
+                for child in sorted(names, key=_tree_text):
+                    scan(descriptor, child, f"{relative}/{child}" if relative else child,
+                         depth + 1, device)
+            else:
+                if before.st_nlink != 1 or before.st_size > MAX_IDENTITY_FILE_BYTES:
+                    raise ToolError("installation file is hardlinked or oversized")
+                total += before.st_size
+                if total > 4294967296:
+                    raise ToolError("installation tree byte limit exceeded")
+                content = hashlib.sha256()
+                size = 0
+                while True:
+                    tick()
+                    block = os.read(descriptor, 64 * 1024)
+                    if not block:
+                        break
+                    size += len(block)
+                    if size > before.st_size:
+                        raise ToolError("installation file grew during verification")
+                    content.update(block)
+                if size != before.st_size:
+                    raise ToolError("installation file changed size")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                repeated_content = hashlib.sha256()
+                repeated_size = 0
+                while True:
+                    tick()
+                    block = os.read(descriptor, 64 * 1024)
+                    if not block:
+                        break
+                    repeated_size += len(block)
+                    if repeated_size > before.st_size:
+                        raise ToolError("installation file grew during verification")
+                    repeated_content.update(block)
+                if repeated_size != size or repeated_content.digest() != content.digest():
+                    raise ToolError("installation file content changed during verification")
+                hasher.update(struct.pack(">Q", size) + content.digest())
+            unchanged(before, os.fstat(descriptor))
+            if name is not None:
+                unchanged(before, os.stat(name, dir_fd=parent, follow_symlinks=False))
+        finally:
+            os.close(descriptor)
+
+    try:
+        root = _open_tree_root(Path(path))
+        try:
+            scan(root, None, "", 0, os.fstat(root).st_dev)
+        finally:
+            os.close(root)
+        for relative, (kind, target) in members.items():
+            if kind != b"L":
+                continue
+            current = relative.split("/")[:-1]
+            remaining = target.split("/")
+            hops = 0
+            while remaining:
+                tick()
+                component = remaining.pop(0)
+                if component in ("", "."):
+                    continue
+                if component == "..":
+                    if not current:
+                        raise ToolError("installation link escapes root")
+                    current.pop()
+                    continue
+                current.append(component)
+                key = "/".join(current)
+                if key not in members:
+                    raise ToolError("installation link is dangling")
+                child_kind, child_target = members[key]
+                if child_kind == b"L":
+                    hops += 1
+                    if hops > 40 or child_target.startswith("/"):
+                        raise ToolError("installation link is cyclic or absolute")
+                    current.pop()
+                    remaining = child_target.split("/") + remaining
+                elif remaining and child_kind != b"D":
+                    raise ToolError("installation link traverses a regular file")
+            if target.startswith("/") or not target:
+                raise ToolError("installation link is absolute or empty")
+        return {"sha256": hasher.hexdigest(), "entries": len(members), "bytes": total}
+    except (OSError, ValueError, UnicodeError) as error:
+        raise ToolError(f"installation tree cannot be verified: {error}") from error
+
+
+def validate_installation_trees(trees) -> dict:
+    if not isinstance(trees, dict) or set(trees) != {"node", "worker", "chromium"}:
+        raise ToolError("installation trees must name node, worker and chromium")
+    for tree in trees.values():
+        if not isinstance(tree, dict) or set(tree) != {"sha256", "entries", "bytes"}:
+            raise ToolError("installation tree entry is invalid")
+        if not isinstance(tree["sha256"], str) or not valid_digest(tree["sha256"]):
+            raise ToolError("installation tree digest is invalid")
+        for key, lower, upper in (("entries", 1, MAX_TREE_ENTRIES), ("bytes", 0, 4294967296)):
+            if type(tree[key]) is not int or not lower <= tree[key] <= upper:
+                raise ToolError("installation tree count is invalid")
+    return trees
 
 
 def safe_token(value: str, name: str, maximum: int = 64) -> str:
@@ -442,8 +642,45 @@ def checked(argv: list[str], input_bytes: bytes | None = None) -> bytes:
     return result.stdout
 
 
-def ssh_run(args: argparse.Namespace, config_path: Path, script: str, arguments: list[str]) -> bytes:
-    return checked(ssh_argv(args, config_path, remote_command(script, arguments)))
+def ssh_run(args: argparse.Namespace, config_path: Path, script: str,
+            arguments: list[str], input_bytes: bytes | None = None) -> bytes:
+    return checked(ssh_argv(args, config_path, remote_command(script, arguments)), input_bytes)
+
+
+INSTALLATION_PROBE_SCRIPT = 'set -eu\ncd /\nexec env -i PATH=/usr/bin:/bin "$1" --no-addons - "$2" "$3" "$4" "$5"\n'
+
+
+def require_fresh_remote_root(args, config_path, root: str) -> None:
+    ssh_run(args, config_path, 'set -eu\numask 077\nmkdir -m 700 -- "$1"\n', [root])
+
+
+def remote_installation_trees(args, config_path, layout: dict) -> dict:
+    # Read at call time: the shared probe is a repository asset, not user input.
+    probe_path = Path(__file__).resolve().parents[2] / "crates/saya-core/src/browser/worker/installation_probe.js"
+    try:
+        source = probe_path.read_bytes()
+    except OSError as error:
+        raise ToolError("installation probe asset cannot be read") from error
+    reply = ssh_run(args, config_path, INSTALLATION_PROBE_SCRIPT,
+                    [layout["node"], str(Path(layout["node"]).parent), layout["worker"],
+                     str(Path(layout["chromium"]).parent), "20000"], source)
+    if len(reply) > 4096:
+        raise ToolError("installation probe reply exceeds its bound")
+    return validate_installation_trees(strict_json(reply))
+
+
+def strict_json(payload: bytes):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ToolError("identity JSON has duplicate fields")
+            result[key] = value
+        return result
+    try:
+        return json.loads(payload, object_pairs_hook=unique)
+    except (ValueError, UnicodeError) as error:
+        raise ToolError("identity JSON is invalid") from error
 
 
 def parse_probe(output: str, count: int) -> list[dict]:
@@ -519,7 +756,9 @@ def build_manifest(
     package_bytes: dict[str, bytes],
     browsers_bytes: bytes,
     node_version: str,
+    installation_trees: dict,
 ) -> dict:
+    validate_installation_trees(installation_trees)
     if len(records) != 7:
         raise ToolError("identity probe must cover seven named files")
     mcp = parse_package_bytes(package_bytes["mcp"], "@playwright/mcp")
@@ -537,7 +776,8 @@ def build_manifest(
     if node_version != node_version.strip() or not node_version.startswith("v"):
         raise ToolError("Node version must be the exact version reported by node --version")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "installation_trees": installation_trees,
         "node": {
             "sha256": records[0]["sha256"],
             "size": records[0]["size"],
@@ -671,7 +911,7 @@ def verify_remote_identity(
     if expected_digest is not None and digest != expected_digest:
         raise ToolError("remote manifest digest does not match the expected digest")
     try:
-        manifest = json.loads(remote_manifest)
+        manifest = strict_json(remote_manifest)
     except json.JSONDecodeError as error:
         raise ToolError("remote manifest is invalid") from error
     manifest = validate_manifest_structure(manifest)
@@ -719,7 +959,8 @@ def verify_remote_identity(
         raise ToolError("browsers.json changed size while it was being read")
 
     rebuilt = build_manifest(
-        named, package_bytes, browsers_bytes, manifest["node"]["version"]
+        named, package_bytes, browsers_bytes, manifest["node"]["version"],
+        manifest["installation_trees"],
     )
     if rebuilt != manifest:
         raise ToolError("remote files do not match the uploaded manifest")
@@ -731,6 +972,9 @@ def verify_remote_identity(
     ).decode("utf-8").strip()
     if version != manifest["node"]["version"]:
         raise ToolError("remote Node version does not match the manifest")
+    trees = remote_installation_trees(args, config_path, layout)
+    if trees != manifest["installation_trees"]:
+        raise ToolError("remote installation trees do not match the manifest")
     return manifest, digest, version
 
 
@@ -791,20 +1035,79 @@ def verify_network_prerequisites(
         )
 
 
+def snapshot_node(source: Path, destination: Path) -> dict:
+    """Copy only the named Node binary, not its source installation directory."""
+    deadline = time.monotonic() + 20
+    try:
+        parent = _open_tree_root(source.parent)
+        try:
+            descriptor = os.open(source.name, os.O_RDONLY | os.O_NOFOLLOW |
+                                 os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+            try:
+                before = os.fstat(descriptor)
+                require_regular({"kind": "regular file" if stat.S_ISREG(before.st_mode) else "other",
+                                 "size": before.st_size, "mode": stat.S_IMODE(before.st_mode)},
+                                "Node source", executable=True)
+                if before.st_nlink != 1:
+                    raise ToolError("Node source is hardlinked")
+                destination.mkdir(mode=0o755)
+                destination.chmod(0o755)
+                size = 0
+                content = hashlib.sha256()
+                with (destination / "node").open("xb") as output:
+                    while True:
+                        if time.monotonic() >= deadline:
+                            raise ToolError("Node snapshot deadline exceeded")
+                        block = os.read(descriptor, 64 * 1024)
+                        if not block:
+                            break
+                        size += len(block)
+                        if size > before.st_size:
+                            raise ToolError("Node source changed while copying")
+                        output.write(block)
+                        content.update(block)
+                    os.fchmod(output.fileno(), stat.S_IMODE(before.st_mode))
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                repeated_content = hashlib.sha256()
+                repeated_size = 0
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise ToolError("Node snapshot deadline exceeded")
+                    block = os.read(descriptor, 64 * 1024)
+                    if not block:
+                        break
+                    repeated_size += len(block)
+                    if repeated_size > before.st_size:
+                        raise ToolError("Node source changed while copying")
+                    repeated_content.update(block)
+                if repeated_size != size or repeated_content.digest() != content.digest():
+                    raise ToolError("Node source content changed while copying")
+                if size != before.st_size or _metadata_identity(before) != _metadata_identity(os.fstat(descriptor)) \
+                        or _metadata_identity(before) != _metadata_identity(os.stat(source.name, dir_fd=parent, follow_symlinks=False)):
+                    raise ToolError("Node source changed while copying")
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent)
+    except OSError as error:
+        raise ToolError(f"Node snapshot failed: {error}") from error
+    return {"sha256": content.hexdigest(), "size": size, "mode": stat.S_IMODE(before.st_mode)}
+
+
 def command_provision(args: argparse.Namespace) -> dict:
     validate_local_executable(args.ssh, "ssh")
     validate_local_executable(args.scp, "scp")
-    node_source = validate_local_executable(args.node_source, "node source")
+    node_source = safe_local_path(args.node_source, "node source")
     validate_private_file(args.identity_file, "identity file")
     validate_read_file(args.known_hosts, "known_hosts")
-    worker_source = canonical_local_path(args.worker_source, "worker source")
+    worker_source = safe_local_path(args.worker_source, "worker source")
     if not worker_source.is_dir():
         raise ToolError(f"worker source is not a directory: {worker_source}")
     if worker_source.name != "worker":
         raise ToolError(
             "worker source directory name must be 'worker' to match the remote layout"
         )
-    chromium_source = canonical_local_path(args.chromium_source, "chromium source")
+    chromium_source = safe_local_path(args.chromium_source, "chromium source")
     if not chromium_source.is_file():
         raise ToolError(f"chromium source is not a file: {chromium_source}")
     if chromium_source.name != "chrome-headless-shell":
@@ -815,9 +1118,16 @@ def command_provision(args: argparse.Namespace) -> dict:
         raise ToolError(
             "chromium directory name must match the chromium source parent directory"
         )
+    local_trees = {"worker": installation_tree(worker_source),
+                   "chromium": installation_tree(chromium_source.parent)}
     layout = remote_layout(args)
     config = strict_ssh_config(args)
-    with tempfile.TemporaryDirectory(prefix="saya-browser-vm-") as temporary:
+    temporary_root = Path(__file__).resolve().parents[2] / "target/n5"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="saya-browser-vm-", dir=temporary_root) as temporary:
+        node_snapshot = Path(temporary) / "node-bin"
+        node_identity = snapshot_node(node_source, node_snapshot)
+        local_trees["node"] = installation_tree(node_snapshot)
         config_path = Path(temporary) / "ssh_config"
         config_path.write_text(config, encoding="utf-8")
         os.chmod(config_path, 0o600)
@@ -829,19 +1139,18 @@ def command_provision(args: argparse.Namespace) -> dict:
             config_path,
             configure_userns=getattr(args, "configure_apparmor_userns", False),
         )
+        require_fresh_remote_root(args, config_path, layout["root"])
         ssh_run(
             args,
             config_path,
-            'set -eu\nmkdir -p -- "$1" "$2" "$3" "$4" "$5"\n',
-            [
-                f"{layout['root']}/node/bin",
-                f"{layout['worker']}",
-                f"{layout['root']}/browsers/chromium_headless_shell-{CHROMIUM_REVISION}",
-                layout["runs"],
-                f"{layout['root']}",
-            ],
+            'set -eu\nmkdir -m 755 -- "$1" "$2" "$3" "$4" "$5" "$6"\n',
+            [f"{layout['root']}/node", f"{layout['root']}/node/bin", layout["worker"],
+             f"{layout['root']}/browsers", f"{layout['root']}/browsers/chromium_headless_shell-{CHROMIUM_REVISION}",
+             layout["runs"]],
         )
-        checked(scp_argv(args, config_path, str(node_source), layout["node"]))
+        checked(scp_argv(args, config_path, str(node_snapshot / "node"), layout["node"]))
+        ssh_run(args, config_path, 'set -eu\nchmod -- "$1" "$2"\n',
+                [f"{(node_snapshot / 'node').stat().st_mode & 0o7777:o}", layout["node"]])
         # Preserve the worker tree exactly as provided; no package manager runs.
         archive = Path(temporary) / "worker.tar"
         checked(
@@ -854,6 +1163,8 @@ def command_provision(args: argparse.Namespace) -> dict:
                 worker_source.name,
             ]
         )
+        if installation_tree(worker_source) != local_trees["worker"]:
+            raise ToolError("worker source changed during archiving")
         checked(
             scp_argv(
                 args,
@@ -865,26 +1176,32 @@ def command_provision(args: argparse.Namespace) -> dict:
         ssh_run(
             args,
             config_path,
-            'set -eu\ntar -C "$1" -xf "$2"\nrm -f -- "$2"\n',
+            'set -eu\ntar -C "$1" -xpf "$2"\nrm -f -- "$2"\n',
             [layout["root"], f"{layout['root']}/worker.tar"],
         )
-        checked(
-            scp_argv(
-                args,
-                config_path,
-                str(chromium_source.parent),
-                f"{layout['root']}/browsers/chromium_headless_shell-{CHROMIUM_REVISION}/",
-                recursive=True,
-            )
-        )
+        chromium_archive = Path(temporary) / "chromium.tar"
+        checked(["tar", "-C", str(chromium_source.parent.parent), "-cf",
+                 str(chromium_archive), chromium_source.parent.name])
+        if installation_tree(chromium_source.parent) != local_trees["chromium"]:
+            raise ToolError("Chromium source changed during archiving")
+        checked(scp_argv(args, config_path, str(chromium_archive),
+                         f"{layout['root']}/chromium.tar"))
+        ssh_run(args, config_path, 'set -eu\ntar -C "$1" -xpf "$2"\nrm -f -- "$2"\n',
+                [f"{layout['root']}/browsers/chromium_headless_shell-{CHROMIUM_REVISION}",
+                 f"{layout['root']}/chromium.tar"])
         records, package_bytes, browsers_bytes = identity_probe(args, config_path, layout)
+        if any(records[0][key] != value for key, value in node_identity.items()):
+            raise ToolError("uploaded Node identity differs from local snapshot")
+        trees = remote_installation_trees(args, config_path, layout)
+        if trees != local_trees:
+            raise ToolError("uploaded installation trees differ from local sources")
         version = ssh_run(
             args,
             config_path,
             'set -eu\n"$1" --version\n',
             [layout["node"]],
         ).decode("utf-8").strip()
-        manifest = build_manifest(records, package_bytes, browsers_bytes, version)
+        manifest = build_manifest(records, package_bytes, browsers_bytes, version, trees)
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") + b"\n"
         if len(manifest_bytes) > MAX_MANIFEST_BYTES:
             raise ToolError("generated manifest exceeds 64 KiB")
@@ -920,39 +1237,34 @@ def command_provision(args: argparse.Namespace) -> dict:
 
 
 def validate_manifest_structure(manifest) -> dict:
-    """Reject unexpected manifest shapes with a controlled ToolError.
-
-    The remote manifest is untrusted input. Missing groups or a nested value of
-    the wrong type must not escape as a traceback (TypeError/AttributeError)
-    or be silently treated as a valid manifest.
-    """
-    if not isinstance(manifest, dict):
-        raise ToolError("remote manifest is invalid")
-    if manifest.get("schema_version") != 1:
+    """Accept only the closed v2 identity contract, without coercing numbers."""
+    groups = {"node", "worker_cli_js", "mcp_package", "playwright_package",
+              "playwright_core_package", "playwright_core_browsers_json", "chromium"}
+    if not isinstance(manifest, dict) or set(manifest) != groups | {
+            "schema_version", "installation_trees"}:
+        raise ToolError("remote manifest fields are invalid")
+    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 2:
         raise ToolError("remote manifest schema version is unsupported")
-    node = manifest.get("node")
-    if not isinstance(node, dict):
-        raise ToolError("remote manifest node entry is invalid")
-    for name in ("node", "worker_cli_js", "mcp_package", "playwright_package",
-                 "playwright_core_package", "playwright_core_browsers_json"):
-        entry = manifest.get(name)
-        if not isinstance(entry, dict):
-            raise ToolError(f"remote manifest {name} entry is invalid")
-        digest_value = entry.get("sha256")
-        size = entry.get("size")
-        if not isinstance(digest_value, str) or not valid_digest(digest_value):
+    validate_installation_trees(manifest["installation_trees"])
+    for name in groups:
+        entry = manifest[name]
+        keys = {"sha256", "size"}
+        if name not in {"worker_cli_js", "playwright_core_browsers_json"}:
+            keys.add("version")
+        if name == "chromium":
+            keys.add("revision")
+        if not isinstance(entry, dict) or set(entry) != keys:
+            raise ToolError(f"remote manifest {name} fields are invalid")
+        if not isinstance(entry["sha256"], str) or not valid_digest(entry["sha256"]):
             raise ToolError(f"remote manifest {name} digest is invalid")
-        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        if type(entry["size"]) is not int or not 0 <= entry["size"] <= MAX_IDENTITY_FILE_BYTES:
             raise ToolError(f"remote manifest {name} size is invalid")
-    if not isinstance(node.get("version"), str) or not node["version"].startswith("v"):
+        if "version" in keys and (not isinstance(entry["version"], str) or not entry["version"]):
+            raise ToolError(f"remote manifest {name} version is invalid")
+        if name == "chromium" and type(entry["revision"]) is not int:
+            raise ToolError("remote manifest chromium revision is invalid")
+    if not manifest["node"]["version"].startswith("v"):
         raise ToolError("remote manifest Node version is invalid")
-    chromium = manifest.get("chromium")
-    if not isinstance(chromium, dict):
-        raise ToolError("remote manifest chromium entry is invalid")
-    if not isinstance(chromium.get("version"), str) or not isinstance(
-        chromium.get("revision"), int
-    ):
-        raise ToolError("remote manifest chromium entry is invalid")
     return manifest
 
 

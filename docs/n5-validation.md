@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-15：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段完成 21 passed、1 disabled，三协议 CLI／TUI 回归通过。Linux ARM 独立 VM 已通过完整原生 Rust 门禁、工具回归、CLI／TUI smoke 及宿主通道定向验收；这不是生产 Chromium 或四平台证据。生产截图、native Browser 及新增四平台证据仍未满足，DEV-083 全范围与 N5 不标为完成。**
+**2026-11-16：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段保留 21 passed、1 disabled 的历史输入。安装树身份 v2 本机阶段已完成：跨设备链接拒绝有真实 RED／GREEN，修复后 macOS 第 184 轮与 Linux 第 187 轮完整门禁通过，第 190 轮 Rust 生产 VM 身份通道正控、拒绝与恢复通过；旧 v1 输入不得复用于当前入口。这不是生产 Chromium 或四平台证据；受限 worker、生产截图、native Browser 及新增四平台仍未满足，DEV-083 全范围与 N5 不标为完成。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
 
@@ -14,6 +14,44 @@
 | DEV-081 凭据／文件／后台 | `f1bbc5c` | origin 凭据槽、下载／上传 artifact、GC／lease、取消与 unknown |
 | DEV-082 | `1443291` | CLI／TUI 审批与产物、三协议图片、有效上下文媒体加载、来源保真与导出 |
 | DEV-083 | 本次本机验收阶段 | 正常 CLI／TUI／专用 VM 联合矩阵通过；保留截图 disabled、native Browser 与新增四平台缺口，不标全范围完成 |
+
+## 安装树身份 v2 本机阶段
+
+schema v2 的规范、资源上限与迁移要求见 [安装树身份](browser.md#安装树身份-v2)。manifest 继续逐项绑定七个命名文件，新增三棵完整安装树；未命名依赖或资源的增删改、权限与链接变化也必须拒绝。链接不跟随扫描，按树内成员图解析；常规文件在同一已打开 FD 上双读内容，不能以同一时钟 tick 内可能不变的 stat 代替内容一致性。双读不是原子快照，安装需由宿主管理并在校验及启动期间保持不变；它不认证源码／DEPS／工具链／构建配方。
+
+第 176／168 轮门禁之后，第 179 轮在独立 user／mount namespace 中真实复现 Rust 接受跨设备 symlink，而 Node／Python 拒绝；第 181 轮持久回归在正确拒绝断言上 RED，最小设备检查修复后第 182 轮七项定向回归全部 GREEN。修复后的 macOS 第 184 轮与 Linux 第 187 轮完整门禁已通过；Linux 第 185 轮失败与第 186 轮同程序复验分别保留，chat 超时根因仍未确认。第 190 轮另行完成 Rust 生产 VM 身份通道的正控、安装树拒绝与恢复。下表明确区分修复前历史与修复后输入，不迁移旧成功。证据位于 `target/n5/linux-full-20261115/`：
+
+| 检查 | 实际结果 | 证据 |
+| --- | --- | --- |
+| macOS 完整 Rust 门禁（修复后） | 第 184 轮 72 组结果，1686 passed、0 failed、25 ignored；格式、全目标严格 Clippy、标准 release 通过，同新程序 smoke 通过 | `evidence/identity-workspace-macos-184.json`、`logs/identity-macos-184-check.log` |
+| Linux ARM 完整 Rust 门禁（修复前历史） | 第 168 轮 1701 passed、0 failed、22 ignored；格式、全目标严格 Clippy、标准 release 通过 | `evidence/identity-workspace-168.json`、`data/identity-workspace-168/check.{stdout,stderr}` |
+| Linux ARM 完整门禁（修复后） | 第 187 轮 72 组结果，1701 passed、0 failed、23 ignored；格式、全目标严格 Clippy、标准 release 通过，不覆盖或重写源码，历史与输入守卫通过 | `evidence/identity-workspace-187.json`、`data/identity-workspace-187/check.{stdout,stderr}` |
+| Linux ARM 最终复验失败轮 | 第 185 轮格式与严格 Clippy 通过；workspace 测试 1700 passed、1 failed、23 ignored，chat 等待未保存结果超时；后续 release、显式探针、工具和 smoke 未运行 | `evidence/identity-workspace-185.json`、`data/identity-workspace-185/check.{stdout,stderr}` |
+| Linux 同程序 chat 复验 | 第 186 轮不重编、不修改原断言及 8 秒超时：精确用例 1 passed／0.87 秒，完整套件 21 passed／14.30 秒；程序与输入未变，所属进程清理通过。未再次复现，根因未确认 | `evidence/chat-recheck-186.json`、`data/chat-recheck-186/{exact,chat-suite}.{stdout,stderr}` |
+| Linux 固定 Node 探针与跨设备回归（修复后） | 第 187 轮显式实跑共 6 项：五项 Node 探针及独立 namespace 持久跨设备回归全部通过、0 ignored | `data/identity-workspace-187/node-probe.{stdout,stderr}` |
+| 完整 Python 工具回归（修复后） | macOS 第 184 轮 168 passed；Linux 第 187 轮 167 passed、1 skipped。两端均实际运行 11 个 suite、168 个用例 | `logs/identity-macos-184-tooling.log`、`data/identity-workspace-187/tooling.{stdout,stderr}` |
+| 同程序 smoke（修复后） | macOS 第 184 轮与 Linux 第 187 轮各自的新 release 分别通过离线 PLAN、会话 journey、五项审查、28 组真实 TUI 旅程；前后程序身份一致 | `logs/identity-macos-184-smoke.log`、`data/identity-workspace-187/smoke.{stdout,stderr}` |
+| 修正后的定向复跑 | Rust 改写一项与 Node 五项全部通过；原源码／程序守卫不变，所属进程组已回收 | `evidence/identity-mutation-tests-175.json` |
+| 跨设备持久 RED／GREEN | 第 181 轮编译成功、跨设备拒绝断言失败；最小修复后，第 182 轮该项、Rust 改写与五项 Node 探针全部实跑通过，旧失败程序独立备份 | `evidence/identity-cross-device-tests-{181,182}.json`、`data/identity-cross-device-tests-{181,182}/` |
+| Rust 生产 VM 身份通道 | 第 190 轮在专用 `n5cap` 的全新根正常 provision／check；实际 Rust verifier 正控通过，添加未声明常规文件后在安装树边界以已知 `worker_identity` 拒绝，删除该自有文件后恢复通过；未启动 Browser | `data/identity-vm-190/evidence/report.json`、同目录三份 `rust-{positive,negative,restored}.stdout`（带步骤前缀） |
+
+Linux 的平台 skip 仅因为系统不能为符号链接设置非 `0777` 模式，不把它计为实跑；macOS 实际覆盖该模式规范化边界。真实 stat 改写记录的读前／读后 dev、ino、size、mode、nlink、mtime、ctime 完全相同，真实内容已变，修复后仍拒绝。另一个同 tick 用例仅归一化目标 inode 的时间观察，其余 I/O 与摘要真实；它与真实平台 stat 用例分别记录，不互相冒充。
+
+保留的失败与修正顺序：
+
+- 第 157 轮 Rust 在真实元数据不变的改写后错误接受；同 FD 双读后，第 162／163／175 轮拒绝。第 162 轮旧 Node 在真实 stat 与独立同 tick 观察两项上错误接受；双读后第 163／175 轮拒绝。原始 stdout／stderr 和改写 audit 随各轮保留。
+- 第 171 轮 Rust 接受合法 BOM 名称／链接，而旧 Node 探针失败；`TextDecoder` 保留 BOM 后，第 172 轮探针已成功，但测试比较了重新密封前的旧 13 项 fixture，实际树为 15 项。该轮仍记录失败，不计 GREEN。测试改为读取重新密封的磁盘 manifest 后，第 175／168 轮完整相等检查通过。
+- 第 179 轮以真实 `open_tree`／`move_mount` 建立跨设备 symlink：目标仍为树内合法文件、nlink 为 1，读前后元数据稳定，Rust 接受而 Node／Python 拒绝。第 181 轮新 libtest 编译成功，并在 `a foreign-device installation symlink must be rejected` 断言失败；不是 namespace、挂载或编译错误。链接分支补齐 device 检查后，第 182 轮同一持久测试、Rust 改写与五项 Node 探针全部通过；新旧 libtest 摘要分别为 `2820e42a8ad3ba342ff649726bced7fe2bb0d314219e77efd0c26c4b0b6a9d93`、`36743220a7852ee6d84ee1af9c0f61810a515b80213de983a119f5693d0ef87b`。旧实现与失败程序在第 182 轮独立 inode 备份，原报告／日志不变；第 181 轮私有源码根从第 182 轮起受控升级，不能再把原路径当作永远冻结的旧程序。成功父测试不转印子进程 stderr，GREEN 依据已绑定测试中实际执行的 uid／namespace／device／正控／拒绝断言，不推断未输出的新 namespace 或 device 数值。
+- 第 188 轮 Cargo 构建退出 0，但同一 `serde_json` 的运行时与 host／build profile 形成两个合法产物，旧夹具错误地要求全局唯一。该轮在解析阶段失败，未编译 driver、provision 或执行 Rust 校验，原根前后均不存在；输入、VM 配置与清理守卫通过。第 190 轮从实际 Cargo JSON 中由唯一 core 确定完整 profile，再唯一选择同 profile 的依赖；同 profile 重复及失败的 build-finished 负控仍拒绝，不按 glob、修改时间或首项选择。该修正不改变生产 Rust 或身份断言。
+- Python 的同 FD 复读与单 Node 私有快照回归分别留在 `logs/python-stability-150-*`；首次 umask 导致的权限前提失败不算行为 RED。
+
+第 190 轮真实 Rust 通道使用已核验的 macOS 第 184 轮 CLI 作为宿主 launcher，经生产 `SshVmCommandRunner`／`VmWorkerIdentityVerifier` 以及 stdin 传入的固定 Node 探针完成三次校验；不是 Node 直跑或 Python check 的替代说法。schema v2 manifest SHA-256 为 `c67a57d3dc94d774e28482bf1cf818500638eccf99de92d51765020466773764`，报告 SHA-256 为 `8fe62da841f3112e902434b79bb3c9aa725b2f625986a5b02e13807eb43c4a68`。三树计数／常规字节分别为 Node 2／122,295,568、worker 233／19,160,460、Chromium 290／296,457,671。新远端根为 `/home/ariakage.guest/saya-identity-v2-190`；只添加和删除这一根下的固定负控文件，旧根不覆盖，VM 不重启、不改全局工具或 sysctl。源输入、素材、VM 启动进程／SSH 身份与资源约束前后不变；全部所属进程组已回收，远端 Run 根及关联进程、宿主临时项与关联 SSH 进程为空，未使用 SIGKILL。该轮只验安装身份，不验 Browser 启动、stdio 生命周期或捕获。
+
+macOS 第 184 轮程序为 `target/n5/capture-rust-20261115/release/saya`，60,418,800 字节，SHA-256 `28cb78cac5143d9e84cf2b7cc394fe8ef3cbd48269868451fd06613295fd887c`，部署目标 15.0／SDK 27.0。第 176 轮旧 `7fa2eeeacb83154c58b6a458e0c77e9cbe502ef1a1174f99d760d74f45aadda6` 程序已独立备份于 `data/identity-macos-184/saya-before-184`。Linux 第 187 轮程序为 `/workspace/target/release/saya`，66,589,720 字节，SHA-256 `550445a6d7f225e2e756d17935ee7699fbac93e70ac482605080f4aa9b36db4b`；release rlib 为 `ef691de2424285f41dd5a2d0040afd312e7f071c3513b4b36b293ae74ba986d3`。第 168 轮旧 `36549c0fb85c7ee8c8fd039754d43cf059ef65d3e1286a43b0478ac3bb168a10` 程序和旧 rlib 已分别保存在 `/workspace/target/n5/identity-workspace-187/saya-before` 与 `rlib-before`，是独立 inode 副本；不追改第 185 轮未进入 release 构建的记录。旧 138 程序继续保存在第 168 轮 `saya-before`，摘要为 `d0d44170…`。
+
+Linux 的来源是 `557f865` 加各轮列明八文件及保留的 `execution_backend.rs` 补丁，不是宿主 HEAD 全树；第 185 轮已将八文件升级至跨设备修复输入，第 187 轮保持这些源码字节不变并重建 release。macOS 第 184 轮报告绑定当时 HEAD 和列明的未提交输入，包含未完成的截图草案测试。默认 ignored 与编译成功都不计为真实截图通过。旧 138 的文件／程序身份已由 168 的受控备份和新构建取代，后续不能再用旧守卫脚本声称新程序不变。原临时目录的 23 项基线全部保留，168、185 与 187 各自临时目录的残留分别记录；第 187 轮有四项自有残留，不宣称所有临时项为空。
+
+本节确认安装身份 v2 的本机阶段及明确的验证范围：v1 拒绝、provision 新根、完整安装树正负控和恢复均有实证；它不完成受限 stdio worker、native managed provider、生产捕获事务或新增四平台。`screenshots`／`screenshot_masking` 继续为 false，未推送、发布或运行新增远端 CI。下文较早程序及 v1 VM 记录按各自来源保留，不能用于认证当前 v2 运行时。
 
 ## 固定程序与本机门禁
 
@@ -317,6 +355,24 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 第 106 轮通过真实 `GClient／GcsDependency` 从新缓存导入 18,015,920 字节 sysroot，总计约 8.2 秒。解释器审计实际观察到缓存读取；透传观察器保存的真实 gsutil 操作只有一次 stat、没有 cp，stat 约 3.2 秒、退出 0 且原始 stderr 为空，外层 stderr 也为空。原生摘要、大小、解包、`usr/include/stdio.h` 与原生标记核对通过，见 `evidence/gcs-import-106.json`、`data/gcs-import-106/{cache-read-events,gsutil-operations}.json`；不能把该单对象导入扩称为全量同步。
 
 第 107 轮重新通过独立 index 的两组补丁顺序应用、逐文件比对及 HEAD／refs 检查；四文件组合 diff 仍为 `5c0821c0ae9a89fc67d3878c239cfb953c359944d186b405bdd0bb5a81ab7725`，未改变固定工具源码。封存 `evidence/depot-patch-107.json` 绑定新导入证据和 47 份缓存，旧第 89 轮仍只认证其原来的 25 份输入。构建环境现显式指向 `data/gcs-prefetch-103/cache`，环境脚本 SHA-256 为 `ef92cb4ef960a9ab2eec9624231a7b1c54451acff1541912c113bf2c42040833`；上述相对路径均位于 `target/n5/capture-toolchain-20261115/`。**全部 DEPS、pre-hooks／hooks、GN、定制引擎及生产捕获仍未完成**，截图关闭、身份 v1 与新增远端验收限制不变，N5 全范围未完成，未推送。
+
+### 固定递归同步、hooks 与捕获构建图
+
+2026-11-16，后续成功范围已推进到固定配方的递归依赖、hooks 与真实 GN 生成；前述第 107 轮及更早的“未完成”按各自时点保留，不再代表当前构建前置状态。以下证据均位于 `target/n5/capture-toolchain-20261115/`：
+
+| 阶段 | 实际结果 | 证据 |
+| --- | --- | --- |
+| 第 164 轮递归同步 | 配置范围内 `gclient sync` 与 `revinfo --actual` 均退出 0，约 2362.46 秒 | `evidence/deps-sync-164.json` |
+| 第 174 轮正常 pre-DEPS 阶段 | 去掉 `--noprehooks`，保留 `--nohooks --no-history --shallow --jobs=4`，退出 0，约 52.20 秒；七份选中递归 DEPS 无 pre-hook 声明，动作清单为空、执行数不伪填 | `evidence/deps-pre-hooks-174.json` |
+| 第 177 轮内嵌 depot_tools | 固定 `b86fc981b72ab966f8260f73b4eca600b3b12677` 加与外层相同的四文件组合补丁；逐文件、完整 diff 及 Git 元数据核对 | `evidence/nested-depot-177.json` |
+| 第 178 轮正式 hooks | `gclient runhooks --verbose` 退出 0，约 201.30 秒，来源与配方不变 | `evidence/deps-hooks-178.json`、`data/deps-hooks-178/hooks.log` |
+| 第 180 轮捕获 GN | 23 文件固定草案已真实应用；`gn gen --fail-on-unused-args` 与 `gn desc //headless:headless_shell outputs` 退出 0，实际 38,072 targets／5,134 files | `evidence/capture-gn-180.json`、`data/capture-gn-180/command-{053,054}.{stdout,stderr}` |
+
+配方仍为第 112 轮确认的 small checkout：`target_os=['linux']`、`target_os_only=False`、`cache_dir=None`，`custom_deps` 仅排除 `src/chrome/test/data/xr/webvr_info`，活跃根 Git 依赖为 146；不是未经定制的原始 small checkout 全选完成。第 174 轮未选中的 `crossbench-web-tests/DEPS` 含 pre-hook 声明，不能据此说本轮执行过它们。第 178 轮先核对正式 hermetic Xcode 查询为关闭；原始 hooks 日志明确跳过 Mac toolchain 安装，reclient 配置使用 `--skip_remoteexec_cfg_fetch`。配置生成不等于远端执行，未上传源码或启动 CI。
+
+GN 输出为 `src/out/saya_capture_linux_arm64_180/`，参数严格为 `target_os="linux"`、`target_cpu="arm64"`、`is_debug=false`、`is_component_build=false`、`is_official_build=false`、`symbol_level=0`、`use_remoteexec=false`、`use_siso=false`。`args.gn` SHA-256 为 `f8c5a2809e541a9d404bb781509647a8701bb30fb9ca9411878bb04895367b5a`，`build.ninja` 为 `7599d3af43a501f796cc27d525505a5e39ff3e0b0854f3e6860a66ed10fa02b7`；GN 与固定 CPython、完整 SDK、23 文件补丁、DEPS 和 Git 元数据均前后核对。第 180 轮报告 SHA-256 为 `02a97eb348e103a0295fd99f42ce1b5235fec3f8576a30429dbd3d9dcbb43a38`。原封存补丁未修复已知绘制缺口；GN 成功不是 C++ 编译、链接、目标 std、像素遮蔽或生产捕获成功。
+
+当前本地编译尚无通过证据，不将生成图或后续编译失败当作隐私行为 RED。写入范围继续只允许任务的构建／工具链目录及既有设备节点，全部可控缓存与临时文件位于工作区；不扩大到系统 `/tmp` 或 `/var/folders`。生产 `screenshots`／`screenshot_masking` 保持 false，native Browser、私有捕获桥接与新增四平台仍未完成，未推送或发布。
 
 ## 复跑入口
 
