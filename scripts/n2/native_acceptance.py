@@ -1396,7 +1396,7 @@ def main():
             image.chmod(0o500)
         require(digest(image) == evidence['binary']['sha256'], 'Input image changed while copying')
         evidence['binary']['executed_copy_path'] = str(image)
-        with tempfile.TemporaryDirectory(prefix='saya-n2-', dir='/var/tmp') as directory:
+        with tempfile.TemporaryDirectory(prefix='saya-n2-', dir=os.environ.get('TMPDIR', '/var/tmp')) as directory:
             base = Path(directory).resolve()
             probe_source = base / 'probe.c'
             probe_source.write_text(PROBE_SOURCE)

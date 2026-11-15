@@ -162,6 +162,8 @@ TUI的CommonMark／GFM使用pulldown-cmark与一致的Unicode脚注标签匹配�
 
 在具备对应原生后端的机器上对指定优化程序执行验收，使用完整单次报告核对性能字段。Linux委派资源的运行要求见[N2验收记录](n2-validation.md)。
 
+原生验收的临时根优先使用显式 `TMPDIR`；未设置时保留 `/var/tmp` 默认。工作区约束下应选用仓库内已存在的短目录，以满足 Unix socket 路径上限；不可写时明确失败，不自行回退到目录外。编译失败仍写出机器可读诊断并清理临时目录。
+
 ```sh
 python3 scripts/n2/native_acceptance.py target/release/saya --benchmark-samples 3
 python3 scripts/n2/verify_performance.py target/n2/acceptance/native-evidence.json --samples 3

@@ -70,6 +70,12 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 
 完整上游测试曾因 macOS Unix socket 路径过长失败，后改用同一构建根内更短的 `t/` 临时目录通过；原目录和失败日志保留，写入范围未扩大。上游原有文件未关闭的 `ResourceWarning` 仍保留记录，不称为零告警。[完整摘要与验证范围](n5-validation.md#固定构建工具的工作区临时目录)分别记录；本阶段不证明 DEPS／hooks／GN、定制引擎或生产捕获完成，未开启截图或身份 v2，未推送。
 
+## 原生验收的显式临时目录
+
+2026-11-15，N5 构建环境中的工具门禁暴露原生验收入口硬编码 `/var/tmp`，绕过显式 `TMPDIR`。入口现尊重显式目录，未设置时仍保留原默认；回归检查真实生成的编译输入位于请求目录、编译失败诊断完整且临时目录清理。先观察目录外写入被拒绝的 RED，再经最小修复通过；定向日志为 `target/n5/capture-toolchain-20261115/logs/native-temp-{red-83,green-84}.log`。
+
+完整工具门禁第 80 轮的目录错误与第 84 轮的 PTY 设备拦截均保留。测试专用策略仅额外允许 PTY 字符设备 I/O，不放行系统临时文件或修改固定构建写入策略；第 86 轮 `just test-tooling` 的 11 个 suite、145 项全部通过，日志为同根 `logs/project-tooling-86.log`。本阶段未修改 Rust、重跑完整原生 Browser／性能验收或开启截图，不代表生产捕获或 N5 全范围完成，未推送。
+
 ## 专用 VM 创建上下文保护
 
 2026-11-15，修复专用 Browser VM 创建命令沿用 Colima 默认全局激活的问题。`create` 显式传入 `--activate=false`，保留无宿主挂载、无 SSH agent 转发，避免切换宿主 Docker／Kubernetes／Incus 上下文。新增回归先在缺参数时失败，最小修复后通过；`just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `target/n5/capture-toolchain-20261115/logs/vm-context-{red,green,tooling}-12.log`。本阶段只修改 Python 工具及说明，未重跑 Rust 门禁、创建新 VM 或开启生产截图；N5 全范围仍未完成，未推送。

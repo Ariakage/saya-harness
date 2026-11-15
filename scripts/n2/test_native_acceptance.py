@@ -324,20 +324,30 @@ class AcceptanceOracles(unittest.TestCase):
         real_run = subprocess.run
         def run(arguments, **options):
             if arguments[0] == 'cc':
+                probe_source = Path(arguments[-3])
+                self.assertTrue(probe_source.is_file())
+                self.assertEqual(probe_source.parent.parent, Path(os.environ['TMPDIR']))
                 raise subprocess.CalledProcessError(17, arguments, stderr=b'N2_SYNTHETIC_COMPILER_FAILURE')
             return real_run(arguments, **options)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'evidence.json'
             arguments = ['native_acceptance.py', sys.executable, '--skip-benchmarks', '--output', str(output)]
-            with patch.object(sys, 'argv', arguments), patch.object(acceptance, 'tool_evidence', return_value={}), \
-                    patch.object(acceptance.subprocess, 'run', side_effect=run), \
-                    self.assertRaises(subprocess.CalledProcessError):
-                acceptance.main()
+            error = None
+            with patch.dict(os.environ, {'TMPDIR': directory}), \
+                    patch.object(sys, 'argv', arguments), patch.object(acceptance, 'tool_evidence', return_value={}), \
+                    patch.object(acceptance.subprocess, 'run', side_effect=run):
+                try:
+                    acceptance.main()
+                except (subprocess.CalledProcessError, OSError) as failure:
+                    error = failure
+            self.assertIsInstance(error, subprocess.CalledProcessError)
             evidence = json.loads(output.read_text())
             self.assertFalse(evidence['passed'])
             self.assertEqual(evidence['phase'], 'failed')
+            self.assertEqual(evidence['fatal']['error_type'], 'CalledProcessError')
             self.assertEqual(evidence['fatal']['stderr'], 'N2_SYNTHETIC_COMPILER_FAILURE')
             self.assertIn('finished_utc', evidence)
+            self.assertFalse(any(path.name.startswith('saya-n2-') for path in Path(directory).iterdir()))
 
 
 if __name__ == '__main__':
