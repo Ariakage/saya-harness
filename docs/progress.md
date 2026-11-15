@@ -64,6 +64,12 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 
 该阶段只补齐完整源码及可用的专用捕获环境，不代表 DEPS／hooks／GN、定制引擎、生产截图或四平台通过。后续首次 DEPS 同步因 vpython 派生包尝试写入 `/tmp` 被工作区写入约束拒绝，未放宽边界或绕过 bootstrap。仍未启用截图 facts 或身份 v2，N5 全范围仍未完成，未推送或新增远端验收。
 
+## 固定构建工具临时目录修复
+
+2026-11-15，固定 depot_tools 的下载入口不再覆盖显式 `TMPDIR`／`TEMP`／`TMP`；未配置时仍保留上游 `/tmp` 默认，Windows 与 BOTO 行为不变。[固定补丁](../scripts/n5/patches/depot-tools-workspace-temp.patch)包含真实子进程回归，先观察覆盖导致的失败，再通过最小修复；含新增三项的上游完整文件 31 项和项目 `just test-tooling` 145 项均通过。真实 `vpython → gsutil 5.35` 的旧版本入口虽退出 0 仍有 stderr 异常，不算干净成功；收紧验收后，第 61 轮在原写入约束下实际退出 0 且 stderr 为空，未绕过 bootstrap。本地工具身份明确为固定上游提交加已封存补丁，而非未修改的上游树。
+
+完整上游测试曾因 macOS Unix socket 路径过长失败，后改用同一构建根内更短的 `t/` 临时目录通过；原目录和失败日志保留，写入范围未扩大。上游原有文件未关闭的 `ResourceWarning` 仍保留记录，不称为零告警。[完整摘要与验证范围](n5-validation.md#固定构建工具的工作区临时目录)分别记录；本阶段不证明 DEPS／hooks／GN、定制引擎或生产捕获完成，未开启截图或身份 v2，未推送。
+
 ## 专用 VM 创建上下文保护
 
 2026-11-15，修复专用 Browser VM 创建命令沿用 Colima 默认全局激活的问题。`create` 显式传入 `--activate=false`，保留无宿主挂载、无 SSH agent 转发，避免切换宿主 Docker／Kubernetes／Incus 上下文。新增回归先在缺参数时失败，最小修复后通过；`just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `target/n5/capture-toolchain-20261115/logs/vm-context-{red,green,tooling}-12.log`。本阶段只修改 Python 工具及说明，未重跑 Rust 门禁、创建新 VM 或开启生产截图；N5 全范围仍未完成，未推送。

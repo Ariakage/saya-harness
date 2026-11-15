@@ -1,0 +1,85 @@
+diff --git a/download_from_google_storage.py b/download_from_google_storage.py
+index 43f9573..26ff9fb 100755
+--- a/download_from_google_storage.py
++++ b/download_from_google_storage.py
+@@ -119,7 +119,8 @@ class Gsutil(object):
+             env["BOTO_CONFIG"] = self.boto_path
+ 
+         if PLATFORM_MAPPING[sys.platform] != "win":
+-            env.update((x, "/tmp") for x in _TEMPDIR_ENV_VARS)
++            for name in _TEMPDIR_ENV_VARS:
++                env.setdefault(name, "/tmp")
+ 
+         return env
+ 
+diff --git a/tests/download_from_google_storage_unittest.py b/tests/download_from_google_storage_unittest.py
+index 0e9a271..568aaa5 100755
+--- a/tests/download_from_google_storage_unittest.py
++++ b/tests/download_from_google_storage_unittest.py
+@@ -211,6 +211,66 @@ class GstoolsUnitTests(unittest.TestCase):
+         self.assertFalse(os.path.exists(lorem_ipsum2_md5))
+ 
+ 
++class GsutilEnvironmentTests(unittest.TestCase):
++    def setUp(self):
++        self.temp_dir = tempfile.mkdtemp(
++            prefix="gsutil_env_test", dir=os.path.dirname(os.path.dirname(TEST_DIR))
++        )
++        self.addCleanup(shutil.rmtree, self.temp_dir)
++        self.script = os.path.join(self.temp_dir, "print_environment.py")
++        with open(self.script, "w") as script:
++            script.write(
++                "import os\n"
++                "for name in ('TMPDIR', 'TEMP', 'TMP'):\n"
++                "    print(os.environ.get(name))\n"
++            )
++        self.gsutil = download_from_google_storage.Gsutil(self.script)
++        self.explicit_env = {
++            "TMPDIR": os.path.join(self.temp_dir, "tmpdir"),
++            "TEMP": os.path.join(self.temp_dir, "temp"),
++            "TMP": os.path.join(self.temp_dir, "tmp"),
++        }
++        for directory in self.explicit_env.values():
++            os.mkdir(directory)
++
++    @unittest.skipIf(sys.platform == "win32", "Non-Windows environment contract")
++    def test_check_call_preserves_explicit_temp_directories(self):
++        # Use a controlled Python child, not vpython or a network operation.
++        self.gsutil.VPYTHON3 = sys.executable
++        with mock.patch.dict(os.environ, self.explicit_env):
++            code, out, err = self.gsutil.check_call()
++        self.assertEqual(code, 0, err)
++        self.assertEqual(err, "")
++        self.assertEqual(
++            out.splitlines(),
++            [self.explicit_env["TMPDIR"], self.explicit_env["TEMP"],
++             self.explicit_env["TMP"]],
++        )
++
++    def test_missing_temp_directories_default_to_tmp_on_non_windows(self):
++        for platform in ("linux", "darwin"):
++            with (
++                self.subTest(platform=platform),
++                mock.patch.object(sys, "platform", platform),
++                mock.patch.dict(os.environ, {}, clear=True),
++            ):
++                env = self.gsutil.get_sub_env()
++                self.assertEqual(
++                    [env["TMPDIR"], env["TEMP"], env["TMP"]],
++                    ["/tmp", "/tmp", "/tmp"],
++                )
++
++    def test_windows_passes_through_explicit_and_missing_temp_directories(self):
++        for inherited in (self.explicit_env, {}):
++            with (
++                self.subTest(inherited=inherited),
++                mock.patch.object(sys, "platform", "win32"),
++                mock.patch.dict(os.environ, inherited, clear=True),
++            ):
++                env = self.gsutil.get_sub_env()
++                self.assertEqual(env, inherited)
++
++
+ class GsutilCommandTests(unittest.TestCase):
+     """Tests how Gsutil launches gsutil (see Gsutil._get_python_cmd)."""
+ 

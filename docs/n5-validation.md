@@ -284,6 +284,16 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 固定 stock runtime 已通过七个命名文件及 manifest 校验；仍是身份 v1，不声称封闭整个安装树。`target/n5/cap1/logs/runtime-baseline-48.log` 的真实原语基线 1 passed，固定 Chromium 版本／revision 匹配，renderer 的 NoNewPrivs=1、Seccomp=2 与合法 sandbox argv 断言通过；closed-shadow／密码合成字段未绘入图片、绿色正控制保留，页面样式及暂停后计时恢复。独立前后 inventory 的 Run 条目与关联进程均为空。环境报告为 `target/n5/cap1/evidence/runtime-provision-46.json`，包预载记录为 `package-preload-45.json`，inventory 为 `data/runtime-baseline-48/{before,after}.json`。该成功仅证明新专用环境可执行已有原语，**不是原生生产捕获、native Browser 或四平台成功**；N5 全范围仍未完成，未推送。
 
+### 固定构建工具的工作区临时目录
+
+2026-11-15，确认首次 DEPS 同步的直接失败来自固定 depot_tools `Gsutil.get_sub_env`：它在非 Windows 上无条件把三个临时变量改为 `/tmp`。新增真实受控子进程回归先观察三个值均被覆盖的 RED，再将实现改为仅为缺失变量补默认；未改 BOTO、Windows、真实 vpython、固定 spec 或 bootstrap。新三项回归通过；第 53 轮真实入口保留 `/tmp` 拒绝，第 54 轮虽打印版本且退出 0，stderr 仍含 Unix socket 异常及探针自身空 AWS 配置的告警，旧报告的宽松标记**不作为干净成功证据**。后将探针收紧为 stderr 必须为空、去掉自身注入的空配置，并在私有无凭据 HOME 与短临时根下实际通过第 61 轮，未读取真实凭据、过滤告警或绕过 bootstrap。报告为 `target/n5/capture-toolchain-20261115/evidence/depot-runtime-{53,54,61}.json`，单元回归日志为同根 `logs/depot-temp-{red-52,green-54}.log`。
+
+[构建工具补丁](../scripts/n5/patches/depot-tools-workspace-temp.patch)基于上游 `b86fc981b72ab966f8260f73b4eca600b3b12677`，3,612 字节，SHA-256 `5d3983146fc8e4064b26273c66462ef9e1ad823430d7697567ce244ecbcbdb05`。两份修改文件的原始／新摘要及独立 index 应用检查见 `evidence/depot-patch-64.json`，其中运行证据绑定空 stderr 的第 61 轮；此前第 58 轮的静态补丁身份仍有效，但不能用其第 54 轮宽松运行标记代替干净成功。HEAD 与 refs 未改。后续工具身份必须同时绑定上游提交和此补丁，不再将该本地副本描述为 pristine，也不把工作区补丁当成上游已接受的变更。
+
+上游完整文件首次运行 30 passed、1 failed：`GstoolsUnitTests.test_gsutil` 的真实 `SyncManager` 因 macOS `AF_UNIX path too long` 向 stderr 写入错误，未放宽空 stderr 断言。随后只把私有临时根从构建目录内 `tmp/` 缩短为 `t/`，完整文件 31 项通过；原目录未删除、写入约束未扩大，默认无显式变量时的 `/tmp` 语义未改。日志为 `logs/depot-download-suite-{55,59}.log`，完整失败原因见 `depot-download-failure-57.log`。上游 `test_get_md5_cached_write` 原有未关闭文件的 `ResourceWarning` 在成功轮仍存在，不能称为零告警。封存初次因 detached checkout 无 refs 导致 `show-ref` 退出 1 的失败保留于 `depot-patch-56.log`，改用可表达空 refs 的枚举后才通过；不是跳过 refs 核对。
+
+项目 `just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `logs/project-tooling-55.log`；此前构建专用 PATH 不含 `just` 的第 54 轮未启动，后明确使用已存在的任务执行器重跑。上述相对证据路径均位于 `target/n5/capture-toolchain-20261115/`。该阶段仅证明临时目录修复、真实工具入口和相关回归，**不证明 DEPS／hooks／GN、引擎编译或生产捕获成功**；八项原生捕获仍无 GREEN，截图关闭与身份 v1 保持不变，未推送或新增远端验收。
+
 ## 复跑入口
 
 先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SAYA_TEST_VM_*` 输入，程序身份与源码归属另行保留。
