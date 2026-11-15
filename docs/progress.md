@@ -52,6 +52,12 @@ Linux GNU target 的 workspace 全目标严格 Clippy 与完整测试程序链�
 
 完整 Chromium 工作树仍在补齐，官方固定快照超时且未导入；捕获草案仅在 `target/`，未编译或部署。该阶段不代表 GN 生成、目标 std、headless_shell 或生产截图成功；身份 v1 与截图关闭状态保持不变，N5 全范围仍未完成，未推送或新增远端验收。
 
+## 原生捕获草案前置检查
+
+2026-11-15，固定上游生成器实际通过原版／捕获版 `HeadlessExperimental` 异步接口生成，以及私有 Mojo 的 parser、模板预编译、原生几何 typemap 与三组 C++ 绑定生成。草案相对固定 Chromium revision 的补丁身份已封存，并通过独立 index 的应用检查；没有改源码工作树或 refs。[输入、完整摘要和验证边界](n5-validation.md#捕获草案的生成与固定补丁)分别记录，不能将这些检查当成 GN 生成、C++ 编译或实际捕获成功。
+
+八项原生真实契约均仍止于旧引擎缺少私有命令，没有原生 GREEN；最新完整 Rust 门禁为 1672 passed、0 failed、21 ignored，格式、严格 Clippy 和 release 通过。前一轮终端慢输出失败和锁中毒保留，原断言的 9 项复验及后续完整门禁通过。草案与未完成测试继续留在工作区，未作为生产实现提交；截图关闭、身份 v1 与新增远端验收限制不变，N5 全范围仍未完成，未推送。
+
 ## 专用 VM 创建上下文保护
 
 2026-11-15，修复专用 Browser VM 创建命令沿用 Colima 默认全局激活的问题。`create` 显式传入 `--activate=false`，保留无宿主挂载、无 SSH agent 转发，避免切换宿主 Docker／Kubernetes／Incus 上下文。新增回归先在缺参数时失败，最小修复后通过；`just test-tooling` 的 11 个 suite、145 项全部通过，日志为 `target/n5/capture-toolchain-20261115/logs/vm-context-{red,green,tooling}-12.log`。本阶段只修改 Python 工具及说明，未重跑 Rust 门禁、创建新 VM 或开启生产截图；N5 全范围仍未完成，未推送。

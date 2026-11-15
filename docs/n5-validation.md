@@ -266,6 +266,16 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 完整 Chromium 工作树仍在补齐；逐批 Git 传输超时和官方固定快照在 1200 秒仅取得 23,363,584 字节的失败均保留。快照的 `download_complete` 为 false，未调用导入器，不将部分归档当成完整源码。原生捕获的 C++／Mojo／PDL 草案仅保留于工作区 `target/`，尚未编译、部署或提交为生产实现；既有引擎的六项显式原生用例均在缺少私有命令处失败，不能证明草案正确。生产截图 facts、身份 v1 和已发布能力均未改变。此阶段的成功仅限固定 bootstrap 与 GN；N5 全范围仍未完成，未推送或新增远端验收。
 
+### 捕获草案的生成与固定补丁
+
+2026-11-15，在完整引擎构建前先对固定源码的生成链做独立检查。固定 Python 3.11.8 与上游 Inspector Protocol 生成器分别处理原版、捕获版 `HeadlessExperimental` PDL 和各自配置；两轮均实际退出 0，捕获版生成了两个异步回调，原有 BeginFrame 接口保留。该检查只生成此 domain，不等于全部 CDP domains 或 GN 生成通过；输入、配置、生成物摘要见 `target/n5/capture-toolchain-20261115/evidence/{protocol-generator-inputs-27,protocol-generation-31}.json`。
+
+私有 Mojo 使用同一固定源码的真实 parser、C++ 模板预编译和 typemap 生成器；保留 `gfx::Size`／`gfx::PointF` 原生映射，variant、shared、message IDs 三组生成均实际退出 0。284 份输入逐一核对 Git blob 与 SHA-256；最初一个模板的 EOF 传输失败保留，后续补齐后才执行。报告为 `evidence/{mojo-generator-inputs-36,mojo-generation-37}.json`，位于上述工具链目录。该独立生成未覆盖完整 GN feature／import 配置，也不是 C++ 编译或链接成功证据。
+
+草案已封存为 `target/n5/capture-patch-20261115/data/patch-identity-44/capture-draft.patch`，62,982 字节，SHA-256 `a2cba7371192f7c982e5a7decf2ed70e2d8c3db79fbc23b12386121ad86930dc`。修改前输入按固定 revision、Git blob 和 SHA-256 核对，补丁通过独立 index 上的 `git apply --cached --check`；未改源码工作树、HEAD 或 refs。逐文件身份见同目录根下的 `evidence/patch-identity-44.json`。草案包含预绘制敏感子树抑制、透明清零、滚动几何、文档／激活关联、错误分类及绝对期限复核；**仍未编译、部署或作为生产实现提交**，静态检查不证明这些行为正确。
+
+新增的八项真实原生契约覆盖字段与 closed-shadow、同文档陈旧 context、Canvas 新绘制、内联编辑区、滚动视口、透明像素、不完整绘制与原生期限。前六项在 `target/n5/cap1/logs/native-contract-red-16.log`、加强后的整片内联区域在 `native-inline-region-red-19.log`、后两项在 `native-error-contract-red-32.log` 均实际止于旧引擎缺少私有命令；没有原生 GREEN。最新 `capture-contract-workspace-33.log` 的完整 `just check` 为 1672 passed、0 failed、21 ignored，含格式、严格 Clippy 和 release；忽略项不算原生验收。此前 `capture-contract-workspace-20.log` 的终端慢输出失败与后续锁中毒保留，原断言复验 `terminal-recheck-22.log` 的 9 项及后续完整门禁通过，未放宽测试。生产截图与身份 v2 仍未交付，N5 全范围仍未完成，未推送。
+
 ## 复跑入口
 
 先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SAYA_TEST_VM_*` 输入，程序身份与源码归属另行保留。
