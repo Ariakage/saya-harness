@@ -1757,6 +1757,67 @@ impl WorkerLaunchPlanner for LocalWorkerLaunchPlanner {
     }
 }
 
+/// Host-only roles reported by the fixed private worker protocol.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerProcessInfo {
+    pub schema_version: u32,
+    pub node_pid: u32,
+    pub node_pid_namespace: WorkerPidNamespace,
+    pub browser_pid: u32,
+    pub renderer_pids: Vec<u32>,
+}
+
+impl WorkerProcessInfo {
+    pub(crate) fn decode(value: Value) -> Result<Self, BrowserFailure> {
+        let info: Self = serde_json::from_value(value).map_err(|_| process_info_unavailable())?;
+        let namespace_valid = [&info.node_pid_namespace.dev, &info.node_pid_namespace.ino]
+            .into_iter()
+            .all(|value| {
+                value
+                    .parse::<u64>()
+                    .is_ok_and(|number| number != 0 && number.to_string() == *value)
+            });
+        let mut pids = BTreeSet::from([info.node_pid, info.browser_pid]);
+        if info.schema_version != 1
+            || info.node_pid == 0
+            || info.browser_pid == 0
+            || pids.len() != 2
+            || !namespace_valid
+            || info.renderer_pids.len() > MAX_SANDBOX_PROCESSES
+            || info
+                .renderer_pids
+                .iter()
+                .any(|pid| *pid == 0 || !pids.insert(*pid))
+        {
+            return Err(process_info_unavailable());
+        }
+        Ok(info)
+    }
+}
+
+fn process_info_unavailable() -> BrowserFailure {
+    BrowserFailure::new(
+        "worker_process_info",
+        "Browser worker process information is unavailable",
+    )
+}
+
+pub(crate) fn process_info_failure(failure: BoundaryError) -> BrowserFailure {
+    if failure.0.code == "cancelled" {
+        BrowserFailure::new("cancelled", "Browser process information query cancelled")
+    } else {
+        process_info_unavailable()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerPidNamespace {
+    pub dev: String,
+    pub ino: String,
+}
+
 /// A live worker connection. Implementations must send each call at most once.
 #[async_trait]
 pub trait WorkerConnection: Send + Sync {
@@ -1770,6 +1831,16 @@ pub trait WorkerConnection: Send + Sync {
     /// Bounded stderr tail used as supplemental sandbox evidence.
     fn stderr_tail(&self) -> Vec<u8> {
         Vec::new()
+    }
+    /// Read fixed private roles without creating a browser or exposing a tool.
+    async fn process_info(
+        &self,
+        _cancel: &dyn Cancellation,
+    ) -> Result<WorkerProcessInfo, BrowserFailure> {
+        Err(BrowserFailure::new(
+            "worker_process_info",
+            "Browser worker process information is unavailable",
+        ))
     }
     async fn list_tools(&self, cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure>;
     async fn call_tool(
@@ -1851,6 +1922,25 @@ impl WorkerConnection for RealWorkerConnection {
             .lock()
             .map(|tail| tail.iter().copied().collect())
             .unwrap_or_default()
+    }
+
+    async fn process_info(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<WorkerProcessInfo, BrowserFailure> {
+        let client = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(BrowserFailure::new("cancelled", "Browser process information query cancelled")),
+            client = self.client.lock() => client,
+        };
+        let client = client
+            .as_ref()
+            .ok_or_else(|| BrowserFailure::new("worker_closed", "Browser worker is closed"))?;
+        let value = client
+            .browser_process_info(cancel)
+            .await
+            .map_err(process_info_failure)?;
+        WorkerProcessInfo::decode(value)
     }
 
     async fn list_tools(&self, cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure> {

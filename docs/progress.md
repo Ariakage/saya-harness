@@ -44,6 +44,14 @@ D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用�
 
 本阶段只完成受限 worker 补丁、协议回归及其 VM 生命周期；生产 Rust 未修改、完整 Rust 门禁未重跑。新增显式 Just 回归入口与[逐轮证据](n5-validation.md#受限-worker-补丁与私有协议阶段)已同步。native 权威角色／namespace／kernel 联合核验、生产捕获与新增四平台仍未完成，截图 facts 保持 false，未推送或发布。
 
+## Rust 固定请求接线
+
+2026-11-16，native／VM 连接已接入固定 `saya/browser/processInfo`，不进入模型工具目录或接受任意调试参数；严格校验回复版本、PID、namespace 与字节边界。派发和响应共用期限；取消／超时发送同一 request ID 的通知，通知发送不能确认或 future 丢弃时使连接失效，仍由现有生命周期完成进程及目录清理。native inspector 尚未消费角色回复，原 sandbox 成功条件未放宽。
+
+第 220 轮先在真实连接“固定查询不可用”处 RED，第 221 轮两项通过；第 222／223 轮复现取消／超时没有通知，以及阻塞通知后仍可复用。第 224 轮通知与失效判据通过，但测试对端刻意阻塞导致收尾 unknown；释放 fixture 后，第 225 轮仅 future 丢弃仍复用处 RED。增加连接失效 guard 后，第 226 轮九项全部通过。第 227 轮完整 `just check` 为 1695 passed、0 failed、25 ignored，格式、严格 Clippy、release、168 项工具回归、9 项 CLI、15 项组件及同一新程序 smoke 全部通过；该轮包装报告仍因五个临时 fixture 留存而记 failed。第 228 轮用未修改的旧程序 14 项复现四个只读插件缓存，另一个确认是既有静态 bootstrap fixture；无打开句柄后仅无损归档自有目录，不改原报告或生产清理规则。
+
+第 230 轮使用新 release／当前 core 库，经真实 `VmWorkerConnection` 完成四次私有查询：首次导航前及 close 后已知拒绝，导航与 reopen 后取得非空 renderer 角色。全部十步退出 0，无超时、信号或残留，输入、专用 VM 配置和历史归档前后不变。release SHA-256 为 `8af6d47c4c94fc6fa6551283ac2dbf3c97a7e46c3a309fad6e76f7202688384a`；[逐轮证据与范围](n5-validation.md#rust-固定请求接线)保留原始失败与成功。本阶段不构成 native kernel 角色绑定、生产捕获或新增四平台验收；截图继续关闭，未推送或发布，N5 全范围未完成。
+
 ## 固定递归依赖与捕获构建图
 
 2026-11-16，固定配方的递归 `gclient sync` 与 `revinfo --actual` 已通过；第 174 轮移除 `--noprehooks` 后，正常 pre-DEPS 阶段完成。选中的七份递归 DEPS 没有 pre-hook 动作，因此动作清单为空，不宣称执行了动作。第 177 轮为源码内嵌 depot_tools 应用与外层相同的已验证四文件补丁；第 178 轮正式 `gclient runhooks --verbose` 退出 0，来源与配方守卫通过，未修改宿主 Xcode、license 或系统临时目录。

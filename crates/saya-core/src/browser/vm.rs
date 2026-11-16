@@ -2738,6 +2738,25 @@ impl WorkerConnection for VmWorkerConnection {
             .unwrap_or_default()
     }
 
+    async fn process_info(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<worker::WorkerProcessInfo, BrowserFailure> {
+        let client = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(BrowserFailure::new("cancelled", "Browser process information query cancelled")),
+            client = self.client.lock() => client,
+        };
+        let client = client
+            .as_ref()
+            .ok_or_else(|| BrowserFailure::new("worker_closed", "Browser VM worker is closed"))?;
+        let value = client
+            .browser_process_info(cancel)
+            .await
+            .map_err(worker::process_info_failure)?;
+        worker::WorkerProcessInfo::decode(value)
+    }
+
     async fn list_tools(&self, cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure> {
         let client = self.client.lock().await;
         let client = client

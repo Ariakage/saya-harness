@@ -76,6 +76,28 @@ Linux 的来源是 `557f865` 加各轮列明八文件及保留的 `execution_bac
 
 私有方法未列入模型工具目录，不能接受任意 method／script／selector／processId，HTTP／共享／非 isolated 通道均有实际拒绝回归。组件中的 PID／namespace 为受控字面 fixture，不是新内核采样；第 217 轮也只验证现有 VM 生命周期，尚未在 Rust native inspector 中消费新私有接口、绑定权威角色／namespace／starttime／exe 或证明相对 baseline 的额外 Seccomp。网络／文件联合矩阵、生产捕获与新增四平台未在本阶段重新验收；`screenshots`／`screenshot_masking` 保持 false，N5 全范围未完成，未推送、发布或运行新增远端 CI。
 
+## Rust 固定请求接线
+
+2026-11-16，本阶段为 native／VM 的宿主连接接入同一个固定私有查询，增加严格角色回复校验与取消／超时／future 丢弃边界。`WorkerConnection::process_info` 没有任意方法或工具参数，不调用 `tools/list`／`tools/call` 完成角色查询，也不重放。派发和响应共享请求期限；取消通知最多等待五秒，发送不能确认或 future 被丢弃时使连接失效。现有进程、VM 与目录清理仍独立执行，不把失效连接当成清理已完成。native inspector、原 sandbox 判据、网络／凭据／PLAN 与截图 facts 未改。
+
+以下路径相对 `target/n5/linux-full-20261115/`：
+
+| 检查 | 实际结果与边界 | 证据 |
+| --- | --- | --- |
+| Rust 固定请求 RED／GREEN | 第 220 轮编译成功后，真实连接在固定查询不可用处失败；接线后第 221 轮固定请求及非法角色回复两项通过 | `logs/worker-rust-query-{red-220,green-221}.log` |
+| 在途取消与超时 RED | 第 222 轮请求确实到达后取消，两项在未收到 `notifications/cancelled` 处失败；第 223 轮还复现阻塞通知后连接可复用，3 passed、3 failed | `logs/worker-rust-cancel-red-{222,223}.log` |
+| 取消通知与 fixture 收尾 | 第 224 轮通知、超时与连接失效判据通过；刻意停止读取的测试对端导致 shutdown unknown，5 passed、1 failed。后续仅在失效断言之后释放 fixture，不弱化生产判据 | `logs/worker-rust-cancel-green-224.log` |
+| future 丢弃 RED／GREEN | 第 225 轮 8 passed，仅已派发 future 被丢弃后仍复用连接处失败；增加失效 guard 后，第 226 轮 9 passed、0 failed、0 ignored。另覆盖预取消、关闭连接、有效但超过字节上限的回复、未知字段／PID／namespace 拒绝及不依赖目录 | `logs/worker-rust-drop-red-225.log`、`logs/worker-rust-query-green-226.log` |
+| 完整 Rust 与同程序回归 | 第 227 轮完整 `just check` 为 1695 passed、0 failed、25 ignored；格式、严格 Clippy、release、168 项工具、9 项真实 CLI、15 项组件，以及同一 release 的 smoke／文本旅程／5 项审查／28 组 TUI 全部通过。六个命令均退出 0，进程组消失，源码前后相等；包装报告因五个临时 fixture 留存仍记 failed，不追改 | `evidence/worker-rust-checks-227.json`、`data/worker-rust-checks-227/*.log` |
+| 自有 fixture 留存归属 | 第 228 轮用独立保存的旧 core 程序运行插件模块 14 项，复现四个只读 HTTP 插件缓存；另一个目录对应 `execution_backend` 的静态 bootstrap fixture。确认原目录及对照目录均无打开句柄后，仅原子迁移到自有证据目录，成员 inode、模式与内容摘要不变；原报告、源码与程序未改 | `evidence/worker-rust-temp-228.json`、`data/worker-rust-temp-228/` |
+| 当前 Rust 的真实 VM 私有查询 | 第 230 轮当前 core／release 经生产身份、environment、launcher 与 `VmWorkerConnection` 完成四次查询及三次固定页面调用；初次导航前、close 后已知拒绝，导航及 reopen 后返回角色。十步均退出 0，无超时、SIGTERM 或 SIGKILL，所属进程组消失 | `evidence/worker-process-info-vm-230.json`、`data/worker-process-info-vm-230/06-private-query-lifecycle.{stdout,stderr}` |
+
+第 227 轮新 release SHA-256 为 `8af6d47c4c94fc6fa6551283ac2dbf3c97a7e46c3a309fad6e76f7202688384a`／60,444,976 字节；旧程序与库在第 219 轮独立保存为 18 个非硬链接副本，不以重新编译替换历史证据。第 230 轮探针为 `207840a86e13deae27fd9c94f8f2e9bd4ba9766001172cd365f7f61c74e20d24`，报告为 `ed2fcde0dd9828e3aee3bf202cdccbab89a8b5292eda630f17fb1b845984f52b`。探针直接链接第 227 轮 Cargo JSON 中与 core 完全相同 profile 的库，另以当前 release 固定宿主 launcher；不复用第 217 轮旧 Rust 程序冒充新接线验证。
+
+VM 继续使用已校验的 v2-217 安装，manifest 为 `fd401d1ed8ab07201d10835584bde4a02f973a0a3bfb57249e5036d5572c03a4`。实际 Node PID 为 11643，PID namespace 为 `dev=4`／`ino=4026531836`；首次 browser／renderer 为 11672／11731，重开后为 11742／11795。这些是固定协议的真实返回值，不是宿主 procfs 联合核验。宿主与远端关联进程、远端 Run 根和该轮临时目录均为空；190 历史安装／失败归档及专用 VM 配置前后不变。
+
+本阶段只闭合 Rust 固定请求与其 VM 生命周期；native 的 namespace／starttime／exe／额外 Seccomp 证明、真实生产捕获和新增四平台仍未完成。ignored 不计为截图成功，`screenshots`／`screenshot_masking` 保持 false，未推送、发布或新增远端 CI。
+
 ## 固定程序与本机门禁
 
 宿主为 macOS 27.2 ARM，Rust 1.99.1，部署目标 15.0。固定 release 程序 SHA-256：

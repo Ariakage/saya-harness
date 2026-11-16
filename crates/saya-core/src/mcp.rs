@@ -14,10 +14,13 @@ pub use http::McpHttpClient;
 use crate::boundary::Cancellation;
 use crate::contract::{BoundaryError, ErrorInfo};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig, Implementation,
-    PaginatedRequestParams, ProtocolVersion, ServerNotification, SubscriptionFilterBuilder,
+    CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig, CustomRequest,
+    Implementation, PaginatedRequestParams, ProtocolVersion, ServerNotification, ServerResult,
+    SubscriptionFilterBuilder,
 };
-use rmcp::service::{ClientInitializeError, NotificationContext, RunningService};
+use rmcp::service::{
+    ClientInitializeError, NotificationContext, PeerRequestOptions, RunningService,
+};
 use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClient, StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -199,6 +202,17 @@ pub struct McpClient {
 }
 
 struct NotificationTask(JoinHandle<()>);
+
+// Dropping an SDK request future does not cancel its remote request.
+struct InFlightBrowserQuery<'a>(Option<&'a McpClient>);
+
+impl Drop for InFlightBrowserQuery<'_> {
+    fn drop(&mut self) {
+        if let Some(client) = self.0.take() {
+            client.cancel_connection();
+        }
+    }
+}
 
 impl Drop for NotificationTask {
     fn drop(&mut self) {
@@ -544,6 +558,67 @@ impl McpClient {
             "mcp_limit",
             "MCP catalogue pagination exceeds configured limit",
         ))
+    }
+
+    pub(crate) async fn browser_process_info(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<Value, BoundaryError> {
+        self.ensure_connected()?;
+        if cancel.is_cancelled() {
+            return Err(error("cancelled", "Browser process query cancelled"));
+        }
+        let mut pending = InFlightBrowserQuery(Some(self));
+        let deadline = tokio::time::Instant::now() + self.limits.request_timeout;
+        let request = CustomRequest::new("saya/browser/processInfo", Some(serde_json::json!({})));
+        let mut handle = bounded(
+            self.service
+                .send_cancellable_request(request.into(), PeerRequestOptions::no_options()),
+            self.limits.request_timeout,
+            cancel,
+        )
+        .await?
+        .map_err(service_error)?;
+        let response = bounded(
+            &mut handle.rx,
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+            cancel,
+        )
+        .await;
+        let response = match response {
+            Ok(response) => {
+                pending.0 = None;
+                response
+                    .map_err(|_| service_error(ServiceError::TransportClosed))?
+                    .map_err(service_error)?
+            }
+            Err(failure) => {
+                if !matches!(
+                    tokio::time::timeout(
+                        Duration::from_secs(5),
+                        handle.cancel(Some(failure.0.code.clone())),
+                    )
+                    .await,
+                    Ok(Ok(()))
+                ) {
+                    self.cancel_connection();
+                }
+                pending.0 = None;
+                return Err(failure);
+            }
+        };
+        let ServerResult::CustomResult(result) = response else {
+            return Err(error("mcp_protocol", "Browser process reply is invalid"));
+        };
+        let bytes = serde_json::to_vec(&result.0)
+            .map_err(|_| error("mcp_protocol", "Browser process reply cannot be encoded"))?;
+        if bytes.len() > self.limits.max_result_bytes {
+            return Err(error(
+                "mcp_limit",
+                "Browser process reply exceeds its byte limit",
+            ));
+        }
+        Ok(result.0)
     }
 
     /// Validate against the approved catalogue generation, then send exactly one request.

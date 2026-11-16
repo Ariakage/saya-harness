@@ -3128,3 +3128,412 @@ fn upload_staging_preserves_page_visible_name_and_never_leaves_partials() {
     );
     assert!(!directory.join("cancelled.txt").exists());
 }
+
+struct ProcessInfoFixture {
+    connection: Arc<RealWorkerConnection>,
+    requests: Arc<Mutex<Vec<Value>>>,
+    received: tokio::sync::mpsc::Receiver<Value>,
+    task: tokio::task::JoinHandle<()>,
+    _directory: TempDir,
+}
+
+impl ProcessInfoFixture {
+    async fn observed_method(&mut self, method: &str) -> Value {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while let Some(message) = self.received.recv().await {
+                if message["method"] == method {
+                    return message;
+                }
+            }
+            panic!("wire closed before {method}");
+        })
+        .await
+        .unwrap_or_else(|_| panic!("wire method {method} did not arrive"))
+    }
+}
+
+impl Drop for ProcessInfoFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+fn process_info_reply() -> Value {
+    json!({
+        "schema_version": 1,
+        "node_pid": 3,
+        "node_pid_namespace": { "dev": "4", "ino": "4026532444" },
+        "browser_pid": 15,
+        "renderer_pids": [74, 81]
+    })
+}
+
+async fn process_info_fixture(reply: Value) -> ProcessInfoFixture {
+    process_info_fixture_with_limits(
+        Some(reply),
+        McpLimits {
+            connect_timeout: Duration::from_secs(3),
+            request_timeout: Duration::from_secs(1),
+            ..McpLimits::default()
+        },
+    )
+    .await
+}
+
+async fn process_info_fixture_with_limits(
+    reply: Option<Value>,
+    limits: McpLimits,
+) -> ProcessInfoFixture {
+    process_info_fixture_transport(reply, limits, false).await
+}
+
+async fn process_info_fixture_transport(
+    reply: Option<Value>,
+    limits: McpLimits,
+    stall_after_query: bool,
+) -> ProcessInfoFixture {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let (client, server) = tokio::io::duplex(if stall_after_query { 1 } else { 64 * 1024 });
+    let (client_read, client_write) = tokio::io::split(client);
+    let (server_read, mut server_write) = tokio::io::split(server);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let observed = requests.clone();
+    let (sent, received) = tokio::sync::mpsc::channel(64);
+    let task = tokio::spawn(async move {
+        let mut lines = BufReader::new(server_read).lines();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            observed.lock().unwrap().push(request.clone());
+            if sent.send(request.clone()).await.is_err() {
+                break;
+            }
+            let Some(id) = request.get("id") else {
+                continue;
+            };
+            let response = match request["method"].as_str().unwrap() {
+                "server/discover" => json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "error": { "code": -32601, "message": "legacy fixture" }
+                }),
+                "initialize" => json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "result": {
+                        "protocolVersion": "2025-11-25", "capabilities": {},
+                        "serverInfo": { "name": "process-info-fixture", "version": "1" }
+                    }
+                }),
+                "saya/browser/processInfo" => match &reply {
+                    Some(reply) => json!({
+                        "jsonrpc": "2.0", "id": id, "result": reply
+                    }),
+                    None if stall_after_query => std::future::pending().await,
+                    None => continue,
+                },
+                _ => json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "error": { "code": -32601, "message": "unexpected method" }
+                }),
+            };
+            if server_write
+                .write_all(format!("{response}\n").as_bytes())
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let client = crate::mcp::McpClient::connect_stdio(
+        "saya-browser-worker",
+        client_read,
+        client_write,
+        limits,
+        &NeverCancel,
+    )
+    .await
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    ProcessInfoFixture {
+        connection: Arc::new(RealWorkerConnection {
+            client: AsyncMutex::new(Some(client)),
+            process: AsyncMutex::new(None),
+            protocol: WORKER_PROTOCOL_VERSION.to_owned(),
+            generation: AtomicU64::new(0),
+            pid: 0,
+            stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
+            work_dir: directory.path().to_path_buf(),
+            output_dir: directory.path().to_path_buf(),
+        }),
+        requests,
+        received,
+        task,
+        _directory: directory,
+    }
+}
+
+#[tokio::test]
+async fn real_worker_process_info_uses_one_fixed_private_request_without_catalogue() {
+    let fixture = process_info_fixture(process_info_reply()).await;
+    let info = fixture
+        .connection
+        .process_info(&NeverCancel)
+        .await
+        .expect("fixed private process query must be connected");
+    assert_eq!(info.schema_version, 1);
+    assert_eq!(info.node_pid, 3);
+    assert_eq!(info.node_pid_namespace.dev, "4");
+    assert_eq!(info.node_pid_namespace.ino, "4026532444");
+    assert_eq!(info.browser_pid, 15);
+    assert_eq!(info.renderer_pids, [74, 81]);
+    let requests = fixture.requests.lock().unwrap().clone();
+    let private: Vec<_> = requests
+        .iter()
+        .filter(|request| request["method"] == "saya/browser/processInfo")
+        .collect();
+    assert_eq!(private.len(), 1);
+    assert_eq!(
+        private[0]["params"],
+        json!({ "_meta": { "progressToken": 0 } })
+    );
+    assert!(!requests.iter().any(|request| {
+        matches!(
+            request["method"].as_str(),
+            Some("tools/list" | "tools/call")
+        )
+    }));
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_cancels_the_dispatched_request() {
+    let mut fixture = process_info_fixture_with_limits(None, McpLimits::default()).await;
+    let connection = fixture.connection.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let query =
+        tokio::spawn(async move { connection.process_info(&SwitchCancel(cancelled)).await });
+    let request = fixture.observed_method("saya/browser/processInfo").await;
+    flag.store(true, Ordering::Release);
+    let failure = tokio::time::timeout(Duration::from_secs(1), query)
+        .await
+        .expect("cancelled query did not return")
+        .unwrap()
+        .expect_err("cancelled query returned role evidence");
+    assert_eq!(failure.code, "cancelled");
+    assert!(!failure.uncertain);
+    let notification = fixture.observed_method("notifications/cancelled").await;
+    assert_eq!(notification["params"]["requestId"], request["id"]);
+    assert_eq!(
+        fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| { message["method"] == "saya/browser/processInfo" })
+            .count(),
+        1,
+        "cancellation must not replay the private query"
+    );
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_timeout_cancels_the_dispatched_request() {
+    let mut fixture = process_info_fixture_with_limits(
+        None,
+        McpLimits {
+            connect_timeout: Duration::from_secs(3),
+            request_timeout: Duration::from_millis(50),
+            ..McpLimits::default()
+        },
+    )
+    .await;
+    let connection = fixture.connection.clone();
+    let query = tokio::spawn(async move { connection.process_info(&NeverCancel).await });
+    let request = fixture.observed_method("saya/browser/processInfo").await;
+    let failure = tokio::time::timeout(Duration::from_secs(1), query)
+        .await
+        .expect("timed-out query did not return")
+        .unwrap()
+        .expect_err("timed-out query returned role evidence");
+    assert_eq!(failure.code, "worker_process_info");
+    assert!(!failure.uncertain);
+    let notification = fixture.observed_method("notifications/cancelled").await;
+    assert_eq!(notification["params"]["requestId"], request["id"]);
+    assert_eq!(
+        fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| { message["method"] == "saya/browser/processInfo" })
+            .count(),
+        1,
+        "a timed-out private query must not be replayed"
+    );
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_stalled_cancellation_closes_the_connection() {
+    let mut fixture = process_info_fixture_transport(None, McpLimits::default(), true).await;
+    let connection = fixture.connection.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let query =
+        tokio::spawn(async move { connection.process_info(&SwitchCancel(cancelled)).await });
+    fixture.observed_method("saya/browser/processInfo").await;
+    flag.store(true, Ordering::Release);
+    let failure = tokio::time::timeout(Duration::from_secs(8), query)
+        .await
+        .expect("stalled cancellation exceeded its cleanup bound")
+        .unwrap()
+        .expect_err("stalled cancellation returned role evidence");
+    assert_eq!(failure.code, "cancelled");
+    assert!(
+        !fixture
+            .connection
+            .client
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .is_connected(),
+        "unfinished cancellation left the connection reusable"
+    );
+    fixture.task.abort();
+    let _ = (&mut fixture.task).await;
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_dropped_query_closes_the_connection() {
+    let mut fixture = process_info_fixture_with_limits(None, McpLimits::default()).await;
+    let connection = fixture.connection.clone();
+    let query = tokio::spawn(async move { connection.process_info(&NeverCancel).await });
+    fixture.observed_method("saya/browser/processInfo").await;
+    query.abort();
+    assert!(query.await.unwrap_err().is_cancelled());
+    assert!(
+        !fixture
+            .connection
+            .client
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .is_connected(),
+        "dropped query left an in-flight request on a reusable connection"
+    );
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_rejects_a_valid_role_reply_above_the_byte_limit() {
+    let mut reply = process_info_reply();
+    reply["renderer_pids"] = json!((1000..1100).collect::<Vec<u32>>());
+    let fixture = process_info_fixture_with_limits(
+        Some(reply),
+        McpLimits {
+            max_result_bytes: 256,
+            ..McpLimits::default()
+        },
+    )
+    .await;
+    let failure = fixture
+        .connection
+        .process_info(&NeverCancel)
+        .await
+        .expect_err("private role query bypassed its result byte limit");
+    assert_eq!(failure.code, "worker_process_info");
+    assert!(!failure.uncertain);
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_closed_connection_does_not_dispatch() {
+    let fixture = process_info_fixture(process_info_reply()).await;
+    fixture.connection.shutdown().await.unwrap();
+    let failure = fixture
+        .connection
+        .process_info(&NeverCancel)
+        .await
+        .expect_err("closed connection returned role evidence");
+    assert_eq!(failure.code, "worker_closed");
+    assert!(
+        !fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| { message["method"] == "saya/browser/processInfo" })
+    );
+}
+
+#[tokio::test]
+async fn real_worker_process_info_pre_cancel_does_not_dispatch() {
+    let fixture = process_info_fixture(process_info_reply()).await;
+    let failure = fixture
+        .connection
+        .process_info(&SwitchCancel(Arc::new(AtomicBool::new(true))))
+        .await
+        .expect_err("pre-cancelled query returned role evidence");
+    assert_eq!(failure.code, "cancelled");
+    assert!(
+        !fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| { message["method"] == "saya/browser/processInfo" })
+    );
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_worker_process_info_rejects_untrusted_role_replies() {
+    let mut cases = Vec::new();
+    for (field, value) in [
+        ("schema_version", json!(2)),
+        ("node_pid", json!(0)),
+        ("browser_pid", json!(0)),
+        ("browser_pid", json!(3)),
+        ("renderer_pids", json!([74, 74])),
+        ("renderer_pids", json!([0])),
+        ("renderer_pids", json!([15])),
+        ("renderer_pids", json!([3])),
+        ("renderer_pids", json!([4294967296_u64])),
+        ("renderer_pids", json!(["74"])),
+        ("renderer_pids", json!([74.5])),
+        ("renderer_pids", json!((1000..1513).collect::<Vec<_>>())),
+        ("script", json!("not a process field")),
+    ] {
+        let mut reply = process_info_reply();
+        reply[field] = value;
+        cases.push(reply);
+    }
+    for namespace in [
+        json!({ "dev": "4", "ino": "" }),
+        json!({ "dev": "-4", "ino": "4026532444" }),
+        json!({ "dev": "04", "ino": "4026532444" }),
+        json!({ "dev": "4", "ino": "18446744073709551616" }),
+        json!({ "dev": 4, "ino": "4026532444" }),
+        json!({ "dev": "4", "ino": "4026532444", "other": 1 }),
+    ] {
+        let mut reply = process_info_reply();
+        reply["node_pid_namespace"] = namespace;
+        cases.push(reply);
+    }
+    for reply in cases {
+        let fixture = process_info_fixture(reply.clone()).await;
+        let failure = fixture
+            .connection
+            .process_info(&NeverCancel)
+            .await
+            .expect_err("invalid private role reply was accepted");
+        assert_eq!(failure.code, "worker_process_info", "reply={reply}");
+        assert!(!failure.uncertain);
+        fixture.connection.shutdown().await.unwrap();
+    }
+}

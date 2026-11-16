@@ -76,7 +76,15 @@ v1 安装不能自动升级或回退。应使用新工具在全新远端根重�
 - 活跃 backend 只发送固定 `SystemInfo.getProcessInfo`，把取消信号交给 CDP，成功／失败后均 detach；断连或取消后的迟到结果不能成为有效角色回复。最多接受 512 个进程记录，拒绝非法／重复 PID 和缺失／重复 browser 角色。
 - 回复固定为 `schema_version: 1`、`node_pid`、`node_pid_namespace: {dev, ino}`、`browser_pid` 与排序后的 `renderer_pids`；namespace 的 dev／ino 为十进制字符串。PID 是对应浏览器 namespace 的观察值，不能直接等同宿主 PID 或一律取 `NSpid` 最后一列。
 
-这两份补丁及其真实 VM 生命周期已验证；**Rust native inspector 尚未接入私有请求或权威角色绑定**，仍按原有失败关闭条件工作。组件测试的受控 CDP／namespace 不是内核证据，VM 生命周期也不证明该私有接口已完成真实 kernel 联合核验。复跑入口见[开发指南](development.md#just-开发入口)，证据与未完成范围见[N5 验收](n5-validation.md#受限-worker-补丁与私有协议阶段)；生产截图继续关闭。
+这两份补丁及其真实 VM 生命周期已验证；组件测试的受控 CDP／namespace 不是内核证据，VM 生命周期也不证明该私有接口已完成真实 kernel 联合核验。复跑入口见[开发指南](development.md#just-开发入口)，补丁证据见[N5 验收](n5-validation.md#受限-worker-补丁与私有协议阶段)；生产截图继续关闭。
+
+### Rust 固定请求接线
+
+native 与 VM 的 `WorkerConnection::process_info` 已连接同一个宿主专用 MCP 请求，只接受取消句柄，不接受 method、script、selector 或 processId，也不依赖工具目录。严格回复解析拒绝未知字段、非 v1 回复、零／重复／跨角色冲突的 PID、超过 512 个 renderer，以及非规范、为零或超出 u64 的 namespace 十进制字符串；保留现有 `McpLimits` 的 wire／result 字节上限。
+
+派发与响应共用请求总期限，入口取消不派发；在途取消或超时向同一 request ID 发送取消通知，最多等待五秒。通知发送不能确认或查询 future 被丢弃时，立即使 MCP 连接失效，不重放请求，也不接受迟到角色回复。MCP 失效不等于 worker／VM 已清理，宿主仍须执行既有 shutdown、进程组回收与 lease 清理；清理不明继续返回 unknown。
+
+九项真实 Rust 连接回归及当前库／程序的 VM 私有查询生命周期已验证，详见[Rust 接线证据](n5-validation.md#rust-固定请求接线)。**native inspector 尚未消费这条接口或绑定权威角色**；它仍按原有失败关闭条件工作。私有角色回复不证明宿主 PID 映射、starttime、exe、namespace 或额外 Seccomp，截图 facts 不变。
 
 ## 托管捕获引擎扩展（D-068，待实现）
 
