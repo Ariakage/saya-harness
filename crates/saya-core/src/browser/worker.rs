@@ -39,7 +39,7 @@ use std::{
     io::{Read, Write},
     os::unix::{
         ffi::OsStrExt,
-        fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+        fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -322,6 +322,130 @@ pub struct VerifiedWorkerIdentity {
     pub cli_js: PathBuf,
     pub chromium: PathBuf,
     pub manifest_sha256: String,
+    pub(crate) local_images: Option<Arc<VerifiedLocalImages>>,
+}
+
+impl VerifiedWorkerIdentity {
+    fn check_local_executables(
+        &self,
+        checkpoint: &mut dyn FnMut() -> Result<(), BoundaryError>,
+    ) -> Result<(), BoundaryError> {
+        let images = self.local_images.as_ref().ok_or_else(|| {
+            identity_error("Browser worker local executable identities are unavailable")
+        })?;
+        images.node.check_named(&self.node, checkpoint)?;
+        images.chromium.check_named(&self.chromium, checkpoint)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct VerifiedLocalImages {
+    node: PinnedWorkerImage,
+    chromium: PinnedWorkerImage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerImageIdentity {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    links: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl WorkerImageIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            size: metadata.len(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            links: metadata.nlink(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PinnedWorkerImage {
+    file: File,
+    identity: WorkerImageIdentity,
+    sha256: String,
+}
+
+impl PinnedWorkerImage {
+    fn check_named(
+        &self,
+        path: &Path,
+        checkpoint: &mut dyn FnMut() -> Result<(), BoundaryError>,
+    ) -> Result<(), BoundaryError> {
+        checkpoint()?;
+        let named = open_absolute_file(path)?;
+        self.check_metadata(&named)?;
+        if self.identity.size > MAX_IDENTITY_FILE_BYTES {
+            return Err(identity_error(
+                "Browser worker executable exceeds its size limit",
+            ));
+        }
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        let mut total = 0u64;
+        loop {
+            checkpoint()?;
+            let length = (self.identity.size - total).min(buffer.len() as u64).max(1) as usize;
+            let count = self
+                .file
+                .read_at(&mut buffer[..length], total)
+                .map_err(|_| identity_error("Browser worker executable cannot be reread"))?;
+            if count == 0 {
+                if total != self.identity.size {
+                    return Err(identity_error("Browser worker executable ended early"));
+                }
+                break;
+            }
+            total += count as u64;
+            if total > self.identity.size {
+                return Err(identity_error(
+                    "Browser worker executable grew after verification",
+                ));
+            }
+            hasher.update(&buffer[..count]);
+        }
+        let digest = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if digest != self.sha256 {
+            return Err(identity_error(
+                "Browser worker executable content changed after verification",
+            ));
+        }
+        self.check_metadata(&named)?;
+        checkpoint()?;
+        Ok(())
+    }
+
+    fn check_metadata(&self, named: &File) -> Result<(), BoundaryError> {
+        for file in [&self.file, named, &self.file] {
+            let metadata = file.metadata().map_err(|_| {
+                identity_error("Browser worker executable identity cannot be rechecked")
+            })?;
+            if WorkerImageIdentity::from_metadata(&metadata) != self.identity {
+                return Err(identity_error(
+                    "Browser worker executable changed after verification",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -514,7 +638,7 @@ fn verify_identity_digest(
     expected: &ExpectedFile<'_>,
     executable: bool,
     checkpoint: &mut dyn FnMut() -> Result<(), BoundaryError>,
-) -> Result<(), BoundaryError> {
+) -> Result<PinnedWorkerImage, BoundaryError> {
     let before = file
         .metadata()
         .map_err(|_| identity_error("Browser worker identity cannot be inspected"))?;
@@ -541,7 +665,8 @@ fn verify_identity_digest(
     let after = file
         .metadata()
         .map_err(|_| identity_error("Browser worker identity cannot be rechecked"))?;
-    if file_identity(&before) != file_identity(&after) || total != expected.size {
+    let identity = WorkerImageIdentity::from_metadata(&before);
+    if identity != WorkerImageIdentity::from_metadata(&after) || total != expected.size {
         return Err(identity_error(
             "Browser worker identity changed while being read",
         ));
@@ -556,7 +681,11 @@ fn verify_identity_digest(
             "Browser worker identity digest does not match its manifest",
         ));
     }
-    Ok(())
+    Ok(PinnedWorkerImage {
+        file,
+        identity,
+        sha256: digest,
+    })
 }
 
 pub(crate) fn parse_package(
@@ -685,7 +814,7 @@ fn verify_worker_identity_checked(
         }
     }
 
-    verify_identity_digest(
+    let node_image = verify_identity_digest(
         open_absolute_file(node)?,
         &expected_versioned(&manifest.node),
         true,
@@ -775,7 +904,7 @@ fn verify_worker_identity_checked(
         ));
     }
 
-    verify_identity_digest(
+    let chromium_image = verify_identity_digest(
         open_absolute_file(chromium)?,
         &expected_chromium(&manifest.chromium),
         true,
@@ -796,13 +925,20 @@ fn verify_worker_identity_checked(
         )?;
     }
 
-    Ok(VerifiedWorkerIdentity {
+    let identity = VerifiedWorkerIdentity {
         node: node.clone(),
         worker_root: worker_root.clone(),
         cli_js: worker_root.join(CLI_JS_PATH),
         chromium: chromium.clone(),
         manifest_sha256: manifest_digest,
-    })
+        local_images: Some(Arc::new(VerifiedLocalImages {
+            node: node_image,
+            chromium: chromium_image,
+        })),
+    };
+    checkpoint()?;
+    identity.check_local_executables(&mut checkpoint)?;
+    Ok(identity)
 }
 
 /// One private, host-owned temp tree for a worker lifecycle.
@@ -1138,6 +1274,18 @@ fn build_launch_request(
     identity: &VerifiedWorkerIdentity,
     directories: &BrowserSandboxDirectories,
 ) -> Result<WorkerLaunchRequest, BoundaryError> {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(settings.connect_timeout_ms))
+        .ok_or_else(|| identity_error("Browser worker image recheck deadline is out of range"))?;
+    let mut checkpoint = || {
+        if Instant::now() >= deadline {
+            return Err(identity_error(
+                "Browser worker image recheck exceeded its deadline",
+            ));
+        }
+        Ok(())
+    };
+    identity.check_local_executables(&mut checkpoint)?;
     // Chromium's own sandbox stays enabled. The browser worker network policy
     // is always decided by the host environment; `worker.proxy` is validated
     // input reserved for the later broker stage and must not be injected here.
@@ -2182,6 +2330,36 @@ impl WorkerLauncher for ManagedProcessLauncher {
                 "Browser worker launch cancelled before dispatch",
             ));
         }
+        let deadline = Instant::now()
+            .checked_add(request.mcp_limits.connect_timeout)
+            .ok_or_else(|| {
+                BrowserFailure::new(
+                    "worker_identity",
+                    "Browser worker image recheck deadline is out of range",
+                )
+            })?;
+        let mut checkpoint = || {
+            if cancel.is_cancelled() {
+                return Err(error("cancelled", "Browser worker image recheck cancelled"));
+            }
+            if Instant::now() >= deadline {
+                return Err(identity_error(
+                    "Browser worker image recheck exceeded its deadline",
+                ));
+            }
+            Ok(())
+        };
+        request
+            .identity
+            .as_ref()
+            .ok_or_else(|| {
+                BrowserFailure::new(
+                    "worker_identity",
+                    "Browser worker launch identity is missing",
+                )
+            })?
+            .check_local_executables(&mut checkpoint)
+            .map_err(|failure| BrowserFailure::new(failure.0.code, failure.0.message))?;
         let Some(environment) = request.execution.clone() else {
             return Err(BrowserFailure::new(
                 "browser_sandbox_unavailable",

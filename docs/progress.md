@@ -1,8 +1,18 @@
 # 开发进度
 
-**更新于2026-11-16。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-17。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
+
+## 本地可执行句柄与内容复核增量
+
+2026-11-17，围绕生产启动前的本地可执行文件复核已完成 `PinnedWorkerImage` 与 `ManagedProcessLauncher::launch` 补强：除原有启动前 `WorkerImageIdentity` 校验外，同时保留已认证的 Node／Chromium `File` 描述符与 `sha256` 摘要；在 `check_named` 内以 Unix `FileExt::read_at`（64 KiB 分块、512 MiB 上限，逐块核对期限并保留 `"cancelled"` 错误码）复核精确大小、EOF 与内容摘要，并保留原有 FD 与新开 `named` FD 的前后完整元数据校验，覆盖 Linux 同 tick 时间戳不变的局部改写。`crates/saya-core/src/browser/vm.rs` 已同步新增的 `local_images` 字段；未包含或提交未完成的 `crates/saya-core/tests/browser_screenshot_real.rs` 与空 `CONTRIBUTING.md`。
+
+本机 macOS（Darwin 27.2 ARM64，Rust 1.99.1）与独立 Linux ARM Ubuntu 22.04 VM（`n5arm22`，内核 `6.8.0-149-generic`，同一三份 Rust 源码 SHA-256）已分别完成全量门禁验证，并按各自失败与推进轨迹完整保留历史记录：
+- macOS：`target/n5/native-image-stage249-macos.json` 记录 `RUST_TEST_THREADS=1 just check` 1701 passed、0 failed、25 ignored（含 6 项新增／修正 worker 复核测试与标准 release 构建，release ELF SHA-256 `027090788d3046e06409c4d86d6d2dbd8f20e18461793d5bfe90a4d9afdca628`），`just test-tooling` 11 个 suite、168 passed，及 `just smoke` 完整通过。
+- Linux ARM 保留失败与续跑链：第 245 轮在备份容量 preflight 拒绝；第 248 轮在 Linux 同 tick 复核用例 `launch_planner_rejects_backdated_verified_executable_mutations` 失败（1713 passed、1 failed）且 `/home/saya-test/ni248` 留存 4 项只读 HTTP 插件测试夹具，原回执保留 `incomplete`，随后在第 250 轮协作锁＋`renameat2(RENAME_NOREPLACE)` 无损归档；修复 Rust 定位复核并更新第 249 轮包装门禁后，第 249 轮在 `n5arm22` 通过 `browser::*` 全部单元项（含该同 tick 回归），运行至 `execution::linux::tests::system_alternatives_resolve_read_only_and_stay_subject_to_protected_masks`（同时创建 3 个 `113 MB` 临时 `saya-worker` 目录）时触及 `3 GiB` 空间守卫中止（第二轮清理确认主进程 78961 及其进程组为空）；经审核回收中止残留 `ni249` 与 15 个未引用旧测试目录恢复至 5.28 GiB 空闲后，第 252 轮衔接同一已封存 249 源码状态并通过完整 `just check`（72 组结果，1716 passed、0 failed、23 ignored，新 Linux release ELF SHA-256 `166e82bc2375c26cbabe39b93f7ea90a111e1d0101625c115bf37f05a29ecda6`）、`just test-tooling`（11 suite、168 passed）及 `just smoke`（含 28 组 TUI 旅程），三层历史／当前程序备份及 4 项运行后只读 HTTP 夹具原子归档核验通过。详细回执与边界见 [N5 验收](n5-validation.md#本地可执行句柄与内容复核)。
+
+该增量仅关闭启动前本地可执行字节复核，不构成原子 `exec`／不可变安装快照或跨进程 `processInfo`／kernel 角色绑定；native `verify_sandbox` 尚未接入私有角色核验，定制捕获引擎、2 处绘制／回读遮蔽缺口与 `browser_screenshot_real.rs` 仍待后续完成，`screenshots`／`screenshot_masking` 维持 `false`，N5 全范围与四平台联合验收尚未完成，未推送、发布或触发远端 CI。
 
 ## N5 Browser 本机联合阶段
 

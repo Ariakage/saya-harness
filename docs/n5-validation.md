@@ -98,6 +98,23 @@ VM 继续使用已校验的 v2-217 安装，manifest 为 `fd401d1ed8ab07201d1083
 
 本阶段只闭合 Rust 固定请求与其 VM 生命周期；native 的 namespace／starttime／exe／额外 Seccomp 证明、真实生产捕获和新增四平台仍未完成。ignored 不计为截图成功，`screenshots`／`screenshot_masking` 保持 false，未推送、发布或新增远端 CI。
 
+## 本地可执行句柄与内容复核
+
+2026-11-17，为阻止已通过安装身份校验的 Node／Chromium 可执行文件在规划后至实际启动前发生不改变时间戳的同 tick 改写，本阶段修改三份源码：`crates/saya-core/src/browser/worker.rs`（160,551 B，SHA-256 `4b6df6e98046ad8e8c5cefba6014fb6aef9a7a11f412f54e873ef8b93e0e666a`）、`crates/saya-core/src/browser/worker/tests.rs`（134,242 B，SHA-256 `830ee9f66e2f595adf8cfefcee7d3f85751d907f4e92d1842bd446bf8253d50f`）与 `crates/saya-core/src/browser/vm.rs`（203,676 B，SHA-256 `0a38c43c49093d4010d359331b823c11513c32b8a1a6c9850e8c88ae7153c77e`）。`PinnedWorkerImage` 同时保存已认证 `sha256` 与原始 `File` 描述符；`check_named` 通过 Unix `FileExt::read_at`（64 KiB 分块、512 MiB 上限，逐块检查取消与期限）核对精确大小、EOF 与内容摘要，并保留原有 FD 与重开 `named` FD 的前后完整 `WorkerImageIdentity` 检查；`ManagedProcessLauncher::launch` 通过 `checked_add` 对 Node／Chromium 共享重核期限并保留 `"cancelled"` 取消语义。未完成协作草案 `crates/saya-core/tests/browser_screenshot_real.rs`（`f2234e18…`）及空 `CONTRIBUTING.md` 保持未提交状态。
+
+下表保留本阶段 macOS 验证与 Linux ARM `n5arm22` 从失败到完整通过的全部实证（Linux 路径相对 `target/n5/linux-full-20261115/`）：
+
+| 检查／轮次 | 实际结果与边界 | 证据 |
+| --- | --- | --- |
+| macOS 完整 Rust＋工具＋smoke | `RUST_TEST_THREADS=1 just check` 1701 passed、0 failed、25 ignored（含 6 项新增／修正复核单测），release ELF `027090788d3046e06409c4d86d6d2dbd8f20e18461793d5bfe90a4d9afdca628`（60,315,632 B，独立备份于 `target/n5/saya-native-image-249-02709078…`）；`just test-tooling` 11 suite、168 passed；同程序 smoke 含 5 项审查与 28 组 TUI 全过 | `target/n5/native-image-stage249-macos.json`、`target/n5/native-image-{check,tooling,smoke}-249-main.log` |
+| Linux ARM 第 245 轮（保留失败） | 备份容量 preflight 在覆盖／Cargo 前明确拒绝；源码、程序与基线不变 | `data/native-image-gate-245/receipt.json` |
+| Linux ARM 第 248 轮（保留失败）＋第 250 轮夹具归档 | 第 248 轮 `just check` 在 Linux 同 tick 用例 `launch_planner_rejects_backdated_verified_executable_mutations` 失败（1713 passed、1 failed），`/home/saya-test/ni248` 留存 4 项 `runtime_plugins::tests` 只读 HTTP 夹具（65 行成员，原报告保留 `incomplete`）；第 250 轮确认所属进程 64600 进程组为空且获 13 把协作锁后，经 `renameat2(RENAME_NOREPLACE)` 无损迁移至 `/home/saya-test/ni248-preserved-fixtures-250`，标注 `runtime_cleanup=not proved`、`global_absence=unknown` | `data/native-image-gate-248/receipt.json`、`data/ni248-fixtures-preserved-250/receipt.json` |
+| Linux ARM 第 249 轮（保留容量中止） | 78 项包装测试通过（`249-wiring-green-main-20261117.log`）并执行前序双层备份与源码覆盖；`just check` 通过 `browser::*` 全部单元项（含 6 项新／修 worker 复核用例），运行至 `execution::linux::tests::system_alternatives_resolve_read_only_and_stay_subject_to_protected_masks`（同时写入 3 个 113 MB `saya-worker` 临时目录）时因空间降至 `3,186,274,304 B`（低于 `3 GiB` 守卫）而被 `live_limits` 终止并记 `cleanup_unknown`；后置清理确认主进程 78961 进程组已空（`empty_known=True`），原回执保留 `incomplete` | `data/native-image-gate-249/receipt.json`、`data/249-wiring-green-main-20261117.log` |
+| Linux ARM 空间回收第 252 轮 | 5 项单测 RED -> GREEN；认证第 249 轮空组证明后安全清理中止残留 `ni249`（拒绝符号链接）与 15 个未引用的 242 前历史 `/home/saya-test/` 测试目录，工作区可用空间由 `3,186,126,848 B` 恢复至 `5,668,450,304 B`（5.28 GiB） | `helpers/reclaim_n5arm22_252.py`、`data/n5arm22-reclaim-252/receipt.json` |
+| Linux ARM 第 252 轮完整通过 | 衔接第 248／249／回收第 252 轮已封存输入（4 项包装单测通过），`n5arm22` 三层备份校验通过（631,382,636 B 压缩新增）；`just check`（707.28s、exit 0）72 组结果 1716 passed、0 failed、23 ignored，新 release `/workspace/target/release/saya` 为 66,522,328 B（SHA-256 `166e82bc2375c26cbabe39b93f7ea90a111e1d0101625c115bf37f05a29ecda6`）；`just test-tooling`（2.13s、exit 0）11 suite、168 passed；同程序 `just smoke`（88.35s、exit 0）含审查与 28 组 TUI 旅程通过；3 个运行步骤主进程组均空，post-run 4 项 HTTP 插件只读夹具 `.tmp0XJhRL`／`.tmp9FNOEN`／`.tmpC3qvJ4`／`.tmpNKDY32` 经协作锁与 `renameat2(RENAME_NOREPLACE)` 无损归档至 `/home/saya-test/ni252-preserved-fixtures-252`，`tmp_entries_after=[]`，剩余空间 `4,891,271,168 B` | `data/native-image-gate-252/receipt.json`、`helpers/{run,test}_native_image_gate_252.py` |
+
+上述成果只关闭启动前本地可执行字节与 FD 重核，不提供原子 `execve`／不可变安装快照，也不等于 native kernel 角色绑定或生产捕获完成：`verify_sandbox` 尚未消费 `WorkerConnection::process_info`，定制捕获引擎及 2 处绘制／回读遮蔽缺口仍待修补，`crates/saya-core/tests/browser_screenshot_real.rs` 仍为 `ignored`，`screenshots`／`screenshot_masking` 维持 `false`，新增四平台联合验收尚未完成，未推送、发布或触发远端 CI。
+
 ## 固定捕获引擎本地构建
 
 2026-11-16，固定 Chromium `6449d9f9a6a906edff724b7b220199b3fde4615c` 加封存捕获补丁 `a2cba7371192f7c982e5a7decf2ed70e2d8c3db79fbc23b12386121ad86930dc`（23 文件），使用第 180 轮 GN 图、固定 Mac ARM 工具链／SDK 27.0 交叉构建 Linux ARM64 `headless_shell`。`use_remoteexec=false`、`use_siso=false`、Ninja `-j2`；不使用远端构建或新增 CI。以下路径相对 `target/n5/capture-toolchain-20261115/`：

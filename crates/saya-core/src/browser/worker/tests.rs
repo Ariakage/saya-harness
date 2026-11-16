@@ -2184,6 +2184,164 @@ fn temp_artifacts_disappear_on_drop() {
     assert_eq!(fs::read_dir(&fixture.temp_root).unwrap().count(), 0);
 }
 
+#[test]
+fn launch_planner_rejects_replaced_verified_executables() {
+    for node in [true, false] {
+        let fixture = fixture_identity();
+        let identity = verify_worker_identity(&fixture.settings).unwrap();
+        let artifacts = TempArtifacts::create(&fixture.settings).unwrap();
+        let path = if node {
+            &fixture.node_path
+        } else {
+            &fixture.chromium_path
+        };
+        let before = fs::metadata(path).unwrap();
+        let replacement = path.with_extension("replacement");
+        write_mode(&replacement, &fs::read(path).unwrap(), 0o755);
+        fs::rename(replacement, path).unwrap();
+        assert_ne!(fs::metadata(path).unwrap().ino(), before.ino());
+
+        let failure = LocalWorkerLaunchPlanner::new(fixture.settings.clone())
+            .build(&identity, &artifacts.directories())
+            .expect_err("a replaced verified executable must not produce a launch request");
+        assert_eq!(failure.0.code, "worker_identity");
+        assert!(!artifacts.config_path.exists());
+    }
+}
+
+#[test]
+fn launch_planner_rejects_backdated_verified_executable_mutations() {
+    for node in [true, false] {
+        let fixture = fixture_identity();
+        let identity = verify_worker_identity(&fixture.settings).unwrap();
+        let artifacts = TempArtifacts::create(&fixture.settings).unwrap();
+        let path = if node {
+            &fixture.node_path
+        } else {
+            &fixture.chromium_path
+        };
+        let before = fs::metadata(path).unwrap();
+        let mut changed = fs::read(path).unwrap();
+        changed[0] ^= 1;
+        fs::write(path, changed).unwrap();
+        File::open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(before.modified().unwrap()))
+            .unwrap();
+        let after = fs::metadata(path).unwrap();
+        assert_eq!(after.ino(), before.ino());
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+
+        let failure = LocalWorkerLaunchPlanner::new(fixture.settings.clone())
+            .build(&identity, &artifacts.directories())
+            .expect_err("a backdated executable mutation must not produce a launch request");
+        assert_eq!(failure.0.code, "worker_identity");
+        assert!(!artifacts.config_path.exists());
+    }
+}
+
+#[tokio::test]
+async fn production_launcher_rechecks_images_changed_after_planning() {
+    for node in [true, false] {
+        let fixture = fixture_identity();
+        let identity = verify_worker_identity(&fixture.settings).unwrap();
+        let artifacts = TempArtifacts::create(&fixture.settings).unwrap();
+        let request = LocalWorkerLaunchPlanner::new(fixture.settings.clone())
+            .build(&identity, &artifacts.directories())
+            .unwrap();
+        let launcher = ManagedProcessLauncher::new(ExecConfig::default());
+        let no_environment = launcher
+            .launch(request.clone(), &NeverCancel)
+            .await
+            .err()
+            .expect("a native environment is still mandatory");
+        assert_eq!(no_environment.code, "browser_sandbox_unavailable");
+        let path = if node {
+            &fixture.node_path
+        } else {
+            &fixture.chromium_path
+        };
+        let replacement = path.with_extension("replacement");
+        write_mode(&replacement, &fs::read(path).unwrap(), 0o755);
+        fs::rename(replacement, path).unwrap();
+
+        let failure = launcher
+            .launch(request, &NeverCancel)
+            .await
+            .err()
+            .expect("a changed image must be rejected before environment dispatch");
+        assert_eq!(failure.code, "worker_identity");
+        assert!(!failure.uncertain);
+    }
+}
+
+#[tokio::test]
+async fn production_launcher_honors_cancellation_after_entry() {
+    struct CancelAfterEntry(AtomicUsize);
+    impl Cancellation for CancelAfterEntry {
+        fn is_cancelled(&self) -> bool {
+            self.0.fetch_add(1, Ordering::AcqRel) > 0
+        }
+
+        fn cancelled(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    let fixture = fixture_identity();
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let artifacts = TempArtifacts::create(&fixture.settings).unwrap();
+    let request = LocalWorkerLaunchPlanner::new(fixture.settings.clone())
+        .build(&identity, &artifacts.directories())
+        .unwrap();
+    let failure = ManagedProcessLauncher::new(ExecConfig::default())
+        .launch(request, &CancelAfterEntry(AtomicUsize::new(0)))
+        .await
+        .err()
+        .expect("cancellation during image recheck must stop dispatch");
+    assert_eq!(failure.code, "cancelled");
+    assert!(!failure.uncertain);
+}
+
+#[tokio::test]
+async fn production_launcher_honors_image_recheck_deadline() {
+    let fixture = fixture_identity();
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let artifacts = TempArtifacts::create(&fixture.settings).unwrap();
+    let mut request = LocalWorkerLaunchPlanner::new(fixture.settings.clone())
+        .build(&identity, &artifacts.directories())
+        .unwrap();
+    request.mcp_limits.connect_timeout = Duration::from_nanos(1);
+    let failure = ManagedProcessLauncher::new(ExecConfig::default())
+        .launch(request, &NeverCancel)
+        .await
+        .err()
+        .expect("an expired image recheck must stop dispatch");
+    assert_eq!(failure.code, "worker_identity");
+    assert!(!failure.uncertain);
+}
+
+#[tokio::test]
+async fn production_launcher_rejects_a_missing_verified_identity() {
+    let fixture = fixture_identity();
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let artifacts = TempArtifacts::create(&fixture.settings).unwrap();
+    let mut request = LocalWorkerLaunchPlanner::new(fixture.settings.clone())
+        .build(&identity, &artifacts.directories())
+        .unwrap();
+    request.identity = None;
+    let failure = ManagedProcessLauncher::new(ExecConfig::default())
+        .launch(request, &NeverCancel)
+        .await
+        .err()
+        .expect("a local launch requires the verified executable identities");
+    assert_eq!(failure.code, "worker_identity");
+    assert!(!failure.uncertain);
+}
+
 #[tokio::test]
 async fn identity_is_rechecked_immediately_before_launch() {
     let fixture = fixture_identity();

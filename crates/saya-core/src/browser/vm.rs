@@ -1980,6 +1980,7 @@ impl WorkerIdentityVerifier for VmWorkerIdentityVerifier {
             cli_js: PathBuf::from(cli_js),
             chromium: PathBuf::from(remote.chromium),
             manifest_sha256: remote.identity_sha256,
+            local_images: None,
         })
     }
 }
@@ -4849,6 +4850,7 @@ mod tests {
                     "/opt/saya/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell",
                 ),
                 manifest_sha256: fixture.settings.identity_sha256.clone().unwrap(),
+                local_images: None,
             }),
         };
         let task_launcher = launcher.clone();
@@ -5596,6 +5598,7 @@ mod tests {
                     "/opt/saya/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell",
                 ),
                 manifest_sha256: fixture.settings.identity_sha256.clone().unwrap(),
+                local_images: None,
             }),
         };
         let cancel_token = SwitchCancel(cancel);
