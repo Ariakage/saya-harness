@@ -52,11 +52,19 @@ D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用�
 
 第 230 轮使用新 release／当前 core 库，经真实 `VmWorkerConnection` 完成四次私有查询：首次导航前及 close 后已知拒绝，导航与 reopen 后取得非空 renderer 角色。全部十步退出 0，无超时、信号或残留，输入、专用 VM 配置和历史归档前后不变。release SHA-256 为 `8af6d47c4c94fc6fa6551283ac2dbf3c97a7e46c3a309fad6e76f7202688384a`；[逐轮证据与范围](n5-validation.md#rust-固定请求接线)保留原始失败与成功。本阶段不构成 native kernel 角色绑定、生产捕获或新增四平台验收；截图继续关闭，未推送或发布，N5 全范围未完成。
 
+## 固定捕获引擎本地构建
+
+2026-11-16，固定 Chromium revision `6449d9f9a6a906edff724b7b220199b3fde4615c` 加已封存的 23 文件捕获草案，已完成 Mac ARM 宿主到 Linux ARM64 的本地增量构建复验。第 233 轮 48 条实际命令与 18 次 Root 来源查询均通过，原 Git 元数据、源码、SDK、DEPS 配方及 GN 参数前后守卫通过，所属进程组已回收。ELF 为 501,808,968 字节，SHA-256 为 `18dc7e9e243ec5994d6074022452696caadc4e76315b0baac91e0b041d0f8fca`；本轮 Ninja 退出 0、报告 no work to do，确认已有增量产物，并非重新执行全部编译。
+
+第 183 轮完整编译曾达到六小时预算并发生回收／后置错误；第 231 轮完成剩余 746 步并链接成功，但 index 字节后置检查失败，仍保留 incomplete。第 232 轮独立 index 副本未复现查询改写，历史写入者未确定；第 233 轮显式禁止原三份 `.git` 写入，仅为 Root 查询使用独立 index，Ninja 与嵌套仓库不继承该重定向，未改旧报告、原 index 或 Git 配置。[逐轮证据与边界](n5-validation.md#固定捕获引擎本地构建)分别保留失败与本轮结果。
+
+该阶段仅确认本地构建产物，尚未打包部署、运行定制引擎或验证真实捕获与隐私回归；不能作为生产捕获事务、native Browser 或新增四平台证据。Rust 未修改，未重跑完整 Rust 门禁；生产截图继续关闭，N5 全范围未完成，未推送或发布。
+
 ## 固定递归依赖与捕获构建图
 
 2026-11-16，固定配方的递归 `gclient sync` 与 `revinfo --actual` 已通过；第 174 轮移除 `--noprehooks` 后，正常 pre-DEPS 阶段完成。选中的七份递归 DEPS 没有 pre-hook 动作，因此动作清单为空，不宣称执行了动作。第 177 轮为源码内嵌 depot_tools 应用与外层相同的已验证四文件补丁；第 178 轮正式 `gclient runhooks --verbose` 退出 0，来源与配方守卫通过，未修改宿主 Xcode、license 或系统临时目录。
 
-第 180 轮将已封存的 23 文件捕获草案原样应用到完整 Chromium 源码，真实 GN 生成了 Linux ARM64 `headless_shell` 构建图，实际为 38,072 targets／5,134 files。`use_remoteexec=false`、`use_siso=false`；SDK、源码、DEPS、补丁、Git 元数据与参数前后均绑定核验。当前仅完成依赖、hooks 与 GN 前置，尚无定制引擎编译／链接或生产捕获成功证据；本地编译另行记录，不开启截图。[逐轮身份与边界](n5-validation.md#固定递归同步hooks-与捕获构建图)保留原始报告；这不是未经定制的原始 small checkout 全选、native Browser 或四平台验收，未推送或运行新增远端 CI。
+第 180 轮将已封存的 23 文件捕获草案原样应用到完整 Chromium 源码，真实 GN 生成了 Linux ARM64 `headless_shell` 构建图，实际为 38,072 targets／5,134 files。`use_remoteexec=false`、`use_siso=false`；SDK、源码、DEPS、补丁、Git 元数据与参数前后均绑定核验。该轮仅完成依赖、hooks 与 GN 前置，不代表定制引擎编译／链接或生产捕获成功；后续本地构建见[固定捕获引擎本地构建](#固定捕获引擎本地构建)，不据此开启截图。[逐轮身份与边界](n5-validation.md#固定递归同步hooks-与捕获构建图)保留原始报告；这不是未经定制的原始 small checkout 全选、native Browser 或四平台验收，未推送或运行新增远端 CI。
 
 以下较早阶段按各自验证时点保留；其中身份 v1、旧程序摘要和工具准备状态不替代上述当前输入。
 

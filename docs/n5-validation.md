@@ -98,6 +98,23 @@ VM 继续使用已校验的 v2-217 安装，manifest 为 `fd401d1ed8ab07201d1083
 
 本阶段只闭合 Rust 固定请求与其 VM 生命周期；native 的 namespace／starttime／exe／额外 Seccomp 证明、真实生产捕获和新增四平台仍未完成。ignored 不计为截图成功，`screenshots`／`screenshot_masking` 保持 false，未推送、发布或新增远端 CI。
 
+## 固定捕获引擎本地构建
+
+2026-11-16，固定 Chromium `6449d9f9a6a906edff724b7b220199b3fde4615c` 加封存捕获补丁 `a2cba7371192f7c982e5a7decf2ed70e2d8c3db79fbc23b12386121ad86930dc`（23 文件），使用第 180 轮 GN 图、固定 Mac ARM 工具链／SDK 27.0 交叉构建 Linux ARM64 `headless_shell`。`use_remoteexec=false`、`use_siso=false`、Ninja `-j2`；不使用远端构建或新增 CI。以下路径相对 `target/n5/capture-toolchain-20261115/`：
+
+| 轮次 | 实际结果与边界 | 证据 |
+| --- | --- | --- |
+| 第 183 轮 | 11 个修改 TU 目标预检退出 0；完整构建到 21,600 秒预算中断，最后进度 37,232／37,978。回收出现 EPERM 且后置 index 字节检查失败，完整命令退出与组回收未确认，仍为 incomplete | `evidence/capture-build-183.json`、`data/capture-build-183/` |
+| 第 231 轮 | 实际执行剩余 746 步并完成 LINK，270.37 秒、退出 0、stderr 为空；全部所属进程组回收。原 index 字节后置检查仍失败，前后 509,184 个 path／mode／blob 均等于固定 revision，不追改为构建通过 | `evidence/capture-build-231.json`、`data/capture-build-231/full.{stdout,stderr}` |
+| 第 232 轮 | 八条查询在独立 inode／nlink1 的 index 副本上执行，原 index／HEAD／refs／config 的字节与元数据前后不变；精确 diff 及 no-ext-diff 对照均未复现副本改写，Trace2 不确定历史写入者 | `evidence/capture-index-232.json`、`data/capture-index-232/` |
+| 第 233 轮 | 48 条实际命令、18 次 Root 来源查询及前后守卫通过；原三份 `.git` 禁止写入，Root 查询使用独立 index，Ninja 与嵌套仓库不继承。Ninja 退出 0、no work to do，已有 ELF 身份确认，全部进程组回收 | `evidence/capture-build-233.json`、`data/capture-build-233/` |
+
+第 233 轮只在逻辑成员严格等于固定 revision 后，以第 232 轮已绑定的原 index 字节建立新前置基线；后置不再放宽。该轮没有重写历史报告、修复原 index、修改 Git 配置、清除 object 或制造完成 marker。Root 私有查询的 stat cache 不是生产安装身份，不能用它替代原 Git 元数据与源码检查。48 条命令的原始 stdout／stderr／磁盘记录已重新核对摘要，18 次 Root 查询均保持原状态不变。
+
+本地 ELF 为 `target/n5/capture-build-20261115/src/out/saya_capture_linux_arm64_180/headless_shell`，501,808,968 字节、ELF64 little-endian／aarch64，SHA-256 为 `18dc7e9e243ec5994d6074022452696caadc4e76315b0baac91e0b041d0f8fca`。第 233 轮报告 SHA-256 为 `9f5097366ad11bc8947e60c56b1a279d55700b732d7c2b5e8a4f7a05fecf186f`。增量复验确认既有产物，不声称该轮重编全部对象或已经运行引擎。
+
+`chromium_build_verified=true` 仅属于本轮本地构建范围；`production_capture_verified`、`deployed`、`real_capture_tests_run` 仍为 false。最小运行时包、定制引擎实跑、真实遮蔽与导航／取消屏障仍未验证，不能据此开启截图或认定 native／四平台成功。该阶段未修改 Rust 或重跑完整 Rust 门禁；N5 全范围未完成，未推送、发布或运行新增远端验收。
+
 ## 固定程序与本机门禁
 
 宿主为 macOS 27.2 ARM，Rust 1.99.1，部署目标 15.0。固定 release 程序 SHA-256：
