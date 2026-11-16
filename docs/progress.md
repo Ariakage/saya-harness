@@ -4,6 +4,21 @@
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
 
+## 原生角色查询与内核隔离核验增量
+
+2026-11-17，已完成 native 浏览器私有角色查询与强内核 sandbox 联合核验，修改三份 Rust 源码：`crates/saya-core/src/browser/worker.rs`（218,999 B，SHA-256 `98d7f2018182c15f51a8189b6fa868883c763daaa956b5c2d78df75c3545e840`）、`crates/saya-core/src/browser/worker/tests.rs`（166,878 B，SHA-256 `5d715483445938a79e0d78727718228a1667ee51993cc5eee110b650c3676ddc`）与 `crates/saya-core/src/browser/vm.rs`（207,138 B，SHA-256 `e118b70a4aafef9dcfe078ec5e63fc0677f070b622b1211293b6a44c72e47d4b`）；未包含或提交未完成的 `crates/saya-core/tests/browser_screenshot_real.rs`（`f2234e18…`）与空 `CONTRIBUTING.md`。
+
+主要实现：
+- `ChromiumSandboxInspector::inspect_connection` 成为运行时唯一核验入口，`PlaywrightMcpProvider::verify_sandbox` 移除 `process_id() == None` 旁路，native `ProcfsChromiumSandboxInspector::inspect` 对裸 PID 直接失败关闭，VM `VmChromiumSandboxInspector::inspect_connection` 要求非零 worker PID 后委托检查；
+- 引入不透明 `NativeSandboxContext<'a>` 与 `WorkerConnection::native_sandbox_context`，在 `ManagedProcessLauncher::launch` 绑定 Linux 监督进程 `pidfd`＋`starttime`、`PinnedWorkerImage` 与 `capture_linux_node_baseline`（确认 `CapEff == 0`、`NoNewPrivs == 1`、`Seccomp == 2`、`Seccomp_filters >= 1` 以及 `pid`／`user`／PID namespace owner userns 严格后代关系）；
+- `ProcfsChromiumSandboxInspector::verify_once` 在单次 5 秒截止期内串联 `q1`（`saya/browser/processInfo`）、`verify_linux_process_exe`、最多 8 跳 `NS_GET_PARENT`（`EPERM` 立即失败关闭）与 `NS_GET_USERNS`、对应层级 `NSpid[len - 1 - k]`、Chrome `setproctitle` 空格合并 `/proc/<pid>/cmdline` 归一化（`normalize_cmdline_tokens`＋`has_forbidden_sandbox_flag`）、`node`／`browser`／`renderer` `Seccomp_filters` 递增校验（`renderer > browser >= node`）、`q2 == q1` 及事后 `pidfd`／`starttime` 复核。
+
+本机 macOS 与独立 Linux ARM64 Ubuntu 22.04 VM（`n5arm22`，内核 `6.8.0-149-generic`）分别在同一三份源码 SHA-256 上完成全量门禁及真实 Chromium 核验：
+- macOS（`task-1248`）：`RUST_TEST_THREADS=1 just check` 72 suites／1710 passed、0 failed、25 ignored；`just test-tooling` 11 suites／168 passed；release `target/n5/capture-rust-20261115/release/saya`（60,291,632 B，SHA-256 `dcb48089aecc28db2162eeeecfbcf3d0913a0549826e745f68041593a902648a`）通过 `just smoke`（offline smoke／journey／R-01..R-05／28 组 TUI PTY）。
+- Linux ARM `n5arm22`（第 253–260 轮，保留全部中间失败回执与恢复轨迹）：第 253 轮完整 Rust 门禁（1725 passed）与 tooling 通过、smoke 在瞬态 TUI 竞争失败；第 254 轮记录重启后不透明进程基线；第 255–257 轮先后暴露测试夹具路径（`linux64` vs `linux-arm64`）、核验截止期内重复 SHA-256 大二进制耗时及 Linux Chromium `setproctitle` 空格合并 `/proc/<pid>/cmdline` 解析三处真实问题并逐一修复；第 258 轮 preflight 在空 `/home/saya-test/ni257-real` 前阻断；第 259 轮在同一源码上完整通过 `full-rust-check`（798.58s、exit 0、72 suites／1725 passed、0 failed、23 ignored，Linux release SHA-256 `e92c4c778a37b18625600c856e61cc80803ef5611747bf809f78b48e8e27c07f`）、`tooling`（exit 0）、`current-cli-smoke`（exit 0）及真实 Chromium `browser_worker_real`（exit 0，`renderer_pid=74 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），仅因单 crate `cargo test -p saya-core --test browser_worker_real` 就地更新 `libsaya_core-652763c80c37cb2d.{rlib,rmeta}` 在后置产物对比处止步；最终第 260 轮无损归档 `/home/saya-test/ni259` 夹具、验证全部 70 历史与 84 预 259 归档层、衔接第 259 轮 `full-rust-check` 并在产物完全不变（`programs_before == programs_final`）前提下重跑通过 `tooling`（11 suites／168 项、167 passed、1 skipped）、`current-cli-smoke`（exit 0）与 `browser_worker_real`（`21.21s`、`1 passed`、`renderer_pid=74 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），回执 `target/n5/linux-full-20261115/data/native-image-gate-260/receipt.json`（SHA-256 `c22d6841c15327f8955383ce8fc9de3335622a996bf37cc55b1fd95a31732af5`）确认 `status = diagnostic-only-with-global-inventory-unknown`、`rust_gate_complete = true`、`native_browser_verified = true`、`transaction_complete = true`。详见 [N5 验收](n5-validation.md#原生角色查询与内核隔离核验)。
+
+受管捕获引擎打包部署、真实预捕获遮蔽回归（`crates/saya-core/tests/browser_screenshot_real.rs`）及新增四平台固定源码发行证据仍待后续任务完成；`screenshots` 与 `screenshot_masking` 保持 `false`，未推送、发布或触发远端 CI。
+
 ## 本地可执行句柄与内容复核增量
 
 2026-11-17，围绕生产启动前的本地可执行文件复核已完成 `PinnedWorkerImage` 与 `ManagedProcessLauncher::launch` 补强：除原有启动前 `WorkerImageIdentity` 校验外，同时保留已认证的 Node／Chromium `File` 描述符与 `sha256` 摘要；在 `check_named` 内以 Unix `FileExt::read_at`（64 KiB 分块、512 MiB 上限，逐块核对期限并保留 `"cancelled"` 错误码）复核精确大小、EOF 与内容摘要，并保留原有 FD 与新开 `named` FD 的前后完整元数据校验，覆盖 Linux 同 tick 时间戳不变的局部改写。`crates/saya-core/src/browser/vm.rs` 已同步新增的 `local_images` 字段；未包含或提交未完成的 `crates/saya-core/tests/browser_screenshot_real.rs` 与空 `CONTRIBUTING.md`。

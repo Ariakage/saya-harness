@@ -3657,6 +3657,23 @@ impl ChromiumSandboxInspector for VmChromiumSandboxInspector {
                 .any(|window| window == b"InitializeSandbox"),
         })
     }
+
+    async fn inspect_connection(
+        &self,
+        connection: &dyn WorkerConnection,
+        cancel: &dyn Cancellation,
+    ) -> Result<ChromiumSandboxEvidence, BrowserFailure> {
+        let pid = connection
+            .process_id()
+            .filter(|pid| *pid != 0)
+            .ok_or_else(|| {
+                BrowserFailure::new(
+                    "browser_sandbox_unavailable",
+                    "Browser VM worker process identity is unavailable",
+                )
+            })?;
+        self.inspect(pid, &connection.stderr_tail(), cancel).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4686,6 +4703,89 @@ mod tests {
         let inspector = VmChromiumSandboxInspector::new(settings, runner);
         let failure = inspector.inspect(42, b"", &NeverCancel).await.unwrap_err();
         assert_eq!(failure.code, "browser_sandbox_unavailable");
+    }
+
+    #[tokio::test]
+    async fn vm_sandbox_inspect_connection_requires_live_pid_and_delegates() {
+        struct StubConnection {
+            pid: Option<u32>,
+            stderr: Vec<u8>,
+        }
+
+        #[async_trait::async_trait]
+        impl WorkerConnection for StubConnection {
+            fn protocol_version(&self) -> Option<String> {
+                Some("2025-11-25".to_owned())
+            }
+            fn generation(&self) -> u64 {
+                0
+            }
+            fn process_id(&self) -> Option<u32> {
+                self.pid
+            }
+            fn stderr_tail(&self) -> Vec<u8> {
+                self.stderr.clone()
+            }
+            async fn list_tools(
+                &self,
+                _cancel: &dyn Cancellation,
+            ) -> Result<crate::mcp::McpCatalog, BrowserFailure> {
+                unreachable!()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _generation: u64,
+                _cancel: &dyn Cancellation,
+            ) -> Result<crate::mcp::McpToolResult, BrowserFailure> {
+                unreachable!()
+            }
+            async fn shutdown(&self) -> Result<(), BrowserFailure> {
+                Ok(())
+            }
+        }
+
+        let settings = IdentityFixture::new().settings;
+        for missing_pid in [None, Some(0)] {
+            let runner = QueueRunner::new(VecDeque::new());
+            let inspector = VmChromiumSandboxInspector::new(settings.clone(), runner.clone());
+            let failure = inspector
+                .inspect_connection(
+                    &StubConnection {
+                        pid: missing_pid,
+                        stderr: b"InitializeSandbox".to_vec(),
+                    },
+                    &NeverCancel,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(failure.code, "browser_sandbox_unavailable");
+        }
+
+        let runner = QueueRunner::new(
+            [success(
+                b"renderer=77\ncmdline=/opt/saya/chromium --type=renderer --no-zygote\nnonewprivs=1\nseccomp=2\n".to_vec(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let inspector = VmChromiumSandboxInspector::new(settings, runner);
+        let evidence = inspector
+            .inspect_connection(
+                &StubConnection {
+                    pid: Some(42),
+                    stderr: b"InitializeSandbox() called".to_vec(),
+                },
+                &NeverCancel,
+            )
+            .await
+            .unwrap();
+        assert_eq!(evidence.renderer_pid, 77);
+        assert!(evidence.no_new_privs);
+        assert_eq!(evidence.seccomp_mode, 2);
+        assert!(evidence.sandbox_arguments_valid);
+        assert!(evidence.stderr_initializes_sandbox);
     }
 
     #[tokio::test]

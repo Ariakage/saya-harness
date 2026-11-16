@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-16：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段保留 21 passed、1 disabled 的历史输入。安装树身份 v2 本机阶段已完成：跨设备链接拒绝有真实 RED／GREEN，修复后 macOS 第 184 轮与 Linux 第 187 轮完整门禁通过，第 190 轮 Rust 生产 VM 身份通道正控、拒绝与恢复通过；旧 v1 输入不得复用于当前入口。这不是生产 Chromium 或四平台证据；受限 worker 原生接线、生产截图、native Browser 及新增四平台仍未满足，DEV-083 全范围与 N5 不标为完成。**
+**2026-11-17：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段保留 21 passed、1 disabled 的历史输入。原生浏览器角色查询（`NativeSandboxContext`＋`ChromiumSandboxInspector::inspect_connection`）与强内核 sandbox 联合核验已在同一三份源码 SHA-256 上通过 macOS 完整门禁（1710 passed）与独立 Linux ARM64 `n5arm22` 第 259／260 轮门禁（72 suites／1725 passed + 真实 Chromium `browser_worker_real` `renderer_pid=74 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`）；受管生产捕获引擎、`crates/saya-core/tests/browser_screenshot_real.rs` 像素／隔离回归与新增四平台固定源码发行证据仍未满足，`screenshots`／`screenshot_masking` 维持 `false`，DEV-083 全范围与 N5 不标为完成。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
 
@@ -97,6 +97,26 @@ Linux 的来源是 `557f865` 加各轮列明八文件及保留的 `execution_bac
 VM 继续使用已校验的 v2-217 安装，manifest 为 `fd401d1ed8ab07201d10835584bde4a02f973a0a3bfb57249e5036d5572c03a4`。实际 Node PID 为 11643，PID namespace 为 `dev=4`／`ino=4026531836`；首次 browser／renderer 为 11672／11731，重开后为 11742／11795。这些是固定协议的真实返回值，不是宿主 procfs 联合核验。宿主与远端关联进程、远端 Run 根和该轮临时目录均为空；190 历史安装／失败归档及专用 VM 配置前后不变。
 
 本阶段只闭合 Rust 固定请求与其 VM 生命周期；native 的 namespace／starttime／exe／额外 Seccomp 证明、真实生产捕获和新增四平台仍未完成。ignored 不计为截图成功，`screenshots`／`screenshot_masking` 保持 false，未推送、发布或新增远端 CI。
+
+## 原生角色查询与内核隔离核验
+
+2026-11-17，在上一节本地句柄复核基础上完成 native 浏览器权威角色绑定与强内核隔离核验，三份修改源码为 `crates/saya-core/src/browser/worker.rs`（218,999 B，SHA-256 `98d7f2018182c15f51a8189b6fa868883c763daaa956b5c2d78df75c3545e840`）、`crates/saya-core/src/browser/worker/tests.rs`（166,878 B，SHA-256 `5d715483445938a79e0d78727718228a1667ee51993cc5eee110b650c3676ddc`）与 `crates/saya-core/src/browser/vm.rs`（207,138 B，SHA-256 `e118b70a4aafef9dcfe078ec5e63fc0677f070b622b1211293b6a44c72e47d4b`）；未完成 `crates/saya-core/tests/browser_screenshot_real.rs`（`f2234e18…`）及空 `CONTRIBUTING.md` 保持未提交。
+
+核心变更见 [Browser 架构约束](browser.md#dev-080-worker-与生产装配实现状态)：`ChromiumSandboxInspector::inspect_connection` 统一绑定连接、`NativeSandboxContext<'a>` 与 `capture_linux_node_baseline`，`ProcfsChromiumSandboxInspector::verify_once` 在单一 5 秒期限内执行 `q1`／`q2` 双向角色一致性、`pidfd`／`starttime`／`verify_linux_process_exe`、`NS_GET_PARENT`（1..=8 跳、`EPERM` 失败关闭）／`NS_GET_USERNS`、`NSpid`、`CapEff=0`／`NoNewPrivs=1`／`Seccomp=2`、递增 `Seccomp_filters`（`renderer > browser >= node >= 1`）、Chromium `setproctitle` 空格合并 `/proc/<pid>/cmdline` 归一化（`normalize_cmdline_tokens`＋`has_forbidden_sandbox_flag`）及 `InitializeSandbox` stderr 检查。新增 8 项协议／内核基线单元项、正反 `setproctitle` cmdline 单测、弱 Seccomp 滤器拒绝单测与 `vm_sandbox_inspect_connection_requires_live_pid_and_delegates`。
+
+macOS 与独立 Linux ARM64 `n5arm22`（Ubuntu 22.04，内核 `6.8.0-149-generic`）按同三份源码 SHA-256 验证轨迹如下（Linux 路径相对 `target/n5/linux-full-20261115/`）：
+
+| 检查／轮次 | 实际结果与边界 | 证据 |
+| --- | --- | --- |
+| macOS 完整门禁 | `RUST_TEST_THREADS=1 just check` 72 组 1710 passed、0 failed、25 ignored；`just test-tooling` 11 suite、168 passed；release `target/n5/capture-rust-20261115/release/saya`（60,291,632 B，`0o755`，SHA-256 `dcb48089aecc28db2162eeeecfbcf3d0913a0549826e745f68041593a902648a`）通过 `just smoke`（含 R-01..R-05 与 28 组 TUI PTY）；macOS 不具备 Linux native Chromium 测试条件 | 会话 `task-1248` 执行日志与产出二进制 |
+| Linux ARM 第 253 轮（保留 smoke 失败） | `full-rust-check` 通过（752.78s、exit 0、72 组 1725 passed、0 failed、23 ignored），`tooling` 通过（2.15s、exit 0），`current-cli-smoke` 在瞬态 `tui_journey` 竞争处返回 exit 1；不追改状态 | `data/native-image-gate-253/receipt.json` |
+| Linux ARM 第 254 轮（重启基线） | 记录 `n5arm22` 重启后不透明背景进程集合 `{'617', '1178'}`；未改动源码 | `data/native-image-gate-254/receipt.json` |
+| Linux ARM 第 255–257 轮（三轮真实故障定位，保留失败） | 先后 reclaim `ni253-real` 并无损归档 `ni253`；第 255 轮暴露测试夹具路径 `linux64` vs `linux-arm64`（exit 101）；第 256 轮暴露 inspector 5 秒期限内 `check_named` 重复读取大可执行 SHA-256 超时（exit 101）；第 257 轮 `full-rust-check` 通过（797.95s、exit 0、1725 passed）、`tooling`／`smoke` 通过，`browser_worker_real` 暴露 Linux Chromium zygote／renderer 调用 `setproctitle` 将 `/proc/<pid>/cmdline` 以空格合并而非 NUL 分隔导致的误判（exit 101） | `data/native-image-gate-{255,256,257}/receipt.json` |
+| Linux ARM 第 258 轮（preflight 阻断） | 因 `/home/saya-test/ni257-real` 尚存，`steps: []` 提前阻断并完成 `postguards_complete: true` | `data/native-image-gate-258/receipt.json` |
+| Linux ARM 第 259 轮（全量构建与首次实跑通过） | 回收空 `ni257-real` 并无损归档 `ni257` 四项夹具至 `/home/saya-test/ni257-preserved-fixtures-259`；在最终源码上通过 `full-rust-check`（798.58s、exit 0、72 组 1725 passed、0 failed、23 ignored，Linux release `/workspace/target/release/saya` 为 66,585,480 B，SHA-256 `e92c4c778a37b18625600c856e61cc80803ef5611747bf809f78b48e8e27c07f`）、`tooling`（2.14s、exit 0）、`current-cli-smoke`（88.48s、exit 0）及 `browser_worker_real`（46.49s、exit 0，实测 `test real_playwright_worker_verifies_chromium_sandbox ... ok`，stderr 为 `renderer_pid=74 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），四步所属进程组均已回收（`empty_known: true`）；仅因单 crate `cargo test -p saya-core --test browser_worker_real` 就地更新 `libsaya_core-652763c80c37cb2d.{rlib,rmeta}` 触发后置产物比对失败而记 `incomplete` | `data/native-image-gate-259/receipt.json`（SHA-256 `531d29cb5625b0d4f9ee6800a1d77a8698673c357c5feb0e4c4da26324d57391`） |
+| Linux ARM 第 260 轮（最终封存通过） | 无损归档 `/home/saya-test/ni259` 四项 HTTP 插件只读夹具（`.tmpMHndo4`／`.tmpO2odHa`／`.tmpTSrSj3`／`.tmpZOJbJr`）至 `/home/saya-test/ni259-preserved-fixtures-260` 并回收 `ni259`；复核 70 项 Gate 248 历史归档与 84 项 Gate 259 预备份；衔接 Gate 259 `full-rust-check`（72 组 1725 passed）并在零产物漂移（`programs_before == programs_final`、新增压缩备份 0 B、剩余 3,983,970,304 B）下运行通过 `tooling`（2.16s、exit 0、11 suite／168 用例、167 passed、1 平台 skipped）、`current-cli-smoke`（88.97s、exit 0、smoke／journey／R-01..R-05／28 组 TUI）及 `browser_worker_real`（21.80s、exit 0、`test real_playwright_worker_verifies_chromium_sandbox ... ok` 用时 21.21s、`renderer_pid=74 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），全部三步进程组已回收，`tmp_entries_after=[]`、`tmp_real_entries_after=[]`，回执结论为 `status = diagnostic-only-with-global-inventory-unknown`、`rust_gate_complete = true`、`native_browser_verified = true`、`transaction_complete = true` | `data/native-image-gate-260/receipt.json`（SHA-256 `c22d6841c15327f8955383ce8fc9de3335622a996bf37cc55b1fd95a31732af5`）、`data/native-image-gate-260/guest-report.json`（SHA-256 `bfb28d12280d67882451d96006e150c1df20cb1c95bd2f8b8cbc6ac8adc1c553`）、`helpers/{run,test}_native_image_gate_260.py` |
+
+上述门禁封闭 native Linux ARM64 权威角色查询与内核隔离联合核验及 macOS 对应单测／门禁；`screenshots` 与 `screenshot_masking` 维持 `false`，受管捕获引擎部署、真实预捕获遮蔽（`crates/saya-core/tests/browser_screenshot_real.rs`）与新增四平台固定源码发行证据仍未完成，未推送、发布或触发远端 CI。
 
 ## 本地可执行句柄与内容复核
 

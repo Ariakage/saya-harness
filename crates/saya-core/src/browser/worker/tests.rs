@@ -961,7 +961,9 @@ fn fake_provider(
     connection: Arc<FakeConnection>,
 ) -> (PlaywrightMcpProvider, Arc<FakeLauncher>) {
     let launcher = FakeLauncher::new(vec![Ok(connection)]);
-    let provider = PlaywrightMcpProvider::new(fixture.settings.clone(), launcher.clone()).unwrap();
+    let provider = PlaywrightMcpProvider::new(fixture.settings.clone(), launcher.clone())
+        .unwrap()
+        .with_sandbox_inspector(offline_sandbox_inspector());
     (provider, launcher)
 }
 
@@ -2111,7 +2113,9 @@ async fn shutdown_reaps_cleans_and_can_restart() {
     let first = FakeConnection::new(pinned_catalog());
     let second = FakeConnection::new(pinned_catalog());
     let launcher = FakeLauncher::new(vec![Ok(first.clone()), Ok(second.clone())]);
-    let provider = PlaywrightMcpProvider::new(fixture.settings.clone(), launcher.clone()).unwrap();
+    let provider = PlaywrightMcpProvider::new(fixture.settings.clone(), launcher.clone())
+        .unwrap()
+        .with_sandbox_inspector(offline_sandbox_inspector());
 
     provider.open(None, &NeverCancel).await.unwrap();
     assert_eq!(launcher.launch_count(), 1);
@@ -2436,12 +2440,24 @@ impl BrowserEnvironmentFactory for FakeEnvironmentFactory {
     }
 }
 
+fn offline_sandbox_inspector() -> Arc<FixedInspector> {
+    FixedInspector::new(Ok(ChromiumSandboxEvidence {
+        renderer_pid: 400,
+        no_new_privs: true,
+        seccomp_mode: 2,
+        sandbox_arguments_valid: true,
+        stderr_initializes_sandbox: true,
+    }))
+}
+
 fn provider_with_factory(
     fixture: &IdentityFixture,
     launcher: Arc<dyn WorkerLauncher>,
     factory: Arc<dyn BrowserEnvironmentFactory>,
 ) -> PlaywrightMcpProvider {
-    PlaywrightMcpProvider::build(fixture.settings.clone(), launcher, Some(factory)).unwrap()
+    PlaywrightMcpProvider::build(fixture.settings.clone(), launcher, Some(factory))
+        .unwrap()
+        .with_sandbox_inspector(offline_sandbox_inspector())
 }
 
 struct FixedInspector {
@@ -2481,6 +2497,19 @@ impl ChromiumSandboxInspector for FixedInspector {
             std::future::pending::<()>().await;
         }
         self.evidence.lock().unwrap().clone()
+    }
+
+    async fn inspect_connection(
+        &self,
+        connection: &dyn WorkerConnection,
+        cancel: &dyn Cancellation,
+    ) -> Result<ChromiumSandboxEvidence, BrowserFailure> {
+        self.inspect(
+            connection.process_id().unwrap_or(0),
+            &connection.stderr_tail(),
+            cancel,
+        )
+        .await
     }
 }
 
@@ -2839,77 +2868,508 @@ async fn sandbox_verification_dropped_by_timeout_quarantines_the_lifecycle() {
     provider.shutdown(&NeverCancel).await.unwrap();
 }
 
-fn proc_entry(
-    root: &Path,
-    pid: u32,
+#[derive(Debug, Clone)]
+struct FakeProcNode {
     ppid: u32,
-    no_new_privs: u32,
-    seccomp: u32,
-    cmdline: &[&str],
-    children: &[u32],
-) {
-    let directory = root.join(pid.to_string());
-    fs::create_dir_all(directory.join("task").join(pid.to_string())).unwrap();
-    fs::write(
-        directory.join("status"),
-        format!(
-            "Name:\tprocess\nPPid:\t{ppid}\nNoNewPrivs:\t{no_new_privs}\nSeccomp:\t{seccomp}\n"
-        ),
-    )
-    .unwrap();
-    let mut bytes = Vec::new();
-    for token in cmdline {
-        bytes.extend_from_slice(token.as_bytes());
-        bytes.push(0);
-    }
-    fs::write(directory.join("cmdline"), bytes).unwrap();
-    fs::write(
-        directory
-            .join("task")
-            .join(pid.to_string())
-            .join("children"),
-        children
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
-    .unwrap();
+    nspid: Vec<u32>,
+    no_new_privs: bool,
+    seccomp_mode: u32,
+    seccomp_filters: Option<u32>,
+    cap_eff_zero: bool,
+    cmdline: Vec<String>,
+    children: Vec<u32>,
+    starttime: u64,
+    alive: bool,
+    exe: &'static str,
+    pid_ns: u64,
+    user_ns: u64,
 }
 
-fn renderer_fixture(root: &Path, renderer_cmdline: &[&str], nnp: u32, seccomp: u32) {
-    proc_entry(root, 100, 1, 0, 0, &["/usr/bin/node"], &[200]);
-    proc_entry(
-        root,
-        200,
+#[derive(Default)]
+struct FakeKernelState {
+    processes: BTreeMap<u32, FakeProcNode>,
+    pid_ns_parents: BTreeMap<u64, u64>,
+    pid_ns_owners: BTreeMap<u64, u64>,
+    user_ns_parents: BTreeMap<u64, u64>,
+    ns_eperm: BTreeSet<u64>,
+    owner_eperm: BTreeSet<u64>,
+    hard_status_error_pids: BTreeSet<u32>,
+}
+
+struct FakeKernelProbe {
+    state: Mutex<FakeKernelState>,
+    node_path: PathBuf,
+    chromium_path: PathBuf,
+}
+
+impl FakeKernelProbe {
+    fn new(node_path: PathBuf, chromium_path: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(FakeKernelState::default()),
+            node_path,
+            chromium_path,
+        })
+    }
+
+    fn locked(&self) -> std::sync::MutexGuard<'_, FakeKernelState> {
+        self.state.lock().unwrap()
+    }
+}
+
+fn test_pin(pid: u32, starttime: u64) -> HostProcessPin {
+    HostProcessPin {
+        pid,
+        starttime,
+        #[cfg(target_os = "linux")]
+        pidfd: None,
+    }
+}
+
+fn test_verified_ns(ino: u64) -> VerifiedNamespace {
+    VerifiedNamespace {
+        id: KernelNamespaceId { dev: 4, ino },
+        #[cfg(target_os = "linux")]
+        fd: None,
+    }
+}
+
+impl NativeKernelProbe for FakeKernelProbe {
+    fn check_supervisor_pin(&self, pin: &HostProcessPin) -> Result<(), SandboxProbeFailure> {
+        self.check_process_pin(pin)
+    }
+
+    fn capture_process_pin(&self, pid: u32) -> Result<HostProcessPin, SandboxProbeFailure> {
+        let state = self.locked();
+        let node = state
+            .processes
+            .get(&pid)
+            .ok_or(SandboxProbeFailure::Hard("Simulated process is missing"))?;
+        if !node.alive {
+            return Err(SandboxProbeFailure::Hard("Simulated process has exited"));
+        }
+        Ok(test_pin(pid, node.starttime))
+    }
+
+    fn check_process_pin(&self, pin: &HostProcessPin) -> Result<(), SandboxProbeFailure> {
+        let state = self.locked();
+        let node = state
+            .processes
+            .get(&pin.pid)
+            .ok_or(SandboxProbeFailure::Hard("Simulated process disappeared"))?;
+        if !node.alive || node.starttime != pin.starttime {
+            return Err(SandboxProbeFailure::Hard(
+                "Simulated process exited or recycled",
+            ));
+        }
+        Ok(())
+    }
+
+    fn read_status(&self, pid: u32) -> Result<KernelProcStatus, SandboxProbeFailure> {
+        let state = self.locked();
+        if state.hard_status_error_pids.contains(&pid) {
+            return Err(SandboxProbeFailure::Hard("Simulated procfs read failure"));
+        }
+        let node = state
+            .processes
+            .get(&pid)
+            .ok_or(SandboxProbeFailure::Transient(
+                "Simulated process disappeared",
+            ))?;
+        Ok(KernelProcStatus {
+            ppid: Some(node.ppid),
+            nspid: node.nspid.clone(),
+            no_new_privs: node.no_new_privs,
+            seccomp_mode: node.seccomp_mode,
+            seccomp_filters: node.seccomp_filters,
+            cap_eff_zero: node.cap_eff_zero,
+        })
+    }
+
+    fn read_cmdline(&self, pid: u32) -> Result<Vec<String>, SandboxProbeFailure> {
+        let state = self.locked();
+        let node = state
+            .processes
+            .get(&pid)
+            .ok_or(SandboxProbeFailure::Transient(
+                "Simulated process disappeared",
+            ))?;
+        Ok(node.cmdline.clone())
+    }
+
+    fn task_children(&self, pid: u32) -> Result<Vec<u32>, SandboxProbeFailure> {
+        let state = self.locked();
+        let node = state
+            .processes
+            .get(&pid)
+            .ok_or(SandboxProbeFailure::Transient(
+                "Simulated parent disappeared",
+            ))?;
+        Ok(node.children.clone())
+    }
+
+    fn verify_exe(
+        &self,
+        pid: u32,
+        expected_path: &Path,
+        _pinned: &PinnedWorkerImage,
+    ) -> Result<(), SandboxProbeFailure> {
+        let state = self.locked();
+        let node = state
+            .processes
+            .get(&pid)
+            .ok_or(SandboxProbeFailure::Hard("Simulated exe process missing"))?;
+        let expected_tag = if expected_path == self.node_path {
+            "node"
+        } else if expected_path == self.chromium_path {
+            "chromium"
+        } else {
+            return Err(SandboxProbeFailure::Hard("Unexpected executable path"));
+        };
+        if node.exe == expected_tag {
+            Ok(())
+        } else {
+            Err(SandboxProbeFailure::Hard(
+                "Simulated process executable mismatch",
+            ))
+        }
+    }
+
+    fn inspect_namespace(
+        &self,
+        pid: u32,
+        kind: KernelNamespaceKind,
+    ) -> Result<VerifiedNamespace, SandboxProbeFailure> {
+        let state = self.locked();
+        let node = state
+            .processes
+            .get(&pid)
+            .ok_or(SandboxProbeFailure::Transient(
+                "Simulated namespace process disappeared",
+            ))?;
+        let ino = match kind {
+            KernelNamespaceKind::Pid => node.pid_ns,
+            KernelNamespaceKind::User => node.user_ns,
+        };
+        Ok(test_verified_ns(ino))
+    }
+
+    fn parent_namespace(
+        &self,
+        ns: &VerifiedNamespace,
+        expected_kind: KernelNamespaceKind,
+    ) -> Result<Option<VerifiedNamespace>, SandboxProbeFailure> {
+        let state = self.locked();
+        if state.ns_eperm.contains(&ns.id.ino) {
+            return Err(SandboxProbeFailure::PermissionDenied);
+        }
+        let table = match expected_kind {
+            KernelNamespaceKind::Pid => &state.pid_ns_parents,
+            KernelNamespaceKind::User => &state.user_ns_parents,
+        };
+        Ok(table.get(&ns.id.ino).copied().map(test_verified_ns))
+    }
+
+    fn pid_ns_owner_user_ns(
+        &self,
+        pid_ns: &VerifiedNamespace,
+    ) -> Result<VerifiedNamespace, SandboxProbeFailure> {
+        let state = self.locked();
+        if state.owner_eperm.contains(&pid_ns.id.ino) {
+            return Err(SandboxProbeFailure::PermissionDenied);
+        }
+        let owner =
+            state
+                .pid_ns_owners
+                .get(&pid_ns.id.ino)
+                .copied()
+                .ok_or(SandboxProbeFailure::Hard(
+                    "Simulated pid namespace owner missing",
+                ))?;
+        Ok(test_verified_ns(owner))
+    }
+}
+
+struct TestNativeConnection {
+    process: Arc<AsyncMutex<Option<ManagedProcess>>>,
+    local_images: Arc<VerifiedLocalImages>,
+    node_path: PathBuf,
+    chromium_path: PathBuf,
+    baseline: NativeLaunchBaseline,
+    stderr: Mutex<Vec<u8>>,
+    replies: Mutex<VecDeque<Result<WorkerProcessInfo, BrowserFailure>>>,
+    steady_reply: Mutex<Option<Result<WorkerProcessInfo, BrowserFailure>>>,
+    delays: Mutex<VecDeque<Duration>>,
+    hang_on_call: Mutex<Option<usize>>,
+    process_info_calls: AtomicUsize,
+}
+
+impl TestNativeConnection {
+    fn from_identity(
+        identity: VerifiedWorkerIdentity,
+        baseline: NativeLaunchBaseline,
+        stderr: &[u8],
+        reply: WorkerProcessInfo,
+    ) -> Self {
+        Self {
+            process: Arc::new(AsyncMutex::new(None)),
+            local_images: identity.local_images.expect("local images verified"),
+            node_path: identity.node,
+            chromium_path: identity.chromium,
+            baseline,
+            stderr: Mutex::new(stderr.to_vec()),
+            replies: Mutex::new(VecDeque::new()),
+            steady_reply: Mutex::new(Some(Ok(reply))),
+            delays: Mutex::new(VecDeque::new()),
+            hang_on_call: Mutex::new(None),
+            process_info_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WorkerConnection for TestNativeConnection {
+    fn protocol_version(&self) -> Option<String> {
+        Some(WORKER_PROTOCOL_VERSION.to_owned())
+    }
+
+    fn generation(&self) -> u64 {
+        0
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        Some(self.baseline.supervisor.pid)
+    }
+
+    fn stderr_tail(&self) -> Vec<u8> {
+        self.stderr.lock().unwrap().clone()
+    }
+
+    async fn native_sandbox_context(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<NativeSandboxContext<'_>, BrowserFailure> {
+        if cancel.is_cancelled() {
+            return Err(BrowserFailure::new("cancelled", "cancelled"));
+        }
+        let guard = self.process.clone().lock_owned().await;
+        Ok(NativeSandboxContext {
+            _process_guard: guard,
+            local_images: self.local_images.clone(),
+            node_path: &self.node_path,
+            chromium_path: &self.chromium_path,
+            baseline: &self.baseline,
+        })
+    }
+
+    async fn process_info(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<WorkerProcessInfo, BrowserFailure> {
+        let call_index = self.process_info_calls.fetch_add(1, Ordering::AcqRel) + 1;
+        let next_delay = self.delays.lock().unwrap().pop_front();
+        if let Some(delay) = next_delay {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(BrowserFailure::new("cancelled", "cancelled")),
+                _ = tokio::time::sleep(delay) => {}
+            }
+        }
+        let should_hang = *self.hang_on_call.lock().unwrap() == Some(call_index);
+        if should_hang {
+            cancel.cancelled().await;
+            return Err(BrowserFailure::new("cancelled", "cancelled"));
+        }
+        let queued = self.replies.lock().unwrap().pop_front();
+        if let Some(next) = queued {
+            return next;
+        }
+        self.steady_reply
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| Err(BrowserFailure::new("worker_process_info", "missing reply")))
+    }
+
+    async fn list_tools(&self, _cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure> {
+        unreachable!()
+    }
+
+    async fn call_tool(
+        &self,
+        _name: &str,
+        _arguments: Value,
+        _generation: u64,
+        _cancel: &dyn Cancellation,
+    ) -> Result<McpToolResult, BrowserFailure> {
+        unreachable!()
+    }
+
+    async fn shutdown(&self) -> Result<(), BrowserFailure> {
+        Ok(())
+    }
+}
+
+fn native_role_fixture(
+    renderer_depth_k2: bool,
+) -> (
+    IdentityFixture,
+    Arc<FakeKernelProbe>,
+    NativeLaunchBaseline,
+    WorkerProcessInfo,
+) {
+    let fixture = fixture_identity();
+    let probe = FakeKernelProbe::new(fixture.node_path.clone(), fixture.chromium_path.clone());
+    let mut state = probe.locked();
+    let (renderer_pid_ns, renderer_nspid, renderer_ppid, browser_child) = if renderer_depth_k2 {
+        state.pid_ns_parents.insert(30, 20);
+        state.pid_ns_parents.insert(20, 10);
+        state.pid_ns_owners.insert(30, 1001);
+        state.pid_ns_owners.insert(20, 1001);
+        state.processes.insert(
+            500,
+            FakeProcNode {
+                ppid: 300,
+                nspid: vec![500, 6, 1],
+                no_new_privs: true,
+                seccomp_mode: 2,
+                seccomp_filters: Some(2),
+                cap_eff_zero: true,
+                cmdline: vec!["/chromium".into(), "--type=zygote".into()],
+                children: vec![63582],
+                starttime: 50,
+                alive: true,
+                exe: "chromium",
+                pid_ns: 20,
+                user_ns: 1001,
+            },
+        );
+        (30, vec![63582, 74, 4, 1], 500, 500)
+    } else {
+        state.pid_ns_parents.insert(20, 10);
+        state.pid_ns_owners.insert(20, 1001);
+        (20, vec![63582, 74, 1], 300, 63582)
+    };
+    state.user_ns_parents.insert(1001, 1002);
+    state.user_ns_parents.insert(1002, 1000);
+    state.pid_ns_owners.insert(10, 1000);
+
+    state.processes.insert(
         100,
-        0,
-        0,
-        &["/chromium", "--type=browser"],
-        &[400],
+        FakeProcNode {
+            ppid: 1,
+            nspid: vec![100],
+            no_new_privs: false,
+            seccomp_mode: 0,
+            seccomp_filters: None,
+            cap_eff_zero: false,
+            cmdline: vec!["bwrap".into()],
+            children: vec![200],
+            starttime: 10,
+            alive: true,
+            exe: "supervisor",
+            pid_ns: 1,
+            user_ns: 999,
+        },
     );
-    proc_entry(root, 400, 200, nnp, seccomp, renderer_cmdline, &[]);
+    state.processes.insert(
+        200,
+        FakeProcNode {
+            ppid: 100,
+            nspid: vec![200, 3],
+            no_new_privs: true,
+            seccomp_mode: 2,
+            seccomp_filters: Some(2),
+            cap_eff_zero: true,
+            cmdline: vec!["node".into(), "cli.js".into()],
+            children: vec![300],
+            starttime: 20,
+            alive: true,
+            exe: "node",
+            pid_ns: 10,
+            user_ns: 1000,
+        },
+    );
+    state.processes.insert(
+        300,
+        FakeProcNode {
+            ppid: 200,
+            nspid: vec![300, 15],
+            no_new_privs: true,
+            seccomp_mode: 2,
+            seccomp_filters: Some(2),
+            cap_eff_zero: true,
+            cmdline: vec!["/chromium".into(), "--headless".into()],
+            children: vec![browser_child],
+            starttime: 30,
+            alive: true,
+            exe: "chromium",
+            pid_ns: 10,
+            user_ns: 1000,
+        },
+    );
+    state.processes.insert(
+        63582,
+        FakeProcNode {
+            ppid: renderer_ppid,
+            nspid: renderer_nspid,
+            no_new_privs: true,
+            seccomp_mode: 2,
+            seccomp_filters: Some(3),
+            cap_eff_zero: true,
+            cmdline: vec!["/chromium".into(), "--type=renderer".into()],
+            children: vec![],
+            starttime: 60,
+            alive: true,
+            exe: "chromium",
+            pid_ns: renderer_pid_ns,
+            user_ns: 1001,
+        },
+    );
+    drop(state);
+
+    let baseline = NativeLaunchBaseline {
+        supervisor: test_pin(100, 10),
+        node: NodeLaunchBaseline {
+            pin: test_pin(200, 20),
+            ns_pid: 3,
+            pid_ns: KernelNamespaceId { dev: 4, ino: 10 },
+            user_ns: KernelNamespaceId { dev: 4, ino: 1000 },
+            seccomp_filters: 2,
+        },
+    };
+    let info = WorkerProcessInfo {
+        schema_version: 1,
+        node_pid: 3,
+        node_pid_namespace: WorkerPidNamespace {
+            dev: "4".into(),
+            ino: "10".into(),
+        },
+        browser_pid: 15,
+        renderer_pids: vec![74],
+    };
+    (fixture, probe, baseline, info)
 }
 
 #[tokio::test]
 async fn procfs_sandbox_evidence_requires_a_real_renderer() {
-    let root = tempfile::tempdir().unwrap();
-    renderer_fixture(
-        root.path(),
-        &["/chromium", "--type=renderer", "--enable-sandbox"],
-        1,
-        2,
+    let (fixture, probe, baseline, info) = native_role_fixture(false);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection = TestNativeConnection::from_identity(
+        identity,
+        baseline,
+        b"Chromium InitializeSandbox() called",
+        info,
     );
-    let inspector = ProcfsChromiumSandboxInspector::with_limits(
-        root.path().to_path_buf(),
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
         Duration::from_millis(200),
         Duration::from_millis(10),
     );
     let evidence = inspector
-        .inspect(100, b"Chromium InitializeSandbox() called", &NeverCancel)
+        .inspect_connection(&connection, &NeverCancel)
         .await
         .unwrap();
-    assert_eq!(evidence.renderer_pid, 400);
+    assert_eq!(evidence.renderer_pid, 74);
     assert!(evidence.no_new_privs);
     assert_eq!(evidence.seccomp_mode, 2);
     assert!(evidence.sandbox_arguments_valid);
@@ -2918,23 +3378,27 @@ async fn procfs_sandbox_evidence_requires_a_real_renderer() {
 
 #[tokio::test]
 async fn procfs_sandbox_evidence_rejects_bubblewrap_only_markers() {
-    // Bubblewrap gives every confined process NoNewPrivs and a seccomp filter.
-    // Without Chromium's own InitializeSandbox marker those fields must not be
-    // accepted as proof of Chromium's sandbox.
-    let root = tempfile::tempdir().unwrap();
-    renderer_fixture(
-        root.path(),
-        &["/chromium", "--type=renderer", "--enable-sandbox"],
-        1,
-        2,
+    let (fixture, probe, baseline, info) = native_role_fixture(false);
+    probe
+        .locked()
+        .processes
+        .get_mut(&63582)
+        .unwrap()
+        .seccomp_filters = Some(2);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection = TestNativeConnection::from_identity(
+        identity,
+        baseline,
+        b"bubblewrap seccomp installed",
+        info,
     );
-    let inspector = ProcfsChromiumSandboxInspector::with_limits(
-        root.path().to_path_buf(),
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
         Duration::from_millis(100),
         Duration::from_millis(10),
     );
     let failure = inspector
-        .inspect(100, b"bubblewrap seccomp installed", &NeverCancel)
+        .inspect_connection(&connection, &NeverCancel)
         .await
         .unwrap_err();
     assert_eq!(failure.code, "browser_sandbox_unavailable");
@@ -2943,64 +3407,87 @@ async fn procfs_sandbox_evidence_rejects_bubblewrap_only_markers() {
 #[tokio::test]
 async fn procfs_sandbox_evidence_rejects_disabled_or_unrelated_processes() {
     for (cmdline, nnp, seccomp) in [
-        (vec!["/chromium", "--type=renderer", "--no-sandbox"], 1, 2),
         (
-            vec!["/chromium", "--type=renderer", "--disable-setuid-sandbox"],
-            1,
+            vec!["/chromium", "--type=renderer", "--no-sandbox"],
+            true,
             2,
         ),
-        (vec!["/chromium", "--type=renderer"], 0, 2),
-        (vec!["/chromium", "--type=renderer"], 1, 1),
+        (
+            vec!["/chromium", "--type=renderer", "--disable-setuid-sandbox"],
+            true,
+            2,
+        ),
+        (vec!["/chromium", "--type=renderer"], false, 2),
+        (vec!["/chromium", "--type=renderer"], true, 1),
+        (
+            vec!["/chromium --type=renderer --no-sandbox --headless=old"],
+            true,
+            2,
+        ),
+        (
+            vec!["/chromium --type=renderer --disable-setuid-sandbox=1 --headless=old"],
+            true,
+            2,
+        ),
     ] {
-        let root = tempfile::tempdir().unwrap();
-        renderer_fixture(root.path(), &cmdline, nnp, seccomp);
-        let inspector = ProcfsChromiumSandboxInspector::with_limits(
-            root.path().to_path_buf(),
+        let (fixture, probe, baseline, info) = native_role_fixture(false);
+        {
+            let mut state = probe.locked();
+            let renderer = state.processes.get_mut(&63582).unwrap();
+            renderer.cmdline = cmdline.into_iter().map(str::to_owned).collect();
+            renderer.no_new_privs = nnp;
+            renderer.seccomp_mode = seccomp;
+        }
+        let identity = verify_worker_identity(&fixture.settings).unwrap();
+        let connection =
+            TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+        let inspector = ProcfsChromiumSandboxInspector::with_probe(
+            probe,
             Duration::from_millis(50),
             Duration::from_millis(10),
         );
-        let failure = inspector.inspect(100, b"", &NeverCancel).await.unwrap_err();
+        let failure = inspector
+            .inspect_connection(&connection, &NeverCancel)
+            .await
+            .unwrap_err();
         assert_eq!(failure.code, "browser_sandbox_unavailable");
     }
 
-    // A children file alone is not trusted when the candidate reports another
-    // parent, which is the shape of a PID-reuse misread.
-    let root = tempfile::tempdir().unwrap();
-    proc_entry(root.path(), 100, 1, 0, 0, &["/usr/bin/node"], &[500]);
-    proc_entry(
-        root.path(),
-        500,
-        999,
-        1,
-        2,
-        &["/chromium", "--type=renderer"],
-        &[],
-    );
-    let inspector = ProcfsChromiumSandboxInspector::with_limits(
-        root.path().to_path_buf(),
+    // Mismatched PPid between children list and child status must not be accepted.
+    let (fixture, probe, baseline, info) = native_role_fixture(false);
+    {
+        let mut state = probe.locked();
+        state.processes.get_mut(&63582).unwrap().ppid = 999;
+    }
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
         Duration::from_millis(50),
         Duration::from_millis(10),
     );
     assert_eq!(
         inspector
-            .inspect(100, b"", &NeverCancel)
+            .inspect_connection(&connection, &NeverCancel)
             .await
             .unwrap_err()
             .code,
         "browser_sandbox_unavailable"
     );
 
-    let cancelled = Arc::new(AtomicBool::new(true));
-    let root = tempfile::tempdir().unwrap();
-    renderer_fixture(root.path(), &["/chromium", "--type=renderer"], 1, 2);
-    let inspector = ProcfsChromiumSandboxInspector::with_limits(
-        root.path().to_path_buf(),
+    let (fixture, probe, baseline, info) = native_role_fixture(false);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
         Duration::from_millis(200),
         Duration::from_millis(10),
     );
     assert_eq!(
         inspector
-            .inspect(100, b"", &SwitchCancel(cancelled))
+            .inspect_connection(&connection, &SwitchCancel(Arc::new(AtomicBool::new(true))))
             .await
             .unwrap_err()
             .code,
@@ -3415,13 +3902,18 @@ async fn process_info_fixture_transport(
     ProcessInfoFixture {
         connection: Arc::new(RealWorkerConnection {
             client: AsyncMutex::new(Some(client)),
-            process: AsyncMutex::new(None),
+            process: Arc::new(AsyncMutex::new(None)),
             protocol: WORKER_PROTOCOL_VERSION.to_owned(),
             generation: AtomicU64::new(0),
             pid: 0,
             stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
             work_dir: directory.path().to_path_buf(),
             output_dir: directory.path().to_path_buf(),
+            local_images: None,
+            node_path: PathBuf::new(),
+            chromium_path: PathBuf::new(),
+            baseline: None,
+            test_sandbox_ready: false,
         }),
         requests,
         received,
@@ -3694,4 +4186,438 @@ async fn real_worker_process_info_rejects_untrusted_role_replies() {
         assert!(!failure.uncertain);
         fixture.connection.shutdown().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn verify_sandbox_without_fixed_inspector_rejects_fake_connection_and_raw_pid_inspect() {
+    let fixture = fixture_identity();
+    let connection = FakeConnection::new(pinned_catalog());
+    assert_eq!(connection.process_id(), None);
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let provider = PlaywrightMcpProvider::new(fixture.settings.clone(), launcher).unwrap();
+    let failure = provider.open(None, &NeverCancel).await.unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert_eq!(connection.shutdown_count(), 1);
+
+    let inspector = ProcfsChromiumSandboxInspector::default();
+    let direct_failure = inspector
+        .inspect(100, b"InitializeSandbox", &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(direct_failure.code, "browser_sandbox_unavailable");
+
+    let cancelled_failure = inspector
+        .inspect(
+            100,
+            b"InitializeSandbox",
+            &SwitchCancel(Arc::new(AtomicBool::new(true))),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(cancelled_failure.code, "cancelled");
+}
+
+#[tokio::test]
+async fn real_worker_connection_without_process_rejects_native_sandbox_context() {
+    let fixture = process_info_fixture(process_info_reply()).await;
+    let context_err = fixture
+        .connection
+        .native_sandbox_context(&NeverCancel)
+        .await
+        .err()
+        .expect("missing ManagedProcess must reject native sandbox context");
+    assert_eq!(context_err.code, "browser_sandbox_unavailable");
+
+    let inspector_err = ProcfsChromiumSandboxInspector::default()
+        .inspect_connection(fixture.connection.as_ref(), &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(inspector_err.code, "browser_sandbox_unavailable");
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_inspector_rejects_empty_renderers_and_q1_q2_mismatch_immediately() {
+    let (fixture, probe, baseline, mut info) = native_role_fixture(true);
+    info.renderer_pids.clear();
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let empty_conn =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_secs(5),
+        Duration::from_millis(10),
+    );
+    let started = Instant::now();
+    let failure = inspector
+        .inspect_connection(&empty_conn, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert_eq!(empty_conn.process_info_calls.load(Ordering::Acquire), 1);
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    let (fixture, probe, baseline, q1) = native_role_fixture(true);
+    let mut q2 = q1.clone();
+    q2.renderer_pids = vec![75];
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let mismatch_conn =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", q1.clone());
+    *mismatch_conn.replies.lock().unwrap() = VecDeque::from([Ok(q1), Ok(q2)]);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_secs(5),
+        Duration::from_millis(10),
+    );
+    let started = Instant::now();
+    let failure = inspector
+        .inspect_connection(&mismatch_conn, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert_eq!(mismatch_conn.process_info_calls.load(Ordering::Acquire), 2);
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn native_inspector_maps_nested_nspid_at_depth_k2() {
+    assert_eq!(
+        parse_cmdline_tokens(
+            b"/home/saya-test/chrome-headless-shell --type=renderer --headless=old\0\0\0"
+        ),
+        vec![
+            "/home/saya-test/chrome-headless-shell",
+            "--type=renderer",
+            "--headless=old",
+        ]
+    );
+
+    let (fixture, probe, baseline, info) = native_role_fixture(true);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_millis(200),
+        Duration::from_millis(10),
+    );
+    let evidence = inspector
+        .inspect_connection(&connection, &NeverCancel)
+        .await
+        .expect("k=2 nested renderer topology must succeed");
+    assert_eq!(evidence.renderer_pid, 74);
+    assert_eq!(connection.process_info_calls.load(Ordering::Acquire), 2);
+
+    // Space-collapsed setproctitle `/proc/<pid>/cmdline` from Chromium's Linux zygote must match `--type=renderer`.
+    let (fixture, probe, baseline, info) = native_role_fixture(true);
+    {
+        let mut state = probe.locked();
+        state.processes.get_mut(&63582).unwrap().cmdline =
+            vec!["/home/saya-test/chrome-headless-shell --type=renderer --headless=old".into()];
+    }
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_millis(200),
+        Duration::from_millis(10),
+    );
+    let evidence = inspector
+        .inspect_connection(&connection, &NeverCancel)
+        .await
+        .expect("setproctitle space-collapsed renderer cmdline must succeed");
+    assert_eq!(evidence.renderer_pid, 74);
+}
+
+#[tokio::test]
+async fn native_inspector_verifies_every_renderer_and_rejects_unreported_or_weak_second_renderer() {
+    let add_second_renderer = |probe: &Arc<FakeKernelProbe>, info: &mut WorkerProcessInfo| {
+        info.renderer_pids = vec![74, 75];
+        let mut state = probe.locked();
+        state.pid_ns_parents.insert(31, 20);
+        state.pid_ns_owners.insert(31, 1001);
+        state.processes.get_mut(&500).unwrap().children.push(63583);
+        state.processes.insert(
+            63583,
+            FakeProcNode {
+                ppid: 500,
+                nspid: vec![63583, 75, 5, 1],
+                no_new_privs: true,
+                seccomp_mode: 2,
+                seccomp_filters: Some(3),
+                cap_eff_zero: true,
+                cmdline: vec!["/chromium".into(), "--type=renderer".into()],
+                children: vec![],
+                starttime: 61,
+                alive: true,
+                exe: "chromium",
+                pid_ns: 31,
+                user_ns: 1001,
+            },
+        );
+    };
+
+    // Two compliant renderers pass.
+    let (fixture, probe, baseline, mut info) = native_role_fixture(true);
+    add_second_renderer(&probe, &mut info);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_millis(100),
+        Duration::from_millis(10),
+    );
+    inspector
+        .inspect_connection(&connection, &NeverCancel)
+        .await
+        .expect("two locked-down renderers should succeed");
+
+    // Any failure on the second renderer fails closed.
+    for mutation in [
+        "cap_eff",
+        "no_new_privs",
+        "seccomp",
+        "weak_seccomp_filters",
+        "no_sandbox_arg",
+        "unreported_renderer",
+    ] {
+        let (fixture, probe, baseline, mut info) = native_role_fixture(true);
+        add_second_renderer(&probe, &mut info);
+        {
+            let mut state = probe.locked();
+            match mutation {
+                "cap_eff" => state.processes.get_mut(&63583).unwrap().cap_eff_zero = false,
+                "no_new_privs" => state.processes.get_mut(&63583).unwrap().no_new_privs = false,
+                "seccomp" => state.processes.get_mut(&63583).unwrap().seccomp_mode = 1,
+                "weak_seccomp_filters" => {
+                    state.processes.get_mut(&63583).unwrap().seccomp_filters = Some(2);
+                }
+                "no_sandbox_arg" => state
+                    .processes
+                    .get_mut(&63583)
+                    .unwrap()
+                    .cmdline
+                    .push("--disable-setuid-sandbox=1".into()),
+                "unreported_renderer" => info.renderer_pids = vec![74],
+                _ => unreachable!(),
+            }
+        }
+        let identity = verify_worker_identity(&fixture.settings).unwrap();
+        let connection =
+            TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+        let inspector = ProcfsChromiumSandboxInspector::with_probe(
+            probe,
+            Duration::from_millis(60),
+            Duration::from_millis(10),
+        );
+        let failure = inspector
+            .inspect_connection(&connection, &NeverCancel)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.code, "browser_sandbox_unavailable", "{mutation}");
+    }
+}
+
+#[tokio::test]
+async fn native_inspector_fails_closed_immediately_on_eperm_same_userns_or_deep_ancestry() {
+    for case in [
+        "pid_ns_eperm",
+        "user_ns_eperm",
+        "owner_eperm",
+        "same_user_ns",
+        "same_pid_ns",
+        "owner_same_user_ns",
+        "too_deep_9_hops",
+    ] {
+        let (fixture, probe, baseline, info) = native_role_fixture(true);
+        {
+            let mut state = probe.locked();
+            match case {
+                "pid_ns_eperm" => {
+                    state.ns_eperm.insert(30);
+                }
+                "user_ns_eperm" => {
+                    state.ns_eperm.insert(1002);
+                }
+                "owner_eperm" => {
+                    state.owner_eperm.insert(30);
+                }
+                "same_user_ns" => {
+                    state.processes.get_mut(&63582).unwrap().user_ns = 1000;
+                }
+                "same_pid_ns" => {
+                    state.processes.get_mut(&63582).unwrap().pid_ns = 10;
+                }
+                "owner_same_user_ns" => {
+                    state.pid_ns_owners.insert(30, 1000);
+                }
+                "too_deep_9_hops" => {
+                    // Build a 9-hop user_ns chain (> MAX_NAMESPACE_HOPS = 8).
+                    state.user_ns_parents.clear();
+                    for hop in 0..8_u64 {
+                        state.user_ns_parents.insert(2000 + hop, 2001 + hop);
+                    }
+                    state.user_ns_parents.insert(2008, 1000);
+                    state.processes.get_mut(&63582).unwrap().user_ns = 2000;
+                    state.pid_ns_owners.insert(30, 2000);
+                }
+                _ => unreachable!(),
+            }
+        }
+        let identity = verify_worker_identity(&fixture.settings).unwrap();
+        let connection =
+            TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+        let inspector = ProcfsChromiumSandboxInspector::with_probe(
+            probe,
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        );
+        let started = Instant::now();
+        let failure = inspector
+            .inspect_connection(&connection, &NeverCancel)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.code, "browser_sandbox_unavailable", "{case}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{case} did not fail immediately"
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_inspector_rejects_oversized_procfs_and_process_count_above_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let exact_path = dir.path().join("exact");
+    fs::write(&exact_path, vec![b'a'; MAX_SANDBOX_PROC_FILE_BYTES]).unwrap();
+    assert_eq!(
+        read_bounded_proc_file_strict(&exact_path).unwrap().len(),
+        MAX_SANDBOX_PROC_FILE_BYTES
+    );
+
+    let over_path = dir.path().join("over");
+    fs::write(&over_path, vec![b'a'; MAX_SANDBOX_PROC_FILE_BYTES + 1]).unwrap();
+    assert!(matches!(
+        read_bounded_proc_file_strict(&over_path),
+        Err(SandboxProbeFailure::Hard(_))
+    ));
+
+    assert_eq!(
+        parse_proc_stat_starttime(
+            b"63582 (Web (Content) Helper) S 500 500 500 0 -1 4194560 1 0 0 0 1 0 0 0 20 0 4 0 987654 0 0",
+            63582
+        ),
+        Ok(987654)
+    );
+
+    // Populate 513 total descendants under supervisor (> MAX_SANDBOX_PROCESSES = 512).
+    let (fixture, probe, baseline, info) = native_role_fixture(true);
+    {
+        let mut state = probe.locked();
+        let extra_start = 10_000_u32;
+        let extra_count = (MAX_SANDBOX_PROCESSES + 1) as u32;
+        let browser = state.processes.get_mut(&300).unwrap();
+        for offset in 0..extra_count {
+            browser.children.push(extra_start + offset);
+        }
+        for offset in 0..extra_count {
+            let pid = extra_start + offset;
+            state.processes.insert(
+                pid,
+                FakeProcNode {
+                    ppid: 300,
+                    nspid: vec![pid, 1000 + offset],
+                    no_new_privs: true,
+                    seccomp_mode: 2,
+                    seccomp_filters: Some(2),
+                    cap_eff_zero: true,
+                    cmdline: vec!["/chromium".into(), "--type=utility".into()],
+                    children: vec![],
+                    starttime: 200 + u64::from(offset),
+                    alive: true,
+                    exe: "chromium",
+                    pid_ns: 10,
+                    user_ns: 1000,
+                },
+            );
+        }
+    }
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let connection =
+        TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_secs(5),
+        Duration::from_millis(10),
+    );
+    let started = Instant::now();
+    let failure = inspector
+        .inspect_connection(&connection, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn native_inspector_enforces_single_deadline_vs_cancellation_across_q1_and_q2() {
+    // q1 hangs -> deadline expires as browser_sandbox_unavailable (not cancelled).
+    let (fixture, probe, baseline, info) = native_role_fixture(true);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let conn = TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    *conn.hang_on_call.lock().unwrap() = Some(1);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_millis(50),
+        Duration::from_millis(10),
+    );
+    let failure = inspector
+        .inspect_connection(&conn, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+
+    // q1 hangs -> caller cancellation overrides before deadline.
+    let (fixture, probe, baseline, info) = native_role_fixture(true);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let conn = TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    *conn.hang_on_call.lock().unwrap() = Some(1);
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let notifier = cancel_flag.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        notifier.store(true, Ordering::Release);
+    });
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_millis(200),
+        Duration::from_millis(10),
+    );
+    let failure = inspector
+        .inspect_connection(&conn, &SwitchCancel(cancel_flag))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "cancelled");
+
+    // q1 takes 30ms of a 70ms total budget; q2 hangs and times out at the shared 70ms deadline.
+    let (fixture, probe, baseline, info) = native_role_fixture(true);
+    let identity = verify_worker_identity(&fixture.settings).unwrap();
+    let conn = TestNativeConnection::from_identity(identity, baseline, b"InitializeSandbox", info);
+    *conn.delays.lock().unwrap() = VecDeque::from([Duration::from_millis(30)]);
+    *conn.hang_on_call.lock().unwrap() = Some(2);
+    let inspector = ProcfsChromiumSandboxInspector::with_probe(
+        probe,
+        Duration::from_millis(70),
+        Duration::from_millis(10),
+    );
+    let started = Instant::now();
+    let failure = inspector
+        .inspect_connection(&conn, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert_eq!(conn.process_info_calls.load(Ordering::Acquire), 2);
+    assert!(started.elapsed() < Duration::from_millis(130));
 }
