@@ -13,6 +13,7 @@ N5 将受控网页读取与托管 Chromium 接入共享运行时。CLI、文本�
 - 成功页面调用后重新采样 sandbox 证据，close 后作废旧证据；启动核验或清理超时／失败时保留句柄并阻止连接复用，未确认清理明确返回 unknown。
 - 显式专用 Colima VM 后端，保留宿主隔离与 Chromium 自有 sandbox。创建工具不激活宿主全局客户端上下文；浏览器通过 VM 私有网络命名空间、SSH 反向通道和宿主 broker 出网，不回退默认网络。
 - Linux VM 宿主通道使用 Bubblewrap、原有 Seccomp 与固定目标双桥，保留 IPv4／IPv6 字面地址，只读暴露三个 SSH 文件及合成账号视图。空 broker 就绪探测不消耗 Run 连接额度，relay 清理核对 socket 身份；紧凑私有目录与短 socket 名已通过 64 字节 TMPDIR 的真实准备回归，保留完整 UUID 位。缺原生前提时失败关闭，不回退 Host。
+- 固定 worker 的可重放补丁使受限 isolated stdio 直接使用进程内 Browser，并提供不进入模型工具目录的固定进程角色查询；取消释放及严格 MCP 保留元数据已通过回归，补丁组合通过新 v2 安装根的真实 VM 生命周期。Rust native 权威角色核验尚未接入，不能据此宣称 native Browser 完成。
 - 精确 origin 绑定的凭据槽、次数与撤销限制、顶层文档校验；凭据只在最终填充边界解析，填充不自动提交。
 - 点击绑定的下载与同 Session artifact 上传；文件名、路径、大小、类型、摘要、私有 staging、产物 lease 与 GC pin 均受限。File 不注入模型媒体。
 - 有界后台导航、等待和下载。已派发副作用的未知结果不自动重放，恢复后重新观察页面并使用新的文档引用。
@@ -46,6 +47,7 @@ N5 connects controlled web reads and managed Chromium to the shared runtime. CLI
 - Sandbox evidence is sampled again after successful page calls and invalidated on close. Startup verification or cleanup timeouts/failures retain cleanup handles and block connection reuse; unconfirmed cleanup is explicitly unknown.
 - An explicit dedicated Colima VM backend preserving host isolation and Chromium's own sandbox. The creation tool leaves the host's global client context unchanged. Browser egress uses a private VM network namespace, a reverse SSH channel, and the host broker, with no default-network fallback.
 - The Linux VM host channel uses Bubblewrap, the existing Seccomp filter, and two fixed-destination bridges. It preserves IPv4/IPv6 literals and exposes only three read-only SSH files plus synthetic account data. Empty broker readiness probes do not consume the Run connection budget, and relay cleanup checks socket identity. Compact private directory names and short socket names retain every UUID bit and pass real preparation with a 64-byte TMPDIR. Missing native prerequisites fail closed without falling back to Host.
+- Replayable pinned-worker patches use an in-process Browser for restricted isolated stdio and add a fixed process-role query outside the model tool catalogue. Cancellation cleanup and strict MCP progress metadata pass regressions, and the combined patches pass a real VM lifecycle in a new v2 installation. Rust native authoritative-role verification is not connected yet; this is not native Browser acceptance.
 - Exact-origin credential slots with usage and revocation limits and top-level document checks. Values are resolved only at the final fill boundary; filling never submits a form automatically.
 - Click-bound downloads and same-Session artifact uploads, with filename, path, size, type, digest, private staging, lease, and GC-pin boundaries. File artifacts never become model media.
 - Bounded background navigation, waits, and downloads. Dispatched side effects with unknown outcomes are not replayed automatically; recovery requires a fresh page observation and new document references.

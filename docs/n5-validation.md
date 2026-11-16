@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-16：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段保留 21 passed、1 disabled 的历史输入。安装树身份 v2 本机阶段已完成：跨设备链接拒绝有真实 RED／GREEN，修复后 macOS 第 184 轮与 Linux 第 187 轮完整门禁通过，第 190 轮 Rust 生产 VM 身份通道正控、拒绝与恢复通过；旧 v1 输入不得复用于当前入口。这不是生产 Chromium 或四平台证据；受限 worker、生产截图、native Browser 及新增四平台仍未满足，DEV-083 全范围与 N5 不标为完成。**
+**2026-11-16：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段保留 21 passed、1 disabled 的历史输入。安装树身份 v2 本机阶段已完成：跨设备链接拒绝有真实 RED／GREEN，修复后 macOS 第 184 轮与 Linux 第 187 轮完整门禁通过，第 190 轮 Rust 生产 VM 身份通道正控、拒绝与恢复通过；旧 v1 输入不得复用于当前入口。这不是生产 Chromium 或四平台证据；受限 worker 原生接线、生产截图、native Browser 及新增四平台仍未满足，DEV-083 全范围与 N5 不标为完成。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
 
@@ -52,6 +52,29 @@ macOS 第 184 轮程序为 `target/n5/capture-rust-20261115/release/saya`，60,4
 Linux 的来源是 `557f865` 加各轮列明八文件及保留的 `execution_backend.rs` 补丁，不是宿主 HEAD 全树；第 185 轮已将八文件升级至跨设备修复输入，第 187 轮保持这些源码字节不变并重建 release。macOS 第 184 轮报告绑定当时 HEAD 和列明的未提交输入，包含未完成的截图草案测试。默认 ignored 与编译成功都不计为真实截图通过。旧 138 的文件／程序身份已由 168 的受控备份和新构建取代，后续不能再用旧守卫脚本声称新程序不变。原临时目录的 23 项基线全部保留，168、185 与 187 各自临时目录的残留分别记录；第 187 轮有四项自有残留，不宣称所有临时项为空。
 
 本节确认安装身份 v2 的本机阶段及明确的验证范围：v1 拒绝、provision 新根、完整安装树正负控和恢复均有实证；它不完成受限 stdio worker、native managed provider、生产捕获事务或新增四平台。`screenshots`／`screenshot_masking` 继续为 false，未推送、发布或运行新增远端 CI。下文较早程序及 v1 VM 记录按各自来源保留，不能用于认证当前 v2 运行时。
+
+## 受限 worker 补丁与私有协议阶段
+
+2026-11-16，本阶段仅交付[受限 stdio 与固定角色查询补丁](browser.md#受限-stdio-worker-补丁)、显式协议回归和补丁组合的 VM 生命周期，不把新私有角色回复当成已经接入的 native kernel 证明。生产 Rust、launcher、网络／凭据／PLAN 策略与截图 facts 未改；完整 Rust 门禁未重跑，已有 macOS 第 184 轮与 Linux 第 187 轮结果仍按其原输入保留。
+
+固定包版本不变。两个补丁依次应用于 stock 独立副本，最终仅 `node_modules/playwright-core/lib/coreBundle.js` 改变，232 个非根成员的内容、权限与链接均与候选逐项核对。stock、第一补丁后与最终 coreBundle SHA-256 分别为 `9d3260b17408501ba46ca708fa870a7c95e1e3f6e9cc34d799465f17b7d78c50`、`385866007a5df69db4c3e22bea193b2afe7ae20b54769a144855b52e1d608a0d`、`28512f80e0a84cb225bd1431217f0ca98265d5010cf920c2f171e28fc056093a`。补丁组合不绕过身份树校验或复用旧 manifest。
+
+以下路径相对 `target/n5/linux-full-20261115/`：
+
+| 检查 | 实际结果与边界 | 证据 |
+| --- | --- | --- |
+| 缺失私有接口 RED | 第 194 轮合法空／非空对象收到 `-32601`；第 201 轮组件 12 项在同一缺失方法边界失败、未启用 factory 的第 13 项通过。第 194 轮另有三种非法 envelope 被上游丢弃后的超时，不算产品 RED | `evidence/worker-protocol-194.json`、`evidence/worker-process-info-201.json` |
+| 取消 RED／GREEN | 第 206 轮原 13 项通过，新增项在 CDP 响应仍挂起、取消后未 detach 的断言失败；仅转交 signal 后，第 207 轮 14 项全部通过 | `evidence/worker-cancel-{206,207}.json`、`data/worker-cancel-{206,207}/stdout` |
+| 真实 SDK 元数据与兼容性 RED／GREEN | 第 214 轮真实 Rust SDK 在空业务参数中发出 `_meta.progressToken=0`，恰好一个私有请求；第 215 轮组件新增项及四个 CLI metadata 子例实际收到 `-32602`。严格空业务参数 schema 修复后，第 216 轮组件 15 项、CLI 9 项全部通过 | `evidence/rmcp-process-info-wire-214.json`、`evidence/worker-metadata-{215,216}.json` |
+| 最终完整工具与持久回归 | 第 218 轮 `just test-tooling` 11 个 suite、168 passed；两个显式 Just 入口分别 9 项真实 CLI 通道和 15 项组件全部通过。宿主 Node 为 `v22.23.0`，不将其称为固定 Linux runtime 或 native 平台验收 | `evidence/worker-checks-218.json`、`logs/worker-{tooling,protocol,process-info}-218.log` |
+| 标准检查掩码对照 | 第 209 轮继承 `077` 后，golden tree、link mode 与 provision verifier 三项失败；第 210 轮诊断驱动参数错误，未执行对照。第 211 轮同源码三项在 `077` 下失败、`022` 下通过；第 212／218 轮按开发指南对子进程设置 `022` 后完整通过，未改断言或安装策略 | `evidence/worker-checks-209.json`、`data/worker-umask-{210,211}/`、`evidence/worker-checks-{212,218}.json` |
+| 真实初始页失败及保留 | 第 195 轮真实生命周期入口 exit 101；第 199 轮经生产 launcher／连接读取到原 MCP 错误：89 字节 socket 目录过长。第 197／198 轮确认无关联进程后，仅原子归档自有失败 Run／宿主临时目录，未删文件或发送信号，不算重跑成功 | `evidence/vm-lifecycle-{195,197,198}.json`、`evidence/vm-worker-mcp-199.json` |
+| 归档清单前置失败 | 第 208 轮对历史归档 socket 使用安装树扫描器而失败，未 provision 或启动 Browser；第 213 轮专用只读归档清单完成后，旧 `f537…` 候选通过真实生命周期。socket 不打开／连接／删除，安装树的特殊文件拒绝不变；旧成功不转印至最终候选 | `evidence/worker-vm-{208,213}.json`、`data/worker-vm-213-preparation/archive-fixture.json` |
+| 最终候选真实 VM 生命周期 | 第 217 轮在新根正常 provision／check，旧 Rust 生产生命周期入口实际 1 passed、0 failed、0 ignored，初始页／close／reopen／snapshot／shutdown 均完成；全部步骤退出 0，无超时或 SIGKILL，前后输入与历史归档相等 | `evidence/worker-vm-217.json`、`data/worker-vm-217/09-libtest.{stdout,stderr}`、`data/worker-vm-217-preparation/replay.json` |
+
+第 217 轮新根为 `/home/ariakage.guest/saya-identity-v2-217`，未缩短路径以规避旧 socket 错误。manifest SHA-256 为 `fd401d1ed8ab07201d10835584bde4a02f973a0a3bfb57249e5036d5572c03a4`，worker 树为 `dea1a1a4115aadc25f36819aeac99b39a8a615825ec512df549f629ed743e98f`／233 项／19,164,091 字节，报告 SHA-256 为 `705f24f6a4fdb46abe58dc981092f083874d66bedfab98ef18d3490286dfa3dd`。宿主 launcher 为 macOS 第 184 轮 `28cb78ca…`，libtest 为 `5be6b520f68cea8b1de5398d5f4136babe56c5c793828f9cbe4d3ba87e03824e`；VM 使用固定 Linux Node `v22.23.5`。实际 renderer PID 10960、重开后 11070 均为 `NoNewPrivs=1`／`Seccomp=2` 且未禁用 sandbox；`stderr_initialize_sandbox=false` 为真实观测值，不把它改为成功断言。宿主与远端关联进程、远端 Run 根、该轮临时目录均为空，旧 190 根的安装与失败归档前后不变。
+
+私有方法未列入模型工具目录，不能接受任意 method／script／selector／processId，HTTP／共享／非 isolated 通道均有实际拒绝回归。组件中的 PID／namespace 为受控字面 fixture，不是新内核采样；第 217 轮也只验证现有 VM 生命周期，尚未在 Rust native inspector 中消费新私有接口、绑定权威角色／namespace／starttime／exe 或证明相对 baseline 的额外 Seccomp。网络／文件联合矩阵、生产捕获与新增四平台未在本阶段重新验收；`screenshots`／`screenshot_masking` 保持 false，N5 全范围未完成，未推送、发布或运行新增远端 CI。
 
 ## 固定程序与本机门禁
 

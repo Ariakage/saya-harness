@@ -41,7 +41,9 @@ cargo install just --locked
 | `just prompt code` | 输出指定场景的完整离线模型请求，可省略为 `all` |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
 | `just render-preview 140 60 syntax` | 输出离线场景快照，可追加 `--source` 或 `--json` |
-| `just test-tooling` | 执行CI使用的发行、N2、N3及提示词评估离线Python回归 |
+| `just test-tooling` | 执行CI使用的发行、N2、N3、N5及提示词评估离线Python回归 |
+| `just test-n5-worker-protocol NODE WORKER_ROOT` | 显式指定 Node 与已打补丁的固定 worker，运行真实 CLI 的私有协议及 stdio／HTTP 范围回归 |
+| `just test-n5-worker-process-info NODE WORKER_ROOT` | 同一固定 worker 的真实 SDK／BrowserBackend 回归；仅 CDP 和 namespace 为受控替身 |
 | `just smoke BINARY` | 对显式指定程序执行CLI、文本会话、审查回归及完整TUI旅程 |
 
 ```sh
@@ -57,6 +59,8 @@ RUST_TEST_THREADS=4 just check
 ```
 
 Recipe通过带引号的位置参数转发输入，可变参数使用 `"$@"`，smoke程序路径使用 `"$1"`。含空格、引号或shell元字符的参数保持原值。CLI内的工作区及文件相对路径以仓库根目录为起点。[Just位置参数](https://just.systems/man/en/positional-arguments.html)
+
+两个 `test-n5-worker-*` 入口不会下载运行时，必须显式传入可执行 Node 和已按顺序应用[两份受限 worker 补丁](browser.md#受限-stdio-worker-补丁)的绝对安装路径；它们不属于默认离线 `test-tooling`，也不把受控依赖当成真实 sandbox 证据。协议回归使用仓库 `target/` 下的私有临时目录和真实临时 loopback HTTP 服务，拒绝路径或版本不符时直接失败，不默默 skip。
 
 `smoke`要求显式提供要验收的程序路径。使用 `CARGO_TARGET_DIR`、`CARGO_BUILD_TARGET` 或Cargo的目标配置构建时，传入其实际产物路径。构建及工具安装可按需下载依赖；Python回归使用离线替身，smoke使用本地模型夹具、loopback和Unix PTY，文件与命令场景需要当前平台的原生隔离依赖。[原生配置](configuration.md#n2-原生隔离配置)、[Cargo构建输出](https://doc.rust-lang.org/cargo/commands/cargo-build.html#output-options)
 

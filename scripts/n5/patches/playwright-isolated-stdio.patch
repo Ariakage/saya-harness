@@ -1,0 +1,33 @@
+diff --git a/node_modules/playwright-core/lib/coreBundle.js b/node_modules/playwright-core/lib/coreBundle.js
+--- a/node_modules/playwright-core/lib/coreBundle.js
++++ b/node_modules/playwright-core/lib/coreBundle.js
+@@ -76283,6 +76283,8 @@ async function createBrowser(config, clientInfo, cliOptions, bindOptions) {
+     ownership = "own";
+   }
+   try {
++    if (bindOptions.inProcess)
++      return { browser, browserInfo: browserInfo(browser, config), endpoint: void 0, ownership };
+     const { endpoint } = await browser.bind(bindOptions.title, { workspaceDir: bindOptions.workspaceDir });
+     return { browser, browserInfo: browserInfo(browser, config), endpoint, ownership };
+   } catch (error) {
+@@ -76485,7 +76487,10 @@ function decorateMCPCommand(command) {
+       options.caps.push("devtools");
+     const config = await resolveCLIConfigForMCP(options);
+     const tools = filteredTools(config);
+-    const useSharedBrowser = config.sharedBrowserContext || config.browser.isolated;
++    const inProcess = config.browser.isolated && config.server.port === void 0 &&
++      !config.sharedBrowserContext && !config.browser.remoteEndpoint &&
++      !config.browser.cdpEndpoint && !config.extension;
++    const useSharedBrowser = !inProcess && (config.sharedBrowserContext || config.browser.isolated);
+     let sharedBrowserPromise;
+     let clientCount = 0;
+     const clientNameCounters = /* @__PURE__ */ new Map();
+@@ -76525,7 +76530,7 @@ function decorateMCPCommand(command) {
+             const count = (clientNameCounters.get(clientInfo.clientName) ?? 0) + 1;
+             clientNameCounters.set(clientInfo.clientName, count);
+             const sessionName = count > 1 ? `${clientInfo.clientName} (${count})` : clientInfo.clientName;
+-            info = await createBrowserWithInfo(config, clientInfo, options, { title: sessionName, workspaceDir: clientInfo.cwd });
++            info = await createBrowserWithInfo(config, clientInfo, options, { title: sessionName, workspaceDir: clientInfo.cwd, inProcess });
+             browser = info.browser;
+           }
+         } catch (error) {

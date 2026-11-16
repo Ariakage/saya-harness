@@ -67,6 +67,17 @@ v1 安装不能自动升级或回退。应使用新工具在全新远端根重�
 
 本机真实集成入口为 `crates/saya-core/tests/browser_worker_real.rs`，默认 `#[ignore]`，通过 `SAYA_TEST_EXECUTABLE`、`SAYA_TEST_NODE`、`SAYA_TEST_WORKER_ROOT`、`SAYA_TEST_CHROMIUM_BIN`、`SAYA_TEST_IDENTITY_MANIFEST` 显式启用。以下旧 fixture 路径按历史验收保留；当前入口必须提供新 v2 安装根与摘要。测试 fixture 使用固定 headless-shell，而不是本环境会崩溃的完整 Chrome：macOS 为 `target/n5/browser-cache-mirror/chromium_headless_shell-1254/chrome-headless-shell-mac-arm64/chrome-headless-shell` 与 `target/n5/mac-worker-manifest.json`，Linux ARM 为 `/opt/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux-arm64/chrome-headless-shell` 与容器内 `/opt/browsers/worker-manifest.json`。这些是测试输入，不是产品默认值；产品只接受宿主显式配置的绝对路径与 manifest。
 
+### 受限 stdio worker 补丁
+
+固定发行包的独立副本按顺序应用 [isolated stdio 补丁](../scripts/n5/patches/playwright-isolated-stdio.patch)与[固定角色查询补丁](../scripts/n5/patches/playwright-process-info.patch)，再正常生成 v2 身份并向新根 provision；不得修改正在使用的安装或复用旧 manifest。补丁对应上述固定包版本，仅修改 `node_modules/playwright-core/lib/coreBundle.js`：stock SHA-256 为 `9d3260b17408501ba46ca708fa870a7c95e1e3f6e9cc34d799465f17b7d78c50`，第一补丁后为 `385866007a5df69db4c3e22bea193b2afe7ae20b54769a144855b52e1d608a0d`，最终为 `28512f80e0a84cb225bd1431217f0ca98265d5010cf920c2f171e28fc056093a`。安装树仍须完整校验，单一文件摘要不替代树身份。
+
+- 仅 isolated stdio、非共享、非 remote endpoint／CDP endpoint／extension 使用进程内 Browser；该路径不创建非必要的 browser-bind socket，避免长 Run 路径在首次导航时触发 socket 上限。不缩短测试路径、不放宽宿主隔离或 Chromium sandbox；HTTP 等其他路径保持原实现。
+- 私有 `saya/browser/processInfo` 不出现在 `tools/list`，不创建或懒启动 backend。Browser 尚未启动时返回 `-32000`／`browser_not_started`；非启用通道为 `-32601`。业务参数必须为空，仅允许可选、严格的 `_meta.progressToken`：u32 或最长 128 个 UTF-16 码元的字符串；其他元数据键、method、script、selector、processId 均以 `-32602` 拒绝。
+- 活跃 backend 只发送固定 `SystemInfo.getProcessInfo`，把取消信号交给 CDP，成功／失败后均 detach；断连或取消后的迟到结果不能成为有效角色回复。最多接受 512 个进程记录，拒绝非法／重复 PID 和缺失／重复 browser 角色。
+- 回复固定为 `schema_version: 1`、`node_pid`、`node_pid_namespace: {dev, ino}`、`browser_pid` 与排序后的 `renderer_pids`；namespace 的 dev／ino 为十进制字符串。PID 是对应浏览器 namespace 的观察值，不能直接等同宿主 PID 或一律取 `NSpid` 最后一列。
+
+这两份补丁及其真实 VM 生命周期已验证；**Rust native inspector 尚未接入私有请求或权威角色绑定**，仍按原有失败关闭条件工作。组件测试的受控 CDP／namespace 不是内核证据，VM 生命周期也不证明该私有接口已完成真实 kernel 联合核验。复跑入口见[开发指南](development.md#just-开发入口)，证据与未完成范围见[N5 验收](n5-validation.md#受限-worker-补丁与私有协议阶段)；生产截图继续关闭。
+
 ## 托管捕获引擎扩展（D-068，待实现）
 
 项目负责人已确认允许扩展托管引擎的捕获与固定身份契约，必要时引入定制 Chromium。普通 CDP 的 renderer 暂停、DOM／CSS 遮蔽原语不等于导航提交、绘制与捕获之间的完整事务屏障，不能单独据此开启生产截图。

@@ -1,0 +1,93 @@
+diff --git a/node_modules/playwright-core/lib/coreBundle.js b/node_modules/playwright-core/lib/coreBundle.js
+--- a/node_modules/playwright-core/lib/coreBundle.js
++++ b/node_modules/playwright-core/lib/coreBundle.js
+@@ -68412,6 +68412,59 @@
+         };
+         this._browserContext.once("close", markDisconnected);
+         this._browserContext.browser()?.once("disconnected", markDisconnected);
++      }
++      async sayaProcessInfo(signal) {
++        const unavailable = (reason) => Object.assign(new Error("Browser process information is unavailable"), { code: -32000, data: { reason } });
++        if (this._disposed || this._disconnected)
++          throw unavailable("browser_disconnected");
++        let session;
++        let result;
++        let failed = false;
++        try {
++          if (signal.aborted)
++            throw new Error("Request cancelled");
++          session = await this._browserContext.browser().newBrowserCDPSession();
++          const reply = await session.send("SystemInfo.getProcessInfo", void 0, { signal });
++          if (!Array.isArray(reply.processInfo) || reply.processInfo.length > 512)
++            throw new Error("Invalid process inventory");
++          const seen = new Set();
++          let browserPid;
++          const rendererPids = [];
++          for (const info of reply.processInfo) {
++            if (!info || !Number.isSafeInteger(info.id) || info.id <= 0 || info.id > 4294967295 || typeof info.type !== "string" || seen.has(info.id))
++              throw new Error("Invalid process identity");
++            seen.add(info.id);
++            if (info.type === "browser") {
++              if (browserPid !== void 0)
++                throw new Error("Ambiguous browser identity");
++              browserPid = info.id;
++            } else if (info.type === "renderer") {
++              rendererPids.push(info.id);
++            }
++          }
++          if (browserPid === void 0)
++            throw new Error("Browser identity missing");
++          const namespace = require("node:fs").statSync("/proc/self/ns/pid", { bigint: true });
++          result = {
++            schema_version: 1,
++            node_pid: process.pid,
++            node_pid_namespace: { dev: namespace.dev.toString(), ino: namespace.ino.toString() },
++            browser_pid: browserPid,
++            renderer_pids: rendererPids.sort((a, b) => a - b)
++          };
++        } catch {
++          failed = true;
++        }
++        try {
++          await session?.detach();
++        } catch {
++          failed = true;
++        }
++        if (this._disposed || this._disconnected)
++          throw unavailable("browser_disconnected");
++        if (failed || signal.aborted)
++          throw unavailable("process_info_unavailable");
++        return result;
+       }
+       async initialize(clientInfo) {
+         this._sessionLog = this._config.saveSession ? await SessionLog.create(this._config, clientInfo.cwd) : void 0;
+@@ -74833,6 +74886,21 @@
+   });
+   let backendPromise;
+   let heartbeatStarted = false;
++  if (factory.sayaProcessInfoEnabled === true) {
++    const processInfoParams = zod.object({
++      _meta: zod.object({
++        progressToken: zod.union([zod.string().max(128), zod.number().int().min(0).max(4294967295)]).optional()
++      }).strict().optional()
++    }).strict();
++    server.setRequestHandler(zod.object({ method: zod.literal("saya/browser/processInfo"), params: zod.unknown().optional() }), async (request2, extra) => {
++      if (!processInfoParams.safeParse(request2.params).success)
++        throw Object.assign(new Error("Invalid process information parameters"), { code: -32602 });
++      const backend = await backendPromise?.catch(() => void 0);
++      if (!backend)
++        throw Object.assign(new Error("Browser process information is unavailable"), { code: -32000, data: { reason: "browser_not_started" } });
++      return await backend.sayaProcessInfo(extra.signal);
++    });
++  }
+   server.setRequestHandler(ListToolsRequestSchema, async () => {
+     serverDebug("listTools");
+     const tools = factory.toolSchemas.map((s) => toMcpTool(s));
+@@ -76500,6 +76568,7 @@
+       version: version2,
+       toolSchemas: tools.map((tool) => tool.schema),
+       ignoreRoots: config.ignoreRoots,
++      sayaProcessInfoEnabled: inProcess,
+       create: async (clientInfo) => {
+         if (useSharedBrowser && !sharedBrowserPromise) {
+           const promise2 = createBrowserWithInfo(config, clientInfo, options, { title: clientInfo.clientName, workspaceDir: clientInfo.cwd }).then((shared2) => {

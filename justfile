@@ -66,6 +66,14 @@ test-tooling:
     python3 -B scripts/n5/test_browser_vm.py
     python3 -I -B scripts/n5/test_acceptance.py
 
+# 验证显式 Node 与固定 worker 的私有协议和通道范围
+test-n5-worker-protocol node worker_root:
+    python3 -I -B scripts/n5/test_worker_protocol.py --node "$1" --worker-root "$2" --temp-root "$PWD/target/tmp/n5-worker-protocol"
+
+# 验证固定 worker 的内部角色查询与受控 CDP 生命周期
+test-n5-worker-process-info node worker_root:
+    "$1" scripts/n5/test_worker_process_info.cjs "$2"
+
 # 验证显式指定程序的 CLI、会话、审查回归和 TUI
 smoke binary:
     python3 -B scripts/release/smoke.py "$1"

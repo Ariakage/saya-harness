@@ -32,7 +32,17 @@ D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用�
 
 第 190 轮在专用 `n5cap` VM 的全新根完成正常 schema v2 provision／check，并由当前 Rust `VmWorkerIdentityVerifier` 经生产 `SshVmCommandRunner` 与固定 Node 探针取得真实正控；添加未声明常规文件后，在完整安装树边界返回已知 `worker_identity` 拒绝；仅删除该自有文件后再次通过。三次 Rust 校验未启动 Browser，宿主输入、素材和 VM 身份／配置前后不变，临时项与关联进程为空。第 188 轮因 Cargo 同名库的不同 profile 解析失败，未执行部署或 Rust 校验，失败记录保留；第 190 轮只按实际 Cargo JSON 中与 core 完全相同的 profile 唯一选择依赖，不按文件名 glob 或修改时间猜测。
 
-安装树身份 v2 本机阶段已完成上述验证；门禁 ignored 包含尚未完成的真实截图入口，不计作截图成功。[逐轮证据与未验证范围](n5-validation.md#安装树身份-v2-本机阶段)另行记录；受限 stdio worker、native 生产核验、定制引擎与新增四平台仍待补齐，截图 facts 保持 false，N5 全范围未完成，未推送或发布。
+安装树身份 v2 本机阶段已完成上述验证；门禁 ignored 包含尚未完成的真实截图入口，不计作截图成功。[逐轮证据与未验证范围](n5-validation.md#安装树身份-v2-本机阶段)另行记录；受限 stdio worker 在该阶段仍待补齐，后续补丁与协议证据见下一节；native 生产核验、定制引擎与新增四平台仍未完成，截图 facts 保持 false，N5 全范围未完成，未推送或发布。
+
+## 受限 worker 补丁与私有协议阶段
+
+2026-11-16，新增固定 Playwright worker 的两份顺序补丁：isolated stdio 在非共享、非 remote／CDP／extension 时直接使用进程内 Browser，不创建非必要的 browser-bind socket；固定 `saya/browser/processInfo` 只查询既有 Browser 的 `SystemInfo.getProcessInfo`，不进入工具目录、不接受业务参数或任意调试命令。保留的 `_meta.progressToken` 仅用于标准 MCP 元数据。返回 Node PID／PID namespace 身份及 browser／renderer PID；Rust native inspector 尚未消费这条接口，不能把角色回复当成 kernel sandbox 证明。
+
+第 206 轮先复现 CDP 响应挂起时取消不释放会话，转交取消信号后第 207 轮 14 项通过。第 214 轮通过真实 Rust SDK 观察到自动注入的 progress metadata；第 215 轮在实际 `-32602` 兼容性拒绝处 RED，严格空业务参数 schema 修复后，第 216／218 轮组件 15 项与真实 CLI 通道 9 项全部通过，覆盖取消释放、角色／PID 拒绝、目录隐藏及 HTTP／共享／非 isolated 拒绝。第 218 轮完整工具门禁 168 项通过。第 209 轮因验收驱动继承 `umask 077` 而失败的三项保留；第 211 轮同源码掩码对照确认原因，最终检查按开发指南仅对子进程设置 `022`，未修改测试断言或安装权限策略。
+
+最终第 217 轮从 stock 在新目录顺序重放补丁，全树与候选一致，并向专用 `n5cap` 的新 v2 根 provision／check；旧 Rust 生产生命周期入口实际 1 passed，覆盖初始页、close、reopen、snapshot 与 shutdown。worker coreBundle SHA-256 为 `28512f80e0a84cb225bd1431217f0ca98265d5010cf920c2f171e28fc056093a`，manifest 为 `fd401d1ed8ab07201d10835584bde4a02f973a0a3bfb57249e5036d5572c03a4`；原始输入、历史归档及 VM 身份前后不变，宿主／远端进程与 Run 根为空，无 SIGKILL。第 195 轮初始页失败、第 199 轮真实 socket 路径错误与第 208 轮归档清单前置失败均保留；第 213 轮旧候选成功不转印为当前候选证据。
+
+本阶段只完成受限 worker 补丁、协议回归及其 VM 生命周期；生产 Rust 未修改、完整 Rust 门禁未重跑。新增显式 Just 回归入口与[逐轮证据](n5-validation.md#受限-worker-补丁与私有协议阶段)已同步。native 权威角色／namespace／kernel 联合核验、生产捕获与新增四平台仍未完成，截图 facts 保持 false，未推送或发布。
 
 ## 固定递归依赖与捕获构建图
 
