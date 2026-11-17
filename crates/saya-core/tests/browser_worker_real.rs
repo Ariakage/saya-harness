@@ -86,39 +86,7 @@ fn required_path(name: &str) -> PathBuf {
 #[ignore = "requires explicit SAYA_TEST_EXECUTABLE and pinned offline worker inputs on a supported Linux host"]
 async fn real_playwright_worker_verifies_chromium_sandbox() {
     assert_eq!(std::env::consts::OS, "linux", "real Browser requires Linux");
-    let image = std::fs::canonicalize(required_path("SAYA_TEST_EXECUTABLE"))
-        .expect("explicit real CLI image");
-    saya_core::execution::pin_launcher_image_from(&image).expect("real CLI launcher image");
-    let node = required_path("SAYA_TEST_NODE");
-    let worker_root = required_path("SAYA_TEST_WORKER_ROOT");
-    let chromium = required_path("SAYA_TEST_CHROMIUM_BIN");
-    let identity_manifest = required_path("SAYA_TEST_IDENTITY_MANIFEST");
-    assert!(node.is_file(), "Node is unavailable");
-    assert!(worker_root.is_dir(), "worker root is unavailable");
-    assert!(chromium.is_file(), "Chromium is unavailable");
-    assert!(
-        identity_manifest.is_file(),
-        "identity manifest is unavailable"
-    );
-
-    let settings = BrowserWorkerSettings {
-        enabled: true,
-        node: Some(node),
-        worker_root: Some(worker_root),
-        chromium: Some(chromium),
-        identity_manifest: Some(identity_manifest.clone()),
-        identity_sha256: Some(manifest_digest(&identity_manifest)),
-        proxy: None,
-        temp_root: None,
-        ..Default::default()
-    };
-    let install_roots = browser_install_roots(&settings).expect("installation roots");
-    let factory = Arc::new(
-        NativeBrowserEnvironmentFactory::new(install_roots, BackendKind::Auto)
-            .expect("native browser environment"),
-    );
-    let provider = PlaywrightMcpProvider::managed(settings, factory, ExecConfig::default())
-        .expect("production provider");
+    let provider = native_worker_provider();
     let outcome = tokio::time::timeout(Duration::from_secs(40), async {
         let opened = provider
             .open(None, &NeverCancel)
@@ -157,6 +125,97 @@ async fn real_playwright_worker_verifies_chromium_sandbox() {
     );
     eprintln!(
         "renderer_pid={} no_new_privs={} seccomp={} stderr_initialize_sandbox={}",
+        evidence.renderer_pid,
+        evidence.no_new_privs,
+        evidence.seccomp_mode,
+        evidence.stderr_initializes_sandbox
+    );
+}
+
+fn native_worker_provider() -> PlaywrightMcpProvider {
+    let image = std::fs::canonicalize(required_path("SAYA_TEST_EXECUTABLE"))
+        .expect("explicit Saya launcher path");
+    saya_core::execution::pin_launcher_image_from(&image).expect("real CLI launcher image");
+    let node = required_path("SAYA_TEST_NODE");
+    let worker_root = required_path("SAYA_TEST_WORKER_ROOT");
+    let chromium = required_path("SAYA_TEST_CHROMIUM_BIN");
+    let identity_manifest = required_path("SAYA_TEST_IDENTITY_MANIFEST");
+    assert!(node.is_file(), "Node is unavailable");
+    assert!(worker_root.is_dir(), "worker root is unavailable");
+    assert!(chromium.is_file(), "Chromium is unavailable");
+    assert!(
+        identity_manifest.is_file(),
+        "identity manifest is unavailable"
+    );
+
+    let settings = BrowserWorkerSettings {
+        enabled: true,
+        node: Some(node),
+        worker_root: Some(worker_root),
+        chromium: Some(chromium),
+        identity_manifest: Some(identity_manifest.clone()),
+        identity_sha256: Some(manifest_digest(&identity_manifest)),
+        proxy: None,
+        temp_root: None,
+        ..Default::default()
+    };
+    let install_roots = browser_install_roots(&settings).expect("installation roots");
+    let factory = Arc::new(
+        NativeBrowserEnvironmentFactory::new(install_roots, BackendKind::Auto)
+            .expect("native browser environment"),
+    );
+    PlaywrightMcpProvider::managed(settings, factory, ExecConfig::default())
+        .expect("production provider")
+}
+
+#[tokio::test]
+#[ignore = "requires Linux Bubblewrap/Seccomp, SAYA_TEST_*, and the fixed capture engine + worker"]
+async fn real_playwright_worker_captures_masked_png_in_native_sandbox() {
+    assert_eq!(std::env::consts::OS, "linux", "real Browser requires Linux");
+    let provider = native_worker_provider();
+    let facts = provider.facts();
+    assert!(facts.screenshots);
+    assert!(facts.screenshot_masking);
+    let outcome = tokio::time::timeout(Duration::from_secs(40), async {
+        let opened = provider
+            .open(None, &NeverCancel)
+            .await
+            .map_err(|error| format!("real worker open: {error:?}"))?;
+        let shot = provider
+            .screenshot(&opened.session, &opened.page, &NeverCancel)
+            .await
+            .map_err(|error| format!("real worker screenshot: {error:?}"))?;
+        let evidence = provider
+            .sandbox_evidence()
+            .await
+            .ok_or_else(|| "Chromium sandbox evidence is missing".to_owned())?;
+        provider
+            .close(&opened.session, &NeverCancel)
+            .await
+            .map_err(|error| format!("real worker close: {error:?}"))?;
+        Ok::<_, String>((shot, evidence))
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(30), provider.shutdown(&NeverCancel))
+        .await
+        .expect("bounded real worker cleanup")
+        .expect("real worker shutdown");
+    let (shot, evidence) = outcome
+        .expect("bounded native masked screenshot")
+        .expect("native masked screenshot");
+    assert!(shot.masked);
+    assert_eq!(shot.mime, "image/png");
+    assert!(shot.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(shot.width > 0 && shot.height > 0);
+    assert_eq!(shot.url.as_deref(), Some("about:blank"));
+    assert!(evidence.no_new_privs, "renderer NoNewPrivs is not 1");
+    assert_eq!(evidence.seccomp_mode, 2);
+    assert!(evidence.sandbox_arguments_valid);
+    assert!(evidence.stderr_initializes_sandbox);
+    eprintln!(
+        "native_screenshot_width={} native_screenshot_height={} renderer_pid={} no_new_privs={} seccomp={} stderr_initialize_sandbox={}",
+        shot.width,
+        shot.height,
         evidence.renderer_pid,
         evidence.no_new_privs,
         evidence.seccomp_mode,

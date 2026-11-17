@@ -2020,7 +2020,7 @@ impl WorkerLaunchPlanner for VmWorkerLaunchPlanner {
             mcp_limits: McpLimits {
                 connect_timeout: Duration::from_millis(self.settings.connect_timeout_ms),
                 request_timeout: Duration::from_millis(self.settings.request_timeout_ms),
-                max_wire_bytes: 4 * 1024 * 1024 + 1024 * 1024,
+                max_wire_bytes: worker::MAX_WORKER_SCREENSHOT_WIRE_BYTES,
                 max_pages: 32,
                 max_tools: 256,
                 max_catalog_bytes: 4 * 1024 * 1024,
@@ -2756,6 +2756,21 @@ impl WorkerConnection for VmWorkerConnection {
             .await
             .map_err(worker::process_info_failure)?;
         worker::WorkerProcessInfo::decode(value)
+    }
+
+    async fn capture_screenshot(&self, cancel: &dyn Cancellation) -> Result<Value, BrowserFailure> {
+        let client = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(BrowserFailure::new("cancelled", "Browser screenshot capture cancelled")),
+            client = self.client.lock() => client,
+        };
+        let client = client
+            .as_ref()
+            .ok_or_else(|| BrowserFailure::new("worker_closed", "Browser VM worker is closed"))?;
+        client
+            .browser_capture_screenshot(cancel)
+            .await
+            .map_err(worker::capture_screenshot_failure)
     }
 
     async fn list_tools(&self, cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure> {

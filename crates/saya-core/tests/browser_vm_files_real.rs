@@ -1242,16 +1242,22 @@ async fn real_vm_credentials_files_background_and_cleanup() {
         "credential plaintext leaked into the artifact store"
     );
 
-    // DEV-082: the pinned Playwright MCP worker has no screenshot mask input.
-    // The production VM provider must therefore refuse the capability instead
-    // of returning an unmasked image.
-    assert!(!state.facts().screenshots);
-    assert!(!state.facts().screenshot_masking);
-    let screenshot_error = state
+    // DEV-082 / Stage 5B: production VM worker exposes masked PNG capture only
+    // through the host-private `saya/browser/captureScreenshot` channel.
+    assert!(state.facts().screenshots);
+    assert!(state.facts().screenshot_masking);
+    let (shot, shot_media) = state
         .screenshot(&context, &after_plan.page, &NeverCancel)
         .await
-        .expect_err("screenshot must be disabled without masking support");
-    assert_eq!(screenshot_error.0.code, "browser_capability_disabled");
+        .expect("masked screenshot should succeed via production VM worker");
+    assert!(shot.masked);
+    assert_eq!(shot.mime, "image/png");
+    assert!(shot.artifact_ref.is_some());
+    assert!(shot_media.is_some());
+    assert!(
+        !tree_contains(&root.path().join("artifacts"), "alice-secret"),
+        "screenshot persistence must never write plaintext secret material"
+    );
 
     jobs.shutdown().await.unwrap();
     state.shutdown(&NeverCancel).await.expect("state shutdown");

@@ -28,6 +28,7 @@ use crate::{
     tools::exec::{ExecConfig, ManagedProcess},
 };
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cap_std::fs::{Dir, OpenOptions as CapOpenOptions, OpenOptionsExt as CapOpenOptionsExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -84,6 +85,9 @@ pub(crate) const BROWSERS_JSON_PATH: &str = "node_modules/playwright-core/browse
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 pub(crate) const MAX_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_WORKER_RESULT_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_WORKER_SCREENSHOT_WIRE_BYTES: usize = 13 * 1024 * 1024;
+const MAX_SCREENSHOT_BASE64_BYTES: usize = 12 * 1024 * 1024;
+const MAX_SCREENSHOT_DIMENSION: u32 = 4096;
 const WORKER_SESSION: &str = "worker_session";
 const WORKER_PAGE: &str = "worker_page";
 /// Bounded re-discovery attempts for a lifecycle operation that races the
@@ -1367,7 +1371,7 @@ fn build_launch_request(
         mcp_limits: McpLimits {
             connect_timeout: Duration::from_millis(settings.connect_timeout_ms),
             request_timeout: Duration::from_millis(settings.request_timeout_ms),
-            max_wire_bytes: MAX_WORKER_RESULT_BYTES.saturating_add(1024 * 1024),
+            max_wire_bytes: MAX_WORKER_SCREENSHOT_WIRE_BYTES,
             max_pages: 32,
             max_tools: 256,
             max_catalog_bytes: MAX_WORKER_RESULT_BYTES,
@@ -3220,6 +3224,134 @@ pub(crate) fn process_info_failure(failure: BoundaryError) -> BrowserFailure {
     }
 }
 
+pub(crate) fn capture_screenshot_failure(failure: BoundaryError) -> BrowserFailure {
+    match failure.0.code.as_str() {
+        "cancelled" => BrowserFailure::new("cancelled", "Browser screenshot cancelled"),
+        "browser_capability_disabled" => {
+            BrowserFailure::new("browser_capability_disabled", failure.0.message)
+        }
+        "saya_capture_timeout" | "mcp_timeout" => {
+            BrowserFailure::new("saya_capture_timeout", failure.0.message)
+        }
+        "saya_capture_stale_context" => {
+            BrowserFailure::new("saya_capture_stale_context", failure.0.message)
+        }
+        "saya_capture_incomplete" => {
+            BrowserFailure::new("saya_capture_incomplete", failure.0.message)
+        }
+        "saya_capture_busy" => BrowserFailure::new("saya_capture_busy", failure.0.message),
+        "worker_closed" | "mcp_disconnect" => {
+            BrowserFailure::new("worker_closed", failure.0.message)
+        }
+        "browser_limit" | "mcp_limit" => {
+            BrowserFailure::new("browser_limit", "Browser screenshot exceeds its byte limit")
+        }
+        _ => BrowserFailure::new("worker_screenshot_failed", failure.0.message),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapturedScreenshotReply {
+    schema_version: u32,
+    protocol_version: u32,
+    mime: String,
+    data: String,
+    width: u32,
+    height: u32,
+    masked: bool,
+    url: String,
+}
+
+fn parse_captured_screenshot(value: Value) -> Result<super::BrowserScreenshot, BrowserFailure> {
+    let reply: CapturedScreenshotReply = serde_json::from_value(value).map_err(|_| {
+        BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned an invalid screenshot payload",
+        )
+    })?;
+    if reply.schema_version != 1 || reply.protocol_version != 1 {
+        return Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned an unsupported screenshot protocol version",
+        ));
+    }
+    if !reply.masked {
+        return Err(BrowserFailure::new(
+            "browser_capability_disabled",
+            "Browser provider did not confirm sensitive-field masking",
+        ));
+    }
+    if reply.mime != "image/png" {
+        return Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned an unsupported screenshot MIME type",
+        ));
+    }
+    if reply.width == 0
+        || reply.width > MAX_SCREENSHOT_DIMENSION
+        || reply.height == 0
+        || reply.height > MAX_SCREENSHOT_DIMENSION
+    {
+        return Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned invalid screenshot dimensions",
+        ));
+    }
+    super::provider_url(&reply.url)?;
+    if reply.data.is_empty() {
+        return Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned empty screenshot data",
+        ));
+    }
+    if reply.data.len() > MAX_SCREENSHOT_BASE64_BYTES {
+        return Err(BrowserFailure::new(
+            "browser_limit",
+            "Browser screenshot exceeds its byte limit",
+        ));
+    }
+    let bytes = STANDARD.decode(&reply.data).map_err(|_| {
+        BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned invalid base64 screenshot data",
+        )
+    })?;
+    if bytes.len() > crate::media::MAX_IMAGE_BYTES as usize {
+        return Err(BrowserFailure::new(
+            "browser_limit",
+            "Browser screenshot exceeds its byte limit",
+        ));
+    }
+    if bytes.len() < 33
+        || &bytes[..8] != b"\x89PNG\r\n\x1a\n"
+        || u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) != 13
+        || &bytes[12..16] != b"IHDR"
+    {
+        return Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned a malformed PNG screenshot",
+        ));
+    }
+    let png_width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let png_height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if png_width == 0 || png_height == 0 || png_width != reply.width || png_height != reply.height {
+        return Err(BrowserFailure::new(
+            "invalid_provider_result",
+            "Browser worker returned mismatched PNG screenshot dimensions",
+        ));
+    }
+    Ok(super::BrowserScreenshot {
+        mime: "image/png".into(),
+        filename: "screenshot.png".into(),
+        bytes,
+        width: png_width,
+        height: png_height,
+        masked: true,
+        url: Some(reply.url),
+    })
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerPidNamespace {
@@ -3260,6 +3392,16 @@ pub trait WorkerConnection: Send + Sync {
         Err(BrowserFailure::new(
             "worker_process_info",
             "Browser worker process information is unavailable",
+        ))
+    }
+    /// Capture a host-only masked PNG screenshot through the private worker channel.
+    async fn capture_screenshot(
+        &self,
+        _cancel: &dyn Cancellation,
+    ) -> Result<Value, BrowserFailure> {
+        Err(BrowserFailure::new(
+            "browser_capability_disabled",
+            "The browser worker does not support masked screenshot capture",
         ))
     }
     async fn list_tools(&self, cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure>;
@@ -3436,6 +3578,23 @@ impl WorkerConnection for RealWorkerConnection {
             .await
             .map_err(process_info_failure)?;
         WorkerProcessInfo::decode(value)
+    }
+
+    async fn capture_screenshot(&self, cancel: &dyn Cancellation) -> Result<Value, BrowserFailure> {
+        let client = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return Err(BrowserFailure::new("cancelled", "Browser screenshot cancelled"));
+            }
+            client = self.client.lock() => client,
+        };
+        let client = client
+            .as_ref()
+            .ok_or_else(|| BrowserFailure::new("worker_closed", "Browser worker is closed"))?;
+        client
+            .browser_capture_screenshot(cancel)
+            .await
+            .map_err(capture_screenshot_failure)
     }
 
     async fn list_tools(&self, cancel: &dyn Cancellation) -> Result<McpCatalog, BrowserFailure> {
@@ -5521,11 +5680,11 @@ impl BrowserProvider for PlaywrightMcpProvider {
     fn facts(&self) -> BrowserFacts {
         BrowserFacts {
             provider: format!("playwright-mcp-{PLAYWRIGHT_MCP_VERSION}"),
-            // The pinned schema has no `mask` input, so the worker cannot
-            // perform the required pre-capture masking. The host refuses the
-            // capability instead of returning an unmasked screenshot.
-            screenshots: false,
-            screenshot_masking: false,
+            // Pre-capture masking is delegated through the private host-only
+            // `saya/browser/captureScreenshot` channel; runtime capture still
+            // fails closed unless the worker and native capture engine confirm masking.
+            screenshots: true,
+            screenshot_masking: true,
             downloads: true,
             uploads: true,
         }
@@ -5783,17 +5942,23 @@ impl BrowserProvider for PlaywrightMcpProvider {
 
     async fn screenshot(
         &self,
-        _session: &str,
-        _page: &str,
-        _cancel: &dyn Cancellation,
+        session: &str,
+        page: &str,
+        cancel: &dyn Cancellation,
     ) -> Result<super::BrowserScreenshot, BrowserFailure> {
-        // `browser_take_screenshot` in the pinned worker has no mask input.
-        // Returning bytes here would expose passwords and one-time codes, so
-        // the provider reports an explicit disabled capability.
-        Err(BrowserFailure::new(
-            "browser_capability_disabled",
-            "The pinned Playwright MCP worker cannot mask sensitive fields before capture",
-        ))
+        self.check_page(session, page).await?;
+        let _guard = self.call_lock.lock().await;
+        let (connection, _) = self.connected().await?;
+        let captured = connection.capture_screenshot(cancel).await;
+        if let Err(failure) = self.verify_sandbox(&connection, cancel).await {
+            if self.shutdown_resources().await.is_err() {
+                return Err(BrowserFailure::uncertain(
+                    "Browser sandbox shutdown could not be confirmed",
+                ));
+            }
+            return Err(failure);
+        }
+        parse_captured_screenshot(captured?)
     }
     async fn download(
         &self,

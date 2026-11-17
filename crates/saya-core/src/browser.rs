@@ -333,6 +333,8 @@ pub struct BrowserScreenshot {
     /// True only when the provider masked passwords, one-time codes,
     /// credential-slot elements and marked sensitive inputs before capture.
     pub masked: bool,
+    /// Observed top-level page URL at capture time, when the provider reports it.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1708,6 +1710,35 @@ impl BrowserState {
                 "Browser provider did not confirm sensitive-field masking",
             ));
         }
+        if let Some(observed_url) = screenshot.url.as_deref() {
+            if let Err(error) = provider_url(observed_url) {
+                return Err(error.into_boundary());
+            }
+            match provider_final_url(observed_url) {
+                Ok(ProviderFinalUrl::Origin(origin)) => {
+                    if self.settings.network.enabled
+                        && !self.settings.network.allows_origin(&origin)
+                    {
+                        state.invalidate();
+                        return Err(failure(
+                            "network_final_origin_denied",
+                            "Browser screenshot observed an origin outside the Run's allowed origins",
+                        ));
+                    }
+                }
+                Ok(ProviderFinalUrl::Blank | ProviderFinalUrl::BrowserError) => {}
+                Err(error) => return Err(error.into_boundary()),
+            }
+            if let Some(expected_url) = state.url.as_deref()
+                && expected_url != observed_url
+            {
+                state.invalidate();
+                return Err(failure(
+                    "stale_document",
+                    "Browser document URL changed before screenshot capture",
+                ));
+            }
+        }
         let sha256 = digest_hex(&screenshot.bytes);
         let bytes = screenshot.bytes.len();
         let mime = screenshot.mime;
@@ -2820,6 +2851,7 @@ pub struct FixtureProvider {
     stall_action: AtomicBool,
     snapshot_truncated: AtomicBool,
     screenshot_unmasked: AtomicBool,
+    override_screenshot_url: Mutex<Option<String>>,
     override_action_url: Mutex<Option<String>>,
     omit_navigation_url: AtomicBool,
     override_title: Mutex<Option<String>>,
@@ -2851,6 +2883,7 @@ impl FixtureProvider {
             stall_action: AtomicBool::new(false),
             snapshot_truncated: AtomicBool::new(false),
             screenshot_unmasked: AtomicBool::new(false),
+            override_screenshot_url: Mutex::new(None),
             override_action_url: Mutex::new(None),
             omit_navigation_url: AtomicBool::new(false),
             override_title: Mutex::new(None),
@@ -3281,6 +3314,7 @@ impl BrowserProvider for FixtureProvider {
             width: 640,
             height: 480,
             masked: !self.screenshot_unmasked.load(Ordering::Acquire),
+            url: self.override_screenshot_url.lock().unwrap().take(),
         })
     }
     async fn download(
@@ -5704,5 +5738,112 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.0.code, "unsupported");
+    }
+
+    #[tokio::test]
+    async fn screenshot_enforces_observed_url_origin_and_document_consistency() {
+        let root = tempfile::tempdir().unwrap();
+        let outputs = Arc::new(
+            OutputStore::open(
+                root.path().join("outputs"),
+                crate::output_store::OutputLimits::default(),
+                Arc::new(SecretRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let provider = Arc::new(FixtureProvider::full());
+        let run = make_run();
+        let state = BrowserState::new(
+            BrowserSettings {
+                enabled: true,
+                network: crate::browser::network::BrowserNetworkSettings {
+                    enabled: true,
+                    allowed_origins: vec!["http://127.0.0.1:8080".into()],
+                    localhost_development_origin: Some("http://127.0.0.1:8080".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            provider.clone(),
+            run.clone(),
+        )
+        .unwrap()
+        .with_artifacts(outputs)
+        .unwrap();
+        let context = make_context(run);
+        let cancel = NeverCancel;
+        let opened = state.open(&context, &cancel).await.unwrap();
+        state
+            .navigate(
+                &context,
+                &opened.page,
+                "http://127.0.0.1:8080/login",
+                &cancel,
+            )
+            .await
+            .unwrap();
+        let snap = state
+            .snapshot(&context, &opened.page, &cancel)
+            .await
+            .unwrap();
+
+        // Matching observed URL succeeds and preserves confirmed URL.
+        *provider.override_screenshot_url.lock().unwrap() =
+            Some("http://127.0.0.1:8080/login".into());
+        let shot = state
+            .screenshot(&context, &opened.page, &cancel)
+            .await
+            .unwrap();
+        assert_eq!(shot.0.url.as_deref(), Some("http://127.0.0.1:8080/login"));
+        assert_eq!(shot.0.url_observation, "last_confirmed");
+        assert_eq!(shot.0.mime, "image/png");
+        assert!(shot.1.is_some());
+
+        // URL drift within allowed origin fails as stale_document and invalidates state.
+        *provider.override_screenshot_url.lock().unwrap() =
+            Some("http://127.0.0.1:8080/other".into());
+        let err = state
+            .screenshot(&context, &opened.page, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0.code, "stale_document");
+        let stale_click = state
+            .click(
+                &context,
+                &opened.page,
+                &snap.document,
+                &snap.elements[0].element_ref,
+                None,
+                &cancel,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(stale_click.0.code, "stale_element");
+
+        // Disallowed origin fails as network_final_origin_denied and invalidates state.
+        state
+            .navigate(
+                &context,
+                &opened.page,
+                "http://127.0.0.1:8080/login",
+                &cancel,
+            )
+            .await
+            .unwrap();
+        *provider.override_screenshot_url.lock().unwrap() =
+            Some("https://outside.example/phish".into());
+        let err = state
+            .screenshot(&context, &opened.page, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0.code, "network_final_origin_denied");
+
+        // Non-HTTP(S)/non-blank URL fails as invalid_provider_result.
+        *provider.override_screenshot_url.lock().unwrap() = Some("file:///etc/passwd".into());
+        let err = state
+            .screenshot(&context, &opened.page, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0.code, "invalid_provider_result");
     }
 }

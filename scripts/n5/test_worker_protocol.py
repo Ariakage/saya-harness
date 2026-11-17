@@ -21,6 +21,8 @@ TOTAL_SECONDS = 120
 STDOUT_LIMIT = 2 * 1024 * 1024
 STDERR_LIMIT = 256 * 1024
 PRIVATE_METHOD = "saya/browser/processInfo"
+PRIVATE_CAPTURE_METHOD = "saya/browser/captureScreenshot"
+PRIVATE_METHODS = (PRIVATE_METHOD, PRIVATE_CAPTURE_METHOD)
 
 
 class Worker:
@@ -401,10 +403,12 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_empty_params_report_browser_not_started_without_launch(self):
         self.start_worker()
-        response = self.worker.request(PRIVATE_METHOD, {})
-        error = self.assert_rpc_error(response, -32000)
-        self.assertIsInstance(error.get("data"), dict, response)
-        self.assertEqual(error["data"].get("reason"), "browser_not_started", response)
+        for method in PRIVATE_METHODS:
+            with self.subTest(method=method):
+                response = self.worker.request(method, {})
+                error = self.assert_rpc_error(response, -32000)
+                self.assertIsInstance(error.get("data"), dict, response)
+                self.assertEqual(error["data"].get("reason"), "browser_not_started", response)
 
     def test_nonempty_object_params_are_rejected_without_launch(self):
         self.start_worker()
@@ -417,9 +421,10 @@ class WorkerProtocolTests(unittest.TestCase):
             {"params": {}},
             {"params": {"method": "Runtime.evaluate", "script": "1 + 1"}},
         ]
-        for params in cases:
-            with self.subTest(params=params):
-                self.assert_rpc_error(self.worker.request(PRIVATE_METHOD, params), -32602)
+        for method in PRIVATE_METHODS:
+            for params in cases:
+                with self.subTest(method=method, params=params):
+                    self.assert_rpc_error(self.worker.request(method, params), -32602)
 
     def test_reserved_progress_metadata_reports_browser_not_started_without_launch(self):
         self.start_worker()
@@ -430,13 +435,14 @@ class WorkerProtocolTests(unittest.TestCase):
             {"_meta": {"progressToken": 4294967295}},
             {"_meta": {"progressToken": "role-check"}},
         ]
-        for params in cases:
-            with self.subTest(params=params):
-                response = self.worker.request(PRIVATE_METHOD, params)
-                error = self.assert_rpc_error(response, -32000)
-                self.assertIsInstance(error.get("data"), dict, response)
-                self.assertEqual(error["data"].get("reason"), "browser_not_started", response)
-                self.assertFalse(self.worker.marker.exists(), "browser sentinel executed")
+        for method in PRIVATE_METHODS:
+            for params in cases:
+                with self.subTest(method=method, params=params):
+                    response = self.worker.request(method, params)
+                    error = self.assert_rpc_error(response, -32000)
+                    self.assertIsInstance(error.get("data"), dict, response)
+                    self.assertEqual(error["data"].get("reason"), "browser_not_started", response)
+                    self.assertFalse(self.worker.marker.exists(), "browser sentinel executed")
 
     def test_progress_metadata_does_not_allow_business_parameters_without_launch(self):
         self.start_worker()
@@ -450,10 +456,11 @@ class WorkerProtocolTests(unittest.TestCase):
             {"_meta": {"progressToken": 0}, "selector": "body"},
             {"_meta": {"progressToken": 0}, "processId": 1},
         ]
-        for params in cases:
-            with self.subTest(params=params):
-                self.assert_rpc_error(self.worker.request(PRIVATE_METHOD, params), -32602)
-                self.assertFalse(self.worker.marker.exists(), "browser sentinel executed")
+        for method in PRIVATE_METHODS:
+            for params in cases:
+                with self.subTest(method=method, params=params):
+                    self.assert_rpc_error(self.worker.request(method, params), -32602)
+                    self.assertFalse(self.worker.marker.exists(), "browser sentinel executed")
 
     def test_tools_directory_keeps_private_process_queries_hidden(self):
         self.start_worker()
@@ -468,7 +475,8 @@ class WorkerProtocolTests(unittest.TestCase):
             names.add(tool["name"])
         self.assertIn("browser_navigate", names)
         self.assertIn("browser_snapshot", names)
-        self.assertNotIn(PRIVATE_METHOD, names)
+        for method in PRIVATE_METHODS:
+            self.assertNotIn(method, names)
         self.assertFalse(
             {name for name in names if name.startswith("saya/")
              or "process" in name.lower()},
@@ -482,16 +490,19 @@ class WorkerProtocolTests(unittest.TestCase):
 
     def test_nonisolated_stdio_rejects_private_method_without_launch(self):
         self.start_worker(flags=())
-        self.assert_rpc_error(self.worker.request(PRIVATE_METHOD, {}), -32601)
+        for method in PRIVATE_METHODS:
+            self.assert_rpc_error(self.worker.request(method, {}), -32601)
 
     def test_shared_context_stdio_rejects_private_method_without_launch(self):
         self.start_worker(flags=("--isolated", "--shared-browser-context"))
-        self.assert_rpc_error(self.worker.request(PRIVATE_METHOD, {}), -32601)
+        for method in PRIVATE_METHODS:
+            self.assert_rpc_error(self.worker.request(method, {}), -32601)
 
     def test_isolated_http_rejects_private_method_without_launch(self):
         self.start_worker(flags=("--isolated", "--port", "0", "--host", "127.0.0.1"),
                           http=True)
-        self.assert_rpc_error(self.worker.request(PRIVATE_METHOD, {}), -32601)
+        for method in PRIVATE_METHODS:
+            self.assert_rpc_error(self.worker.request(method, {}), -32601)
 
 
 def main():

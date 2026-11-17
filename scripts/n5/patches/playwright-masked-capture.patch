@@ -1,0 +1,206 @@
+diff --git a/node_modules/playwright-core/lib/coreBundle.js b/node_modules/playwright-core/lib/coreBundle.js
+--- a/node_modules/playwright-core/lib/coreBundle.js
++++ b/node_modules/playwright-core/lib/coreBundle.js
+@@ -68466,6 +68466,151 @@
+           throw unavailable("process_info_unavailable");
+         return result;
+       }
++      async sayaCaptureScreenshot(signal) {
++        const fail = (reason, message = "Browser screenshot capture is unavailable") =>
++          Object.assign(new Error(message), { code: -32000, data: { reason } });
++        if (this._disposed || this._disconnected)
++          throw fail("browser_disconnected");
++        if (signal?.aborted)
++          throw fail("cancelled", "Browser screenshot capture cancelled");
++        const context = this._context;
++        const tabs = context?.tabs?.();
++        const tab = context?.currentTab?.();
++        if (!context || !Array.isArray(tabs) || tabs.length !== 1 || !tab || tabs[0] !== tab || !tab.page || tab.page.isClosed())
++          throw fail("capture_state_invalid");
++        if (tab.modalStates?.().length)
++          throw fail("modal_state_active");
++        const page = tab.page;
++        if (typeof page.frames === "function" && page.frames().length !== 1)
++          throw fail("saya_capture_incomplete");
++        const initialUrl = page.url();
++        let session;
++        let result;
++        let reason;
++        let onAbort;
++        let detachedPromise;
++        let aborted = false;
++        const abortPromise = signal ? new Promise((_, reject) => {
++          onAbort = () => {
++            aborted = true;
++            reject(fail("cancelled", "Browser screenshot capture cancelled"));
++          };
++          if (signal.aborted)
++            onAbort();
++          else
++            signal.addEventListener("abort", onAbort, { once: true });
++        }) : null;
++        const raceSignal = (promise) => {
++          promise.catch(() => {});
++          return abortPromise ? Promise.race([promise, abortPromise]) : promise;
++        };
++        const detachSession = async () => {
++          if (!session)
++            return;
++          const active = session;
++          session = void 0;
++          if (!detachedPromise)
++            detachedPromise = active.detach().catch(() => {});
++          await detachedPromise;
++        };
++        try {
++          const cdpSessionPromise = page.context().newCDPSession(page).then(async (created) => {
++            if (aborted || this._disposed || this._disconnected) {
++              await created.detach().catch(() => {});
++              throw fail(this._disposed || this._disconnected ? "browser_disconnected" : "cancelled");
++            }
++            session = created;
++            return created;
++          });
++          await raceSignal(cdpSessionPromise);
++          const binding = await raceSignal(session.send("HeadlessExperimental.getSayaCaptureContext", void 0));
++          if (
++            !binding ||
++            binding.protocolVersion !== 1 ||
++            typeof binding.context !== "string" ||
++            binding.context.length === 0 ||
++            binding.context.length > 256
++          ) {
++            throw fail("saya_capture_incomplete");
++          }
++          const captured = await raceSignal(
++            session.send("HeadlessExperimental.captureSayaScreenshot", { context: binding.context })
++          );
++          if (
++            !captured ||
++            captured.context !== binding.context ||
++            captured.masked !== true ||
++            typeof captured.data !== "string" ||
++            captured.data.length === 0 ||
++            !Number.isSafeInteger(captured.width) ||
++            captured.width <= 0 ||
++            captured.width > 4096 ||
++            !Number.isSafeInteger(captured.height) ||
++            captured.height <= 0 ||
++            captured.height > 4096
++          ) {
++            throw fail("saya_capture_incomplete");
++          }
++          if (captured.data.length > 12 * 1024 * 1024)
++            throw fail("browser_limit", "Screenshot image exceeds its byte limit");
++          const currentTabs = context.tabs();
++          if (
++            !Array.isArray(currentTabs) ||
++            currentTabs.length !== 1 ||
++            context.currentTab() !== tab ||
++            page.isClosed() ||
++            (typeof page.frames === "function" && page.frames().length !== 1) ||
++            page.url() !== initialUrl
++          ) {
++            throw fail("saya_capture_stale_context");
++          }
++          result = {
++            schema_version: 1,
++            protocol_version: 1,
++            mime: "image/png",
++            data: captured.data,
++            width: captured.width,
++            height: captured.height,
++            masked: true,
++            url: initialUrl
++          };
++        } catch (error) {
++          if (error && error.data && typeof error.data.reason === "string") {
++            reason = error.data.reason;
++          } else {
++            const text = String(error?.message || error || "");
++            for (const code of [
++              "saya_capture_timeout",
++              "saya_capture_stale_context",
++              "saya_capture_incomplete",
++              "saya_capture_busy",
++              "saya_capture_disconnected",
++              "saya_capture_target_closed",
++              "saya_capture_failure"
++            ]) {
++              if (text.includes(code)) {
++                reason = code;
++                break;
++              }
++            }
++            if (!reason && (text.includes("wasn't found") || text.includes("Not implemented") || text.includes("-32601")))
++              reason = "capture_unsupported";
++            if (!reason)
++              reason = "capture_unavailable";
++          }
++        } finally {
++          if (signal && onAbort)
++            signal.removeEventListener("abort", onAbort);
++          await detachSession();
++        }
++        if (this._disposed || this._disconnected)
++          throw fail("browser_disconnected");
++        if (signal?.aborted || reason === "cancelled")
++          throw fail("cancelled", "Browser screenshot capture cancelled");
++        if (reason || !result)
++          throw fail(reason || "capture_unavailable");
++        return result;
++      }
+       async initialize(clientInfo) {
+         this._sessionLog = this._config.saveSession ? await SessionLog.create(this._config, clientInfo.cwd) : void 0;
+         this._context = new Context(this._browserContext, {
+@@ -74886,20 +75031,32 @@
+   });
+   let backendPromise;
+   let heartbeatStarted = false;
+-  if (factory.sayaProcessInfoEnabled === true) {
+-    const processInfoParams = zod.object({
++  if (factory.sayaProcessInfoEnabled === true || factory.sayaCaptureEnabled === true) {
++    const sayaPrivateParams = zod.object({
+       _meta: zod.object({
+         progressToken: zod.union([zod.string().max(128), zod.number().int().min(0).max(4294967295)]).optional()
+       }).strict().optional()
+     }).strict();
+-    server.setRequestHandler(zod.object({ method: zod.literal("saya/browser/processInfo"), params: zod.unknown().optional() }), async (request2, extra) => {
+-      if (!processInfoParams.safeParse(request2.params).success)
+-        throw Object.assign(new Error("Invalid process information parameters"), { code: -32602 });
+-      const backend = await backendPromise?.catch(() => void 0);
+-      if (!backend)
+-        throw Object.assign(new Error("Browser process information is unavailable"), { code: -32000, data: { reason: "browser_not_started" } });
+-      return await backend.sayaProcessInfo(extra.signal);
+-    });
++    if (factory.sayaProcessInfoEnabled === true) {
++      server.setRequestHandler(zod.object({ method: zod.literal("saya/browser/processInfo"), params: zod.unknown().optional() }), async (request2, extra) => {
++        if (!sayaPrivateParams.safeParse(request2.params).success)
++          throw Object.assign(new Error("Invalid process information parameters"), { code: -32602 });
++        const backend = await backendPromise?.catch(() => void 0);
++        if (!backend)
++          throw Object.assign(new Error("Browser process information is unavailable"), { code: -32000, data: { reason: "browser_not_started" } });
++        return await backend.sayaProcessInfo(extra.signal);
++      });
++    }
++    if (factory.sayaCaptureEnabled === true) {
++      server.setRequestHandler(zod.object({ method: zod.literal("saya/browser/captureScreenshot"), params: zod.unknown().optional() }), async (request2, extra) => {
++        if (!sayaPrivateParams.safeParse(request2.params).success)
++          throw Object.assign(new Error("Invalid screenshot capture parameters"), { code: -32602 });
++        const backend = await backendPromise?.catch(() => void 0);
++        if (!backend)
++          throw Object.assign(new Error("Browser screenshot capture is unavailable"), { code: -32000, data: { reason: "browser_not_started" } });
++        return await backend.sayaCaptureScreenshot(extra.signal);
++      });
++    }
+   }
+   server.setRequestHandler(ListToolsRequestSchema, async () => {
+     serverDebug("listTools");
+@@ -76569,6 +76726,7 @@
+       toolSchemas: tools.map((tool) => tool.schema),
+       ignoreRoots: config.ignoreRoots,
+       sayaProcessInfoEnabled: inProcess,
++      sayaCaptureEnabled: inProcess,
+       create: async (clientInfo) => {
+         if (useSharedBrowser && !sharedBrowserPromise) {
+           const promise2 = createBrowserWithInfo(config, clientInfo, options, { title: clientInfo.clientName, workspaceDir: clientInfo.cwd }).then((shared2) => {

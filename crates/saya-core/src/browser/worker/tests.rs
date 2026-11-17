@@ -668,6 +668,7 @@ struct FakeConnection {
     catalog_replies: Mutex<VecDeque<FakeCatalogReply>>,
     calls: Mutex<Vec<(String, Value)>>,
     replies: Mutex<VecDeque<FakeReply>>,
+    screenshot_replies: Mutex<VecDeque<Result<Value, BrowserFailure>>>,
     shutdowns: AtomicUsize,
     shutdown_failure: AtomicBool,
     shutdown_hangs: AtomicBool,
@@ -686,6 +687,7 @@ impl FakeConnection {
             catalog_replies: Mutex::new(VecDeque::new()),
             calls: Mutex::new(Vec::new()),
             replies: Mutex::new(VecDeque::new()),
+            screenshot_replies: Mutex::new(VecDeque::new()),
             shutdowns: AtomicUsize::new(0),
             shutdown_failure: AtomicBool::new(false),
             shutdown_hangs: AtomicBool::new(false),
@@ -710,6 +712,10 @@ impl FakeConnection {
 
     fn push(&self, reply: FakeReply) {
         self.replies.lock().unwrap().push_back(reply);
+    }
+
+    fn push_screenshot(&self, reply: Result<Value, BrowserFailure>) {
+        self.screenshot_replies.lock().unwrap().push_back(reply);
     }
 
     fn queue_catalog_reply(&self, reply: Result<McpCatalog, BrowserFailure>) {
@@ -886,6 +892,22 @@ impl WorkerConnection for FakeConnection {
         } else {
             Ok(())
         }
+    }
+
+    async fn capture_screenshot(
+        &self,
+        _cancel: &dyn Cancellation,
+    ) -> Result<Value, BrowserFailure> {
+        self.screenshot_replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| {
+                Err(BrowserFailure::new(
+                    "browser_capability_disabled",
+                    "fixture disabled",
+                ))
+            })
     }
 
     async fn read_download(
@@ -3495,22 +3517,65 @@ async fn procfs_sandbox_evidence_rejects_disabled_or_unrelated_processes() {
     );
 }
 
+fn test_png_bytes(width: u32, height: u32, extra_tail: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(33 + 12 + extra_tail);
+    bytes.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    bytes.extend_from_slice(&13u32.to_be_bytes());
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[8, 2, 0, 0, 0]);
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.resize(bytes.len() + extra_tail, b'x');
+    bytes.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
+    bytes
+}
+
+fn captured_screenshot_reply(width: u32, height: u32, extra_tail: usize) -> Value {
+    json!({
+        "schema_version": 1,
+        "protocol_version": 1,
+        "mime": "image/png",
+        "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, test_png_bytes(width, height, extra_tail)),
+        "width": width,
+        "height": height,
+        "masked": true,
+        "url": "http://allowed.example/"
+    })
+}
+
 #[tokio::test]
-async fn pinned_worker_never_declares_masked_screenshot_capability() {
+async fn pinned_worker_declares_masked_screenshot_capability_and_fails_closed() {
     let fixture = fixture_identity();
-    let provider =
-        PlaywrightMcpProvider::new(fixture.settings.clone(), FakeLauncher::new(vec![])).unwrap();
+    let connection = FakeConnection::new(pinned_catalog());
+    let (provider, _) = fake_provider(&fixture, connection.clone());
     let facts = provider.facts();
-    assert!(!facts.screenshots);
-    assert!(!facts.screenshot_masking);
+    assert!(facts.screenshots);
+    assert!(facts.screenshot_masking);
     assert!(facts.downloads);
     assert!(facts.uploads);
     let cancel = SwitchCancel(Arc::new(AtomicBool::new(false)));
+    let opened = provider.open(None, &cancel).await.unwrap();
+
+    // Runtime capability still fails closed if worker/engine refuses masking.
     let error = provider
-        .screenshot("session", "page", &cancel)
+        .screenshot(&opened.session, &opened.page, &cancel)
         .await
         .unwrap_err();
     assert_eq!(error.code, "browser_capability_disabled");
+
+    // Valid masked screenshot succeeds and decodes verified PNG + IHDR dimensions.
+    connection.push_screenshot(Ok(captured_screenshot_reply(320, 240, 0)));
+    let shot = provider
+        .screenshot(&opened.session, &opened.page, &cancel)
+        .await
+        .unwrap();
+    assert_eq!(shot.mime, "image/png");
+    assert_eq!(shot.width, 320);
+    assert_eq!(shot.height, 240);
+    assert!(shot.masked);
+    assert_eq!(shot.url.as_deref(), Some("http://allowed.example/"));
+    provider.shutdown(&cancel).await.unwrap();
 }
 
 #[test]
@@ -3837,6 +3902,27 @@ async fn process_info_fixture_transport(
     limits: McpLimits,
     stall_after_query: bool,
 ) -> ProcessInfoFixture {
+    let mut replies = VecDeque::new();
+    if let Some(reply) = reply {
+        replies.push_back(Ok(reply));
+    }
+    custom_method_fixture(
+        "saya/browser/processInfo",
+        replies,
+        limits,
+        stall_after_query,
+    )
+    .await
+}
+
+type CustomRpcReply = Result<Value, (i32, &'static str, Option<Value>)>;
+
+async fn custom_method_fixture(
+    custom_method: &'static str,
+    mut replies: VecDeque<CustomRpcReply>,
+    limits: McpLimits,
+    stall_after_query: bool,
+) -> ProcessInfoFixture {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let (client, server) = tokio::io::duplex(if stall_after_query { 1 } else { 64 * 1024 });
@@ -3856,7 +3942,8 @@ async fn process_info_fixture_transport(
             let Some(id) = request.get("id") else {
                 continue;
             };
-            let response = match request["method"].as_str().unwrap() {
+            let method = request["method"].as_str().unwrap();
+            let response = match method {
                 "server/discover" => json!({
                     "jsonrpc": "2.0", "id": id,
                     "error": { "code": -32601, "message": "legacy fixture" }
@@ -3868,10 +3955,17 @@ async fn process_info_fixture_transport(
                         "serverInfo": { "name": "process-info-fixture", "version": "1" }
                     }
                 }),
-                "saya/browser/processInfo" => match &reply {
-                    Some(reply) => json!({
+                _ if method == custom_method => match replies.pop_front() {
+                    Some(Ok(reply)) => json!({
                         "jsonrpc": "2.0", "id": id, "result": reply
                     }),
+                    Some(Err((code, message, data))) => {
+                        let mut error = json!({ "code": code, "message": message });
+                        if let Some(data) = data {
+                            error["data"] = data;
+                        }
+                        json!({ "jsonrpc": "2.0", "id": id, "error": error })
+                    }
                     None if stall_after_query => std::future::pending().await,
                     None => continue,
                 },
@@ -4620,4 +4714,185 @@ async fn native_inspector_enforces_single_deadline_vs_cancellation_across_q1_and
     assert_eq!(failure.code, "browser_sandbox_unavailable");
     assert_eq!(conn.process_info_calls.load(Ordering::Acquire), 2);
     assert!(started.elapsed() < Duration::from_millis(130));
+}
+
+#[test]
+fn parse_captured_screenshot_validates_masking_ihdr_url_and_limits() {
+    let valid = parse_captured_screenshot(captured_screenshot_reply(128, 64, 0)).unwrap();
+    assert_eq!(valid.width, 128);
+    assert_eq!(valid.height, 64);
+    assert!(valid.masked);
+    assert_eq!(valid.url.as_deref(), Some("http://allowed.example/"));
+
+    let mut unmasked = captured_screenshot_reply(128, 64, 0);
+    unmasked["masked"] = json!(false);
+    assert_eq!(
+        parse_captured_screenshot(unmasked).unwrap_err().code,
+        "browser_capability_disabled"
+    );
+
+    let mut bad_mime = captured_screenshot_reply(128, 64, 0);
+    bad_mime["mime"] = json!("image/jpeg");
+    assert_eq!(
+        parse_captured_screenshot(bad_mime).unwrap_err().code,
+        "invalid_provider_result"
+    );
+
+    let mut bad_base64 = captured_screenshot_reply(128, 64, 0);
+    bad_base64["data"] = json!("@@@not-base64@@@");
+    assert_eq!(
+        parse_captured_screenshot(bad_base64).unwrap_err().code,
+        "invalid_provider_result"
+    );
+
+    let mut bad_ihdr_dim = captured_screenshot_reply(128, 64, 0);
+    bad_ihdr_dim["width"] = json!(256);
+    assert_eq!(
+        parse_captured_screenshot(bad_ihdr_dim).unwrap_err().code,
+        "invalid_provider_result"
+    );
+
+    let mut bad_url = captured_screenshot_reply(128, 64, 0);
+    bad_url["url"] = json!("");
+    assert_eq!(
+        parse_captured_screenshot(bad_url).unwrap_err().code,
+        "invalid_provider_result"
+    );
+
+    let mut oversized_decoded = captured_screenshot_reply(128, 64, 0);
+    oversized_decoded["data"] = json!(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        test_png_bytes(128, 64, (crate::media::MAX_IMAGE_BYTES as usize) + 1)
+    ));
+    assert_eq!(
+        parse_captured_screenshot(oversized_decoded)
+            .unwrap_err()
+            .code,
+        "browser_limit"
+    );
+}
+
+#[tokio::test]
+async fn real_worker_capture_screenshot_supports_large_wire_payload_and_maps_errors() {
+    let large_payload = captured_screenshot_reply(800, 600, 4_500_000);
+    assert!(large_payload["data"].as_str().unwrap().len() > 5 * 1024 * 1024);
+
+    let replies = VecDeque::from([
+        Ok(large_payload),
+        Err((-32601, "Method not found", None)),
+        Err((
+            -32000,
+            "Unsupported",
+            Some(json!({ "reason": "capture_unsupported" })),
+        )),
+        Err((
+            -32000,
+            "Timeout",
+            Some(json!({ "reason": "saya_capture_timeout" })),
+        )),
+        Err((
+            -32000,
+            "Stale",
+            Some(json!({ "reason": "saya_capture_stale_context" })),
+        )),
+        Err((
+            -32000,
+            "Incomplete",
+            Some(json!({ "reason": "saya_capture_incomplete" })),
+        )),
+        Err((
+            -32000,
+            "Busy",
+            Some(json!({ "reason": "saya_capture_busy" })),
+        )),
+        Err((
+            -32000,
+            "Disconnected",
+            Some(json!({ "reason": "saya_capture_disconnected" })),
+        )),
+        Err((
+            -32000,
+            "Oversized",
+            Some(json!({ "reason": "browser_limit" })),
+        )),
+    ]);
+    let fixture = custom_method_fixture(
+        "saya/browser/captureScreenshot",
+        replies,
+        McpLimits {
+            connect_timeout: Duration::from_secs(3),
+            request_timeout: Duration::from_secs(5),
+            max_wire_bytes: MAX_WORKER_SCREENSHOT_WIRE_BYTES,
+            ..McpLimits::default()
+        },
+        false,
+    )
+    .await;
+
+    let value = fixture
+        .connection
+        .capture_screenshot(&NeverCancel)
+        .await
+        .expect("6 MiB base64 PNG must cross updated stdio wire limit");
+    let shot = parse_captured_screenshot(value).unwrap();
+    assert_eq!(shot.width, 800);
+    assert_eq!(shot.height, 600);
+    assert!(shot.masked);
+
+    for expected in [
+        "browser_capability_disabled",
+        "browser_capability_disabled",
+        "saya_capture_timeout",
+        "saya_capture_stale_context",
+        "saya_capture_incomplete",
+        "saya_capture_busy",
+        "worker_closed",
+        "browser_limit",
+    ] {
+        let error = fixture
+            .connection
+            .capture_screenshot(&NeverCancel)
+            .await
+            .expect_err("expected mapped error code");
+        assert_eq!(error.code, expected);
+    }
+    fixture.connection.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn screenshot_sandbox_verification_failure_cleans_worker_and_environment() {
+    let fixture = fixture_identity();
+    let environment_root = tempfile::tempdir().unwrap();
+    let factory = FakeEnvironmentFactory::new(environment_root.path().to_path_buf());
+    let connection = FakeConnection::new(pinned_catalog()).with_pid(4242);
+    connection.push_screenshot(Ok(captured_screenshot_reply(320, 240, 0)));
+    let launcher = FakeLauncher::new(vec![Ok(connection.clone())]);
+    let inspector = FixedInspector::new(Ok(ChromiumSandboxEvidence {
+        renderer_pid: 4243,
+        no_new_privs: true,
+        seccomp_mode: 2,
+        sandbox_arguments_valid: true,
+        stderr_initializes_sandbox: true,
+    }));
+    let provider = provider_with_factory(
+        &fixture,
+        launcher,
+        factory.clone() as Arc<dyn BrowserEnvironmentFactory>,
+    )
+    .with_sandbox_inspector(inspector.clone());
+
+    let opened = provider.open(None, &NeverCancel).await.unwrap();
+    inspector.set_evidence(Err(BrowserFailure::new(
+        "browser_sandbox_unavailable",
+        "Chromium renderer sandbox evidence is insufficient",
+    )));
+
+    let failure = provider
+        .screenshot(&opened.session, &opened.page, &NeverCancel)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code, "browser_sandbox_unavailable");
+    assert_eq!(connection.shutdown_count(), 1);
+    assert_eq!(factory.releases.load(Ordering::Acquire), 1);
+    provider.shutdown(&NeverCancel).await.unwrap();
 }

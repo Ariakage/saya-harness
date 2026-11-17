@@ -74,6 +74,10 @@ test-n5-worker-protocol node worker_root:
 test-n5-worker-process-info node worker_root:
     "$1" scripts/n5/test_worker_process_info.cjs "$2"
 
+# 验证固定 worker 的原生截图遮蔽私密请求与受控 CDP 生命周期
+test-n5-worker-capture node worker_root:
+    "$1" scripts/n5/test_worker_capture.cjs "$2"
+
 # 验证显式指定程序的 CLI、会话、审查回归和 TUI
 smoke binary:
     python3 -B scripts/release/smoke.py "$1"

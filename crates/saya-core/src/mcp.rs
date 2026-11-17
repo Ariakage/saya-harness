@@ -230,6 +230,17 @@ impl fmt::Debug for McpClient {
     }
 }
 
+const MAX_CUSTOM_SCREENSHOT_BYTES: usize = 12 * 1024 * 1024 + 4096;
+
+struct CustomBrowserRequest<'a> {
+    method: &'a str,
+    params: Value,
+    cancel_message: &'static str,
+    limit_message: &'static str,
+    max_bytes: usize,
+    classify_screenshot_error: bool,
+}
+
 impl McpClient {
     /// Connect to pipes supplied by a host that has authorized and isolated the server.
     /// This method never spawns a process or inherits environment variables.
@@ -560,17 +571,26 @@ impl McpClient {
         ))
     }
 
-    pub(crate) async fn browser_process_info(
+    async fn send_custom_browser_request(
         &self,
+        spec: CustomBrowserRequest<'_>,
         cancel: &dyn Cancellation,
     ) -> Result<Value, BoundaryError> {
+        let CustomBrowserRequest {
+            method,
+            params,
+            cancel_message,
+            limit_message,
+            max_bytes,
+            classify_screenshot_error,
+        } = spec;
         self.ensure_connected()?;
         if cancel.is_cancelled() {
-            return Err(error("cancelled", "Browser process query cancelled"));
+            return Err(error("cancelled", cancel_message));
         }
         let mut pending = InFlightBrowserQuery(Some(self));
         let deadline = tokio::time::Instant::now() + self.limits.request_timeout;
-        let request = CustomRequest::new("saya/browser/processInfo", Some(serde_json::json!({})));
+        let request = CustomRequest::new(method, Some(params));
         let mut handle = bounded(
             self.service
                 .send_cancellable_request(request.into(), PeerRequestOptions::no_options()),
@@ -578,7 +598,7 @@ impl McpClient {
             cancel,
         )
         .await?
-        .map_err(service_error)?;
+        .map_err(|err| map_custom_service_error(err, classify_screenshot_error))?;
         let response = bounded(
             &mut handle.rx,
             deadline.saturating_duration_since(tokio::time::Instant::now()),
@@ -589,8 +609,13 @@ impl McpClient {
             Ok(response) => {
                 pending.0 = None;
                 response
-                    .map_err(|_| service_error(ServiceError::TransportClosed))?
-                    .map_err(service_error)?
+                    .map_err(|_| {
+                        map_custom_service_error(
+                            ServiceError::TransportClosed,
+                            classify_screenshot_error,
+                        )
+                    })?
+                    .map_err(|err| map_custom_service_error(err, classify_screenshot_error))?
             }
             Err(failure) => {
                 if !matches!(
@@ -608,17 +633,51 @@ impl McpClient {
             }
         };
         let ServerResult::CustomResult(result) = response else {
-            return Err(error("mcp_protocol", "Browser process reply is invalid"));
+            return Err(error("mcp_protocol", "Browser worker reply is invalid"));
         };
         let bytes = serde_json::to_vec(&result.0)
-            .map_err(|_| error("mcp_protocol", "Browser process reply cannot be encoded"))?;
-        if bytes.len() > self.limits.max_result_bytes {
-            return Err(error(
-                "mcp_limit",
-                "Browser process reply exceeds its byte limit",
-            ));
+            .map_err(|_| error("mcp_protocol", "Browser worker reply cannot be encoded"))?;
+        if bytes.len() > max_bytes {
+            return Err(error("mcp_limit", limit_message));
         }
         Ok(result.0)
+    }
+
+    pub(crate) async fn browser_process_info(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<Value, BoundaryError> {
+        self.send_custom_browser_request(
+            CustomBrowserRequest {
+                method: "saya/browser/processInfo",
+                params: serde_json::json!({}),
+                cancel_message: "Browser process query cancelled",
+                limit_message: "Browser process reply exceeds its byte limit",
+                max_bytes: self.limits.max_result_bytes,
+                classify_screenshot_error: false,
+            },
+            cancel,
+        )
+        .await
+    }
+
+    pub(crate) async fn browser_capture_screenshot(
+        &self,
+        cancel: &dyn Cancellation,
+    ) -> Result<Value, BoundaryError> {
+        let cap = self.limits.max_wire_bytes.min(MAX_CUSTOM_SCREENSHOT_BYTES);
+        self.send_custom_browser_request(
+            CustomBrowserRequest {
+                method: "saya/browser/captureScreenshot",
+                params: serde_json::json!({}),
+                cancel_message: "Browser screenshot capture cancelled",
+                limit_message: "Browser screenshot reply exceeds its byte limit",
+                max_bytes: cap,
+                classify_screenshot_error: true,
+            },
+            cancel,
+        )
+        .await
     }
 
     /// Validate against the approved catalogue generation, then send exactly one request.
@@ -870,6 +929,64 @@ fn tool_failure(failure: BoundaryError, attempted: bool) -> BoundaryError {
         );
     }
     failure
+}
+
+fn map_custom_service_error(
+    error_value: ServiceError,
+    classify_screenshot_error: bool,
+) -> BoundaryError {
+    if classify_screenshot_error && let ServiceError::McpError(ref mcp_err) = error_value {
+        if mcp_err.code == rmcp::model::ErrorCode::METHOD_NOT_FOUND {
+            return error(
+                "browser_capability_disabled",
+                "Browser worker does not support pre-capture masking",
+            );
+        }
+        if let Some(reason) = mcp_err
+            .data
+            .as_ref()
+            .and_then(|value| value.get("reason"))
+            .and_then(Value::as_str)
+        {
+            return match reason {
+                "capture_unsupported" => error(
+                    "browser_capability_disabled",
+                    "Browser engine does not support pre-capture masking",
+                ),
+                "saya_capture_timeout" => error(
+                    "saya_capture_timeout",
+                    "Native masked capture exceeded its deadline",
+                ),
+                "saya_capture_stale_context" => error(
+                    "saya_capture_stale_context",
+                    "Browser document changed during capture",
+                ),
+                "saya_capture_incomplete" => error(
+                    "saya_capture_incomplete",
+                    "Browser page contains unreadable or incomplete paint content",
+                ),
+                "saya_capture_busy" => error(
+                    "saya_capture_busy",
+                    "Browser capture is already in progress",
+                ),
+                "saya_capture_disconnected"
+                | "saya_capture_target_closed"
+                | "browser_disconnected"
+                | "browser_not_started" => {
+                    error("worker_closed", "Browser page disconnected during capture")
+                }
+                "browser_limit" => {
+                    error("browser_limit", "Browser screenshot exceeds its byte limit")
+                }
+                "cancelled" => error("cancelled", "Browser screenshot capture cancelled"),
+                _ => error(
+                    "worker_screenshot_failed",
+                    "Browser screenshot capture could not be completed cleanly",
+                ),
+            };
+        }
+    }
+    service_error(error_value)
 }
 
 fn service_error(error_value: ServiceError) -> BoundaryError {
