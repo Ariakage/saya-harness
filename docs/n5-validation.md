@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-17：DEV-079 至 DEV-083 已完成功能交付、定制 Chromium 捕获引擎修复（Stage 5A：23 文件补丁 `df4c0fb6…`，ELF `501,816,112 B` SHA-256 `d3c691a5…`）与三补丁受限 worker／Host／VM Masked 截图联合实测（Stage 5B）：macOS ARM64 `just check` 通过（1714 passed，`target/release/saya` `1b752d59…`，`minos 15.0`），`colima-n5cap`（`saya-capture-fixed-265`）通过 `browser_screenshot_real`（12/12 passed）、全部 VM 套件及 `scripts/n5/acceptance.py --require-screenshot`（22/22 passed、0 disabled），独立 Linux ARM64 `n5arm22`（`native-capture-265`）通过 `just check`（1729 passed，Linux `saya` `f0d15cc6…`）、tooling／smoke 及原生 `browser_worker_real`（2/2 passed 含 `1280x720` Masked PNG 捕获，`renderer_pid=74/76 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`）。Linux x86-64／macOS Intel 当前源码、多架构定制引擎分发与远端四平台 CI／发行尚未执行，未推送或发布。**
+**2026-11-17：DEV-079 至 DEV-083 已完成功能交付、定制 Chromium ARM64 捕获引擎修复（Stage 5A：23 文件补丁 `df4c0fb6…`，ELF `501,816,112 B` `d3c691a5…`）、本机／专用 Colima VM／独立 Linux ARM64 Masked 截图实测（Stage 5B），以及固定源码 `5fff1c46ba1d07bf5af993745f4bdeb1e90eeb7d`（`5fff1c4`）上的四平台远端终验（Stage 5C）：[CI 44044030536](https://github.com/Ariakage/saya-harness/actions/runs/44044030536)、[N5 native acceptance 44044034857](https://github.com/Ariakage/saya-harness/actions/runs/44044034857)（4/4 passed，0 unsatisfied）与 [Release candidates 44044045558](https://github.com/Ariakage/saya-harness/actions/runs/44044045558)（4/4 passed）均已全绿通过，四组构建产物的 candidate 与 tarball 解包二进制 SHA-256 逐字节一致。`version = 0.2.0` 不变、未发布新发行标签；非 `linux-arm64` 目标架构定制 `headless_shell` 构建分发仍作为显式未覆盖边界保留。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
 
@@ -13,7 +13,22 @@
 | DEV-081 网络阶段 | `e2587fe` | 共享 Run 网络预算、broker、反向 SSH、私有 netns、旁路 canary |
 | DEV-081 凭据／文件／后台 | `f1bbc5c` | origin 凭据槽、下载／上传 artifact、GC／lease、取消与 unknown |
 | DEV-082 | `1443291` | CLI／TUI 审批与产物、三协议图片、有效上下文媒体加载、来源保真与导出 |
-| DEV-083（Stage 5A／5B） | 本次阶段 | 定制 Chromium pre-capture 遮蔽引擎、`saya/browser/captureScreenshot`、strict `--require-screenshot` 22/22 passed 及 Linux ARM64 原生 `1280x720` Masked PNG 实测；待远端四平台 CI／多架构引擎分发 |
+| DEV-083（Stage 5A／5B） | 本机／VM 实测 | 定制 Chromium ARM64 捕获引擎、`saya/browser/captureScreenshot`、strict `--require-screenshot` 22/22 passed 与 `n5arm22` `1280x720` 原生 Masked PNG |
+| DEV-083（Stage 5C） | `5fff1c4` | 四平台远端 `CI`（`44044030536`）、`N5 native acceptance`（`44044034857`）与 `Release candidates`（`44044045558`）全部 4/4 通过，三补丁 worker `de88c9fc…`、Linux x64/ARM64 Chromium sandbox 与 candidate/RC 产物核验一致 |
+
+## 四平台固定源码远端终验（`5fff1c4`）
+
+2026-11-17，在推送修复（含 macOS PTY 背压与终止退避、`vm.rs` 早退上传 `BrokenPipe` 竞争、TUI 选区渲染等待及 Darwin XNU 进程组回收 `EPERM` 边界）后，以固定 Clean 源码 `5fff1c46ba1d07bf5af993745f4bdeb1e90eeb7d` 执行三组四平台远端工作流并全部通过；已下载全部 `n5-acceptance-*` 与 `saya-*` 产物完成独立摘要与日志核验：
+
+| 平台／目标 | Runner 与系统基线 | Rust / Python | Candidate 与 RC 二进制（`saya`） | N5 原生／Browser 关键实测 |
+| --- | --- | --- | --- | --- |
+| `ubuntu-22.04`（`linux-x86_64`） | Ubuntu 22.04.5 LTS，glibc 2.35，Linux `6.8.0-1070-azure` | Rust 72 suites / **1730 passed**（0 failed，35 ignored）；Python 12 suites / **172 passed** | `72,519,776 B`，SHA-256 `a3e640eed750770875d9349a8cf56a41722bf14aeeefa47de905dc2a404634ed`（`.tar.gz` `2cb8a04f…`）与 RC 解包完全一致 | `workflow-outcomes` 22/22；原生隔离 19/19、性能 21/21、插件 8/8、N3 CLI 34/34、N3 TUI 15/15、TUI 28/28；三补丁 worker `de88c9fc…`（9/15/13 passed）；`browser_vm_host_linux` 1/1；schema v2 manifest `1d914e12…` ＋ Playwright rev 1254 原生 Chromium sandbox `passed`（115.30s，`renderer_pid=73 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`） |
+| `ubuntu-22.04-arm`（`linux-aarch64`） | Ubuntu 22.04.5 LTS，glibc 2.35，Linux `6.8.0-1070-azure` | Rust 72 suites / **1730 passed**（0 failed，35 ignored）；Python 12 suites / **172 passed** | `66,548,720 B`，SHA-256 `09a13baeb1a8591aeb3d4589ffddbbd0fee1c2be98b0a8c866dc18b0a48d683b`（`.tar.gz` `28c4ce66…`）与 RC 解包完全一致 | `workflow-outcomes` 22/22；原生隔离 19/19、性能 21/21、插件 8/8、N3 CLI 34/34、N3 TUI 15/15、TUI 28/28；三补丁 worker `de88c9fc…`（9/15/13 passed）；`browser_vm_host_linux` 1/1；schema v2 manifest `dd82993c…` ＋ Playwright rev 1254 原生 Chromium sandbox `passed`（49.42s，`renderer_pid=73 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`） |
+| `macos-15`（`macos-aarch64`） | macOS 15.8.2 arm64，Darwin `24.6.0`，`minos 15.0` | Rust 72 suites / **1715 passed**（0 failed，27 ignored）；Python 12 suites / **172 passed** | `60,582,784 B`，SHA-256 `8b67b35bd4c9aa0698938f9c97963d6dd06d38633d59bf2726dca050ce6e80e1`（`.tar.gz` `961bbc6b…`）与 RC 解包完全一致 | `workflow-outcomes` 19/19；Seatbelt 原生隔离 18 passed / 1 `not_run`（无 Linux delegated cgroup）、性能 21/21、插件 8/8、N3 CLI 34/34、N3 TUI 15/15、TUI 28/28；三补丁 worker `de88c9fc…`（9/15/13 passed）；Seatbelt 原生 Browser fail-closed 契约保持 |
+| `macos-15-intel`（`macos-x86_64`） | macOS 15.7.9 x86_64，Darwin `24.6.0`，`minos 15.0` | Rust 72 suites / **1715 passed**（0 failed，27 ignored）；Python 12 suites / **172 passed** | `64,133,976 B`，SHA-256 `fa525f8e1136ec77e76caa4978bf23d55c7f5f0c870698f1883e4ccdcfda1824`（`.tar.gz` `febef730…`）与 RC 解包完全一致 | `workflow-outcomes` 19/19；Seatbelt 原生隔离 18 passed / 1 `not_run`（无 Linux delegated cgroup）、性能 21/21、插件 8/8、N3 CLI 34/34、N3 TUI 15/15、TUI 28/28；三补丁 worker `de88c9fc…`（9/15/13 passed）；Seatbelt 原生 Browser fail-closed 契约保持 |
+
+- **工作流记录**：[CI 44044030536](https://github.com/Ariakage/saya-harness/actions/runs/44044030536)（14m22s–40m36s）、[N5 native acceptance 44044034857](https://github.com/Ariakage/saya-harness/actions/runs/44044034857)（19m54s–56m16s）、[Release candidates 44044045558](https://github.com/Ariakage/saya-harness/actions/runs/44044045558)（18m29s–36m8s）；四个目标均使用统一工具链 `rustc 1.99.1 (58cf8f9c3 2026-10-13)`。
+- **能力边界说明**：远端 `N5 native acceptance` 在 Linux 双架构使用 Playwright rev `1254` 的 stock Chromium（证明安装树 v2 核验、`browser_vm_host_linux` 通道、Bubblewrap/Seccomp 嵌套隔离与 Chromium 内层 sandbox 成立）；定制预捕获 Masked PNG 捕获引擎当前仅针对 `linux-arm64` 完成编译交付并在下节 `colima-n5cap`／`n5arm22` 取得实跑通过（遇未修补引擎继续按设计 fail-closed 返回 `browser_capability_disabled`）。
 
 ## 定制捕获引擎修复、Stage 5B 接线与 strict 截图验收
 
@@ -512,9 +527,9 @@ python3 -B scripts/n2/native_acceptance.py target/release/saya --benchmark-sampl
 python3 -B scripts/n2/verify_performance.py target/n5/native-evidence.json --samples 3
 ```
 
-## 尚未满足的退出条件
+## 已有证据之外的显式边界
 
-1. 除 macOS ARM64 与 Linux ARM64 外，Linux x86-64／macOS Intel 当前源码及远端四平台固定源码联合／发行证据（既有 N2／N3 四平台报告不替代 N5 本轮证据）。
-2. 若在非 `linux-arm64` 架构（如 `linux-x86_64`）宿主原生启用 Masked 截图，对应目标架构定制 Chromium `headless_shell` 的构建与分发校验产物。
+1. 除已完成交叉编译与实际验证的 `linux-arm64` 定制 `headless_shell`（`501,816,112 B`，`d3c691a5…`）外，若需在非 `linux-arm64` 架构（如 `linux-x86_64`）原生启用 Masked 截图，仍需另行构建与分发对应目标架构的定制 Chromium `headless_shell`（四平台远端终验使用 Playwright rev 1254 stock Chromium，未修补引擎按设计 fail-closed 返回 `browser_capability_disabled`）。
+2. 版本号保持 `0.2.0` 且未创建新正式发行标签；是否发布新版本或归档定制 Chromium 构建产物取决于项目负责人后续决定。
 
-本轮未推送、未创建发行，Browser 验收只访问本地网页 fixture，未使用真实外网页面或付费模型；构建准备中的官方依赖下载不算 Browser 外网验收。版本号未变，完成声明以实际证据为准，不以模型文字或安全拒绝代替尚缺功能。
+以上远端工作流与本机／VM 联合矩阵均仅在受控夹具与本地网页环境下验证，未使用真实外网页面或付费模型；构建准备中的官方依赖下载不算 Browser 外网验收，所有完成声明严格以实际可核查证据为准。
