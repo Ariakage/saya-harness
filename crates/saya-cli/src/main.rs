@@ -514,7 +514,8 @@ async fn compact_session(
             events,
             run_id: Some(run_id),
         },
-    )?;
+    )
+    .await?;
     let result = runtime.compact(&mut prepared.session).await?;
     log_run_result(config, &result);
     match config.output {
@@ -523,7 +524,7 @@ async fn compact_session(
         Output::Text => Ok(report_result(&result, &prepared.session, false, config)),
     }
 }
-fn build_runtime(
+async fn build_runtime(
     config: &Config,
     session: &Session,
     summary: &str,
@@ -531,22 +532,26 @@ fn build_runtime(
 ) -> Result<(AgentRuntime, bool), Box<dyn std::error::Error>> {
     install_diagnostics(config)?;
     let events = launch.events;
-    saya_app::build_runtime(
-        config,
-        session,
-        summary,
-        saya_app::Launch {
-            permissions: launch.permissions,
-            store: launch.store,
-            cancellation: launch.cancellation,
-            confirmation: launch.confirmation,
-            input: launch.input,
-            approvals: launch.approvals,
-            personal_context: launch.personal_context,
-            anthropic_prompt_cache: launch.anthropic_prompt_cache,
-            run_id: launch.run_id,
-            secret_registry: events.as_ref().and_then(|writer| writer.secret_registry()),
-        },
+    let app_launch = saya_app::Launch {
+        permissions: launch.permissions,
+        store: launch.store,
+        cancellation: launch.cancellation,
+        confirmation: launch.confirmation,
+        input: launch.input,
+        approvals: launch.approvals,
+        personal_context: launch.personal_context,
+        anthropic_prompt_cache: launch.anthropic_prompt_cache,
+        run_id: launch.run_id,
+        secret_registry: events.as_ref().and_then(|writer| writer.secret_registry()),
+    };
+    // The build opens stores and may hash the worker installation tree; run it
+    // on a blocking thread so Ctrl-C handling on this current_thread runtime
+    // is not delayed behind the synchronous work.
+    saya_app::spawn_build_runtime(
+        config.clone(),
+        session.clone(),
+        summary.to_owned(),
+        app_launch,
         move |router, streamed| {
             if let Some(events) = events {
                 Arc::new(events::EventModel(router, events))
@@ -557,6 +562,8 @@ fn build_runtime(
             }
         },
     )
+    .await
+    .map_err(|error| -> Box<dyn std::error::Error> { error })
 }
 fn log_warning(config: &Config, level: &str, event: &str, data: serde_json::Value) {
     let Ok(secrets) = config_secrets(config) else {
@@ -746,7 +753,8 @@ async fn run(
             events: events.clone(),
             run_id: Some(run_id),
         },
-    )?;
+    )
+    .await?;
     if let Some(events) = &events {
         use saya_core::contract::EventPayload;
         let payload = if args.session.is_some() {
@@ -806,7 +814,10 @@ async fn query_sessions(
         return export::run(config, args).await;
     }
     session::check_roots(config, &config.cwd, config.mode)?;
-    let store = session::open(config)?;
+    let store = {
+        let owned = config.clone();
+        saya_app::offload(move || session::open(&owned)).await?
+    };
     let mut data = match action {
         SessionAction::Export(_) => return Err("invalid export routing".into()),
         SessionAction::List { page } => {

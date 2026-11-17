@@ -488,7 +488,13 @@ async fn auto_loop(
     let mut runs = Vec::new();
     let mut first_run_approval = approval_file.cloned();
     loop {
-        configured_auto_goal(config, &goal)?;
+        {
+            // The fingerprint reads module overrides through SQLite; keep the
+            // bounded storage work off this current_thread executor.
+            let owned = config.clone();
+            let record = goal.clone();
+            saya_app::offload_boundary(move || configured_auto_goal(&owned, &record)).await?;
+        }
         if goal.status != GoalStatus::Ready {
             break;
         }
@@ -572,7 +578,11 @@ async fn start(
         auto: true,
         mode: config.mode,
         permissions: config.permissions_mode,
-        config_fingerprint: goal_profile_fingerprint(config, &goal.profile)?,
+        config_fingerprint: {
+            let owned = config.clone();
+            let profile = goal.profile.clone();
+            saya_app::offload_boundary(move || goal_profile_fingerprint(&owned, &profile)).await?
+        },
         authorized_at: saya_app::events::timestamp()?,
     });
     goal.updated_at = saya_app::events::timestamp()?;
@@ -608,9 +618,14 @@ async fn worker_once(
         if goal.status != GoalStatus::Ready || goal.authorization.is_none() {
             continue;
         }
-        if config.permissions_mode == PermissionMode::Manual
-            || configured_auto_goal(config, &goal).is_err()
-        {
+        let configured = {
+            let owned = config.clone();
+            let record = goal.clone();
+            saya_app::offload_boundary(move || configured_auto_goal(&owned, &record))
+                .await
+                .is_ok()
+        };
+        if config.permissions_mode == PermissionMode::Manual || !configured {
             let blocked = store
                 .transition(
                     goal.id,

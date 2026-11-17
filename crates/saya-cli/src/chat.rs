@@ -123,7 +123,7 @@ struct RunSettings<'a> {
     personal_context: &'a PersonalContext,
     anthropic_prompt_cache: bool,
 }
-fn start_run(
+async fn start_run(
     config: &Config,
     session: &mut Option<Session>,
     summary: &str,
@@ -145,7 +145,11 @@ fn start_run(
         events: None,
         run_id: None,
     };
-    let (mut runtime, streamed) = build_runtime(config, current, summary, launch)?;
+    // Runtime assembly hashes the worker tree and opens stores; it runs on a
+    // blocking worker so this single-thread executor stays responsive.
+    let (mut runtime, streamed) = build_runtime(config, current, summary, launch)
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
     let handle = runtime.handle();
     let mut current = session.take().ok_or("session missing")?;
     let join = tokio::spawn(async move {
@@ -479,7 +483,7 @@ pub async fn chat(
                     if compact_after_run && completed {
                         match start_run(&config, &mut session, "Compact the saved session context", RunKind::Compaction, RunSettings {
                             permissions, store: store.clone(), personal_context: &personal_context, anthropic_prompt_cache,
-                        }) {
+                        }).await {
                             Ok(run) => { active = Some(run); console.print("Compacting context...\n")?; continue; }
                             Err(error) => console.print(&format!("saya: {}\n", safe_terminal_text(&error.to_string())))?,
                         }
@@ -580,7 +584,7 @@ pub async fn chat(
                                 } else {
                                     match start_run(&config, &mut session, "Compact the saved session context", RunKind::Compaction, RunSettings {
                                         permissions, store: store.clone(), personal_context: &personal_context, anthropic_prompt_cache,
-                                    }) {
+                                    }).await {
                                         Ok(run) => { active = Some(run); console.print("Compacting context...\n")?; }
                                         Err(error) => console.print(&format!("saya: {}\n", safe_terminal_text(&error.to_string())))?,
                                     }
@@ -783,7 +787,7 @@ pub async fn chat(
                         .ok_or("session not found")?);
                     match start_run(&config, &mut session, &text, RunKind::Execution, RunSettings {
                         permissions, store: store.clone(), personal_context: &personal_context, anthropic_prompt_cache,
-                    }) {
+                    }).await {
                         Ok(run) => active = Some(run),
                         Err(e) => {
                             console
@@ -892,6 +896,7 @@ mod tests {
                     run_id: None,
                 },
             )
+            .await
             .unwrap();
             let handle = runtime.handle();
             let current = prepared.session.clone();

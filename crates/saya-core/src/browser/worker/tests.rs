@@ -1384,26 +1384,95 @@ fn rejects_writable_installation_directories() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn identity_verification_observes_cancellation_while_reading() {
-    struct AfterChecks(AtomicUsize);
-    impl Cancellation for AfterChecks {
+    // Cancellation now reaches the hashing worker through a flag bridge: the
+    // outer `cancelled()` resolves, `verify` flags the bridge, and the next
+    // checkpoint inside `verify_worker_identity_checked` returns `cancelled`.
+    struct YieldCancel;
+    impl Cancellation for YieldCancel {
         fn is_cancelled(&self) -> bool {
-            self.0.fetch_add(1, Ordering::AcqRel) >= 3
+            false
         }
         fn cancelled(
             &self,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
-            Box::pin(std::future::pending())
+            Box::pin(async {
+                for _ in 0..8 {
+                    tokio::task::yield_now().await;
+                }
+            })
         }
     }
-    let fixture = fixture_identity();
+    let fixture = slow_fixture_identity();
     let verifier = LocalWorkerIdentityVerifier::new(fixture.settings);
     let error = verifier
-        .verify(&AfterChecks(AtomicUsize::new(0)))
+        .verify(&YieldCancel)
         .await
         .expect_err("identity verification ignored cancellation while reading");
     assert_eq!(error.code, "cancelled");
+}
+
+/// A Node image large enough that the identity hash takes several executor
+/// turns; without it the worker could finish before a concurrent probe runs.
+fn slow_fixture_identity() -> IdentityFixture {
+    let mut fixture = fixture_identity();
+    let node_bytes = vec![0xA5u8; 16 * 1024 * 1024];
+    write_mode(&fixture.node_path, &node_bytes, 0o755);
+    fixture.manifest.node.sha256 = sha256_hex(&node_bytes);
+    fixture.manifest.node.size = node_bytes.len() as u64;
+    seal_fixture_installations(&mut fixture);
+    fixture
+}
+
+struct ImmediateCancel;
+impl Cancellation for ImmediateCancel {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    fn cancelled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::ready(()))
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn identity_verification_reports_cancelled_when_the_signal_wins() {
+    let fixture = slow_fixture_identity();
+    let verifier = LocalWorkerIdentityVerifier::new(fixture.settings);
+    let error = verifier
+        .verify(&ImmediateCancel)
+        .await
+        .expect_err("a ready cancellation signal was ignored");
+    assert_eq!(error.code, "cancelled");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn identity_verification_keeps_the_executor_responsive() {
+    let fixture = slow_fixture_identity();
+    let verifier = LocalWorkerIdentityVerifier::new(fixture.settings);
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let verify = {
+        let order = order.clone();
+        async move {
+            let _ = verifier.verify(&NeverCancel).await;
+            order.lock().unwrap().push("verify");
+        }
+    };
+    let probe = {
+        let order = order.clone();
+        async move {
+            // One yield is enough for the executor to make progress while
+            // hashing runs on a blocking thread; inline work cannot yield here.
+            tokio::task::yield_now().await;
+            order.lock().unwrap().push("probe");
+        }
+    };
+    tokio::join!(verify, probe);
+    assert_eq!(
+        order.lock().unwrap().as_slice(),
+        ["probe", "verify"],
+        "identity hashing monopolized the current_thread executor"
+    );
 }
 
 #[test]

@@ -310,30 +310,53 @@ impl PlaywrightMcpProvider {
         // Recheck the named files immediately before launch so construction-time
         // identity cannot silently drift before the first process dispatch.
         let identity = self.identity_verifier.verify(cancel).await?;
-        let workspace = Arc::new(AsyncMutex::new(match &self.environment_factory {
-            Some(factory) => {
-                let lease = factory
-                    .prepare()
-                    .map_err(|failure| map_environment_failure(&failure))?;
-                ActiveWorkspace::prepared(lease)
-            }
-            None => {
-                let settings = self.temp_settings.as_ref().ok_or_else(|| {
-                    BrowserFailure::new(
-                        "worker_environment",
-                        "Browser worker requires a prepared environment factory",
-                    )
-                })?;
-                ActiveWorkspace::temp(TempArtifacts::create(settings).map_err(|_| {
-                    BrowserFailure::new("worker_environment", "Browser worker temp setup failed")
-                })?)
-            }
-        }));
+        // Environment preparation recreates the private sandbox tree and the
+        // launch planner re-hashes the pinned executables and writes the worker
+        // config; keep that synchronous filesystem work off the executor.
+        let prepared = {
+            let environment_factory = self.environment_factory.clone();
+            let temp_settings = self.temp_settings.clone();
+            let launch_planner = self.launch_planner.clone();
+            tokio::task::spawn_blocking(move || {
+                let workspace = match &environment_factory {
+                    Some(factory) => {
+                        let lease = factory
+                            .prepare()
+                            .map_err(|failure| map_environment_failure(&failure))?;
+                        ActiveWorkspace::prepared(lease)
+                    }
+                    None => {
+                        let settings = temp_settings.as_ref().ok_or_else(|| {
+                            BrowserFailure::new(
+                                "worker_environment",
+                                "Browser worker requires a prepared environment factory",
+                            )
+                        })?;
+                        ActiveWorkspace::temp(TempArtifacts::create(settings).map_err(|_| {
+                            BrowserFailure::new(
+                                "worker_environment",
+                                "Browser worker temp setup failed",
+                            )
+                        })?)
+                    }
+                };
+                let request = launch_planner.build(&identity, &workspace.directories);
+                Ok::<_, BrowserFailure>((workspace, request))
+            })
+            .await
+            .map_err(|_| {
+                BrowserFailure::new(
+                    "worker_environment",
+                    "Browser worker environment preparation worker failed",
+                )
+            })??
+        };
+        let (workspace, request) = prepared;
+        let workspace = Arc::new(AsyncMutex::new(workspace));
         // Register the workspace before any await so cancelling the launch
         // future cannot drop the only reference to an unreleased environment.
         inner.workspace = Some(workspace.clone());
-        let directories = workspace.lock().await.directories.clone();
-        let mut request = match self.launch_planner.build(&identity, &directories) {
+        let mut request = match request {
             Ok(request) => request,
             Err(_) => {
                 return Self::discard_workspace(

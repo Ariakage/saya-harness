@@ -115,18 +115,24 @@ pub async fn create(
     mut session: Session,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     check_roots(config, &session.workspace, session.work_mode)?;
-    let store = open(config)?;
-    let media = media_store(config)?;
-    let lock = store.lock_session(session.id)?;
     let profile = config
         .profiles
         .get(&session.profile)
         .ok_or("session profile not found")?;
     let media_capabilities = profile.multimodal;
-    let captures = capture_history(&mut session, &media, media_capabilities)?;
-    store
-        .create_session(&session, &profile.fingerprint()?)
-        .await?;
+    let fingerprint = profile.fingerprint()?;
+    // Store opens poll file locks and capture hashing does bounded file I/O;
+    // keep them on a blocking thread so the caller's executor stays responsive.
+    let owned = config.clone();
+    let (store, media, lock, session, captures) = crate::offload(move || {
+        let store = open(&owned)?;
+        let media = media_store(&owned)?;
+        let lock = store.lock_session(session.id)?;
+        let captures = capture_history(&mut session, &media, media_capabilities)?;
+        Ok((store, media, lock, session, captures))
+    })
+    .await?;
+    store.create_session(&session, &fingerprint).await?;
     drop(captures);
     Ok(Prepared {
         store,
@@ -137,6 +143,19 @@ pub async fn create(
         recovery: RecoverySummary::default(),
     })
 }
+fn read_candidates(
+    config: &Config,
+    id: SessionId,
+) -> Result<Vec<saya_core::sqlite::GuardCandidate>, Box<dyn std::error::Error>> {
+    if let Some(candidates) = SqliteStore::guard_candidates(&config.data_dir, id)? {
+        return Ok(candidates);
+    }
+    let session = SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
+    Ok(vec![saya_core::sqlite::GuardCandidate {
+        workspace: session.workspace,
+        work_mode: session.work_mode,
+    }])
+}
 /// Validate current configuration under an exclusive lock and recover interrupted runs.
 /// Historical approvals are never restored. Lock release follows Prepared lifetime.
 pub async fn resume(
@@ -145,18 +164,6 @@ pub async fn resume(
     options: ResumeOptions,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     let id = parse_id(raw)?;
-    let read_candidates =
-        || -> Result<Vec<saya_core::sqlite::GuardCandidate>, Box<dyn std::error::Error>> {
-            if let Some(candidates) = SqliteStore::guard_candidates(&config.data_dir, id)? {
-                return Ok(candidates);
-            }
-            let session =
-                SqliteStore::peek_session(&config.data_dir, id)?.ok_or("session not found")?;
-            Ok(vec![saya_core::sqlite::GuardCandidate {
-                workspace: session.workspace,
-                work_mode: session.work_mode,
-            }])
-        };
     let preflight = |candidates: &[saya_core::sqlite::GuardCandidate]| -> Result<(), Box<dyn std::error::Error>> {
         for candidate in candidates {
             let workspace = if options.cwd_explicit { &config.cwd } else { &candidate.workspace };
@@ -164,11 +171,25 @@ pub async fn resume(
         }
         Ok(())
     };
-    preflight(&read_candidates()?)?;
-    let lock = SqliteStore::lock_existing(&config.data_dir, id)?;
-    let locked_preview = read_candidates()?;
+    let candidates = {
+        let owned = config.clone();
+        crate::offload(move || read_candidates(&owned, id)).await?
+    };
+    preflight(&candidates)?;
+    let (lock, locked_preview) = {
+        let owned = config.clone();
+        crate::offload(move || {
+            let lock = SqliteStore::lock_existing(&owned.data_dir, id)?;
+            let locked = read_candidates(&owned, id)?;
+            Ok((lock, locked))
+        })
+        .await?
+    };
     preflight(&locked_preview)?;
-    let store = open(config)?;
+    let store = {
+        let owned = config.clone();
+        crate::offload(move || open(&owned)).await?
+    };
     let mut session = store.load_session(id).await?.ok_or("session not found")?;
     if !locked_preview.iter().any(|candidate| {
         candidate.workspace == session.workspace && candidate.work_mode == session.work_mode
@@ -220,7 +241,10 @@ pub async fn resume(
     if recovery.interrupted_runs > 0 {
         session = store.load_session(id).await?.ok_or("session not found")?;
     }
-    let media = media_store(config)?;
+    let media = {
+        let owned = config.clone();
+        crate::offload(move || media_store(&owned)).await?
+    };
     let media_capabilities = profile.multimodal;
     Ok(Prepared {
         store,

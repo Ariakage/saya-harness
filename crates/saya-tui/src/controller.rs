@@ -473,10 +473,13 @@ impl App {
         let store: Arc<dyn Store> = Arc::new(EventStore(writer.clone()));
         let cancel = Arc::new(RunCancellation::new());
         let (interaction, requests) = input_channel(16)?;
-        let (mut runtime, _) = saya_app::build_runtime(
-            &self.config,
-            &prepared.session,
-            &text,
+        // Runtime assembly opens stores and can hash the worker installation
+        // tree; offload it so this current_thread runtime keeps drawing and
+        // handling input while the synchronous work proceeds.
+        let (mut runtime, _) = saya_app::spawn_build_runtime(
+            self.config.clone(),
+            prepared.session.clone(),
+            text.clone(),
             saya_app::Launch {
                 permissions: self.config.permissions_mode,
                 store,
@@ -504,7 +507,9 @@ impl App {
                     .with_managed_sources(true, true),
                 )
             },
-        )?;
+        )
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
         if kind == RunKind::Execution {
             session::append(prepared, text.clone())
                 .await

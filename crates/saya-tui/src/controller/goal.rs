@@ -465,14 +465,30 @@ impl App {
                         auto: true,
                         mode: goal.mode,
                         permissions: config.permissions_mode,
-                        config_fingerprint: goal_profile_fingerprint(&config, &goal.profile)?,
+                        config_fingerprint: {
+                            // Module override reads are bounded but synchronous
+                            // SQLite work; keep them off the UI executor.
+                            let owned = config.clone();
+                            let profile = goal.profile.clone();
+                            saya_app::offload_boundary(move || {
+                                goal_profile_fingerprint(&owned, &profile)
+                            })
+                            .await?
+                        },
                         authorized_at: saya_app::events::timestamp()?,
                     });
                     goal.updated_at = saya_app::events::timestamp()?;
                     let revision = goal.revision;
                     goal = goal_store.save(goal, revision).await?;
                     loop {
-                        configured_auto_goal(&config, &goal)?;
+                        {
+                            let owned = config.clone();
+                            let record = goal.clone();
+                            saya_app::offload_boundary(move || {
+                                configured_auto_goal(&owned, &record)
+                            })
+                            .await?;
+                        }
                         if goal.status != GoalStatus::Ready || checking.is_cancelled() {
                             break;
                         }

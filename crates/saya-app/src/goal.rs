@@ -1,9 +1,10 @@
 //! Shared Goal planning and bounded Run orchestration.
 
 use crate::{
-    Launch, build_runtime,
+    Launch,
     events::timestamp,
     session::{self, ResumeOptions},
+    spawn_build_runtime,
 };
 use saya_core::{
     approvals::Preauthorizations,
@@ -299,10 +300,10 @@ async fn run_step(
         "Durable Goal: {}\nCurrent step: {}\n{}",
         goal.objective, step.title, step.instruction
     );
-    let (mut runtime, streamed) = build_runtime(
-        config,
-        &prepared.session,
-        &summary,
+    let (mut runtime, streamed) = spawn_build_runtime(
+        config.clone(),
+        prepared.session.clone(),
+        summary,
         Launch {
             permissions: context.permissions,
             store: prepared.store.clone(),
@@ -317,6 +318,7 @@ async fn run_step(
         },
         |model, _| model,
     )
+    .await
     .map_err(|_| failure("goal_runtime", "Goal runtime cannot be assembled"))?;
     let mut session = prepared.session.clone();
     let heartbeat_store = store.clone();

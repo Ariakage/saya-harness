@@ -42,6 +42,67 @@ use saya_core::{
     },
 };
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+
+/// Shared boxed error that can cross a blocking-thread boundary.
+pub type SharedError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Convert an arbitrary boxed CLI error into a thread-safe form, preserving a
+/// carried [`BoundaryError`] (and its stable code) when present.
+fn send_sync_error(error: Box<dyn std::error::Error>) -> SharedError {
+    match error.downcast::<BoundaryError>() {
+        Ok(error) => error,
+        Err(error) => error.to_string().into(),
+    }
+}
+
+/// Run bounded blocking work (SQLite opens, file-lock polling, store scans,
+/// identity hashing) on a blocking thread so `current_thread` runtimes keep
+/// handling cancellation and UI refresh. The closure runs to completion once
+/// dispatched; cooperative cancellation must live inside the work itself.
+pub async fn offload<T>(
+    work: impl FnOnce() -> Result<T, Box<dyn std::error::Error>> + Send + 'static,
+) -> Result<T, Box<dyn std::error::Error>>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || work().map_err(send_sync_error))
+        .await
+        .map_err(|_| "blocking worker failed")?
+        .map_err(|error| -> Box<dyn std::error::Error> { error })
+}
+
+/// [`offload`] variant for work that already returns a [`BoundaryError`]; the
+/// structured error (and its stable code) survives the blocking-thread hop.
+pub async fn offload_boundary<T>(
+    work: impl FnOnce() -> Result<T, BoundaryError> + Send + 'static,
+) -> Result<T, BoundaryError>
+where
+    T: Send + 'static,
+{
+    offload(move || work().map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) }))
+        .await
+        .map_err(|error| match error.downcast::<BoundaryError>() {
+            Ok(error) => *error,
+            Err(error) => BoundaryError::new("storage_error", error.to_string()),
+        })
+}
+
+/// [`build_runtime`] opens several stores, polls file locks and may hash the
+/// browser worker installation tree. Async callers should dispatch through
+/// this offload wrapper instead of invoking the synchronous builder inline.
+pub async fn spawn_build_runtime(
+    config: Config,
+    session: Session,
+    summary: String,
+    launch: Launch,
+    decorate: impl FnOnce(Arc<dyn Model>, bool) -> Arc<dyn Model> + Send + 'static,
+) -> Result<(AgentRuntime, bool), SharedError> {
+    tokio::task::spawn_blocking(move || {
+        build_runtime(&config, &session, &summary, launch, decorate)
+    })
+    .await
+    .map_err(|_| "runtime build worker failed")?
+}
 fn model(
     config: &Config,
     name: &str,
@@ -238,7 +299,7 @@ pub fn build_runtime(
     summary: &str,
     launch: Launch,
     decorate: impl FnOnce(Arc<dyn Model>, bool) -> Arc<dyn Model>,
-) -> Result<(AgentRuntime, bool), Box<dyn std::error::Error>> {
+) -> Result<(AgentRuntime, bool), SharedError> {
     let profile = &session.profile;
     let selected = config.profiles.get(profile).ok_or("profile not found")?;
     let run = Run {

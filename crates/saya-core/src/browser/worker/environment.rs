@@ -1,4 +1,21 @@
 use super::*;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+/// Cancellation flag polled by the blocking identity verifier. The async
+/// caller sets it from the outer `cancel` signal; the worker never awaits.
+struct WorkerCancel(Arc<AtomicBool>);
+impl Cancellation for WorkerCancel {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::pending())
+    }
+}
 
 /// One private, host-owned temp tree for a worker lifecycle.
 pub(super) struct TempArtifacts {
@@ -663,19 +680,45 @@ impl WorkerIdentityVerifier for LocalWorkerIdentityVerifier {
                 "Browser worker identity check cancelled before dispatch",
             ));
         }
-        verify_worker_identity_checked(&self.settings, Some(cancel)).map_err(|failure| {
-            if failure.0.code == "cancelled" {
-                BrowserFailure::new(
-                    "cancelled",
-                    "Browser worker identity verification cancelled before launch",
-                )
-            } else {
+        // Hashing the Node/worker/Chromium trees is bounded but can take
+        // seconds; keep it off the executor and bridge the outer cancellation
+        // flag so the worker still honours its checkpoints.
+        let settings = self.settings.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut task = tokio::task::spawn_blocking({
+            let flag = flag.clone();
+            move || {
+                let bridge = WorkerCancel(flag);
+                verify_worker_identity_checked(&settings, Some(&bridge))
+            }
+        });
+        let outcome = tokio::select! {
+            outcome = &mut task => outcome,
+            () = cancel.cancelled() => {
+                flag.store(true, Ordering::Release);
+                task.await
+            }
+        };
+        outcome
+            .map_err(|_| {
                 BrowserFailure::new(
                     "worker_identity",
-                    "Browser worker identity changed before launch",
+                    "Browser worker identity verification worker failed",
                 )
-            }
-        })
+            })?
+            .map_err(|failure| {
+                if failure.0.code == "cancelled" {
+                    BrowserFailure::new(
+                        "cancelled",
+                        "Browser worker identity verification cancelled before launch",
+                    )
+                } else {
+                    BrowserFailure::new(
+                        "worker_identity",
+                        "Browser worker identity changed before launch",
+                    )
+                }
+            })
     }
 }
 
