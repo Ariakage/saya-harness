@@ -178,11 +178,18 @@ pub use sandbox::{
 };
 #[cfg(test)]
 pub(in crate::browser::worker) use sandbox::{
-    HostProcessPin, KernelNamespaceId, KernelNamespaceKind, KernelProcStatus,
-    MAX_SANDBOX_PROC_FILE_BYTES, NativeKernelProbe, NodeLaunchBaseline, SandboxProbeFailure,
+    KernelNamespaceId, KernelProcStatus, MAX_SANDBOX_PROC_FILE_BYTES, NativeKernelProbe,
     VerifiedNamespace, parse_cmdline_tokens, parse_proc_stat_starttime,
     read_bounded_proc_file_strict,
 };
+// The launch baseline probe runs only on Linux; the probe tests exercise the
+// same types through a fake kernel on every platform.
+#[cfg(any(test, target_os = "linux"))]
+pub(in crate::browser::worker) use sandbox::{
+    HostProcessPin, KernelNamespaceKind, NodeLaunchBaseline, SandboxProbeFailure,
+};
+#[cfg(target_os = "linux")]
+pub(in crate::browser::worker) use identity::open_absolute_file;
 pub(in crate::browser::worker) use sandbox::{MAX_SANDBOX_PROCESSES, NativeLaunchBaseline};
 #[cfg(target_os = "linux")]
 pub(in crate::browser::worker) use sandbox::{

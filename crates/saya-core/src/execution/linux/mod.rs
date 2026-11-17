@@ -28,9 +28,7 @@ mod seccomp;
 mod tests;
 
 #[cfg(test)]
-pub(in crate::execution::linux) use seccomp::{
-    ALLOW, AND, BITS, DENY, EQUAL, LOAD, RETURN, instruction,
-};
+pub(in crate::execution::linux) use seccomp::{ALLOW, AND, BITS, DENY, EQUAL, LOAD, RETURN};
 pub(in crate::execution) use seccomp::{Filter, inherit_filter_descriptor, install_payload_filter};
 pub(in crate::execution::linux) use seccomp::{browser_filter, filter};
 
