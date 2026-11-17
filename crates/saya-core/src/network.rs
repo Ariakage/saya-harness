@@ -428,10 +428,33 @@ async fn supervise(
     // Abort drops both halves of every owned connection. Join before reporting shutdown complete.
     jobs.abort_all();
     while jobs.join_next().await.is_some() {}
-    drop(listener);
-    drop(ipv6);
+    // Drain any connections still sitting in the kernel accept queue because
+    // BrokerHandle's `_ipv4_lease`/`_ipv6_lease` intentionally keep the
+    // listening socket bound until full handle cleanup.
+    drain_queued_tcp(listener, &state);
+    drain_queued_tcp(ipv6, &state);
     #[cfg(unix)]
     drop(unix);
+}
+
+fn drain_queued_tcp(listener: TcpListener, state: &BrokerState) {
+    let outcome = match state.termination.load(Ordering::Acquire) {
+        TERMINATION_DEADLINE => Some(NetworkOutcome::Limit),
+        TERMINATION_CANCELLED => Some(NetworkOutcome::Cancelled),
+        _ => None,
+    };
+    let Ok(listener) = listener.into_std() else {
+        return;
+    };
+    if listener.set_nonblocking(true).is_err() {
+        return;
+    }
+    while let Ok((stream, _)) = listener.accept() {
+        drop(stream);
+        if let Some(outcome) = outcome {
+            state.observe_rejection(outcome);
+        }
+    }
 }
 
 fn spawn_client(

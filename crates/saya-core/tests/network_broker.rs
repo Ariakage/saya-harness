@@ -349,7 +349,7 @@ async fn active_timeout_closes_clients_but_port_leases_remain_until_handle_clean
     let broker = NetworkBroker::start(
         BrokerPolicy {
             limits: BrokerLimits {
-                active_timeout_ms: 20,
+                active_timeout_ms: 50,
                 ..Default::default()
             },
             ..Default::default()
@@ -362,7 +362,14 @@ async fn active_timeout_closes_clients_but_port_leases_remain_until_handle_clean
     let v6 = broker.ipv6_endpoint();
     let mut stream = TcpStream::connect(v4).await.unwrap();
     stream.write_all(b"GET ").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while broker.is_running() {
+        assert!(
+            tokio::time::Instant::now() < wait_deadline,
+            "broker supervisor did not stop after active_timeout_ms"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(!broker.is_running());
     assert!(std::net::TcpListener::bind(v4).is_err());
     assert!(std::net::TcpListener::bind(v6).is_err());
@@ -374,6 +381,51 @@ async fn active_timeout_closes_clients_but_port_leases_remain_until_handle_clean
     broker.shutdown().await.unwrap();
     assert!(TcpStream::connect(v4).await.is_err());
     assert!(TcpStream::connect(v6).await.is_err());
+}
+
+#[tokio::test]
+async fn deadline_drains_unaccepted_queued_clients_while_retaining_leases() {
+    use std::io::Read as _;
+
+    let broker = NetworkBroker::start(
+        BrokerPolicy {
+            limits: BrokerLimits {
+                active_timeout_ms: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Arc::new(Never),
+    )
+    .await
+    .unwrap();
+    let v4 = broker.tcp_endpoint();
+    let v6 = broker.ipv6_endpoint();
+    // Complete TCP handshake synchronously and let the deadline expire before
+    // yielding so `biased; select!` exits without running `listener.accept()`.
+    let mut queued = std::net::TcpStream::connect(v4).unwrap();
+    queued
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(15));
+    let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while broker.is_running() {
+        assert!(
+            tokio::time::Instant::now() < wait_deadline,
+            "broker supervisor did not stop after active_timeout_ms"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(std::net::TcpListener::bind(v4).is_err());
+    assert!(std::net::TcpListener::bind(v6).is_err());
+    let mut buffer = Vec::new();
+    let read = queued.read_to_end(&mut buffer);
+    assert!(
+        matches!(read, Ok(0))
+            || matches!(&read, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+        "queued client remained open after broker stopped: {read:?}"
+    );
+    broker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
