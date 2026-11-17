@@ -302,7 +302,8 @@ fn snapshot_with_limits(
         conn.deserialize_read_exact(MAIN_DB, image.as_slice(), image.len(), true)
             .map_err(|_| fail("storage_corrupt", "cannot read database snapshot"))?;
         let vm_check = check.clone();
-        conn.progress_handler(1000, Some(move || vm_check().is_err()));
+        conn.progress_handler(1000, Some(move || vm_check().is_err()))
+            .map_err(|_| fail("storage_error", "cannot register snapshot progress handler"))?;
         let result = conn.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0));
         check()?;
         let result = result.map_err(|_| fail("storage_corrupt", "invalid database snapshot"))?;
