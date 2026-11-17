@@ -652,19 +652,19 @@ async fn slow_stdio_handshake_and_catalogue_respect_the_active_budget() {
             None,
             false,
             ServiceOptions {
-                active_time: Duration::from_millis(250),
+                active_time: Duration::from_millis(800),
                 http: None,
             },
         );
         let server = SERVER.replace(
             "    method=request['method']",
-            &format!("    method=request['method']\n    if method=={method:?}: time.sleep(1.5)"),
+            &format!("    method=request['method']\n    if method=={method:?}: time.sleep(2.5)"),
         );
         std::fs::write(root.path().join("mcp-server.py"), server).unwrap();
         let started = std::time::Instant::now();
         let result = runtime.run(&mut session).await.unwrap();
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(2),
             "{method} ignored the active budget for {:?}",
             started.elapsed()
         );

@@ -423,9 +423,11 @@ fn persistence_failure_shows_observed_result_and_ends_chat() {
     pty.send("read task\n");
     pty.until("observed tool result (not saved)");
     pty.until("readable fixture");
-    drop(pty.master.take());
     let deadline = Instant::now() + Duration::from_secs(5);
     let status = loop {
+        // Keep draining output while waiting for exit so eprintln! never hits
+        // EIO when stderr finishes flushing after "readable fixture".
+        while matches!(pty.read_output(0), Ok(true)) {}
         if let Some(status) = pty.child.try_wait().unwrap() {
             break status;
         }
@@ -433,7 +435,7 @@ fn persistence_failure_shows_observed_result_and_ends_chat() {
             Instant::now() < deadline,
             "chat continued after a persistence failure"
         );
-        std::thread::sleep(Duration::from_millis(20));
+        let _ = pty.read_output(20);
     };
     assert_eq!(status.code(), Some(1));
 }

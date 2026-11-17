@@ -631,17 +631,23 @@ async fn root_and_database_replacement_and_incompatible_schema_fail_closed() {
         .execute_batch("CREATE TABLE unexpected (data TEXT)")
         .unwrap();
     drop(store);
-    assert_eq!(
-        HookStore::open(
+    // Parallel tests spawning child processes via fork()+pre_exec may briefly hold
+    // an inherited .owner.lock descriptor until execve completes.
+    let mut reopen_error = None;
+    for _ in 0..20 {
+        let err = HookStore::open(
             &root,
             Arc::new(SecretRegistry::default()),
-            HookStoreLimits::default()
+            HookStoreLimits::default(),
         )
-        .unwrap_err()
-        .0
-        .code,
-        "hook_journal_corrupt"
-    );
+        .unwrap_err();
+        if err.0.code != "hook_journal_busy" {
+            reopen_error = Some(err);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(reopen_error.unwrap().0.code, "hook_journal_corrupt");
     let root = temp.path().join("third");
     let store = open(&root);
     fs::rename(root.join("hooks.sqlite3"), root.join("old-database")).unwrap();
