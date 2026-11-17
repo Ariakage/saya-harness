@@ -1477,3 +1477,30 @@ async fn official_provider_runtime_continues_truncated_text_without_prefill_and_
     assert!(cap_requests.try_recv().is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn many_large_deltas_accumulate_without_quadratic_copies()
+-> Result<(), Box<dyn std::error::Error>> {
+    // 4 MiB of streamed text across 4096 deltas took ~39s with per-delta
+    // string reconstruction. In-place accumulation must stay far below the
+    // request timeout even on slow machines.
+    const DELTAS: usize = 4096;
+    let chunk = "x".repeat(1024);
+    let mut events = vec![start(), block_start(0, json!({"type":"text","text":""}))];
+    for _ in 0..DELTAS {
+        events.push(delta(0, json!({"type":"text_delta","text":chunk})));
+    }
+    events.push(block_stop(0));
+    events.extend(stop("end_turn"));
+    let (url, _) = fixture::server(vec![("text/event-stream", sse(&events))])?;
+    let model = AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default());
+    let started = std::time::Instant::now();
+    let (_, _, text) = collect(&model, &request()).await?;
+    assert_eq!(text.len(), DELTAS * 1024);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "stream accumulation took {:?}",
+        started.elapsed()
+    );
+    Ok(())
+}

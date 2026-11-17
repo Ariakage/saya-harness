@@ -944,8 +944,15 @@ impl StreamState {
                     let map = block.value.as_object_mut().ok_or_else(|| {
                         failure("invalid_model_response", "invalid content block")
                     })?;
-                    let previous = map.get(field).and_then(Value::as_str).unwrap_or("");
-                    map.insert(field.into(), json!(format!("{previous}{text}")));
+                    match map
+                        .entry(field)
+                        .or_insert_with(|| Value::String(String::new()))
+                    {
+                        Value::String(accumulated) => accumulated.push_str(text),
+                        _ => {
+                            return Err(failure("invalid_model_response", "invalid content block"));
+                        }
+                    }
                 }
                 if kind == "text_delta" {
                     Ok(Some(text.into()))
