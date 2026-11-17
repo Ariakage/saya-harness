@@ -10,3 +10,4 @@ __pycache__/
 
 # Private local test configuration and credentials.
 /.saya/local/
+/.soyo/local/

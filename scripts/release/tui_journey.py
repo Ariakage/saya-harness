@@ -569,7 +569,7 @@ class Terminal:
         raise RuntimeError('terminal output did not reach a complete quiet frame\n' + self.screen.text)
 
     def title(self):
-        self.wait(lambda: self.screen.main_row_text(0).startswith('Saya Harness'), 'TUI title in its header region')
+        self.wait(lambda: self.screen.main_row_text(0).startswith('Soyo Harness'), 'TUI title in its header region')
 
     def editor_text(self):
         return self.screen.editor_text()
@@ -801,7 +801,7 @@ def stream_journey(binary, protocol):
     fixture = Fixture(protocol, [{'text': response, 'pieces': ['TUI_STREAM_', '你好_', '🌸', '\n' + markdown],
                                  'thinking': [thought]}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-stream-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-stream-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
@@ -903,7 +903,7 @@ def markdown_table_links_journey(binary):
     fixture = Fixture('openai-chat-completions', [
         {'text': response, 'pieces': pieces, 'stream_delay': 0.02}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-markdown-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-markdown-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
@@ -985,7 +985,7 @@ def markdown_source_and_footnotes_journey(binary):
         + '[^support]: TARGET_NOTE with a return reference.\n')
     fixture = Fixture('openai-chat-completions', [{'text': response}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-markdown-source-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-markdown-source-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
@@ -1070,7 +1070,7 @@ def command_completion_journey(binary):
         {'text': 'COMPLETION_MULTILINE_DONE'}, {'text': 'COMPLETION_LITERAL_DONE'},
         {'call': call}, denied])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-completion-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-completion-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -1206,7 +1206,7 @@ def empty_tab_mode_journey(binary):
         {'call': active_call, 'delay': 3}, expect_tool(active_call[0], {'text': 'TabActiveDone'}),
         {'call': manual_call}, stale_manual])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-empty-tab-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-empty-tab-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -1346,7 +1346,7 @@ def empty_tab_mode_journey(binary):
 
 
 def reference_layout_and_title_journey(binary):
-    first_prompt = '整理 Saya 验收🌸'
+    first_prompt = '整理 Soyo 验收🌸'
     approval_prompt = '核对文件\n只读审批'
     tiny_prompt = '窄屏中文'
     malicious_prompt = '  项目\u202e\x1b]2;FORGED\x07 标题🌸\t第一项任务 ' + '长中文' * 60
@@ -1360,13 +1360,13 @@ def reference_layout_and_title_journey(binary):
         {'text': 'COMPACT_TINY_DONE', 'chat_usage': {'prompt_tokens': 12800, 'completion_tokens': 5}},
         {'text': 'COMPACT_SAFE_TITLE_DONE'}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-compact-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-compact-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
             (workspace / 'fact.txt').write_text('reference fixture\n')
             (workspace / 'AGENTS.md').write_text('Use the reference UI fixture instructions and preserve fact.txt.\n')
-            skill = workspace / '.saya' / 'skills' / 'example'
+            skill = workspace / '.soyo' / 'skills' / 'example'
             skill.mkdir(parents=True)
             (skill / 'SKILL.md').write_text('---\nname: example\ndescription: Offline reference UI acceptance fixture.\n---\nRead fact.txt when requested.\n')
             config = configuration(root, fixture)
@@ -1392,7 +1392,7 @@ def reference_layout_and_title_journey(binary):
                     screen = terminal.screen
                     if screen.colors[0][0][1] != (9, 9, 11):
                         raise RuntimeError('reference header did not retain the main background')
-                    if screen.row_style(0, 'Saya Harness', 0, screen.main_width()) != ((232, 232, 237), (9, 9, 11)):
+                    if screen.row_style(0, 'Soyo Harness', 0, screen.main_width()) != ((232, 232, 237), (9, 9, 11)):
                         raise RuntimeError('reference brand did not use its stronger foreground hierarchy')
                     if not screen.main_row_text(1).startswith('┌') or '/' not in screen.main_row_text(1):
                         raise RuntimeError('reference workspace was not embedded in the outer top border')
@@ -1500,7 +1500,7 @@ def reference_layout_and_title_journey(binary):
                     return populated
 
                 terminal.title()
-                terminal.wait(lambda: title() == 'Saya | New session', 'initial window title')
+                terminal.wait(lambda: title() == 'Soyo | New session', 'initial window title')
                 for columns, rows, message_row in [
                         (110, 32, 27), (120, 40, 35),
                         (119, 24, 19), (120, 24, 19), (119, 24, 19),
@@ -1524,7 +1524,7 @@ def reference_layout_and_title_journey(binary):
                 terminal.wait(lambda: 'input —/128k (—)' in footer(), 'unknown initial reference input usage')
                 terminal.line(first_prompt)
                 wait_idle(terminal, root)
-                terminal.wait(lambda: title() == 'Saya | ' + first_prompt, 'first-task window title')
+                terminal.wait(lambda: title() == 'Soyo | ' + first_prompt, 'first-task window title')
                 assert_user_input(0, first_prompt)
                 if fixture.requests[0].get('reasoning_effort') != 'max':
                     raise RuntimeError('reference configured thinking effort was not sent to the model')
@@ -1589,7 +1589,7 @@ def reference_layout_and_title_journey(binary):
                 terminal.send('y')
                 wait_idle(terminal, root, count=2)
                 terminal.wait(lambda: '○ input 512/128k (0%)' in footer(), 'latest execution input usage without accumulation')
-                if title() != 'Saya | ' + first_prompt:
+                if title() != 'Soyo | ' + first_prompt:
                     raise RuntimeError('a later task replaced the first-task window title')
                 reference_ready(120, 40, 35)
                 assert_sidebar_context({'Instructions', 'Skills', 'Files'})
@@ -1606,7 +1606,7 @@ def reference_layout_and_title_journey(binary):
 
                 reference_ready(80, 24, 19)
                 terminal.line('/new')
-                terminal.wait(lambda: title() == 'Saya | New session' and terminal.screen.status() == 'Ready',
+                terminal.wait(lambda: title() == 'Soyo | New session' and terminal.screen.status() == 'Ready',
                               'new session title reset')
                 terminal.wait(lambda: 'input —/128k (—)' in footer(), 'new session input meter reset')
                 title_count = len(terminal.screen.window_titles)
@@ -1615,7 +1615,7 @@ def reference_layout_and_title_journey(binary):
                 wait_idle(terminal, root, count=4)
                 assert_user_input(4, malicious_prompt)
                 titles = terminal.screen.window_titles[title_count:]
-                if len(titles) != 1 or not titles[0].startswith('Saya | 项目]2;FORGED 标题🌸 第一项任务 '):
+                if len(titles) != 1 or not titles[0].startswith('Soyo | 项目]2;FORGED 标题🌸 第一项任务 '):
                     raise RuntimeError('hostile task text injected a second OSC or changed its sanitized title prefix')
                 if len(titles[0]) > 87 or len(titles[0].encode()) > 512:
                     raise RuntimeError('long first-task window title exceeded its limit')
@@ -1623,7 +1623,7 @@ def reference_layout_and_title_journey(binary):
                        for character in titles[0]):
                     raise RuntimeError('window title retained terminal controls or bidi overrides')
                 terminal.line('/resume ' + identifier)
-                terminal.wait(lambda: title() == 'Saya | ' + first_prompt and terminal.screen.status() == 'Ready',
+                terminal.wait(lambda: title() == 'Soyo | ' + first_prompt and terminal.screen.status() == 'Ready',
                               'resumed first-task window title')
                 if len(fixture.requests) != 5:
                     raise RuntimeError('title changes or session browsing made an extra model request')
@@ -1645,7 +1645,7 @@ def session_data(binary, root, config):
 
 
 def wait_idle(terminal, root, count=1, expected_status='completed'):
-    path = root / 'data' / 'saya' / 'sessions.sqlite3'
+    path = root / 'data' / 'soyo' / 'sessions.sqlite3'
     outcome = []
     def finished():
         if not path.exists():
@@ -1678,7 +1678,7 @@ def mode_permission_matrix(binary):
             marker = 'MATRIX_' + mode + '_' + permission
             fixture = Fixture('openai-chat-completions', [{'text': marker}])
             try:
-                with tempfile.TemporaryDirectory(prefix='saya-tui-mode-') as directory:
+                with tempfile.TemporaryDirectory(prefix='soyo-tui-mode-') as directory:
                     root = Path(directory)
                     (root / 'workspace').mkdir()
                     config = configuration(root, fixture, permission)
@@ -1766,7 +1766,7 @@ def manual_tools_and_clarification(binary):
                expect_tool('manual-status', {'call': ask}), expect_tool('manual-question', final)]
     fixture = Fixture('openai-chat-completions', replies)
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-manual-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-manual-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             (root / 'workspace' / 'fact.txt').write_text('TUI_PRIVATE_FIXTURE\n')
@@ -1804,7 +1804,7 @@ def manual_tools_and_clarification(binary):
                 markdown_text = full_markdown.read_text()
                 if reasoning not in markdown_text or 'TUI_PRIVATE_FIXTURE' not in markdown_text or 'manual-read' not in markdown_text:
                     raise RuntimeError('full Markdown export omitted provider reasoning or complete tool records')
-                with sqlite3.connect(root / 'data' / 'saya' / 'sessions.sqlite3') as connection:
+                with sqlite3.connect(root / 'data' / 'soyo' / 'sessions.sqlite3') as connection:
                     saved = [json.loads(row[0]) for row in connection.execute('SELECT item FROM messages ORDER BY ordinal')]
                 retained = [item['data']['value'].get('reasoning_content') for item in saved if item.get('kind') == 'provider_item']
                 if retained != [reasoning]:
@@ -1845,7 +1845,7 @@ def goal_orchestration_journey(binary):
          'chat_usage': {'prompt_tokens': 100, 'completion_tokens': 8}},
     ])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-goal-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-goal-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -1922,7 +1922,7 @@ def goal_orchestration_journey(binary):
 
 def save_interactive_screen(terminal, name):
     """Save fixture screens only in the explicitly selected debug directory."""
-    directory = os.environ.get('SAYA_TUI_SNAPSHOT_DIR')
+    directory = os.environ.get('SOYO_TUI_SNAPSHOT_DIR')
     if not directory:
         return
     path = Path(directory) / ('tui-command-palette-' + name + '-cells.json')
@@ -1940,7 +1940,7 @@ def thinking_tools_and_mouse_journey(binary):
         {'call': call, 'chat_reasoning': [thoughts[0]]},
         expect_tool(call[0], {'text': final, 'chat_reasoning': [thoughts[1]]})])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-folds-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-folds-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             (root / 'workspace' / 'long.txt').write_text(''.join(
@@ -2099,7 +2099,7 @@ def todos_manual_plan_and_restore_journey(binary):
         {'call': calls[0], 'chat_reasoning': ['TODO_THOUGHT_FIRST_FIXTURE']},
         after_todo(0), after_todo(1), after_todo(2), denied])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-todos-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-todos-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture, 'manual')
@@ -2185,7 +2185,7 @@ def summary_tool_cards_journey(binary):
         {'call': todo}, after(todo, {'call': missing}), after(missing, {'call': truncated}),
         after(truncated, {'text': 'SUMMARY_DONE'})])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-summary-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-summary-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             (root / 'workspace' / 'short.txt').write_text('TRUNCATED_BODY_FIXTURE\nOMITTED_SECOND_LINE\n')
@@ -2286,7 +2286,7 @@ def command_palette_modal_journey(binary):
         expect_tool(read[0], {'text': 'PALETTE_BACKGROUND_DONE\nCommands\n› /mode plan'}),
         {'call': manual}, denied])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-palette-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-palette-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -2526,7 +2526,7 @@ def mode_change_invalidates_approval(binary):
         return {'text': 'STALE_MODE_DONE'}
     fixture = Fixture('openai-chat-completions', [{'call': call}, after])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-stale-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-stale-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -2556,7 +2556,7 @@ def mode_change_invalidates_approval(binary):
 def session_restore_and_export(binary):
     fixture = Fixture('openai-chat-completions', [{'text': 'SESSION_FIRST'}, {'text': 'SESSION_CONTINUED'}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-session-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-session-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
@@ -2630,7 +2630,7 @@ def cancellation_and_incomplete_stream(binary):
                             ({'text': 'PARTIAL_ONLY', 'partial': True}, 'failed')]:
         fixture = Fixture('openai-chat-completions', [first, {'text': 'AFTER_FAILURE'}])
         try:
-            with tempfile.TemporaryDirectory(prefix='saya-tui-control-') as directory:
+            with tempfile.TemporaryDirectory(prefix='soyo-tui-control-') as directory:
                 root = Path(directory)
                 (root / 'workspace').mkdir()
                 config = configuration(root, fixture)
@@ -2682,7 +2682,7 @@ def background_control_and_unknown_records(binary):
     fixture = Fixture('openai-chat-completions', [{'call': start}, after_start,
                       expect_tool('after-background', {'text': 'BG_CONTROL_DONE'})])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-background-') as directory, ExitStack() as resources:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-background-') as directory, ExitStack() as resources:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -2722,7 +2722,7 @@ def background_control_and_unknown_records(binary):
                 terminal.finish()
             finally:
                 terminal.close()
-            database = root / 'data' / 'saya' / 'sessions.sqlite3'
+            database = root / 'data' / 'soyo' / 'sessions.sqlite3'
             with sqlite3.connect(database) as connection:
                 changed = connection.execute("UPDATE tool_calls SET state='unknown',result=NULL WHERE call_id=?", (job['id'],))
                 if changed.rowcount != 1:
@@ -2748,7 +2748,7 @@ def background_control_and_unknown_records(binary):
 def pasted_file_references_use_display_tokens(binary):
     fixture = Fixture('openai-chat-completions', [{'text': 'ATTACHMENTS_OK'}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-attachments-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-attachments-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -2805,7 +2805,7 @@ def pasted_file_references_use_display_tokens(binary):
                 prompt = content_text(user)
                 if '[Image 1]' not in prompt or '[File 1](<' not in prompt or str(file) not in prompt:
                     raise RuntimeError('model prompt did not retain attached file destinations: ' + repr(content))
-                if 'saya-media://' in prompt:
+                if 'soyo-media://' in prompt:
                     raise RuntimeError('model prompt leaked the durable media reference instead of image content')
                 image = next((part for part in parts
                               if isinstance(part, dict) and part.get('type') == 'image_url'), None)
@@ -2825,7 +2825,7 @@ def high_frequency_stream(binary):
     text = ''.join(pieces)
     fixture = Fixture('openai-chat-completions', [{'text': text, 'pieces': pieces}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-frequency-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-frequency-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
@@ -2868,7 +2868,7 @@ def slow_terminal_consumer(binary):
         {'text': ''.join(pieces), 'pieces': pieces, 'stream_delay': 0.015},
     ])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-slow-consumer-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-slow-consumer-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture, permission='bypass')
@@ -2920,7 +2920,7 @@ def slow_terminal_consumer(binary):
 def first_task_validation_failure(binary):
     fixture = Fixture('openai-chat-completions', [{'text': 'RECOVERED_AFTER_VALIDATION'}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-first-task-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-first-task-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             additional = root / 'additional'
@@ -2957,7 +2957,7 @@ def active_hangup_cleanup(binary):
         "exec 9>child.lease; printf 'READY\\n' >&9; echo $$ > child.pid; sleep 20; echo unsafe > late-write.txt"], 'timeout_seconds': 30})
     fixture = Fixture('openai-chat-completions', [{'call': call}])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-hangup-') as directory, ExitStack() as resources:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-hangup-') as directory, ExitStack() as resources:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -2978,7 +2978,7 @@ def active_hangup_cleanup(binary):
                 lease.wait_released()
                 if (workspace / 'late-write.txt').exists():
                     raise RuntimeError('hangup command performed its late write')
-                with sqlite3.connect(root / 'data' / 'saya' / 'sessions.sqlite3') as connection:
+                with sqlite3.connect(root / 'data' / 'soyo' / 'sessions.sqlite3') as connection:
                     runs = connection.execute('SELECT result FROM runs').fetchall()
                     if len(runs) != 1 or json.loads(runs[0][0])['status'] != 'cancelled':
                         raise RuntimeError('hangup did not persist one cancelled run')
@@ -3006,7 +3006,7 @@ def signal_restore(binary):
     for sig in [signal.SIGTERM, signal.SIGHUP]:
         fixture = Fixture('openai-chat-completions', [])
         try:
-            with tempfile.TemporaryDirectory(prefix='saya-tui-signal-') as directory:
+            with tempfile.TemporaryDirectory(prefix='soyo-tui-signal-') as directory:
                 root = Path(directory)
                 (root / 'workspace').mkdir()
                 config = configuration(root, fixture)
@@ -3043,7 +3043,7 @@ def run_feedback_journey(binary):
     observed_positions = {}
     observed_tail_glyphs = {}
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-feedback-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-feedback-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             config = configuration(root, fixture)
@@ -3189,7 +3189,7 @@ def selection_and_clipboard_journey(binary):
         blocked_reply,
     ])
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-tui-selection-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-tui-selection-') as directory:
             root = Path(directory)
             (root / 'workspace').mkdir()
             (root / 'workspace' / 'copy.txt').write_text(tool_copy + '\n')
@@ -3384,7 +3384,7 @@ def selection_and_clipboard_journey(binary):
 
 
 def invalid_routes(binary):
-    with tempfile.TemporaryDirectory(prefix='saya-tui-routing-') as directory:
+    with tempfile.TemporaryDirectory(prefix='soyo-tui-routing-') as directory:
         root = Path(directory)
         (root / 'workspace').mkdir()
         config = root / 'config.toml'

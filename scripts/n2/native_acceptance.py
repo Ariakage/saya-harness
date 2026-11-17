@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline native acceptance for the supplied Saya image through normal CLI entry points."""
+"""Offline native acceptance for the supplied Soyo image through normal CLI entry points."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -676,7 +676,7 @@ def deny_case(case):
 
 
 def protected_case(case):
-    control = case.workspace / '.saya' / 'local'
+    control = case.workspace / '.soyo' / 'local'
     control.mkdir(parents=True)
     secret = control / 'synthetic.txt'
     secret.write_text('N2_SYNTHETIC_PROTECTED')
@@ -699,18 +699,18 @@ def protected_case(case):
 
 
 def skill_case(case):
-    workspace_skill = case.workspace / '.saya' / 'skills' / 'example' / 'SKILL.md'
+    workspace_skill = case.workspace / '.soyo' / 'skills' / 'example' / 'SKILL.md'
     workspace_skill.parent.mkdir(parents=True)
     workspace_body = ('---\nname: example\ndescription: N2 workspace acceptance skill\n---\n'
                       'N2_WORKSPACE_SKILL_BODY\n')
     workspace_skill.write_text(workspace_body)
-    global_skill = case.root / '.saya' / 'skills' / 'global-example' / 'SKILL.md'
+    global_skill = case.root / '.soyo' / 'skills' / 'global-example' / 'SKILL.md'
     global_skill.parent.mkdir(parents=True)
     global_body = ('---\nname: global-example\ndescription: N2 global acceptance skill\n---\n'
                    'N2_GLOBAL_SKILL_BODY\n')
     global_skill.write_text(global_body)
-    (case.workspace / '.saya' / 'AGENTS.md').write_text('N2_PROJECT_INSTRUCTION_FIXTURE\n')
-    (case.workspace / '.saya' / 'config.toml').write_text('not valid runtime configuration\n')
+    (case.workspace / '.soyo' / 'AGENTS.md').write_text('N2_PROJECT_INSTRUCTION_FIXTURE\n')
+    (case.workspace / '.soyo' / 'config.toml').write_text('not valid runtime configuration\n')
     outcome = case.run([
         ('read_file', {'path': str(workspace_skill), 'start_line': 1, 'line_count': 20}),
         ('read_file', {'path': str(global_skill), 'start_line': 1, 'line_count': 20}),
@@ -1038,7 +1038,7 @@ def resources_case(case, cgroup_root=None):
 
 @contextmanager
 def delegated_group(root):
-    owned = root.resolve(strict=True) / ('saya_n2_accept_' + uuid.uuid4().hex)
+    owned = root.resolve(strict=True) / ('XKsoyo_n2_accept_' + uuid.uuid4().hex)
     owned.mkdir()
     try:
         available = (owned / 'cgroup.controllers').read_text().split()
@@ -1350,7 +1350,7 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('target/n2/acceptance/native-evidence.json'))
     parser.add_argument('--benchmark-samples', type=int, default=3, choices=range(1, 21))
     parser.add_argument('--skip-benchmarks', action='store_true')
-    parser.add_argument('--cgroup-root', type=Path, default=os.environ.get('SAYA_N2_CGROUP_ROOT'))
+    parser.add_argument('--cgroup-root', type=Path, default=os.environ.get('SOYO_N2_CGROUP_ROOT'))
     parser.add_argument('--require-cgroup', action='store_true')
     options = parser.parse_args()
     options.output.parent.mkdir(parents=True, exist_ok=True)
@@ -1390,13 +1390,13 @@ def main():
                 evidence['tools'][name] = tool_evidence(name, arguments)
         if platform.system() == 'Darwin':
             evidence['tools']['sandbox-exec'] = tool_evidence('/usr/bin/sandbox-exec', ['-h'])
-        image = options.output.parent.resolve() / ('saya-' + evidence['binary']['sha256'])
+        image = options.output.parent.resolve() / ('soyo-' + evidence['binary']['sha256'])
         if not image.exists():
             shutil.copy2(binary, image)
             image.chmod(0o500)
         require(digest(image) == evidence['binary']['sha256'], 'Input image changed while copying')
         evidence['binary']['executed_copy_path'] = str(image)
-        with tempfile.TemporaryDirectory(prefix='saya-n2-', dir=os.environ.get('TMPDIR', '/var/tmp')) as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-n2-', dir=os.environ.get('TMPDIR', '/var/tmp')) as directory:
             base = Path(directory).resolve()
             probe_source = base / 'probe.c'
             probe_source.write_text(PROBE_SOURCE)

@@ -61,7 +61,7 @@ TUI 的 Agent 执行期间可以继续提交普通用户消息。消息进入有
 
 开发线按D-046增加 `todo_write` 会话任务清单工具，PLAN可更新任务元数据，Manual Approval每次调用均需批准。完整列表替换、校验限额及恢复规则见[运行时](runtime.md#会话任务清单)。
 
-N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭（并受 `saya module browser|vm enable|disable` 开关与配置校验共同门控）。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。DEV-080 至 DEV-083 已打通 Playwright worker（三补丁 + 定制 ARM64 Chromium 预捕获遮蔽）、专用 VM、broker 网络／凭据／文件通道及 CLI/TUI 媒体展示；固定源码 `5fff1c4` 四平台远端终验与本机／VM/`n5arm22` Masked PNG 联合验收均已通过（遇到未修补 Chromium 或未确认 `masked=true` 时仍严格 fail-closed 为 `browser_capability_disabled`，非 ARM64 定制引擎分发待补齐），详见[Browser 设计](browser.md)与[N5 验收](n5-validation.md)。
+N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭（并受 `soyo module browser|vm enable|disable` 开关与配置校验共同门控）。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。DEV-080 至 DEV-083 已打通 Playwright worker（三补丁 + 定制 ARM64 Chromium 预捕获遮蔽）、专用 VM、broker 网络／凭据／文件通道及 CLI/TUI 媒体展示；固定源码 `5fff1c4` 四平台远端终验与本机／VM/`n5arm22` Masked PNG 联合验收均已通过（遇到未修补 Chromium 或未确认 `masked=true` 时仍严格 fail-closed 为 `browser_capability_disabled`，非 ARM64 定制引擎分发待补齐），详见[Browser 设计](browser.md)与[N5 验收](n5-validation.md)。
 
 工具按下面的顺序处理：
 
@@ -140,7 +140,7 @@ JSONL事件序号严格递增，预留可产生空洞。每个4096序号预留�
 
 当前开发线默认采用 `sandbox.backend = "auto"`，macOS 选择独立 SeatbeltBackend，Linux 选择 Bubblewrap、Seccomp 与可选 socat 代理桥。实际准备、能力报告、命令和文件服务通过同一 ExecutionBackend 连接。配置加载与原生能力探测分别进行，已通过的完整四平台整体验收见[N2 验收记录](n2-validation.md)。
 
-权限许可继续绑定规范化操作、模式、权限版本、环境摘要及执行环境身份。`bypass` 保留 PLAN、显式 deny、参数和预算规则，并继续受原生执行策略约束。宿主保护路径优先于可写根，默认包括启动时已存在的配置、data、state、cache 和工作区 `.saya/local`。活动凭据存储新建后会强制加入实际保护路径。
+权限许可继续绑定规范化操作、模式、权限版本、环境摘要及执行环境身份。`bypass` 保留 PLAN、显式 deny、参数和预算规则，并继续受原生执行策略约束。宿主保护路径优先于可写根，默认包括启动时已存在的配置、data、state、cache 和工作区 `.soyo/local`。活动凭据存储新建后会强制加入实际保护路径。
 
 `sandbox.read_roots` 与 `write_roots` 控制 OS 视图，`permissions.additional_roots` 同时扩展逻辑文件权限和原生读写根。单独提供工具链可读根只允许进程访问该目录，文件工具访问仍按逻辑权限判断。解释器与编译器需要的额外目录由用户显式选择。
 

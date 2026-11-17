@@ -1,4 +1,4 @@
-# Saya continuation after compaction
+# Soyo continuation after compaction
 
 Apply this section only when the trusted host request context sets checkpoint_selected_by_host to true. The harness supplies that flag. For a false or absent flag, follow the normal execution contract and the supplied history.
 

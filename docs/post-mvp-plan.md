@@ -11,18 +11,18 @@
 | 加入日志系统 | 五级诊断、关联 span、脱敏、轮转、筛选与跟随查询已接入 CLI | N0 已实现，各轮故障验证见进度 | [日志与追踪](observability.md)，F-12 |
 | Session 导出为 Markdown 或 JSON | SQLite 一致性快照、两种导出格式及显式文件保存已接入 CLI 和 TUI | N0 已实现，各轮导出边界验证见进度 | [会话导出](session-export.md)，F-19 |
 | 未来加入 `/goal` | 运行预算、会话恢复、四模式、运行内后台工具 | 目标、步骤、验收证据，随后增加受限自动续跑 | [Goal 编排](goal.md)，新增 F-20 |
-| 直接输入 `saya` 进入 TUI | 默认 TUI、流式对话、人工审批、会话与工具管理已接入共享应用层 | N1 已实现，后续交互与验收按源码跟踪 | [TUI 设计](tui.md)，F-14 |
+| 直接输入 `soyo` 进入 TUI | 默认 TUI、流式对话、人工审批、会话与工具管理已接入共享应用层 | N1 已实现，后续交互与验收按源码跟踪 | [TUI 设计](tui.md)，F-14 |
 
-0.1.0 workspace 包含 `saya-core`、`saya-cli`。当前开发线已增加 `saya-app` 与 `saya-tui`，模型组装、会话准备、事件和人工交互桥由共享应用层提供，CLI 与 TUI 使用同一服务。`tracing`、Ratatui 和 Crossterm 已接入并由 Cargo.lock 固定。
+0.1.0 workspace 包含 `soyo-core`、`soyo-cli`。当前开发线已增加 `soyo-app` 与 `soyo-tui`，模型组装、会话准备、事件和人工交互桥由共享应用层提供，CLI 与 TUI 使用同一服务。`tracing`、Ratatui 和 Crossterm 已接入并由 Cargo.lock 固定。
 
-本轮补充[Browser](browser.md)、[原生 Sandbox／AST](sandbox.md)、[上下文与长输出](context-management.md)及[saya-plugin v1 规范](saya-plugin.md)。Linux 使用项目负责人指定的 Bubblewrap + Seccomp + socat，macOS 以独立 SeatbeltBackend 承接 sandbox-exec，并通过统一后端接口预留容器／VM 实现。
+本轮补充[Browser](browser.md)、[原生 Sandbox／AST](sandbox.md)、[上下文与长输出](context-management.md)及[soyo-plugin v1 规范](soyo-plugin.md)。Linux 使用项目负责人指定的 Bubblewrap + Seccomp + socat，macOS 以独立 SeatbeltBackend 承接 sandbox-exec，并通过统一后端接口预留容器／VM 实现。
 
 ## 交付分组
 
 | 阶段 | 范围 | 主要任务 | 退出条件 |
 | --- | --- | --- | --- |
 | N0 共享基础 | 应用服务、事件桥接、日志、Session Export | DEV-038 至 DEV-046 | 现有 CLI 正常运行，日志及导出有离线证据 |
-| N1 默认 TUI | 终端生命周期、聊天、审批、会话、入口路由 | DEV-047 至 DEV-053 | 直接运行 `saya` 打开 TUI，四平台交互验收通过 |
+| N1 默认 TUI | 终端生命周期、聊天、审批、会话、入口路由 | DEV-047 至 DEV-053 | 直接运行 `soyo` 打开 TUI，四平台交互验收通过 |
 | N2 隔离与工具扩展 | Tool Registry、原生后端、AST、MCP、凭据 | DEV-054 至 DEV-061、DEV-075 | 实际约束和能力等级可验证，外部工具走统一调度 |
 | N3 上下文与扩展包 | OutputStore、Context、Compact、检查点、Skills／插件／Hooks、全局记忆 | DEV-062 至 DEV-068、DEV-076 至 DEV-078、DEV-084 至 DEV-089 | 长输出、压缩、扩展及模型记忆编辑具有可追溯边界 |
 | N4 目标编排 | Goal 数据、手动推进、持久任务、有限自动续跑与报告 | DEV-069 至 DEV-074 | 目标完成由验收证据判定，预算、恢复及授权可验证 |
@@ -66,13 +66,13 @@ flowchart TD
 
 | 任务 | 内容 | 最小依赖 | 交付与验证 |
 | --- | --- | --- | --- |
-| DEV-038 | 提取 `saya-app` 共享应用服务 | 0.1.0 | 迁移 profile／模型组装、会话创建／恢复与锁的生命周期。CLI 测试覆盖模式覆盖、配置变更、PLAN 数据目录与恢复行为 |
+| DEV-038 | 提取 `soyo-app` 共享应用服务 | 0.1.0 | 迁移 profile／模型组装、会话创建／恢复与锁的生命周期。CLI 测试覆盖模式覆盖、配置变更、PLAN 数据目录与恢复行为 |
 | DEV-039 | 统一应用命令、流事件、人工输入与控制桥接 | DEV-038 | 复用 EventWriter／EventModel 和 RuntimeHandle。三协议文本流、序号、审批失效、取消与消费者断开通过受控测试 |
 | DEV-040 | 扩展安全日志为五级类型化记录 | 0.1.0 | 保留现有日志路径、跨进程锁和 10 MiB／5 备份边界。验证级别、字段白名单、嵌套凭据与轮转 |
 | DEV-041 | 接入 tracing span 与安全 subscriber | DEV-039、DEV-040 | 关联 session／run／request／call／job，异步任务归属正确。元数据经过安全记录层，压力下资源有界 |
-| DEV-042 | 日志级别及 show／tail 查询 | DEV-040、DEV-041 | 提供 `--log-level`、`SAYA_LOG_LEVEL` 和本地筛选。验证轮转跟随、退出、损坏尾行、终端转义与 JSON／JSONL stdout |
+| DEV-042 | 日志级别及 show／tail 查询 | DEV-040、DEV-041 | 提供 `--log-level`、`SOYO_LOG_LEVEL` 和本地筛选。验证轮转跟随、退出、损坏尾行、终端转义与 JSON／JSONL stdout |
 | DEV-043 | 实现只读一致性 Session Snapshot | 0.1.0 | 单次读事务读取全部集合及持久化水位。并发写入、活跃会话、旧 schema、取消与读取上限有测试 |
-| DEV-044 | 版本化 JSON 导出器 | DEV-043 | 独立 `saya.session` schema、范围与内容选择、复合调用 ID、未知状态及省略字段可验证 |
+| DEV-044 | 版本化 JSON 导出器 | DEV-043 | 独立 `soyo.session` schema、范围与内容选择、复合调用 ID、未知状态及省略字段可验证 |
 | DEV-045 | Markdown 导出器 | DEV-043、DEV-044 | 复用同一快照和过滤策略。验证 Unicode、代码围栏、HTML／控制字符和长工具输出 |
 | DEV-046 | CLI 导出与安全文件发布 | DEV-044、DEV-045 | `session export --file` 接入。验证原子发布、已有文件、链接、私有权限、磁盘失败、取消、PLAN 路径和无模型调用 |
 
@@ -80,11 +80,11 @@ flowchart TD
 
 | 任务 | 内容 | 最小依赖 | 交付与验证 |
 | --- | --- | --- | --- |
-| DEV-047 | 建立 `saya-tui` library 与终端生命周期 | DEV-038、DEV-039 | Ratatui／Crossterm 候选经验证后锁版本。状态更新与绘制分离，退出、错误、panic unwind 和信号恢复终端 |
+| DEV-047 | 建立 `soyo-tui` library 与终端生命周期 | DEV-038、DEV-039 | Ratatui／Crossterm 候选经验证后锁版本。状态更新与绘制分离，退出、错误、panic unwind 和信号恢复终端 |
 | DEV-048 | 流式聊天、编辑与基础内容呈现 | DEV-047 | 多行输入、滚动、Unicode／窄终端、代码块及有限文本缓存。高频增量合并后最终文本完整 |
 | DEV-049 | 模式、权限、确认／澄清和运行控制 | DEV-048 | 展示当前／待切换模式，Manual Approval 覆盖全部模型工具。取消优先、过期确认、后台清理及人工等待计时复用 core |
 | DEV-050 | 会话浏览、工具详情、后台状态与导出入口 | DEV-046、DEV-049 | 新建／恢复等待输入，工具结果与 unknown 原样呈现。界面查看持久化记录与 Agent 工具调用有清楚关联 |
-| DEV-051 | `saya` 默认入口切换与兼容处理 | DEV-050 | TTY 无子命令进入 TUI。非 TTY、管道输入和机器输出冲突返回用法错误。run／chat／resume／session／config 命令回归通过 |
+| DEV-051 | `soyo` 默认入口切换与兼容处理 | DEV-050 | TTY 无子命令进入 TUI。非 TTY、管道输入和机器输出冲突返回用法错误。run／chat／resume／session／config 命令回归通过 |
 | DEV-052 | TUI 与 CLI 四平台集成验收 | DEV-051 | PTY 故障注入、慢消费者、审批取消竞态、三协议和四模式／三权限回归，验证 stdout、退出与资源清理 |
 | DEV-053 | 0.2.0 候选发行检查与双语说明 | DEV-042、DEV-046、DEV-052 | 更新使用指南和迁移说明，按选定版本构建四平台候选并验收。记录默认入口变化、安装、已知限制与证据 |
 
@@ -115,7 +115,7 @@ flowchart TD
 | DEV-063 | 手动／自动 Compact | DEV-062、DEV-041 | 安全调用边界压缩、保留最近未闭合工具及协议原子组，摘要写入失败可恢复。三协议多轮与约束保真测试通过 |
 | DEV-064 | Diff、检查点及恢复 | DEV-055、DEV-057 | Git／普通目录的受控改动可比较，恢复前检测外部修改，记录单文件与跨文件恢复的实际保证 |
 | DEV-065 | Skill 按需激活与资源加载 | DEV-062 | 复用已实现发现机制，验证同名覆盖、路径作用域、来源、停用和上下文预算 |
-| DEV-066 | saya-plugin 声明式包管理 | DEV-059、DEV-065、DEV-078 | 按 v1 规范实现本地安装、启停、更新／卸载、digest 与租约，Skill／MCP 经既有入口生效 |
+| DEV-066 | soyo-plugin 声明式包管理 | DEV-059、DEV-065、DEV-078 | 按 v1 规范实现本地安装、启停、更新／卸载、digest 与租约，Skill／MCP 经既有入口生效 |
 | DEV-067 | 受控 Hooks 生命周期 | DEV-057、DEV-041 | 定义观察／阻止事件，验证超时、递归、幂等、拒绝、取消及重启后的执行状态 |
 | DEV-068 | 扩展与 Compact 联合验收 | DEV-061、DEV-063、DEV-064、DEV-066、DEV-067、DEV-077 | 扩展、摘要、输出引用、模式、权限、恢复及检查点交叉测试，记录该批次发行范围 |
 
@@ -153,7 +153,7 @@ DEV-069至DEV-074已实现。Goal 使用独立版本化 SQLite、专属 Session�
 
 ## F-07 全局记忆与模型编辑专项
 
-入口为 `~/.saya/MEMORY.md`，支持用户直接审阅和专用模型工具更新，格式、来源、权限与保留规则见[全局记忆](memory.md)。DEV-084至DEV-089属于本轮N3范围，实际实现与最终验收状态按[N3验收记录](n3-validation.md)维护。
+入口为 `~/.soyo/MEMORY.md`，支持用户直接审阅和专用模型工具更新，格式、来源、权限与保留规则见[全局记忆](memory.md)。DEV-084至DEV-089属于本轮N3范围，实际实现与最终验收状态按[N3验收记录](n3-validation.md)维护。
 
 | 任务 | 内容 | 最小依赖 | 交付与验证 |
 | --- | --- | --- | --- |
@@ -167,7 +167,7 @@ DEV-069至DEV-074已实现。Goal 使用独立版本化 SQLite、专属 Session�
 ## 跨阶段验收
 
 - 原有 PLAN、deny、Manual Approval、模式切换、取消、预算和历史授权规则进入持续回归集。
-- `saya run` 的 JSON／JSONL、退出码和工具调用关联作为兼容入口持续验证。
+- `soyo run` 的 JSON／JSONL、退出码和工具调用关联作为兼容入口持续验证。
 - 原始历史和执行意图／结果保存在持久层，诊断日志、导出与 UI 使用明确水位和来源。
 - 每个 DEV 在适用检查通过、文档与证据更新后创建独立 Conventional Commit。推送和发行依据当次用户授权执行。
 - 最终版本说明提供中英双语，支持平台依赖实际程序验收结果。新增协议、后端和迁移均记录验证矩阵。
@@ -184,7 +184,7 @@ DEV-069至DEV-074已实现。Goal 使用独立版本化 SQLite、专属 Session�
 | 固定MCP SDK／协议及授权矩阵已完成四平台验收，后续协议扩展另行验证 | DEV-058 至 DEV-061 |
 | Compact 触发水位、摘要模型及协议安全边界 | DEV-062、DEV-063 |
 | 输出引用／捕获配额、检索与压缩恢复 | DEV-076、DEV-077 |
-| saya-plugin v1 schema、语义、lock 与能力绑定 | DEV-078、DEV-066 |
+| soyo-plugin v1 schema、语义、lock 与能力绑定 | DEV-078、DEV-066 |
 | 浏览器版本、原生约束、操作与产物策略 | DEV-079 至 DEV-083 |
 | Goal 自动续跑授权、模式控制、预算和租约语义 | DEV-069 至 DEV-072 |
 | 全局记忆格式、模型写入授权、遗忘与检索默认值 | DEV-084 至 DEV-089 |

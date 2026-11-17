@@ -1,8 +1,10 @@
 # 配置加载组件
 
-配置解析已接入 CLI 与默认 TUI。`saya config init`、`saya config check` 和任务入口复用该组件。配置格式、完整示例与产品规则以 [MVP 基线 B-04、B-05 和 B-15](mvp-baseline.md) 为准。
+配置解析已接入 CLI 与默认 TUI。`soyo config init`、`soyo config check` 和任务入口复用该组件。配置格式、完整示例与产品规则以 [MVP 基线 B-04、B-05 和 B-15](mvp-baseline.md) 为准。
 
-组件只读取一份配置，依次按显式参数、相应 `SAYA_*` 环境变量、文件内容和内置默认值解析；`SAYA_CONFIG` 只选择文件，不会自动加载或合并项目配置。XDG 路径要求绝对路径，否则回退至 HOME 下的标准目录。工作区与 `permissions.additional_roots` 在加载时检查存在性，权限规则同步校验。Sandbox 路径身份和实际能力在 Run 准备阶段检查。配置加载保持只读解析。
+组件只读取一份配置，依次按显式参数、相应 `SOYO_*` 环境变量、文件内容和内置默认值解析；`SOYO_CONFIG` 只选择文件，不会自动加载或合并项目配置。XDG 路径要求绝对路径，否则回退至 HOME 下的标准目录。
+
+**改名兼容**：项目自 Saya Harness 更名为 Soyo Harness 后（分界提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0`），所有 `SOYO_*` 环境变量读取在对应变量缺失时自动回退到同名的 `SAYA_*` 变量（例如 `SOYO_MODE` → `SAYA_MODE`）；两者同时存在时 `SOYO_*` 生效。默认数据、配置、状态与缓存目录使用 `soyo` 子目录，`$HOME` 下的全局记忆根优先使用 `.soyo`；当 `.soyo` 不存在且 `.saya` 已存在时回退到 `.saya`，两者皆不存在时按 `.soyo` 创建。项目级约定目录按 `.agents`、`.saya`、`.soyo` 顺序发现，`.soyo` 约定优先、`.saya` 继续可读。工作区与 `permissions.additional_roots` 在加载时检查存在性，权限规则同步校验。Sandbox 路径身份和实际能力在 Run 准备阶段检查。配置加载保持只读解析。
 
 每个 profile 显式声明协议、API 根 URL、模型、鉴权方式和上下文窗口，模型凭据和额外请求头的值只能通过环境变量名引用。默认没有 profile 或付费模型；未知字段、未定义的 profile、缺失的环境变量引用、不合法的鉴权、权限规则和预算均报错。解析错误不回显原始 TOML 或环境变量值。程序使用环境快照，可在测试中注入；CLI 将配置应用于模型、执行器和权限控制。
 
@@ -141,7 +143,7 @@ mode = "deny"
 | `ca_certs` | 默认 `false`；设为 `true` 时按平台只读挂载已存在的系统 CA 目录（macOS `/etc/ssl`；Linux `/etc/ssl`、`/etc/pki`、`/etc/ca-certificates`） |
 | `toolchain_presets` | 默认 `[]`；显式按需只读探测并加入宿主工具链目录，可选 `"auto"`、`"rust"`、`"python"`、`"node"`、`"homebrew"`、`"xcode_clt"`、`"minimal_etc"`，最多 32 项 |
 
-省略时默认严格视图保持不变。开启 `toolchain_presets` 时仅在运行准备阶段加入当前实际存在的绝对目录，并过滤 `/`、`$HOME`（及其规范路径）、包含 `.saya` 的路径以及非目录项；`"auto"` 会展开为其余全部预设。选择 `"rust"`、`"python"`、`"node"`、`"minimal_etc"` 或 `"auto"` 时，会在 Linux 沙箱额外启用只含当前数值 UID／GID 的合成 `/etc/{passwd,group,nsswitch.conf}` 身份视图，仍不挂载宿主账号库或 `/proc`。
+省略时默认严格视图保持不变。开启 `toolchain_presets` 时仅在运行准备阶段加入当前实际存在的绝对目录，并过滤 `/`、`$HOME`（及其规范路径）、包含 `.soyo` 的路径以及非目录项；`"auto"` 会展开为其余全部预设。选择 `"rust"`、`"python"`、`"node"`、`"minimal_etc"` 或 `"auto"` 时，会在 Linux 沙箱额外启用只含当前数值 UID／GID 的合成 `/etc/{passwd,group,nsswitch.conf}` 身份视图，仍不挂载宿主账号库或 `/proc`。
 
 Linux默认只读系统视图在目录存在时包含 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 和 `/etc/alternatives`，使系统工具的包管理器别名可沿既有可见目标解析。目录内容按实际只读映射，保护路径在所有根挂载后应用，并覆盖系统目录的全部规范路径／guest别名。[执行边界](sandbox.md)
 
@@ -153,7 +155,7 @@ Linux原生视图省略 `/proc`。依赖 `/proc/self/exe` 定位工具链的程�
 
 x86_64 GNU Linux的Rust默认LLD wrapper还会通过 `/proc/self/exe` 查找同目录链接器。当前编译夹具显式加入 `-C linker-features=-lld`，使用宿主已配置的系统链接器，保留无proc视图。该选项按目标限定，ARM和macOS夹具保持各自已有命令。实际Linux结果见[N2记录](n2-validation.md)。[Rust链接器选项](https://doc.rust-lang.org/rustc/codegen-options/index.html#linker-features)
 
-宿主默认保护启动时已存在的配置文件、data、state、cache 目录以及工作区 `.saya/local`。启用凭据引用而新建凭据目录后，宿主会把实际凭据目录加入保护集合。其他 `.saya` 项目指令和 Skills 仍按[项目上下文约定](project-context.md)读取。Linux 无法安全表示保护路径时返回 `unsupported_fs_policy`，具体约束见[执行契约](execution.md#n2-原生执行边界)。
+宿主默认保护启动时已存在的配置文件、data、state、cache 目录以及工作区 `.soyo/local`。启用凭据引用而新建凭据目录后，宿主会把实际凭据目录加入保护集合。其他 `.soyo` 项目指令和 Skills 仍按[项目上下文约定](project-context.md)读取。Linux 无法安全表示保护路径时返回 `unsupported_fs_policy`，具体约束见[执行契约](execution.md#n2-原生执行边界)。
 
 显式 `backend = "host"` 选择宿主兼容执行，其文件系统、网络及聚合资源隔离能力报告为 `unsupported`，工作模式、权限规则与运行预算继续生效。Host 支持现有单进程 rlimit。指定 `cgroup_root` 或请求 `total_memory_bytes`、`total_processes`、`cpu_quota` 中任一项时，Run 准备在模型派发前返回 `sandbox_capability_unavailable`。启用了 `credential_ref` 的 HTTP MCP 服务，或 state 目录下已经存在 `credentials` 存储目录时，应用继续拒绝 Host 启动。
 
@@ -186,7 +188,7 @@ read_only_tools = ["lookup"]
 type = "stdio"
 argv = ["/absolute/path/to/server", "--stdio"]
 # cwd = "/absolute/path/to/workspace"
-# env = { SERVICE_TOKEN = "SAYA_MCP_TOKEN" }
+# env = { SERVICE_TOKEN = "SOYO_MCP_TOKEN" }
 ```
 
 `env` 左侧是子进程目标变量名，右侧是启动环境中的引用名。只有启用服务的环境引用需要存在。该映射由宿主显式选择，MCP 启动继续经过命令权限与实际环境摘要绑定。`read_only_tools` 是宿主对原始远端工具名的分类，PLAN 的 HTTP MCP 工具仅开放其中明确列出的项，stdio 服务在 PLAN 中保持停止。
@@ -197,7 +199,7 @@ HTTP 配置使用 `[mcp.servers.NAME.transport]`，设置 `type = "http"` 与完
 
 ## Web 与 Browser（DEV-079／DEV-080）
 
-Web 读取与浏览器默认关闭。配置加载执行严格校验，未知字段、缺失 origin 或越界限额直接报错。除直接修改 `[browser].enabled` 与 `[browser.vm].enabled` 外，也可通过 `saya module <browser|vm> <enable|disable|status>` 与 `saya module list` 切换运行时模块开关；显式切换持久化在 `data_dir/modules/modules.sqlite3`（不会改写 `config.toml`），未显式覆盖的模块继续继承 `config.toml` 中的 `enabled` 默认值，`vm enable` 落盘前会按 D-066 校验 `[browser.vm]`、`[browser.network]` 及与 `[browser.worker]` 的互斥约束（详见[Browser 设计](browser.md#module-开关管理d-071)）。`browser.enabled = true` 必须显式选择 `[browser.worker]` 或 `[browser.vm]` 之一，两者同时启用会被拒绝；`saya-app` 会校验所选后端的身份并为每个生命周期预检宿主 environment。native `Host` backend 与 macOS Seatbelt 在任何 worker／Chromium 启动前返回 `browser_sandbox_unavailable`；VM 后端缺少输入或不可用时返回 `browser_vm_unavailable`，不会回退 native／Host。native 浏览器环境固定使用 `NetworkPolicy::Deny`；VM 宿主通道使用 `NetworkPolicy::LoopbackPort`，只放行两个宿主回环目标：Colima 转发的 VM SSH 端口（`[browser.vm].port`）与本次 Run 的 broker 临时端口。VM 私有 netns 内承接代理的 `127.0.0.1:31281` 不是宿主通道端点。DEV-081A 起 VM 浏览器只能经宿主 broker 访问网络，没有默认 VM 出口回退；隔离能力失败返回 `browser_network_unavailable`，预算耗尽或固定 deadline 到期返回 `browser_network_budget`。worker 与 VM 配置默认关闭，启用时全部身份输入必须显式提供：
+Web 读取与浏览器默认关闭。配置加载执行严格校验，未知字段、缺失 origin 或越界限额直接报错。除直接修改 `[browser].enabled` 与 `[browser.vm].enabled` 外，也可通过 `soyo module <browser|vm> <enable|disable|status>` 与 `soyo module list` 切换运行时模块开关；显式切换持久化在 `data_dir/modules/modules.sqlite3`（不会改写 `config.toml`），未显式覆盖的模块继续继承 `config.toml` 中的 `enabled` 默认值，`vm enable` 落盘前会按 D-066 校验 `[browser.vm]`、`[browser.network]` 及与 `[browser.worker]` 的互斥约束（详见[Browser 设计](browser.md#module-开关管理d-071)）。`browser.enabled = true` 必须显式选择 `[browser.worker]` 或 `[browser.vm]` 之一，两者同时启用会被拒绝；`soyo-app` 会校验所选后端的身份并为每个生命周期预检宿主 environment。native `Host` backend 与 macOS Seatbelt 在任何 worker／Chromium 启动前返回 `browser_sandbox_unavailable`；VM 后端缺少输入或不可用时返回 `browser_vm_unavailable`，不会回退 native／Host。native 浏览器环境固定使用 `NetworkPolicy::Deny`；VM 宿主通道使用 `NetworkPolicy::LoopbackPort`，只放行两个宿主回环目标：Colima 转发的 VM SSH 端口（`[browser.vm].port`）与本次 Run 的 broker 临时端口。VM 私有 netns 内承接代理的 `127.0.0.1:31281` 不是宿主通道端点。DEV-081A 起 VM 浏览器只能经宿主 broker 访问网络，没有默认 VM 出口回退；隔离能力失败返回 `browser_network_unavailable`，预算耗尽或固定 deadline 到期返回 `browser_network_budget`。worker 与 VM 配置默认关闭，启用时全部身份输入必须显式提供：
 
 ```toml
 [web]
@@ -224,13 +226,13 @@ max_wait_ms = 60000
 [browser.worker]
 enabled = false
 # 绝对路径；仅启用时必填。
-# node = "/opt/saya/node/bin/node"
-# worker_root = "/opt/saya/playwright-worker"
-# chromium = "/opt/saya/chromium/Google Chrome for Testing"
-# identity_manifest = "/opt/saya/identity.json"
+# node = "/opt/soyo/node/bin/node"
+# worker_root = "/opt/soyo/playwright-worker"
+# chromium = "/opt/soyo/chromium/Google Chrome for Testing"
+# identity_manifest = "/opt/soyo/identity.json"
 # identity_sha256 = "<64 位小写 SHA-256>"
 # proxy = "http://127.0.0.1:3128"
-# temp_root = "/run/user/1000/saya-browser"
+# temp_root = "/run/user/1000/soyo-browser"
 connect_timeout_ms = 20000
 request_timeout_ms = 120000
 stderr_limit_bytes = 65536
@@ -242,19 +244,19 @@ backend = "colima"
 # 全部为宿主绝对路径；仅启用时必填。
 # colima = "/opt/homebrew/bin/colima"
 # ssh = "/usr/bin/ssh"
-# profile = "saya-browser"
+# profile = "soyo-browser"
 # host = "127.0.0.1"          # 必须是字面回环地址
-# user = "saya"
+# user = "soyo"
 # port = 2222
-# identity_file = "/Users/me/.ssh/saya-browser-vm"
+# identity_file = "/Users/me/.ssh/soyo-browser-vm"
 # known_hosts = "/Users/me/.ssh/known_hosts"
 # 远端 POSIX 绝对路径，由 scripts/n5/browser_vm.py provision 输出。
-# node = "/opt/saya/node/bin/node"
-# worker_root = "/opt/saya/worker"
-# chromium = "/opt/saya/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
-# identity_manifest = "/opt/saya/identity.json"
+# node = "/opt/soyo/node/bin/node"
+# worker_root = "/opt/soyo/worker"
+# chromium = "/opt/soyo/browsers/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
+# identity_manifest = "/opt/soyo/identity.json"
 # identity_sha256 = "<64 位小写 SHA-256>"
-# remote_temp_root = "/opt/saya/runs"
+# remote_temp_root = "/opt/soyo/runs"
 connect_timeout_ms = 20000
 request_timeout_ms = 120000
 cleanup_timeout_ms = 10000
@@ -305,7 +307,7 @@ max_upload_bytes = 8388608
 
 启用 native 或 VM 时只接受 schema v2 身份 manifest：保留七个命名文件字段，并要求 `installation_trees.node`、`worker`、`chromium` 各自包含 `sha256`／`entries`／`bytes`。三根分别是 Node binary 父目录、worker root、Chromium binary 父目录；manifest 应置于三根之外，Node 应使用专用最小目录。未知字段、v1、缺树、超限、不安全权限／成员／链接或完整树摘要不符均失败关闭。native Rust 与固定 VM Node 探针均比较同一 FD 的两遍文件内容，并保留元数据、取消及期限边界；安装树校验不是不可变快照或定制构建来源证明。[规范、上限与迁移](browser.md#安装树身份-v2)另行说明。旧配置需要在全新远端根重新 `provision`，显式替换路径与 `identity_sha256`；不会覆盖旧根或自动降级。
 
-DEV-080 的 `[browser.worker]` 仅描述宿主预置的 Playwright MCP worker，默认关闭且不会安装任何依赖。启用时 Node、worker root、Chromium、身份 manifest 与摘要必须齐全并保持绝对路径；启动前校验 manifest 命名的 Node、`cli.js`、三个 `package.json`、`browsers.json` 和 Chromium 主程序，以及三棵完整安装树；pinned package 与 Chromium 版本必须精确匹配，Node 版本由 manifest 声明并与其摘要绑定。固定版本为 `@playwright/mcp 0.0.85`、`playwright`／`playwright-core 1.66.0-alpha-2026-11-09` 与 Chromium `158.0.8127.18`（revision 1254）。生产装配按 Node 父目录、worker root 与 Chromium 包目录构造只读安装根，不绑定 workspace、HOME、`.saya` 或凭据目录；`temp_root` 只用于离线 provider 测试，生产 workspace 来自每次启动新建的 `PreparedEnvironment`。`proxy` 仍仅为后续 broker 保留：只接受无凭据、无 path／query／fragment、带显式端口的 loopback HTTP 地址（IPv4 或 IPv6），DEV-080 不会把它注入 Chromium 或 `--proxy-server`，浏览器环境网络保持 Deny。
+DEV-080 的 `[browser.worker]` 仅描述宿主预置的 Playwright MCP worker，默认关闭且不会安装任何依赖。启用时 Node、worker root、Chromium、身份 manifest 与摘要必须齐全并保持绝对路径；启动前校验 manifest 命名的 Node、`cli.js`、三个 `package.json`、`browsers.json` 和 Chromium 主程序，以及三棵完整安装树；pinned package 与 Chromium 版本必须精确匹配，Node 版本由 manifest 声明并与其摘要绑定。固定版本为 `@playwright/mcp 0.0.85`、`playwright`／`playwright-core 1.66.0-alpha-2026-11-09` 与 Chromium `158.0.8127.18`（revision 1254）。生产装配按 Node 父目录、worker root 与 Chromium 包目录构造只读安装根，不绑定 workspace、HOME、`.soyo` 或凭据目录；`temp_root` 只用于离线 provider 测试，生产 workspace 来自每次启动新建的 `PreparedEnvironment`。`proxy` 仍仅为后续 broker 保留：只接受无凭据、无 path／query／fragment、带显式端口的 loopback HTTP 地址（IPv4 或 IPv6），DEV-080 不会把它注入 Chromium 或 `--proxy-server`，浏览器环境网络保持 Deny。
 
 `[browser.vm]` 按 D-066 保留宿主与 Chromium 双层 sandbox。启用时所有宿主与远端路径必须显式；宿主 `ssh`、identity 与 known-hosts（共三个文件，不含 `/etc/passwd`）由 Seatbelt 精确只读绑定，canonicalize 后的路径再次接受空白、控制字符与引号校验，符号链接目标也不能绕过。`host` 必须是字面回环地址，`[::1]` 等括号形式会归一化为 `::1` 后再进入 HostName 与 argv。写范围仅 run 私有目录，网络只允许到 `host:port` 的 VM loopback SSH，使用 `BatchMode`、`IdentitiesOnly`、严格主机 key 校验并禁止 agent／X11／本地命令／连接复用与 ProxyJump。远端身份校验通过同一受控通道核对 schema v2 manifest 摘要、命名文件大小／SHA-256／权限、三棵安装树摘要／计数／字节、Node 实际版本、`@playwright/mcp`／Playwright 精确版本、Chromium `158.0.8127.18`（revision 1254）和 headless-shell 路径。每个生命周期创建唯一 0700 Run 根，并预先创建 LAUNCH 使用的全部 XDG 目录。SSH 断连、worker 退出、取消或 Run 结束都执行有界远端清理；启动或清理失败保留可重试句柄，外层超时不会丢弃 connection／workspace，无法确认时返回 unknown 并允许重试。VM 内 renderer 证据要求合法 sandbox argv、`NoNewPrivs=1` 与 `Seccomp=2`；native 浏览器还必须取得 Chromium 自有的 `InitializeSandbox` 证据，不能只依赖 Bubblewrap 固定属性。DEV-081A 起 VM 网络只经宿主 broker：宿主启动受 `RunNetworkBudget` 约束的 `NetworkBroker`，SSH 通道增加一条反向 streamlocal 转发，VM 内在 `sudo -n unshare -n` 的私有网络命名空间中由原用户运行 `socat`，worker 再 `setpriv` 回原用户；宿主通道需要放行的两个回环端口是 `[browser.vm].port`（Colima 转发的 VM SSH）和本次 Run 的 broker 临时端口，VM 内 `31281` 只在私有 netns 中。Chromium 被固定到该 loopback 代理，禁用 QUIC、非代理 WebRTC UDP、隐式回环旁路与本地页面名解析。隔离能力失败返回 `browser_network_unavailable`，预算耗尽或固定 deadline 到期返回 `browser_network_budget`，均不回退默认 VM 网络。`screenshots` 仍为 false，原因是固定 worker 没有在截图生成前执行真实遮蔽的契约，而不是 DEV-082 的图片／产物能力未实现；`downloads`／`uploads` 为 true；下载只接受显式元素动作产生的文件，上传只接受当前 Session 的 artifact 引用，并在宿主 OutputStore 保护目录下的 0600 staging 与 VM Run 私有 staging 之间复制。VM 上传以原名作为页面可见 basename 放入唯一私有目录，脚本用 trap 在 create／write／chmod／mv 失败或取消时删除半成品。`browser_navigate`／`wait`／`download` 支持显式 `background=true`，返回真实 job ID 并接入现有 BackgroundJobs、PLAN、取消与 Run 清理；已派发取消为 `outcome_unknown`，不重放。job `tool_timeout` 即使观察到 deadline 之后完成的下载，也保留其 `SealedMedia` lease 和 observed result，避免 GC 提前回收。PLAN 清理使 `background=true` 失败并在显式 open 后重新绑定存活的 supervisor；生命周期取消唤醒在途 wait。凭据／文件错误不绕过权限、PLAN 或 artifact ACL。`scripts/n5/browser_vm.py` 是唯一的显式创建／provision／check／destroy 入口，严格校验本地 canonical 路径、远端生成路径、manifest 结构与 worker-source 目录名，运行时不自动下载或更新版本。每个 Run 只创建一个共享 `RunNetworkBudget`，所有 worker 生命周期与 broker 重启共用累计 bytes／connections 和固定 deadline；重启不会重置已耗尽的上限。`provision`／`check` 还验证 `sudo -n`、`unshare -n`、`socat`、`setpriv`、`nsenter`、`ip route`、Chromium 所需的 user namespace／AppArmor 当前值，以及 `sshd -T` 报告的有效配置确实允许反向 streamlocal forwarding（`AllowStreamLocalForwarding`，并拒绝显式 `AllowTcpForwarding no`）；`provision --configure-apparmor-userns` 仅在专用 VM 内写入 sysctl drop-in，不修改宿主。
 
@@ -355,7 +357,7 @@ compaction_timeout_seconds = 600
 
 摘要使用执行profile和空工具集合。实际摘要请求、传输重试与运行活跃时间共用Run预算，默认最多16个完整组分块、4轮合并和每次请求2次允许的传输重试。失败不会切换为无限摘要循环。`auto_compact = false`保留手动入口及完整请求预算检查。
 
-`saya compact SESSION_ID`在独占已保存Session的写锁下执行独立摘要。文本会话和TUI的 `/compact` 在空闲时压缩当前Session，运行时排队至下一模型边界；末轮完成仍有请求时再执行独立Compact。它们保留原始UserText及工具历史，成功检查点通过来源水位CAS提交。[流程与恢复](context-management.md)
+`soyo compact SESSION_ID`在独占已保存Session的写锁下执行独立摘要。文本会话和TUI的 `/compact` 在空闲时压缩当前Session，运行时排队至下一模型边界；末轮完成仍有请求时再执行独立Compact。它们保留原始UserText及工具历史，成功检查点通过来源水位CAS提交。[流程与恢复](context-management.md)
 
 本地计数直接使用三协议实际请求序列化器。当前输入token采用标记为estimated的字符启发式，ASCII每4字符、其他Unicode标量每1字符，证据绑定完整请求指纹、协议与适配器版本。计数在本地执行，远端tokenizer／count服务属于后续可验证接缝。供应商最终窗口保护继续执行，估算方法与版本进入记录。[逐项证据](n3-validation.md)
 
@@ -366,16 +368,16 @@ compaction_timeout_seconds = 600
 read = true
 inject = true
 write = true
-# root = "/absolute/private/saya-memory-root"
+# root = "/absolute/private/soyo-memory-root"
 ```
 
-默认根为启动环境 `HOME` 下的 `.saya`，索引为 `MEMORY.md`，主题目录为 `memory/`。显式root要求绝对路径。运行配置仍从本次显式选择的配置文件加载，指令／Skill发现保持独立规则。
+默认根为启动环境 `HOME` 下的 `.soyo`，索引为 `MEMORY.md`，主题目录为 `memory/`。显式root要求绝对路径。运行配置仍从本次显式选择的配置文件加载，指令／Skill发现保持独立规则。
 
 三个开关默认启用。read关闭模型查询与自动事实注入，inject单独关闭自动注入，write关闭更新／遗忘／回滚／备份恢复。内部仍需读取版本和遗忘状态以验证旧上下文兼容性。缺失根按空记忆处理，读和投影保持零创建。`--memory-file`和`--preferences-file`沿显式文件参数提供本次个人上下文。
 
 write与内容读取独立，read关闭时显式CLI仍可按给定版本执行持久变更，版本和receipt只返回元数据。TUI完整review包含旧正文，需先启用read，关闭read会使待确认review失效。
 
-PLAN只读，Manual Approval对每次模型记忆工具调用确认，auto变更采用规则与独立模型核查。显式deny和宿主受保护路径继续生效。`saya memory`提供离线管理，TUI `/memory`提供有界浏览、差异、确认、导出、恢复和空闲时的进程级开关。[实际工具、默认限额与保留范围](memory.md)
+PLAN只读，Manual Approval对每次模型记忆工具调用确认，auto变更采用规则与独立模型核查。显式deny和宿主受保护路径继续生效。`soyo memory`提供离线管理，TUI `/memory`提供有界浏览、差异、确认、导出、恢复和空闲时的进程级开关。[实际工具、默认限额与保留范围](memory.md)
 
 ### 插件宿主绑定
 

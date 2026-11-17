@@ -38,8 +38,8 @@ jobs:
       - name: Check workspace and build release binary
         run: |
           ./scripts/check.sh
-          expected_version=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "saya-cli"))')
-          test "$(target/release/saya --version)" = "saya $expected_version"
+          expected_version=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "soyo-cli"))')
+          test "$(target/release/soyo --version)" = "soyo $expected_version"
       - name: Check packaging and verification tools
         run: |
           python3 scripts/release/test_package.py
@@ -48,7 +48,7 @@ jobs:
           python3 scripts/release/test_script_helpers.py
       - name: Package the native candidate
         run: |
-          python3 scripts/release/package.py --source-commit "$GITHUB_SHA" --output candidate --target '${{ matrix.target }}' --binary '${{ matrix.target }}=target/release/saya'
+          python3 scripts/release/package.py --source-commit "$GITHUB_SHA" --output candidate --target '${{ matrix.target }}' --binary '${{ matrix.target }}=target/release/soyo'
       - name: Verify the packaged binary on its minimum OS
         shell: bash
         run: |
@@ -64,7 +64,7 @@ jobs:
       - name: Retain the verified candidate and evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: saya-${{ matrix.target }}
+          name: soyo-${{ matrix.target }}
           path: candidate/
           if-no-files-found: error
           retention-days: 14

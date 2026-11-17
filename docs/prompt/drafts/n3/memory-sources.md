@@ -55,7 +55,7 @@
 
 ## 运行时新增绑定
 
-- 默认根使用 `~/.saya/MEMORY.md` 及 `memory/`，read／inject／write与显式memory-file／preferences-file分别配置。
+- 默认根使用 `~/.soyo/MEMORY.md` 及 `memory/`，read／inject／write与显式memory-file／preferences-file分别配置。
 - `__saya_managed.review`包含宿主核对的最新用户和选中证据、变更前后内容／摘要、scope、revision及截断状态。审核按user_input／succeeded／failed／unknown等级判断。
 - goal_summary只保留调用方摘要身份，用户更正和遗忘沿真实用户来源与当前规则判断。旧memory输出、摘要、Hook或插件正文无法制造独立证据。
 - 旧记忆请求的实际暴露来源与模型返回hash进入durable记录，失效的完整组先退出请求投影，再供Compact读取。静态英文规则保持缓存前缀，动态版本与来源进入上下文。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in live CLI smoke; no secrets, responses, or task data are printed or saved.
 
-The caller supplies SAYA_LIVE_API_KEY and three protocol roots. Requests may incur
+The caller supplies SOYO_LIVE_API_KEY and three protocol roots. Requests may incur
 charges. This checks one model/provider, not broad model quality or compatibility.
 """
 import argparse
@@ -25,9 +25,9 @@ def main():
     parser.add_argument('--legacy-max-tokens', action='store_true',
                         help='send max_tokens instead of max_completion_tokens for Chat Completions')
     args = parser.parse_args()
-    secret = os.environ.get('SAYA_LIVE_API_KEY')
+    secret = os.environ.get('SOYO_LIVE_API_KEY')
     if not secret:
-        parser.error('SAYA_LIVE_API_KEY must be set in the environment')
+        parser.error('SOYO_LIVE_API_KEY must be set in the environment')
     binary = args.binary.resolve(strict=True)
     cases = [
         ('chat', 'openai-chat-completions', args.chat_root,
@@ -36,16 +36,16 @@ def main():
         ('anthropic', 'anthropic-messages', args.anthropic_root, 'api_version = "2026-10-21"'),
     ]
     failed = False
-    with tempfile.TemporaryDirectory(prefix='saya-live-smoke-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='soyo-live-smoke-') as temporary:
         root = Path(temporary)
         workspace = root / 'workspace'
         workspace.mkdir()
-        marker = 'SAYA_SMOKE_' + uuid.uuid4().hex
+        marker = 'SOYO_SMOKE_' + uuid.uuid4().hex
         (workspace / 'fact.txt').write_text(marker + '\n', encoding='utf-8')
         env = {key: os.environ[key] for key in ('PATH', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY') if key in os.environ}
         env.update({'HOME': str(root), 'XDG_DATA_HOME': str(root / 'data'),
                     'XDG_STATE_HOME': str(root / 'state'), 'XDG_CACHE_HOME': str(root / 'cache'),
-                    'SAYA_LIVE_API_KEY': secret})
+                    'SOYO_LIVE_API_KEY': secret})
         for name, protocol, api_root, extra in cases:
             # JSON-quoted strings are also TOML basic strings.
             config = root / (name + '.toml')
@@ -53,7 +53,7 @@ def main():
                 'schema_version = 1', '[defaults]', 'profile = "live"',
                 '[profiles.live]', 'protocol = ' + json.dumps(protocol),
                 'base_url = ' + json.dumps(api_root), 'model = ' + json.dumps(args.model),
-                'auth = "bearer"', 'api_key_env = "SAYA_LIVE_API_KEY"',
+                'auth = "bearer"', 'api_key_env = "SOYO_LIVE_API_KEY"',
                 'context_window_tokens = ' + str(args.context_window),
                 'max_output_tokens = 1024', 'stream = true', extra, ''
             ]), encoding='utf-8')

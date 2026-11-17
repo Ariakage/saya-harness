@@ -1,4 +1,4 @@
-"""Offline regression tests. No Saya, Cargo, Git, native backend or API is used."""
+"""Offline regression tests. No Soyo, Cargo, Git, native backend or API is used."""
 import json
 import hashlib
 from contextlib import redirect_stdout
@@ -208,7 +208,7 @@ class FixtureTests(unittest.TestCase):
     def test_review_requests_do_not_consume_the_execution_dialogue(self):
         provider = Provider(PROTOCOLS[0])
         provider.dialogue = Dialogue("fixture", [("read", "memory_read", {})])
-        response = provider.respond({"messages": [{"role": "system", "content": "# Saya: independent operation review v1"}]})
+        response = provider.respond({"messages": [{"role": "system", "content": "# Soyo: independent operation review v1"}]})
         self.assertEqual(json.loads(response["choices"][0]["message"]["content"])["decision"], "allow")
         self.assertEqual(provider.dialogue.index, 0)
         self.assertEqual(provider.counts, {"execution": 0, "review": 1, "compaction": 0})

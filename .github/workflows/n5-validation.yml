@@ -71,7 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/n5/witness.py candidate --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
-            --copy-from target/release/saya --binary target/n5/acceptance/program/saya \
+            --copy-from target/release/soyo --binary target/n5/acceptance/program/soyo \
             --report target/n5/acceptance/candidate.json 2>&1 | tee target/n5/acceptance/candidate.log
       - name: Verify candidate architecture and minimum platform
         id: baseline
@@ -100,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo systemd-run --collect --wait --pipe \
-            --unit="saya-n5-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --unit="soyo-n5-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --uid="$(id -u)" --gid="$(id -g)" \
             --property='Delegate=cpu memory pids' \
             --property=RuntimeMaxSec=1800 --property=KillMode=control-group \
@@ -135,10 +135,10 @@ jobs:
       - name: Exercise all eight real native plugin service fixtures
         id: plugins
         env:
-          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+          SOYO_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
         run: |
           set -euo pipefail
-          cargo test -p saya-core --locked --test plugin_services -- --ignored --test-threads=1 \
+          cargo test -p soyo-core --locked --test plugin_services -- --ignored --test-threads=1 \
             2>&1 | tee target/n5/acceptance/native-plugin-services.log
           python3 - <<'PY' | tee target/n5/acceptance/native-plugin-summary.json
           import json, pathlib, re
@@ -219,28 +219,28 @@ jobs:
         run: |
           set -euo pipefail
           {
-            cargo test -p saya-core --locked --test browser_worker_real
-            cargo test -p saya-core --locked --test browser_vm_real
-            cargo test -p saya-core --locked --test browser_vm_network_real
-            cargo test -p saya-core --locked --test browser_vm_files_real
-            cargo test -p saya-core --locked --test browser_screenshot_real
-            cargo test -p saya-app --locked --test browser_assembly
+            cargo test -p soyo-core --locked --test browser_worker_real
+            cargo test -p soyo-core --locked --test browser_vm_real
+            cargo test -p soyo-core --locked --test browser_vm_network_real
+            cargo test -p soyo-core --locked --test browser_vm_files_real
+            cargo test -p soyo-core --locked --test browser_screenshot_real
+            cargo test -p soyo-app --locked --test browser_assembly
           } 2>&1 | tee target/n5/acceptance/browser-negative-controls.log
       - name: Exercise Linux private VM host channel
         id: browser_vm_host_linux
         if: startsWith(matrix.os, 'ubuntu-')
         env:
-          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+          SOYO_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
         run: |
           set -euo pipefail
-          cargo test -p saya-core --locked --test browser_vm_host_linux -- --ignored --exact \
+          cargo test -p soyo-core --locked --test browser_vm_host_linux -- --ignored --exact \
             private_vm_channel_preserves_literals_and_denies_other_host_access --nocapture \
             2>&1 | tee target/n5/acceptance/browser-vm-host-linux.log
       - name: Exercise real native Linux Chromium sandbox with schema v2 manifest
         id: native_chromium_sandbox
         if: startsWith(matrix.os, 'ubuntu-')
         env:
-          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+          SOYO_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
         run: |
           set -euo pipefail
           umask 022
@@ -261,11 +261,11 @@ jobs:
             --chromium "$CHROMIUM_BIN" \
             --manifest "$N5_WORK/identity.json" \
             --report target/n5/acceptance/native-manifest.json 2>&1 | tee target/n5/acceptance/native-manifest.log
-          SAYA_TEST_NODE="$N5_NODE" \
-          SAYA_TEST_WORKER_ROOT="$N5_WORKER_ROOT" \
-          SAYA_TEST_CHROMIUM_BIN="$CHROMIUM_BIN" \
-          SAYA_TEST_IDENTITY_MANIFEST="$N5_WORK/identity.json" \
-          cargo test -p saya-core --locked --test browser_worker_real -- --ignored --exact \
+          SOYO_TEST_NODE="$N5_NODE" \
+          SOYO_TEST_WORKER_ROOT="$N5_WORKER_ROOT" \
+          SOYO_TEST_CHROMIUM_BIN="$CHROMIUM_BIN" \
+          SOYO_TEST_IDENTITY_MANIFEST="$N5_WORK/identity.json" \
+          cargo test -p soyo-core --locked --test browser_worker_real -- --ignored --exact \
             real_playwright_worker_verifies_chromium_sandbox --nocapture \
             2>&1 | tee target/n5/acceptance/native-chromium-sandbox.log
       - name: Clean temporary worker installation

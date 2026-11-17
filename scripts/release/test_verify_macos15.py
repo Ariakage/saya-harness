@@ -20,7 +20,7 @@ def create_archive(path, target='macos-aarch64', cpu=0x0100000c):
     binary = b'\xcf\xfa\xed\xfe' + struct.pack('<I', cpu) + b'\x00' * 56
     metadata = {'target': target, 'binary_sha256': hashlib.sha256(binary).hexdigest(),
                 'declared_source_commit': 'a' * 40}
-    contents = {'saya': binary, 'LICENSE': b'license', 'README.md': b'readme',
+    contents = {'soyo': binary, 'LICENSE': b'license', 'README.md': b'readme',
                 'BUILD-INFO.json': json.dumps(metadata).encode()}
     with tarfile.open(path, 'w:gz') as archive:
         for name, data in contents.items():

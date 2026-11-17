@@ -24,7 +24,7 @@ class LinuxVerifierTest(unittest.TestCase):
             binary = b'\x7fELF\x02\x01' + b'\x00' * 12 + struct.pack('<H', 183) + b'\x00' * 44
             metadata = {'target': 'linux-aarch64', 'binary_sha256': hashlib.sha256(binary).hexdigest(),
                         'declared_source_commit': 'a' * 40}
-            contents = {'saya': binary, 'LICENSE': b'license', 'README.md': b'readme',
+            contents = {'soyo': binary, 'LICENSE': b'license', 'README.md': b'readme',
                         'BUILD-INFO.json': json.dumps(metadata).encode()}
             with tarfile.open(archive, 'w:gz') as tar:
                 for name, data in contents.items():

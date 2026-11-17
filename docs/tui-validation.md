@@ -6,7 +6,7 @@
 
 在 `c2bf78c` 基线上完成输入色条、右侧留白、忙碌动画及任务结束统计。实际环境为本机macOS27.2 ARM／Rust1.99.1，部署目标15.0。完整 `RUST_TEST_THREADS=4 just check` 通过格式、workspace全目标严格Clippy、924项Rust测试与优化构建，50项Python工具回归通过。
 
-所测优化程序固定为 `target/tui-status-polish/saya`，SHA-256为 `59416ecc766dec2762ba75c853e5a18e2d0875cad4217f8601cbe5ed8533dab9`。完整门禁及各项日志保留在 `target/tui-status-polish/`，其中 `check.log`、`tooling-final.log` 分别记录Rust和Python检查。
+所测优化程序固定为 `target/tui-status-polish/soyo`，SHA-256为 `59416ecc766dec2762ba75c853e5a18e2d0875cad4217f8601cbe5ed8533dab9`。完整门禁及各项日志保留在 `target/tui-status-polish/`，其中 `check.log`、`tooling-final.log` 分别记录Rust和Python检查。
 
 新增受控PTY场景覆盖四模式实际请求期间的多帧动画、精确／未知用量、完成后动画清除、历史摘要配色，以及下一次模型请求不包含界面统计。统计速率使用事件发布端的Execution请求区间，总量取最终RunResult，详细口径见[TUI设计](tui-design.md#运行反馈与结束统计)。
 
@@ -18,7 +18,7 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 
 ## 0.2.0 正式发行与验收
 
-2026-11-09，项目负责人授权的0.2.0已正式发布并设为Latest。标签 `v0.2.0` 固定到 `f579d1f1f8ec48f96e0544967bf4ffd6bbc2cbb0`。四个原生目标均通过682项Rust测试、九项发行脚本测试和22组PTY，完成格式、严格Clippy、优化构建、工具往返、文本会话、恢复及审查回归。[正式发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42524461863)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42524462140)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42525979782)
+2026-11-09，项目负责人授权的0.2.0已正式发布并设为Latest。标签 `v0.2.0` 固定到 `f579d1f1f8ec48f96e0544967bf4ffd6bbc2cbb0`。四个原生目标均通过682项Rust测试、九项发行脚本测试和22组PTY，完成格式、严格Clippy、优化构建、工具往返、文本会话、恢复及审查回归。[正式发行](https://github.com/Ariakage/soyo-harness/releases/tag/v0.2.0)、[源码CI](https://github.com/Ariakage/soyo-harness/actions/runs/42524461863)、[候选包验收](https://github.com/Ariakage/soyo-harness/actions/runs/42524462140)、[标签CI](https://github.com/Ariakage/soyo-harness/actions/runs/42525979782)
 
 | 目标 | 实际原生验收环境 | 安装包SHA-256 |
 | --- | --- | --- |
@@ -27,15 +27,15 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 | macos-x86_64 | macOS15.7.9／Intel | `f37ed4277ead62a7915f53fd248023ccba406800dc7f58b8cde4e41e7b448022` |
 | macos-aarch64 | macOS15.8.2／ARM | `c92a391264be9b4505d9f0dce5dba1fd6e399f24bac409fb5e0d8958b8db6742` |
 
-四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产均完成匿名公开下载，逐字节及SHA-256与验收对象一致。包内源码声明、README／LICENSE及程序哈希，以及验收脚本摘要经过独立核对。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[正式版结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/release-evidence.json)
+四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产均完成匿名公开下载，逐字节及SHA-256与验收对象一致。包内源码声明、README／LICENSE及程序哈希，以及验收脚本摘要经过独立核对。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[正式版结构化证据](https://github.com/Ariakage/soyo-harness/releases/download/v0.2.0/release-evidence.json)
 
 正式macOS ARM二进制通过24例合成凭据探针及deepseek-flash三协议×四模式的12项真实任务。41次模型请求全部成功，35次工具调用中34次成功。Chat CODE的invalid_patch发生于事件序号15，事件序号21的补丁成功，最终任务与静态产物校验通过，失败错误码、调用ID和顺序均保留。三项PLAN工作区零修改，命令执行为0。生成源码仅静态检查，服务内部effort及网络分块未独立观察。[真实模型记录](reports/live-model-validation.md)
 
-本机 `.saya/local/saya-trial` 已切换到匿名下载的正式ARM程序，配置、空闲TUI、命令面板和退出恢复检查通过，模型运行数为0。原预发行和历史程序保留独立记录。完整日志、包、公开下载与验收材料位于 `target/release-0.2.0/`。
+本机 `.soyo/local/soyo-trial` 已切换到匿名下载的正式ARM程序，配置、空闲TUI、命令面板和退出恢复检查通过，模型运行数为0。原预发行和历史程序保留独立记录。完整日志、包、公开下载与验收材料位于 `target/release-0.2.0/`。
 
 ## 0.2.0-rc.2 发行与验收
 
-2026-11-09，项目负责人授权的0.2.0-rc.2已发布为GitHub预发行。标签 `v0.2.0-rc.2` 固定到 `daee043821529e270b876a77d5c6e8f47bed1c33`。四个原生目标均通过682项Rust测试、九项发行脚本测试及22组PTY，完成工具、文本会话、恢复与审查回归，源码／脚本／包／二进制摘要交叉核对通过。[预发行](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0-rc.2)、[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42518737234)、[候选包验收](https://github.com/Ariakage/saya-harness/actions/runs/42518738474)、[标签CI](https://github.com/Ariakage/saya-harness/actions/runs/42520065596)
+2026-11-09，项目负责人授权的0.2.0-rc.2已发布为GitHub预发行。标签 `v0.2.0-rc.2` 固定到 `daee043821529e270b876a77d5c6e8f47bed1c33`。四个原生目标均通过682项Rust测试、九项发行脚本测试及22组PTY，完成工具、文本会话、恢复与审查回归，源码／脚本／包／二进制摘要交叉核对通过。[预发行](https://github.com/Ariakage/soyo-harness/releases/tag/v0.2.0-rc.2)、[源码CI](https://github.com/Ariakage/soyo-harness/actions/runs/42518737234)、[候选包验收](https://github.com/Ariakage/soyo-harness/actions/runs/42518738474)、[标签CI](https://github.com/Ariakage/soyo-harness/actions/runs/42520065596)
 
 | 目标 | 原生验收环境 | 安装包SHA-256 |
 | --- | --- | --- |
@@ -44,17 +44,17 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 | macos-x86_64 | macOS15.7.9／Intel | `810d29e182d735494c4d788b65e8e66b6d7f8045399c199258ee7c383283456c` |
 | macos-aarch64 | macOS15.8.2／ARM | `e8e8544419153aea06a89d64b9c96fbff31a3197b807b9a6f02940dda0db048d` |
 
-四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产完成匿名公开下载，逐字节／SHA-256与验收对象一致。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0-rc.2/release-evidence.json)
+四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产完成匿名公开下载，逐字节／SHA-256与验收对象一致。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[结构化证据](https://github.com/Ariakage/soyo-harness/releases/download/v0.2.0-rc.2/release-evidence.json)
 
 实际发布的macOS ARM二进制通过24例合成凭据探针，以及deepseek-flash三协议×四模式共12项真实任务。42次模型请求全部成功，36次工具调用中35次成功。Chat CODE运行包含一次未成功的补丁尝试，最终产物准确且任务完成，该失败的具体错误码与两次尝试的先后顺序未留存。三个PLAN工作区保持不变，命令执行为0。生成源码仅静态检查，服务内部effort及实际网络分块未独立核实，抽样范围见[真实模型记录](reports/live-model-validation.md)。
 
-本机试用入口 `.saya/local/saya-trial` 更新为该公开发行的ARM程序，保留之前产物。完整本机、原生工作流、下载及探针记录位于 `target/rc2/`。
+本机试用入口 `.soyo/local/soyo-trial` 更新为该公开发行的ARM程序，保留之前产物。完整本机、原生工作流、下载及探针记录位于 `target/rc2/`。
 
 ## 2026-11-09 第二轮整改程序
 
 源码 `6d0c609fc9f02a71d74ea2b1afc79fad397ac51e` 的格式、严格workspace Clippy、682项Rust测试与release构建通过，同一程序通过九项发行脚本测试、smoke、文本journey、既有审查回归和22组正常入口PTY。新增场景验证首条校验失败的草稿保留／准确重试，以及HUP同时关闭终端后返回130、子进程清理、cancelled落库和会话锁重新获取。
 
-24例安全探针和三输出completed-only测试通过。二进制SHA-256为 `31391a832815471d3d2ab5dfbb7ab45dfefcf13d05ab97d26ced8057661ec1a0`，证据在 `target/review-r2-final/`。155份源码与构建文件逐字匹配，实际Mach-O最低部署版本15.0。试用入口 `.saya/local/saya-trial` 指向新产物，空闲启动、命令面板和恢复检查通过且未创建模型运行。
+24例安全探针和三输出completed-only测试通过。二进制SHA-256为 `31391a832815471d3d2ab5dfbb7ab45dfefcf13d05ab97d26ced8057661ec1a0`，证据在 `target/review-r2-final/`。155份源码与构建文件逐字匹配，实际Mach-O最低部署版本15.0。试用入口 `.soyo/local/soyo-trial` 指向新产物，空闲启动、命令面板和恢复检查通过且未创建模型运行。
 
 本轮实际环境为本机macOS27.2 ARM。原生macOS15、Linux及四平台CI和真实服务复验仍待执行。[逐项处置与保留契约](reviews/review-2026-11-09_02.md)
 
@@ -88,20 +88,20 @@ DEV-047 至 DEV-053 覆盖默认 TUI、共享运行控制、会话与记录、�
 
 | 本机对象 | SHA-256 |
 | --- | --- |
-| `saya-0.2.0-rc.1-macos-aarch64.tar.gz` | `9ca4b75f3823da881c0b42821a9723fb0bb8663958a78598988249d76147c486` |
-| 解包 `saya` | `facd68f0fe189c1b0d541c28cbd9a91f91e48b7814227da3cf2e7b2c568cdebb` |
+| `soyo-0.2.0-rc.1-macos-aarch64.tar.gz` | `9ca4b75f3823da881c0b42821a9723fb0bb8663958a78598988249d76147c486` |
+| 解包 `soyo` | `facd68f0fe189c1b0d541c28cbd9a91f91e48b7814227da3cf2e7b2c568cdebb` |
 
 ## 原生 CI 修复
 
 首轮Linux ARM检查发现测试将C字符缓冲固定为 `i8`，已改为 `libc::c_char`。Linux x86_64 的满终端恢复测试发现Ratatui析构在恢复blocking文件标志后输出诊断并阻塞，已由私有析构sink和公开draw拒绝恢复后调用的回归修复。另将PTY观察器的后续输入门槛修正为数据库完成和界面最终状态同时成立。旧失败或取消运行分别保留在Actions历史中。
 
-[CI 42407739097](https://github.com/Ariakage/saya-harness/actions/runs/42407739097) 已在Ubuntu22.04的ARM／x86_64和macOS15的ARM／Intel全部通过。四个job均针对 `a6c172d4032ec134172c117bdd19fb0acb39a74f` 执行完整workspace检查与13组TUI验收，Linux两项平台修复已在原生环境复核。
+[CI 42407739097](https://github.com/Ariakage/soyo-harness/actions/runs/42407739097) 已在Ubuntu22.04的ARM／x86_64和macOS15的ARM／Intel全部通过。四个job均针对 `a6c172d4032ec134172c117bdd19fb0acb39a74f` 执行完整workspace检查与13组TUI验收，Linux两项平台修复已在原生环境复核。
 
 `./scripts/check.sh` 执行格式、workspace Clippy、全部 Rust 测试与优化构建。发行工具包含3项打包测试和各1项 Linux／macOS 验证器测试。默认测试使用本地协议夹具和临时工作区。
 
 ## 真实 PTY 场景
 
-[tui_journey.py](../scripts/release/tui_journey.py) 通过实际 `saya` 入口运行13组场景。
+[tui_journey.py](../scripts/release/tui_journey.py) 通过实际 `soyo` 入口运行13组场景。
 
 - 无子命令的非TTY／JSON／JSONL预检，确认用法错误、空stdout和存储零副作用。
 - 三协议流式往返，Unicode、Ctrl+J与多行bracketed paste到实际模型请求的保真，窗口缩放后首次Ctrl+D，以及完整终端恢复。
@@ -123,7 +123,7 @@ Darwin PTY在首次输出及canonical/raw切换时会增加内核状态。观察
 | macos-x86_64 | macOS 15.7.9，x86_64，minos 15.0 | `e5178fe2c4fda565854a4283c65fb17226431e73bca32130ff778182ae18d78d` |
 | macos-aarch64 | macOS 15.8.2，arm64，minos 15.0 | `7c30ebf7df4fefdb718146e22c055ef99dc1dacc73e30b319acb0e31979e64ae` |
 
-[候选工作流42407739653](https://github.com/Ariakage/saya-harness/actions/runs/42407739653)的四个原生目标全部通过。四个包已回下载到本机 `target/n1-four-platform-a6c172d/`，逐一核对归档成员、权限、归档及二进制摘要、源码声明、测试脚本摘要和已知测试凭据。汇总证据为同目录 `release-evidence.json`。
+[候选工作流42407739653](https://github.com/Ariakage/soyo-harness/actions/runs/42407739653)的四个原生目标全部通过。四个包已回下载到本机 `target/n1-four-platform-a6c172d/`，逐一核对归档成员、权限、归档及二进制摘要、源码声明、测试脚本摘要和已知测试凭据。汇总证据为同目录 `release-evidence.json`。
 
 工作流对解包程序执行工具smoke、文本会话、审查回归与全部TUI场景，记录归档／二进制SHA-256、源码声明、脚本摘要及实际系统。Linux检查GLIBC符号上限与共享库，macOS检查硬件／进程架构及Mach-O最低版本。产物与证据作为Actions artifacts保存14天。
 

@@ -1,4 +1,4 @@
-"""Offline regressions for the PTY acceptance harness, without launching Saya."""
+"""Offline regressions for the PTY acceptance harness, without launching Soyo."""
 from contextlib import closing
 import json
 from pathlib import Path

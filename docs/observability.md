@@ -4,9 +4,9 @@
 
 ## 已有实现
 
-[logging.rs](../crates/saya-core/src/logging.rs) 提供 `JsonLog`，接受 `trace`、`debug`、`info`、`warn`、`error`，默认严重程度阈值为 `warn`，在已选 state 目录写 JSON 行，单文件 10 MiB、最多五份备份，写入前进行已知凭据脱敏，并用跨进程锁保护轮转。CLI 的 `log_run_result` 记录未完成运行的摘要，`log_warning` 处理写入失败。
+[logging.rs](../crates/soyo-core/src/logging.rs) 提供 `JsonLog`，接受 `trace`、`debug`、`info`、`warn`、`error`，默认严重程度阈值为 `warn`，在已选 state 目录写 JSON 行，单文件 10 MiB、最多五份备份，写入前进行已知凭据脱敏，并用跨进程锁保护轮转。CLI 的 `log_run_result` 记录未完成运行的摘要，`log_warning` 处理写入失败。
 
-[events.rs](../crates/saya-cli/src/events.rs) 的事件输出与 SQLite 持久事件负责运行展示及恢复。新增诊断日志与这些数据分别维护，并通过 ID 关联。
+[events.rs](../crates/soyo-cli/src/events.rs) 的事件输出与 SQLite 持久事件负责运行展示及恢复。新增诊断日志与这些数据分别维护，并通过 ID 关联。
 
 ## 类型化记录
 
@@ -18,7 +18,7 @@
 
 `logging::diagnostics::Diagnostics` 管理本地 writer 线程和 subscriber，应用入口安装 dispatch 并保留 guard 至退出。默认普通队列容量 256，warn／error 优先队列容量 32，普通事件队列满后计数丢弃，高优先事件最多等待 20 毫秒。`flush` 返回写入失败或超时，退出最多等待两秒，`diagnostics.dropped` 记录累计变化。
 
-subscriber 只接收 `saya`／`saya::` target，按类型化白名单采集字段，未知字段和 message 被过滤。超长单字段以 withheld 标记处理后再进入队列。span 保存 session／run／request／call／job 归属，后台任务显式传播 subscriber 与 span。运行、模型执行、独立审核、工具派发和后台状态通过同一诊断层关联，模型完成记录包含单调时钟耗时。
+subscriber 只接收 `soyo`／`soyo::` target，按类型化白名单采集字段，未知字段和 message 被过滤。超长单字段以 withheld 标记处理后再进入队列。span 保存 session／run／request／call／job 归属，后台任务显式传播 subscriber 与 span。运行、模型执行、独立审核、工具派发和后台状态通过同一诊断层关联，模型完成记录包含单调时钟耗时。
 
 ## 五级日志
 
@@ -30,15 +30,15 @@ subscriber 只接收 `saya`／`saya::` target，按类型化白名单采集字�
 | warn | 可恢复错误、重试、权限拒绝及能力降级原因 |
 | error | 运行失败、存储失败及需要处理的系统错误 |
 
-默认级别为 `warn`，通过 `--log-level` 或 `SAYA_LOG_LEVEL` 显式选择其他级别，优先级为 CLI 高于环境变量、高于默认值。首批保留现有配置文件加载方式。
+默认级别为 `warn`，通过 `--log-level` 或 `SOYO_LOG_LEVEL` 显式选择其他级别，优先级为 CLI 高于环境变量、高于默认值。首批保留现有配置文件加载方式。
 
 ```sh
-saya --log-level debug chat
-saya --log-level trace run "Investigate the failure"
-saya logs show --session SESSION_ID --level warn
-saya --output jsonl logs tail --session SESSION_ID
-saya --output json logs show --level info --limit 100 --offset 0
-saya logs show --since 2026-11-08T08:00:00+08:00
+soyo --log-level debug chat
+soyo --log-level trace run "Investigate the failure"
+soyo logs show --session SESSION_ID --level warn
+soyo --output jsonl logs tail --session SESSION_ID
+soyo --output json logs show --level info --limit 100 --offset 0
+soyo logs show --since 2026-11-08T08:00:00+08:00
 ```
 
 级别过滤按严重程度阈值处理，`warn` 同时包含 `error`。时间范围使用带时区输入，保存的时间为 UTC。耗时使用单调时钟，日志排序同时参考进程、关联 ID 和本地序号。

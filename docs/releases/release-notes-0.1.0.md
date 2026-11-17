@@ -1,10 +1,10 @@
-# Saya Harness 0.1.0
+# Soyo Harness 0.1.0
 
 [English](#english) · [简体中文](#简体中文)
 
 ## English
 
-Saya Harness is a Rust agent runtime that drives model requests, local tool execution, and subsequent turns. Version 0.1.0 delivers the CLI for programming and local general-purpose tasks. [User guide](../usage.md)
+Soyo Harness is a Rust agent runtime that drives model requests, local tool execution, and subsequent turns. Version 0.1.0 delivers the CLI for programming and local general-purpose tasks. [User guide](../usage.md)
 
 ### Features
 
@@ -32,7 +32,7 @@ The following example selects Linux x86_64. Select the archive for your platform
 
 ```sh
 archive=saya-0.1.0-linux-x86_64.tar.gz
-gh release download v0.1.0 --repo Ariakage/saya-harness --pattern "$archive" --pattern SHA256SUMS
+gh release download v0.1.0 --repo Ariakage/soyo-harness --pattern "$archive" --pattern SHA256SUMS
 grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
 mkdir saya-0.1.0
 tar -xzf "$archive" -C saya-0.1.0
@@ -61,7 +61,7 @@ Sandbox, MCP, executable plugins, automatic context compaction, TUI, and GUI fol
 
 ## 简体中文
 
-Saya Harness 的首个 CLI 版本，自行驱动模型调用、工具执行和后续轮次，面向编程与本地通用任务。详细用法见[使用指南](../usage.md)。
+Soyo Harness 的首个 CLI 版本，自行驱动模型调用、工具执行和后续轮次，面向编程与本地通用任务。详细用法见[使用指南](../usage.md)。
 
 ### 主要能力
 
@@ -89,7 +89,7 @@ Saya Harness 的首个 CLI 版本，自行驱动模型调用、工具执行和�
 
 ```sh
 archive=saya-0.1.0-linux-x86_64.tar.gz
-gh release download v0.1.0 --repo Ariakage/saya-harness --pattern "$archive" --pattern SHA256SUMS
+gh release download v0.1.0 --repo Ariakage/soyo-harness --pattern "$archive" --pattern SHA256SUMS
 grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
 mkdir saya-0.1.0
 tar -xzf "$archive" -C saya-0.1.0

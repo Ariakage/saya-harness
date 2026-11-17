@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Opt-in four-mode live sample; sends real model requests and may incur costs.
 
-Set SAYA_LIVE_API_KEY, SAYA_LIVE_BASE_URL, SAYA_LIVE_MODEL and
-SAYA_LIVE_SANDBOX_IMAGE. The selected endpoint receives the credential. The
+Set SOYO_LIVE_API_KEY, SOYO_LIVE_BASE_URL, SOYO_LIVE_MODEL and
+SOYO_LIVE_SANDBOX_IMAGE. The selected endpoint receives the credential. The
 Docker image must contain rustc. Configure DOCKER_HOST as needed. Generated Rust
 runs without network or host mounts in a restricted Linux container; containers
 are not a guarantee against host kernel escapes.
@@ -45,7 +45,7 @@ def sandbox_check(path, image, target_platform=None):
         '&& printf "alpha  beta\\ngamma delta\\n" | /tmp/test',
     ])
     docker_env = os.environ.copy()
-    docker_env.pop('SAYA_LIVE_API_KEY', None)
+    docker_env.pop('SOYO_LIVE_API_KEY', None)
     try:
         result = subprocess.run(command, input=path.read_bytes(), env=docker_env,
                                 capture_output=True, timeout=40)
@@ -56,34 +56,34 @@ def sandbox_check(path, image, target_platform=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=Path('target/release/saya'))
-    parser.add_argument('--sandbox-platform', default=os.environ.get('SAYA_LIVE_SANDBOX_PLATFORM'),
+    parser.add_argument('--binary', type=Path, default=Path('target/release/soyo'))
+    parser.add_argument('--sandbox-platform', default=os.environ.get('SOYO_LIVE_SANDBOX_PLATFORM'),
                         help='Docker platform override; otherwise use the Docker engine default')
     parser.add_argument('--legacy-max-tokens', action='store_true',
                         help='send max_tokens instead of max_completion_tokens for Chat Completions')
     args = parser.parse_args()
     try:
-        secret = os.environ['SAYA_LIVE_API_KEY']
-        api_root = os.environ['SAYA_LIVE_BASE_URL']
-        model = os.environ['SAYA_LIVE_MODEL']
-        image = os.environ['SAYA_LIVE_SANDBOX_IMAGE']
+        secret = os.environ['SOYO_LIVE_API_KEY']
+        api_root = os.environ['SOYO_LIVE_BASE_URL']
+        model = os.environ['SOYO_LIVE_MODEL']
+        image = os.environ['SOYO_LIVE_SANDBOX_IMAGE']
     except KeyError as error:
         print('Missing required environment variable:', error.args[0], file=sys.stderr)
         return 2
     binary = args.binary.resolve(strict=True)
-    with tempfile.TemporaryDirectory(prefix='saya-live-modes-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='soyo-live-modes-') as temporary:
         root = Path(temporary)
         env = {key: os.environ[key] for key in (
             'PATH', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY',
             'SSL_CERT_FILE', 'SSL_CERT_DIR') if key in os.environ}
         env.update({'HOME': str(root), 'XDG_DATA_HOME': str(root / 'data'),
                     'XDG_STATE_HOME': str(root / 'state'), 'XDG_CACHE_HOME': str(root / 'cache'),
-                    'SAYA_LIVE_API_KEY': secret})
+                    'SOYO_LIVE_API_KEY': secret})
         config = root / 'config.toml'
         config.write_text('\n'.join([
             'schema_version = 1', '[defaults]', 'profile = "live"', '[profiles.live]',
             'protocol = "openai-chat-completions"', 'base_url = ' + json.dumps(api_root),
-            'model = ' + json.dumps(model), 'auth = "bearer"', 'api_key_env = "SAYA_LIVE_API_KEY"',
+            'model = ' + json.dumps(model), 'auth = "bearer"', 'api_key_env = "SOYO_LIVE_API_KEY"',
             'context_window_tokens = 128000', 'max_output_tokens = 8192', 'stream = true',
             'legacy_max_tokens = ' + str(args.legacy_max_tokens).lower(),
             '[limits]', 'max_model_requests = 10', 'max_tool_calls = 24',

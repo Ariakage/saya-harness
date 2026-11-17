@@ -4,7 +4,7 @@ set -eu
 [ "$(uname -s)" = Linux ]
 version=0.13.1
 checksum=0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d
-build_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/saya-bwrap.XXXXXX")
+build_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/soyo-bwrap.XXXXXX")
 trap 'rm -rf "$build_root"' EXIT HUP INT TERM
 sudo apt-get update
 sudo apt-get install --no-install-recommends -y meson ninja-build pkg-config libcap-dev socat

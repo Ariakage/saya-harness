@@ -13,5 +13,5 @@ ENV PATH=/root/.cargo/bin:$PATH
 WORKDIR /src
 COPY . .
 RUN cargo build --workspace --release --locked
-RUN ldd --version | head -n 1 && target/release/saya --version && target/release/saya --help >/dev/null \
-    && target/release/saya --config examples/config.example.toml config check
+RUN ldd --version | head -n 1 && target/release/soyo --version && target/release/soyo --help >/dev/null \
+    && target/release/soyo --config examples/config.example.toml config check

@@ -4,9 +4,9 @@
 
 ## 正式发行与下载复核
 
-[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0) 于 2026-11-07 发布，状态为正式版和 Latest。四个平台安装包、`SHA256SUMS`、`release-evidence.json` 与中英双语 `RELEASE-NOTES.md` 共七项资产已公开上传。Release 正文与附件中的双语说明一致。
+[GitHub Release](https://github.com/Ariakage/soyo-harness/releases/tag/v0.1.0) 于 2026-11-07 发布，状态为正式版和 Latest。四个平台安装包、`SHA256SUMS`、`release-evidence.json` 与中英双语 `RELEASE-NOTES.md` 共七项资产已公开上传。Release 正文与附件中的双语说明一致。
 
-[正式构建与验收](https://github.com/Ariakage/saya-harness/actions/runs/42383135600) 在四个原生架构分别通过格式检查、Clippy、342 项 Rust 测试、四项发行工具测试和 `saya 0.1.0` 版本断言。工作流对每个包解出的二进制执行工具往返、交互会话恢复及五项审查回归。
+[正式构建与验收](https://github.com/Ariakage/soyo-harness/actions/runs/42383135600) 在四个原生架构分别通过格式检查、Clippy、342 项 Rust 测试、四项发行工具测试和 `soyo 0.1.0` 版本断言。工作流对每个包解出的二进制执行工具往返、交互会话恢复及五项审查回归。
 
 | 目标 | 实际原生验收环境 | 正式包 SHA-256 |
 | --- | --- | --- |
@@ -15,7 +15,7 @@
 | macos-x86_64 | macOS 15.7.9 | `30767ac2194ba2d8fdca9ca3ce30119928a8bae126877efe77f9b877802d3117` |
 | macos-aarch64 | macOS 15.8.2 | `188af0747e24bb3c1f9f96002d9e1917d001f9b8c24c61866d9411ec7ef3cd52` |
 
-四个包的源码声明、二进制哈希、归档成员、执行权限和测试脚本哈希均与工作流记录一致。macOS 部署目标为 15.0，Linux 的最高 GLIBC 符号版本均为 2.34。逐目标环境、包与二进制哈希和演练结果已作为 [release-evidence.json](https://github.com/Ariakage/saya-harness/releases/download/v0.1.0/release-evidence.json) 随正式版公开保存。
+四个包的源码声明、二进制哈希、归档成员、执行权限和测试脚本哈希均与工作流记录一致。macOS 部署目标为 15.0，Linux 的最高 GLIBC 符号版本均为 2.34。逐目标环境、包与二进制哈希和演练结果已作为 [release-evidence.json](https://github.com/Ariakage/soyo-harness/releases/download/v0.1.0/release-evidence.json) 随正式版公开保存。
 
 七项正式资产全部回下载到本机 `target/release-0.1.0-download-check/`，逐字节比较通过，GitHub 返回的资产 SHA-256 也全部一致。四个安装包通过 `shasum -a 256 -c SHA256SUMS`，远端附注标签解引用到上述固定源码，公开 Release 页面返回 HTTP 200。
 
@@ -27,7 +27,7 @@
 
 本节验收源码为 `2840cbbd52bc7cd03d8953c1837f43540928a290`，对应正式发布前的候选包。
 
-[Release candidates 42381963924](https://github.com/Ariakage/saya-harness/actions/runs/42381963924) 在四个原生目标全部通过。每项执行格式检查、Clippy、342 个 Rust 测试与 release 构建，随后对压缩包内的程序执行 PLAN 工具往返、人工批准与会话恢复、五项审查回归。三个发行工具测试组共四项通过。
+[Release candidates 42381963924](https://github.com/Ariakage/soyo-harness/actions/runs/42381963924) 在四个原生目标全部通过。每项执行格式检查、Clippy、342 个 Rust 测试与 release 构建，随后对压缩包内的程序执行 PLAN 工具往返、人工批准与会话恢复、五项审查回归。三个发行工具测试组共四项通过。
 
 | 目标 | 实际最低环境 | 原生架构 | 验收包 SHA-256 |
 | --- | --- | --- | --- |
@@ -66,15 +66,15 @@ macOS ARM 二进制带有链接器生成的 ad-hoc 签名，Intel 二进制未�
 ### 包 SHA-256
 
 ```text
-6bd3df8ded69d13141e485092e46a5a1e2bffc405a41e8ed75900517d728fc31  saya-0.1.0-linux-x86_64.tar.gz
-cce4b4a8718e17dc290150bc38ba20ab4e3d0634064eaa1bcd880e61cdc1f368  saya-0.1.0-linux-aarch64.tar.gz
-8f42fcece37890d353a3367d1a031c415e97b2162fbe6bb97eb2215c09de2d48  saya-0.1.0-macos-x86_64.tar.gz
-cee5ffb625a46f029cc0ab96a844aa1ee85a4c6b888034d18e1a5cb42d0bdd4a  saya-0.1.0-macos-aarch64.tar.gz
+6bd3df8ded69d13141e485092e46a5a1e2bffc405a41e8ed75900517d728fc31  soyo-0.1.0-linux-x86_64.tar.gz
+cce4b4a8718e17dc290150bc38ba20ab4e3d0634064eaa1bcd880e61cdc1f368  soyo-0.1.0-linux-aarch64.tar.gz
+8f42fcece37890d353a3367d1a031c415e97b2162fbe6bb97eb2215c09de2d48  soyo-0.1.0-macos-x86_64.tar.gz
+cee5ffb625a46f029cc0ab96a844aa1ee85a4c6b888034d18e1a5cb42d0bdd4a  soyo-0.1.0-macos-aarch64.tar.gz
 ```
 
 ### 二进制 SHA-256
 
-| 目标 | 包内 saya |
+| 目标 | 包内 soyo |
 | --- | --- |
 | linux-x86_64 | `183181415aeddc40e29ec523068344f83867462a90fa927e5ff1ec43f7453ab3` |
 | linux-aarch64 | `d44875422573f096413b6121d9ce015ecc2d479494438d28c1cba2f2839336f6` |
@@ -83,13 +83,13 @@ cee5ffb625a46f029cc0ab96a844aa1ee85a4c6b888034d18e1a5cb42d0bdd4a  saya-0.1.0-mac
 
 ### 当时的最低环境缺口
 
-[GitHub Actions 42373322880](https://github.com/Ariakage/saya-harness/actions/runs/42373322880) 已再次通过只读查询核实，源码为 `47452e6173397d7b7b7eacd035116489bb2a3a70`，Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 四个 job 均成功。该 CI 运行中的二进制来源为该提交，原工作流执行离线工具往返与交互演练，未上传产物。当前候选来源为 `854be1b`，其 macOS 15 实测证据仍待补齐。
+[GitHub Actions 42373322880](https://github.com/Ariakage/soyo-harness/actions/runs/42373322880) 已再次通过只读查询核实，源码为 `47452e6173397d7b7b7eacd035116489bb2a3a70`，Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 四个 job 均成功。该 CI 运行中的二进制来源为该提交，原工作流执行离线工具往返与交互演练，未上传产物。当前候选来源为 `854be1b`，其 macOS 15 实测证据仍待补齐。
 
 本节保留 `854be1b` 当时的环境缺口与归档摘要。下列示例使用当前验证器接口，适用于与验收脚本源码匹配、包含默认 TUI 的候选产物。`--source-commit` 填入预期的完整构建提交，`--sha256` 填入该归档的预期摘要，输出文件须尚不存在。脚本核对原生 macOS 15、源码声明、架构、部署目标及包／二进制哈希，并运行四项演练。
 
 ```sh
-python3 scripts/release/verify_macos15.py /path/to/saya-VERSION-macos-aarch64.tar.gz --sha256 EXPECTED_ARCHIVE_SHA256 --source-commit FULL_BUILD_COMMIT --output macos15-aarch64.json
-python3 scripts/release/verify_macos15.py /path/to/saya-VERSION-macos-x86_64.tar.gz --sha256 EXPECTED_ARCHIVE_SHA256 --source-commit FULL_BUILD_COMMIT --output macos15-x86_64.json
+python3 scripts/release/verify_macos15.py /path/to/soyo-VERSION-macos-aarch64.tar.gz --sha256 EXPECTED_ARCHIVE_SHA256 --source-commit FULL_BUILD_COMMIT --output macos15-aarch64.json
+python3 scripts/release/verify_macos15.py /path/to/soyo-VERSION-macos-x86_64.tar.gz --sha256 EXPECTED_ARCHIVE_SHA256 --source-commit FULL_BUILD_COMMIT --output macos15-x86_64.json
 ```
 
 原生最低环境验证使用架构匹配的 macOS 15 主机。Rosetta 演练单独记录为模拟证据，验证器单元测试记录为逻辑检查。0.1.0 的最终 P7 结论与产物证据见本文件对应的后续发行记录。
@@ -112,10 +112,10 @@ Linux 容器复用虚拟机内核，GLIBC 符号检查不代表所有 Linux 内�
 四平台候选经过离线 PLAN 文件读取／回传与工作区不变检查，以及配置、人工批准、退出、会话列表、恢复和继续输入的流程演练；测试使用临时工作区和本地模型替身，两个 x86_64 目标使用模拟。包校验和、成员与包内二进制哈希均已核对。该历史候选的 `SHA256SUMS`：
 
 ```text
-2a02cc5d6bf14340477b41bc7c0dc995435d852e1523af61db6904721a58b25e  saya-0.1.0-linux-x86_64.tar.gz
-8de8927b6736fc201ce3bf60a317370c7159086cbf9da82623b2da63e1fa1540  saya-0.1.0-linux-aarch64.tar.gz
-77bb195af8faaca3a99656725765924cbf3d3cca6cf424f357e1f20cce1f3962  saya-0.1.0-macos-x86_64.tar.gz
-b0f0fa786d4cf3c4263d624207818ee240a1aac46ececd7fcb95f2e826ad9489  saya-0.1.0-macos-aarch64.tar.gz
+2a02cc5d6bf14340477b41bc7c0dc995435d852e1523af61db6904721a58b25e  soyo-0.1.0-linux-x86_64.tar.gz
+8de8927b6736fc201ce3bf60a317370c7159086cbf9da82623b2da63e1fa1540  soyo-0.1.0-linux-aarch64.tar.gz
+77bb195af8faaca3a99656725765924cbf3d3cca6cf424f357e1f20cce1f3962  soyo-0.1.0-macos-x86_64.tar.gz
+b0f0fa786d4cf3c4263d624207818ee240a1aac46ececd7fcb95f2e826ad9489  soyo-0.1.0-macos-aarch64.tar.gz
 ```
 
 构建使用 Rust 1.99.1；macOS 显式设置 `MACOSX_DEPLOYMENT_TARGET=15.0`。Linux 使用 Ubuntu 22.04 与 [Dockerfile](../../scripts/release/ubuntu-22.04.Dockerfile)；APT 软件包及 rustup 安装器未按内容固定。打包由 [package.py](../../scripts/release/package.py) 完成；在候选目录可用 `shasum -a 256 -c SHA256SUMS` 复核。

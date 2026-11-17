@@ -56,7 +56,7 @@ def fixture(binary, responses, protocol='openai-chat-completions', limits='', se
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-review-candidate-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-review-candidate-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()
@@ -172,7 +172,7 @@ def check(binary):
 
 def main():
     if len(sys.argv) != 2:
-        print('usage: review_regressions.py PATH_TO_SAYA', file=sys.stderr)
+        print('usage: review_regressions.py PATH_TO_SOYO', file=sys.stderr)
         return 2
     try:
         check(Path(sys.argv[1]).resolve(strict=True))

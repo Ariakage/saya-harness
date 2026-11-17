@@ -110,7 +110,7 @@ jobs:
               'macos-15': ('Darwin', 'arm64'),
               'macos-15-intel': ('Darwin', 'x86_64'),
           }[os.environ['RUNNER_LABEL']]
-          binary = pathlib.Path('target/release/saya')
+          binary = pathlib.Path('target/release/soyo')
           if platform.system() == 'Darwin':
               architectures = subprocess.check_output(['lipo', '-archs', str(binary)], text=True).split()
           else:
@@ -125,7 +125,7 @@ jobs:
               'binary': str(binary),
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'optimized_binary_bytes': binary.stat().st_size,
-              'debug_binary_bytes': pathlib.Path('target/debug/saya').stat().st_size,
+              'debug_binary_bytes': pathlib.Path('target/debug/soyo').stat().st_size,
               'dev_debug_information': os.environ.get('CARGO_PROFILE_DEV_DEBUG'),
               'runner_label': os.environ['RUNNER_LABEL'],
               'runner_system': platform.system(),
@@ -155,7 +155,7 @@ jobs:
           sys.path.insert(0, str(pathlib.Path('scripts/release').resolve()))
           from verify_linux import command, os_release
 
-          binary = pathlib.Path('target/release/saya')
+          binary = pathlib.Path('target/release/soyo')
           release = os_release()
           libc = os.confstr('CS_GNU_LIBC_VERSION')
           symbols = command('objdump', '-T', str(binary))
@@ -187,24 +187,24 @@ jobs:
           {
             sw_vers
             test "$(sw_vers -productVersion | cut -d. -f1)" = 15
-            otool -l target/release/saya | tee target/n2/acceptance/macho.txt
+            otool -l target/release/soyo | tee target/n2/acceptance/macho.txt
             grep -Eq '^[[:space:]]*minos[[:space:]]+15\.0([[:space:]]|$)' target/n2/acceptance/macho.txt
           } 2>&1 | tee target/n2/acceptance/macos-baseline.log
       - name: Native macOS isolation acceptance
         id: macos_native
         if: ${{ !cancelled() && steps.macos_baseline.outcome == 'success' && startsWith(matrix.os, 'macos-') }}
-        run: python3 scripts/n2/native_acceptance.py target/release/saya 2>&1 | tee target/n2/acceptance/native.log
+        run: python3 scripts/n2/native_acceptance.py target/release/soyo 2>&1 | tee target/n2/acceptance/native.log
       - name: Native Linux isolation and delegated resource acceptance
         id: linux_native
         if: ${{ !cancelled() && steps.linux_baseline.outcome == 'success' && startsWith(matrix.os, 'ubuntu-') }}
         run: |
           sudo systemd-run --collect --wait --pipe \
-            --unit="saya-n2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --unit="soyo-n2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --uid="$(id -u)" --gid="$(id -g)" \
             --property='Delegate=cpu memory pids' \
             --property=RuntimeMaxSec=1800 --property=KillMode=control-group \
             --working-directory="$PWD" \
-            /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$PWD/target/release/saya" \
+            /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$PWD/target/release/soyo" \
             --require-cgroup 2>&1 | tee target/n2/acceptance/native.log
       - name: Verify complete native performance evidence
         id: performance
@@ -213,15 +213,15 @@ jobs:
       - name: MCP and OAuth acceptance
         id: mcp
         if: ${{ !cancelled() && steps.architecture.outcome == 'success' && (runner.os != 'macOS' || steps.macos_baseline.outcome == 'success') && (runner.os != 'Linux' || steps.linux_baseline.outcome == 'success') }}
-        run: python3 scripts/n2/mcp_acceptance.py target/release/saya 2>&1 | tee target/n2/acceptance/mcp.log
+        run: python3 scripts/n2/mcp_acceptance.py target/release/soyo 2>&1 | tee target/n2/acceptance/mcp.log
       - name: Markdown, TUI and recovery acceptance
         id: journeys
         if: ${{ !cancelled() && steps.architecture.outcome == 'success' && (runner.os != 'macOS' || steps.macos_baseline.outcome == 'success') && (runner.os != 'Linux' || steps.linux_baseline.outcome == 'success') }}
         run: |
-          python3 scripts/release/smoke.py target/release/saya 2>&1 | tee target/n2/acceptance/smoke.log
-          python3 scripts/release/journey.py target/release/saya 2>&1 | tee target/n2/acceptance/journey.log
-          python3 scripts/release/review_regressions.py target/release/saya 2>&1 | tee target/n2/acceptance/review-regressions.log
-          python3 scripts/release/tui_journey.py target/release/saya --report target/n2/acceptance/tui-report.json 2>&1 | tee target/n2/acceptance/tui.log
+          python3 scripts/release/smoke.py target/release/soyo 2>&1 | tee target/n2/acceptance/smoke.log
+          python3 scripts/release/journey.py target/release/soyo 2>&1 | tee target/n2/acceptance/journey.log
+          python3 scripts/release/review_regressions.py target/release/soyo 2>&1 | tee target/n2/acceptance/review-regressions.log
+          python3 scripts/release/tui_journey.py target/release/soyo --report target/n2/acceptance/tui-report.json 2>&1 | tee target/n2/acceptance/tui.log
       - name: Record N2 workflow outcomes
         if: always()
         env:

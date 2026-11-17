@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline MCP acceptance through an immutable copy of the ordinary Saya CLI."""
+"""Offline MCP acceptance through an immutable copy of the ordinary Soyo CLI."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -178,7 +178,7 @@ class Fixture:
                 body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
                 if self.path == '/register':
                     registration = json.loads(body)
-                    self.reply({'client_id': 'saya-acceptance-public-client',
+                    self.reply({'client_id': 'soyo-acceptance-public-client',
                                 'redirect_uris': registration['redirect_uris']})
                     return
                 if self.path == '/token':
@@ -479,7 +479,7 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
     original = args.binary.resolve(strict=True)
     expected_hash = digest(original)
-    binary = report_dir / ('mcp-saya-' + expected_hash[:16])
+    binary = report_dir / ('mcp-soyo-' + expected_hash[:16])
     shutil.copy2(original, binary)
     binary.chmod(0o700)
     require(digest(binary) == expected_hash, 'acceptance executable copy hash differs')
@@ -492,7 +492,7 @@ def main():
 
     def case(name, operation):
         started = time.monotonic()
-        with tempfile.TemporaryDirectory(prefix='saya-mcp-acceptance-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='soyo-mcp-acceptance-') as temporary:
             root = Path(temporary).resolve()
             (root / 'workspace').mkdir()
             (root / 'home').mkdir()
@@ -773,7 +773,7 @@ def main():
         fixture.oauth = True
         try:
             config = configuration(root, fixture)
-            code, text, _ = invoke_pty(arguments(binary, root, config) + ['mcp', 'login', 'fixture', '--approve-scopes', '--client-id', 'saya-public-fixture'], root, fixture)
+            code, text, _ = invoke_pty(arguments(binary, root, config) + ['mcp', 'login', 'fixture', '--approve-scopes', '--client-id', 'soyo-public-fixture'], root, fixture)
             require(code == 0, 'OAuth CLI login failed ' + text)
             values = records(text)
             reference = next(value['data']['reference'] for value in reversed(values) if value.get('data', {}).get('reference'))

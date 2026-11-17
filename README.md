@@ -1,8 +1,10 @@
-# Saya Harness
+# Soyo Harness
 
 [English](README.en.md)
 
-使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用共享运行时，GUI 按后续计划推进。当前支持 macOS 15+ 与 Linux glibc 2.35+（`x86_64` / `aarch64`）。
+使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Soyo 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用共享运行时，GUI 按后续计划推进。当前支持 macOS 15+ 与 Linux glibc 2.35+（`x86_64` / `aarch64`）。
+
+> **更名说明**：本项目原名 **Saya Harness**，自提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0` 之后更名为 **Soyo Harness**。变更：二进制 `saya`→`soyo`、crate `saya-*`→`soyo-*`、数据目录 `.saya`→`.soyo`（`.soyo` 优先、`.saya` 自动回退）、环境变量 `SAYA_*`→`SOYO_*`（`SOYO_*` 优先、`SAYA_*` 自动回退）。存储与线缆格式标识符（`saya_*_v1`、`SAYAENV1`/`SAYAOUT1`/`SAYAMED1`、`saya_capture_*`、`saya/browser/*` 等）保留旧拼写以保持既有数据与协议兼容。`v0.2.0` 及更早 Release 仍发布历史 `saya` 资产，见 [docs/releases/](docs/releases/)。
 
 ## 快速上手
 
@@ -13,20 +15,20 @@
 ```sh
 cargo build --workspace --release --locked
 # 或安装到 ~/.cargo/bin
-cargo install --path crates/saya-cli --locked
+cargo install --path crates/soyo-cli --locked
 ```
 
 ### 2. 初始化与校验配置
 
-复制无凭据示例配置（或运行 `saya config init`），填入你的模型端点、模型名与 API Key 环境变量名（凭据只通过环境变量引用，不写入配置文件）：
+复制无凭据示例配置（或运行 `soyo config init`），填入你的模型端点、模型名与 API Key 环境变量名（凭据只通过环境变量引用，不写入配置文件）：
 
 ```sh
-mkdir -p ~/.config/saya
-cp examples/config.example.toml ~/.config/saya/config.toml
+mkdir -p ~/.config/soyo
+cp examples/config.example.toml ~/.config/soyo/config.toml
 # 或使用自定义路径：
-# ./target/release/saya --config /path/to/saya.toml config init
+# ./target/release/soyo --config /path/to/soyo.toml config init
 
-./target/release/saya config check
+./target/release/soyo config check
 ```
 
 > `config check` 只校验 TOML 语法、规则与环境变量引用，**不会联网或调用付费模型**。
@@ -37,13 +39,13 @@ cp examples/config.example.toml ~/.config/saya/config.toml
 
 ```sh
 # 进入默认交互式 TUI
-./target/release/saya --cwd /path/to/project
+./target/release/soyo --cwd /path/to/project
 
 # 启动纯文本对话模式
-./target/release/saya --cwd /path/to/project chat
+./target/release/soyo --cwd /path/to/project chat
 
 # 非交互单次执行（可显式指定工作模式）
-./target/release/saya --cwd /path/to/project --mode code run "Inspect this repository"
+./target/release/soyo --cwd /path/to/project --mode code run "Inspect this repository"
 ```
 
 详细用法、快捷键、会话恢复与导出见[使用指南](docs/usage.md)和[配置说明](docs/configuration.md)。
@@ -53,7 +55,7 @@ cp examples/config.example.toml ~/.config/saya/config.toml
 - **运行模式**：提供 `WORK`（默认，通用任务）、`CODE`（代码读写与调试）、`PLAN`（严格只读调研与规划）、`BUILD`（端到端实现与交付），同一会话保留上下文手动切换，在调用边界生效。
 - **权限与隔离**：默认 `auto`（规则 + 命令 CST 结构分析 + 可选独立模型核查 + 人工确认），另支持 `bypass`（仍遵守 PLAN 只读、显式 `deny` 与沙箱硬边界）与 `manual`（逐工具人工确认）。原生执行默认启用 macOS Seatbelt / Linux Bubblewrap + Seccomp + `NetworkBroker` 域名白名单代理，默认网络 `deny`。
 - **模型协议**：支持 OpenAI Chat Completions、OpenAI Responses API 与 Anthropic Messages；统一维护上下文预算、输出限制与超时重试。
-- **工具与长程能力**：内置文件读写与搜索（`read_file`、`list_dir`、`find_files`、`search_text`、`write_file`、`edit_file`、`apply_patch`）、受控命令执行（`exec`）、运行内后台任务、预授权非手动只读并发批处理、stdio / Streamable HTTP MCP、SQLite WAL 会话持久化与导出、上下文压缩、插件／Hooks、`saya module browser|vm enable|disable` 模块开关与 Goal 编排。
+- **工具与长程能力**：内置文件读写与搜索（`read_file`、`list_dir`、`find_files`、`search_text`、`write_file`、`edit_file`、`apply_patch`）、受控命令执行（`exec`）、运行内后台任务、预授权非手动只读并发批处理、stdio / Streamable HTTP MCP、SQLite WAL 会话持久化与导出、上下文压缩、插件／Hooks、`soyo module browser|vm enable|disable` 模块开关与 Goal 编排。
 
 ## 开发
 
@@ -68,7 +70,7 @@ just tui-preview syntax
 
 ## 当前版本与开发线状态
 
-- **已发布版本**：**Saya Harness 0.2.0** 提供 CLI 和默认 TUI（含已确认的[完整基线](docs/mvp-baseline.md) B-01 至 B-24、D-029、D-033、D-035）。历史 0.1.0、0.2.0-rc.2 与 0.2.0 发行各自保留独立源码与产物归属。[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[0.2.0 双语说明](docs/releases/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
+- **已发布版本**：**Soyo Harness 0.2.0** 提供 CLI 和默认 TUI（含已确认的[完整基线](docs/mvp-baseline.md) B-01 至 B-24、D-029、D-033、D-035）。历史 0.1.0、0.2.0-rc.2 与 0.2.0 发行各自保留独立源码与产物归属。[GitHub Release](https://github.com/Ariakage/soyo-harness/releases/tag/v0.2.0)、[0.2.0 双语说明](docs/releases/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
 - **0.2.0 之后的主线增量**：
   - N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 与凭据管理：固定源码 `aaec8c5` 已完成四平台验收（[N2 验收](docs/n2-validation.md)）。
   - N3 上下文压缩、插件／Hooks 与全局记忆：固定源码 `e1da373` 已完成四平台验收（[N3 验收](docs/n3-validation.md)）。
@@ -103,7 +105,7 @@ just tui-preview syntax
 | [发行验证](docs/releases/release-validation.md) | 历史产物、源码关联、最低环境与下载复核 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
-| [saya-plugin 规范](docs/saya-plugin.md) | manifest v1、结构 schema、本地管理、权限与运行生命周期 |
+| [soyo-plugin 规范](docs/soyo-plugin.md) | manifest v1、结构 schema、本地管理、权限与运行生命周期 |
 | [后续能力路线图](docs/capability-roadmap.md) | 已有扩展基础、N3 实现范围与多 Agent 等后续规划 |
 | [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 发行范围、已完成的 N3 与后续阶段，DEV-038 至 DEV-089 |
 | [全局记忆](docs/memory.md) | 可读 MEMORY.md、专用工具、审阅、更正／遗忘与回滚 |
@@ -115,7 +117,7 @@ just tui-preview syntax
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [N5 Browser 验收](docs/n5-validation.md) | 本机／专用 VM 证据、联合矩阵与未满足的退出条件 |
 | [N5 中英双语说明](docs/releases/release-notes-n5.md) | Browser 开发线功能、权限、兼容性与截图限制 |
-| [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
+| [TUI 设计](docs/tui.md) | 默认 soyo 入口、共享应用层、终端交互与兼容 |
 | [TUI 布局](docs/tui-design.md) | 参考布局、侧栏、输入区与预览 |
 | [TUI 验证](docs/tui-validation.md) | 候选及后续源码的真实终端验收 |
 | [日志与追踪](docs/observability.md) | 五级诊断、关联 span、日志查询与安全边界 |

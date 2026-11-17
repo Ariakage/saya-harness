@@ -38,19 +38,19 @@ release *args:
 
 # 运行开发版 Saya，可追加 CLI 参数
 run *args:
-    cargo run --locked -p saya-cli -- "$@"
+    cargo run --locked -p soyo-cli -- "$@"
 
 # 打开 debug TUI 预览，可指定场景和 --source
 tui-preview *args:
-    cargo run --locked -p saya-cli -- tui-preview "$@"
+    cargo run --locked -p soyo-cli -- tui-preview "$@"
 
 # 输出离线完整模型提示词，可指定 work、plan、code、build、compact、memory、review 或 all
 prompt type="all":
-    cargo run --locked -p saya-core --example prompt_preview -- "$1"
+    cargo run --locked -p soyo-core --example prompt_preview -- "$1"
 
 # 输出离线 TUI 快照，可指定宽、高、场景和 --json
 render-preview *args:
-    cargo run --locked -p saya-tui --example render_preview -- "$@"
+    cargo run --locked -p soyo-tui --example render_preview -- "$@"
 
 # 执行发行、N2、N3 与提示词评估脚本的离线 Python 回归
 test-tooling:

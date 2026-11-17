@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-17：DEV-079 至 DEV-083 已完成功能交付、定制 Chromium ARM64 捕获引擎修复（Stage 5A：23 文件补丁 `df4c0fb6…`，ELF `501,816,112 B` `d3c691a5…`）、本机／专用 Colima VM／独立 Linux ARM64 Masked 截图实测（Stage 5B），以及固定源码 `5fff1c46ba1d07bf5af993745f4bdeb1e90eeb7d`（`5fff1c4`）上的四平台远端终验（Stage 5C）：[CI 44044030536](https://github.com/Ariakage/saya-harness/actions/runs/44044030536)、[N5 native acceptance 44044034857](https://github.com/Ariakage/saya-harness/actions/runs/44044034857)（4/4 passed，0 unsatisfied）与 [Release candidates 44044045558](https://github.com/Ariakage/saya-harness/actions/runs/44044045558)（4/4 passed）均已全绿通过，四组构建产物的 candidate 与 tarball 解包二进制 SHA-256 逐字节一致。`version = 0.2.0` 不变、未发布新发行标签；非 `linux-arm64` 目标架构定制 `headless_shell` 构建分发仍作为显式未覆盖边界保留。**
+**2026-11-17：DEV-079 至 DEV-083 已完成功能交付、定制 Chromium ARM64 捕获引擎修复（Stage 5A：23 文件补丁 `df4c0fb6…`，ELF `501,816,112 B` `d3c691a5…`）、本机／专用 Colima VM／独立 Linux ARM64 Masked 截图实测（Stage 5B），以及固定源码 `5fff1c46ba1d07bf5af993745f4bdeb1e90eeb7d`（`5fff1c4`）上的四平台远端终验（Stage 5C）：[CI 44044030536](https://github.com/Ariakage/soyo-harness/actions/runs/44044030536)、[N5 native acceptance 44044034857](https://github.com/Ariakage/soyo-harness/actions/runs/44044034857)（4/4 passed，0 unsatisfied）与 [Release candidates 44044045558](https://github.com/Ariakage/soyo-harness/actions/runs/44044045558)（4/4 passed）均已全绿通过，四组构建产物的 candidate 与 tarball 解包二进制 SHA-256 逐字节一致。`version = 0.2.0` 不变、未发布新发行标签；非 `linux-arm64` 目标架构定制 `headless_shell` 构建分发仍作为显式未覆盖边界保留。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](releases/release-notes-n5.md)。
 
@@ -27,7 +27,7 @@
 | `macos-15`（`macos-aarch64`） | macOS 15.8.2 arm64，Darwin `24.6.0`，`minos 15.0` | Rust 72 suites / **1715 passed**（0 failed，27 ignored）；Python 12 suites / **172 passed** | `60,582,784 B`，SHA-256 `8b67b35bd4c9aa0698938f9c97963d6dd06d38633d59bf2726dca050ce6e80e1`（`.tar.gz` `961bbc6b…`）与 RC 解包完全一致 | `workflow-outcomes` 19/19；Seatbelt 原生隔离 18 passed / 1 `not_run`（无 Linux delegated cgroup）、性能 21/21、插件 8/8、N3 CLI 34/34、N3 TUI 15/15、TUI 28/28；三补丁 worker `de88c9fc…`（9/15/13 passed）；Seatbelt 原生 Browser fail-closed 契约保持 |
 | `macos-15-intel`（`macos-x86_64`） | macOS 15.7.9 x86_64，Darwin `24.6.0`，`minos 15.0` | Rust 72 suites / **1715 passed**（0 failed，27 ignored）；Python 12 suites / **172 passed** | `64,133,976 B`，SHA-256 `fa525f8e1136ec77e76caa4978bf23d55c7f5f0c870698f1883e4ccdcfda1824`（`.tar.gz` `febef730…`）与 RC 解包完全一致 | `workflow-outcomes` 19/19；Seatbelt 原生隔离 18 passed / 1 `not_run`（无 Linux delegated cgroup）、性能 21/21、插件 8/8、N3 CLI 34/34、N3 TUI 15/15、TUI 28/28；三补丁 worker `de88c9fc…`（9/15/13 passed）；Seatbelt 原生 Browser fail-closed 契约保持 |
 
-- **工作流记录**：[CI 44044030536](https://github.com/Ariakage/saya-harness/actions/runs/44044030536)（14m22s–40m36s）、[N5 native acceptance 44044034857](https://github.com/Ariakage/saya-harness/actions/runs/44044034857)（19m54s–56m16s）、[Release candidates 44044045558](https://github.com/Ariakage/saya-harness/actions/runs/44044045558)（18m29s–36m8s）；四个目标均使用统一工具链 `rustc 1.99.1 (58cf8f9c3 2026-10-13)`。
+- **工作流记录**：[CI 44044030536](https://github.com/Ariakage/soyo-harness/actions/runs/44044030536)（14m22s–40m36s）、[N5 native acceptance 44044034857](https://github.com/Ariakage/soyo-harness/actions/runs/44044034857)（19m54s–56m16s）、[Release candidates 44044045558](https://github.com/Ariakage/soyo-harness/actions/runs/44044045558)（18m29s–36m8s）；四个目标均使用统一工具链 `rustc 1.99.1 (58cf8f9c3 2026-10-13)`。
 - **能力边界说明**：远端 `N5 native acceptance` 在 Linux 双架构使用 Playwright rev `1254` 的 stock Chromium（证明安装树 v2 核验、`browser_vm_host_linux` 通道、Bubblewrap/Seccomp 嵌套隔离与 Chromium 内层 sandbox 成立）；定制预捕获 Masked PNG 捕获引擎当前仅针对 `linux-arm64` 完成编译交付并在下节 `colima-n5cap`／`n5arm22` 取得实跑通过（遇未修补引擎继续按设计 fail-closed 返回 `browser_capability_disabled`）。
 
 ## 定制捕获引擎修复、Stage 5B 接线与 strict 截图验收
@@ -45,7 +45,7 @@
 | `colima-n5cap` Strict 联合验收（`--require-screenshot`） | `python3 -I -B scripts/n5/acceptance.py target/release/saya --require-screenshot`：**22/22 passed、0 failed、0 disabled**（Execution 140、Review 8、Compact 1，`real-screenshot` passed 并将捕获产物注入后续多模态请求，远端 Run 根及进程均空），报告 `target/n5/cap1/acceptance-265-final/run-23_y48z2/evidence.json` |
 | Linux ARM64 `n5arm22`（`/home/saya-test/native-capture-265`，`8a2a06f0…`） | `just check` 72 suites／**1729 passed、0 failed、35 ignored**（Linux `saya` 66,631,008 B，`f0d15cc6c54764549760164f860bcc6d60267b3718fcacdf3828e32d57d5c73c`）；`just test-tooling` 11 suites／167 passed／1 平台 skip；三项 `test-n5-worker-*`（9/15/13 passed）；`just smoke` 全过；`browser_worker_real` **2/2 passed**（79.63s，覆盖 `1280x720` 原生 Bubblewrap/Seccomp Masked PNG 捕获，`renderer_pid=74/76 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），零残余进程，日志 `target/n5/cap1/logs/n5arm22-full-265.log` |
 
-此前 `task-2494` 中断遗留的单个远端 dir `saya-browser-vm-85893b2396778cb8` 经核对时间戳与进程为空后手动清理，随后在干净状态完成 `run-23_y48z2` 及四套 VM 套件复跑全过。Linux x86-64／macOS Intel 当前源码、非 `linux-arm64` 定制引擎构建分发及远端四平台 CI 仍待外部平台环境执行，不据此提前声称全平台发行完成。
+此前 `task-2494` 中断遗留的单个远端 dir `soyo-browser-vm-85893b2396778cb8` 经核对时间戳与进程为空后手动清理，随后在干净状态完成 `run-23_y48z2` 及四套 VM 套件复跑全过。Linux x86-64／macOS Intel 当前源码、非 `linux-arm64` 定制引擎构建分发及远端四平台 CI 仍待外部平台环境执行，不据此提前声称全平台发行完成。
 
 ## 安装树身份 v2 本机阶段
 
@@ -204,7 +204,7 @@ macOS 与独立 Linux ARM64 `n5arm22`（Ubuntu 22.04，内核 `6.8.0-149-generic
 
 ## 真实 Browser 后端
 
-专用 Colima profile `saya-browser`，Linux ARM VM，宿主只使用严格 SSH 通道。显式 manifest 摘要：
+专用 Colima profile `soyo-browser`，Linux ARM VM，宿主只使用严格 SSH 通道。显式 manifest 摘要：
 
 ```text
 e6af5a229682028f9be237a96c1e1f4699292d08b3b5bce88822e56a3d679b46
@@ -282,7 +282,7 @@ macOS 中间轮 `macos-check-final.log` 的 `queued_compaction_at_the_last_execu
 
 受管 relay 新增两项实际 IO 红绿回归：活跃期间替换 socket 路径后，清理按类型及 device／inode 核对，不直接删除替换物；HTTP broker 桥收到首字节后才连接上游，空就绪探测不会先消耗 `max_total_connections=1` 的唯一额度，SSH 服务端先发 banner 仍正常。旧实现确实在两个新断言处失败，修复后 6 项通过，证据为 `relay-review-red.log`／`relay-review-green.log`。
 
-三个旧 VM 入口不再缺前提时成功返回：必须提供并固定 `SAYA_TEST_EXECUTABLE`，必需 VM 字段和端口严格解析，provider 装配失败也失败；不使用默认 release 路径，不按 macOS 之外的平台成功跳过。最新四个测试程序在 `entrypoints-shortpaths/harnesses.json` 记录程序与 Rust 源码 SHA-256，其源码摘要与真实 VM 运行一致；四入口各自的缺输入、缺 VM 设置、程序不存在、程序不可固定共 16 项负控均以 exit=101 在对应前提边界拒绝，实际错误和失败计数均经核对，证据为 `entrypoints-shortpaths/negative/results.json`。较早的 `entrypoints-final/` 冻结轮保留自己的程序身份。截图入口原本已严格拒绝缺前提，本次仅移除 macOS-only 限制。
+三个旧 VM 入口不再缺前提时成功返回：必须提供并固定 `SOYO_TEST_EXECUTABLE`，必需 VM 字段和端口严格解析，provider 装配失败也失败；不使用默认 release 路径，不按 macOS 之外的平台成功跳过。最新四个测试程序在 `entrypoints-shortpaths/harnesses.json` 记录程序与 Rust 源码 SHA-256，其源码摘要与真实 VM 运行一致；四入口各自的缺输入、缺 VM 设置、程序不存在、程序不可固定共 16 项负控均以 exit=101 在对应前提边界拒绝，实际错误和失败计数均经核对，证据为 `entrypoints-shortpaths/negative/results.json`。较早的 `entrypoints-final/` 冻结轮保留自己的程序身份。截图入口原本已严格拒绝缺前提，本次仅移除 macOS-only 限制。
 
 凭据／文件入口先证明 fill 未自动提交，再显式点击 submit，核对 fixture 实收 `user=alice-secret`（合成测试值），保留 origin／frame／stale／次数拒绝。网络入口以 oneshot 确认慢请求实际到达后才取消，要求派发后的 `outcome_unknown`，不再以未 poll 的入口取消代替。清理扫描使用有界受控 SSH、结构化目录／进程清单和完成标记，不吞权限或 I/O 错误；新增不可列目录的默认回归先在旧扫描上失败，修复后通过，证据为 `cleanup-scan-red.log`／`cleanup-scan-green.log`。
 
@@ -347,7 +347,7 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 ## DEV-083 联合矩阵
 
-[真实入口工具](../scripts/n5/acceptance.py)只使用显式程序、本地模型与本地网页，不 provision、不下载、不访问付费服务。缺少 `SAYA_TEST_VM_*` 前提必须失败并留证，不能把未运行算为通过。本轮新增 Browser 场景使用受控 Chat Completions fixture；三协议正常入口回归单列，不扩称为三协议 Browser 联合实跑。
+[真实入口工具](../scripts/n5/acceptance.py)只使用显式程序、本地模型与本地网页，不 provision、不下载、不访问付费服务。缺少 `SOYO_TEST_VM_*` 前提必须失败并留证，不能把未运行算为通过。本轮新增 Browser 场景使用受控 Chat Completions fixture；三协议正常入口回归单列，不扩称为三协议 Browser 联合实跑。
 
 | 矩阵 | 当前状态 |
 | --- | --- |
@@ -421,7 +421,7 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 从固定 Chromium `6449d9f9a6a906edff724b7b220199b3fde4615c` 的 DEPS 绑定官方对象、generation、精确大小与完整 SHA-256，实际取得 Mac ARM64 Clang／LLD 24、同修订的 Rust 工具链、Linux ARM64 sysroot 和 Linux 编译运行库，共 324,108,436 字节。大请求超时与不完整响应保留；续传使用有界范围、核对 `Content-Range`，拼合后仍要求完整固定摘要一致。下载与解包各使用工作区内独立数据目录，未执行归档内安装脚本；工具、sysroot 的文件／链接清单与摘要在 `target/n5/capture-toolchain-20261115/evidence/`。POSIX sysroot 中 systemd 单元名的字面反斜线不作为路径分隔符，仍保留绝对路径、`..`、特殊文件、越界链接、权限与资源上限检查。
 
-固定宿主 Clang／LLD 24 与 Rust 1.101.0-nightly 已实际启动；项目自身仍使用 Rust 1.99.1。独立 C++／Rust ABI 探针经 `aarch64-linux-gnu` 目标与固定 sysroot、运行库链接，保留 `--fix-cortex-a53-843419`；ELF SHA-256 为 `0008bb6a83b52960ac93dfcb97903d889844a54f87fb0b68b0db782ad2c091d9`。同一字节在独立 Ubuntu 22.04 ARM VM 的 uid501、`6.8.0-149-generic` 内核上实跑，输出 `SAYA_CAPTURE_TOOLCHAIN_ARM64_OK`，远端临时程序与目录已清理。Rust 部分明确使用 `no_core`，**不证明目标 std 或 Chromium 链接成功**；固定 GN 配置的目标 std 从源码构建，不能把宿主包缺少预编译 Linux std 误判为默认阻断。完整报告为 `target/n5/capture-toolchain-20261115/evidence/standalone-canary-06.json`。
+固定宿主 Clang／LLD 24 与 Rust 1.101.0-nightly 已实际启动；项目自身仍使用 Rust 1.99.1。独立 C++／Rust ABI 探针经 `aarch64-linux-gnu` 目标与固定 sysroot、运行库链接，保留 `--fix-cortex-a53-843419`；ELF SHA-256 为 `0008bb6a83b52960ac93dfcb97903d889844a54f87fb0b68b0db782ad2c091d9`。同一字节在独立 Ubuntu 22.04 ARM VM 的 uid501、`6.8.0-149-generic` 内核上实跑，输出 `SOYO_CAPTURE_TOOLCHAIN_ARM64_OK`，远端临时程序与目录已清理。Rust 部分明确使用 `no_core`，**不证明目标 std 或 Chromium 链接成功**；固定 GN 配置的目标 std 从源码构建，不能把宿主包缺少预编译 Linux std 误判为默认阻断。完整报告为 `target/n5/capture-toolchain-20261115/evidence/standalone-canary-06.json`。
 
 构建写入约束的真实正负控制已通过：允许两个任务目录内写入，拒绝修改目录外的、由当前用户拥有且模式为 0600 的可写对照文件。后续构建使用任务私有 HOME／TMPDIR／缓存与独立写入限制，不仅依赖缓存环境变量；该对照不是 CIPD、vpython 或完整构建已经通过的证明。固定 depot_tools `b86fc981b72ab966f8260f73b4eca600b3b12677` 已取得；完整源码展开、GN 生成、目标 std 与 headless_shell 的端到端构建仍不属于上述探针成功范围。
 
@@ -507,7 +507,7 @@ GN 输出为 `src/out/saya_capture_linux_arm64_180/`，参数严格为 `target_o
 
 ## 复跑入口
 
-先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SAYA_TEST_VM_*` 输入，程序身份与源码归属另行保留。
+先按 [Browser 配置与 VM 前提](browser.md)显式设置全部 `SOYO_TEST_VM_*` 输入，程序身份与源码归属另行保留。
 
 ```bash
 python3 -I -B scripts/n5/acceptance.py target/release/saya --evidence-dir target/n5-acceptance

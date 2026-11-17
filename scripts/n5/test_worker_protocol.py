@@ -20,8 +20,8 @@ REQUEST_SECONDS = 10
 TOTAL_SECONDS = 120
 STDOUT_LIMIT = 2 * 1024 * 1024
 STDERR_LIMIT = 256 * 1024
-PRIVATE_METHOD = "saya/browser/processInfo"
-PRIVATE_CAPTURE_METHOD = "saya/browser/captureScreenshot"
+PRIVATE_METHOD = "soyo/browser/processInfo"
+PRIVATE_CAPTURE_METHOD = "soyo/browser/captureScreenshot"
 PRIVATE_METHODS = (PRIVATE_METHOD, PRIVATE_CAPTURE_METHOD)
 
 
@@ -159,7 +159,7 @@ class Worker:
     def initialize(self):
         response = self.request("initialize", {
             "protocolVersion": "2025-11-25", "capabilities": {},
-            "clientInfo": {"name": "saya-worker-protocol-test", "version": "1"},
+            "clientInfo": {"name": "soyo-worker-protocol-test", "version": "1"},
         })
         if response.get("result", {}).get("protocolVersion") != "2025-11-25":
             self.fail(f"initialization failed: {response!r}")
@@ -282,7 +282,7 @@ class HTTPWorker(Worker):
         self.session_id = None
         response = self.request("initialize", {
             "protocolVersion": "2025-11-25", "capabilities": {},
-            "clientInfo": {"name": "saya-worker-protocol-test", "version": "1"},
+            "clientInfo": {"name": "soyo-worker-protocol-test", "version": "1"},
         })
         if response.get("result", {}).get("protocolVersion") != "2025-11-25":
             self.fail(f"HTTP initialization failed: {response!r}")
@@ -484,14 +484,14 @@ class WorkerProtocolTests(unittest.TestCase):
         for method in PRIVATE_METHODS:
             self.assertNotIn(method, names)
         self.assertFalse(
-            {name for name in names if name.startswith("saya/")
+            {name for name in names if name.startswith("soyo/")
              or "process" in name.lower()},
             f"private process tools exposed: {names!r}",
         )
 
     def test_unknown_private_method_stays_method_not_found(self):
         self.start_worker()
-        response = self.worker.request("saya/browser/notProcessInfo", {})
+        response = self.worker.request("soyo/browser/notProcessInfo", {})
         self.assert_rpc_error(response, -32601)
 
     def test_nonisolated_stdio_rejects_private_method_without_launch(self):

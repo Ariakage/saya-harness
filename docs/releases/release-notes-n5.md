@@ -1,4 +1,4 @@
-# Saya Harness N5 Browser
+# Soyo Harness N5 Browser
 
 **开发线说明，当前保持 `version = 0.2.0` 且未创建／发布新版本标签。生产 Masked 截图已在定制 `linux-arm64` 引擎、三补丁 worker、`colima-n5cap` 联合验收（`--require-screenshot` 22/22 passed）及 `n5arm22` Linux ARM64 原生实跑通过；固定源码 `5fff1c4` 已完成四平台远端终验（`CI 44044030536`、`N5 native acceptance 44044034857`、`Release candidates 44044045558` 全 4/4 通过，含 `linux-x86_64` 与 `linux-aarch64` 原生 Chromium sandbox 及三补丁 worker 协议实跑），非 `linux-arm64` 目标架构定制 Chromium 构建分发继续作为显式边界保留。**
 

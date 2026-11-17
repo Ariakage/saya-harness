@@ -34,7 +34,7 @@ stream = true
 # base_url = "https://example.com/v1"
 # model = "YOUR_MODEL"
 # auth = "bearer"
-# api_key_env = "SAYA_API_KEY"
+# api_key_env = "SOYO_API_KEY"
 # context_window_tokens = 128000
 # Optional opt-in Anthropic prompt caching (system, tools, and history breakpoints):
 # prompt_cache = true
@@ -65,7 +65,7 @@ read_only_tools = []
 [mcp.servers.local_example.transport]
 type = "stdio"
 argv = ["/absolute/path/to/mcp-server", "--stdio"]
-# env = { SERVICE_TOKEN = "SAYA_MCP_TOKEN" }
+# env = { SERVICE_TOKEN = "SOYO_MCP_TOKEN" }
 
 [mcp.servers.remote_example]
 enabled = false
@@ -74,7 +74,7 @@ read_only_tools = []
 [mcp.servers.remote_example.transport]
 type = "http"
 endpoint = "https://mcp.example.invalid/mcp"
-# bearer_env = "SAYA_MCP_TOKEN"
+# bearer_env = "SOYO_MCP_TOKEN"
 # credential_ref = "00000000-0000-0000-0000-000000000000"
 # scopes = ["files:read"]
 
@@ -90,7 +90,7 @@ extra_safety_tokens = 0
 max_compaction_calls = 32
 compaction_timeout_seconds = 600
 
-# The default host-selected root is ~/.saya. A missing store stays absent until
+# The default host-selected root is ~/.soyo. A missing store stays absent until
 # an approved write. read=false also suppresses automatic memory injection.
 # Explicit --memory-file input remains independent from these switches.
 [memory]
@@ -104,8 +104,8 @@ write = true
 enabled = true
 
 # Browser and dedicated VM capabilities default to disabled. You can either set
-# `enabled = true` below or toggle them cleanly with `saya module browser enable`
-# and `saya module vm enable` (persisted in `$XDG_DATA_HOME/saya/modules/modules.sqlite3`
+# `enabled = true` below or toggle them cleanly with `soyo module browser enable`
+# and `soyo module vm enable` (persisted in `$XDG_DATA_HOME/soyo/modules/modules.sqlite3`
 # without modifying this file).
 # [browser]
 # enabled = false

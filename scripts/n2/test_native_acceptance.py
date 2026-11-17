@@ -347,7 +347,7 @@ class AcceptanceOracles(unittest.TestCase):
             self.assertEqual(evidence['fatal']['error_type'], 'CalledProcessError')
             self.assertEqual(evidence['fatal']['stderr'], 'N2_SYNTHETIC_COMPILER_FAILURE')
             self.assertIn('finished_utc', evidence)
-            self.assertFalse(any(path.name.startswith('saya-n2-') for path in Path(directory).iterdir()))
+            self.assertFalse(any(path.name.startswith('soyo-n2-') for path in Path(directory).iterdir()))
 
 
 if __name__ == '__main__':

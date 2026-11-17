@@ -1,8 +1,8 @@
 # 可复用 Agent 运行时
 
-**核心运行时、三协议、CLI、默认 TUI、SQLite 恢复及事件输出已实现；`0.1.0` 与 `0.2.0` 已发布，当前开发线通过 `saya-app` 供 CLI 与默认 TUI 复用，共享契约与私有文件系统原语分别提取为叶子 crate `saya-contract` 与 `saya-fs`。各版本的平台与运行验证见[开发进度](progress.md)。**
+**核心运行时、三协议、CLI、默认 TUI、SQLite 恢复及事件输出已实现；`0.1.0` 与 `0.2.0` 已发布，当前开发线通过 `soyo-app` 供 CLI 与默认 TUI 复用，共享契约与私有文件系统原语分别提取为叶子 crate `soyo-contract` 与 `soyo-fs`。各版本的平台与运行验证见[开发进度](progress.md)。**
 
-`crates/saya-core/src/runtime/`（主协调器 `mod.rs` 与非手动只读并发批处理 `batch.rs`）提供与终端无关的单次运行协调器 `AgentRuntime`。调用方提供 `RuntimeSetup`：会话对应的 `Run`、`Model`、`Store`、权限 `Policy`、已配置的 `ReadTools`、取消信号、核查与命令配置、单次预授权、用户任务摘要、可选人工确认回调以及运行预算。运行前获取 `RuntimeHandle`，可在运行期间请求模式切换或查看／取消本运行后台任务；运行结束后的旧句柄不可启动新任务。每次新运行或恢复均构造新的协调器，不复活历史授权。
+`crates/soyo-core/src/runtime/`（主协调器 `mod.rs` 与非手动只读并发批处理 `batch.rs`）提供与终端无关的单次运行协调器 `AgentRuntime`。调用方提供 `RuntimeSetup`：会话对应的 `Run`、`Model`、`Store`、权限 `Policy`、已配置的 `ReadTools`、取消信号、核查与命令配置、单次预授权、用户任务摘要、可选人工确认回调以及运行预算。运行前获取 `RuntimeHandle`，可在运行期间请求模式切换或查看／取消本运行后台任务；运行结束后的旧句柄不可启动新任务。每次新运行或恢复均构造新的协调器，不复活历史授权。
 
 运行协调器执行以下边界：
 
@@ -30,6 +30,6 @@
 
 ## 验证范围与后续
 
-`crates/saya-core/tests/runtime.rs` 使用临时工作区、受控进程、内存／故障注入存储和模型替身，验证调用往返、12 种模式权限、确认、取消、模式切换、共享预算、重试、后台清理、历史闭合和保存失败。`./scripts/check.sh` 提供仓库级检查。
+`crates/soyo-core/tests/runtime.rs` 使用临时工作区、受控进程、内存／故障注入存储和模型替身，验证调用往返、12 种模式权限、确认、取消、模式切换、共享预算、重试、后台清理、历史闭合和保存失败。`./scripts/check.sh` 提供仓库级检查。
 
 三协议的 HTTP／SSE 映射、provider 请求参数和离线协议夹具已有受控验证；CLI 交互和项目指令接入的具体证据见[开发进度](progress.md)。真实会话保存与跨进程恢复已在 P5 受控验证；JSON／JSONL 完整事件和已知凭据脱敏已有本机受控证据，指定模型完成有限抽样联调。当前接口仍非稳定 SDK。单靠进程组清理不是操作系统沙箱（原生 OS 沙箱由 N2 执行层接入，见[原生隔离](sandbox.md)），文件版本检查也不是对任意外部并发修改的原子比较交换。

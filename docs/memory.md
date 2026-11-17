@@ -2,9 +2,9 @@
 
 **更新于2026-11-10。N3开发线已包含全局存储、运行时投影、专用模型工具及CLI／TUI管理入口，并由固定源码 `e1da373` 完成四平台集成与联合验收。实际结果由[开发进度](progress.md)和[N3验收](n3-validation.md#四平台最终验收)维护。**
 
-默认记忆根为 `~/.saya`，索引为 `~/.saya/MEMORY.md`，主题资料位于 `~/.saya/memory/`。宿主可以在显式运行配置中选择其他绝对根路径。读取缺失根或空索引保持只读，首次目录及索引发布沿已授权写入流程进行。
+默认记忆根为 `~/.soyo`，索引为 `~/.soyo/MEMORY.md`，主题资料位于 `~/.soyo/memory/`。宿主可以在显式运行配置中选择其他绝对根路径。读取缺失根或空索引保持只读，首次目录及索引发布沿已授权写入流程进行。
 
-参考材料中的分层读取、来源版本、增量整理、更正与遗忘已按Saya的权限和存储契约定制。原始材料的来源身份与取舍见[记忆提示词来源](prompt/drafts/n3/memory-sources.md)。运行时英文规则与后续独立整理任务草案分别维护。
+参考材料中的分层读取、来源版本、增量整理、更正与遗忘已按Soyo的权限和存储契约定制。原始材料的来源身份与取舍见[记忆提示词来源](prompt/drafts/n3/memory-sources.md)。运行时英文规则与后续独立整理任务草案分别维护。
 
 ## 配置与显式文件
 
@@ -16,13 +16,13 @@
 
 ## 文件、来源与作用域
 
-索引采用版本1的可读Markdown格式，包含 `saya-memory`、`saya-entry`、`saya-fact` JSON元数据注释及结束标记。entry、fact和source使用稳定ID。事实携带kind、来源版本、alias和derived_from，分别标记明确偏好、用户更正、观察事实、任务决定和推测。
+索引采用版本1的可读Markdown格式，包含 `soyo-memory`、`soyo-entry`、`soyo-fact` JSON元数据注释及结束标记。entry、fact和source使用稳定ID。事实携带kind、来源版本、alias和derived_from，分别标记明确偏好、用户更正、观察事实、任务决定和推测。
 
 global条目与当前workspace条目组成可见视图。WorkspaceIdentity由真实工作区路径及设备／inode派生，同名仓库和其他checkout具有各自身份。检索和备份按这一可见范围过滤。来源reference为不透明的证据身份，实际源内容的读取仍经过对应接口与权限。
 
 主题路径限于 `memory/` 内的规范相对Markdown路径，经目录句柄与NOFOLLOW读取。默认索引512KiB，单主题64KiB，主题合计1MiB，最多256条entry、1024条fact／source、64个主题，单事实16KiB。历史默认保留32个索引版本。外部修改参与当前revision，解析或版本失败返回明确错误并保留原文件。
 
-宿主保护 `MEMORY.md` 和 `memory/`，通用文件工具及原生文件worker执行相同保护。其他 `.saya` 指令与Skills仍遵循各自发现路径。已知凭据在索引、主题、提案、审阅、结果及导出边界校验，动态凭据变化会重新验证待执行内容。
+宿主保护 `MEMORY.md` 和 `memory/`，通用文件工具及原生文件worker执行相同保护。其他 `.soyo` 指令与Skills仍遵循各自发现路径。已知凭据在索引、主题、提案、审阅、结果及导出边界校验，动态凭据变化会重新验证待执行内容。
 
 ## 模型工具
 
@@ -62,11 +62,11 @@ WAL意图、私有stage、原子索引替换与独立ledger共同维持提交状
 
 ## CLI管理
 
-`saya memory`提供settings、list、version、show、search、diff、review、apply、forget、history、rollback、export、restore、operation和recover。使用 `saya memory --help` 与具体子命令帮助查看完整参数。
+`soyo memory`提供settings、list、version、show、search、diff、review、apply、forget、history、rollback、export、restore、operation和recover。使用 `soyo memory --help` 与具体子命令帮助查看完整参数。
 
 显式CLI持久变更由write独立控制，read关闭时仍可应用已提供版本的apply、forget、rollback、restore或recover。settings、version、operation与history仅返回配置、版本或操作元数据；内容列表、查询、完整差异和导出需要read启用。变更使用完整expected_revision和稳定operation_id。`diff`／`review`读取显式MemoryChange JSON，展示有界分页差异，`apply`应用对应的明确用户操作。forget按声明scope和fact ID处理。rollback选择历史索引版本，restore校验活动视图备份、来源、遗忘约束和当前主题引用。PLAN拒绝持久管理写入，`write = false`拒绝记忆变更。
 
-备份覆盖当前global及workspace活动视图、来源元数据、当前遗忘约束和主题引用。主题正文、历史版本和原始Session证据沿各自存储保留。导出采用私有权限、完整字节校验和排他创建。未知发布可使用显式 `saya memory recover` 收敛已登记WAL，输入操作保持原身份。信号取消置入同一worker标志，宿主等待实际磁盘操作完成并报告已观察结果，unknown保留结构化receipt。
+备份覆盖当前global及workspace活动视图、来源元数据、当前遗忘约束和主题引用。主题正文、历史版本和原始Session证据沿各自存储保留。导出采用私有权限、完整字节校验和排他创建。未知发布可使用显式 `soyo memory recover` 收敛已登记WAL，输入操作保持原身份。信号取消置入同一worker标志，宿主等待实际磁盘操作完成并报告已观察结果，unknown保留结构化receipt。
 
 ## TUI管理
 

@@ -1,12 +1,14 @@
 # AGENTS.md
 
-本文件指导在 Saya Harness 仓库中工作的编码 Agent。
+本文件指导在 Soyo Harness 仓库中工作的编码 Agent。
+
+> **更名说明**：本项目原名 **Saya Harness**，自提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0` 之后更名为 **Soyo Harness**。二进制 `saya`→`soyo`、crate `saya-*`→`soyo-*`；数据目录 `.saya`→`.soyo`（`.soyo` 优先、`.saya` 回退），环境变量 `SAYA_*`→`SOYO_*`（`SOYO_*` 优先、`SAYA_*` 回退）。存储与线缆格式标识符（`saya_*_v1`、`SAYAENV1`、`saya_capture_*`、`saya/browser/*` 等）保留旧拼写以维持兼容。
 
 ## 项目定位
 
-- Saya Harness 是使用 Rust 构建的 Agent Runtime Harness。
+- Soyo Harness 是使用 Rust 构建的 Agent Runtime Harness。
 - MVP 交付 CLI，后续扩展 TUI 和 GUI。
-- Saya 自己驱动 Agent 循环：调用模型、执行工具、将结果交回模型，直到结束。
+- Soyo 自己驱动 Agent 循环：调用模型、执行工具、将结果交回模型，直到结束。
 - 同时支持编程任务与通用任务，提供 PLAN、BUILD、CODE、WORK 四个可切换的运行模式。
 - PLAN 负责需求分析与规划；BUILD 负责端到端实现和交付；CODE 聚焦代码编写、修改与调试；WORK 负责通用任务执行。具体规则见[工作模式](docs/modes.md)。
 - 新会话默认 WORK。模式由用户手动切换，Agent 可以建议；当前调用完成后、下一次调用前生效，同一会话保留上下文。
@@ -15,7 +17,7 @@
 - MVP 的确定接口、默认值、边界与工程选型以[完整基线](docs/mvp-baseline.md) B-01 至 B-24 为准，已由项目负责人整套确认，见 D-027；macOS 最低支持版本经 D-035 调整为 15。
 - N2 已接入原生隔离、MCP 与凭据组件，实际完成状态和平台证据见[开发进度](docs/progress.md)与[N2 验收](docs/n2-validation.md)。后续增量见[能力路线图](docs/capability-roadmap.md)，功能规划与历史 MVP 发行范围分别处理。
 - 0.1.0 之后的任务分解见[后续开发计划](docs/post-mvp-plan.md)，日志、Session Export、默认 TUI 和 Goal 的细节在对应设计草案中维护。
-- 原生后端按 D-040 使用 Linux Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 实现。D-050 确认默认原生隔离，必需约束无法满足时明确失败。修改匿名 Unix 通道、内核能力或凭据边界时保留实际平台回归与失败关闭约定。实施时读取[原生隔离](docs/sandbox.md)、[MCP](docs/mcp.md)、[上下文](docs/context-management.md)、[Browser](docs/browser.md)与[插件规范](docs/saya-plugin.md)。
+- 原生后端按 D-040 使用 Linux Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 实现。D-050 确认默认原生隔离，必需约束无法满足时明确失败。修改匿名 Unix 通道、内核能力或凭据边界时保留实际平台回归与失败关闭约定。实施时读取[原生隔离](docs/sandbox.md)、[MCP](docs/mcp.md)、[上下文](docs/context-management.md)、[Browser](docs/browser.md)与[插件规范](docs/soyo-plugin.md)。
 - 产品方向与实现状态见 [README.md](README.md)、[项目范围](docs/vision.md)和[决策记录](docs/decisions.md)。已确定与已实现必须分开描述。
 
 ## 开始工作
@@ -54,7 +56,7 @@
 
 - CLI、后续 TUI 和 GUI 应复用运行时能力。运行时业务逻辑不应依赖终端渲染或某个 GUI 框架。
 - 模型接入、Agent 循环和工具执行保持清晰边界；具体模块和 Rust 类型以实现时确认的设计为准。
-- 工作模式、权限模式与人工确认流程属于 Saya 的产品设计，不自动改变修改本仓库的编码 Agent 的工作方式。实现时遵守已确认规则，不自行扩大权限。
+- 工作模式、权限模式与人工确认流程属于 Soyo 的产品设计，不自动改变修改本仓库的编码 Agent 的工作方式。实现时遵守已确认规则，不自行扩大权限。
 - 不把托管外部 Agent 进程当作 MVP 的默认实现路径。
 - 不提前实现尚未确认的 TUI、GUI、插件系统或分布式能力。
 - 模型响应、工具参数和工具输出均可能失败或不完整；沿边界返回明确错误。

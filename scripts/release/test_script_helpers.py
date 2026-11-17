@@ -322,7 +322,7 @@ class ScriptHelpersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'captures'
             screen = SimpleNamespace(columns=2, rows=1, cells=[['X', ' ']], colors=[[]])
-            with mock.patch.dict(os.environ, {'SAYA_TUI_SNAPSHOT_DIR': str(directory)}):
+            with mock.patch.dict(os.environ, {'SOYO_TUI_SNAPSHOT_DIR': str(directory)}):
                 tui_journey.save_interactive_screen(SimpleNamespace(screen=screen), 'fixture')
             saved = json.loads((directory / 'tui-command-palette-fixture-cells.json').read_text())
             self.assertEqual(saved['cells'], screen.cells)
@@ -345,12 +345,12 @@ class ScriptHelpersTest(unittest.TestCase):
             source = Path(temporary) / 'main.rs'
             source.write_text('fn main() {}')
             result = subprocess.CompletedProcess([], 0, b'lines=2 words=4\n', b'')
-            with mock.patch.dict(os.environ, {'SAYA_LIVE_API_KEY': 'synthetic-fixture'}), \
+            with mock.patch.dict(os.environ, {'SOYO_LIVE_API_KEY': 'synthetic-fixture'}), \
                  mock.patch.object(live_modes_smoke.subprocess, 'run', return_value=result) as run:
                 self.assertTrue(live_modes_smoke.sandbox_check(source, 'rust-fixture'))
                 command = run.call_args.args[0]
                 self.assertNotIn('--platform', command)
-                self.assertNotIn('SAYA_LIVE_API_KEY', run.call_args.kwargs['env'])
+                self.assertNotIn('SOYO_LIVE_API_KEY', run.call_args.kwargs['env'])
                 self.assertTrue(live_modes_smoke.sandbox_check(source, 'rust-fixture', 'linux/amd64'))
                 command = run.call_args.args[0]
                 self.assertEqual(command[command.index('--platform') + 1], 'linux/amd64')
@@ -360,9 +360,9 @@ class ScriptHelpersTest(unittest.TestCase):
             binary = Path(temporary) / 'candidate'
             binary.write_bytes(b'fixture')
             environment = {
-                'SAYA_LIVE_API_KEY': 'synthetic-fixture',
-                'SAYA_LIVE_BASE_URL': 'http://127.0.0.1:9/v1',
-                'SAYA_LIVE_MODEL': 'fixture', 'SAYA_LIVE_SANDBOX_IMAGE': 'rust-fixture',
+                'SOYO_LIVE_API_KEY': 'synthetic-fixture',
+                'SOYO_LIVE_BASE_URL': 'http://127.0.0.1:9/v1',
+                'SOYO_LIVE_MODEL': 'fixture', 'SOYO_LIVE_SANDBOX_IMAGE': 'rust-fixture',
             }
             for legacy in [False, True]:
                 profiles = []
@@ -400,7 +400,7 @@ class ScriptHelpersTest(unittest.TestCase):
                         '--anthropic-root', 'http://127.0.0.1:9/v1']
                 if legacy:
                     args.append('--legacy-max-tokens')
-                with mock.patch.dict(os.environ, {'SAYA_LIVE_API_KEY': 'synthetic-fixture'}, clear=True), \
+                with mock.patch.dict(os.environ, {'SOYO_LIVE_API_KEY': 'synthetic-fixture'}, clear=True), \
                      mock.patch.object(sys, 'argv', args), \
                      mock.patch.object(live_protocol_smoke.subprocess, 'run', side_effect=invoke), \
                      redirect_stdout(io.StringIO()):

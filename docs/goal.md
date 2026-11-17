@@ -6,24 +6,24 @@
 
 Goal 使用独立、版本化的 `data_dir/goals/goals.sqlite3`。数据库采用 WAL、私有目录／文件权限、显式 application ID／schema version、版本 CAS、单 Goal worker 租约和 dispatch intent。Goal 绑定一个专属 Session 与工作区，步骤按依赖串行复用现有 AgentRuntime、工具派发、权限、隔离、Compact、检查点及 Session 锁。
 
-CLI 与 TUI 共用 `saya-core::goal` 数据／存储和 `saya-app::goal` 计划／运行编排。模型计划与人工证据核验使用无工具、纯英文请求；模型输出只是候选数据，必须经过严格 schema 校验。步骤完成、Run 完成及 Goal 验收分别记录，模型自述或计划文字不能单独令 Goal 完成。
+CLI 与 TUI 共用 `soyo-core::goal` 数据／存储和 `soyo-app::goal` 计划／运行编排。模型计划与人工证据核验使用无工具、纯英文请求；模型输出只是候选数据，必须经过严格 schema 校验。步骤完成、Run 完成及 Goal 验收分别记录，模型自述或计划文字不能单独令 Goal 完成。
 
 当前入口：
 
 ```sh
-saya goal create "OBJECTIVE" [--accept TEXT]...
-saya goal plan GOAL_ID [--plan-file PLAN.json]
-saya goal confirm GOAL_ID
-saya goal list
-saya goal status GOAL_ID
-saya goal continue GOAL_ID [--approval-file PATH]
-saya goal start GOAL_ID --auto
-saya goal pause|resume|cancel GOAL_ID
-saya goal verify GOAL_ID CRITERION [--summary TEXT]
-saya goal resolve GOAL_ID STEP_ID --retry
-saya goal replan GOAL_ID
-saya goal report GOAL_ID [--format json|markdown] [--file PATH]
-saya goal worker [--once]
+soyo goal create "OBJECTIVE" [--accept TEXT]...
+soyo goal plan GOAL_ID [--plan-file PLAN.json]
+soyo goal confirm GOAL_ID
+soyo goal list
+soyo goal status GOAL_ID
+soyo goal continue GOAL_ID [--approval-file PATH]
+soyo goal start GOAL_ID --auto
+soyo goal pause|resume|cancel GOAL_ID
+soyo goal verify GOAL_ID CRITERION [--summary TEXT]
+soyo goal resolve GOAL_ID STEP_ID --retry
+soyo goal replan GOAL_ID
+soyo goal report GOAL_ID [--format json|markdown] [--file PATH]
+soyo goal worker [--once]
 ```
 
 TUI 提供 `/goals` 选择器与 `/goal create|plan|confirm|status|continue|start|pause|resume|cancel|verify|report|replan ID`。TUI 的交互式 Goal Run 当前要求 `auto` 或 `bypass` 权限；`Manual Approval` 使用 CLI 的终端审批路径。自动启动必须显式执行 `start --auto`，不会由普通发送或后台恢复隐式产生。
@@ -116,15 +116,15 @@ flowchart TD
 ```
 
 ```sh
-saya goal create "Deliver a Rust API with tests and documentation"
-saya goal plan GOAL_ID
-saya goal continue GOAL_ID
-saya goal report GOAL_ID
-saya goal start GOAL_ID --auto --mode build
-saya goal worker
+soyo goal create "Deliver a Rust API with tests and documentation"
+soyo goal plan GOAL_ID
+soyo goal continue GOAL_ID
+soyo goal report GOAL_ID
+soyo goal start GOAL_ID --auto --mode build
+soyo goal worker
 ```
 
-创建先保存目标。计划生成和步骤执行各自由明确操作启动，G1 的 continue 执行一个步骤后返回。恢复加载状态、当前配置和证据，随后等待继续指令。`saya resume SESSION_ID` 使用会话恢复语义。
+创建先保存目标。计划生成和步骤执行各自由明确操作启动，G1 的 continue 执行一个步骤后返回。恢复加载状态、当前配置和证据，随后等待继续指令。`soyo resume SESSION_ID` 使用会话恢复语义。
 
 ## 权限、模式与预算
 

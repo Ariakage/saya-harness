@@ -1,10 +1,10 @@
-# Saya Harness N4 Goal 编排
+# Soyo Harness N4 Goal 编排
 
 **开发线版本说明；正式版本号与固定源码发行证据待发行范围确定。**
 
 ## 中文
 
-Saya Harness 现已提供持久 Goal 编排。Goal 保存目标、验收条件、步骤、预算、Run 关联和证据，并绑定一个专属 Session 与工作区。CLI 和 TUI 共用同一 GoalStore、规划与执行服务，单次 Step 仍通过现有 AgentRuntime、权限、Sandbox、Compact、检查点、Session 锁和工具派发运行。
+Soyo Harness 现已提供持久 Goal 编排。Goal 保存目标、验收条件、步骤、预算、Run 关联和证据，并绑定一个专属 Session 与工作区。CLI 和 TUI 共用同一 GoalStore、规划与执行服务，单次 Step 仍通过现有 AgentRuntime、权限、Sandbox、Compact、检查点、Session 锁和工具派发运行。
 
 主要入口：
 
@@ -41,7 +41,7 @@ TUI 提供 `/goals` 选择器和 `/goal create|plan|confirm|status|continue|star
 
 ## English
 
-Saya Harness now provides durable Goal orchestration. A Goal stores its objective, acceptance criteria, steps, budget, Run associations, and evidence, and owns one dedicated Session and workspace. CLI and TUI use the same GoalStore and orchestration services. Each Step still runs through the existing AgentRuntime, permissions, sandbox, compaction, checkpoints, session lock, and tool dispatch boundaries.
+Soyo Harness now provides durable Goal orchestration. A Goal stores its objective, acceptance criteria, steps, budget, Run associations, and evidence, and owns one dedicated Session and workspace. CLI and TUI use the same GoalStore and orchestration services. Each Step still runs through the existing AgentRuntime, permissions, sandbox, compaction, checkpoints, session lock, and tool dispatch boundaries.
 
 Primary entry points:
 

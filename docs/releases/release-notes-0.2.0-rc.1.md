@@ -1,4 +1,4 @@
-# Saya Harness 0.2.0-rc.1
+# Soyo Harness 0.2.0-rc.1
 
 [简体中文](#简体中文) · [English](#english)
 
@@ -41,7 +41,7 @@
 
 ### 本地日志与共享基础
 
-- trace、debug、info、warn、error 五级诊断，默认 warn，可使用 `--log-level` 或 `SAYA_LOG_LEVEL` 选择。类型化字段及会话／运行／请求／调用／后台 ID 用于关联，诊断与运行机器输出分别处理。
+- trace、debug、info、warn、error 五级诊断，默认 warn，可使用 `--log-level` 或 `SOYO_LOG_LEVEL` 选择。类型化字段及会话／运行／请求／调用／后台 ID 用于关联，诊断与运行机器输出分别处理。
 - `saya logs show --session SESSION_ID --level info --limit 50` 查询本地记录，`saya --output jsonl logs tail --session SESSION_ID` 跟随日志，Ctrl+C 退出 tail。
 - 日志默认位于 `$XDG_STATE_HOME/saya/saya.log` 或 `~/.local/state/saya/saya.log`，单文件10 MiB、最多五份备份。显示、查询与导出重新应用当前配置已知凭据脱敏。[日志说明](../observability.md)
 
@@ -123,7 +123,7 @@ Validation for these additions is recorded against each development source. Hist
 
 ### Local logs and shared foundations
 
-- Five diagnostic levels, trace, debug, info, warn, and error, defaulting to warn. Select a level with `--log-level` or `SAYA_LOG_LEVEL`. Typed fields and session／run／request／call／job IDs provide correlation, and diagnostics are handled separately from runtime machine output.
+- Five diagnostic levels, trace, debug, info, warn, and error, defaulting to warn. Select a level with `--log-level` or `SOYO_LOG_LEVEL`. Typed fields and session／run／request／call／job IDs provide correlation, and diagnostics are handled separately from runtime machine output.
 - `saya logs show --session SESSION_ID --level info --limit 50` queries local records. `saya --output jsonl logs tail --session SESSION_ID` follows logs, with Ctrl+C stopping tail.
 - Logs default to `$XDG_STATE_HOME/saya/saya.log` or `~/.local/state/saya/saya.log`, rotating at 10 MiB with up to five backups. Display, queries, and exports reapply redaction for currently configured known credentials. [Logging](../observability.md)
 

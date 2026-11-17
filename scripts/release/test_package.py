@@ -58,7 +58,7 @@ class CandidatePackageTest(unittest.TestCase):
                 self.assertEqual(blob, (second / name).read_bytes())
                 with tarfile.open(first / name, 'r:gz') as archive:
                     info = json.load(archive.extractfile('BUILD-INFO.json'))
-                    binary = archive.extractfile('saya').read()
+                    binary = archive.extractfile('soyo').read()
                     self.assertEqual(info['declared_source_commit'], commit)
                     self.assertEqual(hashlib.sha256(binary).hexdigest(), info['binary_sha256'])
             self.assertNotEqual(package(first).returncode, 0)

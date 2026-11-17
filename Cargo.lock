@@ -2860,120 +2860,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "saya-app"
-version = "0.2.0"
-dependencies = [
- "cap-std",
- "libc",
- "saya-core",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "saya-cli"
-version = "0.2.0"
-dependencies = [
- "clap",
- "libc",
- "rusqlite",
- "saya-app",
- "saya-contract",
- "saya-core",
- "saya-fs",
- "saya-tui",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "saya-contract"
-version = "0.2.0"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "saya-core"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "cap-std",
- "diffy",
- "futures",
- "globset",
- "httpdate",
- "ignore",
- "jsonschema",
- "libc",
- "lol_html",
- "nix",
- "png",
- "regex",
- "reqwest",
- "rmcp",
- "rusqlite",
- "saya-contract",
- "saya-fs",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2 0.11.1",
- "sse-stream",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-bash",
- "unicase",
- "unicode-normalization",
- "uuid",
-]
-
-[[package]]
-name = "saya-fs"
-version = "0.2.0"
-dependencies = [
- "libc",
- "saya-contract",
- "tempfile",
-]
-
-[[package]]
-name = "saya-tui"
-version = "0.2.0"
-dependencies = [
- "base64 0.22.1",
- "crossterm",
- "libc",
- "merman-core",
- "mermansi",
- "pulldown-cmark",
- "ratatui",
- "saya-app",
- "saya-core",
- "serde_json",
- "syntect",
- "tempfile",
- "tokio",
- "unicase",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
 name = "schannel"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3250,6 +3136,120 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "soyo-app"
+version = "0.2.0"
+dependencies = [
+ "cap-std",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "soyo-core",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "soyo-cli"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "libc",
+ "rusqlite",
+ "serde_json",
+ "soyo-app",
+ "soyo-contract",
+ "soyo-core",
+ "soyo-fs",
+ "soyo-tui",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "soyo-contract"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "soyo-core"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "cap-std",
+ "diffy",
+ "futures",
+ "globset",
+ "httpdate",
+ "ignore",
+ "jsonschema",
+ "libc",
+ "lol_html",
+ "nix",
+ "png",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.1",
+ "soyo-contract",
+ "soyo-fs",
+ "sse-stream",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "unicase",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "soyo-fs"
+version = "0.2.0"
+dependencies = [
+ "libc",
+ "soyo-contract",
+ "tempfile",
+]
+
+[[package]]
+name = "soyo-tui"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "crossterm",
+ "libc",
+ "merman-core",
+ "mermansi",
+ "pulldown-cmark",
+ "ratatui",
+ "serde_json",
+ "soyo-app",
+ "soyo-core",
+ "syntect",
+ "tempfile",
+ "tokio",
+ "unicase",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

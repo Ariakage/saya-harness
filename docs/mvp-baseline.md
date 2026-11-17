@@ -15,7 +15,7 @@ D-062更新B-15／B-16的超时与重试：模型连接及响应头等待默认3
 | 编号 | 主题 | 已确定行为 |
 | --- | --- | --- |
 | B-01 | 产品边界 | 文本任务、本地工具、单 Agent；TUI／GUI 为后续阶段 |
-| B-02 | 工程与分发 | saya；Rust 1.99.1／2024；core＋CLI 两个 crate；macOS／Linux；MIT |
+| B-02 | 工程与分发 | soyo；Rust 1.99.1／2024；core＋CLI 两个 crate；macOS／Linux；MIT |
 | B-03 | CLI 与输入 | 交互、run、resume、session、config；明确 stdin 与非交互行为 |
 | B-04 | 配置 | TOML；CLI ＞环境变量＞配置文件＞内置默认；凭据只引用环境变量 |
 | B-05 | 模型接入 | 三种独立适配器；自定义地址；明确版本、鉴权与流式行为 |
@@ -48,11 +48,11 @@ D-062更新B-15／B-16的超时与重试：模型连接及响应头等待默认3
 
 ## B-02 工程与分发
 
-- 命令名 `saya`，首个版本 `0.1.0`，Cargo workspace 包含 `saya-core` 与 `saya-cli`；CLI 产生 `saya` 二进制。核心包含运行时、模型适配、工具、权限和存储，不依赖终端渲染。
+- 命令名 `soyo`，首个版本 `0.1.0`，Cargo workspace 包含 `soyo-core` 与 `soyo-cli`；CLI 产生 `soyo` 二进制。核心包含运行时、模型适配、工具、权限和存储，不依赖终端渲染。
 - 固定 Rust `1.99.1`、edition `2024`，最低支持版本同为 `1.99.1`；提交 `Cargo.lock`。workspace 通过 `rust-toolchain.toml` 固定该版本。版本依据见 [Rust 官方发布](https://blog.rust-lang.org/2026/10/15/Rust-1.99.1/)。
 - 首批支持 macOS 15+、Linux glibc 2.35+，均覆盖 x86_64 和 aarch64；Windows、musl、移动端与浏览器构建不进入 0.1。
 - 依赖职责确定为 Tokio（异步）、clap（CLI）、reqwest＋rustls（HTTP／TLS）、serde／serde_json／toml（序列化）、thiserror（核心错误）、tracing（日志）、rusqlite bundled（SQLite）。搜索、哈希和标识等辅助依赖按实际需要加入；初始化时选择与工具链兼容的稳定版本并锁定，不为补丁版本另开需求讨论。
-- 许可证为 [MIT](../LICENSE)，已写入仓库根目录，版权行为 `Copyright (c) 2026 Saya Harness contributors`；标准文本参见 [SPDX](https://spdx.org/licenses/MIT.html)。
+- 许可证为 [MIT](../LICENSE)，已写入仓库根目录，版权行为 `Copyright (c) 2026 Soyo Harness contributors`；标准文本参见 [SPDX](https://spdx.org/licenses/MIT.html)。
 - 首版从源码构建并提供手动触发的 release 压缩包流程，不自动上传、发布、签名或安装。自动更新不进入 0.1。
 
 ## B-03 CLI 与输入
@@ -61,12 +61,12 @@ D-062更新B-15／B-16的超时与重试：模型连接及响应头等待默认3
 
 | 命令 | 行为 |
 | --- | --- |
-| `saya`／`saya chat` | 新建交互会话，默认 WORK＋auto；没有终端时报输入错误 |
-| `saya run [PROMPT]` | 单次任务，默认不交互；使用 `--interactive` 才允许向终端询问 |
-| `saya resume SESSION_ID` | 交互恢复，等待新输入；不自动运行旧任务 |
-| `saya run --session SESSION_ID [PROMPT]` | 向已保存会话显式提交新输入，运行一次 |
-| `saya session list`／`show SESSION_ID` | 列出会话或查看记录，支持 text／json 输出 |
-| `saya config init`／`check` | 显式建立无密钥配置模板，或验证配置；已有配置不覆盖 |
+| `soyo`／`soyo chat` | 新建交互会话，默认 WORK＋auto；没有终端时报输入错误 |
+| `soyo run [PROMPT]` | 单次任务，默认不交互；使用 `--interactive` 才允许向终端询问 |
+| `soyo resume SESSION_ID` | 交互恢复，等待新输入；不自动运行旧任务 |
+| `soyo run --session SESSION_ID [PROMPT]` | 向已保存会话显式提交新输入，运行一次 |
+| `soyo session list`／`show SESSION_ID` | 列出会话或查看记录，支持 text／json 输出 |
+| `soyo config init`／`check` | 显式建立无密钥配置模板，或验证配置；已有配置不覆盖 |
 
 - 运行入口参数为 `--config`、`--profile`、`--mode plan|build|code|work`、`--permissions auto|bypass|manual`、`--cwd`、`--data-dir`、`--output text|json|jsonl`。`--approval-file` 仅用于 run，`--accept-config-change` 仅用于恢复既有会话。`bypass` 和 `manual` 分别是已确认权限名称的 CLI 写法；历史序列化值 `review` 可读取为 `manual`。
 - D-034 增加本次调用显式个人上下文文件 `--preferences-file`、`--memory-file`，以及兼容端点的可选 `--anthropic-prompt-cache`；实际行为、数据边界与缓存限制见[CLI 预览](cli-preview.md)和[提示词文档](prompts.md)。
@@ -77,8 +77,8 @@ D-062更新B-15／B-16的超时与重试：模型连接及响应头等待默认3
 
 ## B-04 配置
 
-- 配置格式为 TOML，`schema_version = 1`。默认文件是 `$XDG_CONFIG_HOME/saya/config.toml`，未设置时使用 `~/.config/saya/config.toml`；`--config` 指定文件替代默认文件，不将两份文件隐式合并。
-- 设置优先级：CLI 参数 ＞受支持的 `SAYA_*` 环境变量＞选定配置文件＞内置默认值。支持的环境设置为 `SAYA_CONFIG`、`SAYA_PROFILE`、`SAYA_MODE`、`SAYA_PERMISSIONS`、`SAYA_CWD`、`SAYA_DATA_DIR`；`SAYA_CONFIG` 仅用于选文件。
+- 配置格式为 TOML，`schema_version = 1`。默认文件是 `$XDG_CONFIG_HOME/soyo/config.toml`，未设置时使用 `~/.config/soyo/config.toml`；`--config` 指定文件替代默认文件，不将两份文件隐式合并。
+- 设置优先级：CLI 参数 ＞受支持的 `SOYO_*` 环境变量＞选定配置文件＞内置默认值。支持的环境设置为 `SOYO_CONFIG`、`SOYO_PROFILE`、`SOYO_MODE`、`SOYO_PERMISSIONS`、`SOYO_CWD`、`SOYO_DATA_DIR`；`SOYO_CONFIG` 仅用于选文件。
 - MVP 不自动加载工作区内的配置文件。项目指令文件按 B-22 处理，不能据其内容提升权限或更改模型服务。
 - 模型 API 凭据仅通过配置中的环境变量名称引用；不支持把密钥值写进配置或 CLI 参数。允许显式配置无鉴权的本地兼容接口。
 - 未配置默认 profile 时，交互入口让用户选择已配置项；单次命令报配置错误。没有内置付费模型、账号或自动服务回退。
@@ -151,7 +151,7 @@ model_timeout_seconds = 180
 - OpenAI 两种协议显式发送 `store: false`；Responses 由本地回传所需 output items，不依赖 `previous_response_id` 才能恢复。函数调用结果与原始调用标识关联，协议类型与必要的不透明状态保存在适配层。依据 [OpenAI 官方迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)。
 - Anthropic 默认 `anthropic-version: 2026-10-21`，另支持显式选 `2023-06-01` 的文本／本地工具子集。默认不发送 temperature、top_p、top_k；新版本已移除这些参数。鉴权支持 `bearer`、`x-api-key` 和显式 `none`。依据 [Anthropic 版本说明](https://platform.claude.com/docs/en/api/versioning)与[迁移说明](https://platform.claude.com/docs/en/api/migration-2026-10-21)。
 - 默认使用 HTTPS 并验证证书；本机回环地址允许 HTTP，远程 HTTP 需要配置显式启用。无自动跨站重定向；沿用系统代理环境设置。
-- 支持 profile 的 `headers_env` 映射，以请求头名对应环境变量名，不能覆盖专用鉴权与版本字段；不开放覆盖协议保留字段的任意请求体透传。默认不启用 beta、服务端工具、provider 侧后台任务和多候选回答；Saya 本地运行内后台工具由 B-08 管理。
+- 支持 profile 的 `headers_env` 映射，以请求头名对应环境变量名，不能覆盖专用鉴权与版本字段；不开放覆盖协议保留字段的任意请求体透传。默认不启用 beta、服务端工具、provider 侧后台任务和多候选回答；Soyo 本地运行内后台工具由 B-08 管理。
 - 工具 schema 使用明确类型与运行时校验；支持 strict 的协议显式设置，兼容配置可关闭。流结束、参数 JSON 完整且响应可用于工具调度后才派发，不消费半段参数。依据 [OpenAI 函数调用](https://developers.openai.com/api/docs/guides/function-calling)与 [Anthropic 工具流](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)。
 
 ## B-06 上下文
@@ -325,7 +325,7 @@ error 为 null 或 `{ "code": "稳定标识", "message": "可读说明" }`；art
 
 ## B-18 存储位置与格式
 
-- 数据根为 `$XDG_DATA_HOME/saya`，默认 `~/.local/share/saya`，可用 `--data-dir` 覆盖；数据库为 `sessions.sqlite3`。日志根为 `$XDG_STATE_HOME/saya`，默认 `~/.local/state/saya`。
+- 数据根为 `$XDG_DATA_HOME/soyo`，默认 `~/.local/share/soyo`，可用 `--data-dir` 覆盖；数据库为 `sessions.sqlite3`。日志根为 `$XDG_STATE_HOME/soyo`，默认 `~/.local/state/soyo`。
 - 采用 SQLite WAL、foreign_keys 开启、synchronous FULL，schema 初版为 1，目前内部版本为 2，迁移先建立一致性备份。rusqlite 选择 bundled，避免依赖系统 SQLite；参见 [rusqlite bundled 说明](https://github.com/rusqlite/rusqlite)与 [SQLite WAL](https://sqlite.org/wal.html)。会话库仅支持本地磁盘，不支持网络共享文件系统。
 - 核心实体为 sessions、runs、messages／provider_items、tool_calls、events；会话和运行 ID 使用 UUIDv7。精确表结构作为内部实现随迁移版本管理，不鼓励外部直接依赖数据库列。
 - 会话保留直到用户管理数据目录，不自动过期或上传。0.1 提供 list／show／resume；删除、导出和全文检索命令不进入首版。
@@ -362,10 +362,10 @@ error 为 null 或 `{ "code": "稳定标识", "message": "可读说明" }`；art
 
 - 运行时提示词由核心约束、当前工作模式、用户任务和适用项目说明组成；工具结果单独作为工具数据，不拼进高优先级指令。
 - 按 D-034，每次模型请求向静态系统前缀后追加当前时钟、宿主和工作区等描述性事实；用户显式提供的偏好和记忆与项目文件一样作为有来源的低信任上下文，不构成权限。静态前缀与动态后缀分离，并按协议提供缓存优化。
-- 按 D-033，默认读取用户主目录 `~/.agents/AGENTS.md`、`~/.saya/AGENTS.md` 以及工作区根 `AGENTS.md`、`.agents/AGENTS.md`、`.saya/AGENTS.md` 中存在的约定指令；操作子路径时继续适用从工作区根至该路径的 `AGENTS.md`，按由外到内提供上下文。不扫描工作区外的任意父目录或其他项目。
-- 发现用户主目录和工作区中 `.agents/skills/*/SKILL.md`、`.saya/skills/*/SKILL.md` 的 Skill 元数据；同名时工作区优先于用户级，同一作用域 `.saya` 优先于 `.agents`。发现只提供能力线索，不自动执行或安装 Skill、脚本或插件。Skill 正文按需处理，具体实现与权限接线见 DEV-021；完整安装与插件生命周期仍属 F-03。
+- 按 D-033，默认读取用户主目录 `~/.agents/AGENTS.md`、`~/.soyo/AGENTS.md` 以及工作区根 `AGENTS.md`、`.agents/AGENTS.md`、`.soyo/AGENTS.md` 中存在的约定指令；操作子路径时继续适用从工作区根至该路径的 `AGENTS.md`，按由外到内提供上下文。不扫描工作区外的任意父目录或其他项目。
+- 发现用户主目录和工作区中 `.agents/skills/*/SKILL.md`、`.soyo/skills/*/SKILL.md` 的 Skill 元数据；同名时工作区优先于用户级，同一作用域 `.soyo` 优先于 `.agents`。发现只提供能力线索，不自动执行或安装 Skill、脚本或插件。Skill 正文按需处理，具体实现与权限接线见 DEV-021；完整安装与插件生命周期仍属 F-03。
 - 工作区指令在冲突时优先于用户级指令；它们均是项目上下文，不能覆盖用户明确要求或运行时硬限制，也不能切换工作模式、权限模式、服务地址或自动授予许可。记录指令来源路径与哈希；文件变更在下一次调用前重新读取。
-- 运行配置仍按 B-04 选择单一配置文件，不因发现 `.agents`、`.saya` 而自动读取或合并工作区运行配置；不自动扫描插件、外部账号或其他项目。
+- 运行配置仍按 B-04 选择单一配置文件，不因发现 `.agents`、`.soyo` 而自动读取或合并工作区运行配置；不自动扫描插件、外部账号或其他项目。
 
 ## B-23 验收、CI 与实现顺序
 

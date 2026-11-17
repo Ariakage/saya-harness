@@ -1,4 +1,4 @@
-# Saya memory context
+# Soyo memory context
 
 ## Use scoped evidence
 

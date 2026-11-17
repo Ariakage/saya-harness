@@ -65,7 +65,7 @@ jobs:
         id: candidate
         run: |
           python3 scripts/n3/witness.py candidate --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
-            --copy-from target/release/saya --binary target/n3/acceptance/program/saya \
+            --copy-from target/release/soyo --binary target/n3/acceptance/program/soyo \
             --report target/n3/acceptance/candidate.json 2>&1 | tee target/n3/acceptance/candidate.log
       - name: Verify candidate architecture and minimum platform
         id: baseline
@@ -91,7 +91,7 @@ jobs:
           CANDIDATE: ${{ steps.candidate.outputs.binary }}
         run: |
           sudo systemd-run --collect --wait --pipe \
-            --unit="saya-n3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --unit="soyo-n3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --uid="$(id -u)" --gid="$(id -g)" \
             --property='Delegate=cpu memory pids' \
             --property=RuntimeMaxSec=1800 --property=KillMode=control-group \
@@ -122,9 +122,9 @@ jobs:
       - name: Exercise all eight real native plugin service fixtures
         id: plugins
         env:
-          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+          SOYO_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
         run: |
-          cargo test -p saya-core --locked --test plugin_services -- --ignored --test-threads=1 \
+          cargo test -p soyo-core --locked --test plugin_services -- --ignored --test-threads=1 \
             2>&1 | tee target/n3/acceptance/native-plugin-services.log
           python3 - <<'PY' | tee target/n3/acceptance/native-plugin-summary.json
           import json

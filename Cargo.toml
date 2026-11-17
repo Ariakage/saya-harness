@@ -1,11 +1,11 @@
 [workspace]
 members = [
-    "crates/saya-contract",
-    "crates/saya-fs",
-    "crates/saya-core",
-    "crates/saya-cli",
-    "crates/saya-app",
-    "crates/saya-tui",
+    "crates/soyo-contract",
+    "crates/soyo-fs",
+    "crates/soyo-core",
+    "crates/soyo-cli",
+    "crates/soyo-app",
+    "crates/soyo-tui",
 ]
 resolver = "3"
 

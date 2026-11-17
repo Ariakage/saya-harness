@@ -45,7 +45,7 @@ output_read返回metadata、chunks及next_cursor，output_search返回相应匹�
 
 Run发布对象持有租约，历史引用遵循有界存储和回收策略。缺失对象返回output_unavailable，重新执行producer沿新的明确调用与权限流程处理。磁盘发布失败保留实际工具结果及捕获错误，恢复核对原意图和封存对象，避免重复副作用。
 
-用户媒体使用同一私有存储中的独立二进制对象格式。对象头保存Session、模态、MIME、文件名、字节数和原始内容SHA-256，历史中的`saya-media://`引用同时携带对象ID和内容摘要；读取时验证发布状态、Session归属、长度与摘要，不做UTF-8或文本脱敏投影。媒体对象沿用总库字节数、对象数、文件租约和显式GC，但使用自身模态及单消息上限，不占用工具producer的单Run捕获额度。`collect_garbage`的`pinned_refs`必须同时包含所有活跃ContextView输出引用和`media::history_references`返回的历史媒体引用；未固定且无租约的对象可以被回收，之后的模型请求以`media_unavailable`失败，不回退到原路径。媒体快照在输入历史提交前完成发布，捕获器对新建对象和已有引用都持有租约直到事务结束；捕获中途失败只清理本次新建对象，已有对象不因该失败被删除，残余未引用对象由同一GC处理。DEV-081 起同一私有后端还保存上界 16 MiB 的通用 `File` artifact（Browser 下载或截图借用的图片对象）。`File` 对象可发布、读取、按 lease／pin 回收，但 `expand_user` 只接受 Image／Audio／Video marker，任何 `File` 对象都不能作为模型媒体注入。`CapturedToolResult.media` 持有本次创建的 media／file lease 直到工具结果提交；历史中的 `ToolResult.media_refs` 只由宿主适配器写入，`media::history_references` 把它纳入 GC pin。DEV-082 起，当 `profile.multimodal.image` 开启时，宿主只把本次 request history 中未被 Compact／retirement 丢弃、且 `ToolResult.media_refs` 中类型为 Image 的对象注入下一次 Execution 请求；每个请求最多 8 个引用，聚合原始字节与 base64 均不超过 64 MiB，File 永不为模型媒体，工具产生的音频／视频也不注入。只读取对象头判定类型与字节数，超出预算的引用记录为 omitted，不读取正文；真正选中但缺失的引用返回 `media_unavailable`。Compact 投影保留 `media_refs`，因此引用、来源和 GC pin 在压缩与恢复后保持有效；完整历史仍通过 `history_references` 参与 GC pin。页面文本、工具正文或模型输入中伪造的 `saya-media://` 引用不会产生 pin；恢复后引用仍按 Session、长度和摘要校验，对象缺失时明确返回 `media_unavailable`。
+用户媒体使用同一私有存储中的独立二进制对象格式。对象头保存Session、模态、MIME、文件名、字节数和原始内容SHA-256，历史中的`soyo-media://`引用同时携带对象ID和内容摘要；读取时验证发布状态、Session归属、长度与摘要，不做UTF-8或文本脱敏投影。媒体对象沿用总库字节数、对象数、文件租约和显式GC，但使用自身模态及单消息上限，不占用工具producer的单Run捕获额度。`collect_garbage`的`pinned_refs`必须同时包含所有活跃ContextView输出引用和`media::history_references`返回的历史媒体引用；未固定且无租约的对象可以被回收，之后的模型请求以`media_unavailable`失败，不回退到原路径。媒体快照在输入历史提交前完成发布，捕获器对新建对象和已有引用都持有租约直到事务结束；捕获中途失败只清理本次新建对象，已有对象不因该失败被删除，残余未引用对象由同一GC处理。DEV-081 起同一私有后端还保存上界 16 MiB 的通用 `File` artifact（Browser 下载或截图借用的图片对象）。`File` 对象可发布、读取、按 lease／pin 回收，但 `expand_user` 只接受 Image／Audio／Video marker，任何 `File` 对象都不能作为模型媒体注入。`CapturedToolResult.media` 持有本次创建的 media／file lease 直到工具结果提交；历史中的 `ToolResult.media_refs` 只由宿主适配器写入，`media::history_references` 把它纳入 GC pin。DEV-082 起，当 `profile.multimodal.image` 开启时，宿主只把本次 request history 中未被 Compact／retirement 丢弃、且 `ToolResult.media_refs` 中类型为 Image 的对象注入下一次 Execution 请求；每个请求最多 8 个引用，聚合原始字节与 base64 均不超过 64 MiB，File 永不为模型媒体，工具产生的音频／视频也不注入。只读取对象头判定类型与字节数，超出预算的引用记录为 omitted，不读取正文；真正选中但缺失的引用返回 `media_unavailable`。Compact 投影保留 `media_refs`，因此引用、来源和 GC pin 在压缩与恢复后保持有效；完整历史仍通过 `history_references` 参与 GC pin。页面文本、工具正文或模型输入中伪造的 `soyo-media://` 引用不会产生 pin；恢复后引用仍按 Session、长度和摘要校验，对象缺失时明确返回 `media_unavailable`。
 
 ## 检索与grep
 
@@ -71,7 +71,7 @@ ContextBuilder保留最新原始UserText、未闭合调用、宿主标记的保�
 
 默认 `context.auto_compact = true`，下一次Execution请求前在80%输入容量触发，成功后的投影必须降至55%以内。较高的固定前缀或必留内容使目标不可达时，协调器返回明确限制原因。配置见[ContextSettings](configuration.md#输出捕获与上下文预算)。
 
-- `saya compact SESSION_ID`独占保存Session的写锁，在当前配置下执行独立Compact，支持显式接受配置引用变更的参数。
+- `soyo compact SESSION_ID`独占保存Session的写锁，在当前配置下执行独立Compact，支持显式接受配置引用变更的参数。
 - 文本会话与TUI `/compact`在空闲时压缩当前Session，运行中请求在下一模型边界排队，重复请求合并。末轮完成仍有待处理请求时执行独立Compact。
 - 独立Compact沿摘要请求路径工作，保留原始用户／工具历史，完成后等待用户继续。自动压缩关闭时仍保留手动入口和请求预算保护。
 
@@ -109,7 +109,7 @@ CompactionRecord保存源范围／hash、保留组、失效组manifest、提示�
 
 ## 记忆遗忘与上下文
 
-默认全局索引为 `~/.saya/MEMORY.md`。路由、选中事实、来源与revision进入有界Memory分项。当前记忆和遗忘版本参与检查点兼容性及缓存指纹。[记忆工具与管理](memory.md)
+默认全局索引为 `~/.soyo/MEMORY.md`。路由、选中事实、来源与revision进入有界Memory分项。当前记忆和遗忘版本参与检查点兼容性及缓存指纹。[记忆工具与管理](memory.md)
 
 宿主对原生记忆调用及实际使用Memory的模型请求保存durable来源证明。遗忘、来源撤回或策略变化后，ContextBuilder只根据这些证明将失效的完整闭合组替换为明确历史数据envelope，保留有界机械观察。原工具参数、正文和ProviderItem随该组退出模型投影，旧摘要也需通过当前记忆版本校验。
 

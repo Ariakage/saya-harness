@@ -1,6 +1,6 @@
 # 项目文档
 
-Saya Harness 的说明文档默认使用中文，发行说明提供中英双语。CLI MVP 已完成 P0 至 P7 验收并发布 [v0.1.0](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，**0.2.0** 已发布默认 TUI、增强日志与会话导出。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 及后续[决策记录](decisions.md)为准。
+Soyo Harness 的说明文档默认使用中文，发行说明提供中英双语。CLI MVP 已完成 P0 至 P7 验收并发布 [v0.1.0](https://github.com/Ariakage/soyo-harness/releases/tag/v0.1.0)，**0.2.0** 已发布默认 TUI、增强日志与会话导出。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 及后续[决策记录](decisions.md)为准。
 
 本目录按职责分为四类：**核心规范与契约**、**子系统设计与使用文档**、**进度与阶段验收**，以及置于子目录的**历史档案**（[`reviews/`](reviews/review-2026-11-11.md)、[`releases/`](releases/release-notes-0.2.0.md)、[`reports/`](reports/live-model-validation.md)）。
 
@@ -36,16 +36,16 @@ Saya Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [项目指令与 Skill 发现](project-context.md) | 用户级／工作区指令与 Skill 发现优先级和安全边界 | 已实现；受控验证通过 |
 | [提示词定制](prompts.md) | 英文 prompt 装配、模式／核查分段与前缀缓存设计 | 已实现；受控接线与评估通过 |
 | [提示词来源清单](prompt-sources.json) | 提示词模板来源、相对路径与 SHA-256 核查记录 | 历史来源核查清单 |
-| [当前提示词快照](prompt/README.md) | `saya-prompts-v1` 正式正文与 `drafts/n3/` 草稿说明 | 运行时嵌入正文（`v1/`） |
-| [日志与追踪](observability.md) | 五级日志、关联 span、脱敏记录与 `saya logs` 查询 | 已实现（N0）；本机验收通过 |
+| [当前提示词快照](prompt/README.md) | `XLFMTPsoyo-prompts-v1` 正式正文与 `drafts/n3/` 草稿说明 | 运行时嵌入正文（`v1/`） |
+| [日志与追踪](observability.md) | 五级日志、关联 span、脱敏记录与 `soyo logs` 查询 | 已实现（N0）；本机验收通过 |
 | [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 导出与私有文件写入 | 已实现（N0）；本机验收通过 |
-| [saya-plugin v1 规范](saya-plugin.md) | 插件 manifest v1、权限、lock、安装与 Hook 生命周期 | 已实现（N3）；完成四平台验收 |
-| [插件结构 schema](schemas/saya-plugin-v1.schema.json) | `saya-plugin.toml` 的 JSON Schema 校验定义 | 运行时集成（N3） |
-| [插件 manifest 示例](../examples/saya-plugin.example.toml) | 声明 Skills／MCP／Hooks 的结构示例 | 格式示例 |
+| [soyo-plugin v1 规范](soyo-plugin.md) | 插件 manifest v1、权限、lock、安装与 Hook 生命周期 | 已实现（N3）；完成四平台验收 |
+| [插件结构 schema](schemas/soyo-plugin-v1.schema.json) | `soyo-plugin.toml` 的 JSON Schema 校验定义 | 运行时集成（N3） |
+| [插件 manifest 示例](../examples/soyo-plugin.example.toml) | 声明 Skills／MCP／Hooks 的结构示例 | 格式示例 |
 | [全局记忆](memory.md) | `MEMORY.md`、专用工具、审阅、更正／遗忘与回滚 | 已实现（N3）；完成四平台验收 |
 | [Goal 设计](goal.md) | 独立持久 Goal、结构化计划、预算与人工／自动推进 | 已实现（N4）；完成本机受控验收 |
 | [Browser 设计](browser.md) | 受控 Web、Playwright worker、VM、文件／网络 broker 与截图遮蔽 | 已实现（N5）；VM 与 ARM64 实测通过 |
-| [TUI 设计](tui.md) | 默认 `saya` 终端入口、分层控制、附件与恢复路径 | 已实现（N1／后续交互）；持续演进 |
+| [TUI 设计](tui.md) | 默认 `soyo` 终端入口、分层控制、附件与恢复路径 | 已实现（N1／后续交互）；持续演进 |
 | [TUI 布局设计](tui-design.md) | 配色、侧栏、输入区、状态反馈与 `view/` 模块布局 | 已实现；与 `view/` 一致 |
 | [Markdown 与调试预览](markdown-rendering.md) | CommonMark／GFM、数学／图表高亮与 `tui-preview` | 已实现；离线及 PTY 验证通过 |
 

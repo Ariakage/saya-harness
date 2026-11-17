@@ -239,23 +239,23 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(record['cleanup']['exit_code'], -9)
 
     def test_missing_vm_is_a_failed_prerequisite_not_skip(self):
-        with self.assertRaisesRegex(AssertionError, 'SAYA_TEST_VM_COLIMA'):
+        with self.assertRaisesRegex(AssertionError, 'SOYO_TEST_VM_COLIMA'):
             self.a.vm_config({})
 
     def test_vm_config_requires_every_input_and_never_host_fallback(self):
-        env = {'SAYA_TEST_VM_' + key: value for key, value in {
+        env = {'SOYO_TEST_VM_' + key: value for key, value in {
             'COLIMA': '/bin/colima', 'SSH': '/usr/bin/ssh', 'PROFILE': 'dedicated',
             'HOST': '127.0.0.1', 'USER': 'tester', 'PORT': '2222',
             'IDENTITY_FILE': '/private/key', 'KNOWN_HOSTS': '/private/known',
             'NODE': '/opt/node', 'WORKER_ROOT': '/opt/worker', 'CHROMIUM': '/opt/chrome',
             'MANIFEST': '/opt/manifest', 'MANIFEST_SHA256': 'a' * 64,
-            'TEMP_ROOT': '/tmp/saya-runs'}.items()}
+            'TEMP_ROOT': '/tmp/soyo-runs'}.items()}
         config = self.a.vm_config(env)
         self.assertEqual(config['backend'], 'colima')
         self.assertEqual(config['identity_manifest'], '/opt/manifest')
         self.assertEqual(config['port'], 2222)
-        del env['SAYA_TEST_VM_NODE']
-        with self.assertRaisesRegex(AssertionError, 'SAYA_TEST_VM_NODE'):
+        del env['SOYO_TEST_VM_NODE']
+        with self.assertRaisesRegex(AssertionError, 'SOYO_TEST_VM_NODE'):
             self.a.vm_config(env)
 
     def test_host_snapshot_uses_nested_result_and_checks_source(self):
@@ -292,7 +292,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_candidate_rejects_replaced_binary_before_dispatch(self):
         with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / 'saya'
+            binary = Path(directory) / 'soyo'
             binary.write_bytes(b'initial')
             candidate = object.__new__(self.a.Candidate)
             candidate.binary = binary
@@ -319,7 +319,7 @@ class AcceptanceTests(unittest.TestCase):
             self.assertEqual(evidence['status'], 'failed')
             self.assertEqual(evidence['provider_counts'], {'execution': 0, 'review': 0, 'compaction': 0})
             self.assertEqual(len(evidence['binary_sha256']), 64)
-            self.assertIn('SAYA_TEST_VM_COLIMA', evidence['cases'][0]['error'])
+            self.assertIn('SOYO_TEST_VM_COLIMA', evidence['cases'][0]['error'])
 
     def test_background_poll_is_bounded_and_requires_unknown_terminal_result(self):
         steps = self.a.background_steps('http://127.0.0.1:4', [])
@@ -368,9 +368,9 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(self.a.totals(report['cases']), {'failed': 2, 'passed': 1, 'disabled': 1})
 
     def test_command_global_options_precede_run(self):
-        command = self.a.cli_command(Path('/bin/saya'), Path('/tmp/cfg'), Path('/tmp/root'),
+        command = self.a.cli_command(Path('/bin/soyo'), Path('/tmp/cfg'), Path('/tmp/root'),
                                     Path('/tmp/data'), 'manual', 'plan', ['run', 'task'])
-        self.assertEqual(command, ['/bin/saya', '--config', '/tmp/cfg', '--cwd', '/tmp/root',
+        self.assertEqual(command, ['/bin/soyo', '--config', '/tmp/cfg', '--cwd', '/tmp/root',
                                   '--data-dir', '/tmp/data', '--output', 'json',
                                   '--permissions', 'manual', '--mode', 'plan', 'run', 'task'])
 
@@ -482,7 +482,7 @@ class AcceptanceTests(unittest.TestCase):
             binary.chmod(0o700)
             provider = SimpleNamespace(counts={'execution': 0, 'review': 0, 'compaction': 0}, errors=[])
             provider.serving = lambda: nullcontext(provider)
-            occupied = ['/tmp/saya-runs/saya-browser-vm-existing']
+            occupied = ['/tmp/soyo-runs/soyo-browser-vm-existing']
             with patch.object(self.a, 'vm_config', return_value={'identity_sha256': 'a' * 64}), \
                     patch.object(self.a, 'remote_inventory', return_value=occupied), \
                     patch.object(self.a, 'website', return_value=nullcontext(('http://127.0.0.1:4', []))), \
@@ -522,7 +522,7 @@ class AcceptanceTests(unittest.TestCase):
     def test_pty_uses_workspace_and_records_failed_approval(self):
         provider = SimpleNamespace(errors=[])
         candidate = SimpleNamespace(root=Path('/tmp/managed'), workspace=Path('/tmp/managed/workspace'),
-            env={}, command=lambda *args: ['saya', '--output', 'json'])
+            env={}, command=lambda *args: ['soyo', '--output', 'json'])
         screen = SimpleNamespace(details_text=lambda: 'browser_fill Text: 6 text bytes 秘密',
                                  status=lambda: 'Awaiting approval', text='failed approval')
         def pump():
@@ -542,7 +542,7 @@ class AcceptanceTests(unittest.TestCase):
     def test_manual_pty_cannot_pass_without_approval(self):
         provider = SimpleNamespace(errors=[])
         candidate = SimpleNamespace(workspace=Path('/tmp/workspace'), root=Path('/tmp'), env={},
-                                    command=lambda *args: ['saya', '--output', 'json'])
+                                    command=lambda *args: ['soyo', '--output', 'json'])
         def pump():
             provider.dialogue.completed = True
             provider.dialogue.index = 1

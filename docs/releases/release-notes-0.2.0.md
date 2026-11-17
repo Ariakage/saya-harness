@@ -1,4 +1,4 @@
-# Saya Harness 0.2.0
+# Soyo Harness 0.2.0
 
 [简体中文](#简体中文) · [English](#english)
 
@@ -34,7 +34,7 @@
 
 - `/new`、`/sessions [PAGE]`、`/resume ID` 提供新建、浏览和恢复。`/profiles`、`/profile NAME` 选择已配置模型，兼容配置变化通过 `/resume-accept ID` 显式接受。恢复后等待新输入，使用本次权限设置，工具历史保留原执行结果和 unknown 状态。
 - `/tools` 和 `/jobs` 显示带持久水位的快照，`/cancel-job ID` 取消当前运行拥有的后台任务。正常结束、取消和错误均等待所属任务清理，再释放会话锁。
-- `trace`、`debug`、`info`、`warn`、`error` 五级本地诊断默认 `warn`，通过 `--log-level` 或 `SAYA_LOG_LEVEL` 设置。`saya logs show` 查询，`saya logs tail` 跟随，支持会话／运行关联及文本、JSON／JSONL 的适用输出。日志10 MiB轮转、保留五份备份。[日志说明](../observability.md)
+- `trace`、`debug`、`info`、`warn`、`error` 五级本地诊断默认 `warn`，通过 `--log-level` 或 `SOYO_LOG_LEVEL` 设置。`saya logs show` 查询，`saya logs tail` 跟随，支持会话／运行关联及文本、JSON／JSONL 的适用输出。日志10 MiB轮转、保留五份备份。[日志说明](../observability.md)
 - TUI 使用 `/export json|markdown PATH` 或 `/export-full json|markdown PATH`。离线 CLI 使用 `saya session export SESSION_ID --file ./session.md`，完整 JSON 使用 `--format json --scope full --include-tools`。导出复用脱敏投影、独占文件发布和带 SHA-256／水位的回执，每字段64 KiB、总计32 MiB。目标父目录须存在，已有文件受保护，PLAN 同时保护本次与保存会话的工作区。[会话导出](../session-export.md)
 - 配置、结果与事件继续采用 schema v1。既有会话沿持久记录恢复，配置指纹变化需要显式接受，模型／协议变更需要新会话。[会话存储](../storage.md)
 
@@ -62,7 +62,7 @@
 
 ```sh
 archive=saya-0.2.0-linux-x86_64.tar.gz
-gh release download v0.2.0 --repo Ariakage/saya-harness --pattern "$archive" --pattern SHA256SUMS
+gh release download v0.2.0 --repo Ariakage/soyo-harness --pattern "$archive" --pattern SHA256SUMS
 grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
 mkdir saya-0.2.0
 tar -xzf "$archive" -C saya-0.2.0
@@ -90,9 +90,9 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 
 ### 发行验证
 
-- 发行源码由 `v0.2.0` 标签固定，构建和解包验收使用发行工作流。[标签源码](https://github.com/Ariakage/saya-harness/tree/v0.2.0)、[发行工作流](https://github.com/Ariakage/saya-harness/actions/workflows/release-candidates.yml)
-- 各平台实际通过范围、最低运行环境、源码／脚本／二进制摘要及下载复核以随本版本发布的结构化证据为准。历史 P7／RC1／RC2 记录继续归属原产物。[0.2.0 发行证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/release-evidence.json)
-- 下载后核对对应归档的 SHA-256，并核对包内 `BUILD-INFO.json` 的源码和二进制记录。[0.2.0 校验和](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/SHA256SUMS)
+- 发行源码由 `v0.2.0` 标签固定，构建和解包验收使用发行工作流。[标签源码](https://github.com/Ariakage/soyo-harness/tree/v0.2.0)、[发行工作流](https://github.com/Ariakage/soyo-harness/actions/workflows/release-candidates.yml)
+- 各平台实际通过范围、最低运行环境、源码／脚本／二进制摘要及下载复核以随本版本发布的结构化证据为准。历史 P7／RC1／RC2 记录继续归属原产物。[0.2.0 发行证据](https://github.com/Ariakage/soyo-harness/releases/download/v0.2.0/release-evidence.json)
+- 下载后核对对应归档的 SHA-256，并核对包内 `BUILD-INFO.json` 的源码和二进制记录。[0.2.0 校验和](https://github.com/Ariakage/soyo-harness/releases/download/v0.2.0/SHA256SUMS)
 
 ## English
 
@@ -126,7 +126,7 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 
 - `/new`, `/sessions [PAGE]`, and `/resume ID` create, browse, and restore sessions. `/profiles` and `/profile NAME` select configured models. `/resume-accept ID` explicitly accepts compatible configuration changes. Resume waits for new input and uses the current invocation's permissions, retaining recorded outcomes and unknown states.
 - `/tools` and `/jobs` show snapshots with committed watermarks. `/cancel-job ID` cancels a background job owned by the active run. Completion, cancellation, and errors await owned cleanup before releasing the session lock.
-- Local diagnostics provide `trace`, `debug`, `info`, `warn`, and `error`, defaulting to `warn`, selected with `--log-level` or `SAYA_LOG_LEVEL`. `saya logs show` queries records and `saya logs tail` follows them, with session／run correlation and applicable text, JSON／JSONL formats. Logs rotate at 10 MiB with five backups. [Logging](../observability.md)
+- Local diagnostics provide `trace`, `debug`, `info`, `warn`, and `error`, defaulting to `warn`, selected with `--log-level` or `SOYO_LOG_LEVEL`. `saya logs show` queries records and `saya logs tail` follows them, with session／run correlation and applicable text, JSON／JSONL formats. Logs rotate at 10 MiB with five backups. [Logging](../observability.md)
 - TUI export uses `/export json|markdown PATH` or `/export-full json|markdown PATH`. The offline CLI uses `saya session export SESSION_ID --file ./session.md`, with `--format json --scope full --include-tools` for full JSON records. Both share redacted projections, exclusive file publication, and receipts with SHA-256 and watermarks. Limits are 64 KiB per field and 32 MiB in total. The parent directory must exist, existing files are protected, and PLAN protects both current and saved-session workspaces. [Session export](../session-export.md)
 - Configuration, results, and events retain schema v1. Existing sessions resume from persisted records. Fingerprint changes require explicit acceptance, and model／protocol changes require a new session. [Session storage](../storage.md)
 
@@ -154,7 +154,7 @@ The following example selects Linux x86_64. Use GitHub CLI and `shasum` in an em
 
 ```sh
 archive=saya-0.2.0-linux-x86_64.tar.gz
-gh release download v0.2.0 --repo Ariakage/saya-harness --pattern "$archive" --pattern SHA256SUMS
+gh release download v0.2.0 --repo Ariakage/soyo-harness --pattern "$archive" --pattern SHA256SUMS
 grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
 mkdir saya-0.2.0
 tar -xzf "$archive" -C saya-0.2.0
@@ -182,6 +182,6 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 
 ### Release verification
 
-- The `v0.2.0` tag fixes the release source. The release workflow builds and verifies the unpacked programs. [Tagged source](https://github.com/Ariakage/saya-harness/tree/v0.2.0), [Release workflow](https://github.com/Ariakage/saya-harness/actions/workflows/release-candidates.yml)
-- Per-platform checks actually passed, minimum runtime environments, source／script／binary hashes, and download verification are defined by the structured evidence shipped with this version. Historical P7／RC1／RC2 records retain their original artifact scope. [0.2.0 release evidence](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/release-evidence.json)
-- After downloading, verify the archive's SHA-256 and the source and binary records in `BUILD-INFO.json`. [0.2.0 checksums](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/SHA256SUMS)
+- The `v0.2.0` tag fixes the release source. The release workflow builds and verifies the unpacked programs. [Tagged source](https://github.com/Ariakage/soyo-harness/tree/v0.2.0), [Release workflow](https://github.com/Ariakage/soyo-harness/actions/workflows/release-candidates.yml)
+- Per-platform checks actually passed, minimum runtime environments, source／script／binary hashes, and download verification are defined by the structured evidence shipped with this version. Historical P7／RC1／RC2 records retain their original artifact scope. [0.2.0 release evidence](https://github.com/Ariakage/soyo-harness/releases/download/v0.2.0/release-evidence.json)
+- After downloading, verify the archive's SHA-256 and the source and binary records in `BUILD-INFO.json`. [0.2.0 checksums](https://github.com/Ariakage/soyo-harness/releases/download/v0.2.0/SHA256SUMS)

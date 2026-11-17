@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Opt-in live prompt scenarios; sends model requests and may incur costs.
 
-Loads .saya/local/deepseek.env through the caller, or accepts an equivalent
-SAYA_DEEPSEEK_TEST_API_KEY. Only bounded task artifacts and structured outcomes
+Loads .soyo/local/deepseek.env through the caller, or accepts an equivalent
+SOYO_DEEPSEEK_TEST_API_KEY. Only bounded task artifacts and structured outcomes
 are saved. The model/provider sees the scenario prompts and supplied files.
 
 Each scenario can be repeated (--repeat) and run concurrently (--jobs). Every
@@ -292,7 +292,7 @@ SCENARIOS = [
         "id": "skill_route",
         "mode": "code",
         "prompt": "Repair the whitespace word-counting bug in src/main.rs using the most relevant discovered workspace Skill if applicable. Do not run commands. Keep the existing stdin and output interface.",
-        "files": {"src/main.rs": BUGGY, ".saya/skills/whitespace-review/SKILL.md": SKILL, ".saya/skills/cooking/SKILL.md": "---\nname: cooking\ndescription: Convert cooking recipe measurements.\n---\nUse metric units.\n"},
+        "files": {"src/main.rs": BUGGY, ".soyo/skills/whitespace-review/SKILL.md": SKILL, ".soyo/skills/cooking/SKILL.md": "---\nname: cooking\ndescription: Convert cooking recipe measurements.\n---\nUse metric units.\n"},
         "checks": {"source_contains": ["split_whitespace"], "tool_required": ["skill_activate"], "tool_absent": ["exec"]},
     },
     {
@@ -359,7 +359,7 @@ def scenario_config(root, args):
         'mode = "work"', 'permissions = "auto"', 'output = "jsonl"',
         '[profiles.deepseek-chat]', 'protocol = "openai-chat-completions"',
         'base_url = "https://api.deepseek.com"', f'model = {json.dumps(args.model)}',
-        'auth = "bearer"', 'api_key_env = "SAYA_DEEPSEEK_TEST_API_KEY"',
+        'auth = "bearer"', 'api_key_env = "SOYO_DEEPSEEK_TEST_API_KEY"',
         f'context_window_tokens = {args.context_window}',
         f'max_output_tokens = {args.max_output_tokens}', 'stream = true', 'legacy_max_tokens = true',
         '[limits]', 'max_model_requests = 16', 'max_tool_calls = 40', 'active_run_timeout_seconds = 420',
@@ -396,7 +396,7 @@ def evaluate(workspace, checks, events, before=None):
         for line in lines:
             if line not in content:
                 errors.append(f"{name} lost line {line.strip()!r}")
-    if (workspace / ".saya" / "local").exists():
+    if (workspace / ".soyo" / "local").exists():
         errors.append("host control directory exists in workspace")
     artifact = checks.get("artifact")
     if artifact:
@@ -636,17 +636,17 @@ def main():
         parser.error("--binary, --label and --output are required for live runs")
     if args.repeat < 1 or args.jobs < 1:
         parser.error("--repeat and --jobs must be positive")
-    if not os.environ.get("SAYA_DEEPSEEK_TEST_API_KEY"):
-        parser.error("SAYA_DEEPSEEK_TEST_API_KEY must be supplied by the caller")
+    if not os.environ.get("SOYO_DEEPSEEK_TEST_API_KEY"):
+        parser.error("SOYO_DEEPSEEK_TEST_API_KEY must be supplied by the caller")
     binary = args.binary.resolve(strict=True)
     args.output = args.output.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     selected = [case for case in SCENARIOS if not args.scenario or case["id"] in args.scenario]
     started = time.time()
     lock = threading.Lock()
-    with tempfile.TemporaryDirectory(prefix="saya-prompt-eval-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="soyo-prompt-eval-") as temporary:
         root = Path(temporary)
-        base_env = {key: os.environ[key] for key in ("PATH", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "SAYA_DEEPSEEK_TEST_API_KEY") if key in os.environ}
+        base_env = {key: os.environ[key] for key in ("PATH", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "SOYO_DEEPSEEK_TEST_API_KEY") if key in os.environ}
         config = scenario_config(root, args)
         jobs = [(case, iteration) for iteration in range(1, args.repeat + 1) for case in selected]
 

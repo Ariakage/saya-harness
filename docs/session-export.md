@@ -9,9 +9,9 @@
 CLI 使用以下显式命令。
 
 ```sh
-saya session export SESSION_ID --format markdown --scope transcript --file ./session.md
-saya session export SESSION_ID --format json --scope full --include-tools --file ./session.json
-saya --output json session export SESSION_ID --format markdown --file ./session.md
+soyo session export SESSION_ID --format markdown --scope transcript --file ./session.md
+soyo session export SESSION_ID --format json --scope full --include-tools --file ./session.json
+soyo --output json session export SESSION_ID --format markdown --file ./session.md
 ```
 
 现有全局 `--output` 选择命令 stdout 的 text／json／jsonl 表达，新增 `--file` 选择导出文件路径。`--format` 选择文件内容，默认 `markdown`，`--scope` 默认 `transcript`，工具正文由 `--include-tools` 显式包含。成功确认返回文件路径、格式、字节数、摘要哈希及快照水位，错误沿用 CLI 的输出与退出码约定。
@@ -31,7 +31,7 @@ core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits
 
 水位取已提交记录，事件预留序号中的空洞允许存在。工具关联采用 `(run_id, call_id)`，避免不同 Run 的同名调用混淆。活跃会话显示其快照时状态，`unknown`、未完成和已拒绝结果按记录呈现。
 
-[SqliteStore](../crates/saya-core/src/sqlite.rs) 现有分项查询可复用解码和验证逻辑，统一导出入口需要单一事务。只读打开路径应独立验证 schema 与文件，数据库创建、迁移和中断恢复属于各自的显式操作。遇到需要迁移的旧库时给出迁移提示。
+[SqliteStore](../crates/soyo-core/src/sqlite.rs) 现有分项查询可复用解码和验证逻辑，统一导出入口需要单一事务。只读打开路径应独立验证 schema 与文件，数据库创建、迁移和中断恢复属于各自的显式操作。遇到需要迁移的旧库时给出迁移提示。
 
 ## 范围与内容选择
 
@@ -49,7 +49,7 @@ core 提供 `SqliteStore::read_snapshot`、`SessionSnapshot` 与 `SnapshotLimits
 
 ## JSON 格式 v1
 
-core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一投影，`to_json` 编码为独立 `schema_version = 1`、`export_type = saya.session` 格式。默认 scope 为 transcript，include_tools 为 false，每个字符串保留最多 64 KiB，最终编码最多 32 MiB。身份字段超过单字段限额时返回 `export_limit`，正文按 UTF-8 边界截取，并在 `truncated_fields` 保存 JSON Pointer、原字节数及保留字节数。
+core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一投影，`to_json` 编码为独立 `schema_version = 1`、`export_type = soyo.session` 格式。默认 scope 为 transcript，include_tools 为 false，每个字符串保留最多 64 KiB，最终编码最多 32 MiB。身份字段超过单字段限额时返回 `export_limit`，正文按 UTF-8 边界截取，并在 `truncated_fields` 保存 JSON Pointer、原字节数及保留字节数。
 
 投影在截断前对全部已选择内容重新脱敏。Full 增加持久事件、activity、指标、审批元数据和 ProviderItem；转录范围继续省略 ProviderItem。工具参数及结果正文在 history、调用表、后台任务、事件、activity 和审批中统一按 include_tools 选择。ProviderItem 在 Full history 中以 `kind = provider_item`、协议名称和持久 `value` 输出，并保留原 ordinal。旧 messages 表缺少 run_id，历史工具项只在持久调用可唯一匹配时补充 run_id，否则用 null 与 omitted_fields 说明。调用表始终保留独立的 (run_id, call_id)。
 
@@ -58,7 +58,7 @@ core 的 `export::SessionExport::from_snapshot` 按 `ExportOptions` 生成统一
 ```json
 {
   "schema_version": 1,
-  "export_type": "saya.session",
+  "export_type": "soyo.session",
   "snapshot": {
     "created_at": "2026-11-07T15:00:00Z",
     "source_database_schema": 2,

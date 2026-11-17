@@ -2,7 +2,7 @@
 
 当前 N2 开发线支持显式配置的 stdio、HTTP MCP 和宿主凭据引用，已通过完整四平台整体验收。0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](releases/release-notes-0.2.0.md)
 
-接入使用固定 `rmcp = 3.9.0`，协商首选协议 `2026-07-28`，兼容 `2025-11-25`。当前工具发现、目录变化与工具调用复用宿主注册、权限和持久化边界。[MCP 实现](../crates/saya-core/src/mcp.rs)
+接入使用固定 `rmcp = 3.9.0`，协商首选协议 `2026-07-28`，兼容 `2025-11-25`。当前工具发现、目录变化与工具调用复用宿主注册、权限和持久化边界。[MCP 实现](../crates/soyo-core/src/mcp.rs)
 
 ## 配置与工具发现
 
@@ -23,7 +23,7 @@ read_only_tools = ["lookup"]
 type = "stdio"
 argv = ["/absolute/path/to/mcp-server", "--stdio"]
 # cwd = "/absolute/path/to/project"
-# env = { SERVICE_TOKEN = "SAYA_MCP_TOKEN" }
+# env = { SERVICE_TOKEN = "SOYO_MCP_TOKEN" }
 ```
 
 启动参数采用结构化 argv。`cwd` 省略时使用工作区，`env` 的值是启动环境变量名。宿主显式选择服务可接收的来源引用，并绑定目标变量与实际环境摘要；常规模型命令执行采用自身的敏感环境过滤。解释器或工具链位于原生视图之外时，需添加实际 `sandbox.read_roots`。[配置说明](configuration.md#n2-原生隔离配置)
@@ -53,22 +53,22 @@ scopes = ["files:read"]
 
 ## 导入、登录与引用
 
-管理命令使用显式 HTTP 服务名，凭据值通过已提供的环境引用或授权码交换取得。以下命令中的 `SAYA_MCP_ACCESS_TOKEN` 是环境变量名，值由使用者的凭据管理方式在启动前提供。
+管理命令使用显式 HTTP 服务名，凭据值通过已提供的环境引用或授权码交换取得。以下命令中的 `SOYO_MCP_ACCESS_TOKEN` 是环境变量名，值由使用者的凭据管理方式在启动前提供。
 
 ```sh
-saya --config /path/to/config.toml mcp credentials import remote \
-  --from-env SAYA_MCP_ACCESS_TOKEN --scope files:read --approve-scopes
-saya --config /path/to/config.toml mcp credentials list
+soyo --config /path/to/config.toml mcp credentials import remote \
+  --from-env SOYO_MCP_ACCESS_TOKEN --scope files:read --approve-scopes
+soyo --config /path/to/config.toml mcp credentials list
 ```
 
 导入和登录的授权范围由配置 `scopes` 与重复 `--scope` 参数的并集组成。默认在控制终端展示服务器、endpoint 和完整 scope 集并询问确认，`--approve-scopes` 显式批准本次选择。成功返回新的不透明 UUID reference，列表仅返回元数据。
 
-管理入口在审批前检查服务器、原始 endpoint、scope 和 client ID 中的已知凭据，导入来源变量的实际值也计入检查。实际授权 URL 在显示或交给系统 URL handler 前再次检查，包括有界 URL 编码视图；命中时返回 `sensitive_data`。正常授权流程中的 state 与 PKCE challenge 按授权 UI 字段展示。[管理入口](../crates/saya-cli/src/mcp.rs)
+管理入口在审批前检查服务器、原始 endpoint、scope 和 client ID 中的已知凭据，导入来源变量的实际值也计入检查。实际授权 URL 在显示或交给系统 URL handler 前再次检查，包括有界 URL 编码视图；命中时返回 `sensitive_data`。正常授权流程中的 state 与 PKCE challenge 按授权 UI 字段展示。[管理入口](../crates/soyo-cli/src/mcp.rs)
 
 交互 OAuth 使用授权码、PKCE S256、单次 state、精确 loopback 回调地址、issuer 与有效期检查。可指定已有 public client ID，省略时尝试动态注册 public client。授权 URL 写入 stderr，`--open-browser` 使用系统 URL handler 打开该地址。登录要求 stdin 与 stderr 均连接终端，即使已经提供 `--approve-scopes` 也会检查交互条件。
 
 ```sh
-saya --config /path/to/config.toml mcp login remote \
+soyo --config /path/to/config.toml mcp login remote \
   --scope files:read --client-id YOUR_PUBLIC_CLIENT_ID --open-browser
 ```
 
@@ -89,16 +89,16 @@ scopes = ["files:read"]
 运行中的 MCP 客户端在每次新 HTTP 请求前重新解析引用。OAuth 刷新采用跨进程刷新锁，并重新核对 scope、client 与 issuer，令牌轮换持续加入共享脱敏集合。撤销使引用永久失效，旧刷新结果不能恢复该引用。需要新授权时创建新的 reference。
 
 ```sh
-saya --config /path/to/config.toml mcp credentials revoke RETURNED_REFERENCE
+soyo --config /path/to/config.toml mcp credentials revoke RETURNED_REFERENCE
 ```
 
 管理命令的 stdout 返回 `schema_version = 1` 的单个 `data`／`error` JSON 对象。JSONL 模式增加 `type = "mcp.result"`。成功退出 0，需要交互或重新鉴权退出 4，需要确认退出 3，取消退出 130，配置／引用／scope 错误退出 2，普通操作失败退出 1，达到限制退出 5。人工批准提示与授权 URL 使用 stderr 或控制终端。
 
 ## 私有存储与执行边界
 
-当前凭据后端使用 state 目录下的 `credentials` 明文私有文件，默认位置为 `$XDG_STATE_HOME/saya/credentials` 或 `~/.local/state/saya/credentials`。目录采用 0700，记录与锁文件采用 0600，记录使用独占文件与原子替换。已有目录或文件的所有者、权限、符号链接及文件身份按私有存储约束校验。
+当前凭据后端使用 state 目录下的 `credentials` 明文私有文件，默认位置为 `$XDG_STATE_HOME/soyo/credentials` 或 `~/.local/state/soyo/credentials`。目录采用 0700，记录与锁文件采用 0600，记录使用独占文件与原子替换。已有目录或文件的所有者、权限、符号链接及文件身份按私有存储约束校验。
 
-宿主默认把启动时已存在的配置、data、state、cache 与工作区 `.saya/local` 加入原生保护集合。为活动凭据引用新建存储后，实际凭据目录也会强制加入保护集合。`host` 兼容模式在启用凭据引用或已有凭据存储目录时拒绝启动。模型使用注册后的 MCP 工具，凭据解析和最终请求注入由宿主处理。
+宿主默认把启动时已存在的配置、data、state、cache 与工作区 `.soyo/local` 加入原生保护集合。为活动凭据引用新建存储后，实际凭据目录也会强制加入保护集合。`host` 兼容模式在启用凭据引用或已有凭据存储目录时拒绝启动。模型使用注册后的 MCP 工具，凭据解析和最终请求注入由宿主处理。
 
 共享凭据集合覆盖刷新前后的已知值，并用于历史保存、工具结果、事件和显示边界。启用 MCP 时，模型正文与可读 Thinking 先收集到本次请求完成，再使用最新凭据快照脱敏展示。Thinking 活跃状态仍可见。凭据集合或脱敏边界失败时相关内容会扣留或返回明确错误。
 

@@ -39,7 +39,7 @@ def main():
             raise ValueError('archive SHA-256 mismatch')
         with tarfile.open(args.archive, 'r:gz') as archive:
             members = archive.getmembers()
-            if len(members) != 4 or {item.name for item in members} != {'saya', 'LICENSE', 'README.md', 'BUILD-INFO.json'}:
+            if len(members) != 4 or {item.name for item in members} != {'soyo', 'LICENSE', 'README.md', 'BUILD-INFO.json'}:
                 raise ValueError('unexpected archive members')
             if any(not item.isfile() or item.size > 100 * 1024 * 1024 for item in members):
                 raise ValueError('unexpected archive member type or size')
@@ -49,7 +49,7 @@ def main():
             target = metadata.get('target')
             if target not in ('macos-aarch64', 'macos-x86_64'):
                 raise ValueError('candidate is not a macOS target')
-            binary = archive.extractfile('saya').read()
+            binary = archive.extractfile('soyo').read()
             binary_hash = hashlib.sha256(binary).hexdigest()
             expected_cpu = 0x0100000c if target == 'macos-aarch64' else 0x01000007
             if len(binary) < 8 or binary[:4] != b'\xcf\xfa\xed\xfe' or struct.unpack_from('<I', binary, 4)[0] != expected_cpu:
@@ -66,8 +66,8 @@ def main():
             native_target = 'macos-x86_64'
         if target != native_target:
             raise ValueError('candidate target must match the native machine without translation')
-        with tempfile.TemporaryDirectory(prefix='saya-macos15-') as temporary:
-            path = Path(temporary) / 'saya'
+        with tempfile.TemporaryDirectory(prefix='soyo-macos15-') as temporary:
+            path = Path(temporary) / 'soyo'
             path.write_bytes(binary)
             path.chmod(0o755)
             build_info = command('otool', '-l', str(path))

@@ -1,39 +1,39 @@
 # CLI 入口与实现记录
 
-0.1.0 CLI 已发布，0.2.0 与后续开发线继续演进。`saya run` 与 `saya chat` 接入三种协议、SQLite 持久会话以及受权限与原生隔离约束的文件、搜索和命令工具；`saya module <browser|vm> <enable|disable|status>` / `saya module list` 可在独立状态库中开关受控 Browser / VM 能力。PLAN 保持工作区只读。无子命令的 `saya` 在终端进入 TUI，文本交互入口为 `saya chat`。各版本的验证范围见[开发进度](progress.md)。
+0.1.0 CLI 已发布，0.2.0 与后续开发线继续演进。`soyo run` 与 `soyo chat` 接入三种协议、SQLite 持久会话以及受权限与原生隔离约束的文件、搜索和命令工具；`soyo module <browser|vm> <enable|disable|status>` / `soyo module list` 可在独立状态库中开关受控 Browser / VM 能力。PLAN 保持工作区只读。无子命令的 `soyo` 在终端进入 TUI，文本交互入口为 `soyo chat`。各版本的验证范围见[开发进度](progress.md)。
 
-入门步骤和故障处理见[使用指南](usage.md)。配置格式见[配置组件](configuration.md)和[基线 B-04](mvp-baseline.md)。例如，先用 `saya config init` 创建空模板，填入明确的模型 profile 和凭据环境变量名，再用 `saya config check` 校验；此命令不会覆盖已有文件。默认配置文件位于 `$XDG_CONFIG_HOME/saya/config.toml` 或 `~/.config/saya/config.toml`，也可用 `--config PATH` 选择文件。模板不包含模型或真实凭据。运行示例（假定已经配置默认 profile）：
+入门步骤和故障处理见[使用指南](usage.md)。配置格式见[配置组件](configuration.md)和[基线 B-04](mvp-baseline.md)。例如，先用 `soyo config init` 创建空模板，填入明确的模型 profile 和凭据环境变量名，再用 `soyo config check` 校验；此命令不会覆盖已有文件。默认配置文件位于 `$XDG_CONFIG_HOME/soyo/config.toml` 或 `~/.config/soyo/config.toml`，也可用 `--config PATH` 选择文件。模板不包含模型或真实凭据。运行示例（假定已经配置默认 profile）：
 
 ```sh
-saya run 'Inspect this workspace'
-saya run --prompt-file task.txt
-printf 'Inspect this workspace\n' | saya run --stdin
-saya --permissions manual run --interactive --stdin < task.txt
-saya chat
-saya session list
-saya session show SESSION_ID
-saya resume SESSION_ID
-saya run --session SESSION_ID 'Continue the task'
+soyo run 'Inspect this workspace'
+soyo run --prompt-file task.txt
+printf 'Inspect this workspace\n' | soyo run --stdin
+soyo --permissions manual run --interactive --stdin < task.txt
+soyo chat
+soyo session list
+soyo session show SESSION_ID
+soyo resume SESSION_ID
+soyo run --session SESSION_ID 'Continue the task'
 ```
 
 系统提示词在每次模型请求时注入系统时钟采样（UTC、本地时间及当时的 UTC 偏移）、宿主操作系统和架构、工作区及当前工作／权限模式。时钟可能随请求耗时变旧；不会推断用户地理位置或提供独立 `date` 工具。项目指令和 Skill 仍以带来源的数据提供。
 
-可通过 `--preferences-file PATH` 和 `--memory-file PATH` 显式向本次调用提供用户偏好及长期记忆文本，例如 `saya --preferences-file prefs.md --memory-file memory.md run 'Continue'`。各文件必须为 UTF-8、最多 64 KiB；内容会发送给所选模型，包含已配置凭据时拒绝发送。Saya 不自动发现、维护或保存这些文件，内容属于低信任上下文，不能授予权限。
+可通过 `--preferences-file PATH` 和 `--memory-file PATH` 显式向本次调用提供用户偏好及长期记忆文本，例如 `soyo --preferences-file prefs.md --memory-file memory.md run 'Continue'`。各文件必须为 UTF-8、最多 64 KiB；内容会发送给所选模型，包含已配置凭据时拒绝发送。Soyo 不自动发现、维护或保存这些文件，内容属于低信任上下文，不能授予权限。
 
 对明确支持 Anthropic Messages `cache_control` 的服务，可用 `--anthropic-prompt-cache` 或 `[profiles.NAME].prompt_cache = true` 在静态系统段、工具定义及最近历史断点设置 5 分钟 ephemeral 缓存断点（`anthropic_official_provider = true` 还会一并开启自适应思考摘要与 `max_tokens` 纯文本自动续写）；兼容服务默认全部关闭以兼容 DeepSeek Anthropic 接口。OpenAI 格式和 DeepSeek 使用服务端自动前缀缓存，不发送 Anthropic 专用字段。缓存命中取决于厂商、模型、最小 token 阈值、请求顺序和缓存可用性，不能保证命中或节省费用。动态时间之后的内容不能复用为跨请求静态前缀。
 
 三种单次输入方式互斥，没有隐式读取 stdin。`--interactive` 通过控制终端逐次确认工具调用，并回答 `ask_user` 澄清；无法打开控制终端时按非交互处理。非交互场景需要确认时返回退出码 3，需要澄清时显示问题并返回退出码 4。也可传入 `--approval-file PATH`；精确匹配的命令预授权仅在本次运行有效，并受 PLAN、显式 deny 和路径规则约束。
 
-`saya chat` 启动文本连续对话，没有默认 profile 时可在终端选择已配置的 profile。交互命令为 `/mode`、`/permissions`、`/status`、`/cancel`、`/jobs`、`/job ID`、`/cancel-job ID`、`/help`、`/exit`；使用 `//` 输入以 `/` 开头的普通文本。工作模式可在运行中请求切换，权限模式仅能在空闲时修改。第一次 Ctrl-C 取消当前运行并返回提示符；再次按 Ctrl-C 可强制退出，空闲时 Ctrl-C 退出。
+`soyo chat` 启动文本连续对话，没有默认 profile 时可在终端选择已配置的 profile。交互命令为 `/mode`、`/permissions`、`/status`、`/cancel`、`/jobs`、`/job ID`、`/cancel-job ID`、`/help`、`/exit`；使用 `//` 输入以 `/` 开头的普通文本。工作模式可在运行中请求切换，权限模式仅能在空闲时修改。第一次 Ctrl-C 取消当前运行并返回提示符；再次按 Ctrl-C 可强制退出，空闲时 Ctrl-C 退出。
 
 会话列表默认显示 20 条，`--page N` 翻页，查询可使用 `--output json`。单次运行支持 `--output json` 的最终结果和 `--output jsonl` 的有序事件；确认与澄清使用控制终端，机器输出不混入提示。JSONL 序号按会话递增，崩溃后可以有空号；配置了已知凭据时，为避免跨片段泄漏，文本事件会等待模型消息结束后脱敏输出。恢复沿用会话工作模式和 profile，但采用本次启动的权限，不重放工具或恢复授权。模型／协议变化要求新会话；相同模型的其他配置变更需 `--accept-config-change`。工作区移动后通过 `--cwd` 显式重新关联。
 
 为防止恢复过程在 PLAN 工作区产生数据库文件，恢复前使用会话安全检查点或只读预检；旧会话遗留 WAL 可通过校验后的内存快照预检。恢复会将中断的运行记为失败，区分未执行、等待确认、输入中断和结果不明，补齐工具调用结果并展示恢复提示，不自动重放。若执行结果未能保存，CLI 显示已观察结果并停止当前运行；交互会话也会退出，避免继续调度。
 
-后台任务仅属于当前运行：运行期间可通过 `/jobs` 查看，通过 `/job ID` 查询结果，并用 `/cancel-job ID` 请求取消；`session show` 包含已记录的后台状态。正常结束时会等待清理未完成任务并提示。崩溃恢复不重放任务：结果可能为已完成、未执行或未知，脱离托管的进程在 Saya 被强制终止后可能仍在运行，不能把未知结果当作已停止。原生执行层默认启用 macOS Seatbelt / Linux Bubblewrap + Seccomp + 代理隔离（详见[原生隔离](sandbox.md)与[配置组件](configuration.md)）。
+后台任务仅属于当前运行：运行期间可通过 `/jobs` 查看，通过 `/job ID` 查询结果，并用 `/cancel-job ID` 请求取消；`session show` 包含已记录的后台状态。正常结束时会等待清理未完成任务并提示。崩溃恢复不重放任务：结果可能为已完成、未执行或未知，脱离托管的进程在 Soyo 被强制终止后可能仍在运行，不能把未知结果当作已停止。原生执行层默认启用 macOS Seatbelt / Linux Bubblewrap + Seccomp + 代理隔离（详见[原生隔离](sandbox.md)与[配置组件](configuration.md)）。
 
 `session show` 的 `project_context_records` 提供各模型请求的项目指令／Skill 来源路径和哈希，不包含指令正文。已保存的旧会话可能没有此记录；恢复时始终重新读取当前来源。
 
 已知凭据及其常见 JSON 转义形式会从项目上下文、工具结果、会话记录、日志和输出中遮蔽；无法安全修改的不透明签名内容会使保存失败。未知业务秘密不在识别承诺内。配置了已知凭据时，文本模式也会等待完整模型消息后再输出，避免跨流片段泄露。
 
-运行详情中的 `run_metrics` 区分执行与审核请求及用量；未报告的用量为 null。显式配置费率后才提供标记为估算的成本，使用说明见[配置](configuration.md)。结果的 `artifacts` 只包含已确认成功的 Saya 文件写入；通用命令产生的文件不会猜测。警告与错误写入 `$XDG_STATE_HOME/saya/saya.log`（默认 `~/.local/state/saya/saya.log`），按 10 MiB 轮转并保留 5 个备份；日志不可写时输出简短诊断。
+运行详情中的 `run_metrics` 区分执行与审核请求及用量；未报告的用量为 null。显式配置费率后才提供标记为估算的成本，使用说明见[配置](configuration.md)。结果的 `artifacts` 只包含已确认成功的 Soyo 文件写入；通用命令产生的文件不会猜测。警告与错误写入 `$XDG_STATE_HOME/soyo/soyo.log`（默认 `~/.local/state/soyo/soyo.log`），按 10 MiB 轮转并保留 5 个备份；日志不可写时输出简短诊断。

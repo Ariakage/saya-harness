@@ -1,0 +1,13 @@
+[package]
+name = "soyo-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2.191"
+soyo-contract = { path = "../soyo-contract" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

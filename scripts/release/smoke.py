@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def main():
     if len(sys.argv) != 2:
-        print('usage: smoke.py PATH_TO_SAYA', file=sys.stderr)
+        print('usage: smoke.py PATH_TO_SOYO', file=sys.stderr)
         return 2
     binary = Path(sys.argv[1]).resolve(strict=True)
     marker = 'release_smoke_known_content_731'
@@ -45,7 +45,7 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        with tempfile.TemporaryDirectory(prefix='saya-release-smoke-') as directory:
+        with tempfile.TemporaryDirectory(prefix='soyo-release-smoke-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
             workspace.mkdir()

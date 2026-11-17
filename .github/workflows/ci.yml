@@ -50,11 +50,11 @@ jobs:
         if: startsWith(matrix.os, 'macos-')
         run: |
           test "$(sw_vers -productVersion | cut -d. -f1)" = 15
-          otool -l target/release/saya > "$RUNNER_TEMP/saya-otool.txt"
-          grep -Eq '^[[:space:]]*minos[[:space:]]+15\.0([[:space:]]|$)' "$RUNNER_TEMP/saya-otool.txt"
+          otool -l target/release/soyo > "$RUNNER_TEMP/soyo-otool.txt"
+          grep -Eq '^[[:space:]]*minos[[:space:]]+15\.0([[:space:]]|$)' "$RUNNER_TEMP/soyo-otool.txt"
       - name: Exercise release binary
         run: |
-          python3 scripts/release/smoke.py target/release/saya
-          python3 scripts/release/journey.py target/release/saya
-          python3 scripts/release/review_regressions.py target/release/saya
-          python3 scripts/release/tui_journey.py target/release/saya
+          python3 scripts/release/smoke.py target/release/soyo
+          python3 scripts/release/journey.py target/release/soyo
+          python3 scripts/release/review_regressions.py target/release/soyo
+          python3 scripts/release/tui_journey.py target/release/soyo

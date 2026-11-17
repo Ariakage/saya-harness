@@ -5,13 +5,13 @@
 ## 0.1.0 正式发布
 
 - 标签 `v0.1.0` 固定到 `eaade53649ffffa013e2503b894825e1b72f3dc1`。其运行时代码、提示词与 Cargo 依赖同审查修复 `854be1b` 一致，真实模型复测记录继续适用。
-- [正式构建 42383135600](https://github.com/Ariakage/saya-harness/actions/runs/42383135600) 在 Ubuntu 22.04 和 macOS 15 的两个原生架构分别通过 342 项 Rust 测试、四项发行工具测试及三项解包演练。最终包的源码、二进制、脚本哈希和环境记录已交叉核对。
-- [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0) 已公开发布并设为 Latest，正文和 `RELEASE-NOTES.md` 提供英文及简体中文。四包 SHA256SUMS 校验通过，七项资产全部回下载并逐字节比较通过，公开页面 HTTP 200。
+- [正式构建 42383135600](https://github.com/Ariakage/soyo-harness/actions/runs/42383135600) 在 Ubuntu 22.04 和 macOS 15 的两个原生架构分别通过 342 项 Rust 测试、四项发行工具测试及三项解包演练。最终包的源码、二进制、脚本哈希和环境记录已交叉核对。
+- [GitHub Release](https://github.com/Ariakage/soyo-harness/releases/tag/v0.1.0) 已公开发布并设为 Latest，正文和 `RELEASE-NOTES.md` 提供英文及简体中文。四包 SHA256SUMS 校验通过，七项资产全部回下载并逐字节比较通过，公开页面 HTTP 200。
 - 回下载的两个 macOS 程序在 macOS 27.2 ARM 主机再次通过版本检查和三项演练，Intel 包经 Rosetta 执行。最低 macOS 15 的证据来自上述原生工作流。包哈希与已知限制见[发行验证记录](../releases/release-validation.md)及[版本说明](../releases/release-notes-0.1.0.md)。
 
 ## P7 最终验收
 
-- 手动原生构建 [42381963924](https://github.com/Ariakage/saya-harness/actions/runs/42381963924) 的 Ubuntu 22.04 ARM／Intel、macOS 15 ARM／Intel 四项全部通过。每个平台通过 342 个 Rust 测试、发行工具测试及对解包二进制的三项离线演练。
+- 手动原生构建 [42381963924](https://github.com/Ariakage/soyo-harness/actions/runs/42381963924) 的 Ubuntu 22.04 ARM／Intel、macOS 15 ARM／Intel 四项全部通过。每个平台通过 342 个 Rust 测试、发行工具测试及对解包二进制的三项离线演练。
 - 四包下载后核对源码、包与二进制哈希、测试脚本哈希及实际系统证据，全部一致。macOS 实测版本分别为 Intel 15.7.9、ARM 15.8.2，Linux glibc 2.35。审查后的三协议真实模型复测六项通过。
 - DEV-031、DEV-032 和 P7 已完成。正式发布进一步从含最终双语说明的 `eaade53` 重新构建并通过相同验收，发布文件和标签核对结果见上方记录。
 
@@ -32,7 +32,7 @@
 
 - 项目负责人将 macOS 最低支持版本调整至 15；Linux 基线与四个架构目标不变。CI 构建目标和 macOS 最低环境验证脚本同步调整。
 - macOS ARM／Intel 以 `MACOSX_DEPLOYMENT_TARGET=15.0` 重新构建；在 macOS 27 ARM（Intel 使用 Rosetta）检查 Mach-O 声明、离线工具往返与交互恢复并通过。新候选复用先前 Linux 二进制，校验和和验证边界见[候选记录](../releases/release-validation.md)。
-- [GitHub Actions 42373322880](https://github.com/Ariakage/saya-harness/actions/runs/42373322880) 在 Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 全部通过；macOS job 实际检查 15.0 部署目标并执行离线工具往返与交互会话 smoke。CI 构建的二进制与此前本地候选不同；CI 不自动上传产物，尚不能把其结果归因于本地候选。DEV-031／032 与 P7 保持待验证。
+- [GitHub Actions 42373322880](https://github.com/Ariakage/soyo-harness/actions/runs/42373322880) 在 Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 全部通过；macOS job 实际检查 15.0 部署目标并执行离线工具往返与交互会话 smoke。CI 构建的二进制与此前本地候选不同；CI 不自动上传产物，尚不能把其结果归因于本地候选。DEV-031／032 与 P7 保持待验证。
 
 ## DEV-032 发行检查草案（历史记录）
 
@@ -139,7 +139,7 @@
 ## DEV-021 交付记录
 
 - 日期：2026-11-07；状态：完成（运行时与 CLI 受控验证）。[项目上下文说明](../project-context.md)列出加载位置、优先级和边界。
-- 变更：默认加载用户级和工作区约定指令、发现 Skill 元数据；工作区与同作用域 `.saya` 优先。来源采用固定目录句柄和 SHA-256；目标路径指令或来源变更时先刷新模型上下文，人工批准后及后台派发前再次检查。项目内容作为模型历史中的数据，不修改硬权限或运行配置。增加 `serde_yaml_ng` 解析 Skill 元数据；同步英文提示词与 `docs/prompt` 快照。
+- 变更：默认加载用户级和工作区约定指令、发现 Skill 元数据；工作区与同作用域 `.soyo` 优先。来源采用固定目录句柄和 SHA-256；目标路径指令或来源变更时先刷新模型上下文，人工批准后及后台派发前再次检查。项目内容作为模型历史中的数据，不修改硬权限或运行配置。增加 `serde_yaml_ng` 解析 Skill 元数据；同步英文提示词与 `docs/prompt` 快照。
 - 验证：macOS aarch64／Rust 1.99.1 下 `./scripts/check.sh` 通过格式、Clippy、215 项测试及 release 构建。测试覆盖 10 项来源／作用域／解析和符号链接边界、模型调用及前台／后台人工批准期间变化、三协议 CLI 请求中的数据传递及 Manual Approval 不被项目指令覆盖；提示词快照与运行时源逐字一致。
 - 范围：Skill 仅发现元数据，正文读取仍遵守路径权限；来源记录目前在运行内存中，跨进程保存与恢复属 P5。未验证真实模型对项目指令的遵循程度、其他平台或远端 CI；文件变化检查并非文件系统原子快照。
 
@@ -245,7 +245,7 @@
 - 日期：2026-11-06；状态：完成。
 - 变更：`scripts/check.sh` 统一格式、Clippy、测试及 release 构建；`.github/workflows/ci.yml` 配置四个原生 runner；`crates/saya-core/tests` 提供基于 `tempfile` 的临时工作区辅助与模型、核查、协议夹具目录。夹具目录尚无实现或协议数据。
 - 本地验证：macOS 27.2 aarch64、Rust 1.99.1 下运行 `./scripts/check.sh` 通过，临时工作区隔离和自动清理测试 1 项通过；`go run github.com/rhysd/actionlint/cmd/actionlint@latest .github/workflows/ci.yml`（actionlint 1.7.12）通过；其余产品行为尚无测试。
-- 远端验证：[GitHub Actions 运行 42119615149](https://github.com/Ariakage/saya-harness/actions/runs/42119615149) 对提交 `db90bc4b1d7e95d063a0fc474a18c9fcbb7fc929` 手动触发；Ubuntu 22.04 x86_64／aarch64、macOS 15 aarch64／x86_64 四项均通过格式、Clippy、测试和 release 构建。
+- 远端验证：[GitHub Actions 运行 42119615149](https://github.com/Ariakage/soyo-harness/actions/runs/42119615149) 对提交 `db90bc4b1d7e95d063a0fc474a18c9fcbb7fc929` 手动触发；Ubuntu 22.04 x86_64／aarch64、macOS 15 aarch64／x86_64 四项均通过格式、Clippy、测试和 release 构建。
 - 未验证：macOS 13 最低运行环境、发行产物及 smoke 测试仍由 DEV-031 验证；CI 通过不表示产品功能已实现或发行就绪。
 - 下一任务：DEV-003。
 

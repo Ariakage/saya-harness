@@ -2,7 +2,7 @@
 
 **更新于 2026-11-10。本文包含 F-01 至 F-20 的能力演进，已发行基础、当前实现与待开发增量分别记录。**
 
-本文回答“CLI MVP 之后，Saya Harness 还需要开发哪些能力”。基础扩展见[决策记录](decisions.md) D-028、D-036 至 D-038，本轮 Browser、上下文／插件细化及原生后端见 D-039 至 D-041，全局记忆编辑方向见 D-045。版本候选、依赖及验收见[后续开发计划](post-mvp-plan.md)。
+本文回答“CLI MVP 之后，Soyo Harness 还需要开发哪些能力”。基础扩展见[决策记录](decisions.md) D-028、D-036 至 D-038，本轮 Browser、上下文／插件细化及原生后端见 D-039 至 D-041，全局记忆编辑方向见 D-045。版本候选、依赖及验收见[后续开发计划](post-mvp-plan.md)。
 
 0.1.0 已发布，其行为以[完整基线](mvp-baseline.md)及后续决策为准。0.2.0 已交付 N0／N1 及交互与审查修复，范围和限制保留在[版本说明](releases/release-notes-0.2.0.md)。N2 已完成原生隔离、MCP 与远程 MCP 凭据基础；N3 的上下文、选定文件检查点、本地插件／Hooks 与全局记忆也已接共享运行入口，N2／N3均完成四平台固定源码验收。N4 Goal 已完成本机受控验收；N5 Browser 已交付定制捕获引擎、专用 VM 与原生 worker 链路并完成本机／VM／Linux ARM64 及 `5fff1c4` 四平台远端终验（非 ARM64 定制引擎分发待补齐）。[N2 验收](n2-validation.md)、[N3 验收](n3-validation.md#四平台最终验收)、[N4 验收](n4-validation.md)、[N5 验收](n5-validation.md)
 
@@ -70,8 +70,8 @@ flowchart TD
 | F-10 | 联网读取与浏览器 | 中 | F-01、F-02 | 获取网页资料，随后扩展到受控网页操作 |
 | F-11 | 多模态与附件 | 中 | F-01、F-06 | 使用图片、PDF 和其他附件完成任务 |
 | F-12 | 日志、追踪、回放与评估 | 近期及贯穿各批次 | MVP 事件与安全日志 | 五级诊断、关联追踪、失败定位与版本评估 |
-| F-13 | 稳定 SDK、服务与远程执行 | 后期 | F-01、F-02、F-08、F-12 | 将 Saya 嵌入其他产品，管理远端任务 |
-| F-14 | 默认 TUI 与后续 GUI | TUI 近期，GUI 后续 | 共享应用服务与事件；导出依赖 F-19 | 输入 saya 进入 TUI，管理会话、确认与工具 |
+| F-13 | 稳定 SDK、服务与远程执行 | 后期 | F-01、F-02、F-08、F-12 | 将 Soyo 嵌入其他产品，管理远端任务 |
+| F-14 | 默认 TUI 与后续 GUI | TUI 近期，GUI 后续 | 共享应用服务与事件；导出依赖 F-19 | 输入 soyo 进入 TUI，管理会话、确认与工具 |
 | F-15 | 平台与分发完善 | 后期 | F-01、F-14 | 扩展系统支持、安装、更新与发行体验 |
 | F-16 | 模型路由与故障切换 | 中 | F-06、F-12、F-18 | 按能力、预算和可用性选择已配置模型 |
 | F-17 | 项目索引与 LSP 代码智能 | 高 | F-01、F-06 | 基于符号、引用和诊断理解代码，减少全文扫描 |
@@ -97,7 +97,7 @@ N2 已实现以下范围，平台保证以实际验收证据为准。
 
 ## F-02 MCP Client
 
-**价值**：让 Saya 作为 MCP 客户端／宿主，使用外部工具，而不是让用户为每种服务编写 Saya 专用工具。
+**价值**：让 Soyo 作为 MCP 客户端／宿主，使用外部工具，而不是让用户为每种服务编写 Soyo 专用工具。
 
 当前实现与后续增量如下。
 
@@ -110,13 +110,13 @@ N2 已实现以下范围，平台保证以实际验收证据为准。
 
 当前固定官方 Rust SDK [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.9.0，首选协议 2026-07-28，兼容 2025-11-25。实现依据包含 [stdio／Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)、[HTTP 授权](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)与[工具规范](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)，实际协议矩阵与四平台验收证据见[N2 验收](n2-validation.md)。
 
-验收：至少一个本地和一个远程测试服务器完成发现、调用、拒绝、取消与失败路径；同名工具不会冲突，外部工具不会绕开 Saya 的权限。服务器工具 annotations 只作为声明性信息，不能单凭只读提示获得更高权限；这也符合工具规范对不可信 annotations 的要求。
+验收：至少一个本地和一个远程测试服务器完成发现、调用、拒绝、取消与失败路径；同名工具不会冲突，外部工具不会绕开 Soyo 的权限。服务器工具 annotations 只作为声明性信息，不能单凭只读提示获得更高权限；这也符合工具规范对不可信 annotations 的要求。
 
-Saya 自身对外提供 MCP Server 放在 F-13 的集成方向中，不与首轮 MCP Client 混成一个交付项。
+Soyo 自身对外提供 MCP Server 放在 F-13 的集成方向中，不与首轮 MCP Client 混成一个交付项。
 
-## F-03 Skills 与插件包（saya-plugin）
+## F-03 Skills 与插件包（soyo-plugin）
 
-插件系统命名为 `saya-plugin`。D-033 的目录发现基础已扩展为 Skill 按需激活及资源读取，本地目录插件支持校验、安装、启停、更新、卸载和恢复，MCP／Hook 入口通过当前权限与原生后端执行。N3 固定候选已完成四平台联合验收；归档／远程获取、签名与分发生态继续规划。[saya-plugin 规范](saya-plugin.md)、[N3 验收](n3-validation.md#四平台最终验收)
+插件系统命名为 `soyo-plugin`。D-033 的目录发现基础已扩展为 Skill 按需激活及资源读取，本地目录插件支持校验、安装、启停、更新、卸载和恢复，MCP／Hook 入口通过当前权限与原生后端执行。N3 固定候选已完成四平台联合验收；归档／远程获取、签名与分发生态继续规划。[soyo-plugin 规范](soyo-plugin.md)、[N3 验收](n3-validation.md#四平台最终验收)
 
 **价值**：将领域指令、工作流、工具连接与资源打包复用。
 
@@ -133,7 +133,7 @@ Saya 自身对外提供 MCP Server 放在 F-13 的集成方向中，不与首轮
 
 **价值**：在固定事件点执行格式化、验证、通知或组织级规则。
 
-N3 已接入 `run.started`、`run.finished`、`tool.before_dispatch`、`tool.finished` 四个事件及 observer／check、持久意图和有界执行，固定候选已完成四平台验收。下列自动化范围中的其他事件与规则配置继续按后续需求扩展。[当前 Hook 契约](saya-plugin.md#可执行入口和-hooks)
+N3 已接入 `run.started`、`run.finished`、`tool.before_dispatch`、`tool.finished` 四个事件及 observer／check、持久意图和有界执行，固定候选已完成四平台验收。下列自动化范围中的其他事件与规则配置继续按后续需求扩展。[当前 Hook 契约](soyo-plugin.md#可执行入口和-hooks)
 
 - 定义运行开始／结束、模型返回、工具执行前后、需要人工输入等事件。
 - 区分观察型 Hook 与可阻止操作的检查型 Hook，明确失败、超时和输出格式。
@@ -173,7 +173,7 @@ ContextBuilder、OutputStore、引用检索和自动／手动 Compact 已接入�
 
 **价值**：跨会话复用项目知识，同时让用户能够查看和纠正记忆。
 
-N3 已实现 `~/.saya/MEMORY.md` 与主题资料目录，提供默认读取／注入、五个模型工具、来源及workspace作用域、更正／遗忘、原子发布、历史回滚和 CLI／TUI 管理。DEV-084至DEV-089 已通过固定源码的四平台验收。语义检索、自动过期及更广的知识管理按后续需求扩展。[全局记忆](memory.md)、[N3 验收](n3-validation.md#四平台最终验收)
+N3 已实现 `~/.soyo/MEMORY.md` 与主题资料目录，提供默认读取／注入、五个模型工具、来源及workspace作用域、更正／遗忘、原子发布、历史回滚和 CLI／TUI 管理。DEV-084至DEV-089 已通过固定源码的四平台验收。语义检索、自动过期及更广的知识管理按后续需求扩展。[全局记忆](memory.md)、[N3 验收](n3-validation.md#四平台最终验收)
 
 - 区分会话历史、项目记忆和用户级偏好，不把保存所有日志当作记忆系统。
 - 支持记住、查看、编辑、删除和过期；每条知识带来源、作用域和更新时间。
@@ -243,18 +243,18 @@ DEV-040 至 DEV-042 已实现五级日志、tracing span、`--log-level`、本�
 
 ## F-13 稳定 SDK、服务与远程执行
 
-**价值**：让其他程序能够使用 Saya，并将执行位置从当前终端扩展出去。
+**价值**：让其他程序能够使用 Soyo，并将执行位置从当前终端扩展出去。
 
 - 先收敛嵌入式 SDK 的运行、控制、事件、错误与兼容策略，区别于 MVP 开发期可调整的内部 Rust API。
 - 再做本地服务与任务查询，支持客户端断开后可理解的任务生命周期。
 - 按需求增加远程 worker、工作区／产物同步、执行身份、凭据与配额隔离。
-- Saya 作为 MCP Server 对外提供任务能力属于这一层的可选入口，不能通过暴露接口绕开原权限与 sandbox。
+- Soyo 作为 MCP Server 对外提供任务能力属于这一层的可选入口，不能通过暴露接口绕开原权限与 sandbox。
 
 验收：一个外部程序能通过 SDK／服务执行和取消任务，断连、重连及远端失败不会丢失状态或重复副作用。
 
 ## F-14 TUI 与 GUI
 
-0.2.0 已交付默认 TUI，无子命令的 `saya` 在 stdin／stdout 均连接终端时进入全屏界面，文本交互使用 `saya chat`。N0 已建立共享 saya-app 与有界事件／交互桥，N1 已接入 saya-tui、TTY 路由和终端恢复。当前 N2 增加真实 MCP 生命周期与工具数展示，各轮交互增量按源码记录验证，见[TUI 文档](tui.md)和[开发进度](progress.md)。
+0.2.0 已交付默认 TUI，无子命令的 `soyo` 在 stdin／stdout 均连接终端时进入全屏界面，文本交互使用 `soyo chat`。N0 已建立共享 soyo-app 与有界事件／交互桥，N1 已接入 soyo-tui、TTY 路由和终端恢复。当前 N2 增加真实 MCP 生命周期与工具数展示，各轮交互增量按源码记录验证，见[TUI 文档](tui.md)和[开发进度](progress.md)。
 
 **价值**：让已形成的运行时能力有清楚的交互入口。
 
@@ -320,7 +320,7 @@ DEV-043 至 DEV-046 已实现并通过本机离线验收。
 
 ## F-20 Goal 目标编排
 
-现已提供 `/goal` 与 `saya goal ...`，保存目标、步骤、验收证据、预算和显式自动授权。手动与有限自动阶段复用有界 Run、原生隔离、Compact、检查点与独立持久 worker；多 Agent Goal 继续归 F-09。
+现已提供 `/goal` 与 `soyo goal ...`，保存目标、步骤、验收证据、预算和显式自动授权。手动与有限自动阶段复用有界 Run、原生隔离、Compact、检查点与独立持久 worker；多 Agent Goal 继续归 F-09。
 
 Goal 生命周期与四工作模式分别表达。每次工具执行经过当前权限与隔离边界，自动阶段需要显式有限授权及总预算，目标完成以验收证据判定。具体方案见[Goal 设计](goal.md)，任务为 DEV-069 至 DEV-074。
 

@@ -6,14 +6,14 @@
 
 | 调用 | 当前开发线行为 |
 | --- | --- |
-| `saya` | stdin、stdout 均连接终端时进入 TUI |
-| `saya --cwd PATH --mode code` | 使用现有全局参数进入 TUI |
-| `saya chat` | 进入已有文本交互会话 |
-| `saya run "TASK"` | 执行单次任务，按所选输出模式返回 |
-| `saya resume ID` | 使用已有文本会话恢复入口 |
-| `saya session ...`、`saya config ...` | 执行对应 CLI 子命令 |
-| `saya --help`、`saya --version` | 显示帮助或版本 |
-| 无子命令且无 TTY，或 stdin 来自管道 | 用法错误／2，stderr 提示显式使用 `saya run --stdin` 等入口 |
+| `soyo` | stdin、stdout 均连接终端时进入 TUI |
+| `soyo --cwd PATH --mode code` | 使用现有全局参数进入 TUI |
+| `soyo chat` | 进入已有文本交互会话 |
+| `soyo run "TASK"` | 执行单次任务，按所选输出模式返回 |
+| `soyo resume ID` | 使用已有文本会话恢复入口 |
+| `soyo session ...`、`soyo config ...` | 执行对应 CLI 子命令 |
+| `soyo --help`、`soyo --version` | 显示帮助或版本 |
+| 无子命令且无 TTY，或 stdin 来自管道 | 用法错误／2，stderr 提示显式使用 `soyo run --stdin` 等入口 |
 | 无子命令且选择 `--output json` 或 `jsonl` | 用法错误／2，提示选择具体 CLI 子命令 |
 
 ## 运行设置与扩展选择器
@@ -27,7 +27,7 @@
 - `/sandbox on|off|status`：`status`可随时只读查看；`on`选择平台原生Auto后端，`off`选择Host兼容后端，切换仅允许空闲时执行并影响后续Run，权限、显式deny与PLAN边界不变。
 - `/skills`、`/mcps`、`/plugins`：打开键盘选择器。↑↓或PgUp／PgDn移动，Enter选择，Esc关闭且保留聊天草稿。MCP服务Enter切换后续Run启用状态；Skill与Plugin Enter显示只读来源、状态和能力信息，不授予工具或执行权限。
 
-命令补全可见时，Enter直接执行选中的完整无参数命令。以空格结尾的参数脚手架只填入编辑器，仍需用户提供参数。`/resume ID` 继续从TUI恢复保存会话；CLI `saya resume ID` 继续进入文本聊天恢复入口。
+命令补全可见时，Enter直接执行选中的完整无参数命令。以空格结尾的参数脚手架只填入编辑器，仍需用户提供参数。`/resume ID` 继续从TUI恢复保存会话；CLI `soyo resume ID` 继续进入文本聊天恢复入口。
 
 运行期间输入普通消息会把用户补充作为引导，排队到下一个模型边界持久化，不替换原始任务，也不取消当前模型响应或工具。审批等待时也可提交引导；当前审批仍保持待决。队列限制为16条、累计256KiB，Run结束后迟到输入被拒绝而不会静默丢失到旧Run。
 
@@ -43,21 +43,21 @@
 
 ```text
 crates/
-  saya-core/   Agent 循环、协议、工具、权限、持久化
-  saya-app/    模型与会话准备、运行控制、事件与应用服务
-  saya-tui/    library，输入、状态、组件与终端绘制
-  saya-cli/    saya 可执行入口、参数路由、文本与机器输出
+  soyo-core/   Agent 循环、协议、工具、权限、持久化
+  soyo-app/    模型与会话准备、运行控制、事件与应用服务
+  soyo-tui/    library，输入、状态、组件与终端绘制
+  soyo-cli/    soyo 可执行入口、参数路由、文本与机器输出
 ```
 
-依赖方向为 `saya-cli -> saya-app / saya-tui`、`saya-tui -> saya-app`、`saya-app -> saya-core`。`saya-core` 保持宿主界面独立，发布产物使用统一 `saya` 可执行入口。
+依赖方向为 `soyo-cli -> soyo-app / soyo-tui`、`soyo-tui -> soyo-app`、`soyo-app -> soyo-core`。`soyo-core` 保持宿主界面独立，发布产物使用统一 `soyo` 可执行入口。
 
-DEV-038／039 已将模型组装、`build_runtime`、会话准备／恢复与 `events.rs` 的共享能力迁入 saya-app。会话写锁随应用会话句柄持有，UI 切换和退出由服务完成运行清理与锁释放。
+DEV-038／039 已将模型组装、`build_runtime`、会话准备／恢复与 `events.rs` 的共享能力迁入 soyo-app。会话写锁随应用会话句柄持有，UI 切换和退出由服务完成运行清理与锁释放。
 
 ## 命令、事件与背压
 
 界面向应用服务提交发送消息、请求模式、空闲时修改权限、回复确认／澄清、取消运行、新建／恢复会话及导出等命令。服务验证 ID、运行阶段和请求版本后调用现有 core 接口。
 
-事件包含持久业务事件、文本增量和应用状态。saya-app 提供 EventWriter／EventModel、带背压的事件 sink、确认／澄清桥和 RunCancellation，控制继续复用 core RuntimeHandle。ChannelSink 满队列投递最多等待一秒，超限返回 event_consumer_stalled，消费者关闭返回 event_consumer_closed。人工输入桥容量由调用者选择 1 至 1024，取消同时覆盖发送与回复等待。UI 侧 reducer 更新状态，渲染使用状态快照。
+事件包含持久业务事件、文本增量和应用状态。soyo-app 提供 EventWriter／EventModel、带背压的事件 sink、确认／澄清桥和 RunCancellation，控制继续复用 core RuntimeHandle。ChannelSink 满队列投递最多等待一秒，超限返回 event_consumer_stalled，消费者关闭返回 event_consumer_closed。人工输入桥容量由调用者选择 1 至 1024，取消同时覆盖发送与回复等待。UI 侧 reducer 更新状态，渲染使用状态快照。
 
 - 有界队列合并文本刷新，持久化序列及最终文本保留原有语义。
 - 审批、错误、模式生效、最终结果等关键变化可靠传递，或通过持久水位和快照重建。
@@ -76,7 +76,7 @@ DEV-038／039 已将模型组装、`build_runtime`、会话准备／恢复与 `e
 | 后台任务 | 当前运行的任务列表、输出与取消结果 |
 | 控制 | 当前／待切换模式、空闲权限设置、停止与退出 |
 
-界面以对话为主，工具、会话和诊断信息按需展开。左键拖选松开后立即复制完整选区，并在右上角短暂显示`✓ Copied`。候选快捷键为 Enter 发送、Alt+Enter 换行、Ctrl+P 命令面板、Ctrl+C／Cmd+C 复制选区、Ctrl+C 取消运行或清空输入、空闲时 Ctrl+D 退出。复制优先写本机系统剪贴板，并保留OSC52供远程终端使用；iTerm2等保留Cmd+C或右键Copy的终端不会让这些菜单决定Saya选区内容。
+界面以对话为主，工具、会话和诊断信息按需展开。左键拖选松开后立即复制完整选区，并在右上角短暂显示`✓ Copied`。候选快捷键为 Enter 发送、Alt+Enter 换行、Ctrl+P 命令面板、Ctrl+C／Cmd+C 复制选区、Ctrl+C 取消运行或清空输入、空闲时 Ctrl+D 退出。复制优先写本机系统剪贴板，并保留OSC52供远程终端使用；iTerm2等保留Cmd+C或右键Copy的终端不会让这些菜单决定Soyo选区内容。
 
 Diff、模型选择、Compact、MCP／Skills 和 Goal 面板已按底层能力开放；多 Agent 面板继续按后续进度实现。Goal 选择器、结构化计划、确认、手动／自动执行、暂停、核验和报告见[Goal 编排](goal.md)。
 
@@ -92,7 +92,7 @@ Extensions区显示当前实际接入状态，Skills显示当前请求发现的�
 
 用量指示取最近一次执行模型请求的 `input_tokens`，除以执行 profile 的 `context_window_tokens`。独立安全审核和运行累计用量分别处理。每次执行请求开始时清空旧值，完成后使用服务端报告值，估算值带 `~`，缺失时显示 `—`。新建、恢复或更换 profile 后等待新的请求用量。它反映已完成请求的输入占比，当前草稿及之后的工具输出尚未计入。环形字符按占比区间显示，超出窗口时标为 `>100%`。
 
-终端窗口标题使用 `Saya | 会话概括名`，概括名取会话首条用户任务，先进行已知凭据脱敏，合并空白后保留前80个 Unicode 字符。后续轮次沿用首条任务标题，`/new` 和 `/profile` 重置，恢复会话时重新派生。空会话为 `Saya | New session`。标题写入前移除终端控制与双向控制字符，并限制为512字节。
+终端窗口标题使用 `Soyo | 会话概括名`，概括名取会话首条用户任务，先进行已知凭据脱敏，合并空白后保留前80个 Unicode 字符。后续轮次沿用首条任务标题，`/new` 和 `/profile` 重置，恢复会话时重新派生。空会话为 `Soyo | New session`。标题写入前移除终端控制与双向控制字符，并限制为512字节。
 
 标题通过 OSC 2 设置，进入／退出时使用 xterm 标题栈保存／恢复。支持情况由终端或复用器决定，PTY 验收检查发送协议。重复标题不会反复写入。正常退出、错误和 panic 复用有界终端恢复路径。[xterm 控制序列](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
 
@@ -114,7 +114,7 @@ Chat采用 `reasoning_content`，Messages采用明文thinking块，Responses采�
 
 终端bracketed paste或拖入内容若解析为一个或多个现有本地文件，输入区使用 `[Image N]`、`[Audio N]`、`[Video N]` 与 `[File N]` 显示引用，不展示绝对路径。图片、音频、视频和其他文件分别使用不同高亮；同类型编号从当前草稿中保留的token之后继续。发送时token展开为对应的 `(<PATH>)` 引用；前三种媒体由 profile 能力控制并读取为协议content part，普通 File 仍向模型提供真实路径。会话恢复和窗口标题重新折叠为token。支持`file://`、引号路径及反斜杠转义空格。
 
-附件token在Editor中是原子单元：左右移动跨过整个token，token内部或边界上的Backspace／Delete移除完整附件，不会逐字符破坏占位符。`Ctrl+V`会优先读取系统剪贴板图片二进制，保存为私有文件到`~/.saya/paste_image/`，再插入`[Image N]`；PNG不可用时尝试TIFF，Linux使用Wayland／X11对应工具。剪贴板没有图片时回退为文本粘贴。图片读取上限32MiB，读取有5秒异步期限；普通文本和不存在的路径保持原样。
+附件token在Editor中是原子单元：左右移动跨过整个token，token内部或边界上的Backspace／Delete移除完整附件，不会逐字符破坏占位符。`Ctrl+V`会优先读取系统剪贴板图片二进制，保存为私有文件到`~/.soyo/paste_image/`，再插入`[Image N]`；PNG不可用时尝试TIFF，Linux使用Wayland／X11对应工具。剪贴板没有图片时回退为文本粘贴。图片读取上限32MiB，读取有5秒异步期限；普通文本和不存在的路径保持原样。
 
 ## 模式、权限与安全呈现
 
@@ -124,9 +124,9 @@ PLAN、BUILD、CODE、WORK 的选择来自用户操作。UI 同时展示当前�
 
 ## 显示文本与本地化目录
 
-TUI 用户可见文本统一维护在 `crates/saya-tui/src/i18n.rs`，按命令、状态、视图、选择器、工具、控制器、Memory、Markdown／图表回退和终端错误分组。命令语法、协议字段、内部状态键及稳定错误码不随显示文本迁移，界面代码通过同一目录映射或引用这些值，便于后续增加语言而不改变运行契约。
+TUI 用户可见文本统一维护在 `crates/soyo-tui/src/i18n.rs`，按命令、状态、视图、选择器、工具、控制器、Memory、Markdown／图表回退和终端错误分组。命令语法、协议字段、内部状态键及稳定错误码不随显示文本迁移，界面代码通过同一目录映射或引用这些值，便于后续增加语言而不改变运行契约。
 
-当前目录只覆盖 `saya-tui` 的显示层；CLI 输出、运行时提示词及公开协议诊断仍由各自边界维护。
+当前目录只覆盖 `soyo-tui` 的显示层；CLI 输出、运行时提示词及公开协议诊断仍由各自边界维护。
 
 ## 技术与终端恢复
 
@@ -142,15 +142,15 @@ DEV-047 已锁定 Ratatui0.30.2、Crossterm0.29.0 和已有 Tokio，输入／状
 
 ## 验收与迁移
 
-DEV-047 至 DEV-053 覆盖终端状态恢复、窗口变化、Unicode／窄屏、慢消费者、审批与取消竞态、后台任务、活跃会话锁、三协议流和断连。保持 `saya run` 的机器输出、退出码及恢复行为可验证。
+DEV-047 至 DEV-053 覆盖终端状态恢复、窗口变化、Unicode／窄屏、慢消费者、审批与取消竞态、后台任务、活跃会话锁、三协议流和断连。保持 `soyo run` 的机器输出、退出码及恢复行为可验证。
 
-候选程序在 macOS 15+、Linux glibc 2.35+ 的 x86_64／aarch64 运行 PTY 和解包验收。版本说明以中英双语解释默认入口从文本 chat 到 TUI 的变化，并列出 `saya chat` 的兼容入口。任务与依赖见[后续开发计划](post-mvp-plan.md)。
+候选程序在 macOS 15+、Linux glibc 2.35+ 的 x86_64／aarch64 运行 PTY 和解包验收。版本说明以中英双语解释默认入口从文本 chat 到 TUI 的变化，并列出 `soyo chat` 的兼容入口。任务与依赖见[后续开发计划](post-mvp-plan.md)。
 
 ## DEV-048 显示边界
 
 库内流式协调器通过共享EventWriter／EventModel消费运行事件，绘制仅在状态变化时进行，目标帧间隔33ms。每轮最多主动消费64条已到达事件，键盘与取消信号优先处理。异常或输入断开后取消所属运行，关闭事件接收并等待运行收尾，再退出终端guard。
 
-输入最多64KiB，单条正文256KiB，聊天正文总量2MiB及512条，截断与驱逐均显示标记。聊天保留最近10,000视觉行，详情最多保留2MiB／10,000逻辑行，超过显示范围有可见提示。100列起采用对话与详情双栏，窄屏详情占主区域。默认界面使用深色、英文角色标签，源文件为saya-tui的editor／view／controller模块。
+输入最多64KiB，单条正文256KiB，聊天正文总量2MiB及512条，截断与驱逐均显示标记。聊天保留最近10,000视觉行，详情最多保留2MiB／10,000逻辑行，超过显示范围有可见提示。100列起采用对话与详情双栏，窄屏详情占主区域。默认界面使用深色、英文角色标签，源文件为soyo-tui的editor／view／controller模块。
 
 ### Assistant Markdown 显示
 
@@ -160,7 +160,7 @@ Assistant正文使用CommonMark／GFM解析，支持普通段落、ATX／Setext�
 
 正文统一经过控制字符净化，字符实体保留源码。渲染属于视图投影，会话存储及导出使用原始消息。有界缓存按消息、源码指纹和宽度复用已排版结果，输入、结构、单元格和总显示量超限均有可见回退或截断提示。
 
-debug构建可运行 `saya tui-preview syntax`打开共享场景的交互预览，←／→切换、s／r选择source／render、q退出。`browser`场景显示浏览器截图产物的action、URL、page／document revision、masked、`model_image_capability`与artifact元数据。现有 `render_preview`继续提供离线文本和单元格JSON快照。布局场景覆盖审批与澄清弹窗、`/ps`后台任务、Help／工具详情侧栏、命令面板、补全、Memory，以及Skills／MCP／Plugins／Sessions选择器；命令示例见[预览入口](markdown-rendering.md#debug-预览)。
+debug构建可运行 `soyo tui-preview syntax`打开共享场景的交互预览，←／→切换、s／r选择source／render、q退出。`browser`场景显示浏览器截图产物的action、URL、page／document revision、masked、`model_image_capability`与artifact元数据。现有 `render_preview`继续提供离线文本和单元格JSON快照。布局场景覆盖审批与澄清弹窗、`/ps`后台任务、Help／工具详情侧栏、命令面板、补全、Memory，以及Skills／MCP／Plugins／Sessions选择器；命令示例见[预览入口](markdown-rendering.md#debug-预览)。
 
 ## DEV-049 运行控制
 
@@ -188,7 +188,7 @@ Ctrl+P打开居中的浮层命令面板，方向键选择、Enter执行选中项
 
 ### 斜杠命令补全
 
-当前开发线在输入框首字符为 `/`、单行且光标位于末尾时显示前缀匹配建议。候选覆盖工作模式、权限、会话与工具入口，以及导出格式和需要用户补齐参数的命令前缀。命令面板、帮助和补全共用[命令目录](../crates/saya-tui/src/commands.rs)。
+当前开发线在输入框首字符为 `/`、单行且光标位于末尾时显示前缀匹配建议。候选覆盖工作模式、权限、会话与工具入口，以及导出格式和需要用户补齐参数的命令前缀。命令面板、帮助和补全共用[命令目录](../crates/soyo-tui/src/commands.rs)。
 
 ↑／↓循环选择候选，Tab或末尾→将候选写入输入框，Enter执行输入框中的命令。灰色后缀表示建议文本，接受后才成为草稿。Esc隐藏建议并保留输入，Tab可以重新接受该前缀的建议，输入变化时重新筛选。无匹配的命令前缀按Tab保留原文。`//`字面量斜杠、多行和光标位于中间时使用常规编辑。
 

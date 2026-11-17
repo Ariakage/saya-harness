@@ -2,13 +2,13 @@
 
 依据 [D-033](decisions.md)，CLI 运行时默认发现以下约定来源，按列出顺序提供上下文；不存在的来源会跳过：
 
-1. 用户主目录 `~/.agents/AGENTS.md`、`~/.saya/AGENTS.md`。
-2. 工作区根目录 `AGENTS.md`、`.agents/AGENTS.md`、`.saya/AGENTS.md`。
+1. 用户主目录 `~/.agents/AGENTS.md`、`~/.soyo/AGENTS.md`。
+2. 工作区根目录 `AGENTS.md`、`.agents/AGENTS.md`、`.soyo/AGENTS.md`。
 3. 目标路径从工作区根到目标目录之间存在的 `AGENTS.md`，由外到内排列。
 
-用户级规则先于工作区规则，更具体的工作区规则适用对应路径；冲突时工作区优先。内容编码为 `saya_project_context_v1` 数据项，通过模型历史的 user 消息传递，而非系统指令；提示词要求模型把它视作上下文，不能把该要求视作提示注入的绝对防护。运行时独立执行权限、工作模式和工具策略，项目内容不能改变这些控制，也不能修改运行配置或授权。选定的配置文件与 `SAYA_*` 优先级仍按 [B-04](mvp-baseline.md) 处理，不自动合并 `.saya` 内的运行配置。
+用户级规则先于工作区规则，更具体的工作区规则适用对应路径；冲突时工作区优先。内容编码为 `saya_project_context_v1` 数据项，通过模型历史的 user 消息传递，而非系统指令；提示词要求模型把它视作上下文，不能把该要求视作提示注入的绝对防护。运行时独立执行权限、工作模式和工具策略，项目内容不能改变这些控制，也不能修改运行配置或授权。选定的配置文件与 `SOYO_*` 优先级仍按 [B-04](mvp-baseline.md) 处理，不自动合并 `.soyo` 内的运行配置。
 
-同时发现 `~/.agents/skills/*/SKILL.md`、`~/.saya/skills/*/SKILL.md`、工作区内 `.agents/skills/*/SKILL.md` 与 `.saya/skills/*/SKILL.md` 的名称、描述、来源路径和 SHA-256。支持 [Agent Skills 格式](https://agentskills.io/specification)中的 YAML frontmatter；同名 Skill 以工作区优先，同一作用域 `.saya` 优先于 `.agents`。无效名称、缺失或无效元数据会跳过；为限制解析风险，包含 YAML anchor／alias 的 frontmatter 不参与发现。`allowed-tools` 不授予任何工具权限。
+同时发现 `~/.agents/skills/*/SKILL.md`、`~/.soyo/skills/*/SKILL.md`、工作区内 `.agents/skills/*/SKILL.md` 与 `.soyo/skills/*/SKILL.md` 的名称、描述、来源路径和 SHA-256。支持 [Agent Skills 格式](https://agentskills.io/specification)中的 YAML frontmatter；同名 Skill 以工作区优先，同一作用域 `.soyo` 优先于 `.agents`。无效名称、缺失或无效元数据会跳过；为限制解析风险，包含 YAML anchor／alias 的 frontmatter 不参与发现。`allowed-tools` 不授予任何工具权限。
 
 发现本身仅将元数据发给模型，不自动注入 Skill 正文、安装插件、运行脚本或授予权限。N3 已接入显式 Skill 激活、资源读取和本地插件生命周期；这些操作继续经过当前工作模式、权限与能力授权，目录发现不替代它们。
 

@@ -90,12 +90,12 @@ just tui-preview attachments
 just tui-preview background
 just tui-preview memory
 just tui-preview skills
-./target/debug/saya tui-preview math
-./target/debug/saya tui-preview mermaid
-./target/debug/saya tui-preview footnotes --source
+./target/debug/soyo tui-preview math
+./target/debug/soyo tui-preview mermaid
+./target/debug/soyo tui-preview footnotes --source
 ```
 
-`saya tui-preview [SCENE] [--source]`由 `cfg(debug_assertions)`控制，默认开发构建提供该子命令。优化构建的命令目录按关闭debug assertions的配置生成。该入口使用共享的静态场景，在读取运行配置、初始化日志与打开会话之前分派。
+`soyo tui-preview [SCENE] [--source]`由 `cfg(debug_assertions)`控制，默认开发构建提供该子命令。优化构建的命令目录按关闭debug assertions的配置生成。该入口使用共享的静态场景，在读取运行配置、初始化日志与打开会话之前分派。
 
 共享场景同时覆盖UI壳层：`approval`、`question`与`background`展示居中弹窗，`attachments`展示图片／文件token高亮，`help`与`tool`展示详情侧栏，`commands`与`completion`展示覆盖层，`memory`及`skills`／`mcps`／`plugins`／`sessions`展示各自弹窗，`sidebar`展示宽屏信息栏。所有场景调用生产`view::draw`，不发起模型或存储请求。
 
@@ -104,9 +104,9 @@ just tui-preview skills
 现有render_preview例子共用相同场景，支持文本输出和包含单元格位置、颜色及修饰的JSON快照。
 
 ```sh
-MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-tui --example render_preview -- 140 60 syntax
-MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-tui --example render_preview -- 140 60 math --source
-MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p saya-tui --example render_preview -- 140 60 mermaid --json
+MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p soyo-tui --example render_preview -- 140 60 syntax
+MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p soyo-tui --example render_preview -- 140 60 math --source
+MACOSX_DEPLOYMENT_TARGET=15.0 cargo run -p soyo-tui --example render_preview -- 140 60 mermaid --json
 ```
 
 新增场景包含syntax、syntax-blocks、syntax-lists、syntax-links、footnotes、math、mermaid、mermaid-sequence、mermaid-state、mermaid-class、mermaid-er及mermaid-fallback。原有聊天、工具、审批和布局场景继续通过同一目录发现。

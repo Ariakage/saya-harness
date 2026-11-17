@@ -413,7 +413,7 @@ def main():
     source = options.source_root.resolve(strict=True)
     before_source = source_digest(source)
     actual_sha = sha256(binary)
-    report = {"schema_version": 1, "kind": "saya_n3_tui_acceptance", "status": "failed", "actual_journeys": 0,
+    report = {"schema_version": 1, "kind": "XKsoyo_n3_tui_acceptance", "status": "failed", "actual_journeys": 0,
               "platform": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
               "candidate": {"path": str(binary), "expected_sha256": options.expected_sha256, "sha256_before": actual_sha},
               "source": {"declared_commit": options.source_commit, "before": before_source,
@@ -425,7 +425,7 @@ def main():
         report["failure"] = {"type": "artifact_identity", "message": "candidate SHA differs from the selected artifact"}
         write_report(report_path, report)
         return 1
-    root = options.work_dir.resolve() if options.work_dir else Path(tempfile.mkdtemp(prefix="saya-n3-tui-"))
+    root = options.work_dir.resolve() if options.work_dir else Path(tempfile.mkdtemp(prefix="soyo-n3-tui-"))
     if options.work_dir:
         root.mkdir(parents=True, exist_ok=False)
     report["work_dir"] = str(root)

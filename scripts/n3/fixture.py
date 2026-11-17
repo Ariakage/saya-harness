@@ -180,7 +180,7 @@ class Provider:
         for message in request.get("messages", []):
             if message.get("role") == "system":
                 system += content_text(message.get("content"))
-        if "# Saya: independent operation review v1" in system:
+        if "# Soyo: independent operation review v1" in system:
             self.counts["review"] += 1
             return reply(self.protocol, text=json.dumps({"decision": "allow", "reason": "Controlled N3 fixture"}))
         for text in strings(request.get("messages", []) + request.get("input", [])):

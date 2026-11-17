@@ -71,12 +71,12 @@ def main():
         checksums = []
         for target in targets:
             payload = binaries[target]
-            name = 'saya-' + version + '-' + target + '.tar.gz'
+            name = 'soyo-' + version + '-' + target + '.tar.gz'
             info = {'schema_version': 1, 'version': version, 'target': target,
                     'declared_source_commit': commit,
                     'binary_sha256': hashlib.sha256(payload).hexdigest(),
                     'verification': 'See accompanying release validation record; this field is not a smoke-test result.'}
-            contents = [('saya', payload, 0o755), ('LICENSE', license_data, 0o644),
+            contents = [('soyo', payload, 0o755), ('LICENSE', license_data, 0o644),
                         ('README.md', readme, 0o644),
                         ('BUILD-INFO.json', (json.dumps(info, sort_keys=True, indent=2) + '\n').encode(), 0o644)]
             archive = args.output / name

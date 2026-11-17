@@ -16,7 +16,7 @@ VERSION = '0.0-controlled-fixture'
 PRIMARY = ('https://github.com/containers/bubblewrap/releases/download/'
            f'v{VERSION}/bubblewrap-{VERSION}.tar.xz')
 FALLBACK = 'https://api.github.com/repos/containers/bubblewrap/releases/assets/640310180'
-ARCHIVE_BYTES = b'SAYA_SYNTHETIC_BUBBLEWRAP_ARCHIVE\x00\xff\n'
+ARCHIVE_BYTES = b'SOYO_SYNTHETIC_BUBBLEWRAP_ARCHIVE\x00\xff\n'
 
 
 MOCK_COMMAND = r'''
@@ -27,7 +27,7 @@ from pathlib import Path
 import re
 import sys
 
-root = Path(os.environ['SAYA_INSTALL_FIXTURE'])
+root = Path(os.environ['SOYO_INSTALL_FIXTURE'])
 configuration = json.loads((root / 'control.json').read_text())
 tool, arguments = sys.argv[1], sys.argv[2:]
 entry = {'tool': tool, 'arguments': arguments}
@@ -80,7 +80,7 @@ def download_block():
 
 class InstallerDownloadTests(unittest.TestCase):
     def run_download(self, primary_status=0, fallback_status=0, fallback_bytes=ARCHIVE_BYTES):
-        temporary = tempfile.TemporaryDirectory(prefix='saya-installer-test-')
+        temporary = tempfile.TemporaryDirectory(prefix='soyo-installer-test-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         build_root = root / 'build root'
@@ -117,7 +117,7 @@ class InstallerDownloadTests(unittest.TestCase):
         # Extraction is a marker, while checksum verification hashes real bytes.
         result = subprocess.run(['/bin/sh', '-eu', '-c', prefix + download_block()],
                                 cwd=root, env={'PATH': str(executables),
-                                               'SAYA_INSTALL_FIXTURE': str(root),
+                                               'SOYO_INSTALL_FIXTURE': str(root),
                                                'PYTHONUTF8': '1'},
                                 capture_output=True, text=True, timeout=10)
         log = root / 'commands.jsonl'
@@ -151,7 +151,7 @@ class InstallerDownloadTests(unittest.TestCase):
         self.assertTrue((root / 'extraction-reached').is_file())
 
     def test_fallback_bad_checksum_stops_before_extraction(self):
-        corrupted = b'SAYA_SYNTHETIC_CORRUPTED_ARCHIVE'
+        corrupted = b'SOYO_SYNTHETIC_CORRUPTED_ARCHIVE'
         result, root, archive, commands = self.run_download(primary_status=22, fallback_bytes=corrupted)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([entry['tool'] for entry in commands], ['curl', 'curl', 'sha256sum'])

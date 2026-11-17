@@ -12,7 +12,7 @@
 4. 完成聚焦、完整的改动并同步相关文档，按[路线图](roadmap.md)中的完成标准验证。
 5. 在进度记录中更新状态、证据、阻碍与下一任务，报告实际结果及未验证范围。
 
-工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，MVP workspace 为 saya-core＋saya-cli，DEV-038 增加共享应用服务 saya-app，DEV-047 增加 saya-tui library，二进制 saya，许可证 MIT。具体依赖补丁版本由 Cargo.lock 记录。
+工程与全部产品契约已由 D-027 确认，见[完整基线](mvp-baseline.md)。固定 Rust 1.99.1／edition 2024，MVP workspace 为 soyo-core＋soyo-cli，DEV-038 增加共享应用服务 soyo-app，DEV-047 增加 soyo-tui library，二进制 soyo，许可证 MIT。具体依赖补丁版本由 Cargo.lock 记录。
 
 根目录 [LICENSE](../LICENSE)、.gitignore、workspace 和工具链固定文件已建立。MVP 的实施定义为 P0 至 P7、DEV-001 至 DEV-037，新增任务为 DEV-038 至 DEV-089。各版本依据对应任务和实际验收维护状态，原 CLI／core 基线见 B-02。
 
@@ -37,7 +37,7 @@ cargo install just --locked
 | `just clippy` | 全workspace、全目标严格Clippy |
 | `just test` | 全workspace测试，可追加过滤条件和测试参数 |
 | `just build`／`just release` | 开发／优化构建，可追加Cargo构建参数 |
-| `just run` | 运行开发版Saya，可追加CLI参数 |
+| `just run` | 运行开发版Soyo，可追加CLI参数 |
 | `just prompt code` | 输出指定场景的完整离线模型请求，可省略为 `all` |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
 | `just render-preview 140 60 syntax` | 输出离线场景快照，可追加 `--source` 或 `--json` |
@@ -55,7 +55,7 @@ just prompt all | jq '.requests.compact.request.instructions'
 just tui-preview footnotes --source
 just render-preview 140 60 mermaid --json
 just release
-just smoke target/release/saya
+just smoke target/release/soyo
 RUST_TEST_THREADS=4 just check
 ```
 
@@ -87,9 +87,9 @@ cargo build --workspace --release --locked
 
 GitHub Actions 使用 Rust 1.99.1 与相同的检查脚本，配置原生 runner：Ubuntu 22.04 x86_64／aarch64（`ubuntu-22.04`／`ubuntu-22.04-arm`），macOS 15 aarch64／x86_64（`macos-15`／`macos-15-intel`）；macOS 构建设置最低部署版本 15.0，并在两种 macOS runner 执行离线工具往返与交互会话 smoke。四个 runner 均执行离线 release smoke；不自动上传构建产物。runner 可用性与结果须以实际运行记录为准；运行记录未覆盖的候选仍需独立验证。
 
-核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 用于运行时、异步 HTTP、工具与 CLI。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/saya-core/tests/support` 包含辅助函数，`crates/saya-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
+核心使用 serde／serde_json 表达结构化协议数据，uuid 生成 UUIDv7 会话与运行标识；Tokio 用于运行时、异步 HTTP、工具与 CLI。版本在 Cargo.lock 中固定。测试使用 `tempfile` 开发依赖提供临时工作区；`crates/soyo-core/tests/support` 包含辅助函数，`crates/soyo-core/tests/fixtures` 为模型、核查和三协议预留离线数据目录。目录本身不表示替身或协议已实现。
 
-Linux 的 `browser_environment_binds_install_read_only_and_private_directories` 在独立测试进程中固定真实 CLI 镜像，再实际执行 Bubblewrap payload；缺少程序或原生隔离前提时明确失败。完整 workspace 测试会构建 Cargo profile 下的 `saya`；单独运行 core 测试或固定测试程序时，先构建 CLI，或显式设置 `SAYA_TEST_EXECUTABLE` 为兼容 CLI 的绝对路径。该变量仅供测试夹具使用，不是产品配置，也不能以测试 harness 或简化 bootstrap 代替真实 launcher。
+Linux 的 `browser_environment_binds_install_read_only_and_private_directories` 在独立测试进程中固定真实 CLI 镜像，再实际执行 Bubblewrap payload；缺少程序或原生隔离前提时明确失败。完整 workspace 测试会构建 Cargo profile 下的 `soyo`；单独运行 core 测试或固定测试程序时，先构建 CLI，或显式设置 `SOYO_TEST_EXECUTABLE` 为兼容 CLI 的绝对路径。该变量仅供测试夹具使用，不是产品配置，也不能以测试 harness 或简化 bootstrap 代替真实 launcher。
 
 验收 Shell 使用 `umask 022`。部分内存／日志测试夹具使用普通目录创建 API，`umask 0002` 会产生组可写目录；生产权限检查应继续拒绝这些目录，不能通过放宽权限规则使测试通过。需要时仅对本轮检查设置 umask，不修改用户已有数据权限：
 
@@ -101,13 +101,13 @@ CLI 功能实现后提供与 B-03 一致的安装、配置和启动说明；未�
 
 ## 只读工具开发状态
 
-`crates/saya-core/src/tools/read.rs` 提供只读文件／目录与搜索 API、`Tool` 适配器和可配置上限。它使用 cap-std 根目录句柄、ignore／globset、regex、sha2 及 Tokio 阻塞线程池；具体版本见 Cargo.lock。搜索读取 `.gitignore` 时同样受路径根约束。工具执行前由调度和权限层授权，已接入 CLI。根检查不限制子进程，也不等同于操作系统沙箱。
+`crates/soyo-core/src/tools/read.rs` 提供只读文件／目录与搜索 API、`Tool` 适配器和可配置上限。它使用 cap-std 根目录句柄、ignore／globset、regex、sha2 及 Tokio 阻塞线程池；具体版本见 Cargo.lock。搜索读取 `.gitignore` 时同样受路径根约束。工具执行前由调度和权限层授权，已接入 CLI。根检查不限制子进程，也不等同于操作系统沙箱。
 
-`crates/saya-core/src/tools/write.rs` 实现受授权钩子保护的单文件写入与统一补丁，使用 diffy 校验单文件补丁，要求执行前记录意图。CLI 使用持久化与权限调度后执行真实工作区副作用；内存存储仅供受控测试。版本检查在替换前执行；现有文件的检查与替换之间不具备对任意外部并发写入的原子比较交换保证。
+`crates/soyo-core/src/tools/write.rs` 实现受授权钩子保护的单文件写入与统一补丁，使用 diffy 校验单文件补丁，要求执行前记录意图。CLI 使用持久化与权限调度后执行真实工作区副作用；内存存储仅供受控测试。版本检查在替换前执行；现有文件的检查与替换之间不具备对任意外部并发写入的原子比较交换保证。
 
-`crates/saya-core/src/tools/exec.rs` 提供直接 argv 进程适配器，依赖 Tokio process 与 nix 信号；CLI 可在权限和持久化调度后启动命令；内存存储仅供受控测试。进程组清理并不构成文件系统、网络或主动脱离进程组的后代隔离。
+`crates/soyo-core/src/tools/exec.rs` 提供直接 argv 进程适配器，依赖 Tokio process 与 nix 信号；CLI 可在权限和持久化调度后启动命令；内存存储仅供受控测试。进程组清理并不构成文件系统、网络或主动脱离进程组的后代隔离。
 
-`crates/saya-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。`crates/saya-core/src/review.rs` 已提供与模型替身验证的独立核查组件；三协议和单次许可已接入 core，调用者共享运行预算并在派发前重查。
+`crates/soyo-core/src/permissions.rs` 提供权限规则解析和纯决策；`PolicyGate` 对需要人工或模型判断的操作失败关闭。`crates/soyo-core/src/review.rs` 已提供与模型替身验证的独立核查组件；三协议和单次许可已接入 core，调用者共享运行预算并在派发前重查。
 
 ## 核心验证要求
 
@@ -128,19 +128,19 @@ Agent 循环的测试优先使用可控的模型与工具替身，覆盖直接�
 先保留待比较程序并提供测试凭据：
 
 ```bash
-. .saya/local/deepseek.env
+. .soyo/local/deepseek.env
 ```
 
 每个候选可执行多轮独立运行；以下命令对10个场景各重复3次，最多并发6个运行，并保存失败工具诊断：
 
 ```bash
-python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/saya-candidate --label candidate-b1 --output target/prompt-r2/candidate-b1-r3.json --repeat 3 --jobs 6 --diagnostics
+python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/soyo-candidate --label candidate-b1 --output target/prompt-r2/candidate-b1-r3.json --repeat 3 --jobs 6 --diagnostics
 ```
 
 同一程序应至少再运行一批，区分模型波动与稳定趋势：
 
 ```bash
-python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/saya-candidate --label candidate-b2 --output target/prompt-r2/candidate-b2-r3.json --repeat 3 --jobs 6 --diagnostics
+python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/soyo-candidate --label candidate-b2 --output target/prompt-r2/candidate-b2-r3.json --repeat 3 --jobs 6 --diagnostics
 ```
 
 已有报告可离线比较，不会发起模型请求：
@@ -170,7 +170,7 @@ TUI的CommonMark／GFM使用pulldown-cmark与一致的Unicode脚注标签匹配�
 原生验收的临时根优先使用显式 `TMPDIR`；未设置时保留 `/var/tmp` 默认。工作区约束下应选用仓库内已存在的短目录，以满足 Unix socket 路径上限；不可写时明确失败，不自行回退到目录外。编译失败仍写出机器可读诊断并清理临时目录。
 
 ```sh
-python3 scripts/n2/native_acceptance.py target/release/saya --benchmark-samples 3
+python3 scripts/n2/native_acceptance.py target/release/soyo --benchmark-samples 3
 python3 scripts/n2/verify_performance.py target/n2/acceptance/native-evidence.json --samples 3
 python3 scripts/n2/test_native_acceptance.py
 python3 scripts/n2/test_verify_performance.py
@@ -190,9 +190,9 @@ python3 scripts/n2/test_verify_performance.py
 先执行 `just check` 与 `just test-tooling`；本机测试并发较高时使用 `RUST_TEST_THREADS=4 just check` 控制文件系统争用。正常CLI和TUI使用显式程序SHA及源码commit运行，脚本保留实际源文件摘要、模型请求／工具配对、SQLite和终端恢复结果。三协议均使用本地受控HTTP替身。
 
 ```sh
-python3 -B scripts/n3/acceptance.py /absolute/path/to/saya --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/cli.json
-python3 -B scripts/n3/tui_acceptance.py /absolute/path/to/saya --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/tui.json
-SAYA_TEST_EXECUTABLE=/absolute/path/to/saya cargo test -p saya-core --locked --test plugin_services -- --ignored --test-threads=1
+python3 -B scripts/n3/acceptance.py /absolute/path/to/soyo --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/cli.json
+python3 -B scripts/n3/tui_acceptance.py /absolute/path/to/soyo --expected-sha256 FULL_SHA256 --source-commit FULL_COMMIT --report target/n3/tui.json
+SOYO_TEST_EXECUTABLE=/absolute/path/to/soyo cargo test -p soyo-core --locked --test plugin_services -- --ignored --test-threads=1
 ```
 
 原生插件套件必须实际执行8项，普通测试中的ignored状态不计入原生验收。GitHub的 `N3 native acceptance` 工作流按完整source_sha在四个原生runner执行源码门禁、基线、既有隔离／性能／MCP及N3联合任务，保留成功与失败证据14天。候选、源码、架构或必需步骤状态不匹配时验收失败。[逐项状态](n3-validation.md)

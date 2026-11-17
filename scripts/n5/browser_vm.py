@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit dedicated Colima VM lifecycle for the Saya browser worker.
+"""Explicit dedicated Colima VM lifecycle for the Soyo browser worker.
 
 This tool is the only place where VM creation, installation and copying
 happen. A model Run never downloads or installs anything. The runtime provider
@@ -140,7 +140,7 @@ if [ ! -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
 fi
 sudo -n true >/dev/null 2>&1 || { echo "apparmor-userns=sudo-unavailable" >&2; exit 4; }
 printf '%s\n' 'kernel.apparmor_restrict_unprivileged_userns=0' \
-  | sudo -n tee /etc/sysctl.d/99-saya-browser-userns.conf >/dev/null
+  | sudo -n tee /etc/sysctl.d/99-soyo-browser-userns.conf >/dev/null
 sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
 restrict=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)
 [ "$restrict" = "0" ] || { echo "apparmor-userns=restricted" >&2; exit 4; }
@@ -501,8 +501,8 @@ def strict_ssh_config(args: argparse.Namespace) -> str:
     known_hosts = validate_read_file(args.known_hosts, "known_hosts")
     return "\n".join(
         [
-            "# Saya dedicated browser VM. Contains no secret values.",
-            f"Host saya-browser-vm {host}",
+            "# Soyo dedicated browser VM. Contains no secret values.",
+            f"Host soyo-browser-vm {host}",
             f"  HostName {host}",
             f"  User {args.user}",
             f"  Port {args.port}",
@@ -621,7 +621,7 @@ def scp_argv(
 
 
 def remote_command(script: str, arguments: list[str]) -> str:
-    return " ".join(["sh", "-c", shlex.quote(script), "saya-browser-vm"] + [shlex.quote(value) for value in arguments])
+    return " ".join(["sh", "-c", shlex.quote(script), "soyo-browser-vm"] + [shlex.quote(value) for value in arguments])
 
 
 def run_command(argv: list[str], input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
@@ -656,7 +656,7 @@ def require_fresh_remote_root(args, config_path, root: str) -> None:
 
 def remote_installation_trees(args, config_path, layout: dict) -> dict:
     # Read at call time: the shared probe is a repository asset, not user input.
-    probe_path = Path(__file__).resolve().parents[2] / "crates/saya-core/src/browser/worker/installation_probe.js"
+    probe_path = Path(__file__).resolve().parents[2] / "crates/soyo-core/src/browser/worker/installation_probe.js"
     try:
         source = probe_path.read_bytes()
     except OSError as error:
@@ -1124,7 +1124,7 @@ def command_provision(args: argparse.Namespace) -> dict:
     config = strict_ssh_config(args)
     temporary_root = Path(__file__).resolve().parents[2] / "target/n5"
     temporary_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="saya-browser-vm-", dir=temporary_root) as temporary:
+    with tempfile.TemporaryDirectory(prefix="soyo-browser-vm-", dir=temporary_root) as temporary:
         node_snapshot = Path(temporary) / "node-bin"
         node_identity = snapshot_node(node_source, node_snapshot)
         local_trees["node"] = installation_tree(node_snapshot)
@@ -1274,7 +1274,7 @@ def command_check(args: argparse.Namespace, manifest_bytes: bytes | None = None)
     validate_read_file(args.known_hosts, "known_hosts")
     layout = remote_layout(args)
     config = strict_ssh_config(args)
-    with tempfile.TemporaryDirectory(prefix="saya-browser-vm-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="soyo-browser-vm-") as temporary:
         config_path = Path(temporary) / "ssh_config"
         config_path.write_text(config, encoding="utf-8")
         os.chmod(config_path, 0o600)
@@ -1326,7 +1326,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--port", type=int, required=True)
         command.add_argument("--identity-file", type=Path, required=True)
         command.add_argument("--known-hosts", type=Path, required=True)
-        command.add_argument("--remote-root", default="/opt/saya")
+        command.add_argument("--remote-root", default="/opt/soyo")
         command.add_argument("--chromium-dir-name", default="chrome-headless-shell-linux64")
         command.add_argument(
             "--manifest-sha256", required=(name == "check")

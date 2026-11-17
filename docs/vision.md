@@ -2,9 +2,9 @@
 
 ## 已确认的定位
 
-Saya Harness 是使用 Rust 构建的 Agent Runtime Harness。
+Soyo Harness 是使用 Rust 构建的 Agent Runtime Harness。
 
-Saya 负责驱动 Agent 循环：调用模型、处理工具请求、执行工具、提交工具结果，然后继续下一轮。首阶段交付 CLI，之后扩展 TUI 和 GUI。
+Soyo 负责驱动 Agent 循环：调用模型、处理工具请求、执行工具、提交工具结果，然后继续下一轮。首阶段交付 CLI，之后扩展 TUI 和 GUI。
 
 CLI MVP 同时面向编程任务与通用任务，包含 PLAN、BUILD、CODE、WORK 四个可切换的工作模式，新会话默认 WORK。PLAN 负责需求分析与规划，BUILD 负责端到端实现和交付，CODE 聚焦代码编写、修改与调试，WORK 负责通用任务执行。
 

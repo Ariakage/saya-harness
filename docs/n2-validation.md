@@ -16,7 +16,7 @@
 
 ## 最终四平台验收
 
-2026-11-09，固定源码 `aaec8c5b81ddb464320fd46f6dc6dd00a0a547f2` 的源码CI与N2验收均以四个原生job成功结束。所有平台完整workspace格式、严格Clippy、Rust测试、优化构建及49项Python工具回归通过。验收使用各平台从该固定源码构建的程序。[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42607697386)、[N2原生验收](https://github.com/Ariakage/saya-harness/actions/runs/42607698976)
+2026-11-09，固定源码 `aaec8c5b81ddb464320fd46f6dc6dd00a0a547f2` 的源码CI与N2验收均以四个原生job成功结束。所有平台完整workspace格式、严格Clippy、Rust测试、优化构建及49项Python工具回归通过。验收使用各平台从该固定源码构建的程序。[源码CI](https://github.com/Ariakage/soyo-harness/actions/runs/42607697386)、[N2原生验收](https://github.com/Ariakage/soyo-harness/actions/runs/42607698976)
 
 | 实际环境 | Rust测试 | 原生用例 | MCP／OAuth | TUI旅程 | 性能v2判据 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -42,10 +42,10 @@ Actions保留期为14天，本轮artifact于2026-11-23到期。下表记录API�
 
 | Runner | Artifact ID | API归档SHA-256 |
 | --- | --- | --- |
-| `ubuntu-22.04` | [13669876303](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13669876303) | `dd2b97c65dfd146e064470510f80ccfa715d723eebf5db8d80d53d74f1b2b5c6` |
-| `ubuntu-22.04-arm` | [13668814442](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13668814442) | `82d4e4733bf4952a8e5209c312a2bd85e8908bd36bec6aa22323597d3ca5f7df` |
-| `macos-15` | [13669387523](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13669387523) | `5dd7670089ab3170e340b793fbfe7f2a66fa9233b0f3d7ccf800b9e42f2c2cf3` |
-| `macos-15-intel` | [13669744661](https://github.com/Ariakage/saya-harness/actions/runs/42607698976/artifacts/13669744661) | `4cc70cbb1491372d476cb4c084960c20e2f1e2de26dc55b11aa557b9835d13a0` |
+| `ubuntu-22.04` | [13669876303](https://github.com/Ariakage/soyo-harness/actions/runs/42607698976/artifacts/13669876303) | `dd2b97c65dfd146e064470510f80ccfa715d723eebf5db8d80d53d74f1b2b5c6` |
+| `ubuntu-22.04-arm` | [13668814442](https://github.com/Ariakage/soyo-harness/actions/runs/42607698976/artifacts/13668814442) | `82d4e4733bf4952a8e5209c312a2bd85e8908bd36bec6aa22323597d3ca5f7df` |
+| `macos-15` | [13669387523](https://github.com/Ariakage/soyo-harness/actions/runs/42607698976/artifacts/13669387523) | `5dd7670089ab3170e340b793fbfe7f2a66fa9233b0f3d7ccf800b9e42f2c2cf3` |
+| `macos-15-intel` | [13669744661](https://github.com/Ariakage/soyo-harness/actions/runs/42607698976/artifacts/13669744661) | `4cc70cbb1491372d476cb4c084960c20e2f1e2de26dc55b11aa557b9835d13a0` |
 
 ### 最终性能测量
 
@@ -93,7 +93,7 @@ core已提供统一准备环境、能力等级、固定策略身份和清理接�
 
 隔离源码快照完成格式、workspace严格Clippy、823项Rust测试与优化构建，日志为 `target/n2/dev056-workspace-final2.log`。macOS回归确认宿主进程参数查询被显式拒绝、私有launcher保留自身FD处理能力、标准根symlink可解析，代理仅允许TCP。正常CLI的UDP同端口及宿主进程查询对抗将随DEV-057重跑。
 
-首次Linux原生CI已保留实际失败证据。原Seccomp阻止匿名socketpair，Tokio信号驱动初始化因此panic，原始日志在 `target/n2/research/dev055-direct-linux-{arm,x86}-ci.log`。修复仅放行AF_UNIX的已连接stream pair与必要flags，其余Unix socket创建保持受限，并补充真实Linux重定向／SCM_RIGHTS探针。后续源码 `b15bbe8` 四平台CI全部通过，包含两种Linux架构的真实原生回归，证据为 `target/n2/dev056-four-platform-ci.json`。[CI记录](https://github.com/Ariakage/saya-harness/actions/runs/42555064671)
+首次Linux原生CI已保留实际失败证据。原Seccomp阻止匿名socketpair，Tokio信号驱动初始化因此panic，原始日志在 `target/n2/research/dev055-direct-linux-{arm,x86}-ci.log`。修复仅放行AF_UNIX的已连接stream pair与必要flags，其余Unix socket创建保持受限，并补充真实Linux重定向／SCM_RIGHTS探针。后续源码 `b15bbe8` 四平台CI全部通过，包含两种Linux架构的真实原生回归，证据为 `target/n2/dev056-four-platform-ci.json`。[CI记录](https://github.com/Ariakage/soyo-harness/actions/runs/42555064671)
 
 上述823项本机测试的操作系统为macOS27.2 ARM。Linux修复已有CI回归证据，委派cgroup及最终默认入口仍待完整原生验收。
 
@@ -105,7 +105,7 @@ core已提供统一准备环境、能力等级、固定策略身份和清理接�
 
 SDK需要的reqwest0.13单独服务于MCP，原有模型接入继续使用其已验证的0.12依赖。async-trait用于SDK凭据存储接口，futures和sse-stream用于有界流处理。
 
-隔离源码快照完成格式、workspace严格Clippy、873项Rust测试及优化构建，日志为 `target/n2/dev058-workspace.log`。组件提交 `e69e6c1` 四平台CI全部通过，证据为 `target/n2/dev058-four-platform-ci.json`。[CI记录](https://github.com/Ariakage/saya-harness/actions/runs/42557002296)
+隔离源码快照完成格式、workspace严格Clippy、873项Rust测试及优化构建，日志为 `target/n2/dev058-workspace.log`。组件提交 `e69e6c1` 四平台CI全部通过，证据为 `target/n2/dev058-four-platform-ci.json`。[CI记录](https://github.com/Ariakage/soyo-harness/actions/runs/42557002296)
 
 正常应用配置、默认后端、服务生命周期和界面接线在DEV-059阶段整合，最终四平台程序随后统一验收。
 
@@ -164,7 +164,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/n2/mcp_acceptance.py target/release/sa
 
 ## 首次最终源码验证与Linux工具链兼容
 
-`97b40f96aad20751e3f803d9e0b0904fee90e175` 已正常推送并启动源码CI与N2四平台验收。Linux两架构的完整门禁均在BUILD／CODE夹具失败，Rust编译器在启动时报告无法加载`librustc_driver`并退出127，后续原生／MCP步骤因门禁失败跳过。原始日志为 `target/n2/remote-review/linux-arm-job-128982907369.log` 与 `linux-x86-job-128982907119.log`。[首次验收](https://github.com/Ariakage/saya-harness/actions/runs/42562872298)
+`97b40f96aad20751e3f803d9e0b0904fee90e175` 已正常推送并启动源码CI与N2四平台验收。Linux两架构的完整门禁均在BUILD／CODE夹具失败，Rust编译器在启动时报告无法加载`librustc_driver`并退出127，后续原生／MCP步骤因门禁失败跳过。原始日志为 `target/n2/remote-review/linux-arm-job-128982907369.log` 与 `linux-x86-job-128982907119.log`。[首次验收](https://github.com/Ariakage/soyo-harness/actions/runs/42562872298)
 
 工具链目录已进入可读视图且argv已指定`--sysroot`。根据glibc通过`/proc/self/exe`解析origin的实现，缺少该路径可导致相对动态库定位失败。当前候选为隔离内编译命令显式设置工具链`lib`路径，后端策略保留。原因推断与Linux修复结果分别记录。[glibc实现记录](https://sourceware.org/pipermail/glibc-cvs/2022q4/081599.html)
 
@@ -212,7 +212,7 @@ Linux见证记录实际Ubuntu22.04／glibc2.35、ELF最大GLIBC符号≤2.35及l
 
 ## Linux 长路径与资源控制修复
 
-`72e79a0` 的四平台记录中，macOS15 ARM完整源码门禁及18项原生、25项MCP、24项TUI通过，Intel同样通过三个程序验收套件，其源码结构夹具受到解析截止时间影响。Linux两架构在原生准备时暴露私有TMPDIR超过Unix socket地址长度的问题。宿主能力探测现持有私有目录FD，以短 `/proc/self/fd` 地址执行同一STREAM／SEQPACKET语义探测，payload继续使用既有文件系统视图。长于108字节的真实scratch路径加入回归。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42571348707)
+`72e79a0` 的四平台记录中，macOS15 ARM完整源码门禁及18项原生、25项MCP、24项TUI通过，Intel同样通过三个程序验收套件，其源码结构夹具受到解析截止时间影响。Linux两架构在原生准备时暴露私有TMPDIR超过Unix socket地址长度的问题。宿主能力探测现持有私有目录FD，以短 `/proc/self/fd` 地址执行同一STREAM／SEQPACKET语义探测，payload继续使用既有文件系统视图。长于108字节的真实scratch路径加入回归。[该轮验收](https://github.com/Ariakage/soyo-harness/actions/runs/42571348707)
 
 资源约束检查拒绝可写cgroup／cgroup2挂载及其bind别名和重叠根。显式Host请求委派根或聚合硬限制时准备失败。Linux委派验收保留实际内核读回、活动成员与清理，并加入兄弟controller可写根及Host配置负对照。该用例验证配置与成员，资源耗尽压力仍未测试。
 
@@ -224,7 +224,7 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 13项脚本回归覆盖历史READY／EOF、从未启动、writer继承及READY／ACK顺序。固定优化程序 `fedcddbec295183a4bfcb6fac1a9d7552bba163b850ccd86a5013e0eafe19bdf` 在本机通过18项原生场景、每variant三次性能样本、25项MCP和24项TUI，报告位于 `target/n2/validated-local/`。该记录的源码工作区包含本轮待提交修复，Linux PID命名空间的实际见证由四平台工作流重新确认。
 
-`1a932cc` 的两Linux架构已通过25项MCP、24项TUI及委派资源正负对照。源码门禁继续到Rust生命周期夹具，五项旧断言同样把guest PID交给宿主查询。该夹具改为FIFO现场READY／writer及CLI退出后的立即EOF，shell和sleep后代共同持有writer，保留真实CLI信号与原退出码。新增未启动、历史READY与继承writer回归，本机三轮共18项测试、定向严格Clippy及格式检查通过，日志为 `target/n2/research/lifecycle-namespace-*.log`。Linux重新执行仍待新源码runner确认。[该轮验收](https://github.com/Ariakage/saya-harness/actions/runs/42579723866)
+`1a932cc` 的两Linux架构已通过25项MCP、24项TUI及委派资源正负对照。源码门禁继续到Rust生命周期夹具，五项旧断言同样把guest PID交给宿主查询。该夹具改为FIFO现场READY／writer及CLI退出后的立即EOF，shell和sleep后代共同持有writer，保留真实CLI信号与原退出码。新增未启动、历史READY与继承writer回归，本机三轮共18项测试、定向严格Clippy及格式检查通过，日志为 `target/n2/research/lifecycle-namespace-*.log`。Linux重新执行仍待新源码runner确认。[该轮验收](https://github.com/Ariakage/soyo-harness/actions/runs/42579723866)
 
 `551acc26` 的Linux源码门禁中原五项生命周期场景全部通过，新增继承writer夹具在dash后台命令的stdin重定向处返回BrokenPipe。夹具在异步列表之前以FD8保存控制管道，后代显式从FD8读取，FD9继续见证生命周期。本机真实dash对照复现旧路径提前EOF／BrokenPipe并确认新路径收到release后结束，6项生命周期测试、定向严格Clippy、格式及独立复核通过，记录为 `target/n2/research/lifecycle-{dash-release-control.json,async-release-fd.log}`。最终Linux完整门禁仍由新固定源码执行。
 
@@ -264,9 +264,9 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 ## 人工确认与后台完成的测试同步
 
-`a6f3d9996764e9ca42163c627f989a707419a5bd` 的N2四平台工作流与artifact独立核验全部通过。Linux两端各920项Rust、19项原生、25项MCP和24项TUI，macOS15两端各906项Rust、18项原生、25项MCP和24项TUI。实际源码双清单、架构、平台基线、程序前后哈希、系统别名保护及资源正负对照均通过。报告为 `target/n2/remote-review/a6f3d999/monitoring-complete.json`。[四平台原生基线](https://github.com/Ariakage/saya-harness/actions/runs/42588642806)
+`a6f3d9996764e9ca42163c627f989a707419a5bd` 的N2四平台工作流与artifact独立核验全部通过。Linux两端各920项Rust、19项原生、25项MCP和24项TUI，macOS15两端各906项Rust、18项原生、25项MCP和24项TUI。实际源码双清单、架构、平台基线、程序前后哈希、系统别名保护及资源正负对照均通过。报告为 `target/n2/remote-review/a6f3d999/monitoring-complete.json`。[四平台原生基线](https://github.com/Ariakage/soyo-harness/actions/runs/42588642806)
 
-独立源码CI的Intel正向人工确认用例使用250ms活跃预算，包含真实Python／MCP启动时偶发达到限制。测试现仅在人工回调内虚拟推进60秒，返回前恢复实时时钟，验证10秒活跃预算下任务完成及模型请求一次。同样推进60秒的未暂停预算负对照必须耗尽。真实进程和协议I/O继续按实时时钟执行，日志为 `target/n2/research/human-budget-*.log`。[该轮源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42588641334)
+独立源码CI的Intel正向人工确认用例使用250ms活跃预算，包含真实Python／MCP启动时偶发达到限制。测试现仅在人工回调内虚拟推进60秒，返回前恢复实时时钟，验证10秒活跃预算下任务完成及模型请求一次。同样推进60秒的未暂停预算负对照必须耗尽。真实进程和协议I/O继续按实时时钟执行，日志为 `target/n2/research/human-budget-*.log`。[该轮源码CI](https://github.com/Ariakage/soyo-harness/actions/runs/42588641334)
 
 本机门禁还复现后台文件已可见、job结果尚未完成保存时夹具提前输出final，运行结束按契约取消任务，artifact列表为空。夹具现通过正常 `background_status` 查询实际job及唯一call ID，收到 `finished` 与成功结果后才结束模型任务，保留请求／轮询上限和原artifact断言。11次定向运行、完整61项CLI、严格Clippy及独立复核通过。生命周期8秒等待补充阶段标签，便于区分marker、writer和CLI退出。
 
@@ -284,7 +284,7 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 ## 终端输出预算与启动诊断
 
-`b091dee` 的四平台源码CI全部通过，N2三端完整通过，Intel仅MCP侧栏用例在启动0.505秒后退出1。旧报告保留了正确的Configured首屏，但缺少失败raw，具体原因无法唯一确认。MCP夹具现在在清理前保存有界raw、末帧、阶段、进程退出码及ANSI／UTF-8解析状态。受控150ms消费者停顿实测触发error35并成功保留诊断，正常启动、缩放及20ms停顿均通过。[该轮源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42594301076)、[该轮N2记录](https://github.com/Ariakage/saya-harness/actions/runs/42594302822)
+`b091dee` 的四平台源码CI全部通过，N2三端完整通过，Intel仅MCP侧栏用例在启动0.505秒后退出1。旧报告保留了正确的Configured首屏，但缺少失败raw，具体原因无法唯一确认。MCP夹具现在在清理前保存有界raw、末帧、阶段、进程退出码及ANSI／UTF-8解析状态。受控150ms消费者停顿实测触发error35并成功保留诊断，正常启动、缩放及20ms停顿均通过。[该轮源码CI](https://github.com/Ariakage/soyo-harness/actions/runs/42594301076)、[该轮N2记录](https://github.com/Ariakage/soyo-harness/actions/runs/42594302822)
 
 独立阴性对照确认原帧I/O截止时间在渲染前开始，纯300ms渲染延迟后即使PTY持续可写也会报WouldBlock。`TerminalGuard`复用Ratatui `try_draw`，在渲染完成后开始250ms帧输出计时。旧代码在新回归失败，修复后8项终端测试及3轮重复通过，持续慢读、关闭和恢复的原有边界断言继续执行。此独立问题与旧Intel缺raw失败分别留证。
 
@@ -294,7 +294,7 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 ## 匿名通道关闭引用的探测同步
 
-`e7bbc7e` 的四平台源码CI全部通过，N2的Linux x86源码门禁在长路径匿名pair用例返回“dead-peer send did not report a known closed state”。该端正常原生19项、MCP25项、TUI24项及完整性能v2均通过，失败门禁独立保留。[源码CI](https://github.com/Ariakage/saya-harness/actions/runs/42602868114)、[该轮N2](https://github.com/Ariakage/saya-harness/actions/runs/42602868260)
+`e7bbc7e` 的四平台源码CI全部通过，N2的Linux x86源码门禁在长路径匿名pair用例返回“dead-peer send did not report a known closed state”。该端正常原生19项、MCP25项、TUI24项及完整性能v2均通过，失败门禁独立保留。[源码CI](https://github.com/Ariakage/soyo-harness/actions/runs/42602868114)、[该轮N2](https://github.com/Ariakage/soyo-harness/actions/runs/42602868260)
 
 同源码STREAM控制证明，真实fork中的子进程在exec前可暂时持有CLOEXEC peer，父进程关闭后发送仍可合法成功，exec关闭后原严格检查通过。探测现为所有peer-close分支共享一秒绝对截止，确认Linux完整POLLHUP后才执行发送和重定向验证。无效描述符、迟到事件、未知状态和超时失败关闭，中断按同一截止重试。固定内核门槛与完整行为负对照继续共同约束能力。
 
@@ -304,7 +304,7 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 ## 归档CI的规范模式采样
 
-文档归档提交 `6da36ac` 的CI在macOS ARM仅有空闲输入回收夹具失败，位置为完整 `c_lflag` 比较，实际536872395、原始1483，差值为Darwin的 `PENDIN`。先执行的400ms回收断言通过。子进程先发布报告再进入canonical `read_line`，父进程读取termios与该读取清除PENDIN之间存在竞态。[该轮CI](https://github.com/Ariakage/saya-harness/actions/runs/42613791184)
+文档归档提交 `6da36ac` 的CI在macOS ARM仅有空闲输入回收夹具失败，位置为完整 `c_lflag` 比较，实际536872395、原始1483，差值为Darwin的 `PENDIN`。先执行的400ms回收断言通过。子进程先发布报告再进入canonical `read_line`，父进程读取termios与该读取清除PENDIN之间存在竞态。[该轮CI](https://github.com/Ariakage/soyo-harness/actions/runs/42613791184)
 
 独立真实PTY对照连续12次复现相同数字，空的非阻塞canonical read后全部termios字段与初始值一致。官方XNU在规范模式重入时设置PENDIN，后续输入处理清除此内核状态，与上述观测相符。[XNU规范模式状态转换](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/tty.c#L1358)、[输入状态处理](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/tty.c#L2073)
 
@@ -314,7 +314,7 @@ Linux的MCP与TUI旧夹具将guest PID用于宿主存活查询，原始记录包
 
 ## 已推送基础阶段
 
-`21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/saya-harness/actions/runs/42549418601)
+`21a3f6e` 的DEV-054／DEV-075四平台CI全部通过，包含Ubuntu22.04 ARM／x86_64和macOS15 ARM／Intel的完整检查、优化构建及既有正常入口脚本。该源码尚未包含原生后端与MCP的后续整合，证据为 `target/n2/dev075-four-platform-ci.json`。[GitHub Actions记录](https://github.com/Ariakage/soyo-harness/actions/runs/42549418601)
 
 ## 研究证据
 

@@ -50,7 +50,7 @@ def main():
             raise ValueError('archive SHA-256 mismatch')
         with tarfile.open(args.archive, 'r:gz') as archive:
             members = archive.getmembers()
-            if len(members) != 4 or {member.name for member in members} != {'saya', 'LICENSE', 'README.md', 'BUILD-INFO.json'}:
+            if len(members) != 4 or {member.name for member in members} != {'soyo', 'LICENSE', 'README.md', 'BUILD-INFO.json'}:
                 raise ValueError('unexpected archive members')
             if any(not member.isfile() or member.size > 100 * 1024 * 1024 for member in members):
                 raise ValueError('unexpected archive member type or size')
@@ -61,12 +61,12 @@ def main():
                 raise ValueError('candidate target must match the native machine')
             if metadata.get('declared_source_commit') != args.source_commit:
                 raise ValueError('source commit mismatch')
-            binary = archive.extractfile('saya').read()
+            binary = archive.extractfile('soyo').read()
             binary_hash = hashlib.sha256(binary).hexdigest()
             if not architecture_matches(target, binary) or binary_hash != metadata.get('binary_sha256'):
                 raise ValueError('binary architecture or SHA-256 mismatch')
-        with tempfile.TemporaryDirectory(prefix='saya-linux-release-') as temporary:
-            path = Path(temporary) / 'saya'
+        with tempfile.TemporaryDirectory(prefix='soyo-linux-release-') as temporary:
+            path = Path(temporary) / 'soyo'
             path.write_bytes(binary)
             path.chmod(0o755)
             symbols = command('objdump', '-T', str(path))

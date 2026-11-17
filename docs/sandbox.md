@@ -4,7 +4,7 @@
 
 ## 后端边界
 
-core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独立 Seatbelt 实现或 Linux Bubblewrap 实现。`prepare` 返回 `PreparedEnvironment`，Seatbelt profile、Bubblewrap 参数和 Seccomp BPF 留在对应后端中。[执行实现](../crates/saya-core/src/execution.rs)
+core 使用统一 `ExecutionBackend`，当前 `NativeBackend` 按平台选择独立 Seatbelt 实现或 Linux Bubblewrap 实现。`prepare` 返回 `PreparedEnvironment`，Seatbelt profile、Bubblewrap 参数和 Seccomp BPF 留在对应后端中。[执行实现](../crates/soyo-core/src/execution.rs)
 
 | 接口职责 | 输入／输出 |
 | --- | --- |
@@ -52,13 +52,13 @@ AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑�
 | 共享进程监督器 | 命令、文件 worker、MCP 与桥接进程的取消、超时及结束确认 |
 | 可用的 cgroup v2 | 已委派 controller 支持的 CPU、内存和进程数硬限额 |
 
-Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/saya-core/src/execution/linux/mod.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
+Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/soyo-core/src/execution/linux/mod.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
 
 宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 过滤器允许协议为0的 `AF_UNIX`／`SOCK_STREAM` 与 `SOCK_SEQPACKET` 匿名已连接pair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，用于运行时self-pipe和Rust fork结果通道。命名Unix socket创建及datagram pair受过滤器拒绝，匿名pair同时受前述内核身份与行为探测约束。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
 
 启动创建独立 session，执行前规范化未声明描述符的 close-on-exec 标志，并约束 TIOCSTI 等终端相关入口。宿主固定私有 launcher 镜像，通过有界、解除目录链接的文件描述符传入实际环境值。
 
-Linux 的 Browser 专用 profile 保留通用 payload 过滤器，额外提供嵌套 user namespace、私有 `/proc`、`/dev/shm` 与非 root 映射身份，并只读绑定宿主显式给出的 Node 父目录、worker root 与 Chromium 包目录；profile／output／tmp／work／config 五个可写根都位于该 environment 的 Run 私有 scratch，不绑定 workspace、HOME、`.saya` 或凭据目录。Browser profile 的 `mount` 参数检查读取 seccomp_data 的 args[3]（offset 40，即 mountflags），`umount2` 读取 args[1]（offset 24）；这样合法 mount flags 通过，`MS_MOVE` 等被拒绝。Chromium 自身的 sandbox 不能只依赖 Bubblewrap 固定赋予的 `NoNewPrivs=1`、`Seccomp=2`：provider 还必须取得 Chromium 自有的 `InitializeSandbox` stderr 证据，否则在首次真实启动后返回 `browser_sandbox_unavailable`。macOS Seatbelt 无法在 Chromium 重初始化其 sandbox 时同时保持外层限制，因此浏览器环境明确返回 `browser_sandbox_unavailable`。组合行为与平台证据见 [Browser 阶段](browser.md)。
+Linux 的 Browser 专用 profile 保留通用 payload 过滤器，额外提供嵌套 user namespace、私有 `/proc`、`/dev/shm` 与非 root 映射身份，并只读绑定宿主显式给出的 Node 父目录、worker root 与 Chromium 包目录；profile／output／tmp／work／config 五个可写根都位于该 environment 的 Run 私有 scratch，不绑定 workspace、HOME、`.soyo` 或凭据目录。Browser profile 的 `mount` 参数检查读取 seccomp_data 的 args[3]（offset 40，即 mountflags），`umount2` 读取 args[1]（offset 24）；这样合法 mount flags 通过，`MS_MOVE` 等被拒绝。Chromium 自身的 sandbox 不能只依赖 Bubblewrap 固定赋予的 `NoNewPrivs=1`、`Seccomp=2`：provider 还必须取得 Chromium 自有的 `InitializeSandbox` stderr 证据，否则在首次真实启动后返回 `browser_sandbox_unavailable`。macOS Seatbelt 无法在 Chromium 重初始化其 sandbox 时同时保持外层限制，因此浏览器环境明确返回 `browser_sandbox_unavailable`。组合行为与平台证据见 [Browser 阶段](browser.md)。
 
 按 D-066，专用 VM 后端不把 Chromium 放进宿主 Seatbelt／Bubblewrap browser profile，而是在 VM 内保留 Chromium 自有 sandbox；宿主只运行受控 `ssh`，Auto 按平台选择 Seatbelt 或 Bubblewrap。`read_files` 精确只读绑定 `ssh`、identity 与 known-hosts 三个文件，`write_roots` 仅一个 0700 Run 私有目录。`LoopbackPort { host, port, proxy_port }` 保留归一化 SSH 字面地址，可额外连接本次 broker 的 `127.0.0.1` 端口；Linux 精确桥接指定地址，Seatbelt 仍按 localhost TCP 端口限制。canonicalize 后的 identity／known-hosts 路径重新接受空白、控制字符与引号校验；`[::1]` 归一化为裸 `::1`，不做 IPv4 回退。通用默认仍为 `Deny`，不增加额外文件；Host 对该用途保持拒绝。
 
@@ -85,7 +85,7 @@ Linux私有network namespace内的单向UDP发送可以返回成功。验收要�
 
 桥接socat在宿主按打开的FD核对root所有、权限与可执行性，固定为私有0500镜像并以只读FD挂载。guest按精确device／inode和只读可执行权限复查，身份校验跨user namespace的UID映射生效。准备和复制失败均关闭该执行路径。[代理镜像验收](n2-validation.md#linux-代理桥接镜像身份)
 
-NetworkBroker 实现 HTTP absolute-form 与 CONNECT。每次新上游连接核对精确 origin、重新解析全部目标地址并固定所连接的 socket 地址，默认拒绝私有／本地／元数据地址。HTTP 请求采用有界 framing，校验 Host 与目标一致性，剔除代理专用认证头，并限制连接数、字节量和时间。客户端跟随重定向后产生的新代理请求继续接受相同核查。[网络实现](../crates/saya-core/src/network.rs)
+NetworkBroker 实现 HTTP absolute-form 与 CONNECT。每次新上游连接核对精确 origin、重新解析全部目标地址并固定所连接的 socket 地址，默认拒绝私有／本地／元数据地址。HTTP 请求采用有界 framing，校验 Host 与目标一致性，剔除代理专用认证头，并限制连接数、字节量和时间。客户端跟随重定向后产生的新代理请求继续接受相同核查。[网络实现](../crates/soyo-core/src/network.rs)
 
 HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路径保持不透明。双栈 loopback listener 占有同一代理端口，进程与桥接收尾先于代理释放。本地开发服务需额外配置单一 origin 例外，并核对 loopback 解析结果。
 
@@ -95,7 +95,7 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 
 固定使用系统 `/usr/bin/sandbox-exec`，将类型化策略编译为受控 SBPL 和路径参数。后端处理可读／可写根、保护路径、必要系统库／服务、exec／fork、信号与网络规则，子进程继承实际限制。
 
-网络策略仅允许连接本次受控代理端口的 TCP，再由 NetworkBroker 检查目标。proxy 环境变量由宿主设置，同端口 UDP、直接外联、额外本地服务和 Unix socket 访问分别进入验收。profile 明确拒绝其他进程的 PID 信息读取，保留自身描述符处理所需权限，并为 `/tmp`、`/var`、`/etc` 根 symlink 提供读取规则。[Seatbelt 实现](../crates/saya-core/src/execution/seatbelt.rs)
+网络策略仅允许连接本次受控代理端口的 TCP，再由 NetworkBroker 检查目标。proxy 环境变量由宿主设置，同端口 UDP、直接外联、额外本地服务和 Unix socket 访问分别进入验收。profile 明确拒绝其他进程的 PID 信息读取，保留自身描述符处理所需权限，并为 `/tmp`、`/var`、`/etc` 根 symlink 提供读取规则。[Seatbelt 实现](../crates/soyo-core/src/execution/seatbelt.rs)
 
 本机 macOS 27.2 的 `man sandbox-exec` 将该命令标记为 deprecated，当前独立后端使用系统提供的程序。macOS 15 ARM／Intel 的实际集成程序已通过验收，源码与程序证据见 [N2 验收记录](n2-validation.md)，后续系统兼容性通过后端接口继续验证。
 
@@ -104,10 +104,10 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 默认使用原生路径约束和按需 bind，运行库、工具链与工作区直接复用。开销来源包含策略准备、进程启动、代理桥及 syscall 检查，实际性能由验收数据记录。
 
 - macOS 将规范化路径及保护规则编译进 Seatbelt profile。
-- Linux 根据允许根及更具体的只读／拒绝路径构建 mount 图，系统目录按最小可用集提供；默认继续省略 `/proc` 与宿主 `/etc/passwd`，但当配置显式启用 `sandbox.ca_certs` 或 `sandbox.toolchain_presets`（如 `"auto"`、`"rust"`、`"python"`、`"node"`、`"homebrew"`、`"xcode_clt"`、`"minimal_etc"`）时，运行准备阶段会只读追加存在且安全（排除 `/`、`$HOME`、`.saya`）的工具链／CA 目录，并在 Linux 按需生成仅含当前数值 UID／GID 的合成 `/etc/{passwd,group,nsswitch.conf}`。
+- Linux 根据允许根及更具体的只读／拒绝路径构建 mount 图，系统目录按最小可用集提供；默认继续省略 `/proc` 与宿主 `/etc/passwd`，但当配置显式启用 `sandbox.ca_certs` 或 `sandbox.toolchain_presets`（如 `"auto"`、`"rust"`、`"python"`、`"node"`、`"homebrew"`、`"xcode_clt"`、`"minimal_etc"`）时，运行准备阶段会只读追加存在且安全（排除 `/`、`$HOME`、`.soyo`）的工具链／CA 目录，并在 Linux 按需生成仅含当前数值 UID／GID 的合成 `/etc/{passwd,group,nsswitch.conf}`。
 - Linux 对既有保护路径建立私有拒绝视图，可写根下缺失的保护路径返回 `unsupported_fs_policy`。macOS 将缺失路径的拒绝规则编译进 profile，规则覆盖随后创建的目标。
 - 七种内置文件工具通过同一准备环境启动私有 worker。宿主负责意图、授权和结果记录，worker 复核目标、版本及单文件替换；实际 RPC 请求和响应上限为 32 MiB。通用命令在获准可写根中运行。
-- 宿主把启动时已存在的配置、data、state、cache 和工作区 `.saya/local` 加入原生保护集合，活动凭据引用使用的实际私有存储另行强制保护。`.saya/skills` 的正文读取继续经过文件权限与后端根策略，发现过程使用[项目上下文规则](project-context.md)。
+- 宿主把启动时已存在的配置、data、state、cache 和工作区 `.soyo/local` 加入原生保护集合，活动凭据引用使用的实际私有存储另行强制保护。`.soyo/skills` 的正文读取继续经过文件权限与后端根策略，发现过程使用[项目上下文规则](project-context.md)。
 - 仓库控制数据与工作区文件分开保护：内置文件工具把 `.git` 下的 `config`、`config.worktree`、`hooks/`、`info/` 及 worktree `gitdir` 链接指向的控制目录整体视为保护路径，任何权限模式下均拒绝读写；原生后端只对同一集合追加 deny-write——Seatbelt 编译对应写入拒绝，Bubblewrap 对这些路径叠加只读重绑定。沙箱内 `git status`、`git commit` 等常规操作保持可用，而 `git config`、hook 改写与 fsmonitor/filter 类自动命令注入被拒。`.git` 之外的普通文件不受影响。`HOME` 本身位于可写根内时，`~/.ssh`、`~/.gitconfig`、`~/.config/git` 及常见 shell 启动文件按同一集合处理。
 
 通用程序写入与外部编辑可能并发，执行记录保存实际结果。DEV-064 增加 Diff、检查点和恢复，具体文件一致性保证在该层验收。
@@ -124,9 +124,9 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 
 `cpu_seconds`、`file_size_bytes` 与 `open_files` 是可选的单进程设置，在原生及 Host 后端沿现有 rlimit 路径生效，`RLIMIT_CPU` 按进程计 CPU 时间。聚合设置采用 `total_memory_bytes`、`total_processes` 和 `cpu_quota`，资源等级分别报告为 `hard`／`best_effort`／`unsupported`。
 
-Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独有子目录，核对 controller 文件并回读已请求的限制，加入其拥有的 payload，结束时 kill、等待空组并移除该目录。系统 controller 的委派和启用由宿主准备。用户请求的聚合硬限制缺少必要委派时 prepare 失败。[资源实现](../crates/saya-core/src/execution/cgroup.rs)、[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独有子目录，核对 controller 文件并回读已请求的限制，加入其拥有的 payload，结束时 kill、等待空组并移除该目录。系统 controller 的委派和启用由宿主准备。用户请求的聚合硬限制缺少必要委派时 prepare 失败。[资源实现](../crates/soyo-core/src/execution/cgroup.rs)、[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
 
-Linux 原生后端依据宿主 mountinfo 拒绝与任何 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，返回 `unsupported_fs_policy`。检查覆盖工作区、`write_roots`、`permissions.additional_roots`、委派根的兄弟路径及 bind 挂载别名。`read_roots` 可提供只读 cgroup 视图，其他根与保护规则继续检查。[文件系统检查](../crates/saya-core/src/execution/linux/mod.rs)
+Linux 原生后端依据宿主 mountinfo 拒绝与任何 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，返回 `unsupported_fs_policy`。检查覆盖工作区、`write_roots`、`permissions.additional_roots`、委派根的兄弟路径及 bind 挂载别名。`read_roots` 可提供只读 cgroup 视图，其他根与保护规则继续检查。[文件系统检查](../crates/soyo-core/src/execution/linux/mod.rs)
 
 委派验收保留内核限制读回、活动成员与自有子组清理，并在同一专属委派范围内增加兄弟可写组和 Host 配置的模型派发前拒绝对照。本轮 Linux x86_64／aarch64 的委派正负对照已通过，资源耗尽压力仍未验证。[N2 验收记录](n2-validation.md)
 

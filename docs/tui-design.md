@@ -2,7 +2,7 @@
 
 **更新于2026-11-09。本文对应DEV-048至DEV-050及开发线的布局、运行反馈与结束统计，实际绘制函数为 `view::draw`。默认入口和各源码的验收状态见[开发进度](progress.md)。**
 
-Saya 的终端界面以持续对话为主。用户在主区查看回答与工具进度，在同一窗口编辑下一条消息，通过详情区检查操作参数、确认请求和已保存结果。
+Soyo 的终端界面以持续对话为主。用户在主区查看回答与工具进度，在同一窗口编辑下一条消息，通过详情区检查操作参数、确认请求和已保存结果。
 
 ## 布局
 
@@ -10,7 +10,7 @@ Saya 的终端界面以持续对话为主。用户在主区查看回答与工具
 
 | 区域 | 内容 | 当前尺寸 |
 | --- | --- | --- |
-| 顶栏 | Saya Harness、版本、Ctrl+P命令入口 | 1行 |
+| 顶栏 | Soyo Harness、版本、Ctrl+P命令入口 | 1行 |
 | 外框顶边 | 工作目录 | 1行 |
 | 主区 | 对话与按需详情 | 占据剩余高度 |
 | 状态行 | Ready／运行状态、忙碌动画，右侧为权限 | 1行，空间充足时动画占8列 |
@@ -24,7 +24,7 @@ Saya 的终端界面以持续对话为主。用户在主区查看回答与工具
 
 ```text
 单主区
-Saya Harness (v实际版本)                       Ctrl+P commands
+Soyo Harness (v实际版本)                       Ctrl+P commands
 ┌ • /workspace ────────────────────────────────────────────┐
 │                                                         │
 │ 对话，或按需显示审批／工具详情                             │
@@ -36,7 +36,7 @@ Saya Harness (v实际版本)                       Ctrl+P commands
 └ WORK model max                 ◔ input 25.6k/128k (20%) ─┘
 
 宽屏侧栏
-Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
+Soyo Harness (v实际版本)      Ctrl+P commands  会话概括名
 ┌ • /workspace ────────────────────────────┐ Context · Estimated
 │                                         │ Window 128k
 │ 对话，或按需显示审批／工具详情             │ System       ███ ~4k
@@ -52,7 +52,7 @@ Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
 └ WORK model max      ◔ input … ───────────┘ /workspace
 ```
 
-上图表达区域关系，实际字符布局可由下方预览命令生成。布局代码集中在 [`crates/saya-tui/src/view/`](../crates/saya-tui/src/view/mod.rs) 目录。
+上图表达区域关系，实际字符布局可由下方预览命令生成。布局代码集中在 [`crates/soyo-tui/src/view/`](../crates/soyo-tui/src/view/mod.rs) 目录。
 
 ## 配色与信息层级
 
@@ -96,13 +96,13 @@ Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
 
 Assistant正文支持有界的基础Markdown呈现，包括ATX标题、无序／有序列表、引用、成对强调、行内代码以及代码围栏。标题使用紫色，强调和列表标记使用暖色，行内代码使用绿色，代码围栏转换为带语言标签的卡片。流式未闭合的行内标记保留可见文本，代码内部保持原文，URL／HTML展示为可见文本且不触发链接动作。每逻辑行至多256个样式片段，嵌套上限为4，折行按完整grapheme处理并沿用10,000视觉行缓存预算。
 
-共享颜色定义在[theme.rs](../crates/saya-tui/src/theme.rs)，正文样式与折行在[rich_text.rs](../crates/saya-tui/src/rich_text.rs)，区域绘制在 [`view/`](../crates/saya-tui/src/view/mod.rs)。
+共享颜色定义在[theme.rs](../crates/soyo-tui/src/theme.rs)，正文样式与折行在[rich_text.rs](../crates/soyo-tui/src/rich_text.rs)，区域绘制在 [`view/`](../crates/soyo-tui/src/view/mod.rs)。
 
 侧栏分区标题配浅色分隔，非零用量数字与零值使用不同灰度，任务进行中高亮，完成项弱化。状态行的权限标签按实际权限区分颜色。
 
 输入区以Strong前景和字重强调Message标题，发送、换行和折叠快捷键采用深底键帽与弱化说明文字。常规空输入在编辑首行显示斜体 `Describe a task…`，占位文字仅参与渲染，发送和Tab模式判断读取Editor草稿。人工审批、澄清、截断和补全场景采用各自提示。原底部留白内增加低对比细线，实际草稿区保留多行编辑与水平跟随。1至2行的极小输入区按空间简化提示，粘贴超限使用暖色加粗警示。
 
-粘贴或拖入本地文件时，草稿显示 `[Image N]`、`[Audio N]`、`[Video N]` 或 `[File N]`，按媒体类型使用不同加粗高亮。文件引用作为Editor中的原子token参与移动、删除、换行和裁剪；左右键跨过整个token，任一边界删除都移除完整附件。模型输入保留链接形式的真实路径，会话恢复与窗口标题只显示token。图片、音频和视频是否转为原生content part由profile能力决定，普通File继续提供路径。`Ctrl+V`支持直接读取剪贴板图片二进制，保存到`~/.saya/paste_image/`后插入Image token。
+粘贴或拖入本地文件时，草稿显示 `[Image N]`、`[Audio N]`、`[Video N]` 或 `[File N]`，按媒体类型使用不同加粗高亮。文件引用作为Editor中的原子token参与移动、删除、换行和裁剪；左右键跨过整个token，任一边界删除都移除完整附件。模型输入保留链接形式的真实路径，会话恢复与窗口标题只显示token。图片、音频和视频是否转为原生content part由profile能力决定，普通File继续提供路径。`Ctrl+V`支持直接读取剪贴板图片二进制，保存到`~/.soyo/paste_image/`后插入Image token。
 
 ## 运行反馈与结束统计
 
@@ -167,15 +167,15 @@ just render-preview 160 45 completed --json
 
 拖选按渲染后的可见单元格取字，支持正向／反向跨行选择、中文宽字和组合字符。复制时裁去各视觉行尾的空白，再以换行连接。松开鼠标立即复制整个相交选区、清除高亮并在右上角显示约1.5秒的绿色`✓ Copied`徽标，输入草稿保持可编辑。紧接着的Ctrl+C或Cmd+C只消费这次已完成的复制，不会取消运行、清空草稿或再次写入剪贴板。用户消息、工具调用标题和展开内容都在同一对话选区中。没有拖动的点击在松开时触发折叠或脚注。滚动、缩放和所选内容变化会在松开前清除选区，状态动画和选区外追加时可保留当前选区。可选区域为对话与工具／审批详情，输入框使用原有编辑操作。
 
-复制优先调用本机平台剪贴板工具：macOS使用`pbcopy`，Linux按环境尝试`wl-copy`或`xclip`；随后仍发送OSC52，使远程终端和允许剪贴板写入的复用器可以独立保存同一文本。TUI启用Kitty增强键盘协议并请求完整按键上报，支持该协议的终端可把macOS Cmd+C作为`SUPER+C`送达。iTerm2等终端仍可能把Cmd+C和右键Copy保留为终端自身快捷键；Saya在鼠标松开时已完成整段复制，因此不依赖这些终端菜单。最终复制限额为64KiB，超过限额时界面提示错误。正常TUI与debug预览共用鼠标选区和复制逻辑。[xterm控制序列说明](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
+复制优先调用本机平台剪贴板工具：macOS使用`pbcopy`，Linux按环境尝试`wl-copy`或`xclip`；随后仍发送OSC52，使远程终端和允许剪贴板写入的复用器可以独立保存同一文本。TUI启用Kitty增强键盘协议并请求完整按键上报，支持该协议的终端可把macOS Cmd+C作为`SUPER+C`送达。iTerm2等终端仍可能把Cmd+C和右键Copy保留为终端自身快捷键；Soyo在鼠标松开时已完成整段复制，因此不依赖这些终端菜单。最终复制限额为64KiB，超过限额时界面提示错误。正常TUI与debug预览共用鼠标选区和复制逻辑。[xterm控制序列说明](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
 
 空输入Tab要求草稿为空且命令面板关闭，已有空格、多行或其他文本时沿常规编辑／补全处理。运行中从最近一次待切换选择继续循环，由core在调用边界应用。等待UI任务清理时按最新排队模式选择下一项。切换复用模式命令的根目录、持久化与审批失效处理，权限模式独立。空输入循环以模式状态提供反馈，普通切换过程不新增对话消息。
 
 人工审批要求当前详情可见。输入为空时，新的普通／Shift `y` 批准，`n` 或 Esc 拒绝。重复按键与 Ctrl／Alt／Super 组合键不会提交审批。澄清使用输入框回复，`//` 开头可以发送字面量斜杠。待审批时也能输入 `/mode MODE`，旧回复随切换请求失效。
 
-输入编辑规则集中在[editor.rs](../crates/saya-tui/src/editor.rs)，全局快捷键在[controller.rs](../crates/saya-tui/src/controller.rs)，命令与人工输入接线在[controls.rs](../crates/saya-tui/src/controller/controls.rs)。
+输入编辑规则集中在[editor.rs](../crates/soyo-tui/src/editor.rs)，全局快捷键在[controller.rs](../crates/soyo-tui/src/controller.rs)，命令与人工输入接线在[controls.rs](../crates/soyo-tui/src/controller/controls.rs)。
 
-斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/saya-tui/src/commands.rs)。57项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
+斜杠补全的静态目录和筛选状态位于[commands.rs](../crates/soyo-tui/src/commands.rs)。57项候选与命令面板、帮助共用，包含固定参数及带末尾空格的参数前缀。`State.completion`保存选择与隐藏状态，灰色建议只参与绘制。弹层标题为 `Command suggestions`，位于输入框上方，最多6行，选中行使用 `›`与高亮，剩余宽度显示说明。20×6保留输入行、光标与底栏，弹层按空间降级。
 
 Esc先隐藏可见建议并保留草稿，再沿普通详情／审批优先级处理。Tab可重新接受已隐藏建议，输入前缀变化会重置选择。补全仅匹配末尾光标的单行 `/`输入，`//`和多行文本使用常规编辑。输入框中需要用户填写的profile名、会话／任务ID和路径跟在补全保留的空格之后。
 
@@ -227,7 +227,7 @@ flowchart LR
 | 结束统计 | 最终RunResult用量与当前任务的单调时间采样，模型区间由TUI的事件发布端观察 |
 | 忙碌动画 | 当前运行、状态与120ms显示帧，颜色使用实际模式映射 |
 | 窗口标题 | 从会话首条用户任务派生、脱敏、合并空白、保留80字符，经 TerminalGuard 清理后写入 OSC 2 |
-| 人工审批 | `saya-app::interaction::Request::Approval` 提供操作、参数与原始回复通道，详情区呈现经过脱敏的内容 |
+| 人工审批 | `soyo-app::interaction::Request::Approval` 提供操作、参数与原始回复通道，详情区呈现经过脱敏的内容 |
 | 用户澄清 | `Request::Input` 提供问题及可选建议，输入区承接回复 |
 | 模型文本 | `ModelTextDelta` 合并到稳定消息 ID，最终结果可校正可见正文 |
 | 工具进度 | `ToolStarted`／`ToolFinished` 与持久记录提供调用 ID、状态及结果 |
@@ -276,7 +276,7 @@ flowchart LR
 
 工具和后台面板明确标记 UI 读取来源，按持久记录保留 `unknown`、错误和截断状态。恢复的中断响应标记为 `Assistant · interrupted partial`。后台任务的执行生命周期仍属于当前运行。
 
-新建、恢复和快照／导出各自使用可取消的 UI 任务，同一时刻最多一个。Ctrl+C 请求取消并等待结果。导出相对路径按当前会话工作区解析，目标父目录须已存在，安全发布保护已有目标。发布提交完成后才收到取消时，界面仍报告实际发布回执。PLAN 导出路径检查沿用共享应用服务。会话与发布接线见[services.rs](../crates/saya-tui/src/controller/services.rs)。
+新建、恢复和快照／导出各自使用可取消的 UI 任务，同一时刻最多一个。Ctrl+C 请求取消并等待结果。导出相对路径按当前会话工作区解析，目标父目录须已存在，安全发布保护已有目标。发布提交完成后才收到取消时，界面仍报告实际发布回执。PLAN 导出路径检查沿用共享应用服务。会话与发布接线见[services.rs](../crates/soyo-tui/src/controller/services.rs)。
 
 Goal UI 复用同一有界 UI 任务：列表与状态来自 `GoalStore` 一致 revision；计划和核验使用无工具模型请求；continue／start 通过共享 Goal 引擎持有租约与 Session 锁。Goal 运行不把模型正文伪装成普通聊天回答，完成后以结构化目标面板展示 Step、Run、预算与证据。TUI 自动执行要求 auto／bypass；Manual Approval 使用 CLI 的终端审批。详细语义见[Goal 编排](goal.md)与[N4验收](n4-validation.md)。
 
@@ -285,31 +285,31 @@ Goal UI 复用同一有界 UI 任务：列表与状态来自 `GoalStore` 一致 
 预览程序用合成 State 调用生产 `view::draw`，经 Ratatui TestBackend 导出字符布局。场景包含用户文本、中文、工具的 `unknown` 状态、代码及可选详情，模型请求数为0。
 
 ```sh
-cargo run --locked -p saya-tui --example render_preview -- 120 30
-cargo run --locked -p saya-tui --example render_preview -- 120 30 approval
-cargo run --locked -p saya-tui --example render_preview -- 120 30 attachments
-cargo run --locked -p saya-tui --example render_preview -- 120 30 question
-cargo run --locked -p saya-tui --example render_preview -- 120 30 background
-cargo run --locked -p saya-tui --example render_preview -- 60 24 approval
-cargo run --locked -p saya-tui --example render_preview -- 120 30 tool
-cargo run --locked -p saya-tui --example render_preview -- 120 30 help
-cargo run --locked -p saya-tui --example render_preview -- 120 30 commands
-cargo run --locked -p saya-tui --example render_preview -- 120 30 memory
-cargo run --locked -p saya-tui --example render_preview -- 120 30 skills
-cargo run --locked -p saya-tui --example render_preview -- 120 30 mcps
-cargo run --locked -p saya-tui --example render_preview -- 120 30 plugins
-cargo run --locked -p saya-tui --example render_preview -- 120 30 sessions
-cargo run --locked -p saya-tui --example render_preview -- 80 24 idle
-cargo run --locked -p saya-tui --example render_preview -- 80 24 effort
-cargo run --locked -p saya-tui --example render_preview -- 60 18 compact
-cargo run --locked -p saya-tui --example render_preview -- 20 6 idle
-cargo run --locked -p saya-tui --example render_preview -- 160 40 refined
-cargo run --locked -p saya-tui --example render_preview -- 160 40 tasks
-cargo run --locked -p saya-tui --example render_preview -- 160 40 folded
-cargo run --locked -p saya-tui --example render_preview -- 110 36 expanded
+cargo run --locked -p soyo-tui --example render_preview -- 120 30
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 approval
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 attachments
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 question
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 background
+cargo run --locked -p soyo-tui --example render_preview -- 60 24 approval
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 tool
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 help
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 commands
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 memory
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 skills
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 mcps
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 plugins
+cargo run --locked -p soyo-tui --example render_preview -- 120 30 sessions
+cargo run --locked -p soyo-tui --example render_preview -- 80 24 idle
+cargo run --locked -p soyo-tui --example render_preview -- 80 24 effort
+cargo run --locked -p soyo-tui --example render_preview -- 60 18 compact
+cargo run --locked -p soyo-tui --example render_preview -- 20 6 idle
+cargo run --locked -p soyo-tui --example render_preview -- 160 40 refined
+cargo run --locked -p soyo-tui --example render_preview -- 160 40 tasks
+cargo run --locked -p soyo-tui --example render_preview -- 160 40 folded
+cargo run --locked -p soyo-tui --example render_preview -- 110 36 expanded
 ```
 
-文本输出保留字符布局，配色由上方 token 表描述。真实终端交互和恢复由 PTY 及候选程序验收覆盖。预览程序源码见[render_preview.rs](../crates/saya-tui/examples/render_preview.rs)。
+文本输出保留字符布局，配色由上方 token 表描述。真实终端交互和恢复由 PTY 及候选程序验收覆盖。预览程序源码见[render_preview.rs](../crates/soyo-tui/examples/render_preview.rs)。
 
 ## 改进时对应的代码
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline N3 journeys against one explicitly selected real Saya CLI image.
+"""Offline N3 journeys against one explicitly selected real Soyo CLI image.
 
 The runner supplies build provenance. This report separately records the
 declared commit, current source-tree digest, candidate hash and actual journeys.
@@ -72,7 +72,7 @@ class Candidate:
         self.root = root
         self.provider = provider
         self.data_dir = root / "data"
-        self.memory_root = root / "home" / ".saya"
+        self.memory_root = root / "home" / ".soyo"
         self.config = root / "config.toml"
         (root / "home").mkdir()
         self.env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(root / "home"),
@@ -408,7 +408,7 @@ def long_output_steps():
 
 def skill_output_journey(candidate):
     workspace = candidate.root / "skill-output"
-    skill = workspace / ".saya" / "skills" / "n3-guide"
+    skill = workspace / ".soyo" / "skills" / "n3-guide"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: n3-guide\ndescription: Controlled N3 Skill fixture\n---\nUse the bounded notes resource.\n")
     (skill / "notes.txt").write_text("N3_SKILL_RESOURCE_CONTENT\n")
@@ -437,17 +437,17 @@ def plugin_skill_journey(candidate):
     package = candidate.root / "plugin-package"
     skill = package / "skills" / "guide"
     skill.mkdir(parents=True)
-    plugin_id = "io.saya.n3-cli"
+    plugin_id = "io.soyo.n3-cli"
     qualified = plugin_id + "/guide"
     body_marker = "N3_PLUGIN_ACTIVE_BODY_ONLY"
-    (package / "saya-plugin.toml").write_text('''schema_version=1
+    (package / "soyo-plugin.toml").write_text('''schema_version=1
 [plugin]
-id="io.saya.n3-cli"
+id="io.soyo.n3-cli"
 version="1.0.0"
 description="Normal CLI Skill extension acceptance"
 license="MIT"
 [compatibility]
-requires_saya=">=0.2.0, <1.0.0"
+requires_soyo=">=0.2.0, <1.0.0"
 requires_features=["plugin-manifest-v1","skill-directory-v1"]
 [capabilities]
 requested=["workspace.read"]
@@ -598,15 +598,15 @@ def main():
     report_path = options.report.resolve()
     actual_sha=sha256(binary)
     if actual_sha!=options.expected_sha256:
-        write_report(report_path,{"schema_version":1,"kind":"saya_n3_normal_entry_acceptance","status":"failed","actual_journeys":0,
+        write_report(report_path,{"schema_version":1,"kind":"XKsoyo_n3_normal_entry_acceptance","status":"failed","actual_journeys":0,
                     "candidate":{"path":str(binary),"expected_sha256":options.expected_sha256,"sha256_before":actual_sha},
                     "failure":{"type":"artifact_identity","message":"candidate SHA does not match the explicitly selected artifact"}})
         return 1
     before_source = source_digest(source)
-    root = options.work_dir.resolve() if options.work_dir else Path(tempfile.mkdtemp(prefix="saya-n3-acceptance-"))
+    root = options.work_dir.resolve() if options.work_dir else Path(tempfile.mkdtemp(prefix="soyo-n3-acceptance-"))
     if options.work_dir:
         root.mkdir(parents=True, exist_ok=False)
-    report = {"schema_version": 1, "kind": "saya_n3_normal_entry_acceptance", "status": "failed",
+    report = {"schema_version": 1, "kind": "XKsoyo_n3_normal_entry_acceptance", "status": "failed",
               "platform": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
               "candidate": {"path": str(binary), "sha256_before": options.expected_sha256},
               "source": {"declared_commit": options.source_commit, "before": before_source,

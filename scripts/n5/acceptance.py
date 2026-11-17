@@ -2,7 +2,7 @@
 """DEV-083 real-entry acceptance, against one explicitly selected binary.
 
 No build, provision, downloads, external sites or paid APIs. All VM inputs are
-explicit SAYA_TEST_VM_* variables, as used by browser_vm_files_real.rs. Evidence
+explicit SOYO_TEST_VM_* variables, as used by browser_vm_files_real.rs. Evidence
 is private JSON under target; a dirty source manifest is NOT a build attestation.
 Disabled screenshots are reported separately; --require-screenshot fails closed.
 """
@@ -43,9 +43,9 @@ VM_FIELDS = {'COLIMA': 'colima', 'SSH': 'ssh', 'PROFILE': 'profile', 'HOST': 'ho
 
 
 def vm_config(env):
-    missing = ['SAYA_TEST_VM_' + key for key in VM_FIELDS if not env.get('SAYA_TEST_VM_' + key)]
+    missing = ['SOYO_TEST_VM_' + key for key in VM_FIELDS if not env.get('SOYO_TEST_VM_' + key)]
     require(not missing, 'missing VM prerequisites: ' + ', '.join(missing))
-    value = {field: env['SAYA_TEST_VM_' + key] for key, field in VM_FIELDS.items()}
+    value = {field: env['SOYO_TEST_VM_' + key] for key, field in VM_FIELDS.items()}
     value['port'] = int(value['port'])
     require(0 < value['port'] < 65536, 'invalid VM port')
     require(re.fullmatch('[0-9a-f]{64}', value['identity_sha256']), 'invalid VM manifest SHA')
@@ -544,13 +544,13 @@ def remote_inventory(vm, root):
     temp = module.safe_remote_path(vm['remote_temp_root'], 'remote temp root')
     # Bounded by the process wrapper, output budget and a fixed number of entries.
     script = '''set -eu
-find "$1" -mindepth 1 -maxdepth 1 -name "saya-browser-vm-*" -print
+find "$1" -mindepth 1 -maxdepth 1 -name "soyo-browser-vm-*" -print
 for proc in /proc/[0-9]*; do
   [ -r "$proc/cmdline" ] || continue
   cmd=$(tr '\\000' ' ' < "$proc/cmdline" 2>/dev/null) || continue
   case "$cmd" in
-    *saya-browser-vm-cleanup*) continue ;;
-    *"$1/saya-browser-vm-"*) printf 'process|%s\\n' "${proc##*/}" ;;
+    *soyo-browser-vm-cleanup*) continue ;;
+    *"$1/soyo-browser-vm-"*) printf 'process|%s\\n' "${proc##*/}" ;;
   esac
 done
 '''
@@ -762,16 +762,16 @@ def joint_compact(candidate, provider, report, origin):
     package = candidate.root / 'plugin-input'
     skill = package / 'skills' / 'guide'
     skill.mkdir(parents=True)
-    plugin = 'io.saya.n5-local'
+    plugin = 'io.soyo.n5-local'
     qualified = plugin + '/guide'
-    (package / 'saya-plugin.toml').write_text('''schema_version=1
+    (package / 'soyo-plugin.toml').write_text('''schema_version=1
 [plugin]
-id="io.saya.n5-local"
+id="io.soyo.n5-local"
 version="1.0.0"
 description="Local entry acceptance resource"
 license="MIT"
 [compatibility]
-requires_saya=">=0.2.0, <1.0.0"
+requires_soyo=">=0.2.0, <1.0.0"
 requires_features=["plugin-manifest-v1","skill-directory-v1"]
 [capabilities]
 requested=["workspace.read"]
@@ -994,7 +994,7 @@ def main(argv=None):
     encoded = json.dumps(report, indent=2, ensure_ascii=False)
     # Redact identity path values even from candidate diagnostics; never emit config.
     for key in ('IDENTITY_FILE', 'KNOWN_HOSTS'):
-        secret_path = os.environ.get('SAYA_TEST_VM_' + key)
+        secret_path = os.environ.get('SOYO_TEST_VM_' + key)
         if secret_path:
             encoded = encoded.replace(secret_path, '<private-vm-input>')
     require(len(encoded.encode()) <= 4 * 1024 * 1024, 'evidence exceeds byte budget')

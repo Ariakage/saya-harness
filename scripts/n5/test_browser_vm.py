@@ -98,7 +98,7 @@ class Fixture:
 def namespace(**overrides):
     values = {
         "colima": Path("/opt/homebrew/bin/colima"),
-        "profile": "saya-browser",
+        "profile": "soyo-browser",
         "cpu": 2,
         "memory": 4,
         "disk": 60,
@@ -117,13 +117,13 @@ def ssh_namespace(root: Path, **overrides):
     values = {
         "ssh": Path("/usr/bin/true"),
         "scp": Path("/usr/bin/true"),
-        "profile": "saya-browser",
+        "profile": "soyo-browser",
         "host": "127.0.0.1",
-        "user": "saya",
+        "user": "soyo",
         "port": 2222,
         "identity_file": identity,
         "known_hosts": known_hosts,
-        "remote_root": "/opt/saya",
+        "remote_root": "/opt/soyo",
         "chromium_dir_name": "chrome-headless-shell-linux64",
     }
     values.update(overrides)
@@ -454,12 +454,12 @@ class CreationTests(unittest.TestCase):
 
     def test_destroy_is_explicit_and_forced(self):
         argv = browser_vm.colima_delete_argv(namespace())
-        self.assertEqual(argv[1:4], ["delete", "--profile", "saya-browser"])
+        self.assertEqual(argv[1:4], ["delete", "--profile", "soyo-browser"])
         self.assertEqual(argv[-1], "--force")
 
     def test_profile_rejects_injection(self):
         with self.assertRaises(browser_vm.ToolError):
-            browser_vm.colima_start_argv(namespace(profile="saya;rm"))
+            browser_vm.colima_start_argv(namespace(profile="soyo;rm"))
         with self.assertRaises(browser_vm.ToolError):
             browser_vm.colima_start_argv(namespace(profile="-oProxyCommand=x"))
 
@@ -482,9 +482,9 @@ class SshTests(unittest.TestCase):
             self.assertIn("::1", argv)
             self.assertNotIn("[::1]", " ".join(argv))
             scp = browser_vm.scp_argv(
-                args, Path("/tmp/config"), "/tmp/source", "/opt/saya/node"
+                args, Path("/tmp/config"), "/tmp/source", "/opt/soyo/node"
             )
-            self.assertEqual(scp[-1], "saya@[::1]:/opt/saya/node")
+            self.assertEqual(scp[-1], "soyo@[::1]:/opt/soyo/node")
 
     def test_symlink_to_unsafe_target_is_rejected(self):
         with canonical_tempdir() as temporary:
@@ -561,8 +561,8 @@ class SshTests(unittest.TestCase):
             with self.assertRaises(browser_vm.ToolError):
                 browser_vm.safe_remote_path(bad, "path")
         self.assertEqual(
-            browser_vm.safe_remote_path("/opt/saya/worker", "path"),
-            "/opt/saya/worker",
+            browser_vm.safe_remote_path("/opt/soyo/worker", "path"),
+            "/opt/soyo/worker",
         )
 
 
@@ -731,11 +731,11 @@ class IdentityTests(unittest.TestCase):
     ) -> dict:
         fixture = Fixture()
         files = {
-            "/opt/saya/node/bin/node": fixture.node,
-            "/opt/saya/worker/node_modules/@playwright/mcp/package.json": fixture.mcp,
-            "/opt/saya/worker/node_modules/playwright/package.json": fixture.playwright,
-            "/opt/saya/worker/node_modules/playwright-core/package.json": fixture.core,
-            "/opt/saya/worker/node_modules/playwright-core/browsers.json": fixture.browsers,
+            "/opt/soyo/node/bin/node": fixture.node,
+            "/opt/soyo/worker/node_modules/@playwright/mcp/package.json": fixture.mcp,
+            "/opt/soyo/worker/node_modules/playwright/package.json": fixture.playwright,
+            "/opt/soyo/worker/node_modules/playwright-core/package.json": fixture.core,
+            "/opt/soyo/worker/node_modules/playwright-core/browsers.json": fixture.browsers,
         }
 
         def fake_ssh(args, config_path, script, arguments, input_bytes=None):
@@ -915,10 +915,10 @@ class IdentityTests(unittest.TestCase):
                 if script == browser_vm.CAT_SCRIPT:
                     path = arguments[0]
                     return {
-                        "/opt/saya/worker/node_modules/@playwright/mcp/package.json": fixture.mcp,
-                        "/opt/saya/worker/node_modules/playwright/package.json": fixture.playwright,
-                        "/opt/saya/worker/node_modules/playwright-core/package.json": fixture.core,
-                        "/opt/saya/worker/node_modules/playwright-core/browsers.json": fixture.browsers,
+                        "/opt/soyo/worker/node_modules/@playwright/mcp/package.json": fixture.mcp,
+                        "/opt/soyo/worker/node_modules/playwright/package.json": fixture.playwright,
+                        "/opt/soyo/worker/node_modules/playwright-core/package.json": fixture.core,
+                        "/opt/soyo/worker/node_modules/playwright-core/browsers.json": fixture.browsers,
                     }[path]
                 if '--version' in script:
                     return b"v22.23.0\n"
@@ -1073,7 +1073,7 @@ class NetworkPrerequisiteTests(unittest.TestCase):
         self.assertIn(
             "kernel.apparmor_restrict_unprivileged_userns=0", apparmor
         )
-        self.assertIn("/etc/sysctl.d/99-saya-browser-userns.conf", apparmor)
+        self.assertIn("/etc/sysctl.d/99-soyo-browser-userns.conf", apparmor)
         # The dedicated VM is reconfigured, never the host.
         self.assertNotIn("sysctl --system", apparmor)
 
