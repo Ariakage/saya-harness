@@ -1,6 +1,6 @@
 # CLI 入口与实现记录
 
-0.1.0 CLI 已发布。`saya run` 与 `saya chat` 接入三种协议、SQLite 持久会话以及受权限约束的文件、搜索和命令工具。PLAN 保持工作区只读。当前开发线无子命令的 `saya` 在终端进入 TUI，文本交互入口为 `saya chat`。各版本的验证范围见[开发进度](progress.md)。
+0.1.0 CLI 已发布，0.2.0 与后续开发线继续演进。`saya run` 与 `saya chat` 接入三种协议、SQLite 持久会话以及受权限与原生隔离约束的文件、搜索和命令工具；`saya module <browser|vm> <enable|disable|status>` / `saya module list` 可在独立状态库中开关受控 Browser / VM 能力。PLAN 保持工作区只读。无子命令的 `saya` 在终端进入 TUI，文本交互入口为 `saya chat`。各版本的验证范围见[开发进度](progress.md)。
 
 入门步骤和故障处理见[使用指南](usage.md)。配置格式见[配置组件](configuration.md)和[基线 B-04](mvp-baseline.md)。例如，先用 `saya config init` 创建空模板，填入明确的模型 profile 和凭据环境变量名，再用 `saya config check` 校验；此命令不会覆盖已有文件。默认配置文件位于 `$XDG_CONFIG_HOME/saya/config.toml` 或 `~/.config/saya/config.toml`，也可用 `--config PATH` 选择文件。模板不包含模型或真实凭据。运行示例（假定已经配置默认 profile）：
 
@@ -20,7 +20,7 @@ saya run --session SESSION_ID 'Continue the task'
 
 可通过 `--preferences-file PATH` 和 `--memory-file PATH` 显式向本次调用提供用户偏好及长期记忆文本，例如 `saya --preferences-file prefs.md --memory-file memory.md run 'Continue'`。各文件必须为 UTF-8、最多 64 KiB；内容会发送给所选模型，包含已配置凭据时拒绝发送。Saya 不自动发现、维护或保存这些文件，内容属于低信任上下文，不能授予权限。
 
-对明确支持 Anthropic Messages `cache_control` 的服务，可用 `--anthropic-prompt-cache` 在静态系统提示词末尾设置 5 分钟 ephemeral 缓存断点；兼容服务默认不启用此标记。OpenAI 格式和 DeepSeek 使用服务端自动前缀缓存，不发送 Anthropic 专用字段。缓存命中取决于厂商、模型、最小 token 阈值、请求顺序和缓存可用性，不能保证命中或节省费用。动态时间之后的内容不能复用为跨请求静态前缀。
+对明确支持 Anthropic Messages `cache_control` 的服务，可用 `--anthropic-prompt-cache` 或 `[profiles.NAME].prompt_cache = true` 在静态系统段、工具定义及最近历史断点设置 5 分钟 ephemeral 缓存断点（`anthropic_official_provider = true` 还会一并开启自适应思考摘要与 `max_tokens` 纯文本自动续写）；兼容服务默认全部关闭以兼容 DeepSeek Anthropic 接口。OpenAI 格式和 DeepSeek 使用服务端自动前缀缓存，不发送 Anthropic 专用字段。缓存命中取决于厂商、模型、最小 token 阈值、请求顺序和缓存可用性，不能保证命中或节省费用。动态时间之后的内容不能复用为跨请求静态前缀。
 
 三种单次输入方式互斥，没有隐式读取 stdin。`--interactive` 通过控制终端逐次确认工具调用，并回答 `ask_user` 澄清；无法打开控制终端时按非交互处理。非交互场景需要确认时返回退出码 3，需要澄清时显示问题并返回退出码 4。也可传入 `--approval-file PATH`；精确匹配的命令预授权仅在本次运行有效，并受 PLAN、显式 deny 和路径规则约束。
 
@@ -30,7 +30,7 @@ saya run --session SESSION_ID 'Continue the task'
 
 为防止恢复过程在 PLAN 工作区产生数据库文件，恢复前使用会话安全检查点或只读预检；旧会话遗留 WAL 可通过校验后的内存快照预检。恢复会将中断的运行记为失败，区分未执行、等待确认、输入中断和结果不明，补齐工具调用结果并展示恢复提示，不自动重放。若执行结果未能保存，CLI 显示已观察结果并停止当前运行；交互会话也会退出，避免继续调度。
 
-后台任务仅属于当前运行：运行期间可通过 `/jobs` 查看，通过 `/job ID` 查询结果，并用 `/cancel-job ID` 请求取消；`session show` 包含已记录的后台状态。正常结束时会等待清理未完成任务并提示。崩溃恢复不重放任务：结果可能为已完成、未执行或未知，失去管理的进程在 Saya 被强制终止后可能仍在运行，不能把未知结果当作已停止。现阶段没有操作系统沙箱。
+后台任务仅属于当前运行：运行期间可通过 `/jobs` 查看，通过 `/job ID` 查询结果，并用 `/cancel-job ID` 请求取消；`session show` 包含已记录的后台状态。正常结束时会等待清理未完成任务并提示。崩溃恢复不重放任务：结果可能为已完成、未执行或未知，脱离托管的进程在 Saya 被强制终止后可能仍在运行，不能把未知结果当作已停止。原生执行层默认启用 macOS Seatbelt / Linux Bubblewrap + Seccomp + 代理隔离（详见[原生隔离](sandbox.md)与[配置组件](configuration.md)）。
 
 `session show` 的 `project_context_records` 提供各模型请求的项目指令／Skill 来源路径和哈希，不包含指令正文。已保存的旧会话可能没有此记录；恢复时始终重新读取当前来源。
 

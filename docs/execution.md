@@ -61,7 +61,7 @@ TUI 的 Agent 执行期间可以继续提交普通用户消息。消息进入有
 
 开发线按D-046增加 `todo_write` 会话任务清单工具，PLAN可更新任务元数据，Manual Approval每次调用均需批准。完整列表替换、校验限额及恢复规则见[运行时](runtime.md#会话任务清单)。
 
-N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。DEV-080 已完成 Playwright worker 组件与显式 VM 后端，VM 真实入口已验证；native 浏览器未取得真实平台验收。broker 网络、登录、文件 broker 与后台取消已由 DEV-081 完成并取得专用 VM 验收，DEV-082 已接入 CLI／TUI 审批与产物展示及三协议图片能力；固定 worker 因缺少截图前遮蔽契约仍禁用截图，DEV-083 联合验收待完成。
+N5 开发线的 DEV-079 增加宿主侧 `fetch_url`／`web_search` 与 `browser_*` 工具面，默认关闭（并受 `saya module browser|vm enable|disable` 开关与配置校验共同门控）。效果分类为 `WebRead`、`BrowserRead`、`BrowserWrite`：`WebRead` 在 PLAN 可用；`BrowserRead`（snapshot／wait／screenshot）与 `BrowserWrite`（open／close／navigate／click／fill／press／download／upload）在 PLAN 一律拒绝。`auto` 允许 `WebRead`／`BrowserRead`，`BrowserWrite` 进入现有独立模型核查；Manual Approval 逐次确认；bypass 保留 PLAN 与显式 deny。`AgentRuntime::new_read_only` 不注册也不执行任何 Browser 工具。DEV-080 至 DEV-083 已打通 Playwright worker（三补丁 + 定制 ARM64 Chromium 预捕获遮蔽）、专用 VM、broker 网络／凭据／文件通道及 CLI/TUI 媒体展示；固定源码 `5fff1c4` 四平台远端终验与本机／VM/`n5arm22` Masked PNG 联合验收均已通过（遇到未修补 Chromium 或未确认 `masked=true` 时仍严格 fail-closed 为 `browser_capability_disabled`，非 ARM64 定制引擎分发待补齐），详见[Browser 设计](browser.md)与[N5 验收](n5-validation.md)。
 
 工具按下面的顺序处理：
 
@@ -124,7 +124,7 @@ JSONL事件序号严格递增，预留可产生空洞。每个4096序号预留�
 | 保存失败或会话损坏 | failed／storage_error 或 storage_corrupt，不静默重建或声称保存成功 |
 | 多进程同时写同一会话 | 排他会话写锁，第二个写入者返回 session_busy，查询仍可读 |
 
-会话库使用工作区外 XDG 数据目录中的 SQLite WAL，格式版本为 1，按关键状态事务保存，不自动过期或上传；配置、模型、工作区与工具状态随会话记录。日志位于 XDG state 目录。PLAN 与数据目录重叠时启动检查失败，不写入目标工作区。
+会话库使用工作区外 XDG 数据目录中的 SQLite WAL，内部数据库 schema 版本为 2，按关键状态事务保存，不自动过期或上传；配置、模型、工作区与工具状态随会话记录。日志位于 XDG state 目录。PLAN 与数据目录重叠时启动检查失败，不写入目标工作区。
 
 ## 实现与验证
 
@@ -144,7 +144,7 @@ JSONL事件序号严格递增，预留可产生空洞。每个4096序号预留�
 
 `sandbox.read_roots` 与 `write_roots` 控制 OS 视图，`permissions.additional_roots` 同时扩展逻辑文件权限和原生读写根。单独提供工具链可读根只允许进程访问该目录，文件工具访问仍按逻辑权限判断。解释器与编译器需要的额外目录由用户显式选择。
 
-内置六种文件工具在同一原生后端包裹的私有 worker 中执行。宿主先持久化 intent 并消费一次许可，再传递确切调用、限额和已批准目标，worker 二次解析目标并检查 PLAN。请求与响应各有 32 MiB wire 硬上限，配置中的扫描、返回和写入上限继续按各自语义校验。损坏、超限、截断响应或进程异常按实际观测报告，副作用无法确认时保留 `unknown`。
+内置七种文件工具在同一原生后端包裹的私有 worker 中执行。宿主先持久化 intent 并消费一次许可，再传递确切调用、限额和已批准目标，worker 二次解析目标并检查 PLAN。请求与响应各有 32 MiB wire 硬上限，配置中的扫描、返回和写入上限继续按各自语义校验。损坏、超限、截断响应或进程异常按实际观测报告，副作用无法确认时保留 `unknown`。
 
 命令的实际环境在隔离完成后通过专用私有 FD 恢复，宿主 launcher 使用固定最小环境。未声明 FD 在 exec 时关闭，受控传递的环境 FD 在 payload 前关闭。文件和命令共用进程组监督、超时、取消、输出排空及持久化结果边界，后台执行复用相同链路。
 

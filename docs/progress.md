@@ -53,7 +53,7 @@
 
 ## N5 Browser 本机联合阶段
 
-2026-11-14，DEV-079、DEV-080、DEV-081 网络与凭据／文件阶段、DEV-082 分别已提交为 `5a61152`、`058bb9e`、`e2587fe`、`f1bbc5c`、`1443291`。DEV-083 的正常 CLI／TUI／专用 Colima VM 联合阶段通过 21 项、截图 disabled 1 项，未把禁用算作成功；N5 与 DEV-083 全范围仍未完成。完整范围、失败轮次与复跑入口见 [N5 验收](n5-validation.md)，对外能力与限制见 [中英双语说明](release-notes-n5.md)。
+2026-11-14，DEV-079、DEV-080、DEV-081 网络与凭据／文件阶段、DEV-082 分别已提交为 `5a61152`、`058bb9e`、`e2587fe`、`f1bbc5c`、`1443291`。DEV-083 的正常 CLI／TUI／专用 Colima VM 联合阶段通过 21 项、截图 disabled 1 项，未把禁用算作成功；N5 与 DEV-083 全范围仍未完成。完整范围、失败轮次与复跑入口见 [N5 验收](n5-validation.md)，对外能力与限制见 [中英双语说明](releases/release-notes-n5.md)。
 
 固定程序来自 Rust 源码 `1443291511a294a141908633296e0d304f68f8bb`、标准 `just release` 与 macOS 15.0 部署目标，SHA-256 为 `86c08738d627d3b54314957675f82f1e23398fab212b4a02fe1410a9f82a0135`。最终报告 `target/n5/dev083-browser-final/run-jfraywh6/evidence.json` 实际记录 Execution 135、Review 8、Compact 1；覆盖 PLAN 三权限、独立审核、逐调用批准／拒绝、长快照／检索／完整分页、实际下载／同 Session 上传、后台取消后新观察恢复、前台取消的持久 unknown、插件资源与显式 Compact／Session 恢复。11 组真实 PTY、48 帧审批均验证，完整终端属性和 fd flags 恢复，清理未使用强制 SIGKILL，远端前后 Run 根与关联进程均为空。
 
@@ -195,13 +195,13 @@ CLI新增`goal create|plan|confirm|list|status|continue|start|pause|resume|cance
 
 TUI新增`/goals`选择器与`/goal create|plan|confirm|status|continue|start|pause|resume|cancel|verify|report|replan ID`，面板展示步骤、Run、预算、usage、证据和等待原因。TUI自动执行当前要求auto／bypass，Manual Approval使用CLI终端审批。
 
-完整验收与限制见[N4验收](n4-validation.md)和[N4中英双语说明](release-notes-n4.md)。
+完整验收与限制见[N4验收](n4-validation.md)和[N4中英双语说明](releases/release-notes-n4.md)。
 
 本机最终验收使用 macOS27.2 ARM／Rust1.99.1：格式、workspace全目标严格Clippy、1414项Rust测试、8项条件忽略与release构建通过，日志为`target/n4-check.log`；81项Python工具回归通过，日志为`target/n4-tooling.log`。同一release程序通过离线smoke、文本journey、5项审查回归及28组TUI PTY，Goal场景完整覆盖选择器、计划确认、暂停／恢复、自动Step、核验和report，日志为`target/n4-smoke.log`与`target/n4-goal-pty.log`。Goal CLI fixture显式使用Host sandbox，避免混同N2 native验收；修改后的7项Goal CLI测试和严格Clippy通过。程序SHA-256为`bd24cedf78d235edcf5b07e63b4575243edb4a86c8ea7562399d79feeb6e32c2`。
 
 Linux ARM64使用本机Colima `default`、8 GiB Ubuntu24.04.4 VM及Ubuntu22.04/Rust1.99.1容器，以单并发和关闭测试debug／incremental完成Goal core8项、Goal CLI7项、TUI Goal service／preview／picker各1项及workspace `cargo check --locked`，日志为`target/n4-linux.log`。未限制并发的首次编译OOM及缺少native工具的测试环境日志分别保留为`target/n4-linux-initial.log`与`target/n4-linux-sandbox-missing.log`；临时volume、容器和Colima均已清理。本轮未推送、未运行远端CI或四平台固定源码发行验收。
 
-2026-11-12 对 `56ad4f0` 完成独立审查并整改15项Goal契约问题，覆盖计划确认恢复、证据类型与最终文件重验、Draft／Cancelled完成旁路、单次预授权、租约失败取消、PLAN存储与报告、全部预算dispatch、未知token用量、活动Run取消、终端输出及有界读取。新增定向回归Goal core 14/14、Goal CLI 15/15通过，包含真实双进程活动模型请求取消。最终本机 `RUST_TEST_THREADS=1 just check` 通过1428项Rust测试、8项条件忽略、严格Clippy和release构建，`just test-tooling` 81项通过；同一release的smoke、文本journey、5项历史审查回归及28组TUI PTY全部通过。程序SHA-256为 `e3e75edfebc8f89a4570227c5ee2e9669fa1a2004b2ddbceb8545ec15a61ef77`，日志为 `target/n4-review-{check,tooling,smoke}.log`。完整整改证据见[N4审查与整改报告](review-2026-11-11.md)；原提交的平台日志和程序哈希继续归属 `56ad4f0`，不用于替代整改后验证。本轮未运行远端CI或其他平台重验。
+2026-11-12 对 `56ad4f0` 完成独立审查并整改15项Goal契约问题，覆盖计划确认恢复、证据类型与最终文件重验、Draft／Cancelled完成旁路、单次预授权、租约失败取消、PLAN存储与报告、全部预算dispatch、未知token用量、活动Run取消、终端输出及有界读取。新增定向回归Goal core 14/14、Goal CLI 15/15通过，包含真实双进程活动模型请求取消。最终本机 `RUST_TEST_THREADS=1 just check` 通过1428项Rust测试、8项条件忽略、严格Clippy和release构建，`just test-tooling` 81项通过；同一release的smoke、文本journey、5项历史审查回归及28组TUI PTY全部通过。程序SHA-256为 `e3e75edfebc8f89a4570227c5ee2e9669fa1a2004b2ddbceb8545ec15a61ef77`，日志为 `target/n4-review-{check,tooling,smoke}.log`。完整整改证据见[N4审查与整改报告](reviews/review-2026-11-11.md)；原提交的平台日志和程序哈希继续归属 `56ad4f0`，不用于替代整改后验证。本轮未运行远端CI或其他平台重验。
 
 ## 模型超时与有限间隔重试
 
@@ -245,7 +245,7 @@ Linux ARM64使用本机Colima `default`、Ubuntu22.04工具链完成TUI剪贴板
 
 2026-11-11，提示词评估扩展为10个场景，新增无序区间／相邻区间合并、输入不可变性和多次尝试下的事件状态聚合。补丁指导压缩为连续上下文、独立行数计算与实际起始行，明确多hunk累计行差；对相距较远或多行增删的修改优先一个小hunk，成功后重读并使用新版本。Skill明确激活后携带文档、附加资源读取及 `skill_inactive` 恢复路径。评估工具继续拒绝exec，外部行为测试而非模型自述决定通过。
 
-最终小hunk候选三批合计90/90通过，整体缓存命中率96.11%，Turn 1为91.28%，Turn 2+为97.50%。输入4,789,904 tokens，缓存4,603,776、未缓存186,128，输出89,489，总计4,879,393；输入／输出占98.17%／1.83%，缓存／未缓存输入占94.35%／3.81%。旧程序两批60次运行有9次失败工具结果，最终三批90次为7次；含错误运行比例由8/60（13.33%）降至7/90（7.78%），每次成功模型请求对应的错误由9/254（3.54%）降至7/375（1.87%）。新增事件状态聚合9/9通过且0工具错误，区间合并错误由4次降为1次，范围约束与直接补丁仍有波动，不能宣称所有场景均改善。迭代、分组、token和原始SHA见[提示词与模型任务能力联合验证](prompt-capability-2026-11-11.md)。
+最终小hunk候选三批合计90/90通过，整体缓存命中率96.11%，Turn 1为91.28%，Turn 2+为97.50%。输入4,789,904 tokens，缓存4,603,776、未缓存186,128，输出89,489，总计4,879,393；输入／输出占98.17%／1.83%，缓存／未缓存输入占94.35%／3.81%。旧程序两批60次运行有9次失败工具结果，最终三批90次为7次；含错误运行比例由8/60（13.33%）降至7/90（7.78%），每次成功模型请求对应的错误由9/254（3.54%）降至7/375（1.87%）。新增事件状态聚合9/9通过且0工具错误，区间合并错误由4次降为1次，范围约束与直接补丁仍有波动，不能宣称所有场景均改善。迭代、分组、token和原始SHA见[提示词与模型任务能力联合验证](reports/prompt-capability-2026-11-11.md)。
 
 `just test-tooling` 的81项Python回归通过，日志为 `target/prompt-capability-tooling.log`。Memory工具测试显式关闭自动Compact以保持其原64K测试预算下的独立验收，专用Compact测试不变；产品默认预算未改。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1390项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-capability-check-final.log`。同一release程序执行 `just smoke target/release/saya`，离线smoke、文本journey、5项审查回归及27组TUI PTY全部通过，日志为 `target/prompt-capability-smoke.log`；程序与三批评估候选的SHA-256均为 `7d0dae2a68bba1d4df21bfc72b6c3ef1564acd2272ecc8ab7d22792a09fef645`。未运行远端CI、其他模型或四平台重新验收。
 
@@ -267,7 +267,7 @@ Linux ARM64使用本机Colima `default`、Ubuntu22.04工具链完成TUI剪贴板
 
 2026-11-11，在前一轮83.54%整体缓存命中率基础上继续定位首轮与Turn 3–4未命中。最终系统将运行时间、工作区和环境实例身份／策略摘要移到工具schema之后的带标签历史数据项，同一Runtime复用精确运行时间；不同工作区因此可复用相同配置的系统与工具前缀。查找特定条目改为先搜索而非从第1行读取，补丁明确单行替换的hunk计数公式与连续上下文，Skill要求成功激活后读取资源，WORK逐项保留字面标签和值。
 
-最终同一 `v4` 程序以8场景×6次重复运行两批，合计96/96通过。整体输入4,996,880 tokens，缓存4,749,696、未缓存247,184，输出87,913，总计5,084,793；整体缓存命中率95.05%，Turn 1为87.57%，Turn 2+为97.20%。输入／输出占总token 98.27%／1.73%，缓存／未缓存输入占总token 93.41%／4.86%。两批各48次均有3次失败工具结果，较前一轮48次4次下降；合并为6/96次运行有工具错误（6.25%），低于此前4/48（8.33%）。按成功模型请求归一化为6/397（1.51%），此前为4/212（1.89%）。所有剩余错误均恢复后通过，不声称已消除。迭代、冷启动、连接失败和原始SHA见[缓存95%联合报告](prompt-cache-95-2026-11-11.md)。
+最终同一 `v4` 程序以8场景×6次重复运行两批，合计96/96通过。整体输入4,996,880 tokens，缓存4,749,696、未缓存247,184，输出87,913，总计5,084,793；整体缓存命中率95.05%，Turn 1为87.57%，Turn 2+为97.20%。输入／输出占总token 98.27%／1.73%，缓存／未缓存输入占总token 93.41%／4.86%。两批各48次均有3次失败工具结果，较前一轮48次4次下降；合并为6/96次运行有工具错误（6.25%），低于此前4/48（8.33%）。按成功模型请求归一化为6/397（1.51%），此前为4/212（1.89%）。所有剩余错误均恢复后通过，不声称已消除。迭代、冷启动、连接失败和原始SHA见[缓存95%联合报告](reports/prompt-cache-95-2026-11-11.md)。
 
 `just test-tooling` 的81项Python回归通过，日志为 `target/prompt-cache-95-tooling.log`。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1388项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-cache-95-check.log`。最终release与96次评估的 `v4` 程序SHA-256均为 `df48be3f69d8843379b19394117386c6293b780a6845be82557f2c2e1ee1274c`。未运行远端CI、其他模型或四平台重新验收。
 
@@ -275,7 +275,7 @@ Linux ARM64使用本机Colima `default`、Ubuntu22.04工具链完成TUI剪贴板
 
 2026-11-11，真实 `deepseek-flash` 对照扩展为8个场景，覆盖PLAN只读注入、已有文件与多hunk补丁、Skill路由、WORK精确交付、范围注入、CSV聚合和长日志检索。评估工具新增 `--repeat`、`--jobs`、`--diagnostics` 和离线 `--compare`，保存每轮输入、缓存输入、未缓存输入、输出及总token，并计算整体、Turn 1与Turn 2+命中率和token占比。早期未采集缓存字段的报告在对比中显示未知，不按0处理。
 
-修改前基线24次运行虽全部通过，但有17次失败工具结果；最终提示词/schema与缓存计量候选24次全部通过、1次失败工具结果。缓存前缀优化版以同一程序完成两批各24次运行，合并48/48通过、4次可恢复的补丁hunk计数错误，平均每次运行4.42次模型请求。优化前24次的整体／Turn 2+缓存命中率为36.37%／35.53%；优化后合并为83.54%／91.75%。优化后合计输入3,390,916 tokens，其中缓存2,832,640、未缓存558,276，输出48,275，总计3,439,191；输入／输出占总消耗98.60%／1.40%，缓存／未缓存输入占总消耗82.36%／16.23%。计算口径、分组、程序SHA及原始报告摘要见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。
+修改前基线24次运行虽全部通过，但有17次失败工具结果；最终提示词/schema与缓存计量候选24次全部通过、1次失败工具结果。缓存前缀优化版以同一程序完成两批各24次运行，合并48/48通过、4次可恢复的补丁hunk计数错误，平均每次运行4.42次模型请求。优化前24次的整体／Turn 2+缓存命中率为36.37%／35.53%；优化后合并为83.54%／91.75%。优化后合计输入3,390,916 tokens，其中缓存2,832,640、未缓存558,276，输出48,275，总计3,439,191；输入／输出占总消耗98.60%／1.40%，缓存／未缓存输入占总消耗82.36%／16.23%。计算口径、分组、程序SHA及原始报告摘要见[多轮缓存验证报告](reports/prompt-evaluation-2026-11-11.md)。
 
 实现将Runtime创建时的分钟对齐时间快照复用于后续模型轮次，工作区只保留在`runtime_context`数据项，执行环境事实和宿主checkpoint标志排在动态请求事实之前。`Usage.cached_input_tokens`以可选字段接入Chat、Responses和Messages适配器及运行指标合计，未上报时保留既有JSON形状。离线预览与生产顺序一致；定向Rust回归通过。`just test-tooling` 的81项Python回归通过，日志为 `target/prompt-cache-tooling.log`。本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1388项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-cache-check.log`；最终release程序SHA-256为 `d42656ca8c17755646fef6a41e6f848a6e7060237bf3ad87b064ecc85f7fdd0e`。未运行远端CI、其他模型或四平台重新验收。
 
@@ -313,7 +313,7 @@ Linux ARM64使用本机Colima `default`、Ubuntu22.04工具链完成TUI剪贴板
 
 `just prompt` 改用与生产一致的 `AgentRuntime::model_tool_definitions`，覆盖工作区checkpoint及按模式过滤的工具schema；Memory与checkpoint后端使用临时目录，不写入工作区。执行预览再经过ContextBuilder。新增能力可见性、生产schema与文档快照回归；`scripts/prompt_eval.py` 提供显式DeepSeek基线／候选对照，临时工作区拒绝exec，不执行模型生成的命令。
 
-使用同一 `deepseek-flash`、Chat Completions、128000窗口及8192输出上限运行四个小样本。基线（SHA `25326338fb3560f6870c38c48e8aa45b5c79699489a1367d136f34dad8132c71`）完成3／4项、21次模型请求、3次工具错误；首轮候选（SHA `6654dc3a6cdae50c420a30e5d3e356d9dd3a8a205769f386604b7acd153c5b1b`）完成4／4项、20次请求、3次工具错误。直接补丁由基线5次请求／1次invalid_patch改为连续两轮4次请求／0工具错误；通用报告由未保留颜色名称改为两轮通过。Skill选择仍出现2–3次invalid_patch，说明该路径没有稳定解决。上述结果为同一服务的小样本对照，不代表跨模型提升；[独立对比验证报告](prompt-evaluation-2026-11-11.md)已纳入仓库，原始JSON保存在 `target/prompt-improvement/{baseline,candidate,candidate-repeat}.json`，未提交真实凭据或模型回复。
+使用同一 `deepseek-flash`、Chat Completions、128000窗口及8192输出上限运行四个小样本。基线（SHA `25326338fb3560f6870c38c48e8aa45b5c79699489a1367d136f34dad8132c71`）完成3／4项、21次模型请求、3次工具错误；首轮候选（SHA `6654dc3a6cdae50c420a30e5d3e356d9dd3a8a205769f386604b7acd153c5b1b`）完成4／4项、20次请求、3次工具错误。直接补丁由基线5次请求／1次invalid_patch改为连续两轮4次请求／0工具错误；通用报告由未保留颜色名称改为两轮通过。Skill选择仍出现2–3次invalid_patch，说明该路径没有稳定解决。上述结果为同一服务的小样本对照，不代表跨模型提升；[独立对比验证报告](reports/prompt-evaluation-2026-11-11.md)已纳入仓库，原始JSON保存在 `target/prompt-improvement/{baseline,candidate,candidate-repeat}.json`，未提交真实凭据或模型回复。
 
 本机macOS27.2 ARM执行 `RUST_TEST_THREADS=1 ./scripts/check.sh`，格式、workspace全目标严格Clippy、1370项Rust测试、8项条件忽略和release构建全部通过，日志为 `target/prompt-improvement/check.log`。`just test-tooling` 的75项Python回归通过，日志为 `target/prompt-improvement/tooling.log`。生产预览生成28个工具定义，工作区不遗留Memory／checkpoint目录。尚未运行远端CI、其他模型或四平台重新验收。
 
@@ -573,7 +573,7 @@ TUI在现有富文本显示基础上增加宽度自适应管道表格、`__加�
 
 四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产均完成匿名公开下载，逐字节及SHA-256与验收对象一致。包内源码声明、README／LICENSE及程序哈希，以及验收脚本摘要经过独立核对。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[正式版结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/release-evidence.json)
 
-正式macOS ARM二进制通过24例合成凭据探针及deepseek-flash三协议×四模式的12项真实任务。41次模型请求全部成功，35次工具调用中34次成功。Chat CODE的invalid_patch发生于事件序号15，事件序号21的补丁成功，最终任务与静态产物校验通过，失败错误码、调用ID和顺序均保留。三项PLAN工作区零修改，命令执行为0。生成源码仅静态检查，服务内部effort及网络分块未独立观察。[真实模型记录](live-model-validation.md)
+正式macOS ARM二进制通过24例合成凭据探针及deepseek-flash三协议×四模式的12项真实任务。41次模型请求全部成功，35次工具调用中34次成功。Chat CODE的invalid_patch发生于事件序号15，事件序号21的补丁成功，最终任务与静态产物校验通过，失败错误码、调用ID和顺序均保留。三项PLAN工作区零修改，命令执行为0。生成源码仅静态检查，服务内部effort及网络分块未独立观察。[真实模型记录](reports/live-model-validation.md)
 
 本机 `.saya/local/saya-trial` 已切换到匿名下载的正式ARM程序，配置、空闲TUI、命令面板和退出恢复检查通过，模型运行数为0。原预发行和历史程序保留独立记录。完整日志、包、公开下载与验收材料位于 `target/release-0.2.0/`。
 
@@ -596,13 +596,13 @@ TUI在现有富文本显示基础上增加宽度自适应管道表格、`__加�
 
 四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产完成匿名公开下载，逐字节／SHA-256与验收对象一致。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0-rc.2/release-evidence.json)
 
-实际发布的macOS ARM二进制通过24例合成凭据探针，以及deepseek-flash三协议×四模式共12项真实任务。42次模型请求全部成功，36次工具调用中35次成功。Chat CODE运行包含一次未成功的补丁尝试，最终产物准确且任务完成，该失败的具体错误码与两次尝试的先后顺序未留存。三个PLAN工作区保持不变，命令执行为0。生成源码仅静态检查，服务内部effort及实际网络分块未独立核实，抽样范围见[真实模型记录](live-model-validation.md)。
+实际发布的macOS ARM二进制通过24例合成凭据探针，以及deepseek-flash三协议×四模式共12项真实任务。42次模型请求全部成功，36次工具调用中35次成功。Chat CODE运行包含一次未成功的补丁尝试，最终产物准确且任务完成，该失败的具体错误码与两次尝试的先后顺序未留存。三个PLAN工作区保持不变，命令执行为0。生成源码仅静态检查，服务内部effort及实际网络分块未独立核实，抽样范围见[真实模型记录](reports/live-model-validation.md)。
 
 本机试用入口 `.saya/local/saya-trial` 更新为该公开发行的ARM程序，保留之前产物。完整本机、原生工作流、下载及探针记录位于 `target/rc2/`。
 
 ## 第二轮审查整改
 
-以 `c93fcca` 为整改起点，逐项核实[第二轮报告](review-2026-11-09_02.md)。报告中的发现与建议按既定契约和实际复现判定，确认问题已修复，各阶段完成适用检查后独立提交。契约保留项与最终证据见报告第7节。
+以 `c93fcca` 为整改起点，逐项核实[第二轮报告](reviews/review-2026-11-09_02.md)。报告中的发现与建议按既定契约和实际复现判定，确认问题已修复，各阶段完成适用检查后独立提交。契约保留项与最终证据见报告第7节。
 
 - R2-01已复现并修复共享检测／脱敏不对称。残留编码凭据使脱敏失败关闭，五项redaction测试及SQLite提交前拒绝回归通过，日志为 `target/r2-01-before.log` 和 `target/r2-01-after.log`。
 - R2-15的同模式请求已修复。撤回异构待切换请求会清空pending并更新revision，原模式可继续开始共享调用。两项新增回归的失败／通过证据为 `target/r2-15-mode-before.log` 与 `target/r2-15-mode-after.log`，core全目标Clippy通过。其余后台模式及超时问题继续核实。
@@ -677,7 +677,7 @@ TUI在现有富文本显示基础上增加宽度自适应管道表格、`__加�
 
 ## 2026-11-09 风险优先代码审查
 
-起始 HEAD 为干净的 `c14982a`，覆盖 v0.1.0 至该基线并优先审查 RC1 后增量。六项原复现已完成首轮修复和 Agent 交叉复核。提交为 Todo `294e2fa`、Responses `fe408d1`、CLI `d32c48b` 和 TUI `727832b`。后续独立复核发现的R-02缺口已完成补修，等级、触发条件、回归和处置见[审查报告](review-2026-11-09.md)。
+起始 HEAD 为干净的 `c14982a`，覆盖 v0.1.0 至该基线并优先审查 RC1 后增量。六项原复现已完成首轮修复和 Agent 交叉复核。提交为 Todo `294e2fa`、Responses `fe408d1`、CLI `d32c48b` 和 TUI `727832b`。后续独立复核发现的R-02缺口已完成补修，等级、触发条件、回归和处置见[审查报告](reviews/review-2026-11-09.md)。
 
 macOS 27.2 ARM／Rust 1.99.1、部署目标 15.0 的完整检查通过格式、workspace 全目标严格 Clippy、597 项 Rust 测试和优化构建。同一程序通过 5 项发行工具测试、smoke、journey、既有审查回归及实际 20 组正常入口 PTY。程序 SHA-256 为 `80cb4093bddb9db55f000ca691ff29cefc2a9e5c87028c272a7a55d6db91d417`，代码源码固定为 `727832b`。日志和脚本／程序／源码哈希位于 `target/review-20261109/`，原始 PTY 报告为 `target/review-tui-journey.json`。
 
@@ -907,7 +907,7 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 - 标签 `v0.1.0` 固定到 `eaade53649ffffa013e2503b894825e1b72f3dc1`。其运行时代码、提示词与 Cargo 依赖同审查修复 `854be1b` 一致，真实模型复测记录继续适用。
 - [正式构建 42383135600](https://github.com/Ariakage/saya-harness/actions/runs/42383135600) 在 Ubuntu 22.04 和 macOS 15 的两个原生架构分别通过 342 项 Rust 测试、四项发行工具测试及三项解包演练。最终包的源码、二进制、脚本哈希和环境记录已交叉核对。
 - [GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0) 已公开发布并设为 Latest，正文和 `RELEASE-NOTES.md` 提供英文及简体中文。四包 SHA256SUMS 校验通过，七项资产全部回下载并逐字节比较通过，公开页面 HTTP 200。
-- 回下载的两个 macOS 程序在 macOS 27.2 ARM 主机再次通过版本检查和三项演练，Intel 包经 Rosetta 执行。最低 macOS 15 的证据来自上述原生工作流。包哈希与已知限制见[发行验证记录](release-validation.md)及[版本说明](release-notes-0.1.0.md)。
+- 回下载的两个 macOS 程序在 macOS 27.2 ARM 主机再次通过版本检查和三项演练，Intel 包经 Rosetta 执行。最低 macOS 15 的证据来自上述原生工作流。包哈希与已知限制见[发行验证记录](releases/release-validation.md)及[版本说明](releases/release-notes-0.1.0.md)。
 
 ## P7 最终验收
 
@@ -924,30 +924,30 @@ profile新增可选 `thinking_effort`，支持low／medium／high／xhigh／max�
 ## 2026-11-07 风险优先审查
 
 - 基线为干净的 `1f223cb`，原有仓库检查及 337 个测试通过。审查已复现并修复恢复时忽略显式 PLAN、嵌套凭据进入核查／确认、配置写入上限未传递、Responses 混合输出历史失败，以及无效后台请求直接终止运行五项问题。
-- 修复后 fmt、Clippy `-D warnings`、341 个测试、release 构建、两组发行工具 Python 测试和 350 个本地文档链接检查通过。回归复现、修复入口、复核范围与未完成项见[审查记录](review-2026-11-07.md)。候选重建证据将随实际结果补充，P7、DEV-031 和 DEV-032 继续待验证。
+- 修复后 fmt、Clippy `-D warnings`、341 个测试、release 构建、两组发行工具 Python 测试和 350 个本地文档链接检查通过。回归复现、修复入口、复核范围与未完成项见[审查记录](reviews/review-2026-11-07.md)。候选重建证据将随实际结果补充，P7、DEV-031 和 DEV-032 继续待验证。
 - 第一次独立复核在 `15a4ac6` 中复现较深／Unicode 转义凭据检测遗漏与无效 cwd 分类遗漏。追加修复 `854be1b` 已通过独立复核、完整检查的 342 个测试及实际 release 程序的五项回归。中间提交 `15a4ac6` 的构建产物保留为审查过程证据。
-- 已从 `854be1b` 重新构建四目标候选，校验包、源码声明与二进制哈希，并对四个解包程序执行 smoke、交互演练及五项审查回归，全部通过。Linux Intel 使用 ARM 交叉构建并经 QEMU 运行，macOS Intel 经 Rosetta 运行。候选哈希与最低环境缺口见[发行记录](release-validation.md)。
+- 已从 `854be1b` 重新构建四目标候选，校验包、源码声明与二进制哈希，并对四个解包程序执行 smoke、交互演练及五项审查回归，全部通过。Linux Intel 使用 ARM 交叉构建并经 QEMU 运行，macOS Intel 经 Rosetta 运行。候选哈希与最低环境缺口见[发行记录](releases/release-validation.md)。
 
 ## D-035：最低支持版本调整（历史记录）
 
 - 项目负责人将 macOS 最低支持版本调整至 15；Linux 基线与四个架构目标不变。CI 构建目标和 macOS 最低环境验证脚本同步调整。
-- macOS ARM／Intel 以 `MACOSX_DEPLOYMENT_TARGET=15.0` 重新构建；在 macOS 27 ARM（Intel 使用 Rosetta）检查 Mach-O 声明、离线工具往返与交互恢复并通过。新候选复用先前 Linux 二进制，校验和和验证边界见[候选记录](release-validation.md)。
+- macOS ARM／Intel 以 `MACOSX_DEPLOYMENT_TARGET=15.0` 重新构建；在 macOS 27 ARM（Intel 使用 Rosetta）检查 Mach-O 声明、离线工具往返与交互恢复并通过。新候选复用先前 Linux 二进制，校验和和验证边界见[候选记录](releases/release-validation.md)。
 - [GitHub Actions 42373322880](https://github.com/Ariakage/saya-harness/actions/runs/42373322880) 在 Ubuntu 22.04 ARM／Intel 与 macOS 15 ARM／Intel 全部通过；macOS job 实际检查 15.0 部署目标并执行离线工具往返与交互会话 smoke。CI 构建的二进制与此前本地候选不同；CI 不自动上传产物，尚不能把其结果归因于本地候选。DEV-031／032 与 P7 保持待验证。
 
 ## DEV-032 发行检查草案（历史记录）
 
-- [发行检查草案](release-checklist.md)逐项索引 B-01 至 B-24、AC-01 至 AC-24 的现有证据与缺口；[候选版本说明](release-notes-0.1.0.md)记录功能、迁移和平台限制。
+- [发行检查草案](releases/release-checklist.md)逐项索引 B-01 至 B-24、AC-01 至 AC-24 的现有证据与缺口；[候选版本说明](releases/release-notes-0.1.0.md)记录功能、迁移和平台限制。
 - 草案不代替已核实的最低环境证据。DEV-031 和 AC-24 尚未完成，不能将 DEV-032 或 P7 标为完成，也没有授权外部发布。
 
 ## DEV-031 候选准备记录（D-035 前的历史）
 
 - 从源码 `a1b1b02` 构建四目标候选包并生成 SHA256；两种 Linux 架构在 Ubuntu 22.04／glibc 2.35 通过 smoke，Intel 使用模拟；两个 macOS 目标在 macOS 27.2 ARM 通过 smoke，Intel 使用 Rosetta，声明最低部署版本均为 13.0。
-- 离线工具往返及干净配置、人工批准、退出、列出、恢复、继续输入演练均在四个候选二进制上通过；候选包校验和及内容哈希已核对。详见[发行候选验证记录](release-validation.md)。
+- 离线工具往返及干净配置、人工批准、退出、列出、恢复、继续输入演练均在四个候选二进制上通过；候选包校验和及内容哈希已核对。详见[发行候选验证记录](releases/release-validation.md)。
 - 当时尚未在 macOS 13 运行两个候选，DEV-031 因缺少最低环境证据而未完成；项目负责人确认当时没有 macOS 13 环境。本地候选未签名或发布。D-035 已将最低支持版本调整至 macOS 15，当前验证要求见上方记录。
 
 ## DEV-030 交付记录
 
-- 2026-11-07 以用户提供的 `deepseek-flash` 服务运行三协议 CLI 联调，各自完成流式直接回答和 PLAN 读取真实临时文件后回传；临时工作区保持不变。完整协议、请求计数、模型版本和验证限制见[真实模型联调记录](live-model-validation.md)。
+- 2026-11-07 以用户提供的 `deepseek-flash` 服务运行三协议 CLI 联调，各自完成流式直接回答和 PLAN 读取真实临时文件后回传；临时工作区保持不变。完整协议、请求计数、模型版本和验证限制见[真实模型联调记录](reports/live-model-validation.md)。
 - 提供显式运行的 [live_protocol_smoke.py](../scripts/live_protocol_smoke.py)，仅输出状态与计数；凭据通过环境变量提供，测试不会写入项目仓库。服务未提供可独立核实的模型快照版本，本轮不推断模型版本或其他模型的能力。
 - 同一模型的 Chat Completions 四模式真实任务经修正夹具后通过：PLAN 不修改工作区，BUILD／CODE 产物经受限容器独立编译运行，WORK 完成三份材料汇总。初次输出上限、缺少父目录和测试容器不可执行挂载导致的失败及重测条件均见联调记录；不是所有协议的四模式质量评测。
 
@@ -1336,7 +1336,7 @@ CLI已接入显式memory管理命令和独立compact命令，text chat及TUI提�
 
 ### 2026-11-10 审查整改：TUI 背压与清理证据
 
-修复[11月10日审查](review-2026-11-10.md)的R-01：TUI从首次持续背压起最多等待2秒，到期取消所属运行；部分帧失败后的下一位图先清除不确定终端状态并从空缓冲完整重绘，用户渲染闭包仍在帧I/O计时之前执行。真实PTY覆盖部分帧旧单元格不重放、stalled panic恢复，以及完整控制环取消后台命令、退出码1、termios与FD flags恢复。
+修复[11月10日审查](reviews/review-2026-11-10.md)的R-01：TUI从首次持续背压起最多等待2秒，到期取消所属运行；部分帧失败后的下一位图先清除不确定终端状态并从空缓冲完整重绘，用户渲染闭包仍在帧I/O计时之前执行。真实PTY覆盖部分帧旧单元格不重放、stalled panic恢复，以及完整控制环取消后台命令、退出码1、termios与FD flags恢复。
 
 R-02的原生验收补充服务主进程、服务子进程和Hook子进程检查。Linux以`setsid`构造脱离组后代，macOS验证当前支持的同一进程组后代；两端记录存活进程的启动身份并与清理后的PID状态交叉核对，Hook子进程另以延迟survival marker的不存在证明没有遗留副作用。另补`HOME == workspace`、HOME符号链接别名、XDG外置、工作区内config的四项源码回归。
 
@@ -1344,12 +1344,12 @@ R-02的原生验收补充服务主进程、服务子进程和Hook子进程检查
 
 ### 2026-11-10 第二轮复审整改
 
-按[第二轮复审](review-2026-11-10_02.md)修复F-01至F-03。原生后代验收改为宿主侧独立采样，分别记录服务主进程、服务子进程、`run.started`Hook后代和`run.finished`Hook后代；两个Hook后代等待宿主取得PID与启动身份后退出，因此最后一次模型调用之后的事件也进入证据范围。测试守卫保留原始guest PID，在失败展开路径重新映射并对身份匹配的遗留进程执行bounded kill。
+按[第二轮复审](reviews/review-2026-11-10_02.md)修复F-01至F-03。原生后代验收改为宿主侧独立采样，分别记录服务主进程、服务子进程、`run.started`Hook后代和`run.finished`Hook后代；两个Hook后代等待宿主取得PID与启动身份后退出，因此最后一次模型调用之后的事件也进入证据范围。测试守卫保留原始guest PID，在失败展开路径重新映射并对身份匹配的遗留进程执行bounded kill。
 
 resync PTY探针的填队与resume阶段改用独立五秒期限。本机`RUST_TEST_THREADS=1 just check`通过1321项Rust测试（另8项native ignored）、格式、严格Clippy与优化构建，`just test-tooling`75项通过；真实原生插件8项、固定release的smoke、文本journey、5项历史审查回归及26项TUI旅程全部通过。本轮仍不推送、不运行远端CI，Linux脱离组分支与macOS主动脱离组限制保持原边界。
 
 ### 2026-11-11 第三轮复审与 Linux Colima 验收
 
-按[第三轮复审](review-2026-11-10_03.md)修复F-04、F-05。失败路径守卫记录并用启动身份验证进程组leader，Drop先释放Hook、join采样线程，再执行bounded组清理并等待组`ESRCH`。原生验收为每个角色生成随机argv marker，Linux仅在`NSpid`末端等于guest PID且`/proc/<host>/cmdline`含完整角色marker时接受唯一宿主映射，不再依赖sandbox内`readlink`。
+按[第三轮复审](reviews/review-2026-11-10_03.md)修复F-04、F-05。失败路径守卫记录并用启动身份验证进程组leader，Drop先释放Hook、join采样线程，再执行bounded组清理并等待组`ESRCH`。原生验收为每个角色生成随机argv marker，Linux仅在`NSpid`末端等于guest PID且`/proc/<host>/cmdline`含完整角色marker时接受唯一宿主映射，不再依赖sandbox内`readlink`。
 
 本机macOS27.2 ARM的`RUST_TEST_THREADS=1 just check`通过1321项Rust测试（另8项native ignored）、格式、严格Clippy与release构建，真实原生插件8/8通过；`just test-tooling`75项和固定release的26条TUI旅程通过。Linux ARM64使用工作区内本地Colima `review3` profile验收，VM为Ubuntu24.04／kernel6.8，容器为Ubuntu22.04，使用Rust1.99.1、Bubblewrap0.13.1和socat1.7.4.1。Colima内`scripts/check.sh`完整通过；真实原生插件8/8通过，`native_acceptance.py --skip-benchmarks`报告19项中18项通过、1项因未提供delegated cgroup记为`not_run`，证据为`target/n3/review-3-colima-native-evidence.json`（SHA-256 `2eab2e91fe48e1a3f338f78562671ba7dc690dcb94bb47403fcd27ce8f867877`）；Linux release的smoke、文本journey、5项历史审查回归及26条TUI旅程全部通过。本轮未推送、未运行远端CI。

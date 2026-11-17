@@ -23,11 +23,11 @@
 
 DEV-038 已建立 saya-app，负责模型组装、会话创建／恢复和锁生命周期，CLI 使用同一服务。模型装饰通过调用者提供的适配器接入。DEV-039 的有界事件及人工输入桥由 saya-app 提供，CLI 负责 stdout 与终端呈现，取消句柄与 RuntimeHandle 连接运行控制。saya-tui library 已接入默认终端入口，由 saya-cli 统一路由。具体依赖、控制与事件边界见[TUI 设计](tui.md)，实现范围按 DEV-038 至 DEV-053 验证。
 
-N2 执行层通过 `ExecutionBackend` 和 `PreparedEnvironment` 接入独立 SeatbeltBackend 及 Linux Bubblewrap／Seccomp／socat 组合。应用默认按平台选择原生后端，必需约束不可用时明确失败，显式 Host 兼容后端报告实际能力并遵守凭据保护限制。六种文件工具使用受限 worker，命令和本地 MCP 使用同一准备环境与进程监督。HTTP／CONNECT broker 约束原生工具的代理出口，资源能力按 hard／best_effort／unsupported 报告。具体边界见[原生隔离](sandbox.md)。
+N2 执行层通过 `ExecutionBackend` 和 `PreparedEnvironment` 接入独立 SeatbeltBackend 及 Linux Bubblewrap／Seccomp／socat 组合。应用默认按平台选择原生后端，必需约束不可用时明确失败，显式 Host 兼容后端报告实际能力并遵守凭据保护限制。七种文件工具使用受限 worker，命令和本地 MCP 使用同一准备环境与进程监督。HTTP／CONNECT broker 约束原生工具的代理出口，资源能力按 hard／best_effort／unsupported 报告。具体边界见[原生隔离](sandbox.md)。
 
 统一工具注册表维护本地及 MCP 工具的稳定名称、schema、宿主分类和目录代次。stdio 服务启动先经过命令许可与意图记录，HTTP 连接由宿主管理，外部工具调用复用运行时权限、预算、取消和持久化。宿主私有凭据存储、引用绑定、刷新／撤销及管理入口见[MCP 与凭据](mcp.md)。
 
-N3 的 ContextBuilder、OutputStore、Compact／检查点、全局记忆与可执行插件已接入共享运行入口并完成固定源码验收，设计见[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。DEV-079 已提供 `BrowserProvider` 宿主接口与受限 Web 读取；DEV-080／DEV-081 已接入固定 Playwright MCP worker、专用 VM 后端、受控 broker、凭据与文件 broker，真实 VM 验收范围见[Browser](browser.md)与[开发进度](progress.md)，native 浏览器仍不可用。PLAN 只开放宿主分类为 `WebRead` 的显式受限 `fetch_url`／`web_search`，不注册或执行任何主动 Browser 工具（`BrowserRead`／`BrowserWrite`）。
+N3 的 ContextBuilder、OutputStore、Compact／检查点、全局记忆与可执行插件已接入共享运行入口并完成固定源码验收，设计见[上下文](context-management.md)和[saya-plugin](saya-plugin.md)。DEV-079 已提供 `BrowserProvider` 宿主接口与受限 Web 读取；DEV-080 至 DEV-083 已接入固定 Playwright MCP worker、专用 VM 后端、受控 broker、凭据与文件 broker、pre-capture 遮蔽截图及 CLI/TUI 模块开关（`saya module browser|vm enable|disable`），Linux 原生 Worker（rev 1254 与定制 ARM64 捕获）及专用 VM 均已完成实测验证，macOS 因外层 Seatbelt 限制明确不支持原生 Chromium 而经专用 Linux VM 使用；详见[Browser](browser.md)、[N5 验收](n5-validation.md)与[开发进度](progress.md)。PLAN 只开放宿主分类为 `WebRead` 的显式受限 `fetch_url`／`web_search`，不注册或执行任何主动 Browser 工具（`BrowserRead`／`BrowserWrite`）。
 
 运行时通过输入、控制与事件／结果接口连接界面。终端格式、TUI 组件和 GUI 状态管理不进入核心循环；结果与事件使用 B-17 的 schema v1。内部 Rust 函数签名按实现处理，0.1 不承诺独立 SDK 稳定性。
 
@@ -45,7 +45,7 @@ auto 的 TOML 规则按 deny＞ask＞allow 判断，原生工作区读写默认 
 
 三类模型协议分别实现文本流、工具与错误适配，不共用某一家请求 DTO 驱动核心。core 使用统一内部消息并保留必要协议状态、调用标识与不透明内容；映射及版本按 B-05、B-06 分别验证。不启用 provider 服务端工具、provider 侧后台任务或自动协议回退；本地后台任务由 Saya 管理。
 
-本地工具与澄清按 B-14 实现，D-046 提供 Todo 会话元数据工具。参数完整并校验后，检查工作模式、允许路径、显式规则及所需核查／确认，在实际派发前重查。bypass 跳过逻辑路径范围检查，PLAN、显式 deny 与所选执行后端的硬边界继续生效。文件修改使用版本冲突检查与单文件替换，命令使用 argv。0.2.0 的命令执行沿用宿主权限，当前开发线默认使用原生隔离。
+本地工具与澄清按 B-14 实现，D-046 提供 Todo 会话元数据工具。参数完整并校验后，检查工作模式、允许路径、显式规则及所需核查／确认，在实际派发前重查。bypass 跳过逻辑路径范围检查，PLAN、显式 deny 与所选执行后端的硬边界继续生效。文件修改提供精确原文替换 `edit_file` 与统一补丁 `apply_patch`，均执行读取版本校验与单文件临时写入／替换；命令使用 argv。0.2.0 发行线沿用宿主权限，当前开发线默认使用原生隔离，并提供 `saya module` 开关及 `[profiles.NAME].anthropic_official_provider` 等显式兼容配置。
 
 MCP 服务声明、annotations 和输出均作为外部数据处理，PLAN 只读分类由宿主配置决定。目录变化使旧代次许可失效，工具请求发送一次，断连后无法确认副作用时保存 unknown。凭据后端为私有明文文件，动态 `SecretRegistry` 保留刷新前后已知值，模型输入、工具结果、存储、事件和界面显示使用当前集合检查。启用 MCP 时，模型正文和可读 Thinking 在请求完成后统一脱敏展示，具体范围见[MCP 边界](mcp.md#私有存储与执行边界)。
 
@@ -77,7 +77,7 @@ flowchart TD
     I --> H
 ```
 
-图中为主流程，许可检查包含规则、必要核查与确认。默认前台工具按返回顺序串行；显式后台启动返回任务 ID，模型可继续调用并查询结果，每次派发重查模式；工具错误作为结果返回，框架不自动重跑。非交互结束、有限模型重试和连续失败限制按 B-11、B-16 执行，流式参数完整前不派发。
+图中为主流程，许可检查包含规则、必要核查与确认。默认前台工具按返回顺序串行，非 `manual` 模式下连续预授权只读工具调用可按批次并发派发（`execute_parallel_read_batch`）；显式后台启动返回任务 ID，模型可继续调用并查询结果，每次派发重查模式；工具错误作为结果返回，框架不自动重跑。非交互结束、有限模型重试和连续失败限制按 B-11、B-16 执行，流式参数完整前不派发。
 
 ## 运行状态与结束原因
 
@@ -101,7 +101,7 @@ flowchart TD
 - 工具错误：未知工具、参数无效、执行失败或超时，保留与对应调用的关联。
 - 运行终止：取消或达到限制，避免继续发起新的模型与工具调用。
 
-每次运行默认 64 次模型请求、256 次工具调用、1800 秒活跃时间，人工等待暂停计时。模型连接／流空闲／总超时为 10／60／180 秒，命令默认 120 秒，配置可调整。模型重试最多 2 次且仅在未接收成功响应内容前，工具不自动重跑。MCP 连接、鉴权与目录发现共用 Run 活跃预算，stdio 启动计入工具预算，模型核查计入请求预算。
+每次运行默认 64 次模型请求、256 次工具调用、1800 秒活跃时间，人工等待暂停计时。默认模型连接超时 300 秒、流空闲超时 900 秒、总超时为 0 秒（0 表示不限模型请求总时长，受活跃运行预算与流空闲约束），命令默认 120 秒，配置可调整（见 [配置组件](configuration.md)）。模型重试最多 2 次且仅在未接收成功响应内容前，工具不自动重跑。MCP 连接、鉴权与目录发现共用 Run 活跃预算，stdio 启动计入工具预算，模型核查计入请求预算。
 
 取消覆盖等待中的模型、工具与服务，所属进程先按 5 秒宽限清理，再强制结束。资源收尾在活跃预算耗尽后继续进行，运行终态等待所属服务与环境的清理屏障。Linux 后代清理与 macOS best_effort 保证分别报告，无法确认的副作用保留 unknown，详见[清理能力](sandbox.md#资源与清理能力矩阵)。
 
@@ -109,7 +109,7 @@ flowchart TD
 
 产品与接口基线由[完整基线](mvp-baseline.md) B-01 至 B-24 定义。当前直接依赖包含 Tokio、clap、reqwest＋rustls、serde／toml、tracing 与 rusqlite，补丁解析使用 diffy，边界错误使用显式 Rust 类型。具体版本与直接依赖以各 crate 的 Cargo.toml 和 Cargo.lock 为准。
 
-saya-core、saya-app、saya-tui、saya-cli 四个 crate 和锁文件已建立。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI；当前开发线还包含原生隔离、MCP、OutputStore、ContextBuilder、检查点、全局记忆及可执行插件。saya-tui 通过 saya-app 组装服务，并直接使用 saya-core 的配置、契约、脱敏与任务清单类型。0.1.0、0.2.0、N2 与 N3 固定源码的四平台证据分别归属各自版本。N3 本机整合门禁及固定源码的四平台源码 CI、原生／MCP／插件／Markdown／TUI 正常入口与性能验收均已通过，见[发行验证](release-validation.md)、[TUI 验证](tui-validation.md)、[N2 验收](n2-validation.md)、[N3 验收](n3-validation.md)和[开发进度](progress.md)。
+Cargo workspace 由四个分层主 crate（`saya-core`、`saya-app`、`saya-tui`、`saya-cli`）与两个共享叶子 crate（`saya-contract`、`saya-fs`）及 `Cargo.lock` 构成，大型实现模块按职责拆分为子模块目录（`saya-core` 的 `runtime/`、`browser/{worker,vm}/`、`execution/linux/`，`saya-tui` 的 `view/`，`saya-cli` 的 `terminal.rs` 与 `tests/cli/`）。普通构建提供可复用运行时、本地工具、权限调度、后台任务、三协议适配与默认 TUI；当前开发线还包含原生隔离、MCP、OutputStore、ContextBuilder、检查点、全局记忆、可执行插件、Goal 与受控 Browser。`saya-tui` 通过 `saya-app` 组装服务，并直接使用 `saya-core` 的配置、契约、脱敏与任务清单类型；`saya-core` 对外继续重导出 `saya_contract::{contract, text}` 保持路径兼容。0.1.0、0.2.0、N2 与 N3 固定源码的四平台证据分别归属各自版本；后续 N4 与 N5 证据分别见[发行验证](releases/release-validation.md)、[TUI 验证](tui-validation.md)、[N2 验收](n2-validation.md)、[N3 验收](n3-validation.md)、[N4 验收](n4-validation.md)、[N5 验收](n5-validation.md)与[开发进度](progress.md)。
 
 ## 提示词装配
 

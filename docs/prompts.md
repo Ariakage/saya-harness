@@ -37,7 +37,7 @@
 
 工具说明与 schema 继续通过 `ModelRequest.tools` 传入，不提升为系统指令；内置描述明确补丁版本、单文件修改、读取分页和直接 argv 等调用语义。用户任务、项目材料与显式提供的偏好／记忆保留在历史中。静态装配器不直接拼接来源 prompt、项目文档或任意自定义字符串。它返回段名、版本和 SHA-256 文本指纹以便离线审阅；指纹只标识静态文本，不证明模型遵守程度，也尚未接入持久化记录。
 
-[可复用 core 循环](../crates/saya-core/src/runtime.rs)及假模型原型已使用完整装配器，取代每模式的一句指令。每次请求都按生效模式、权限与过滤后的工具重新装配；切换后不残留旧模式段。稳定核心保持相同前缀，但没有虚构 provider 缓存命中保证，也没有引入某产品专用的动态分隔标记。
+[可复用 core 循环](../crates/saya-core/src/runtime/mod.rs)及假模型原型已使用完整装配器，取代每模式的一句指令。每次请求都按生效模式、权限与过滤后的工具重新装配；切换后不残留旧模式段。稳定核心保持相同前缀，但没有虚构 provider 缓存命中保证，也没有引入某产品专用的动态分隔标记。
 
 每次执行模型请求在静态提示词之后加入动态系统段，但只放入相同有效配置下可复用的事实：操作系统与架构、模型配置引用、实际工作／权限模式，以及项目上下文和显式偏好／记忆是否提供。Runtime 创建时的精确时间快照供后续轮次复用，并与工作区一起放在 `saya_runtime_context_v1` 历史数据项；执行环境实例身份、策略摘要和能力放在其后的环境数据项。这些运行实例数据位于 provider 工具 schema 之后，不再截断不同工作区之间的系统／工具共享前缀。宿主 checkpoint 标志仍位于 `Dynamic request context` 之前。所有字符串序列化为 JSON 并标记为数据，不包含配置凭据或完整历史；临时快照不持久化。用户级和工作区指令、Skill 元数据作为独立 `saya_project_context_v1` 数据项放在模型历史中，来源、哈希、范围与刷新见[项目上下文](project-context.md)。显式偏好和记忆放在 `saya_personal_context_v1` 数据项，不自动发现；它们不是系统授权，模型仍可能受内容影响。
 
@@ -51,7 +51,7 @@
 
 OpenAI 兼容协议保留相同的静态字节前缀并依赖服务端自动缓存；DeepSeek 也自行处理缓存，不额外发送 `cache_control` 或其不支持的 `prompt_cache_key`。系统段只保留相同配置下稳定的内容；运行时间、工作区和环境实例数据位于工具 schema 之后的历史项，因此不同工作区也能复用系统与工具前缀。新增工具结果和用户任务仍是首次出现的未缓存输入，不能被旧前缀复用。参见 [OpenAI 缓存文档](https://developers.openai.com/api/docs/guides/prompt-caching)、[DeepSeek 上下文缓存](https://api-docs.deepseek.com/guides/kv_cache/)和 [Responses 兼容说明](https://api-docs.deepseek.com/guides/responses_api/)。
 
-`Usage.cached_input_tokens` 以可选字段记录 provider 实际报告的缓存输入量，未上报时保持未知且维持既有 JSON 形状。Chat Completions 兼容 `prompt_tokens_details.cached_tokens` 与 `prompt_cache_hit_tokens`，Responses 读取 `input_tokens_details.cached_tokens`，Messages 读取 `cache_read_input_tokens`；运行指标只在相关请求均上报时合计缓存量。真实 DeepSeek 多轮对照中，前缀优化前24次记录为整体36.37%／Turn 2+ 35.53%，优化后48次运行合并为整体83.54%／Turn 2+ 91.75%。完整 token 数量、占比与限制见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。这些结果不是服务端保证，也不代表其他模型。后续将运行时间、工作区和环境实例数据移至工具schema之后，最终96次运行达到整体95.05%／Turn 2+ 97.20%，并在相同48次规模下将失败工具结果由4次降为3次；见[缓存95%与工具错误联合验证](prompt-cache-95-2026-11-11.md)。
+`Usage.cached_input_tokens` 以可选字段记录 provider 实际报告的缓存输入量，未上报时保持未知且维持既有 JSON 形状。Chat Completions 兼容 `prompt_tokens_details.cached_tokens` 与 `prompt_cache_hit_tokens`，Responses 读取 `input_tokens_details.cached_tokens`，Messages 读取 `cache_read_input_tokens`；运行指标只在相关请求均上报时合计缓存量。真实 DeepSeek 多轮对照中，前缀优化前24次记录为整体36.37%／Turn 2+ 35.53%，优化后48次运行合并为整体83.54%／Turn 2+ 91.75%。完整 token 数量、占比与限制见[多轮缓存验证报告](reports/prompt-evaluation-2026-11-11.md)。这些结果不是服务端保证，也不代表其他模型。后续将运行时间、工作区和环境实例数据移至工具schema之后，最终96次运行达到整体95.05%／Turn 2+ 97.20%，并在相同48次规模下将失败工具结果由4次降为3次；见[缓存95%与工具错误联合验证](reports/prompt-cache-95-2026-11-11.md)。
 
 [审核组件](../crates/saya-core/src/review.rs)使用独立英文审核 prompt，保留现有一个数据消息、无工具、1024 输出 token 默认上限、严格 JSON 解析与失败转人工逻辑。它不接收执行 prompt、项目说明或完整执行历史；数据仍为 `tool/arguments/work_mode/permissions/goal_summary`。尤其不把 `goal_summary` 中“用户已授权”的说法当成原始用户证据。
 
@@ -128,7 +128,7 @@ just prompt all | jq '.requests.code.request.combined_system'
 
 [装配测试](../crates/saya-core/tests/prompts.rs)验证 12 种组合、后台与新增能力片段的可见性、稳定前缀／指纹、英文与语言偏好、工具名注入拒绝、工具描述不升权和运行事实隔离；缓存前缀的跨工作区稳定性、运行时间数据位置、工具 schema、补丁错误提示及三协议缓存用量另有定向回归。假循环验证实际模式切换与请求构造。独立核查继续用可控模型替身验证协议及错误，不依赖真实 API。
 
-[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择、通用文件交付、多hunk补丁、范围注入、CSV聚合、长日志检索、无序区间合并和事件状态聚合。`--repeat` 与 `--jobs` 支持独立多轮及并发，`--diagnostics` 保存夹具衍生的失败调用，`--compare` 离线比较报告。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。报告记录程序SHA、模型、窗口、场景错误、请求次数、逐轮输入／缓存输入／输出token、整体与Turn 1／Turn 2+命中率及token占比；旧报告未采集缓存字段时显示未知而不是0。运行方式见[开发指南](development.md)，实际多轮结果见[DeepSeek对比验证报告](prompt-evaluation-2026-11-11.md)；最新10场景能力对照见[提示词与模型任务能力联合验证](prompt-capability-2026-11-11.md)。
+[真实提示词场景脚本](../scripts/prompt_eval.py)提供显式启用的DeepSeek基线／候选对照，覆盖PLAN注入下的只读调查、带版本的已有文件补丁、Skill选择、通用文件交付、多hunk补丁、范围注入、CSV聚合、长日志检索、无序区间合并和事件状态聚合。`--repeat` 与 `--jobs` 支持独立多轮及并发，`--diagnostics` 保存夹具衍生的失败调用，`--compare` 离线比较报告。每个场景在独立临时工作区运行并检查实际文件、工具调用和终态；测试配置拒绝exec，因此不会执行模型生成的命令。报告记录程序SHA、模型、窗口、场景错误、请求次数、逐轮输入／缓存输入／输出token、整体与Turn 1／Turn 2+命中率及token占比；旧报告未采集缓存字段时显示未知而不是0。运行方式见[开发指南](development.md)，实际多轮结果见[DeepSeek对比验证报告](reports/prompt-evaluation-2026-11-11.md)；最新10场景能力对照见[提示词与模型任务能力联合验证](reports/prompt-capability-2026-11-11.md)。
 
 [审核场景集](../crates/saya-core/tests/fixtures/prompts/review_cases.jsonl)含 30 项人工编写的期望：常规检索、构建、字面分号、提示词作为数据、强推、破坏性清理、共享系统、上传、凭据、持久化和规避。单测只检查场景数据格式与覆盖完整，不把期望值喂给替身后冒充分类准确率。真实评测需对每个输入调用选定 reviewer，记录模型／profile、prompt 指纹、实际 decision、解析失败／人工兜底和误放行／误拦截；本轮尚无这类测量。
 

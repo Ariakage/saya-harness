@@ -52,7 +52,7 @@ AST 分析提供静态风险信息，Sandbox 负责执行期约束。确认绑�
 | 共享进程监督器 | 命令、文件 worker、MCP 与桥接进程的取消、超时及结束确认 |
 | 可用的 cgroup v2 | 已委派 controller 支持的 CPU、内存和进程数硬限额 |
 
-Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/saya-core/src/execution/linux.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
+Bubblewrap 从私有文件系统视图构建环境，默认绑定系统运行目录、配置的读写根、私有 launcher 和临时目录，PID 命名空间及其 init 管理后代进程。当前视图省略 `/proc`，限制通过 procfs 访问进程内存、描述符和根目录的渠道。依赖 procfs 的程序需要按此执行视图评估兼容性。后端要求 Bubblewrap 0.13.1 或更高版本，实际依赖版本与哈希由验收记录关联。[Linux 后端](../crates/saya-core/src/execution/linux/mod.rs)、[Bubblewrap](https://github.com/containers/bubblewrap)
 
 宿主将基础 BPF 通过文件描述符交给 Bubblewrap，可信 launcher 在执行 payload 前安装更严格的过滤器。过滤器校验 x86_64／aarch64 的 syscall 架构和 ABI，约束 namespace、ptrace、内核／设备操作及 socket 类型。payload 过滤器允许协议为0的 `AF_UNIX`／`SOCK_STREAM` 与 `SOCK_SEQPACKET` 匿名已连接pair，以及 `SOCK_CLOEXEC`／`SOCK_NONBLOCK` flags，用于运行时self-pipe和Rust fork结果通道。命名Unix socket创建及datagram pair受过滤器拒绝，匿名pair同时受前述内核身份与行为探测约束。Seccomp 检查调用号及可见参数，路径访问由文件系统视图承担。[Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
 
@@ -125,7 +125,7 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 
 Linux 仅在宿主显式提供的 cgroup v2 委派根下创建本次环境的独有子目录，核对 controller 文件并回读已请求的限制，加入其拥有的 payload，结束时 kill、等待空组并移除该目录。系统 controller 的委派和启用由宿主准备。用户请求的聚合硬限制缺少必要委派时 prepare 失败。[资源实现](../crates/saya-core/src/execution/cgroup.rs)、[cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
 
-Linux 原生后端依据宿主 mountinfo 拒绝与任何 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，返回 `unsupported_fs_policy`。检查覆盖工作区、`write_roots`、`permissions.additional_roots`、委派根的兄弟路径及 bind 挂载别名。`read_roots` 可提供只读 cgroup 视图，其他根与保护规则继续检查。[文件系统检查](../crates/saya-core/src/execution/linux.rs)
+Linux 原生后端依据宿主 mountinfo 拒绝与任何 `cgroup`／`cgroup2` 挂载存在祖先或后代交集的可写根，返回 `unsupported_fs_policy`。检查覆盖工作区、`write_roots`、`permissions.additional_roots`、委派根的兄弟路径及 bind 挂载别名。`read_roots` 可提供只读 cgroup 视图，其他根与保护规则继续检查。[文件系统检查](../crates/saya-core/src/execution/linux/mod.rs)
 
 委派验收保留内核限制读回、活动成员与自有子组清理，并在同一专属委派范围内增加兄弟可写组和 Host 配置的模型派发前拒绝对照。本轮 Linux x86_64／aarch64 的委派正负对照已通过，资源耗尽压力仍未验证。[N2 验收记录](n2-validation.md)
 

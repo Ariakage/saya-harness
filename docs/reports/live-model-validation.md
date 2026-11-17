@@ -14,7 +14,7 @@
 
 凭据从环境变量传入，仅在子进程内使用；结果只记录检查状态和计数，不记录密钥、模型回复或随机标记。该结果是单个服务、模型和时间点的小规模联调，不代表其他供应商、协议可选功能、模型对复杂任务的质量或提示注入防护。Anthropic 另一 API 版本和受控四类任务仍以离线测试为证据，未在此轮用真实模型覆盖。
 
-操作者显式设置 `SAYA_LIVE_API_KEY`，通过 [live_protocol_smoke.py](../scripts/live_protocol_smoke.py) 的 `--binary PATH` 选择程序，按 `--help` 填入模型、三个 API 根地址和上下文窗口。Chat Completions 默认使用 `max_completion_tokens`，服务需要 `max_tokens` 时显式添加 `--legacy-max-tokens`。脚本会向选定服务发出真实请求，可能产生费用，凭据从环境变量传入。
+操作者显式设置 `SAYA_LIVE_API_KEY`，通过 [live_protocol_smoke.py](../../scripts/live_protocol_smoke.py) 的 `--binary PATH` 选择程序，按 `--help` 填入模型、三个 API 根地址和上下文窗口。Chat Completions 默认使用 `max_completion_tokens`，服务需要 `max_tokens` 时显式添加 `--legacy-max-tokens`。脚本会向选定服务发出真实请求，可能产生费用，凭据从环境变量传入。
 
 ## 四模式真实任务补充抽样：2026-11-07
 
@@ -29,7 +29,7 @@
 
 初次实验中，PLAN 因测试配置将输出上限设为 2048 token 而返回 `output_limit`；改用默认 8192 并要求简短计划后通过。BUILD 初次遇到不存在的父目录：文件工具不会自动创建目录，测试又显式拒绝 `exec`，因此模型请求人工帮助并返回 `needs_input`；在预创建 `src/` 后通过。CODE 初次使用测试容器的不可执行临时挂载而误报验证失败，改为允许临时目录执行后独立编译运行通过；模型曾先生成不匹配路径的补丁，随后使用版本校验写入修复。WORK 初次即通过。之后四项使用修正后的条件完整重跑通过。
 
-[四模式联调脚本](../scripts/live_modes_smoke.py)通过 `--binary PATH` 选择待测程序，省略时使用当前目录下的 `target/release/saya`。操作者显式提供凭据环境变量、可信 Chat Completions API 根地址、模型和带 Rust 编译器的 Docker 镜像。Docker 默认按所连接引擎选择平台，也可通过 `--sandbox-platform` 或 `SAYA_LIVE_SANDBOX_PLATFORM` 覆盖。Chat 参数默认使用 `max_completion_tokens`，复测上述旧参数兼容场景时添加 `--legacy-max-tokens`。脚本使用临时工作区，结束时清理，输出检查状态与计数。上述历史结果仍归属于当时记录的模型、程序和日期。
+[四模式联调脚本](../../scripts/live_modes_smoke.py)通过 `--binary PATH` 选择待测程序，省略时使用当前目录下的 `target/release/saya`。操作者显式提供凭据环境变量、可信 Chat Completions API 根地址、模型和带 Rust 编译器的 Docker 镜像。Docker 默认按所连接引擎选择平台，也可通过 `--sandbox-platform` 或 `SAYA_LIVE_SANDBOX_PLATFORM` 覆盖。Chat 参数默认使用 `max_completion_tokens`，复测上述旧参数兼容场景时添加 `--legacy-max-tokens`。脚本使用临时工作区，结束时清理，输出检查状态与计数。上述历史结果仍归属于当时记录的模型、程序和日期。
 
 ## 审查修复后复测
 
@@ -65,11 +65,11 @@
 
 Chat Completions 的 CODE 运行包含两次 `apply_patch` 请求，一次失败、一次成功，最终运行状态为 `completed`，产物与预期静态内容精确匹配。保留记录没有单次失败的错误码、原因或结果顺序，本文仅记录计数与最终状态。
 
-三个 PLAN 工作区均保持不变，整轮 `exec` 请求和成功执行数均为0。BUILD／CODE 生成的 Rust 源码仅做精确静态文件比较，未编译或执行。每项任务预算为6次模型请求、12次工具调用和180秒活跃时间。[工作模式与权限](execution.md)、[模型协议](model-protocols.md)
+三个 PLAN 工作区均保持不变，整轮 `exec` 请求和成功执行数均为0。BUILD／CODE 生成的 Rust 源码仅做精确静态文件比较，未编译或执行。每项任务预算为6次模型请求、12次工具调用和180秒活跃时间。[工作模式与权限](../execution.md)、[模型协议](../model-protocols.md)
 
-原配置中的 `stream = true` 和 `thinking_effort = "max"` 全程保留，本轮没有调整兼容参数。Chat Completions 沿用原私有配置的 `legacy_max_tokens = true`，Anthropic Messages 沿用 `api_version = "2026-10-21"`。含已知凭据时，CLI 对文本事件作安全合并，HTTP wire 分块未独立观察。服务也未独立报告内部实际采用的 effort，配置请求值与服务内部行为分别记录。[Thinking effort 配置](configuration.md#thinking-effort)
+原配置中的 `stream = true` 和 `thinking_effort = "max"` 全程保留，本轮没有调整兼容参数。Chat Completions 沿用原私有配置的 `legacy_max_tokens = true`，Anthropic Messages 沿用 `api_version = "2026-10-21"`。含已知凭据时，CLI 对文本事件作安全合并，HTTP wire 分块未独立观察。服务也未独立报告内部实际采用的 effort，配置请求值与服务内部行为分别记录。[Thinking effort 配置](../configuration.md#thinking-effort)
 
-证据只保留状态、计数与摘要，原任务提示词、模型回复、生成文件和临时会话数据库已在验证后删除，凭据与完整请求未进入保留证据。本结果限于本次单个服务、模型和时间点的抽样，其他模型兼容性、任务质量与生成程序的运行正确性需另行验证。[RC2 版本范围](release-notes-0.2.0-rc.2.md)
+证据只保留状态、计数与摘要，原任务提示词、模型回复、生成文件和临时会话数据库已在验证后删除，凭据与完整请求未进入保留证据。本结果限于本次单个服务、模型和时间点的抽样，其他模型兼容性、任务质量与生成程序的运行正确性需另行验证。[RC2 版本范围](../releases/release-notes-0.2.0-rc.2.md)
 
 ## 0.2.0 三协议与四模式联调：2026-11-09
 
@@ -99,8 +99,8 @@ Chat Completions 的 CODE 运行包含两次 `apply_patch` 请求，一次失败
 
 Chat Completions 的 CODE 运行在事件序号15收到 `apply_patch` 的 `invalid_patch` 失败结果，随后在事件序号21收到成功补丁结果，最终产物与预期静态内容精确匹配。本轮保留了错误码、调用ID和事件顺序，详细错误消息、参数与结果正文未进入摘要。
 
-三个 PLAN 工作区均保持不变，整轮 `exec` 请求与成功执行数均为0。BUILD／CODE 生成的 Rust 源码仅通过精确静态文件比较验证，未编译或执行。每项任务预算为6次模型请求、12次工具调用和180秒活跃时间。[执行契约](execution.md)、[模型协议](model-protocols.md)
+三个 PLAN 工作区均保持不变，整轮 `exec` 请求与成功执行数均为0。BUILD／CODE 生成的 Rust 源码仅通过精确静态文件比较验证，未编译或执行。每项任务预算为6次模型请求、12次工具调用和180秒活跃时间。[执行契约](../execution.md)、[模型协议](../model-protocols.md)
 
-所有 profile 保留原配置的 `stream = true` 和 `thinking_effort = "max"`，本轮没有调整兼容参数。Chat Completions 使用原有的 `legacy_max_tokens = true`，Anthropic Messages 使用 `api_version = "2026-10-21"`。CLI 对含已知凭据的文本事件作安全合并，线上分块未独立观察，服务内部实际采用的effort也没有独立确认。[Thinking effort 配置](configuration.md#thinking-effort)
+所有 profile 保留原配置的 `stream = true` 和 `thinking_effort = "max"`，本轮没有调整兼容参数。Chat Completions 使用原有的 `legacy_max_tokens = true`，Anthropic Messages 使用 `api_version = "2026-10-21"`。CLI 对含已知凭据的文本事件作安全合并，线上分块未独立观察，服务内部实际采用的effort也没有独立确认。[Thinking effort 配置](../configuration.md#thinking-effort)
 
-任务提示词、模型回复、生成文件和临时会话数据库在验证后删除，保留证据包含状态、计数、摘要与工具尝试元数据，凭据和完整请求未进入证据。本次结果限于 DeepSeek／`deepseek-flash` 单服务在该时间点的有限抽样，其他服务、模型、任务质量和生成程序的运行正确性需另行验证。[0.2.0 版本范围](release-notes-0.2.0.md)
+任务提示词、模型回复、生成文件和临时会话数据库在验证后删除，保留证据包含状态、计数、摘要与工具尝试元数据，凭据和完整请求未进入证据。本次结果限于 DeepSeek／`deepseek-flash` 单服务在该时间点的有限抽样，其他服务、模型、任务质量和生成程序的运行正确性需另行验证。[0.2.0 版本范围](../releases/release-notes-0.2.0.md)

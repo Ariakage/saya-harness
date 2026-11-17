@@ -4,7 +4,7 @@
 
 ## English
 
-Saya Harness is a Rust agent runtime that drives model requests, local tool execution, and subsequent turns. Version 0.1.0 delivers the CLI for programming and local general-purpose tasks. [User guide](usage.md)
+Saya Harness is a Rust agent runtime that drives model requests, local tool execution, and subsequent turns. Version 0.1.0 delivers the CLI for programming and local general-purpose tasks. [User guide](../usage.md)
 
 ### Features
 
@@ -41,13 +41,13 @@ mkdir -p "$HOME/.local/bin"
 install -m 755 saya-0.1.0/saya "$HOME/.local/bin/saya"
 ```
 
-Add `$HOME/.local/bin` to PATH. Configure a model profile and provide its API key through the environment variable referenced in the config, then run `saya config check` before starting a task. Source builds and protocol-specific settings are documented in the user guide and configuration reference. [User guide](usage.md), [Configuration](configuration.md)
+Add `$HOME/.local/bin` to PATH. Configure a model profile and provide its API key through the environment variable referenced in the config, then run `saya config check` before starting a task. Source builds and protocol-specific settings are documented in the user guide and configuration reference. [User guide](../usage.md), [Configuration](../configuration.md)
 
 ### Review and compatibility
 
-Pre-release review fixed explicit PLAN overrides during session resume, encoded credentials reaching review or approval data, configured write limits, Responses mixed-output history, and invalid foreground/background tool-path error handling. Regression checks exercise the real CLI. The review record includes reproductions and independent verification. [Review record](review-2026-11-07.md)
+Pre-release review fixed explicit PLAN overrides during session resume, encoded credentials reaching review or approval data, configured write limits, Responses mixed-output history, and invalid foreground/background tool-path error handling. Regression checks exercise the real CLI. The review record includes reproductions and independent verification. [Review record](../reviews/review-2026-11-07.md)
 
-Configuration and result/event formats use schema v1. The internal session database uses schema 2, with a backup followed by a transactional migration from schema 1. Resume applies the current invocation's permissions, waits for new input, and preserves recorded outcomes and interruption states. [Session storage](storage.md)
+Configuration and result/event formats use schema v1. The internal session database uses schema 2, with a backup followed by a transactional migration from schema 1. Resume applies the current invocation's permissions, waits for new input, and preserves recorded outcomes and interruption states. [Session storage](../storage.md)
 
 ### Known limitations
 
@@ -57,11 +57,11 @@ Configuration and result/event formats use schema v1. The internal session datab
 - Costs are estimates based on provider token usage and explicit rates. Live model tests cover a limited sample of one configured service and model.
 - macOS archives have no developer-identity signature or Apple notarization. Fully reproducible builds, automatic updates, persistent jobs across runs, and cross-protocol session migration remain future work.
 
-Sandbox, MCP, executable plugins, automatic context compaction, TUI, and GUI follow the capability roadmap. [Capability roadmap](capability-roadmap.md)
+Sandbox, MCP, executable plugins, automatic context compaction, TUI, and GUI follow the capability roadmap. [Capability roadmap](../capability-roadmap.md)
 
 ## 简体中文
 
-Saya Harness 的首个 CLI 版本，自行驱动模型调用、工具执行和后续轮次，面向编程与本地通用任务。详细用法见[使用指南](usage.md)。
+Saya Harness 的首个 CLI 版本，自行驱动模型调用、工具执行和后续轮次，面向编程与本地通用任务。详细用法见[使用指南](../usage.md)。
 
 ### 主要能力
 
@@ -98,13 +98,13 @@ mkdir -p "$HOME/.local/bin"
 install -m 755 saya-0.1.0/saya "$HOME/.local/bin/saya"
 ```
 
-将 `$HOME/.local/bin` 加入 PATH 后可使用 `saya`。从源码构建、配置模板和三协议参数见[使用指南](usage.md)与[配置说明](configuration.md)。API 密钥通过配置引用的环境变量提供。完成 profile 配置后执行 `saya config check`，再运行任务。
+将 `$HOME/.local/bin` 加入 PATH 后可使用 `saya`。从源码构建、配置模板和三协议参数见[使用指南](../usage.md)与[配置说明](../configuration.md)。API 密钥通过配置引用的环境变量提供。完成 profile 配置后执行 `saya config check`，再运行任务。
 
 ### 审查与兼容性
 
-发布前审查修复了恢复会话时的显式 PLAN、嵌套凭据进入核查／确认、写入上限传递、Responses 混合输出历史，以及无效前后台工具路径的错误分类。回归通过实际 CLI 检查，审查记录包含问题复现和独立复核结果。[风险优先审查](review-2026-11-07.md)
+发布前审查修复了恢复会话时的显式 PLAN、嵌套凭据进入核查／确认、写入上限传递、Responses 混合输出历史，以及无效前后台工具路径的错误分类。回归通过实际 CLI 检查，审查记录包含问题复现和独立复核结果。[风险优先审查](../reviews/review-2026-11-07.md)
 
-配置与结果／事件采用 schema v1。会话内部数据库 schema 为 2，schema 1 迁移先生成备份，再事务更新。恢复使用本次启动权限，等待新输入，保持旧工具调用的执行结果和中断状态。[会话存储](storage.md)
+配置与结果／事件采用 schema v1。会话内部数据库 schema 为 2，schema 1 迁移先生成备份，再事务更新。恢复使用本次启动权限，等待新输入，保持旧工具调用的执行结果和中断状态。[会话存储](../storage.md)
 
 ### 已知限制
 
@@ -114,4 +114,4 @@ install -m 755 saya-0.1.0/saya "$HOME/.local/bin/saya"
 - 成本依赖服务返回的 token 用量和使用者显式费率，记录为估算。真实模型联调覆盖指定服务和模型的有限样本。
 - macOS 包未作开发者身份签名或 Apple 公证。完整可复现构建、自动更新、跨运行持久任务和跨协议会话迁移仍属后续工作。
 
-Sandbox、MCP、插件执行、自动上下文压缩、TUI 和 GUI 按后续版本规划推进。[能力路线图](capability-roadmap.md)
+Sandbox、MCP、插件执行、自动上下文压缩、TUI 和 GUI 按后续版本规划推进。[能力路线图](../capability-roadmap.md)

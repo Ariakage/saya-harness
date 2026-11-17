@@ -149,7 +149,7 @@ python3 -B -I scripts/prompt_eval.py --binary target/prompt-r2/saya-candidate --
 python3 -B -I scripts/prompt_eval.py --compare target/prompt-r2/baseline-r3.json target/prompt-r2/candidate-b1-r3.json target/prompt-r2/candidate-b2-r3.json
 ```
 
-`--scenario` 可重复指定单个用例，`--repeat` 和 `--jobs` 必须为正数。`--keep-workspaces` 会把任务目录保存在报告旁供本地检查，默认只保存结构化结果，不保存模型回复。报告包含每个模型轮次的 `input_tokens`、`cached_input_tokens`、`uncached_input_tokens`、`output_tokens`，并聚合总token、整体／Turn 1／Turn 2+缓存命中率与输入、输出、缓存、未缓存占比。没有缓存字段的旧报告显示未知，不应解释为0命中。计算口径与实际结果见[多轮缓存验证报告](prompt-evaluation-2026-11-11.md)。
+`--scenario` 可重复指定单个用例，`--repeat` 和 `--jobs` 必须为正数。`--keep-workspaces` 会把任务目录保存在报告旁供本地检查，默认只保存结构化结果，不保存模型回复。报告包含每个模型轮次的 `input_tokens`、`cached_input_tokens`、`uncached_input_tokens`、`output_tokens`，并聚合总token、整体／Turn 1／Turn 2+缓存命中率与输入、输出、缓存、未缓存占比。没有缓存字段的旧报告显示未知，不应解释为0命中。计算口径与实际结果见[多轮缓存验证报告](reports/prompt-evaluation-2026-11-11.md)。
 
 场景使用独立临时目录，测试配置显式拒绝 `exec`，模型生成的命令不会执行。服务接收任务文本和提供的样例文件，可能产生费用；输出报告和日志不得写入真实凭据。缓存用量采集及汇总逻辑的离线回归通过 `python3 -B scripts/test_prompt_eval.py` 执行，也已纳入 `just test-tooling`。
 

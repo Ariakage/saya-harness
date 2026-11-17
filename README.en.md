@@ -70,7 +70,7 @@ just tui-preview syntax
 
 ## Status & Documentation
 
-- **Latest tagged release**: [`v0.2.0`](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0) ([Bilingual release notes](docs/release-notes-0.2.0.md)).
+- **Latest tagged release**: [`v0.2.0`](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0) ([Bilingual release notes](docs/releases/release-notes-0.2.0.md)).
 - Subsequent development on `main` (`version = "0.2.0"` per [`docs/progress.md`](docs/progress.md)) includes N2 native isolation & MCP, N3 context/plugins/memory, N4 Goal orchestration, and N5 controlled Web/Browser work (with cross-platform CI/packaging evidence tracked in [`docs/progress.md`](docs/progress.md) and [`docs/n5-validation.md`](docs/n5-validation.md)).
 - Full architecture, specifications, and guides are indexed in [`README.md`](README.md) and [`docs/README.md`](docs/README.md).
 

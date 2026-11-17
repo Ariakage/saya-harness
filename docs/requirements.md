@@ -120,7 +120,7 @@ PLAN 使用原生只读文件／搜索、宿主分类为 `WebRead` 的显式受�
 
 ## MVP 验收条件
 
-以下为已确认的验收条件；实际测试与限制见[验收证据索引](acceptance.md)，发行环境证据见[候选验证记录](release-validation.md)。
+以下为已确认的验收条件；实际测试与限制见[验收证据索引](acceptance.md)，发行环境证据见[候选验证记录](releases/release-validation.md)。
 
 | 编号 | 条件 | 期望结果 |
 | --- | --- | --- |

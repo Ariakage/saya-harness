@@ -4,7 +4,7 @@
 
 ## 简体中文
 
-**0.2.0-rc.1 与后续开发线说明，更新于 2026-11-09。RC1 候选源码为 `a6c172d`，范围为 N0 共享基础与 N1 默认 TUI。下文单独记录 RC1 后的交互增量，审查整改与补充验收见[开发进度](progress.md)和[TUI 验证](tui-validation.md)。正式发布另行安排。**
+**0.2.0-rc.1 与后续开发线说明，更新于 2026-11-09。RC1 候选源码为 `a6c172d`，范围为 N0 共享基础与 N1 默认 TUI。下文单独记录 RC1 后的交互增量，审查整改与补充验收见[开发进度](../progress.md)和[TUI 验证](../tui-validation.md)。正式发布另行安排。**
 
 ### 默认 TUI 与入口迁移
 
@@ -19,7 +19,7 @@
 - Enter 发送，Alt+Enter 或 Ctrl+J 换行，Ctrl+P 打开命令面板，PgUp／PgDown 滚动，End 恢复跟随输出，Ctrl+C 取消，输入为空时 Ctrl+D 请求退出。
 - `/mode plan|build|code|work` 请求切换模式，界面同时显示当前与待生效模式。`/permissions auto|manual|bypass` 在运行和 UI 任务均空闲时修改权限。
 - 人工审批显示操作、参数、工作区及关联 ID。详情可见且输入为空时，新的普通／Shift `y` 批准，`n` 或 Esc 拒绝。澄清通过输入框回复，`//` 可发送字面量斜杠。
-- 100列起对话与详情并列，较窄终端的详情占用主区。草稿64 KiB、单条消息256 KiB、聊天正文合计2 MiB／512条，详情缓存2 MiB／10,000逻辑行，省略和截断保留可见提示。界面布局及预览见[TUI 设计说明](tui-design.md)。
+- 100列起对话与详情并列，较窄终端的详情占用主区。草稿64 KiB、单条消息256 KiB、聊天正文合计2 MiB／512条，详情缓存2 MiB／10,000逻辑行，省略和截断保留可见提示。界面布局及预览见[TUI 设计说明](../tui-design.md)。
 
 ### RC1 之后的 TUI 增量
 
@@ -37,13 +37,13 @@
 - 恢复会话使用本次权限设置，等待新输入。中断响应、工具 `unknown`、错误与截断按已保存记录呈现。
 - `/tools` 与 `/jobs` 查看一致性快照及持久水位，工具调用通过 `run_id` 和 `call_id` 关联。`/cancel-job ID` 请求取消当前运行拥有的后台任务，后台任务生命周期继续限于当前运行。
 - `/export json|markdown PATH` 导出对话，`/export-full json|markdown PATH` 显式包含完整范围与工具正文。相对路径基于当前会话工作区，目标父目录须已存在，已有文件受保护。
-- CLI 可离线执行 `saya session export SESSION_ID --file ./session.md`，JSON 文件使用 `--format json`，完整工具记录使用 `--scope full --include-tools`。两种格式复用脱敏投影，回执包含摘要与快照水位，每字段64 KiB、每导出32 MiB。PLAN 导出目标须位于工作区外。[会话导出说明](session-export.md)
+- CLI 可离线执行 `saya session export SESSION_ID --file ./session.md`，JSON 文件使用 `--format json`，完整工具记录使用 `--scope full --include-tools`。两种格式复用脱敏投影，回执包含摘要与快照水位，每字段64 KiB、每导出32 MiB。PLAN 导出目标须位于工作区外。[会话导出说明](../session-export.md)
 
 ### 本地日志与共享基础
 
 - trace、debug、info、warn、error 五级诊断，默认 warn，可使用 `--log-level` 或 `SAYA_LOG_LEVEL` 选择。类型化字段及会话／运行／请求／调用／后台 ID 用于关联，诊断与运行机器输出分别处理。
 - `saya logs show --session SESSION_ID --level info --limit 50` 查询本地记录，`saya --output jsonl logs tail --session SESSION_ID` 跟随日志，Ctrl+C 退出 tail。
-- 日志默认位于 `$XDG_STATE_HOME/saya/saya.log` 或 `~/.local/state/saya/saya.log`，单文件10 MiB、最多五份备份。显示、查询与导出重新应用当前配置已知凭据脱敏。[日志说明](observability.md)
+- 日志默认位于 `$XDG_STATE_HOME/saya/saya.log` 或 `~/.local/state/saya/saya.log`，单文件10 MiB、最多五份备份。显示、查询与导出重新应用当前配置已知凭据脱敏。[日志说明](../observability.md)
 
 ### 取消与终端恢复
 
@@ -63,30 +63,30 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 | Linux，glibc 2.35+ | x86_64、aarch64 |
 | macOS 15+ | Intel x86_64、Apple Silicon aarch64 |
 
-构建使用 Rust 1.99.1／edition 2024。候选源码 `a6c172d` 已通过四平台 CI 与原生最低环境解包验收，每个平台执行445项Rust测试及13组TUI场景。四个归档下载后的SHA-256、二进制、源码声明与脚本摘要均已核对，环境和校验和见[TUI验证](tui-validation.md)。候选保存在Actions artifacts，保留14天。正式发布安排在后续代码review与其他测试之后。
+构建使用 Rust 1.99.1／edition 2024。候选源码 `a6c172d` 已通过四平台 CI 与原生最低环境解包验收，每个平台执行445项Rust测试及13组TUI场景。四个归档下载后的SHA-256、二进制、源码声明与脚本摘要均已核对，环境和校验和见[TUI验证](../tui-validation.md)。候选保存在Actions artifacts，保留14天。正式发布安排在后续代码review与其他测试之后。
 
 ### 已知限制与后续范围
 
 - OS Sandbox、MCP、自动上下文压缩和可执行插件仍属后续开发范围。命令继续使用宿主权限，进程组清理无法约束主动脱离的后代进程。
 - TUI 的有界显示窗口可能省略较早或较长内容，导出也有明确限额。恢复和工具快照保留未知结果，需要结合工作区核查实际副作用。
 - 凭据脱敏依据当前可解析的已知配置值及持久化标记。文件操作保持单文件保证，外部并发改动仍可能竞争。
-- macOS开发者身份签名与Apple公证仍属后续发行工作。跨运行持久任务、跨协议会话迁移、GUI、Goal 和 Browser 按后续计划推进。[后续开发计划](post-mvp-plan.md)
+- macOS开发者身份签名与Apple公证仍属后续发行工作。跨运行持久任务、跨协议会话迁移、GUI、Goal 和 Browser 按后续计划推进。[后续开发计划](../post-mvp-plan.md)
 
 ### RC1 之后的开发线审查
 
-2026-11-09，开发线完成文本 CLI 终端控制序列、个人文件编码凭据外发、Todo 脱敏后失效仍成功、Responses 推理流冲突、TUI 异常后台清理和异步失败覆盖草稿六项问题的首轮修复及交叉复核。首轮源码为 `727832b`，历史 RC1 的 `a6c172d` 四平台验收保留原有归属。各轮程序的实际验证见[本轮审查](review-2026-11-09.md)。首轮共享凭据检测可能拒绝部分无秘密歧义JSON，该边界已在下述第二轮整改修复。仅流式明文、最终仅 opaque 的推理响应，恢复后无法重建明文。
+2026-11-09，开发线完成文本 CLI 终端控制序列、个人文件编码凭据外发、Todo 脱敏后失效仍成功、Responses 推理流冲突、TUI 异常后台清理和异步失败覆盖草稿六项问题的首轮修复及交叉复核。首轮源码为 `727832b`，历史 RC1 的 `a6c172d` 四平台验收保留原有归属。各轮程序的实际验证见[本轮审查](../reviews/review-2026-11-09.md)。首轮共享凭据检测可能拒绝部分无秘密歧义JSON，该边界已在下述第二轮整改修复。仅流式明文、最终仅 opaque 的推理响应，恢复后无法重建明文。
 
 后续R-02补修覆盖Markdown和普通正文中的Unicode、混合及嵌套JSON转义凭据，通过检测的个人文本保持原文。检测视图受256层与累计64 MiB扫描限制，超限失败关闭。最终程序通过600项Rust测试、20组本机PTY及原六例零模型请求回归，源码和程序关联见审查记录。
 
 ### 第二轮整改与本机验收
 
-第二轮修复覆盖环境覆盖授权、路径规则、后台生命周期、上下文来源、WAL、模型协议、导出、日志及TUI草稿／恢复边界。无凭据歧义JSON保持原文，凭据在工具保存前统一净化。CLI按请求补齐完成事件正文，合法交错顺序不一致时可能换行重显完整回答。既定补丁大小和Markdown转义契约保持，逐项处置见[第二轮报告](review-2026-11-09_02.md)。
+第二轮修复覆盖环境覆盖授权、路径规则、后台生命周期、上下文来源、WAL、模型协议、导出、日志及TUI草稿／恢复边界。无凭据歧义JSON保持原文，凭据在工具保存前统一净化。CLI按请求补齐完成事件正文，合法交错顺序不一致时可能换行重显完整回答。既定补丁大小和Markdown转义契约保持，逐项处置见[第二轮报告](../reviews/review-2026-11-09_02.md)。
 
 源码 `6d0c609` 的同一本机macOS27.2 ARM程序通过682项Rust测试、九项发行脚本测试、22组PTY、24例安全探针及三输出completed-only检查。当前源码的四平台CI、原生最低环境及真实模型复验仍待执行。
 
 ## English
 
-**0.2.0-rc.1 and subsequent development-line notes, updated on 2026-11-09. RC1 source `a6c172d` covers N0 shared foundations and N1 default TUI. Post-RC1 interaction features are identified separately below. Review repairs and additional acceptance are tracked in [development progress](progress.md) and [TUI validation](tui-validation.md). Formal publication will be scheduled separately.**
+**0.2.0-rc.1 and subsequent development-line notes, updated on 2026-11-09. RC1 source `a6c172d` covers N0 shared foundations and N1 default TUI. Post-RC1 interaction features are identified separately below. Review repairs and additional acceptance are tracked in [development progress](../progress.md) and [TUI validation](../tui-validation.md). Formal publication will be scheduled separately.**
 
 ### Default TUI and entry-point migration
 
@@ -101,7 +101,7 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 - Enter sends, Alt+Enter or Ctrl+J adds a newline, Ctrl+P opens commands, PgUp／PgDown scroll, End follows new output, Ctrl+C cancels, and Ctrl+D requests exit when the draft is empty.
 - `/mode plan|build|code|work` requests a mode change while the header shows current and pending modes. `/permissions auto|manual|bypass` changes permissions while both runtime and UI operations are idle.
 - Approval details include the operation, arguments, workspace, and correlation IDs. With approval details visible and the draft empty, a fresh ordinary／Shift `y` approves, and `n` or Esc denies. Questions accept typed replies, and `//` sends a literal leading slash.
-- At 100 columns, conversation and details appear side by side. Narrower terminals show details in the main area. Budgets are 64 KiB for a draft, 256 KiB per message, 2 MiB／512 messages for chat bodies, and 2 MiB／10,000 logical lines for cached details, with visible omission and truncation markers. [TUI design and previews](tui-design.md)
+- At 100 columns, conversation and details appear side by side. Narrower terminals show details in the main area. Budgets are 64 KiB for a draft, 256 KiB per message, 2 MiB／512 messages for chat bodies, and 2 MiB／10,000 logical lines for cached details, with visible omission and truncation markers. [TUI design and previews](../tui-design.md)
 
 ### Post-RC1 TUI additions
 
@@ -119,13 +119,13 @@ Validation for these additions is recorded against each development source. Hist
 - Restored sessions use the current invocation's permissions and wait for new input. Interrupted responses, tool `unknown` outcomes, errors, and truncation remain visible according to stored records.
 - `/tools` and `/jobs` display consistent snapshots and committed watermarks. Tool calls are correlated by `run_id` and `call_id`. `/cancel-job ID` requests cancellation of a background job owned by the active run. Background jobs remain scoped to that run.
 - `/export json|markdown PATH` exports a transcript. `/export-full json|markdown PATH` explicitly includes full scope and tool bodies. Relative paths resolve from the session workspace, the parent directory must exist, and existing files are protected.
-- The offline CLI supports `saya session export SESSION_ID --file ./session.md`. Use `--format json` for JSON and `--scope full --include-tools` for full tool records. Both formats share redacted projections and receipts with hashes and snapshot watermarks. Limits are 64 KiB per field and 32 MiB per export. PLAN export targets must be outside the workspace. [Session export](session-export.md)
+- The offline CLI supports `saya session export SESSION_ID --file ./session.md`. Use `--format json` for JSON and `--scope full --include-tools` for full tool records. Both formats share redacted projections and receipts with hashes and snapshot watermarks. Limits are 64 KiB per field and 32 MiB per export. PLAN export targets must be outside the workspace. [Session export](../session-export.md)
 
 ### Local logs and shared foundations
 
 - Five diagnostic levels, trace, debug, info, warn, and error, defaulting to warn. Select a level with `--log-level` or `SAYA_LOG_LEVEL`. Typed fields and session／run／request／call／job IDs provide correlation, and diagnostics are handled separately from runtime machine output.
 - `saya logs show --session SESSION_ID --level info --limit 50` queries local records. `saya --output jsonl logs tail --session SESSION_ID` follows logs, with Ctrl+C stopping tail.
-- Logs default to `$XDG_STATE_HOME/saya/saya.log` or `~/.local/state/saya/saya.log`, rotating at 10 MiB with up to five backups. Display, queries, and exports reapply redaction for currently configured known credentials. [Logging](observability.md)
+- Logs default to `$XDG_STATE_HOME/saya/saya.log` or `~/.local/state/saya/saya.log`, rotating at 10 MiB with up to five backups. Display, queries, and exports reapply redaction for currently configured known credentials. [Logging](../observability.md)
 
 ### Cancellation and terminal recovery
 
@@ -145,23 +145,23 @@ printf '\033\\\033[?1006l\033[?1000l\033[?2004l\033[?25h\033[?1049l\033[23;2t'
 | Linux with glibc 2.35+ | x86_64, aarch64 |
 | macOS 15+ | Intel x86_64, Apple Silicon aarch64 |
 
-Builds use Rust 1.99.1 and edition 2024. Candidate source `a6c172d` passed four-platform CI and native minimum-environment validation of the unpacked programs, with 445 Rust tests and 13 TUI scenarios on each platform. Downloaded archives were checked against their SHA-256 values, binaries, source declarations, and script hashes. Environments and checksums are recorded in [TUI validation](tui-validation.md). Candidates are retained as Actions artifacts for 14 days. Formal publication follows subsequent code review and additional testing.
+Builds use Rust 1.99.1 and edition 2024. Candidate source `a6c172d` passed four-platform CI and native minimum-environment validation of the unpacked programs, with 445 Rust tests and 13 TUI scenarios on each platform. Downloaded archives were checked against their SHA-256 values, binaries, source declarations, and script hashes. Environments and checksums are recorded in [TUI validation](../tui-validation.md). Candidates are retained as Actions artifacts for 14 days. Formal publication follows subsequent code review and additional testing.
 
 ### Known limitations and subsequent scope
 
 - OS sandboxing, MCP, automatic context compaction, and executable plugins remain subsequent work. Commands continue to run with host permissions, and process groups cannot constrain descendants that detach themselves.
 - Bounded TUI windows can omit earlier or longer content, and exports also have explicit limits. Restored sessions and tool snapshots retain unknown outcomes, which require checking actual workspace effects.
 - Credential redaction depends on currently resolvable configured values and persisted markers. File operations provide single-file guarantees and may race with external concurrent changes.
-- macOS developer identity signing and Apple notarization remain release-preparation work. Persistent jobs across runs, cross-protocol session migration, GUI, Goal, and Browser follow the subsequent development plan. [Post-MVP plan](post-mvp-plan.md)
+- macOS developer identity signing and Apple notarization remain release-preparation work. Persistent jobs across runs, cross-protocol session migration, GUI, Goal, and Browser follow the subsequent development plan. [Post-MVP plan](../post-mvp-plan.md)
 
 ### Development-line review after RC1
 
-On 2026-11-09, the development line completed initial repairs for six confirmed issues involving CLI terminal controls, encoded credentials in personal files, invalid Todo snapshots after redaction, conflicting Responses reasoning streams, background cleanup during TUI errors, and newer drafts overwritten after asynchronous failures. Cross-review by agents who did not implement the respective fixes passed. The initial repairs are recorded at `727832b`. The historical four-platform RC1 evidence remains associated with `a6c172d`. Validation for each program is recorded in the [review report](review-2026-11-09.md). That first repair could reject some non-secret ambiguous JSON. The second-round repairs below preserve those documents. Reasoning returned as stream-only plaintext with an opaque final item cannot be reconstructed as plaintext after restore.
+On 2026-11-09, the development line completed initial repairs for six confirmed issues involving CLI terminal controls, encoded credentials in personal files, invalid Todo snapshots after redaction, conflicting Responses reasoning streams, background cleanup during TUI errors, and newer drafts overwritten after asynchronous failures. Cross-review by agents who did not implement the respective fixes passed. The initial repairs are recorded at `727832b`. The historical four-platform RC1 evidence remains associated with `a6c172d`. Validation for each program is recorded in the [review report](../reviews/review-2026-11-09.md). That first repair could reject some non-secret ambiguous JSON. The second-round repairs below preserve those documents. Reasoning returned as stream-only plaintext with an opaque final item cannot be reconstructed as plaintext after restore.
 
 The subsequent R-02 repair covers Unicode, mixed, and nested JSON escapes inside Markdown and prose. Personal text that passes inspection is sent verbatim. Detection views are bounded to 256 decoding layers and 64 MiB of cumulative scanning, with exhausted budgets failing closed. The final program passed 600 Rust tests, 20 local PTY groups, and all six original credential probes with zero model requests. Source and binary provenance is recorded in the review report.
 
 ### Second-round repairs and local acceptance
 
-The second round repairs environment-override authorization, path rules, background lifecycle, context sources, WAL recovery, model protocols, exports, logging, and TUI drafts and restoration. Non-secret ambiguous JSON retains its original text, and tool data is sanitized before persistence. CLI completion events fill missing visible text per request. Valid interleaved output with a different final order may reprint the complete answer on a new line. Existing patch-size and Markdown escaping contracts remain in effect. Individual dispositions are recorded in the [second-round report](review-2026-11-09_02.md).
+The second round repairs environment-override authorization, path rules, background lifecycle, context sources, WAL recovery, model protocols, exports, logging, and TUI drafts and restoration. Non-secret ambiguous JSON retains its original text, and tool data is sanitized before persistence. CLI completion events fill missing visible text per request. Valid interleaved output with a different final order may reprint the complete answer on a new line. Existing patch-size and Markdown escaping contracts remain in effect. Individual dispositions are recorded in the [second-round report](../reviews/review-2026-11-09_02.md).
 
 The same local macOS 27.2 ARM program from source `6d0c609` passed 682 Rust tests, nine release-script tests, 22 PTY groups, 24 security probes, and completed-only checks in three output formats. Four-platform CI, native minimum-environment acceptance, and live-model verification remain pending for this source.

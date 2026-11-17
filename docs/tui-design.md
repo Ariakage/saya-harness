@@ -52,7 +52,7 @@ Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
 └ WORK model max      ◔ input … ───────────┘ /workspace
 ```
 
-上图表达区域关系，实际字符布局可由下方预览命令生成。布局代码集中在[view.rs](../crates/saya-tui/src/view.rs)。
+上图表达区域关系，实际字符布局可由下方预览命令生成。布局代码集中在 [`crates/saya-tui/src/view/`](../crates/saya-tui/src/view/mod.rs) 目录。
 
 ## 配色与信息层级
 
@@ -96,7 +96,7 @@ Saya Harness (v实际版本)      Ctrl+P commands  会话概括名
 
 Assistant正文支持有界的基础Markdown呈现，包括ATX标题、无序／有序列表、引用、成对强调、行内代码以及代码围栏。标题使用紫色，强调和列表标记使用暖色，行内代码使用绿色，代码围栏转换为带语言标签的卡片。流式未闭合的行内标记保留可见文本，代码内部保持原文，URL／HTML展示为可见文本且不触发链接动作。每逻辑行至多256个样式片段，嵌套上限为4，折行按完整grapheme处理并沿用10,000视觉行缓存预算。
 
-共享颜色定义在[theme.rs](../crates/saya-tui/src/theme.rs)，正文样式与折行在[rich_text.rs](../crates/saya-tui/src/rich_text.rs)，区域绘制在[view.rs](../crates/saya-tui/src/view.rs)。
+共享颜色定义在[theme.rs](../crates/saya-tui/src/theme.rs)，正文样式与折行在[rich_text.rs](../crates/saya-tui/src/rich_text.rs)，区域绘制在 [`view/`](../crates/saya-tui/src/view/mod.rs)。
 
 侧栏分区标题配浅色分隔，非零用量数字与零值使用不同灰度，任务进行中高亮，完成项弱化。状态行的权限标签按实际权限区分颜色。
 

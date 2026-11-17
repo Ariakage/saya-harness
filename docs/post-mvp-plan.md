@@ -2,7 +2,7 @@
 
 **初版制订于2026-11-07，更新于2026-11-17。本文包含六个阶段及DEV-038至DEV-089共52项开发任务。N0／N1已随0.2.0发行，N2与N3均已完成四平台验收，N4已完成本机实现与受控验收，N5的DEV-079至DEV-083已完成代码交付、定制 `linux-arm64` 捕获引擎本机／VM 联合验收及固定源码 `5fff1c4` 的四平台远端终验（`CI 44044030536`、`N5 native acceptance 44044034857`、`Release candidates 44044045558` 全 4/4 通过）；非 `linux-arm64` 定制 `headless_shell` 构建分发及正式版本标签发布仍为显式未覆盖边界。实际进度见[开发进度](progress.md)。**
 
-需求来源为项目负责人引用的《Harness功能设计》对话，历史来源标识为 `6aef3957-d280-83ee-9098-278ae10191f8`。需求已提取到本仓库的设计草案，核对时以文档、源码与决策记录为依据。0.1.0 的发行证据见[发行验证](release-validation.md)，原 P0 至 P7 和 DEV-001 至 DEV-037 定义保存在[MVP 实施任务](implementation-plan.md)。
+需求来源为项目负责人引用的《Harness功能设计》对话，历史来源标识为 `6aef3957-d280-83ee-9098-278ae10191f8`。需求已提取到本仓库的设计草案，核对时以文档、源码与决策记录为依据。0.1.0 的发行证据见[发行验证](releases/release-validation.md)，原 P0 至 P7 和 DEV-001 至 DEV-037 定义保存在[MVP 实施任务](implementation-plan.md)。
 
 ## 需求与现有基础
 
@@ -28,7 +28,7 @@
 | N4 目标编排 | Goal 数据、手动推进、持久任务、有限自动续跑与报告 | DEV-069 至 DEV-074 | 目标完成由验收证据判定，预算、恢复及授权可验证 |
 | N5 Browser | 托管 Chromium、网络／资源 broker、界面及联合验收 | DEV-079 至 DEV-083 | 浏览器操作、来源、产物、权限及清理可验证 |
 
-N0与N1已随 **0.2.0正式版**交付，包含候选阶段完善的交互与审查修复，已发布产物的功能和限制保留在[双语发行说明](release-notes-0.2.0.md)。当前N2已接入原生隔离、命令结构事实、stdio／HTTP MCP与凭据管理，最终固定源码的四平台CI、原生、MCP、完整性能及Markdown／TUI验收全部通过。[N2验收记录](n2-validation.md#最终四平台验收)
+N0与N1已随 **0.2.0正式版**交付，包含候选阶段完善的交互与审查修复，已发布产物的功能和限制保留在[双语发行说明](releases/release-notes-0.2.0.md)。当前N2已接入原生隔离、命令结构事实、stdio／HTTP MCP与凭据管理，最终固定源码的四平台CI、原生、MCP、完整性能及Markdown／TUI验收全部通过。[N2验收记录](n2-validation.md#最终四平台验收)
 
 N3的OutputStore、Compact、检查点、插件／Hooks和模型可编辑全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台验收。N4 Goal已完成独立版本化存储、手动与有限自动编排、持久 worker、TUI／CLI 和故障矩阵本机验收；N5 Browser的DEV-079至DEV-083已完成全部运行时交付、本机／专用Colima VM／独立Linux ARM64真实验收与固定源码 `5fff1c4` 四平台远端终验：包含受控网络与凭据／文件broker、强内核角色与sandbox核验、三补丁固定Playwright worker（`de88c9fc…`）、Linux x64/ARM64 `browser_vm_host_linux`＋原生 Playwright rev 1254 Chromium sandbox（`no_new_privs=true`、`seccomp=2`）、`linux-arm64` 23文件定制Chromium pre-capture遮蔽引擎及strict `--require-screenshot` 22/22 passed 与 `n5arm22` 原生 Masked PNG 捕获通过；`version = 0.2.0` 维持不变且未发布新版本标签，非 `linux-arm64` 定制 Chromium `headless_shell` 构建分发继续作为显式外部前提记录于[N5 验收](n5-validation.md)。[N3最终验收](n3-validation.md#四平台最终验收)、[N4验收](n4-validation.md)
 

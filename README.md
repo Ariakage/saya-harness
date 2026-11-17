@@ -68,7 +68,7 @@ just tui-preview syntax
 
 ## 当前版本与开发线状态
 
-- **已发布版本**：**Saya Harness 0.2.0** 提供 CLI 和默认 TUI（含已确认的[完整基线](docs/mvp-baseline.md) B-01 至 B-24、D-029、D-033、D-035）。历史 0.1.0、0.2.0-rc.2 与 0.2.0 发行各自保留独立源码与产物归属。[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[0.2.0 双语说明](docs/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
+- **已发布版本**：**Saya Harness 0.2.0** 提供 CLI 和默认 TUI（含已确认的[完整基线](docs/mvp-baseline.md) B-01 至 B-24、D-029、D-033、D-035）。历史 0.1.0、0.2.0-rc.2 与 0.2.0 发行各自保留独立源码与产物归属。[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[0.2.0 双语说明](docs/releases/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
 - **0.2.0 之后的主线增量**：
   - N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 与凭据管理：固定源码 `aaec8c5` 已完成四平台验收（[N2 验收](docs/n2-validation.md)）。
   - N3 上下文压缩、插件／Hooks 与全局记忆：固定源码 `e1da373` 已完成四平台验收（[N3 验收](docs/n3-validation.md)）。
@@ -97,10 +97,10 @@ just tui-preview syntax
 | [模型协议](docs/model-protocols.md) | 三协议适配、流式边界和验证范围 |
 | [CLI 入口与实现记录](docs/cli-preview.md) | 单次运行、文本会话与默认 TUI 入口 |
 | [MVP 验收证据](docs/acceptance.md) | AC-01 至 AC-24 的测试与发行验收映射 |
-| [0.1.0 双语版本说明](docs/release-notes-0.1.0.md) | 功能、安装、兼容性与已知限制 |
-| [0.2.0 双语版本说明](docs/release-notes-0.2.0.md) | 已发布的 N0／N1、交互完善、审查修复与发行限制 |
-| [0.2.0-rc.1 与开发线双语说明](docs/release-notes-0.2.0-rc.1.md) | 候选与后续交互增量、迁移和限制 |
-| [发行验证](docs/release-validation.md) | 历史产物、源码关联、最低环境与下载复核 |
+| [0.1.0 双语版本说明](docs/releases/release-notes-0.1.0.md) | 功能、安装、兼容性与已知限制 |
+| [0.2.0 双语版本说明](docs/releases/release-notes-0.2.0.md) | 已发布的 N0／N1、交互完善、审查修复与发行限制 |
+| [0.2.0-rc.1 与开发线双语说明](docs/releases/release-notes-0.2.0-rc.1.md) | 候选与后续交互增量、迁移和限制 |
+| [发行验证](docs/releases/release-validation.md) | 历史产物、源码关联、最低环境与下载复核 |
 | [项目指令与 Skill 发现](docs/project-context.md) | 用户级／工作区上下文、优先级和安全边界 |
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [saya-plugin 规范](docs/saya-plugin.md) | manifest v1、结构 schema、本地管理、权限与运行生命周期 |
@@ -114,7 +114,7 @@ just tui-preview syntax
 | [上下文与长输出](docs/context-management.md) | OutputStore、检索、Compact、协议及缓存 |
 | [Browser 设计](docs/browser.md) | 托管浏览器、页面操作、来源、权限及产物 |
 | [N5 Browser 验收](docs/n5-validation.md) | 本机／专用 VM 证据、联合矩阵与未满足的退出条件 |
-| [N5 中英双语说明](docs/release-notes-n5.md) | Browser 开发线功能、权限、兼容性与截图限制 |
+| [N5 中英双语说明](docs/releases/release-notes-n5.md) | Browser 开发线功能、权限、兼容性与截图限制 |
 | [TUI 设计](docs/tui.md) | 默认 saya 入口、共享应用层、终端交互与兼容 |
 | [TUI 布局](docs/tui-design.md) | 参考布局、侧栏、输入区与预览 |
 | [TUI 验证](docs/tui-validation.md) | 候选及后续源码的真实终端验收 |
@@ -122,7 +122,7 @@ just tui-preview syntax
 | [Session 导出](docs/session-export.md) | 一致性快照、Markdown／JSON 与文件保存 |
 | [Goal 设计](docs/goal.md) | 目标、步骤、证据、手动与有限自动推进 |
 | [N4 Goal 验收](docs/n4-validation.md) | Goal 存储、手动／自动推进、worker、预算、报告与故障矩阵 |
-| [N4 中英双语说明](docs/release-notes-n4.md) | Goal 命令、预算、恢复、安全边界与当前限制 |
+| [N4 中英双语说明](docs/releases/release-notes-n4.md) | Goal 命令、预算、恢复、安全边界与当前限制 |
 | [MVP 实施路线图](docs/roadmap.md) | 8 个 MVP 里程碑、工作量估算与交付条件 |
 | [实施任务](docs/implementation-plan.md) | 37 个任务、依赖、交付与基线／验收覆盖 |
 | [开发进度](docs/progress.md) | 当前状态、下一任务与实际验证证据 |

@@ -29,7 +29,7 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 
 四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产均完成匿名公开下载，逐字节及SHA-256与验收对象一致。包内源码声明、README／LICENSE及程序哈希，以及验收脚本摘要经过独立核对。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[正式版结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0/release-evidence.json)
 
-正式macOS ARM二进制通过24例合成凭据探针及deepseek-flash三协议×四模式的12项真实任务。41次模型请求全部成功，35次工具调用中34次成功。Chat CODE的invalid_patch发生于事件序号15，事件序号21的补丁成功，最终任务与静态产物校验通过，失败错误码、调用ID和顺序均保留。三项PLAN工作区零修改，命令执行为0。生成源码仅静态检查，服务内部effort及网络分块未独立观察。[真实模型记录](live-model-validation.md)
+正式macOS ARM二进制通过24例合成凭据探针及deepseek-flash三协议×四模式的12项真实任务。41次模型请求全部成功，35次工具调用中34次成功。Chat CODE的invalid_patch发生于事件序号15，事件序号21的补丁成功，最终任务与静态产物校验通过，失败错误码、调用ID和顺序均保留。三项PLAN工作区零修改，命令执行为0。生成源码仅静态检查，服务内部effort及网络分块未独立观察。[真实模型记录](reports/live-model-validation.md)
 
 本机 `.saya/local/saya-trial` 已切换到匿名下载的正式ARM程序，配置、空闲TUI、命令面板和退出恢复检查通过，模型运行数为0。原预发行和历史程序保留独立记录。完整日志、包、公开下载与验收材料位于 `target/release-0.2.0/`。
 
@@ -46,7 +46,7 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 
 四个平台包、SHA256SUMS、中英双语RELEASE-NOTES.md和release-evidence.json共七项资产完成匿名公开下载，逐字节／SHA-256与验收对象一致。macOS ARM为ad-hoc签名，Intel未签名，发行流程未执行Developer ID签名或Apple公证。[结构化证据](https://github.com/Ariakage/saya-harness/releases/download/v0.2.0-rc.2/release-evidence.json)
 
-实际发布的macOS ARM二进制通过24例合成凭据探针，以及deepseek-flash三协议×四模式共12项真实任务。42次模型请求全部成功，36次工具调用中35次成功。Chat CODE运行包含一次未成功的补丁尝试，最终产物准确且任务完成，该失败的具体错误码与两次尝试的先后顺序未留存。三个PLAN工作区保持不变，命令执行为0。生成源码仅静态检查，服务内部effort及实际网络分块未独立核实，抽样范围见[真实模型记录](live-model-validation.md)。
+实际发布的macOS ARM二进制通过24例合成凭据探针，以及deepseek-flash三协议×四模式共12项真实任务。42次模型请求全部成功，36次工具调用中35次成功。Chat CODE运行包含一次未成功的补丁尝试，最终产物准确且任务完成，该失败的具体错误码与两次尝试的先后顺序未留存。三个PLAN工作区保持不变，命令执行为0。生成源码仅静态检查，服务内部effort及实际网络分块未独立核实，抽样范围见[真实模型记录](reports/live-model-validation.md)。
 
 本机试用入口 `.saya/local/saya-trial` 更新为该公开发行的ARM程序，保留之前产物。完整本机、原生工作流、下载及探针记录位于 `target/rc2/`。
 
@@ -56,13 +56,13 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 
 24例安全探针和三输出completed-only测试通过。二进制SHA-256为 `31391a832815471d3d2ab5dfbb7ab45dfefcf13d05ab97d26ced8057661ec1a0`，证据在 `target/review-r2-final/`。155份源码与构建文件逐字匹配，实际Mach-O最低部署版本15.0。试用入口 `.saya/local/saya-trial` 指向新产物，空闲启动、命令面板和恢复检查通过且未创建模型运行。
 
-本轮实际环境为本机macOS27.2 ARM。原生macOS15、Linux及四平台CI和真实服务复验仍待执行。[逐项处置与保留契约](review-2026-11-09_02.md)
+本轮实际环境为本机macOS27.2 ARM。原生macOS15、Linux及四平台CI和真实服务复验仍待执行。[逐项处置与保留契约](reviews/review-2026-11-09_02.md)
 
 ## 2026-11-09 R-02补修的历史程序
 
 当前开发线已完成正文编码凭据检测补修及独立复核，完整格式、workspace全目标Clippy、600项Rust测试和优化构建通过。同一程序完成5项发行工具测试、smoke、文本journey、既有审查回归与20组正常入口PTY，原六例个人上下文绕过均在模型请求前拒绝。合法个人Markdown按原文发送，相关行为见[使用指南](usage.md)。
 
-平台为本机macOS27.2 ARM／Rust1.99.1，构建设置与实际Mach-O最低部署版本均为15.0。最终程序SHA-256为 `266e0363345042024bb83c326d21ab37e846b2c571e6295835108c624065eeb9`，证据为 `target/r02-fix/check.log`、`tui-journey.json` 和 `validation.json`。[补修与最终验收](review-2026-11-09.md#r-02-补修与最终验收)
+平台为本机macOS27.2 ARM／Rust1.99.1，构建设置与实际Mach-O最低部署版本均为15.0。最终程序SHA-256为 `266e0363345042024bb83c326d21ab37e846b2c571e6295835108c624065eeb9`，证据为 `target/r02-fix/check.log`、`tui-journey.json` 和 `validation.json`。[补修与最终验收](reviews/review-2026-11-09.md#r-02-补修与最终验收)
 
 ## 2026-11-09 首轮审查程序
 
@@ -70,15 +70,15 @@ debug版本的真实预览通过动态帧、working至completed切换、完成�
 
 完整本机检查通过格式、workspace 全目标严格 Clippy、597 项 Rust 测试和 release 构建。同一优化程序通过 5 项发行工具单元测试、工具 smoke、文本 journey、既有审查回归及实际 20 组正常入口 PTY。场景涵盖三协议、4 模式×3 权限、Thinking、Todo、工具摘要／折叠、审批／澄清、补全、Tab、Ctrl+P、粘贴、鼠标、缩放、20×6、恢复、取消、慢消费者和信号终端还原。
 
-平台为 macOS 27.2（26B123）ARM、Rust 1.99.1、Xcode 27.1、SDK 27.0，构建设置和实际 Mach-O 最低部署版本均为 15.0。程序 SHA-256 为 `80cb4093bddb9db55f000ca691ff29cefc2a9e5c87028c272a7a55d6db91d417`，执行各脚本前后核对一致。报告为 `target/review-tui-journey.json`，环境、脚本哈希、源码匹配和完整日志位于 `target/review-20261109/`。[审查与剩余边界](review-2026-11-09.md)
+平台为 macOS 27.2（26B123）ARM、Rust 1.99.1、Xcode 27.1、SDK 27.0，构建设置和实际 Mach-O 最低部署版本均为 15.0。程序 SHA-256 为 `80cb4093bddb9db55f000ca691ff29cefc2a9e5c87028c272a7a55d6db91d417`，执行各脚本前后核对一致。报告为 `target/review-tui-journey.json`，环境、脚本哈希、源码匹配和完整日志位于 `target/review-20261109/`。[审查与剩余边界](reviews/review-2026-11-09.md)
 
 本轮证据限于本机与受控模型，当前开发线的其他平台、macOS 15 及真实服务仍待补充。下方 RC1 `a6c172d` 的四平台验收及其他开发线记录保留原有归属。
 
-补充复核独立重跑通过142项TUI lib和同一程序的20组正常入口PTY，日志为 `target/n1-review-r05-r06-tui.log` 与 `target/review-followup-tui.log`。该轮发现个人上下文正文包裹Unicode JSON的R-02缺口，后续补修及处置见[审查记录](review-2026-11-09.md#r-02-补修与最终验收)。
+补充复核独立重跑通过142项TUI lib和同一程序的20组正常入口PTY，日志为 `target/n1-review-r05-r06-tui.log` 与 `target/review-followup-tui.log`。该轮发现个人上下文正文包裹Unicode JSON的R-02缺口，后续补修及处置见[审查记录](reviews/review-2026-11-09.md#r-02-补修与最终验收)。
 
 ## 范围与证据
 
-DEV-047 至 DEV-053 覆盖默认 TUI、共享运行控制、会话与记录、入口兼容、四平台原生交互和候选包验证。实际任务状态由[开发进度](progress.md)维护，界面结构与修改入口见[TUI 设计说明](tui-design.md)，中英双语说明见[候选说明](release-notes-0.2.0-rc.1.md)。
+DEV-047 至 DEV-053 覆盖默认 TUI、共享运行控制、会话与记录、入口兼容、四平台原生交互和候选包验证。实际任务状态由[开发进度](progress.md)维护，界面结构与修改入口见[TUI 设计说明](tui-design.md)，中英双语说明见[候选说明](releases/release-notes-0.2.0-rc.1.md)。
 
 ## 本机检查
 

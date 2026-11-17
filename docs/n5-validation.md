@@ -2,7 +2,7 @@
 
 **2026-11-17：DEV-079 至 DEV-083 已完成功能交付、定制 Chromium ARM64 捕获引擎修复（Stage 5A：23 文件补丁 `df4c0fb6…`，ELF `501,816,112 B` `d3c691a5…`）、本机／专用 Colima VM／独立 Linux ARM64 Masked 截图实测（Stage 5B），以及固定源码 `5fff1c46ba1d07bf5af993745f4bdeb1e90eeb7d`（`5fff1c4`）上的四平台远端终验（Stage 5C）：[CI 44044030536](https://github.com/Ariakage/saya-harness/actions/runs/44044030536)、[N5 native acceptance 44044034857](https://github.com/Ariakage/saya-harness/actions/runs/44044034857)（4/4 passed，0 unsatisfied）与 [Release candidates 44044045558](https://github.com/Ariakage/saya-harness/actions/runs/44044045558)（4/4 passed）均已全绿通过，四组构建产物的 candidate 与 tarball 解包二进制 SHA-256 逐字节一致。`version = 0.2.0` 不变、未发布新发行标签；非 `linux-arm64` 目标架构定制 `headless_shell` 构建分发仍作为显式未覆盖边界保留。**
 
-任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
+任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](releases/release-notes-n5.md)。
 
 ## 提交与范围
 

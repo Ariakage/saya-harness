@@ -1,86 +1,116 @@
 # 项目文档
 
-Saya Harness 的说明文档默认使用中文，发行说明提供中英双语。CLI MVP 已完成 P0 至 P7 验收并发布 [v0.1.0](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 及后续决策为准。
+Saya Harness 的说明文档默认使用中文，发行说明提供中英双语。CLI MVP 已完成 P0 至 P7 验收并发布 [v0.1.0](https://github.com/Ariakage/saya-harness/releases/tag/v0.1.0)，**0.2.0** 已发布默认 TUI、增强日志与会话导出。具体行为以[完整基线](mvp-baseline.md) B-01 至 B-24 及后续[决策记录](decisions.md)为准。
+
+本目录按职责分为四类：**核心规范与契约**、**子系统设计与使用文档**、**进度与阶段验收**，以及置于子目录的**历史档案**（[`reviews/`](reviews/review-2026-11-11.md)、[`releases/`](releases/release-notes-0.2.0.md)、[`reports/`](reports/live-model-validation.md)）。
+
+## 核心规范与契约
 
 | 文档 | 用途 | 当前状态 |
 | --- | --- | --- |
 | [项目范围](vision.md) | 目标、交付阶段与 MVP 验收入口 | 已确认 |
 | [需求规格](requirements.md) | 已确认需求、用户流程与验收条件 | 已确认；实现和验证范围见开发进度 |
-| [完整基线](mvp-baseline.md) | 全部 24 组决定及具体契约 | 已整套确认，D-027 |
-| [工作模式](modes.md) | 四种工作模式的职责与切换规则 | 已确认；实现和验证范围见开发进度 |
-| [执行与恢复契约](execution.md) | 权限模式、切换边界、脚本输出与恢复策略 | 已确认，按完整基线实现 |
-| [运行时接口](runtime.md) | 可复用 core 循环和调用边界 | 受控验证通过；真实模型小规模联调通过 |
-| [真实模型联调记录](live-model-validation.md) | 测试服务、模型、日期与结果 | DEV-030 单模型小规模联调 |
-| [模型协议接入](model-protocols.md) | HTTP／SSE、协议适配与验证边界 | 三协议受控验证及指定模型小规模联调通过 |
-| [架构设计](architecture.md) | 运行流程、职责划分与实现约束 | 已接入运行时；范围见开发进度 |
-| [开发指南](development.md) | 协作流程、Rust 检查与文档维护 | 初版约定 |
-| [CLI 使用指南](usage.md) | 构建、配置、示例与故障处理 | 0.1.0 使用指南，示例经验证 |
-| [配置组件](configuration.md) | 配置来源、模型 profile 与兼容选项 | 已接入 CLI 与默认 TUI |
-| [CLI 入口与实现记录](cli-preview.md) | 单次运行、文本会话和当前入口 | 0.1.0 已发布，当前使用见使用指南 |
-| [项目指令与 Skill 发现](project-context.md) | 来源、优先级与刷新规则 | 受控验证通过 |
-| [SQLite 存储组件](storage.md) | 事务、事件序号与持久化边界 | 本机受控验证，恢复见开发进度 |
-| [saya-plugin v1 规范](saya-plugin.md) | manifest、权限、lock、生命周期和验收 | N3 已实现，固定源码四平台验收 |
-| [插件结构 schema](schemas/saya-plugin-v1.schema.json) | TOML 解析结果的 JSON Schema | v1 草案，含语义验证要求 |
-| [插件 manifest 示例](../examples/saya-plugin.example.toml) | 声明 Skills／MCP／Hook 的结构示例 | 格式示例 |
-| [后续能力路线图](capability-roadmap.md) | F-01 至 F-20 的功能模块、优先级与依赖 | MVP 基础与待开发增量分别记录 |
-| [后续开发计划](post-mvp-plan.md) | 0.2.0 候选、N0 至 N5、DEV-038 至 DEV-089 | 任务定义与设计草案 |
-| [全局记忆](memory.md) | MEMORY.md、模型编辑／遗忘、审阅与回滚 | DEV-084 至 DEV-089 已完成四平台验收 |
-| [原生 Sandbox](sandbox.md) | Seatbelt、Linux 原生组合、网络、AST 与能力等级 | 已接入共享运行入口并完成固定源码四平台验收 |
-| [工具注册](tool-registry.md) | 可信操作描述、外部schema、权限、版本和派发 | DEV-054实现与验收见开发进度 |
-| [命令结构分析](command-analysis.md) | CST风险事实、预算、独立审核与批准绑定 | DEV-075实现与验收见开发进度 |
-| [N2验收](n2-validation.md) | 原生隔离、命令分析与MCP的阶段要求及证据 | 完成四平台验收 |
-| [N3验收](n3-validation.md) | 上下文、插件／Hooks、记忆与联合矩阵 | 完成四平台验收 |
-| [上下文与长输出](context-management.md) | 预算、引用／检索、Compact、协议及缓存 | N3 已实现并接入共享运行入口 |
-| [Browser 设计](browser.md) | 托管浏览器、页面／文件／网络与恢复 | DEV-079 至 DEV-083 已完成实现，四平台 `5fff1c4` 远端与 ARM64 定制捕获已通过 |
-| [N5 Browser 验收](n5-validation.md) | Browser／原生隔离／Compact／插件与终端联合证据 | `5fff1c4` 四平台 CI／N5／RC 全 4/4 通过，含双 Linux 原生 Chromium sandbox；非 ARM64 定制引擎分发待补齐 |
-| [N5 中英双语说明](release-notes-n5.md) | Browser 工具、权限、VM、媒体与兼容性限制 | 未发布的开发线说明，版本号未变 |
-| [TUI 设计](tui.md) | 默认入口、应用分层、交互与终端恢复 | DEV-047 至 DEV-053 已完成候选验收，后续交互完善见开发进度 |
-| [Markdown与调试预览](markdown-rendering.md) | 语法、Unicode数学、图表、脚注导航与source／render | 本地开发线，验收见开发进度 |
-| [TUI 布局设计](tui-design.md) | 参考布局、尺寸、面板和预览 | 当前开发线设计与实现说明 |
-| [TUI 验证](tui-validation.md) | 候选与后续源码的环境、脚本和证据 | 各轮验证按实际源码记录 |
-| [日志与追踪](observability.md) | 五级日志、span、安全记录与本地查询 | DEV-040 至 DEV-042 已实现，本机验收通过 |
-| [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 与文件保存 | DEV-043 至 DEV-046 已实现，本机验收通过 |
-| [Goal 设计](goal.md) | 目标、证据、预算、恢复与分层交付 | DEV-069 至 DEV-074 已完成本机受控验收 |
-| [N4 Goal 验收](n4-validation.md) | Goal 存储、执行、worker、预算、TUI 与故障矩阵 | 完成本机受控验收 |
-| [N4 审查与整改](review-2026-11-11.md) | 15 项 Goal 契约问题、复现、修复及回归证据 | 整改状态见报告 |
-| [N4 中英双语说明](release-notes-n4.md) | Goal 功能、命令、安全边界与已知限制 | 开发线说明，版本号待定 |
-| [MVP 实施路线图](roadmap.md) | MVP 里程碑、估算与交付条件 | P0 至 P7 验收完成 |
-| [实施任务](implementation-plan.md) | 37 项任务、依赖与验收覆盖 | 状态见开发进度 |
-| [发行检查](release-checklist.md) | 24 组基线、验收与已知限制 | P7 验收完成 |
-| [0.1.0 双语版本说明](release-notes-0.1.0.md) | 功能、安装、迁移与平台限制 | 已发布，中英双语 |
-| [0.2.0-rc.1 与开发线双语说明](release-notes-0.2.0-rc.1.md) | 候选迁移、后续交互增量与限制 | RC1 与后续开发线分别说明 |
-| [发行验证记录](release-validation.md) | 构建产物、校验和、最低环境与下载复核 | v0.1.0 发布及复核完成 |
-| [MVP 验收证据](acceptance.md) | AC-01 至 AC-24 的测试与发行验收映射 | 受控测试与四平台发行验收通过 |
-| [开发进度](progress.md) | 阶段／任务状态与证据 | 持续维护 |
-| [提示词定制](prompts.md) | 英文 prompt、装配与来源对照 | 组件与受控接线，真实模型效果未评测 |
-| [提示词来源清单](prompt-sources.json) | 来源标识、相对路径、字节数与 SHA-256 | 保留历史提取与来源核查记录 |
-| [当前提示词快照](prompt/README.md) | 核心、工具、模式、权限与审核提示词正文 | `saya-prompts-v1`，运行时来源见目录说明 |
-| [决策记录](decisions.md) | 方向确认、基线与变更历史 | 持续维护 |
-| [2026-11-07 风险审查](review-2026-11-07.md) | 历史问题、修复与候选验证 | 历史源码的审查记录 |
-| [2026-11-09 首轮审查](review-2026-11-09.md) | RC1 后问题、修复与补充复核 | 验证归属见报告 |
-| [2026-11-09 第二轮审查](review-2026-11-09_02.md) | 第二轮发现及核实入口 | 整改状态见开发进度 |
-| [根目录 AGENTS.md](../AGENTS.md) | 编码 Agent 的执行约定 | 初版约定 |
-| [MIT 许可证](../LICENSE) | 项目许可与版权声明 | 已添加 |
+| [完整基线](mvp-baseline.md) | 全部 24 组决定及具体契约 | 已整套确认（D-027） |
+| [工作模式](modes.md) | PLAN、BUILD、CODE、WORK 职责与切换规则 | 已实现；边界按完整基线验证 |
+| [执行与恢复契约](execution.md) | 权限模式、切换边界、输出与崩溃恢复契约 | 已实现；验证范围见开发进度 |
+| [架构设计](architecture.md) | 运行循环、分层 crate 与扩展模块边界 | 已实现；与当前代码模块一致 |
+| [决策记录](decisions.md) | 已确认方向、基线与演进历史 | 持续维护 |
+| [根目录 AGENTS.md](../AGENTS.md) | 编码 Agent 的协作、边界与提交流程约定 | 当前有效 |
+| [MIT 许可证](../LICENSE) | 项目开源许可与版权声明 | 已生效 |
 
-[0.2.0-rc.2 中英双语说明](release-notes-0.2.0-rc.2.md)记录当前候选范围与发行验收。
+## 子系统设计与使用文档
 
-[0.2.0 中英双语说明](release-notes-0.2.0.md)记录正式版范围、安装与发行证据。
+| 文档 | 用途 | 当前状态 |
+| --- | --- | --- |
+| [CLI 使用指南](usage.md) | 构建、配置、TUI／CLI 交互、恢复与导出入门 | 已实现；覆盖 `0.2.0` 与当前开发线 |
+| [配置组件](configuration.md) | 配置来源、模型 profile、沙箱预设与模块边界 | 已实现；接入 CLI 与默认 TUI |
+| [CLI 入口与实现记录](cli-preview.md) | 单次运行、文本会话、后台任务与原生入口边界 | 已实现；细节见使用指南 |
+| [运行时接口](runtime.md) | 可复用 core 循环、`runtime/` 模块与并发批处理边界 | 已实现；受控及模型联调已验证 |
+| [模型协议接入](model-protocols.md) | OpenAI／Anthropic 协议映射、思考摘要、缓存与续写边界 | 已实现；三协议受控验证通过 |
+| [SQLite 存储组件](storage.md) | SQLite WAL、Schema v2、事务、写锁与迁移边界 | 已实现；受控与崩溃恢复验证通过 |
+| [原生 Sandbox](sandbox.md) | Seatbelt、Linux Bubblewrap／Seccomp／socat、网络代理与 CST | 已实现（N2）；完成四平台验收 |
+| [命令结构分析](command-analysis.md) | Tree-sitter Bash CST 风险事实、预算与独立核查绑定 | 已实现（N2）；完成四平台验收 |
+| [工具注册](tool-registry.md) | 本地／外部工具身份、宿主分类、代次与派发 | 已实现（N2）；完成四平台验收 |
+| [MCP 与凭据管理](mcp.md) | stdio／Streamable HTTP MCP、私有凭据与 OAuth 绑定 | 已实现（N2）；完成四平台验收 |
+| [上下文与长输出](context-management.md) | OutputStore、检索、Compact、检查点与缓存前缀 | 已实现（N3）；完成四平台验收 |
+| [项目指令与 Skill 发现](project-context.md) | 用户级／工作区指令与 Skill 发现优先级和安全边界 | 已实现；受控验证通过 |
+| [提示词定制](prompts.md) | 英文 prompt 装配、模式／核查分段与前缀缓存设计 | 已实现；受控接线与评估通过 |
+| [提示词来源清单](prompt-sources.json) | 提示词模板来源、相对路径与 SHA-256 核查记录 | 历史来源核查清单 |
+| [当前提示词快照](prompt/README.md) | `saya-prompts-v1` 正式正文与 `drafts/n3/` 草稿说明 | 运行时嵌入正文（`v1/`） |
+| [日志与追踪](observability.md) | 五级日志、关联 span、脱敏记录与 `saya logs` 查询 | 已实现（N0）；本机验收通过 |
+| [Session 导出](session-export.md) | 一致性快照、Markdown／JSON 导出与私有文件写入 | 已实现（N0）；本机验收通过 |
+| [saya-plugin v1 规范](saya-plugin.md) | 插件 manifest v1、权限、lock、安装与 Hook 生命周期 | 已实现（N3）；完成四平台验收 |
+| [插件结构 schema](schemas/saya-plugin-v1.schema.json) | `saya-plugin.toml` 的 JSON Schema 校验定义 | 运行时集成（N3） |
+| [插件 manifest 示例](../examples/saya-plugin.example.toml) | 声明 Skills／MCP／Hooks 的结构示例 | 格式示例 |
+| [全局记忆](memory.md) | `MEMORY.md`、专用工具、审阅、更正／遗忘与回滚 | 已实现（N3）；完成四平台验收 |
+| [Goal 设计](goal.md) | 独立持久 Goal、结构化计划、预算与人工／自动推进 | 已实现（N4）；完成本机受控验收 |
+| [Browser 设计](browser.md) | 受控 Web、Playwright worker、VM、文件／网络 broker 与截图遮蔽 | 已实现（N5）；VM 与 ARM64 实测通过 |
+| [TUI 设计](tui.md) | 默认 `saya` 终端入口、分层控制、附件与恢复路径 | 已实现（N1／后续交互）；持续演进 |
+| [TUI 布局设计](tui-design.md) | 配色、侧栏、输入区、状态反馈与 `view/` 模块布局 | 已实现；与 `view/` 一致 |
+| [Markdown 与调试预览](markdown-rendering.md) | CommonMark／GFM、数学／图表高亮与 `tui-preview` | 已实现；离线及 PTY 验证通过 |
+
+## 开发、进度与阶段验收
+
+| 文档 | 用途 | 当前状态 |
+| --- | --- | --- |
+| [开发指南](development.md) | 协作流程、`justfile` 任务、Rust 检查与 CI 构建 | 当前有效 |
+| [开发进度](progress.md) | 各阶段、DEV 任务状态与最新本地／CI 实测日志 | 持续维护 |
+| [MVP 实施路线图](roadmap.md) | 0.1.0 P0 至 P7 里程碑定义与交付条件 | 已交付（0.1.0 历史基线） |
+| [实施任务](implementation-plan.md) | DEV-001 至 DEV-037 任务拆解与验收映射 | 已完成（0.1.0 历史基线） |
+| [后续能力路线图](capability-roadmap.md) | F-01 至 F-20 功能模块规划、已实现范围与未实现项（含 GUI 等） | 规划与现状对照 |
+| [后续开发计划](post-mvp-plan.md) | 0.2.0、N0 至 N5 阶段拆解（DEV-038 至 DEV-089）与待规划项 | 迭代主计划 |
+| [MVP 验收证据](acceptance.md) | AC-01 至 AC-24 对应测试模块与发行证据索引 | 已验收（0.1.0） |
+| [TUI 验证](tui-validation.md) | 候选及后续源码的终端布局、渲染与 PTY 验收记录 | 已验证 |
+| [N2 验收](n2-validation.md) | 原生隔离、CST、MCP 与性能四平台验收证据（`aaec8c5`） | 完成四平台验收 |
+| [N3 验收](n3-validation.md) | 上下文、插件／Hooks 与全局记忆四平台验收证据（`e1da373`） | 完成四平台验收 |
+| [N4 Goal 验收](n4-validation.md) | Goal 存储、推进、worker、预算与故障矩阵验证 | 完成本机受控验收 |
+| [N5 Browser 验收](n5-validation.md) | 定制引擎、Colima VM、ARM64 原生实测与 `5fff1c4` 四平台远端终验 | 完成本机／VM／`5fff1c4` 四平台验收（非 ARM64 定制引擎待分发） |
+
+## 历史档案（`reviews/`、`releases/`、`reports/`）
+
+> 下述文档记录特定历史提交或发行候选时点的静态审查、双语发行说明与专题实验报告；如需了解**当前仓库实际行为**，请以上文核心规范与子系统文档为准。
+
+### 代码审查与整改记录（`reviews/`）
+
+| 文档 | 内容 |
+| --- | --- |
+| [2026-11-07 风险审查](reviews/review-2026-11-07.md) | 历史问题、修复与候选验证记录 |
+| [2026-11-09 首轮审查](reviews/review-2026-11-09.md) | RC1 后 6 项问题修复与交叉复核报告 |
+| [2026-11-09 第二轮审查](reviews/review-2026-11-09_02.md) | 仓库深度审查、安全耦合分析与文档整理建议 |
+| [2026-11-10 首轮审查](reviews/review-2026-11-10.md) | N0–N2 阶段审查与终端背压／调度修复记录 |
+| [2026-11-10 第二轮审查](reviews/review-2026-11-10_02.md) | N2 隔离与存储路径第二轮复核与回归证据 |
+| [2026-11-10 第三轮审查](reviews/review-2026-11-10_03.md) | N2 收尾一致性复核记录 |
+| [2026-11-11 N4 审查与整改](reviews/review-2026-11-11.md) | Goal 模块 15 项契约问题复现、修复与回归证据 |
+
+### 发行说明与校验记录（`releases/`）
+
+| 文档 | 内容 |
+| --- | --- |
+| [MVP 发行检查清单](releases/release-checklist.md) | B-01 至 B-24 检查项与 CLI 测试映射 |
+| [发行验证记录](releases/release-validation.md) | 历史构建产物、校验和、最低环境与下载复核 |
+| [0.1.0 双语版本说明](releases/release-notes-0.1.0.md) | 0.1.0 功能、安装、迁移与平台限制 |
+| [0.2.0-rc.1 与开发线双语说明](releases/release-notes-0.2.0-rc.1.md) | 候选迁移、后续交互增量与限制 |
+| [0.2.0-rc.2 双语版本说明](releases/release-notes-0.2.0-rc.2.md) | RC2 候选范围与四平台验收归属 |
+| [0.2.0 双语版本说明](releases/release-notes-0.2.0.md) | 已发布 0.2.0 正式版范围、安装与限制 |
+| [N4 中英双语说明](releases/release-notes-n4.md) | Goal 功能、命令、安全边界与开发线说明 |
+| [N5 中英双语说明](releases/release-notes-n5.md) | Browser 开发线功能、权限、VM 与兼容性说明 |
+
+### 专题实验与模型验证报告（`reports/`）
+
+| 文档 | 内容 |
+| --- | --- |
+| [真实模型联调记录](reports/live-model-validation.md) | DEV-030 兼容端点小规模样本联调记录 |
+| [提示词多轮缓存验证报告](reports/prompt-evaluation-2026-11-11.md) | DeepSeek 10 场景多轮前缀缓存率对比评估 |
+| [缓存 95% 与工具错误联合验证](reports/prompt-cache-95-2026-11-11.md) | `saya_runtime_context_v1` 后移后 95.05%／Turn 2+ 97.20% 联合验证 |
+| [提示词与模型任务能力联合验证](reports/prompt-capability-2026-11-11.md) | 10 场景任务能力、命中率与工具修复联合验证报告 |
 
 ## 状态含义
 
-- **已确认**：项目负责人明确确定的方向，记录在决策文档中。
-- **草案**：供讨论的建议，允许调整，不代表已经定案。
-- **已实现**：已有代码与相应验证证据支持的能力。
-- **待决定**：尚缺产品选择或技术决策。
-
-项目目标以最新确认的需求为准；现有行为需要查验代码与验证结果。二者出现偏差时应明确记录，不能只修改描述来掩盖差异。
-
-当前 MVP 无待决产品阻塞项。默认 TUI 已在 0.2.0 开发线接入，GUI、原生隔离、MCP 及其他扩展按后续阶段规划。
-
-查看后续功能全景时使用能力路线图，选择下一个实现任务时读取后续开发计划和开发进度。MVP 路线图与任务表保留 0.1.0 的实施定义及验收依据。
+- **已实现**：已有代码、受控回归或平台验证证据支持的能力；未支持场景在各自文档注明限制。
+- **已确认**：项目负责人明确确定的产品与工程约束，记录于[完整基线](mvp-baseline.md)与[决策记录](decisions.md)。
+- **规划中（未实现）**：如 GUI、多 Agent 协作等在[后续能力路线图](capability-roadmap.md)或 `prompt/drafts/` 中维护的设计方案。
+- **历史档案**：记录过往里程碑审查、历史发行说明与专题实验快照，保留原始上下文与结论。
 
 ## 维护方式
 
-产品范围变化时更新项目范围与决策记录；接口、行为或模块边界变化时更新对应设计文档。只有实现并验证后，才将能力标记为已实现。
-
-新增文档时在此添加入口；各文档使用相对链接，方便在仓库和托管平台阅读。
+产品范围变化时更新[项目范围](vision.md)与[决策记录](decisions.md)；接口、行为或模块边界变化时同步更新对应设计文档，确保所有链接与代码示例可验证。新增文档时在本索引对应分类中添加条目，历史一次性报告或版本说明放入 `reviews/`、`releases/` 或 `reports/`。

@@ -24,7 +24,7 @@ N5 将受控网页读取与托管 Chromium 接入共享运行时。CLI、文本�
 
 ### 兼容性与限制
 
-- Web／Browser 必须显式配置，不自动安装、下载或更新浏览器运行时。配置、版本与 VM 前提见 [Browser](browser.md) 和[配置说明](configuration.md)。
+- Web／Browser 必须显式配置，不自动安装、下载或更新浏览器运行时。配置、版本与 VM 前提见 [Browser](../browser.md) 和[配置说明](../configuration.md)。
 - 安装身份 v2 是不兼容变更：旧 v1 manifest 被拒绝，必须在新远端根重新 provision 并更新显式路径与摘要；已有根不会被覆盖。树校验不是原子／不可变安装快照，也不证明定制 Chromium 的构建来源；历史验收继续归属其原源码与输入。
 - Rust 的 `NetworkPolicy::LoopbackPort` 现在要求显式 `host` 字段；Linux 保留该回环字面地址，Seatbelt 仍按 localhost 端口限制。CLI 的显式 VM 配置字段不变。
 - PLAN 在全部权限模式下拒绝主动 Browser 工具。`auto` 的写动作经过独立核查；Manual Approval 逐工具确认；bypass 不绕过 PLAN、显式 deny、网络和 sandbox 硬边界。
@@ -36,7 +36,7 @@ N5 将受控网页读取与托管 Chromium 接入共享运行时。CLI、文本�
 - `artifact_ref` 是公开的不透明句柄，可与存储引用值相同，但不包含宿主路径或凭据，不授予跨 Session 访问。宿主 `media_refs` 字段只承担可信媒体选择与 GC pin。
 - 未接入个人现有浏览器、持久登录 profile 复用、远程浏览器服务或其他浏览器引擎。真实外网与付费模型不由上述受控矩阵替代。
 
-测试结果与未满足项以 [N5 验收记录](n5-validation.md) 为准；本说明不创建发行或修改版本号。
+测试结果与未满足项以 [N5 验收记录](../n5-validation.md) 为准；本说明不创建发行或修改版本号。
 
 ## English
 
@@ -60,7 +60,7 @@ N5 connects controlled web reads and managed Chromium to the shared runtime. CLI
 
 ### Compatibility and limitations
 
-- Web/Browser features require explicit configuration. No runtime is installed, downloaded, or updated automatically. See [Browser](browser.md) and [configuration](configuration.md) for pinned versions and VM prerequisites.
+- Web/Browser features require explicit configuration. No runtime is installed, downloaded, or updated automatically. See [Browser](../browser.md) and [configuration](../configuration.md) for pinned versions and VM prerequisites.
 - Installation identity v2 is a breaking change: v1 manifests are rejected. Re-provision into a new remote root and explicitly update paths and the digest; existing roots are not overwritten. Tree verification is neither an atomic/immutable installation snapshot nor proof of a custom Chromium build's provenance. Historical acceptance remains bound to its original sources and inputs.
 - The Rust `NetworkPolicy::LoopbackPort` variant now requires an explicit `host` field. Linux preserves that loopback literal; Seatbelt still restricts localhost ports. The explicit CLI VM configuration fields are unchanged.
 - PLAN denies active Browser tools in every permission mode. In auto mode, write actions undergo independent review; Manual Approval confirms every tool. Bypass does not override PLAN, explicit deny rules, network restrictions, or sandbox boundaries.
@@ -72,4 +72,4 @@ N5 connects controlled web reads and managed Chromium to the shared runtime. CLI
 - Public `artifact_ref` handles may share the storage-reference value but contain neither host paths nor credentials and grant no cross-Session access. The host `media_refs` field controls trusted media selection and GC pinning.
 - Existing personal browsers, persistent login-profile reuse, remote browser services, and other engines are not integrated. Local and CI controlled matrices do not replace real external-network or paid-model testing.
 
-Actual results and unmet requirements are recorded in [N5 validation](n5-validation.md). These development notes do not publish a release or change the version number.
+Actual results and unmet requirements are recorded in [N5 validation](../n5-validation.md). These development notes do not publish a release or change the version number.

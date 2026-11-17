@@ -110,7 +110,7 @@ output_microunits_per_million = 2000000
 
 ## N2 原生隔离配置
 
-当前 N2 开发线已通过完整四平台整体验收，0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](release-notes-0.2.0.md)
+当前 N2 开发线已通过完整四平台整体验收，0.2.0 的发行范围与限制继续按其历史记录维护。[N2 验收记录](n2-validation.md)、[0.2.0 发行说明](releases/release-notes-0.2.0.md)
 
 省略 `sandbox` 时采用 `backend = "auto"`，在 macOS 使用系统 Seatbelt，在 Linux 使用 Bubblewrap 与 Seccomp。Linux 要求 Bubblewrap 0.13.1 或更新版本，代理网络还需要 socat，可执行文件需符合宿主可信路径和权限检查。macOS 固定使用系统 `/usr/bin/sandbox-exec`。依赖及必需能力缺失会使运行启动失败。`config check` 仅验证语法、数值和环境引用，原生能力在 Run 启动时探测。
 

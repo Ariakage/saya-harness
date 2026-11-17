@@ -38,7 +38,7 @@
 
 下载到本机 `target/p7-acceptance-2840cbb/verified/` 的四个包逐一核对包哈希、二进制哈希、源码声明、测试脚本哈希、文件成员和执行权限，与各 job 保存的 `verification.json` 一致。完整汇总为同目录 `release-evidence.json`。正式构建已从包含最终双语说明的固定提交重新生成，通过相同验收并发布，见上方记录。
 
-审查修复后的三协议真实模型复测共六项通过，版本和服务样本见[真实模型记录](live-model-validation.md)。B-01 至 B-24 与 AC-01 至 AC-24 的覆盖见[发行检查](release-checklist.md)和[验收索引](acceptance.md)。
+审查修复后的三协议真实模型复测共六项通过，版本和服务样本见[真实模型记录](../reports/live-model-validation.md)。B-01 至 B-24 与 AC-01 至 AC-24 的覆盖见[发行检查](release-checklist.md)和[验收索引](../acceptance.md)。
 
 ## 历史本地候选 854be1b
 
@@ -55,7 +55,7 @@
 | macOS aarch64 | macOS 27.2 ARM，Xcode 27.1，SDK 27.0，部署目标 15.0 | 解包二进制在 macOS 27.2 ARM 原生通过三项离线演练，Mach-O `minos 15.0` | **macOS 15 实测** |
 | macOS x86_64 | 同一 macOS ARM 主机交叉构建，部署目标 15.0 | 解包二进制在 macOS 27.2 经 Rosetta 通过三项离线演练，Mach-O `minos 15.0` | **macOS 15 实测及原生 Intel 主机** |
 
-三项演练为 [smoke.py](../scripts/release/smoke.py)、[journey.py](../scripts/release/journey.py) 和 [review_regressions.py](../scripts/release/review_regressions.py)。它们分别验证 PLAN 工具往返与工作区不变、干净配置／人工批准／退出／会话列表／恢复／继续输入，以及 R-01 至 R-05 的真实 CLI 回归。测试使用本地模型替身、合成凭据及临时工作区。
+三项演练为 [smoke.py](../../scripts/release/smoke.py)、[journey.py](../../scripts/release/journey.py) 和 [review_regressions.py](../../scripts/release/review_regressions.py)。它们分别验证 PLAN 工具往返与工作区不变、干净配置／人工批准／退出／会话列表／恢复／继续输入，以及 R-01 至 R-05 的真实 CLI 回归。测试使用本地模型替身、合成凭据及临时工作区。
 
 包校验和、归档成员、二进制架构、源码声明和包内外二进制一致性均已核对。实际测试使用解包文件，测试后再次核对其哈希。源码、环境和脚本哈希及结果位于本机 `target/review-854be1b/evidence/`，主要文件为 `build-environment.json`、`artifacts.json`、四个 `*-verification.json` 及构建／演练日志。
 
@@ -118,7 +118,7 @@ Linux 容器复用虚拟机内核，GLIBC 符号检查不代表所有 Linux 内�
 b0f0fa786d4cf3c4263d624207818ee240a1aac46ececd7fcb95f2e826ad9489  saya-0.1.0-macos-aarch64.tar.gz
 ```
 
-构建使用 Rust 1.99.1；macOS 显式设置 `MACOSX_DEPLOYMENT_TARGET=15.0`。Linux 使用 Ubuntu 22.04 与 [Dockerfile](../scripts/release/ubuntu-22.04.Dockerfile)；APT 软件包及 rustup 安装器未按内容固定。打包由 [package.py](../scripts/release/package.py) 完成；在候选目录可用 `shasum -a 256 -c SHA256SUMS` 复核。
+构建使用 Rust 1.99.1；macOS 显式设置 `MACOSX_DEPLOYMENT_TARGET=15.0`。Linux 使用 Ubuntu 22.04 与 [Dockerfile](../../scripts/release/ubuntu-22.04.Dockerfile)；APT 软件包及 rustup 安装器未按内容固定。打包由 [package.py](../../scripts/release/package.py) 完成；在候选目录可用 `shasum -a 256 -c SHA256SUMS` 复核。
 
 
 ## 历史候选：macOS 部署目标 13.0

@@ -30,7 +30,7 @@
 | 运行上限 | 每场景最多16次模型请求、40次工具调用、420秒活跃时间 |
 | 环境 | macOS 27.2 ARM |
 
-[prompt_eval.py](../scripts/prompt_eval.py) 将原来4个场景扩展为8个，并通过 `--repeat 3 --jobs 6` 为每组生成24次独立运行。`--diagnostics` 仅将失败工具调用的夹具参数和结构化错误保存到本地忽略目录；`--compare` 可离线汇总已有报告。
+[prompt_eval.py](../../scripts/prompt_eval.py) 将原来4个场景扩展为8个，并通过 `--repeat 3 --jobs 6` 为每组生成24次独立运行。`--diagnostics` 仅将失败工具调用的夹具参数和结构化错误保存到本地忽略目录；`--compare` 可离线汇总已有报告。
 
 | 场景 | 主要验收边界 |
 | --- | --- |
