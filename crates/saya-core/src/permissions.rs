@@ -13,7 +13,7 @@ use crate::{
 use globset::{GlobBuilder, GlobMatcher};
 use serde::Deserialize;
 use std::{
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Arc,
 };
 
@@ -44,6 +44,15 @@ pub struct PolicyDecision {
 }
 fn decision(decision: Decision, reason: &'static str) -> PolicyDecision {
     PolicyDecision { decision, reason }
+}
+
+/// Repository control data is never a model-facing file target. A `.git`
+/// directory or a worktree's `.git` pointer file can host configuration and
+/// hooks that later execute outside the sandbox during ordinary Git use, so
+/// the boundary holds in every permission mode including bypass.
+pub(crate) fn is_repository_control_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::Normal(name) if name == ".git"))
 }
 
 pub(crate) fn has_exec_environment_override(arguments: &serde_json::Value) -> bool {
@@ -727,6 +736,9 @@ impl Policy {
         op: &Operation,
     ) -> PolicyDecision {
         if let Target::File(path) = &op.target {
+            if is_repository_control_path(path) {
+                return decision(Decision::Deny, "repository_control_data");
+            }
             match self.host_protected.read() {
                 Ok(protected) if !protected.iter().any(|root| path.starts_with(root)) => {}
                 _ => return decision(Decision::Deny, "host_managed_resource"),

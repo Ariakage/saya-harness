@@ -392,6 +392,38 @@ impl LinuxBackend {
                     Err(error) => return Err(super::io_error(error)),
                 }
             }
+            // Write-only denials remount each existing target read-only over
+            // itself. A missing target inside a writable root is covered by
+            // the empty mask so it cannot be created later.
+            for (source, destination) in write_deny_masks(policy, &system_roots)? {
+                match fs::symlink_metadata(&source) {
+                    Ok(_) => {
+                        bind(
+                            &mut args,
+                            &mut mount_fds,
+                            "--ro-bind-fd",
+                            &source,
+                            &destination,
+                        )?;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        if policy
+                            .write_roots
+                            .iter()
+                            .any(|root| destination.starts_with(root))
+                        {
+                            bind_descriptor(
+                                &mut args,
+                                &mut mount_fds,
+                                "--ro-bind-fd",
+                                Arc::new(mask_file.try_clone().map_err(super::io_error)?),
+                                &destination,
+                            );
+                        }
+                    }
+                    Err(error) => return Err(super::io_error(error)),
+                }
+            }
         }
         let mut relay = None;
         let bridges = match &policy.network {
@@ -598,6 +630,46 @@ fn protection_masks(
             return Err(failure(
                 "unsupported_fs_policy",
                 "filesystem protection masks exceed their budget",
+            ));
+        }
+    }
+    let mut result: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (destination, source) in masks {
+        if result
+            .last()
+            .is_some_and(|(_, parent)| destination.starts_with(parent))
+        {
+            continue;
+        }
+        result.push((source, destination));
+    }
+    Ok(result)
+}
+
+// Write-only denials keep the target visible but remount it read-only. Only
+// writable roots need masks; read-only views already reject writes. System
+// root aliases receive the same coverage as the full protection masks.
+fn write_deny_masks(
+    policy: &SandboxPolicy,
+    system_roots: &[(PathBuf, PathBuf)],
+) -> Result<Vec<(PathBuf, PathBuf)>, BoundaryError> {
+    const MAX_MASKS: usize = 4096;
+    let mut masks = BTreeMap::new();
+    for denied in &policy.write_denied_paths {
+        for root in &policy.write_roots {
+            if denied.starts_with(root) {
+                masks.insert(denied.clone(), denied.clone());
+            }
+        }
+        for (source, destination) in system_roots {
+            if let Ok(relative) = denied.strip_prefix(source) {
+                masks.insert(destination.join(relative), denied.clone());
+            }
+        }
+        if masks.len() > MAX_MASKS {
+            return Err(failure(
+                "unsupported_fs_policy",
+                "filesystem write-denial masks exceed their budget",
             ));
         }
     }

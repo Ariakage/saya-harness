@@ -533,3 +533,54 @@ fn symlinked_executable_still_matches_canonical_policy_rules()
     assert_eq!(decision.reason, "explicit_deny");
     Ok(())
 }
+
+#[test]
+fn repository_control_paths_are_denied_in_every_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let policy = empty(root.path())?;
+    for target in [
+        ".git/config",
+        ".git/hooks/pre-commit",
+        "sub/.git",
+        "sub/.git/config",
+        "modules/lib/.git/modules/x/config",
+    ] {
+        let absolute = root.path().join(target);
+        if target != "sub/.git" {
+            std::fs::create_dir_all(absolute.parent().ok_or("parent")?)?;
+            std::fs::write(&absolute, b"fixture")?;
+        } else {
+            std::fs::create_dir_all(&absolute)?;
+        }
+        for tool in ["read_file", "write_file"] {
+            let operation = Operation::file(root.path(), tool, Path::new(target))?;
+            for permission in [
+                PermissionMode::Auto,
+                PermissionMode::Manual,
+                PermissionMode::Bypass,
+            ] {
+                for mode in [WorkMode::Plan, WorkMode::Work] {
+                    let result = policy.evaluate(mode, permission, &operation);
+                    assert_eq!(
+                        (result.decision, result.reason),
+                        (Decision::Deny, "repository_control_data"),
+                        "{tool} {target} {mode:?} {permission:?}"
+                    );
+                }
+            }
+        }
+    }
+    // `.gitignore` and lookalike names stay ordinary file targets.
+    std::fs::create_dir_all(root.path().join(".git2"))?;
+    for target in [".gitignore", ".gitattributes", ".git2/config"] {
+        let operation = Operation::file(root.path(), "write_file", Path::new(target))?;
+        assert_ne!(
+            policy
+                .evaluate(WorkMode::Work, PermissionMode::Auto, &operation)
+                .decision,
+            Decision::Deny,
+            "{target}"
+        );
+    }
+    Ok(())
+}

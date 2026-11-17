@@ -114,6 +114,57 @@ mod private_path_tests {
         );
         assert_eq!(fs::read_to_string(target).unwrap(), "original");
     }
+
+    #[test]
+    fn repository_control_targets_are_denied_without_private_registration() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        fs::write(root.join(".git/config"), b"[core]\n").unwrap();
+        let files =
+            Arc::new(ReadTools::new(temp.path(), &[], true, ReadLimits::default()).unwrap());
+        let writes = WriteTools::new(files.clone(), DEFAULT_WRITE_MAX_BYTES);
+        for target in [
+            root.join(".git/config"),
+            root.join(".git/hooks/pre-commit"),
+            root.join("sub/.git/config"),
+        ] {
+            assert_eq!(
+                writes
+                    .write_file(&target, "x", None, &target, None)
+                    .unwrap_err()
+                    .code,
+                "path_denied",
+                "{target:?}"
+            );
+        }
+        assert!(
+            writes
+                .write_file(&root.join(".git"), "x", None, &root.join(".git"), None)
+                .is_err()
+        );
+        assert_eq!(
+            files
+                .read_file(&root.join(".git/config"), 1, 10)
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        assert_eq!(
+            files
+                .read_file(&root.join(".git/hooks/pre-commit"), 1, 10)
+                .unwrap_err()
+                .code,
+            "path_denied"
+        );
+        let benign = root.join(".gitignore");
+        assert!(
+            writes
+                .write_file(&benign, "*.log\n", None, &benign, None)
+                .is_ok()
+        );
+        assert!(files.read_file(&benign, 1, 10).is_ok());
+    }
 }
 
 /// Write primitives use the same allowed roots as the read tools. They do not
@@ -137,6 +188,7 @@ impl WriteTools {
         } else {
             self.files.workspace.join(path)
         };
+        self.files.check_private_path(&input)?;
         let target = if expected_version.is_some() {
             self.files.resolve(&input)?.0
         } else {

@@ -118,6 +118,15 @@ impl SeatbeltBackend {
                 "(deny file-read* file-write* file-map-executable (subpath (param \"{key}\")))\n"
             ));
         }
+        // Repository control data and similar targets stay readable for
+        // ordinary inspection but cannot be written, including paths that do
+        // not exist yet inside a writable ancestor.
+        for (index, path) in policy.write_denied_paths.iter().enumerate() {
+            let key = format!("D{index}");
+            parameters.push("-D".into());
+            parameters.push(path_parameter(&key, path));
+            profile.push_str(&format!("(deny file-write* (subpath (param \"{key}\")))\n"));
+        }
         if let NetworkPolicy::Proxy(proxy) = &policy.network {
             let address = format!("localhost:{}", proxy.endpoint.port());
             // SBPL only accepts localhost or * here. The host broker must own
@@ -224,4 +233,44 @@ fn path_parameter(key: &str, path: &Path) -> OsString {
     let mut value = OsString::from(format!("{key}="));
     value.push(path);
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_denied_paths_emit_write_only_denies() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let root = workspace.path().canonicalize().expect("canonical");
+        let mut policy = SandboxPolicy::workspace(root.clone());
+        policy.write_denied_paths = vec![
+            root.join(".git/config"),
+            root.join(".git/hooks"),
+            root.join(".git/missing-entry"),
+        ];
+        let backend = SeatbeltBackend::prepare(&policy, scratch.path()).expect("prepare");
+        assert!(
+            backend
+                .profile
+                .contains("(deny file-write* (subpath (param \"D0\")))")
+        );
+        assert!(
+            backend
+                .profile
+                .contains("(deny file-write* (subpath (param \"D2\")))")
+        );
+        assert!(
+            !backend
+                .profile
+                .contains("file-map-executable (subpath (param \"D0\"))")
+        );
+        assert!(
+            backend
+                .parameters
+                .iter()
+                .any(|parameter| { parameter.to_string_lossy().starts_with("D0=") })
+        );
+    }
 }

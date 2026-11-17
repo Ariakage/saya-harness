@@ -701,6 +701,43 @@ fn protection_masks_cover_canonical_system_aliases_and_parent_denies() {
     );
 }
 #[test]
+fn write_deny_masks_cover_writable_roots_and_system_aliases() {
+    let mut policy = SandboxPolicy::workspace("/workspace".into());
+    policy.read_roots.push("/usr".into());
+    policy.write_denied_paths = vec![
+        "/workspace/.git/config".into(),
+        "/workspace/.git/hooks".into(),
+        "/outside/.git/config".into(),
+    ];
+    let roots = vec![
+        ("/usr".into(), "/usr".into()),
+        ("/workspace".into(), "/w".into()),
+    ];
+    assert_eq!(
+        write_deny_masks(&policy, &roots).unwrap(),
+        vec![
+            ("/workspace/.git/config".into(), "/w/.git/config".into()),
+            ("/workspace/.git/hooks".into(), "/w/.git/hooks".into()),
+            (
+                "/workspace/.git/config".into(),
+                "/workspace/.git/config".into()
+            ),
+            (
+                "/workspace/.git/hooks".into(),
+                "/workspace/.git/hooks".into()
+            ),
+        ]
+    );
+}
+#[test]
+fn write_deny_mask_growth_is_bounded() {
+    let mut policy = SandboxPolicy::workspace("/workspace".into());
+    policy.write_denied_paths = (0..4097)
+        .map(|index| PathBuf::from(format!("/workspace/{index}")))
+        .collect();
+    assert!(write_deny_masks(&policy, &[]).is_err());
+}
+#[test]
 fn protection_mask_growth_is_bounded() {
     let mut policy = SandboxPolicy::workspace("/workspace".into());
     policy.protected_paths = (0..4097)

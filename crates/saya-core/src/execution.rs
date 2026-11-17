@@ -22,8 +22,10 @@ use std::{
 
 mod cgroup;
 mod fds;
+pub(crate) mod git_control;
 mod transport;
 mod worker;
+pub use git_control::{GitControlPaths, enumerate as enumerate_git_control_paths};
 pub use transport::{pin_launcher_image, pin_launcher_image_from};
 pub use worker::{
     FileWorkerRequest, FileWorkerResponse, WORKER_RPC_MAX_BYTES, execute_file_worker,
@@ -152,6 +154,10 @@ pub struct SandboxPolicy {
     pub read_files: Vec<PathBuf>,
     /// Literal denied paths. Unsupported masks fail preparation.
     pub protected_paths: Vec<PathBuf>,
+    /// Readable paths whose writes the native sandbox still denies, such as
+    /// Git repository control data that must stay inspectable for ordinary
+    /// status operations while remaining unmodifiable by the payload.
+    pub write_denied_paths: Vec<PathBuf>,
     pub network: NetworkPolicy,
     pub resources: ResourceLimits,
     /// An explicitly delegated cgroup v2 subtree. No global tree is modified.
@@ -172,6 +178,7 @@ impl SandboxPolicy {
             read_files: Vec::new(),
             workspace,
             protected_paths: Vec::new(),
+            write_denied_paths: Vec::new(),
             network: NetworkPolicy::Deny,
             resources: ResourceLimits::default(),
             cgroup_root: None,
@@ -191,6 +198,7 @@ impl SandboxPolicy {
             write_roots: Vec::new(),
             read_files: Vec::new(),
             protected_paths: Vec::new(),
+            write_denied_paths: Vec::new(),
             network: NetworkPolicy::Deny,
             resources: ResourceLimits::default(),
             cgroup_root: None,
@@ -289,12 +297,18 @@ pub fn prepare(policy: &SandboxPolicy) -> Result<PreparedEnvironment, BoundaryEr
         .iter()
         .map(|path| normalize_path(path))
         .collect::<Result<Vec<_>, _>>()?;
+    policy.write_denied_paths = policy
+        .write_denied_paths
+        .iter()
+        .map(|path| normalize_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
     if let Some(profile) = &mut policy.browser {
         // Browser mode never inherits generic roots: the installer decides
         // exactly which installation trees and private directories exist.
         if !policy.read_roots.is_empty()
             || !policy.write_roots.is_empty()
             || !policy.protected_paths.is_empty()
+            || !policy.write_denied_paths.is_empty()
         {
             return Err(failure(
                 "invalid_sandbox_policy",

@@ -433,6 +433,12 @@ impl ProtectedPaths {
 
 pub(super) fn check(protected: &Arc<RwLock<ProtectedPaths>>, path: &Path) -> Result<(), ReadError> {
     let lexical = lexical(path);
+    if crate::permissions::is_repository_control_path(&lexical) {
+        return Err(err(
+            "path_denied",
+            "Target belongs to repository control data",
+        ));
+    }
     {
         let guard = protected
             .read()
@@ -457,6 +463,12 @@ pub(super) fn check(protected: &Arc<RwLock<ProtectedPaths>>, path: &Path) -> Res
             ));
         }
     };
+    if crate::permissions::is_repository_control_path(&resolved) {
+        return Err(err(
+            "path_denied",
+            "Target resolves to repository control data",
+        ));
+    }
     {
         let guard = protected
             .read()

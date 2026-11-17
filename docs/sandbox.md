@@ -108,6 +108,7 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 - Linux 对既有保护路径建立私有拒绝视图，可写根下缺失的保护路径返回 `unsupported_fs_policy`。macOS 将缺失路径的拒绝规则编译进 profile，规则覆盖随后创建的目标。
 - 七种内置文件工具通过同一准备环境启动私有 worker。宿主负责意图、授权和结果记录，worker 复核目标、版本及单文件替换；实际 RPC 请求和响应上限为 32 MiB。通用命令在获准可写根中运行。
 - 宿主把启动时已存在的配置、data、state、cache 和工作区 `.saya/local` 加入原生保护集合，活动凭据引用使用的实际私有存储另行强制保护。`.saya/skills` 的正文读取继续经过文件权限与后端根策略，发现过程使用[项目上下文规则](project-context.md)。
+- 仓库控制数据与工作区文件分开保护：内置文件工具把 `.git` 下的 `config`、`config.worktree`、`hooks/`、`info/` 及 worktree `gitdir` 链接指向的控制目录整体视为保护路径，任何权限模式下均拒绝读写；原生后端只对同一集合追加 deny-write——Seatbelt 编译对应写入拒绝，Bubblewrap 对这些路径叠加只读重绑定。沙箱内 `git status`、`git commit` 等常规操作保持可用，而 `git config`、hook 改写与 fsmonitor/filter 类自动命令注入被拒。`.git` 之外的普通文件不受影响。`HOME` 本身位于可写根内时，`~/.ssh`、`~/.gitconfig`、`~/.config/git` 及常见 shell 启动文件按同一集合处理。
 
 通用程序写入与外部编辑可能并发，执行记录保存实际结果。DEV-064 增加 Diff、检查点和恢复，具体文件一致性保证在该层验收。
 

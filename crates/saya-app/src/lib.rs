@@ -373,6 +373,18 @@ pub fn build_runtime(
     sandbox
         .write_roots
         .extend(config.permissions.additional_roots.iter().cloned());
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    // Repository control data stays readable for ordinary Git inspection but
+    // cannot be modified by payloads or model-facing file tools.
+    let git_control =
+        saya_core::execution::enumerate_git_control_paths(&sandbox.write_roots, home.as_deref());
+    if sandbox.backend != saya_core::execution::BackendKind::Host {
+        sandbox
+            .write_denied_paths
+            .extend(git_control.write_denied.iter().cloned());
+    }
     let credential_path = config.state_dir.join("credentials");
     let credential_backed = config.mcp.servers.values().any(|server| {
         server.enabled
@@ -466,6 +478,7 @@ pub fn build_runtime(
     ];
     private_paths.extend(memory_paths);
     private_paths.extend(sandbox.protected_paths.iter().cloned());
+    private_paths.extend(git_control.private_paths.iter().cloned());
     runtime = runtime.with_private_paths(private_paths.clone())?;
     let checkpoints = Arc::new(saya_core::checkpoint::CheckpointStore::open(
         config.data_dir.join("checkpoints"),
@@ -514,9 +527,6 @@ pub fn build_runtime(
             .get(review_profile)
             .and_then(|profile| profile.pricing.clone()),
     );
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
     runtime =
         runtime.with_project_context(ProjectContext::new(&session.workspace, home.as_deref())?)?;
     runtime = runtime.with_skill_manager(saya_core::skills::SkillManager::new(
