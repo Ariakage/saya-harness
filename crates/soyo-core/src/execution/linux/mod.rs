@@ -560,7 +560,7 @@ impl LinuxBackend {
         command.args.push("--chdir".into());
         command.args.push(command.cwd.clone().into_os_string());
         command.args.push(self.helper_path.clone().into_os_string());
-        command.args.push("__saya-sandbox-launch".into());
+        command.args.push("__soyo-sandbox-launch".into());
         if !self.bridges.is_empty() {
             let socat = self
                 .socat
@@ -589,7 +589,7 @@ impl LinuxBackend {
         if Path::new(&payload[0]) == std::env::current_exe().map_err(super::io_error)?
             && payload
                 .get(1)
-                .is_some_and(|value| value == "__saya-file-worker")
+                .is_some_and(|value| value == "__soyo-file-worker")
         {
             payload[0] = self.helper_path.clone().into_os_string();
         }

@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn missing_clipboard_tools_report_no_paste() {
-        let mut command = Command::new("__saya_missing_clipboard_tool__");
+        let mut command = Command::new("__soyo_missing_clipboard_tool__");
         assert_eq!(bounded_output(&mut command, 1024).unwrap(), None);
     }
 

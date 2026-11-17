@@ -55,7 +55,7 @@ static int number(int fd, uint32_t *value) {
 int main(int argc, char **argv) {
     int fd = -1;
     int separator = -1;
-    if (argc < 6 || strcmp(argv[1], "__saya-sandbox-launch")) return 64;
+    if (argc < 6 || strcmp(argv[1], "__soyo-sandbox-launch")) return 64;
     for (int index = 2; index < argc; index++) {
         if (!strcmp(argv[index], "--env-fd") && index + 1 < argc) {
             fd = atoi(argv[++index]);
@@ -482,7 +482,7 @@ fn bubblewrap_prepares_private_views_and_payload_launcher() {
         "--seccomp",
         "--ro-bind-fd",
         "--bind-fd",
-        "__saya-sandbox-launch",
+        "__soyo-sandbox-launch",
     ] {
         assert!(args.iter().any(|arg| arg == required), "missing {required}");
     }

@@ -73,7 +73,7 @@ fn call_worker(request: &FileWorkerRequest) -> FileWorkerResponse {
     let output = run_worker(
         &request.context.workspace,
         &serde_json::to_vec(request).unwrap(),
-        &["__saya-file-worker"],
+        &["__soyo-file-worker"],
     );
     assert!(
         output.status.success(),
@@ -137,7 +137,7 @@ fn private_cli_worker_rejects_malformed_multiple_or_unsupported_requests() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().canonicalize().unwrap();
     for input in [b"{".as_slice(), b"{}\n{}", b"null"] {
-        let output = run_worker(&workspace, input, &["__saya-file-worker"]);
+        let output = run_worker(&workspace, input, &["__soyo-file-worker"]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty());
         let response: FileWorkerResponse = serde_json::from_slice(&output.stdout).unwrap();
@@ -157,7 +157,7 @@ fn private_cli_worker_rejects_malformed_multiple_or_unsupported_requests() {
     assert!(!workspace.join("forbidden").exists());
     unsupported.schema_version = 2;
     assert!(!call_worker(&unsupported).result.ok);
-    let output = run_worker(&workspace, b"", &["__saya-file-worker", "unexpected"]);
+    let output = run_worker(&workspace, b"", &["__soyo-file-worker", "unexpected"]);
     assert_eq!(output.status.code(), Some(64));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
@@ -248,7 +248,7 @@ fn private_cli_worker_receives_host_private_inode_snapshot_and_preserves_normal_
     let output = run_worker(
         &workspace,
         &serde_json::to_vec(&legacy).unwrap(),
-        &["__saya-file-worker"],
+        &["__soyo-file-worker"],
     );
     let response: FileWorkerResponse = serde_json::from_slice(&output.stdout).unwrap();
     assert!(response.result.ok);

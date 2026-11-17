@@ -54,13 +54,13 @@ pub struct FileWorkerResponse {
 /// process exit code. Call before any app setup or subscriber initialization.
 pub async fn internal_command(args: Vec<OsString>) -> Option<i32> {
     match args.first().and_then(|value| value.to_str()) {
-        Some("__saya-file-worker") => {
+        Some("__soyo-file-worker") => {
             if args.len() != 1 {
                 return Some(64);
             }
             Some(file_worker_stdio().await)
         }
-        Some("__saya-sandbox-launch") => Some(launch::run(&args[1..])),
+        Some("__soyo-sandbox-launch") => Some(launch::run(&args[1..])),
         _ => None,
     }
 }

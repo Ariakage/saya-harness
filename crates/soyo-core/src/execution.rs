@@ -708,14 +708,14 @@ impl PreparedEnvironment {
         if let Some(backend) = &self.inner.linux {
             return Ok(vec![
                 backend.helper_path().as_os_str().to_owned(),
-                "__saya-file-worker".into(),
+                "__soyo-file-worker".into(),
             ]);
         }
         #[cfg(target_os = "macos")]
         if let Some(backend) = &self.inner.seatbelt {
             return Ok(vec![
                 backend.helper_path().as_os_str().to_owned(),
-                "__saya-file-worker".into(),
+                "__soyo-file-worker".into(),
             ]);
         }
         let mut worker = self
@@ -733,7 +733,7 @@ impl PreparedEnvironment {
             .ok_or_else(|| failure("sandbox_prepare_failed", "worker image is unavailable"))?;
         Ok(vec![
             image.as_os_str().to_owned(),
-            "__saya-file-worker".into(),
+            "__soyo-file-worker".into(),
         ])
     }
     /// Apply immutable environment values selected by this policy. Call before

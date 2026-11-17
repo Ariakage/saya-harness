@@ -199,14 +199,14 @@ impl SeatbeltBackend {
         command.args = vec!["-p".into(), self.profile.clone().into()];
         command.args.extend(self.parameters.clone());
         command.args.push(self.helper_path.clone().into_os_string());
-        command.args.push("__saya-sandbox-launch".into());
+        command.args.push("__soyo-sandbox-launch".into());
         command.bootstrap_index = Some(command.args.len());
         command.args.push("--".into());
         let mut payload = argv.to_vec();
         if Path::new(&payload[0]) == std::env::current_exe().map_err(super::io_error)?
             && payload
                 .get(1)
-                .is_some_and(|value| value == "__saya-file-worker")
+                .is_some_and(|value| value == "__soyo-file-worker")
         {
             payload[0] = self.helper_path.clone().into_os_string();
         }
