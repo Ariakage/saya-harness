@@ -319,7 +319,7 @@ const STALE_NATIVE_CONTEXT_PROBE: &str = r#"async (page) => {
       await client.send('HeadlessExperimental.captureSoyoScreenshot',{context:binding.context});
       throw new Error('stale same-document context was accepted');
     } catch(error) {
-      if(!String(error.message).includes('saya_capture_stale_context'))throw error;
+      if(!String(error.message).includes('soyo_capture_stale_context'))throw error;
     }
     const fresh=await client.send('HeadlessExperimental.getSoyoCaptureContext');
     const image=await client.send('HeadlessExperimental.captureSoyoScreenshot',{context:fresh.context});
@@ -535,7 +535,7 @@ async fn native_capture_rejects_unreadable_first_line_images_instead_of_certifyi
         result["failure"]
             .as_str()
             .unwrap_or_default()
-            .contains("saya_capture_incomplete"),
+            .contains("soyo_capture_incomplete"),
         "native capture: {}",
         result["failure"]
     );
@@ -641,7 +641,7 @@ const NATIVE_INCOMPLETE_PROBE: &str = r#"async (page) => {
     } catch(error) {
       failure=String(error.message);
     }
-    if(!failure||!failure.includes('saya_capture_incomplete'))throw new Error('unsupported native paint was not classified as incomplete: '+failure);
+    if(!failure||!failure.includes('soyo_capture_incomplete'))throw new Error('unsupported native paint was not classified as incomplete: '+failure);
     await page.setContent('<body style="margin:0;background:rgb(0,255,0)">');
     const fresh=await client.send('HeadlessExperimental.getSoyoCaptureContext');
     const image=await client.send('HeadlessExperimental.captureSoyoScreenshot',{context:fresh.context});
@@ -685,7 +685,7 @@ const NATIVE_TIMEOUT_PROBE: &str = r#"async (page) => {
     } catch(error) {
       failure=String(error.message);
     }
-    if(!failure||!failure.includes('saya_capture_timeout'))throw new Error('native capture deadline was not classified as timeout: '+failure);
+    if(!failure||!failure.includes('soyo_capture_timeout'))throw new Error('native capture deadline was not classified as timeout: '+failure);
     return {timeout:true};
   } finally {
     if(paused)await client.send('Debugger.resume');

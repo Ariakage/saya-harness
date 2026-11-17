@@ -3985,7 +3985,7 @@ async fn process_info_fixture_transport(
         replies.push_back(Ok(reply));
     }
     custom_method_fixture(
-        "saya/browser/processInfo",
+        "soyo/browser/processInfo",
         replies,
         limits,
         stall_after_query,
@@ -4111,7 +4111,7 @@ async fn real_worker_process_info_uses_one_fixed_private_request_without_catalog
     let requests = fixture.requests.lock().unwrap().clone();
     let private: Vec<_> = requests
         .iter()
-        .filter(|request| request["method"] == "saya/browser/processInfo")
+        .filter(|request| request["method"] == "soyo/browser/processInfo")
         .collect();
     assert_eq!(private.len(), 1);
     assert_eq!(
@@ -4135,7 +4135,7 @@ async fn real_worker_process_info_cancels_the_dispatched_request() {
     let flag = cancelled.clone();
     let query =
         tokio::spawn(async move { connection.process_info(&SwitchCancel(cancelled)).await });
-    let request = fixture.observed_method("saya/browser/processInfo").await;
+    let request = fixture.observed_method("soyo/browser/processInfo").await;
     flag.store(true, Ordering::Release);
     let failure = tokio::time::timeout(Duration::from_secs(1), query)
         .await
@@ -4152,7 +4152,7 @@ async fn real_worker_process_info_cancels_the_dispatched_request() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|message| { message["method"] == "saya/browser/processInfo" })
+            .filter(|message| { message["method"] == "soyo/browser/processInfo" })
             .count(),
         1,
         "cancellation must not replay the private query"
@@ -4173,7 +4173,7 @@ async fn real_worker_process_info_timeout_cancels_the_dispatched_request() {
     .await;
     let connection = fixture.connection.clone();
     let query = tokio::spawn(async move { connection.process_info(&NeverCancel).await });
-    let request = fixture.observed_method("saya/browser/processInfo").await;
+    let request = fixture.observed_method("soyo/browser/processInfo").await;
     let failure = tokio::time::timeout(Duration::from_secs(1), query)
         .await
         .expect("timed-out query did not return")
@@ -4189,7 +4189,7 @@ async fn real_worker_process_info_timeout_cancels_the_dispatched_request() {
             .lock()
             .unwrap()
             .iter()
-            .filter(|message| { message["method"] == "saya/browser/processInfo" })
+            .filter(|message| { message["method"] == "soyo/browser/processInfo" })
             .count(),
         1,
         "a timed-out private query must not be replayed"
@@ -4205,7 +4205,7 @@ async fn real_worker_process_info_stalled_cancellation_closes_the_connection() {
     let flag = cancelled.clone();
     let query =
         tokio::spawn(async move { connection.process_info(&SwitchCancel(cancelled)).await });
-    fixture.observed_method("saya/browser/processInfo").await;
+    fixture.observed_method("soyo/browser/processInfo").await;
     flag.store(true, Ordering::Release);
     let failure = tokio::time::timeout(Duration::from_secs(8), query)
         .await
@@ -4234,7 +4234,7 @@ async fn real_worker_process_info_dropped_query_closes_the_connection() {
     let mut fixture = process_info_fixture_with_limits(None, McpLimits::default()).await;
     let connection = fixture.connection.clone();
     let query = tokio::spawn(async move { connection.process_info(&NeverCancel).await });
-    fixture.observed_method("saya/browser/processInfo").await;
+    fixture.observed_method("soyo/browser/processInfo").await;
     query.abort();
     assert!(query.await.unwrap_err().is_cancelled());
     assert!(
@@ -4289,7 +4289,7 @@ async fn real_worker_process_info_closed_connection_does_not_dispatch() {
             .lock()
             .unwrap()
             .iter()
-            .any(|message| { message["method"] == "saya/browser/processInfo" })
+            .any(|message| { message["method"] == "soyo/browser/processInfo" })
     );
 }
 
@@ -4308,7 +4308,7 @@ async fn real_worker_process_info_pre_cancel_does_not_dispatch() {
             .lock()
             .unwrap()
             .iter()
-            .any(|message| { message["method"] == "saya/browser/processInfo" })
+            .any(|message| { message["method"] == "soyo/browser/processInfo" })
     );
     fixture.connection.shutdown().await.unwrap();
 }
@@ -4866,27 +4866,27 @@ async fn real_worker_capture_screenshot_supports_large_wire_payload_and_maps_err
         Err((
             -32000,
             "Timeout",
-            Some(json!({ "reason": "saya_capture_timeout" })),
+            Some(json!({ "reason": "soyo_capture_timeout" })),
         )),
         Err((
             -32000,
             "Stale",
-            Some(json!({ "reason": "saya_capture_stale_context" })),
+            Some(json!({ "reason": "soyo_capture_stale_context" })),
         )),
         Err((
             -32000,
             "Incomplete",
-            Some(json!({ "reason": "saya_capture_incomplete" })),
+            Some(json!({ "reason": "soyo_capture_incomplete" })),
         )),
         Err((
             -32000,
             "Busy",
-            Some(json!({ "reason": "saya_capture_busy" })),
+            Some(json!({ "reason": "soyo_capture_busy" })),
         )),
         Err((
             -32000,
             "Disconnected",
-            Some(json!({ "reason": "saya_capture_disconnected" })),
+            Some(json!({ "reason": "soyo_capture_disconnected" })),
         )),
         Err((
             -32000,
@@ -4895,7 +4895,7 @@ async fn real_worker_capture_screenshot_supports_large_wire_payload_and_maps_err
         )),
     ]);
     let fixture = custom_method_fixture(
-        "saya/browser/captureScreenshot",
+        "soyo/browser/captureScreenshot",
         replies,
         McpLimits {
             connect_timeout: Duration::from_secs(3),
@@ -4920,10 +4920,10 @@ async fn real_worker_capture_screenshot_supports_large_wire_payload_and_maps_err
     for expected in [
         "browser_capability_disabled",
         "browser_capability_disabled",
-        "saya_capture_timeout",
-        "saya_capture_stale_context",
-        "saya_capture_incomplete",
-        "saya_capture_busy",
+        "soyo_capture_timeout",
+        "soyo_capture_stale_context",
+        "soyo_capture_incomplete",
+        "soyo_capture_busy",
         "worker_closed",
         "browser_limit",
     ] {

@@ -648,7 +648,7 @@ impl BrowserProvider for PlaywrightMcpProvider {
         BrowserFacts {
             provider: format!("playwright-mcp-{PLAYWRIGHT_MCP_VERSION}"),
             // Pre-capture masking is delegated through the private host-only
-            // `saya/browser/captureScreenshot` channel; runtime capture still
+            // `soyo/browser/captureScreenshot` channel; runtime capture still
             // fails closed unless the worker and native capture engine confirm masking.
             screenshots: true,
             screenshot_masking: true,

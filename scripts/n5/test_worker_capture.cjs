@@ -21,9 +21,9 @@ compiled.filename = coreFilename;
 compiled.paths = Module._nodeModulePaths(path.dirname(coreFilename));
 const originalRequire = compiled.require.bind(compiled);
 compiled._compile(fs.readFileSync(coreFilename, 'utf8') +
-  '\ninit_server2(); init_browserBackend(); module.exports.sayaTestBindings={createServer,BrowserBackend};\n',
+  '\ninit_server2(); init_browserBackend(); module.exports.soyoTestBindings={createServer,BrowserBackend};\n',
 coreFilename);
-const { createServer, BrowserBackend } = compiled.exports.sayaTestBindings;
+const { createServer, BrowserBackend } = compiled.exports.soyoTestBindings;
 const { z } = originalRequire('./utilsBundle');
 
 function deferred() {
@@ -169,7 +169,7 @@ async function harness(t, handler, opts = {}) {
   const factory = {
     name: 'masked-capture-contract',
     version: '1.0.0',
-    sayaCaptureEnabled: enablePrivate,
+    soyoCaptureEnabled: enablePrivate,
     toolSchemas: [{
       name: 'controlled_bootstrap',
       title: 'Controlled bootstrap',
@@ -207,8 +207,8 @@ async function harness(t, handler, opts = {}) {
     detached,
     release,
     sends,
-    query: (params = {}) => transport.request('saya/browser/captureScreenshot', params),
-    queryWithId: () => transport.beginRequest('saya/browser/captureScreenshot', {}),
+    query: (params = {}) => transport.request('soyo/browser/captureScreenshot', params),
+    queryWithId: () => transport.beginRequest('soyo/browser/captureScreenshot', {}),
     cancel: (id) => transport.notify('notifications/cancelled', { requestId: id, reason: 'test-cancel' }),
     assertSessionReleased(expectedSends = null) {
       assert.equal(sessionCreations, 1);
@@ -279,7 +279,7 @@ test('multi-tab, subframes, and active modals are rejected before opening CDP', 
   multi.assertNoSession();
 
   const subframe = await harness(t, validCaptureHandler(), { frameCount: 2 });
-  assertRpcError(await subframe.query(), 'saya_capture_incomplete');
+  assertRpcError(await subframe.query(), 'soyo_capture_incomplete');
   subframe.assertNoSession();
 
   const modal = await harness(t, validCaptureHandler(), { modals: 1 });
@@ -287,9 +287,9 @@ test('multi-tab, subframes, and active modals are rejected before opening CDP', 
   modal.assertNoSession();
 });
 
-test('post-capture URL drift fails closed as saya_capture_stale_context', { timeout: TEST_TIMEOUT }, async (t) => {
+test('post-capture URL drift fails closed as soyo_capture_stale_context', { timeout: TEST_TIMEOUT }, async (t) => {
   const h = await harness(t, validCaptureHandler(), { afterUrl: 'https://other.test/navigated' });
-  assertRpcError(await h.query(), 'saya_capture_stale_context');
+  assertRpcError(await h.query(), 'soyo_capture_stale_context');
   h.assertSessionReleased();
 });
 
@@ -306,7 +306,7 @@ for (const [label, captureReply] of [
         return { protocolVersion: 1, context: 'ctx-123' };
       return captureReply;
     });
-    assertRpcError(await h.query(), 'saya_capture_incomplete');
+    assertRpcError(await h.query(), 'soyo_capture_incomplete');
     h.assertSessionReleased();
   });
 }
@@ -323,7 +323,7 @@ test('oversize base64 screenshot payload is rejected with browser_limit', { time
 });
 
 test('explicit Chromium error codes are preserved cleanly', { timeout: TEST_TIMEOUT }, async (t) => {
-  for (const code of ['saya_capture_timeout', 'saya_capture_stale_context', 'saya_capture_incomplete', 'saya_capture_busy']) {
+  for (const code of ['soyo_capture_timeout', 'soyo_capture_stale_context', 'soyo_capture_incomplete', 'soyo_capture_busy']) {
     const h = await harness(t, async (method) => {
       if (method === 'HeadlessExperimental.getSayaCaptureContext')
         return { protocolVersion: 1, context: 'ctx-123' };
@@ -334,7 +334,7 @@ test('explicit Chromium error codes are preserved cleanly', { timeout: TEST_TIME
   }
 });
 
-test('inactive sayaCaptureEnabled flag rejects with -32601 without creating CDP', { timeout: TEST_TIMEOUT }, async (t) => {
+test('inactive soyoCaptureEnabled flag rejects with -32601 without creating CDP', { timeout: TEST_TIMEOUT }, async (t) => {
   const h = await harness(t, validCaptureHandler(), { enablePrivate: false });
   const response = await h.query();
   assert.equal(response.error?.code, -32601);

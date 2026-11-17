@@ -1243,7 +1243,7 @@ async fn real_vm_credentials_files_background_and_cleanup() {
     );
 
     // DEV-082 / Stage 5B: production VM worker exposes masked PNG capture only
-    // through the host-private `saya/browser/captureScreenshot` channel.
+    // through the host-private `soyo/browser/captureScreenshot` channel.
     assert!(state.facts().screenshots);
     assert!(state.facts().screenshot_masking);
     let (shot, shot_media) = state

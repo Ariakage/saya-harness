@@ -649,7 +649,7 @@ impl McpClient {
     ) -> Result<Value, BoundaryError> {
         self.send_custom_browser_request(
             CustomBrowserRequest {
-                method: "saya/browser/processInfo",
+                method: "soyo/browser/processInfo",
                 params: serde_json::json!({}),
                 cancel_message: "Browser process query cancelled",
                 limit_message: "Browser process reply exceeds its byte limit",
@@ -668,7 +668,7 @@ impl McpClient {
         let cap = self.limits.max_wire_bytes.min(MAX_CUSTOM_SCREENSHOT_BYTES);
         self.send_custom_browser_request(
             CustomBrowserRequest {
-                method: "saya/browser/captureScreenshot",
+                method: "soyo/browser/captureScreenshot",
                 params: serde_json::json!({}),
                 cancel_message: "Browser screenshot capture cancelled",
                 limit_message: "Browser screenshot reply exceeds its byte limit",
@@ -953,23 +953,25 @@ fn map_custom_service_error(
                     "browser_capability_disabled",
                     "Browser engine does not support pre-capture masking",
                 ),
-                "saya_capture_timeout" => error(
-                    "saya_capture_timeout",
+                "soyo_capture_timeout" | "saya_capture_timeout" => error(
+                    "soyo_capture_timeout",
                     "Native masked capture exceeded its deadline",
                 ),
-                "saya_capture_stale_context" => error(
-                    "saya_capture_stale_context",
+                "soyo_capture_stale_context" | "saya_capture_stale_context" => error(
+                    "soyo_capture_stale_context",
                     "Browser document changed during capture",
                 ),
-                "saya_capture_incomplete" => error(
-                    "saya_capture_incomplete",
+                "soyo_capture_incomplete" | "saya_capture_incomplete" => error(
+                    "soyo_capture_incomplete",
                     "Browser page contains unreadable or incomplete paint content",
                 ),
-                "saya_capture_busy" => error(
-                    "saya_capture_busy",
+                "soyo_capture_busy" | "saya_capture_busy" => error(
+                    "soyo_capture_busy",
                     "Browser capture is already in progress",
                 ),
-                "saya_capture_disconnected"
+                "soyo_capture_disconnected"
+                | "saya_capture_disconnected"
+                | "soyo_capture_target_closed"
                 | "saya_capture_target_closed"
                 | "browser_disconnected"
                 | "browser_not_started" => {

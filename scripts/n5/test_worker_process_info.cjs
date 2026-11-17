@@ -38,9 +38,9 @@ compiled.paths = Module._nodeModulePaths(path.dirname(coreFilename));
 const originalRequire = compiled.require.bind(compiled);
 compiled.require = (id) => id === 'node:fs' ? fsProxy : originalRequire(id);
 compiled._compile(fs.readFileSync(coreFilename, 'utf8') +
-  '\ninit_server2(); init_browserBackend(); module.exports.sayaTestBindings={createServer,BrowserBackend};\n',
+  '\ninit_server2(); init_browserBackend(); module.exports.soyoTestBindings={createServer,BrowserBackend};\n',
 coreFilename);
-const { createServer, BrowserBackend } = compiled.exports.sayaTestBindings;
+const { createServer, BrowserBackend } = compiled.exports.soyoTestBindings;
 const { z } = originalRequire('./utilsBundle');
 
 function deferred() {
@@ -180,7 +180,7 @@ async function harness(t, reply, enablePrivate = true) {
   const factory = {
     name: 'process-info-contract',
     version: '1.0.0',
-    sayaProcessInfoEnabled: enablePrivate,
+    soyoProcessInfoEnabled: enablePrivate,
     toolSchemas: [{
       name: 'controlled_bootstrap',
       title: 'Controlled bootstrap',
@@ -215,8 +215,8 @@ async function harness(t, reply, enablePrivate = true) {
   assert.deepEqual(bootstrap.result, { content: [{ type: 'text', text: 'backend ready' }] });
   return {
     browser, entered, detached, release,
-    query: (params = {}) => transport.request('saya/browser/processInfo', params),
-    queryWithId: () => transport.beginRequest('saya/browser/processInfo'),
+    query: (params = {}) => transport.request('soyo/browser/processInfo', params),
+    queryWithId: () => transport.beginRequest('soyo/browser/processInfo'),
     cancel: (id) => transport.notify('notifications/cancelled', {
       requestId: id, reason: 'controlled process-info cancellation'
     }),

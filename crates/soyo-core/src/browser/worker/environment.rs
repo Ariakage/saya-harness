@@ -813,16 +813,18 @@ pub(crate) fn capture_screenshot_failure(failure: BoundaryError) -> BrowserFailu
         "browser_capability_disabled" => {
             BrowserFailure::new("browser_capability_disabled", failure.0.message)
         }
-        "saya_capture_timeout" | "mcp_timeout" => {
-            BrowserFailure::new("saya_capture_timeout", failure.0.message)
+        "soyo_capture_timeout" | "saya_capture_timeout" | "mcp_timeout" => {
+            BrowserFailure::new("soyo_capture_timeout", failure.0.message)
         }
-        "saya_capture_stale_context" => {
-            BrowserFailure::new("saya_capture_stale_context", failure.0.message)
+        "soyo_capture_stale_context" | "saya_capture_stale_context" => {
+            BrowserFailure::new("soyo_capture_stale_context", failure.0.message)
         }
-        "saya_capture_incomplete" => {
-            BrowserFailure::new("saya_capture_incomplete", failure.0.message)
+        "soyo_capture_incomplete" | "saya_capture_incomplete" => {
+            BrowserFailure::new("soyo_capture_incomplete", failure.0.message)
         }
-        "saya_capture_busy" => BrowserFailure::new("saya_capture_busy", failure.0.message),
+        "soyo_capture_busy" | "saya_capture_busy" => {
+            BrowserFailure::new("soyo_capture_busy", failure.0.message)
+        }
         "worker_closed" | "mcp_disconnect" => {
             BrowserFailure::new("worker_closed", failure.0.message)
         }
