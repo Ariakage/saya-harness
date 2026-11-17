@@ -306,11 +306,11 @@ fn browser_mount_mask() -> u32 {
 fn browser_umount_mask() -> u32 {
     (libc::MNT_FORCE | libc::MNT_DETACH | libc::MNT_EXPIRE | libc::UMOUNT_NOFOLLOW) as u32
 }
-pub(super) struct Filter {
+pub(in crate::execution) struct Filter {
     program: Vec<libc::sock_filter>,
 }
 impl Filter {
-    pub(super) fn prepare() -> Self {
+    pub(in crate::execution) fn prepare() -> Self {
         // The trusted launcher receives this value from the host-configured
         // command environment, not from the payload environment.
         let browser = std::env::var_os("SAYA_BROWSER_SANDBOX")
@@ -323,7 +323,7 @@ impl Filter {
             },
         }
     }
-    pub(super) fn install(&self) -> io::Result<()> {
+    pub(in crate::execution) fn install(&self) -> io::Result<()> {
         let program = libc::sock_fprog {
             len: self.program.len() as u16,
             filter: self.program.as_ptr().cast_mut(),
