@@ -1,8 +1,22 @@
 # 开发进度
 
-**更新于2026-11-17。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token及N4 Goal编排。N4已完成本机macOS与Linux Colima受控验收；N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留。**
+**更新于2026-11-17。当前开发线已加入模型总时限关闭与有限间隔重试、Compact摘要投影防溢出、多模态快照加固、环境历史帧兼容、提示词前缀缓存、复杂任务能力优化、TUI消息复制、完整会话导出、统一附件token、N4 Goal编排，以及N5 Browser定制捕获引擎、受限Masked截图协议、本机 macOS／专用 Colima VM（`--require-screenshot` 22/22 passed）与独立 Linux ARM64（`n5arm22` 1729 passed＋原生 `browser_worker_real` Masked PNG 实测）联合验收。N3上下文、可执行扩展及全局记忆的四平台证据继续归属固定源码 `e1da373`；N2固定源码 `aaec8c5` 与已发布0.2.0历史证据也按各自源码保留；N5 尚待 Linux x86-64／macOS Intel 当前源码及远端四平台 CI／发行验证。**
 
 本文件是开发状态的唯一记录入口。[路线图](roadmap.md)定义阶段，[实施任务](implementation-plan.md)定义任务，[完整基线](mvp-baseline.md)定义产品行为。状态更新需要实际证据，不根据计划或估算自动推进。
+
+## 受管捕获引擎、Masked 截图接线与联合验收（Stage 5A／5B）
+
+2026-11-17，已完成定制 Chromium 捕获修复（Stage 5A）、固定 worker／Rust Host／VM Masked 截图接线（Stage 5B）以及本机 macOS、专用 Colima VM 与独立 Linux ARM64 原生全量实测：
+
+1. **Stage 5A（定制 Chromium 修复与打包部署）**：在 Chromium `6449d9f9a6a906edff724b7b220199b3fde4615c` 上修复草案引擎（`18dc7e9e…`：`draft-capture-red-262.json` 6 passed、5 failed）的 5 项缺陷——`box_fragment_painter.cc` 为 Normal-Flow inline 替换元素与 `PaintFragment` 加入 `ShouldSkipSayaCaptureItem` 守卫、`web_local_frame_impl.cc` 检查 `FirstLineStyleRef()` 样式背景图并使用 `LocalBorderBoxProperties().Unalias()`、`args.gn` 设 `use_dummy_lastchange = false`、`saya_capture_observer.{h,cc}` 将 `Observe`/`Capture` 投递至 `blink::TaskType::kPostedMessage`（`mojo::WrapCallbackWithDefaultInvokeIfNotRun`）并取消手动位移。封存补丁 `target/n5/capture-patch-20261115/data/patch-identity-263/capture-fixed.patch`（64,546 B，SHA-256 `df4c0fb6cfd32b71b83d1c093d431fec166f905b267743043b485b136d7c9b37`；`patch-identity-263.json` `53db522d2f027da2d55c0e0b966e1ed71db6246f5112675fdef8eedd92367cfe`）、`capture-build-263.json` 输出 Linux ARM64 `headless_shell` ELF `501,816,112 B`（SHA-256 `d3c691a5cbe4baca5dc120d95999c7c6f03495eff632d7aad81a8b9ddd80c234`），`capture-runtime-264.json` 完成闭包打包并在 `colima-n5cap`（`saya-capture-fixed-264`）取得 `browser_screenshot_real` **11 passed / 0 failed**（212.44s，`fixed-capture-green-264.json`）。
+2. **Stage 5B（受限 Worker 补丁、Rust 接线与跨端验收）**：
+   - 新增第三份可重放补丁 [scripts/n5/patches/playwright-masked-capture.patch](../scripts/n5/patches/playwright-masked-capture.patch)（9,623 B，SHA-256 `984ac1e6ad0303db7e66277d39abab6ed95960a1ad7cc133a3826d3b31a680f4`），产出 `coreBundle.js`（3,640,550 B，SHA-256 `de88c9fc365498503fb9a3cf8da5c7a0fc3724f9b409b79928aa169d1859e276`），在 `inProcess` isolated stdio 注册私有的 `saya/browser/captureScreenshot`；新增 `scripts/n5/test_worker_capture.cjs` 与 `just test-n5-worker-capture` 并扩展 `test_worker_protocol.py`。
+   - Rust 侧修改 `crates/saya-core/src/{mcp.rs,browser.rs,browser/vm.rs,browser/worker.rs,browser/worker/tests.rs}` 与 `crates/saya-core/tests/{browser_screenshot_real.rs,browser_vm_files_real.rs,browser_worker_real.rs}`：`MAX_WORKER_SCREENSHOT_WIRE_BYTES = 13 MiB`、`parse_captured_screenshot` 验证 `masked == true`/MIME/Base64/`MAX_IMAGE_BYTES`/PNG/`IHDR` 尺寸/`provider_url`、`PlaywrightMcpProvider::{facts,screenshot}` 启用遮蔽截图声明并在捕获后执行 `verify_sandbox`（失败则清理）、`BrowserState::screenshot` 验证 observed URL/origin/`state.url` 一致性（越权或漂移均作废状态）。
+   - **macOS ARM64（`MACOSX_DEPLOYMENT_TARGET=15.0`）**：`RUST_TEST_THREADS=1 just check` 通过（72 suites／**1714 passed、0 failed、27 ignored**，`target/release/saya` 60,578,640 B，`minos 15.0`，SHA-256 `1b752d59c4141790060f64ea2b66ff8ed102814be4759c546416bb5151eee6bd`）；`just test-tooling`（11 suites／168 passed）、`test-n5-worker-protocol`（9/9）、`test-n5-worker-process-info`（15/15）、`test-n5-worker-capture`（13/13）及 `just smoke target/release/saya`（含 28 组 TUI PTY）全部通过。
+   - **专用 `colima-n5cap`（`saya-capture-fixed-265`，manifest `da8e5409a24bd5138230f4791c87a2dbb08b934041c1ce7422497765b4c51c1d`）**：`browser_screenshot_real` **12/12 passed**（含新增 `production_provider_captures_masked_png_and_hides_credentials` 凭据填充＋像素遮蔽验证，138.09s）、`browser_vm_real` 1/1（11.64s）、`browser_vm_files_real` 1/1（120.86s）、`browser_vm_network_real` 1/1（22.72s），以及 `scripts/n5/acceptance.py target/release/saya --require-screenshot`（`target/n5/cap1/acceptance-265-final/run-23_y48z2/evidence.json`）**22/22 passed、0 failed、0 disabled**，远端 Run 根及进程均零残留。
+   - **独立 Linux ARM64 VM（`n5arm22`，Ubuntu 22.04，内核 `6.8.0-149-generic`，`/home/saya-test/native-capture-265` manifest `8a2a06f063b041604ae36279301b8d286cdd7433fdbf9b5200973456483314d4`）**：同步工作区代码后通过完整 `just check`（72 suites／**1729 passed、0 failed、35 ignored**，Linux `saya` 66,631,008 B，SHA-256 `f0d15cc6c54764549760164f860bcc6d60267b3718fcacdf3828e32d57d5c73c`）、`just test-tooling`（11 suites／167 passed、1 Linux skip）、三项 `test-n5-worker-*`（9/15/13 passed）、`just smoke` 及 `browser_worker_real` **2/2 passed**（含原生 Bubblewrap/Seccomp 下的 `1280x720` Masked PNG 捕获，`renderer_pid=74/76 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），零残留进程与临时项。详情与证据清单见 `target/n5/cap1/evidence/stage5b-complete-265.json` 与 [N5 验收](n5-validation.md)。
+
+本机开发与 macOS ARM64／Linux ARM64 实测闭环已完成；Linux x86-64／macOS Intel 当前源码、多架构定制引擎分发与远端四平台 CI／发行尚未执行，未推送或发布。
 
 ## 原生角色查询与内核隔离核验增量
 
@@ -43,7 +57,7 @@
 
 后续生命周期增量修复旧 sandbox 证据缓存、核验中断后的连接复用，以及启动目录／清理 await 丢失句柄或 unknown 的分支。启动隔离覆盖初始导航与目录刷新，直到 sandbox 核验完成；close 后证据作废。worker 定向 48 项与完整 `RUST_TEST_THREADS=1 just check` 的 1660 项通过（71 个测试二进制、0 failed、13 ignored，含格式、严格 Clippy、release 构建），日志 `target/n5/fullscope-lifecycle-{worker-green,check}.log`。新程序 SHA-256 为 `c1e20194d690efae1a9403a1c0892b62d78c146fa38c6da3365902305c2c7a91`、最低部署目标 15.0；真实 VM 四入口各 1 passed，close／reopen／snapshot 重新取得有效证据，独立清理 inventory 为空；同一程序通过完整 CLI／TUI smoke。详见 [生命周期增量证据](n5-validation.md#生命周期核验与启动清理增量)。本次仅本地验证与阶段提交，推送及新增四平台远端验收等待项目负责人再次授权；生产截图与 N5 全范围仍未完成。
 
-D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建生产引擎。2026-11-14 的约 31 GiB 余量保留为历史测量；后续核对并回收已确认可再生缓存后，余量与工具链探针见[固定引擎工具链准备](#固定引擎工具链准备)，不清理归属不明的缓存、不把原语或交叉编译探针冒充生产截图。新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068待实现)
+D-068 已确认扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium，保留全部遮蔽与 sandbox 要求；尚未实现或构建生产引擎。2026-11-14 的约 31 GiB 余量保留为历史测量；后续核对并回收已确认可再生缓存后，余量与工具链探针见[固定引擎工具链准备](#固定引擎工具链准备)，不清理归属不明的缓存、不把原语或交叉编译探针冒充生产截图。新增远端验收仍等待再次授权。[引擎边界](browser.md#托管捕获引擎扩展d-068)
 
 ## 安装树身份 v2 本机阶段
 

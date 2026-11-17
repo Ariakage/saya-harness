@@ -102,7 +102,7 @@ just tui-preview syntax
 
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
-0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。N4 Goal 已完成本机实现与受控验收。N5 Browser 已交付受控 Web、托管 worker、专用 VM 网络与文件 broker、CLI／TUI 和按能力启用的媒体链路；本机／专用 VM 联合阶段 21 passed、1 disabled，见 [N5 验收](docs/n5-validation.md)。生产截图、native Browser 与新增四平台证据仍有缺口，不标为全范围完成。GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)、[N4验收](docs/n4-validation.md)
+0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。N4 Goal 已完成本机实现与受控验收。N5 Browser 已交付受控 Web、托管 worker、专用 VM 网络与文件 broker、定制 pre-capture 遮蔽截图引擎、CLI／TUI 和原生／VM 媒体链路；本机 macOS、专用 VM 联合验收（`--require-screenshot` 22 passed、0 failed）及 Linux ARM64（`n5arm22` 1729 passed + 原生 Masked PNG 实测）已通过，见 [N5 验收](docs/n5-validation.md)。Linux x86-64／macOS Intel、多架构定制引擎分发及远端四平台 CI／发行证据仍有外部平台范围待完成，暂未推送或发布。GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)、[N4验收](docs/n4-validation.md)
 
 ## 许可证
 

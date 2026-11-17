@@ -1,6 +1,6 @@
 # N5 Browser 实现与验收
 
-**2026-11-17：DEV-079 至 DEV-082 已提交；DEV-083 本机／专用 VM 联合阶段保留 21 passed、1 disabled 的历史输入。原生浏览器角色查询（`NativeSandboxContext`＋`ChromiumSandboxInspector::inspect_connection`）与强内核 sandbox 联合核验已在同一三份源码 SHA-256 上通过 macOS 完整门禁（1710 passed）与独立 Linux ARM64 `n5arm22` 第 259／260 轮门禁（72 suites／1725 passed + 真实 Chromium `browser_worker_real` `renderer_pid=74 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`）；受管生产捕获引擎、`crates/saya-core/tests/browser_screenshot_real.rs` 像素／隔离回归与新增四平台固定源码发行证据仍未满足，`screenshots`／`screenshot_masking` 维持 `false`，DEV-083 全范围与 N5 不标为完成。**
+**2026-11-17：DEV-079 至 DEV-083 已完成功能交付、定制 Chromium 捕获引擎修复（Stage 5A：23 文件补丁 `df4c0fb6…`，ELF `501,816,112 B` SHA-256 `d3c691a5…`）与三补丁受限 worker／Host／VM Masked 截图联合实测（Stage 5B）：macOS ARM64 `just check` 通过（1714 passed，`target/release/saya` `1b752d59…`，`minos 15.0`），`colima-n5cap`（`saya-capture-fixed-265`）通过 `browser_screenshot_real`（12/12 passed）、全部 VM 套件及 `scripts/n5/acceptance.py --require-screenshot`（22/22 passed、0 disabled），独立 Linux ARM64 `n5arm22`（`native-capture-265`）通过 `just check`（1729 passed，Linux `saya` `f0d15cc6…`）、tooling／smoke 及原生 `browser_worker_real`（2/2 passed 含 `1280x720` Masked PNG 捕获，`renderer_pid=74/76 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`）。Linux x86-64／macOS Intel 当前源码、多架构定制引擎分发与远端四平台 CI／发行尚未执行，未推送或发布。**
 
 任务范围来自[后续开发计划](post-mvp-plan.md#n5-browser)；实现与安全契约见 [Browser](browser.md)，对外范围见[中英双语说明](release-notes-n5.md)。
 
@@ -13,7 +13,24 @@
 | DEV-081 网络阶段 | `e2587fe` | 共享 Run 网络预算、broker、反向 SSH、私有 netns、旁路 canary |
 | DEV-081 凭据／文件／后台 | `f1bbc5c` | origin 凭据槽、下载／上传 artifact、GC／lease、取消与 unknown |
 | DEV-082 | `1443291` | CLI／TUI 审批与产物、三协议图片、有效上下文媒体加载、来源保真与导出 |
-| DEV-083 | 本次本机验收阶段 | 正常 CLI／TUI／专用 VM 联合矩阵通过；保留截图 disabled、native Browser 与新增四平台缺口，不标全范围完成 |
+| DEV-083（Stage 5A／5B） | 本次阶段 | 定制 Chromium pre-capture 遮蔽引擎、`saya/browser/captureScreenshot`、strict `--require-screenshot` 22/22 passed 及 Linux ARM64 原生 `1280x720` Masked PNG 实测；待远端四平台 CI／多架构引擎分发 |
+
+## 定制捕获引擎修复、Stage 5B 接线与 strict 截图验收
+
+2026-11-17，在保留旧草案 `capture-draft.patch`（`18dc7e9e…`，`draft-capture-red-262.json` 6 passed、5 failed）原始失败记录的基础上，完成全部五处引擎修复与 Stage 5B 生产链路实跑，总汇总见 `target/n5/cap1/evidence/stage5b-complete-265.json`：
+
+- **Stage 5A（5 项引擎修复、打包与 VM 11/11 GREEN）**：修复 `box_fragment_painter.cc`、`web_local_frame_impl.cc`、`args.gn`（`use_dummy_lastchange = false` 输出 `@6449d9f9a6a906edff724b7b220199b3fde4615c`）及 `saya_capture_observer.{h,cc}`（`kPostedMessage` 投递与 `mojo::WrapCallbackWithDefaultInvokeIfNotRun`）。封存 `capture-fixed.patch`（64,546 B，`df4c0fb6…`，`patch-identity-263.json` `53db522d…`），增量构建 Linux ARM64 `headless_shell` ELF（501,816,112 B，`d3c691a5…`，`capture-build-263.json`），经 `package_fixed_capture_runtime_264.py` 闭合打包（`capture-runtime-264.json`），并在 `colima-n5cap`（`saya-capture-fixed-264`，`108dc2e8…`）实测 `browser_screenshot_real` **11 passed / 0 failed**（`212.44s`，`fixed-capture-green-264.json`）。
+- **Stage 5B（受限 Worker、Rust Host/VM 接线与全量实测）**：按顺序应用第三份补丁 `scripts/n5/patches/playwright-masked-capture.patch`（9,623 B，`984ac1e6…`）产出 `coreBundle.js`（3,640,550 B，`de88c9fc…`），在 `crates/saya-core/src/{mcp.rs,browser.rs,browser/vm.rs,browser/worker.rs,browser/worker/tests.rs}` 接入 `saya/browser/captureScreenshot`、`MAX_WORKER_SCREENSHOT_WIRE_BYTES = 13 MiB`、Base64/PNG/`IHDR`/masking/URL-origin-staleness 严格核验及 sandbox 失败清理，并在 `browser_vm_files_real.rs`／`browser_screenshot_real.rs`／`browser_worker_real.rs` 加入生产 Masked PNG 与凭据填充像素核验。
+
+| 检查环境／入口 | 实际结果与证据 |
+| --- | --- |
+| macOS ARM64 `just check`（`minos 15.0`） | 72 suites／**1714 passed、0 failed、27 ignored**，`fmt`、严格 Clippy 与 `--release` 通过（`target/release/saya` 60,578,640 B，`1b752d59c4141790060f64ea2b66ff8ed102814be4759c546416bb5151eee6bd`），日志 `target/n5/cap1/logs/macos-just-check-final.log` |
+| macOS 工具与 Smoke／Worker 协议 | `just test-tooling` 11 suites／168 passed；`test-n5-worker-protocol` 9/9、`test-n5-worker-process-info` 15/15、`test-n5-worker-capture` 13/13；`just smoke target/release/saya` 全部通过（含 R-01..R-05 与 28 组 TUI PTY），日志 `target/n5/cap1/logs/macos-{tooling,worker-protocol,worker-process-info,worker-capture}-265.log`、`macos-smoke-final.log` |
+| `colima-n5cap`（`saya-capture-fixed-265`，`da8e5409…`）VM 套件 | `browser_screenshot_real` **12/12 passed**（138.09s，含生产 `PlaywrightMcpProvider` 凭据填充与像素遮蔽）、`browser_vm_real` 1/1（11.64s，`renderer_pid=56381/56493 no_new_privs=true seccomp=2`）、`browser_vm_files_real` 1/1（120.86s，确认 Masked PNG 产物且 `alice-secret` 不落盘）、`browser_vm_network_real` 1/1（22.72s，`observations=6`），日志 `target/n5/cap1/logs/final-vm-*-265.log` |
+| `colima-n5cap` Strict 联合验收（`--require-screenshot`） | `python3 -I -B scripts/n5/acceptance.py target/release/saya --require-screenshot`：**22/22 passed、0 failed、0 disabled**（Execution 140、Review 8、Compact 1，`real-screenshot` passed 并将捕获产物注入后续多模态请求，远端 Run 根及进程均空），报告 `target/n5/cap1/acceptance-265-final/run-23_y48z2/evidence.json` |
+| Linux ARM64 `n5arm22`（`/home/saya-test/native-capture-265`，`8a2a06f0…`） | `just check` 72 suites／**1729 passed、0 failed、35 ignored**（Linux `saya` 66,631,008 B，`f0d15cc6c54764549760164f860bcc6d60267b3718fcacdf3828e32d57d5c73c`）；`just test-tooling` 11 suites／167 passed／1 平台 skip；三项 `test-n5-worker-*`（9/15/13 passed）；`just smoke` 全过；`browser_worker_real` **2/2 passed**（79.63s，覆盖 `1280x720` 原生 Bubblewrap/Seccomp Masked PNG 捕获，`renderer_pid=74/76 no_new_privs=true seccomp=2 stderr_initialize_sandbox=true`），零残余进程，日志 `target/n5/cap1/logs/n5arm22-full-265.log` |
+
+此前 `task-2494` 中断遗留的单个远端 dir `saya-browser-vm-85893b2396778cb8` 经核对时间戳与进程为空后手动清理，随后在干净状态完成 `run-23_y48z2` 及四套 VM 套件复跑全过。Linux x86-64／macOS Intel 当前源码、非 `linux-arm64` 定制引擎构建分发及远端四平台 CI 仍待外部平台环境执行，不据此提前声称全平台发行完成。
 
 ## 安装树身份 v2 本机阶段
 
@@ -381,7 +398,7 @@ Linux release SHA-256 为 `9b1634ec7c3cb1b115dee6b9301959bd7e8b86b7574fd7c14ee02
 
 ## 定制捕获引擎的构建前提
 
-[D-068](decisions.md) 已确认允许扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium；它不是完成证明。[引擎实施边界](browser.md#托管捕获引擎扩展d-068待实现)保留预捕获遮蔽、事务屏障与双层 sandbox。固定源码的 Linux 构建文档要求 x86-64 构建机与至少 100 GB 空闲空间。2026-11-14 的约 31 GiB 余量保留为历史测量，不能当成后续清理后的现值；Linux ARM VM 的运行时验收也不证明标准 Linux 构建工具链支持 ARM 宿主。
+[D-068](decisions.md) 已确认允许扩展托管捕获引擎与固定身份契约，必要时采用定制 Chromium；它不是完成证明。[引擎实施边界](browser.md#托管捕获引擎扩展d-068)保留预捕获遮蔽、事务屏障与双层 sandbox。固定源码的 Linux 构建文档要求 x86-64 构建机与至少 100 GB 空闲空间。2026-11-14 的约 31 GiB 余量保留为历史测量，不能当成后续清理后的现值；Linux ARM VM 的运行时验收也不证明标准 Linux 构建工具链支持 ARM 宿主。
 
 ### 固定宿主工具链与跨目标执行
 
@@ -481,7 +498,7 @@ GN 输出为 `src/out/saya_capture_linux_arm64_180/`，参数严格为 `target_o
 python3 -I -B scripts/n5/acceptance.py target/release/saya --evidence-dir target/n5-acceptance
 ```
 
-要求真实生产截图时必须严格运行；当前固定 worker 预期不能满足该要求：
+要求真实生产截图时必须严格运行（预置定制引擎与三补丁 worker 的 `colima-n5cap` `saya-capture-fixed-265` 已实跑通过 22/22；若指向未修补引擎则会按预期 fail-closed 失败）：
 
 ```bash
 python3 -I -B scripts/n5/acceptance.py target/release/saya --evidence-dir target/n5-acceptance-screenshot --require-screenshot
@@ -497,7 +514,7 @@ python3 -B scripts/n2/verify_performance.py target/n5/native-evidence.json --sam
 
 ## 尚未满足的退出条件
 
-1. 固定生产 Browser 的可靠预捕获遮蔽及真实截图成功证据。
-2. 当前 N5 源码的 native Browser 与新增四平台固定源码联合／发行证据；既有 N2／N3 四平台报告不得移作本轮证据。
+1. 除 macOS ARM64 与 Linux ARM64 外，Linux x86-64／macOS Intel 当前源码及远端四平台固定源码联合／发行证据（既有 N2／N3 四平台报告不替代 N5 本轮证据）。
+2. 若在非 `linux-arm64` 架构（如 `linux-x86_64`）宿主原生启用 Masked 截图，对应目标架构定制 Chromium `headless_shell` 的构建与分发校验产物。
 
 本轮未推送、未创建发行，Browser 验收只访问本地网页 fixture，未使用真实外网页面或付费模型；构建准备中的官方依赖下载不算 Browser 外网验收。版本号未变，完成声明以实际证据为准，不以模型文字或安全拒绝代替尚缺功能。
