@@ -148,7 +148,7 @@ fn explicit_plan_override_on_resumed_run_prevents_writes_and_is_saved() {
         let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
         let context: serde_json::Value =
             serde_json::from_str(request["messages"][1]["content"].as_str().unwrap()).unwrap();
-        assert_eq!(context["saya_runtime_context_v1"]["work_mode"], "plan");
+        assert_eq!(context["soyo_runtime_context_v1"]["work_mode"], "plan");
         let mut show = command(workspace.path(), home.path());
         show.arg("--config")
             .arg(&cfg)

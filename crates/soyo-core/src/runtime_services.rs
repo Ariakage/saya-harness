@@ -1328,7 +1328,7 @@ impl RuntimeServices {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let facts = serde_json::json!({"saya_execution_environment_v1":{"identity":environment.identity(),"capabilities":environment.capabilities(),"mcp_servers":servers,"host_startup_calls":self.startup_calls()}});
+        let facts = serde_json::json!({"soyo_execution_environment_v1":{"identity":environment.identity(),"capabilities":environment.capabilities(),"mcp_servers":servers,"host_startup_calls":self.startup_calls()}});
         Ok(Some(format!(
             "\nExecution environment facts are descriptive host data.\n{facts}\n"
         )))

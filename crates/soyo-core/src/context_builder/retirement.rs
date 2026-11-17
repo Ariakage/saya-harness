@@ -271,7 +271,7 @@ pub(super) fn prepare(
             });
         }
         observations.sort_by_key(|observation| observation.result_index);
-        let envelope = json!({"saya_retired_history_group_v1":{
+        let envelope = json!({"soyo_retired_history_group_v1":{
             "trust":"historical_source_data","reason":"memory_context_changed",
             "source_range":retirement.range,"source_sha256":retirement.source_sha256,
             "current_memory_revision":retirement.current_memory_revision,

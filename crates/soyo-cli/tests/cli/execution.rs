@@ -802,7 +802,7 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
         .recv_timeout(Duration::from_secs(3))
         .unwrap()
         .to_string();
-    assert!(third.contains("saya_background_recovery_v1"), "{third}");
+    assert!(third.contains("soyo_background_recovery_v1"), "{third}");
     assert!(third.contains("unknown"), "{third}");
     std::thread::sleep(Duration::from_millis(3300));
     assert_eq!(fs::read_to_string(temp.path().join("marker")).unwrap(), "x");

@@ -366,10 +366,12 @@ impl Operation {
                 host_scope,
             } => {
                 if let Some(scope) = host_scope {
-                    if map.contains_key("__saya_plugin_scope") {
+                    if map.contains_key("__soyo_plugin_scope")
+                        || map.contains_key("__saya_plugin_scope")
+                    {
                         return Err(failure("invalid_args", "Reserved plugin execution scope"));
                     }
-                    map.insert("__saya_plugin_scope".into(), scope.clone());
+                    map.insert("__soyo_plugin_scope".into(), scope.clone());
                 }
                 let executable = executable
                     .to_str()
@@ -394,7 +396,7 @@ impl Operation {
                 // Binding excludes time-dependent parse progress. The complete
                 // argv/cwd/environment identity is already included above.
                 map.insert(
-                    "__saya_command_analysis".into(),
+                    "__soyo_command_analysis".into(),
                     serde_json::json!({
                         "schema_version": analysis.schema_version,
                         "analyzer_version": analysis.analyzer_version,
@@ -410,7 +412,7 @@ impl Operation {
                 review,
                 ..
             } => {
-                if map.contains_key("__saya_managed") {
+                if map.contains_key("__soyo_managed") || map.contains_key("__saya_managed") {
                     return Err(failure("invalid_args", "Reserved managed operation field"));
                 }
                 let visible_paths = if self.tool.starts_with("memory_") {
@@ -419,25 +421,25 @@ impl Operation {
                 } else {
                     serde_json::json!(paths)
                 };
-                map.insert("__saya_managed".into(), serde_json::json!({"paths":visible_paths,"binding":binding,"read_only":read_only,"review":review}));
+                map.insert("__soyo_managed".into(), serde_json::json!({"paths":visible_paths,"binding":binding,"read_only":read_only,"review":review}));
             }
             Target::External(descriptor) => {
-                if map.contains_key("__saya_operation") {
+                if map.contains_key("__soyo_operation") || map.contains_key("__saya_operation") {
                     return Err(failure("invalid_args", "reserved external operation field"));
                 }
                 map.insert(
-                    "__saya_operation".into(),
+                    "__soyo_operation".into(),
                     serde_json::to_value(descriptor).map_err(|_| {
                         failure("invalid_args", "invalid external operation identity")
                     })?,
                 );
             }
             Target::Builtin(descriptor) => {
-                if map.contains_key("__saya_operation") {
+                if map.contains_key("__soyo_operation") || map.contains_key("__saya_operation") {
                     return Err(failure("invalid_args", "reserved built-in operation field"));
                 }
                 map.insert(
-                    "__saya_operation".into(),
+                    "__soyo_operation".into(),
                     serde_json::to_value(descriptor).map_err(|_| {
                         failure("invalid_args", "invalid built-in operation identity")
                     })?,
@@ -460,7 +462,7 @@ impl Operation {
             args.as_object_mut()
                 .ok_or_else(|| failure("invalid_args", "tool arguments must be an object"))?
                 .insert(
-                    "__saya_command_facts".into(),
+                    "__soyo_command_facts".into(),
                     serde_json::to_value(analysis.as_ref()).map_err(|_| {
                         failure("invalid_args", "command analysis cannot be encoded")
                     })?,

@@ -296,11 +296,11 @@ fn committed_view_is_a_bound_data_envelope_and_keeps_latest_user_verbatim() {
     };
     let data: Value = serde_json::from_str(data).unwrap();
     assert_eq!(
-        data["saya_context_summary"]["trust"],
+        data["soyo_context_summary"]["trust"],
         "historical_source_data"
     );
     assert_eq!(
-        data["saya_context_summary"]["historical_authorizations_reusable"],
+        data["soyo_context_summary"]["historical_authorizations_reusable"],
         false
     );
     assert_eq!(request.history.len(), 3);
@@ -835,7 +835,7 @@ fn single_user_long_tool_loops_can_compact_with_source_bound_verbatim_user_repla
         };
         let envelope: Value = serde_json::from_str(envelope).unwrap();
         assert_eq!(
-            envelope["saya_context_summary"]["retained_original_groups"][0]["reason"],
+            envelope["soyo_context_summary"]["retained_original_groups"][0]["reason"],
             "latest_user"
         );
         assert_eq!(projected.watermark.item_count, request.history.len());

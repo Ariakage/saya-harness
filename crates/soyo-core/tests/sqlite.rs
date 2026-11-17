@@ -1036,7 +1036,7 @@ async fn recovery_links_background_launch_and_child_without_replay()
                     .iter()
                     .find_map(|item| match item {
                         HistoryItem::UserText(value)
-                            if value.contains("saya_background_recovery_v1") =>
+                            if value.contains("soyo_background_recovery_v1") =>
                         {
                             Some(value)
                         }
@@ -1044,7 +1044,7 @@ async fn recovery_links_background_launch_and_child_without_replay()
                     })
                     .ok_or("missing notice")?;
                 let notice: serde_json::Value = serde_json::from_str(notice)?;
-                let job = &notice["saya_background_recovery_v1"]["jobs"][0];
+                let job = &notice["soyo_background_recovery_v1"]["jobs"][0];
                 assert_eq!(job["job_id"], job_id);
                 assert_eq!(
                     job["outcome"],

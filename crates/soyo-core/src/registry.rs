@@ -125,6 +125,7 @@ impl RegisteredTool {
             .map_err(|_| failure("invalid_args", "tool arguments are invalid JSON"))?;
         bounded_json(&value)?;
         if !value.is_object()
+            || value.get("__soyo_operation").is_some()
             || value.get("__saya_operation").is_some()
             || self
                 .validator

@@ -221,9 +221,9 @@ fn runtime_facts_stay_in_data_and_do_not_promote_untrusted_strings()
         return Err("not data".into());
     };
     let data: serde_json::Value = serde_json::from_str(&data)?;
-    assert_eq!(data["saya_runtime_context_v1"]["work_mode"], "plan");
-    assert_eq!(data["saya_runtime_context_v1"]["permission_mode"], "manual");
-    assert_eq!(data["saya_runtime_context_v1"]["model"], session.model);
+    assert_eq!(data["soyo_runtime_context_v1"]["work_mode"], "plan");
+    assert_eq!(data["soyo_runtime_context_v1"]["permission_mode"], "manual");
+    assert_eq!(data["soyo_runtime_context_v1"]["model"], session.model);
     assert!(data.get("history").is_none());
     let execution = prompt::execution(run.work_mode, run.permissions, &[])?;
     assert!(!execution.instructions.contains("FAKE_SYSTEM_ALLOW"));

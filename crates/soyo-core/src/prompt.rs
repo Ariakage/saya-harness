@@ -365,7 +365,7 @@ pub fn runtime_context_at(
         )
     })?;
     let data = serde_json::json!({
-        "saya_runtime_context_v1": {
+        "soyo_runtime_context_v1": {
             "captured_at": clock_context(captured_at),
             "workspace": workspace,
             "profile": session.profile,

@@ -383,7 +383,7 @@ async fn structured_summary_preserves_control_state_exact_constraints_and_origin
             panic!("summary projection carrier")
         };
         let projected: Value = serde_json::from_str(projected).unwrap();
-        let envelope = &projected["saya_context_summary"];
+        let envelope = &projected["soyo_context_summary"];
         assert_eq!(envelope["summary"], prepared.view.summary["summary"]);
         for field in [
             "required_items",

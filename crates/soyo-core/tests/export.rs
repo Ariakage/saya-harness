@@ -79,7 +79,7 @@ fn transcript_omits_internal_state_and_tool_bodies_everywhere()
     assert!(!text.contains("tool-body-value"));
     let value: serde_json::Value = serde_json::from_slice(&bytes)?;
     assert_eq!(value["schema_version"], 1);
-    assert_eq!(value["export_type"], "saya.session");
+    assert_eq!(value["export_type"], "soyo.session");
     assert_eq!(value["snapshot"]["source_database_schema"], 2);
     assert_eq!(value["snapshot"]["last_change_seq"], 8);
     assert_eq!(value["history"][0]["text"], "你好 🌸");

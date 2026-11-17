@@ -702,7 +702,7 @@ async fn requested_exec_arguments_render_before_completion_and_keep_a_readable_s
         "argv": ["/usr/bin/swift", ".tmp_vision.swift", "private-command-argument"],
         "cwd": "/path/to/project",
         "timeout_seconds": 180,
-        "__saya_command_analysis": {"schema_version": 1}
+        "__soyo_command_analysis": {"schema_version": 1}
     });
     event(
         &mut app,
@@ -717,7 +717,7 @@ async fn requested_exec_arguments_render_before_completion_and_keep_a_readable_s
     assert!(message.text.contains("/usr/bin/swift"));
     assert!(!message.text.contains("private-command-argument"));
     assert!(message.text.contains("[REDACTED]"));
-    assert!(!message.text.contains("__saya_command_analysis"));
+    assert!(!message.text.contains("__soyo_command_analysis"));
     assert!(message.tool_summary.as_ref().unwrap().running);
     assert!(
         !message

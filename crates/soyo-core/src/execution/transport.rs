@@ -15,7 +15,8 @@ use std::{
     sync::OnceLock,
 };
 const ENV_MAX_BYTES: usize = 8 * 1024 * 1024;
-const ENV_MAGIC: &[u8; 8] = b"SAYAENV1";
+const ENV_MAGIC: &[u8; 8] = b"SOYOENV1";
+const ENV_MAGIC_LEGACY: &[u8; 8] = b"SAYAENV1";
 pub(super) type ImageFingerprint = (u64, u64, u64, i64, i64, i64, i64);
 struct Image {
     file: File,
@@ -177,7 +178,9 @@ pub(super) fn read_environment(descriptor: i32) -> io::Result<BTreeMap<OsString,
     let mut bytes = Vec::new();
     file.take(ENV_MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > ENV_MAX_BYTES || !bytes.starts_with(ENV_MAGIC) {
+    if bytes.len() > ENV_MAX_BYTES
+        || !(bytes.starts_with(ENV_MAGIC) || bytes.starts_with(ENV_MAGIC_LEGACY))
+    {
         return Err(io::Error::from_raw_os_error(libc::E2BIG));
     }
     let mut cursor = 8;

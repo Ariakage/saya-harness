@@ -48,7 +48,7 @@ fn append_object(lines: &mut Vec<String>, value: &Value, indent: usize) {
     match value {
         Value::Object(values) => {
             for (key, value) in values {
-                if !key.starts_with("__saya_") {
+                if !key.starts_with("__soyo_") && !key.starts_with("__saya_") {
                     append_value(lines, key, value, indent);
                 }
             }
@@ -700,7 +700,7 @@ mod tests {
             "argv": ["/usr/bin/swift", ".tmp_vision.swift", "reference image.png"],
             "cwd": "/path/to/project",
             "timeout_seconds": 180,
-            "__saya_command_analysis": {"schema_version": 1}
+            "__soyo_command_analysis": {"schema_version": 1}
         });
         let text = call_and_result(
             "exec",
@@ -730,7 +730,7 @@ mod tests {
         assert!(text.contains("Execution result"));
         assert!(text.contains("Exit code"));
         assert!(text.contains("vision ok"));
-        assert!(!text.contains("__saya_command_analysis"));
+        assert!(!text.contains("__soyo_command_analysis"));
         assert!(!text.contains('{'));
     }
 }

@@ -23,7 +23,9 @@ pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_MESSAGE_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
 /// Maximum host-written tool images injected into one model request.
 pub const MAX_TOOL_IMAGES: usize = 8;
-pub const MEDIA_SCHEME: &str = "saya-media://";
+pub const MEDIA_SCHEME: &str = "soyo-media://";
+/// Scheme stored by pre-rename versions; history must still resolve it.
+pub const MEDIA_SCHEME_LEGACY: &str = "saya-media://";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -746,7 +748,10 @@ struct Marker {
 }
 impl Marker {
     fn reference(&self) -> Option<&str> {
-        self.path.to_str()?.strip_prefix(MEDIA_SCHEME)
+        self.path
+            .to_str()?
+            .strip_prefix(MEDIA_SCHEME)
+            .or_else(|| self.path.to_str()?.strip_prefix(MEDIA_SCHEME_LEGACY))
     }
 }
 
@@ -1553,7 +1558,7 @@ mod tests {
         // part of the effective request history passed to the loader.
         let projected = [
             HistoryItem::UserText(
-                serde_json::json!({"saya_context_summary_v1": "prior work"}).to_string(),
+                serde_json::json!({"soyo_context_summary_v1": "prior work"}).to_string(),
             ),
             HistoryItem::ToolResult {
                 call_id: "kept".into(),

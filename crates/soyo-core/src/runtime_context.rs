@@ -273,8 +273,8 @@ impl AgentRuntime {
             {
                 let mut header: serde_json::Value = serde_json::from_str(text)
                     .map_err(|_| error("context_retirement", "Runtime task metadata is invalid"))?;
-                header["saya_runtime_context_v1"]["todos"] = serde_json::json!([]);
-                header["saya_runtime_context_v1"]["retired_memory_dependent_todos"] =
+                header["soyo_runtime_context_v1"]["todos"] = serde_json::json!([]);
+                header["soyo_runtime_context_v1"]["retired_memory_dependent_todos"] =
                     serde_json::json!(true);
                 *text = header.to_string();
             }

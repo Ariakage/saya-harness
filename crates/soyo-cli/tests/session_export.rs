@@ -195,7 +195,7 @@ async fn json_markdown_scope_and_tools_have_offline_cli_receipts()
         assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o600);
         if format == "json" {
             let value: Value = serde_json::from_slice(&bytes)?;
-            assert_eq!(value["export_type"], "saya.session");
+            assert_eq!(value["export_type"], "soyo.session");
             assert_eq!(value["snapshot"]["scope"], scope);
             assert_eq!(value["snapshot"]["include_tools"], include);
             assert_eq!(value["tool_calls"][0]["state"], "unknown");

@@ -55,7 +55,7 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
         .iter()
         .filter_map(|message| message["content"].as_str())
         .filter_map(|content| serde_json::from_str::<serde_json::Value>(content).ok())
-        .find_map(|value| value.get("saya_runtime_context_v1").cloned())
+        .find_map(|value| value.get("soyo_runtime_context_v1").cloned())
         .unwrap();
     assert!(
         runtime["captured_at"]["utc"]
@@ -69,7 +69,7 @@ fn dynamic_system_context_and_explicit_personal_data_reach_the_model() {
         .filter_map(|message| message["content"].as_str())
         .flat_map(|content| content.lines())
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find_map(|value| value.get("saya_execution_environment_v1").cloned())
+        .find_map(|value| value.get("soyo_execution_environment_v1").cloned())
         .unwrap();
     assert_eq!(execution["identity"]["execution_os"], std::env::consts::OS);
     assert_eq!(execution["capabilities"]["filesystem"], "hard");
@@ -258,7 +258,7 @@ fn nonsensitive_personal_markdown_reaches_the_model_unchanged() {
         .iter()
         .filter_map(|message| message["content"].as_str())
         .filter_map(|content| serde_json::from_str::<serde_json::Value>(content).ok())
-        .find_map(|context| context.get("saya_personal_context_v1").cloned())
+        .find_map(|context| context.get("soyo_personal_context_v1").cloned())
         .expect("personal context in the normal model request");
     assert_eq!(personal["preferences"], preferences_text);
     assert_eq!(personal["memory"], memory_text);

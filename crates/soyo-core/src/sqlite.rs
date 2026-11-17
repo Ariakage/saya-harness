@@ -1130,7 +1130,7 @@ fn recover_transaction(
             &StoreChange::History {
                 session_id,
                 item: HistoryItem::UserText(
-                    serde_json::json!({"saya_background_recovery_v1":{"jobs":background_notices}})
+                    serde_json::json!({"soyo_background_recovery_v1":{"jobs":background_notices}})
                         .to_string(),
                 ),
             },

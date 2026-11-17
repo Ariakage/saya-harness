@@ -142,9 +142,15 @@ fn injected(history: &[HistoryItem], index: usize, key: &str) -> Option<Value> {
     };
     let value: Value = serde_json::from_str(text).ok()?;
     let fields = value.as_object().filter(|fields| fields.len() == 1)?;
-    let data = fields.get(key)?.as_object()?;
+    let data = fields
+        .get(key)
+        .or_else(|| {
+            key.strip_prefix("soyo_")
+                .and_then(|rest| fields.get(format!("saya_{rest}").as_str()))
+        })?
+        .as_object()?;
     let valid = match key {
-        "saya_runtime_context_v1" => {
+        "soyo_runtime_context_v1" => {
             ["workspace", "profile", "model"]
                 .iter()
                 .all(|key| data.get(*key).is_some_and(Value::is_string))
@@ -158,14 +164,14 @@ fn injected(history: &[HistoryItem], index: usize, key: &str) -> Option<Value> {
                     serde_json::from_value::<PermissionMode>(value.clone()).is_ok()
                 })
         }
-        "saya_project_context_v1" => ["instructions", "skills"]
+        "soyo_project_context_v1" => ["instructions", "skills"]
             .iter()
             .all(|key| data.get(*key).is_some_and(Value::is_array)),
-        "saya_personal_context_v1" => ["preferences", "memory"].iter().all(|key| {
+        "soyo_personal_context_v1" => ["preferences", "memory"].iter().all(|key| {
             data.get(*key)
                 .is_some_and(|value| value.is_null() || value.is_string())
         }),
-        "saya_active_skills" => data.get("skills").is_some_and(Value::is_array),
+        "soyo_active_skills" => data.get("skills").is_some_and(Value::is_array),
         _ => false,
     };
     valid.then(|| Value::Object(data.clone()))
@@ -187,7 +193,8 @@ fn environment(item: &HistoryItem) -> bool {
         return false;
     };
     let Some(data) = fields
-        .get("saya_execution_environment_v1")
+        .get("soyo_execution_environment_v1")
+        .or_else(|| fields.get("saya_execution_environment_v1"))
         .and_then(Value::as_object)
     else {
         return false;
@@ -213,7 +220,7 @@ fn snapshot(
     let mut skills_count = None;
     // Each expected host prefix must be present consecutively. Stop at the
     // first mismatch so later user JSON can never be promoted into host data.
-    if injected(&request.history, first, "saya_runtime_context_v1").is_some() {
+    if injected(&request.history, first, "soyo_runtime_context_v1").is_some() {
         if let HistoryItem::UserText(text) = &request.history[first] {
             counts[SYSTEM].text(text);
         }
@@ -226,7 +233,7 @@ fn snapshot(
         }
         let mut complete = true;
         if sources.project {
-            if let Some(project) = injected(&request.history, first, "saya_project_context_v1") {
+            if let Some(project) = injected(&request.history, first, "soyo_project_context_v1") {
                 if let Some(instructions) = project.get("instructions").and_then(Value::as_array) {
                     for instruction in instructions {
                         counts[INSTRUCTIONS].value(instruction);
@@ -244,7 +251,7 @@ fn snapshot(
             }
         }
         if complete && sources.personal {
-            if let Some(personal) = injected(&request.history, first, "saya_personal_context_v1") {
+            if let Some(personal) = injected(&request.history, first, "soyo_personal_context_v1") {
                 if let Some(preferences) = personal.get("preferences") {
                     counts[PREFERENCES].value(preferences);
                 }
@@ -276,7 +283,7 @@ fn snapshot(
         }
         if complete
             && active_skills
-            && let Some(skills) = injected(&request.history, first, "saya_active_skills")
+            && let Some(skills) = injected(&request.history, first, "soyo_active_skills")
         {
             counts[SKILLS].value(&skills);
             first += 1;

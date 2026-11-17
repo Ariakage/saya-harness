@@ -883,7 +883,7 @@ async fn forgotten_memory_and_derived_assistant_text_are_retired_after_sqlite_re
             let request = seen.last().unwrap();
             let projected = serde_json::to_string(&request.history)?;
             assert!(!projected.contains("ultraviolet"), "{projected}");
-            assert!(projected.contains("saya_retired_history_group_v1"));
+            assert!(projected.contains("soyo_retired_history_group_v1"));
         }
         assert!(
             serde_json::to_string(&store.load_session(session.id).await?.unwrap().history)?

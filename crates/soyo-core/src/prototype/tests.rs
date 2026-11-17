@@ -1124,8 +1124,8 @@ async fn switch_during_model_rechecks_previously_generated_write()
             return Err("missing runtime facts".into());
         };
         let data: serde_json::Value = serde_json::from_str(data)?;
-        assert_eq!(data["saya_runtime_context_v1"]["work_mode"], expected);
-        assert_eq!(data["saya_runtime_context_v1"]["permission_mode"], "auto");
+        assert_eq!(data["soyo_runtime_context_v1"]["work_mode"], expected);
+        assert_eq!(data["soyo_runtime_context_v1"]["permission_mode"], "auto");
     }
 
     assert!(

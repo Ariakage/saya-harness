@@ -54,31 +54,31 @@ fn command_facts_are_review_data_while_approvals_bind_stable_analyzer_identity()
     };
     let operation = Operation::exec(&plan)?;
     let args =
-        serde_json::json!({"argv":plan.argv,"__saya_command_facts":{"effects_unknown":false}});
+        serde_json::json!({"argv":plan.argv,"__soyo_command_facts":{"effects_unknown":false}});
     let binding = operation.normalized_arguments(serde_json::json!({"argv":plan.argv}))?;
     assert_eq!(
-        binding["__saya_command_analysis"]["analyzer_version"],
+        binding["__soyo_command_analysis"]["analyzer_version"],
         soyo_core::command_analysis::ANALYZER_VERSION
     );
-    assert!(binding.get("__saya_command_facts").is_none());
+    assert!(binding.get("__soyo_command_facts").is_none());
     assert_eq!(
         binding,
         Operation::exec(&plan)?.normalized_arguments(serde_json::json!({"argv":plan.argv}))?
     );
     let reviewed = operation.review_arguments(args)?;
-    assert_eq!(reviewed["__saya_command_facts"]["schema_version"], 1);
-    assert_eq!(reviewed["__saya_command_facts"]["effects_unknown"], true);
+    assert_eq!(reviewed["__soyo_command_facts"]["schema_version"], 1);
+    assert_eq!(reviewed["__soyo_command_facts"]["effects_unknown"], true);
     assert!(
-        !reviewed["__saya_command_facts"]["redirections"]
+        !reviewed["__soyo_command_facts"]["redirections"]
             .as_array()
             .ok_or("redirections")?
             .is_empty()
     );
-    assert!(reviewed["__saya_command_facts"]["input_digest"].is_string());
+    assert!(reviewed["__soyo_command_facts"]["input_digest"].is_string());
     let influenced = Operation::exec_with_environment_keys(&plan, &["BASH_ENV".into()])?;
     let reviewed = influenced.review_arguments(serde_json::json!({"argv":plan.argv}))?;
     assert!(
-        reviewed["__saya_command_facts"]["unknown_effects"]
+        reviewed["__soyo_command_facts"]["unknown_effects"]
             .as_array()
             .ok_or("effects")?
             .contains(&serde_json::json!("environment_influence"))

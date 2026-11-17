@@ -320,11 +320,11 @@ async fn review_is_isolated_tool_free_normalized_and_profile_scoped()
     );
     assert_eq!(data["arguments"]["argv"][1], "hello");
     assert_eq!(
-        data["arguments"]["__saya_command_facts"]["analyzer_version"],
+        data["arguments"]["__soyo_command_facts"]["analyzer_version"],
         soyo_core::command_analysis::ANALYZER_VERSION
     );
     assert_eq!(
-        data["arguments"]["__saya_command_facts"]["effects_unknown"],
+        data["arguments"]["__soyo_command_facts"]["effects_unknown"],
         true
     );
     assert_eq!(

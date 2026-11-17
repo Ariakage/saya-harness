@@ -359,7 +359,7 @@ fn report_text(value: &str, limit: usize) -> String {
 pub fn goal_report_json(record: &GoalRecord) -> Result<Vec<u8>, BoundaryError> {
     let value = serde_json::json!({
         "schema_version": 1,
-        "export_type": "saya.goal",
+        "export_type": "soyo.goal",
         "goal": record,
     });
     let mut bytes = serde_json::to_vec_pretty(&value)

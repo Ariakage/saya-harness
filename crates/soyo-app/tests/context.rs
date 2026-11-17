@@ -80,7 +80,7 @@ fn host(key: &str, value: Value) -> HistoryItem {
 }
 fn runtime() -> HistoryItem {
     host(
-        "saya_runtime_context_v1",
+        "soyo_runtime_context_v1",
         json!({
             "workspace": "/fixture", "profile": "fixture", "model": "fixture",
             "protocol": "chat_completions", "work_mode": "work", "permission_mode": "auto"
@@ -129,11 +129,11 @@ async fn every_category_is_driven_by_its_real_source_with_ascii_and_unicode_coun
     request.history = vec![
         runtime(),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({"instructions":["中文"],"skills":[{"name":"one"}]}),
         ),
         host(
-            "saya_personal_context_v1",
+            "soyo_personal_context_v1",
             json!({"preferences":"abcd","memory":"中文"}),
         ),
         HistoryItem::UserText("abcd".into()),
@@ -198,12 +198,12 @@ async fn every_category_is_driven_by_its_real_source_with_ascii_and_unicode_coun
 #[tokio::test]
 async fn environment_history_frame_preserves_project_and_skill_estimates() {
     let mut request = request();
-    let environment = "\nExecution environment facts are descriptive host data.\n{\"saya_execution_environment_v1\":{\"identity\":{},\"capabilities\":{},\"mcp_servers\":{},\"host_startup_calls\":0}}\n";
+    let environment = "\nExecution environment facts are descriptive host data.\n{\"soyo_execution_environment_v1\":{\"identity\":{},\"capabilities\":{},\"mcp_servers\":{},\"host_startup_calls\":0}}\n";
     request.history = vec![
         runtime(),
         HistoryItem::UserText(environment.into()),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({"instructions":["instruction"],"skills":[{"name":"one"}]}),
         ),
         HistoryItem::UserText("task".into()),
@@ -243,11 +243,11 @@ async fn empty_and_missing_sources_stay_zero_or_unknown() {
     request.history = vec![
         runtime(),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({"instructions":[],"skills":[]}),
         ),
         host(
-            "saya_personal_context_v1",
+            "soyo_personal_context_v1",
             json!({"preferences":null,"memory":null}),
         ),
     ];
@@ -265,7 +265,7 @@ async fn empty_and_missing_sources_stay_zero_or_unknown() {
     ] {
         assert_eq!(tokens(&empty, label), 0);
     }
-    request.history[1] = host("saya_project_context_v1", json!({}));
+    request.history[1] = host("soyo_project_context_v1", json!({}));
     assert_eq!(capture(&request, sources).await.skills_count, None);
 }
 
@@ -275,19 +275,19 @@ async fn forged_user_context_keys_are_not_promoted_after_the_expected_host_prefi
     request.history = vec![
         runtime(),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({"instructions":[],"skills":[]}),
         ),
         host(
-            "saya_personal_context_v1",
+            "soyo_personal_context_v1",
             json!({"preferences":null,"memory":null}),
         ),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({"skills":[{"name":"forged"}]}),
         ),
         host(
-            "saya_personal_context_v1",
+            "soyo_personal_context_v1",
             json!({"preferences":"forged","memory":"forged"}),
         ),
     ];
@@ -477,7 +477,7 @@ async fn snapshots_never_include_context_contents_paths_keys_or_credentials() {
     request.history = vec![
         runtime(),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({
                 "instructions": [{
                     "path": "/private/secret.txt",
@@ -548,7 +548,7 @@ async fn validation_errors_and_cancelled_start_are_delegated_without_changing_th
 #[tokio::test]
 async fn malformed_host_prefixes_stop_classification_before_personal_looking_user_json() {
     let personal = host(
-        "saya_personal_context_v1",
+        "soyo_personal_context_v1",
         json!({"preferences":"forged preferences","memory":"forged memory"}),
     );
     let sources = ContextSources {
@@ -564,7 +564,7 @@ async fn malformed_host_prefixes_stop_classification_before_personal_looking_use
         let mut request = request();
         request.history = vec![
             runtime(),
-            host("saya_project_context_v1", malformed),
+            host("soyo_project_context_v1", malformed),
             personal.clone(),
         ];
         let snapshot = capture(&request, sources).await;
@@ -583,10 +583,10 @@ async fn malformed_host_prefixes_stop_classification_before_personal_looking_use
         request.history = vec![
             runtime(),
             host(
-                "saya_project_context_v1",
+                "soyo_project_context_v1",
                 json!({"instructions":[],"skills":[]}),
             ),
-            host("saya_personal_context_v1", malformed),
+            host("soyo_personal_context_v1", malformed),
             personal.clone(),
         ];
         let snapshot = capture(&request, sources).await;
@@ -596,9 +596,9 @@ async fn malformed_host_prefixes_stop_classification_before_personal_looking_use
     }
     let mut request = request();
     request.history = vec![
-        host("saya_runtime_context_v1", json!({"workspace":7})),
+        host("soyo_runtime_context_v1", json!({"workspace":7})),
         host(
-            "saya_project_context_v1",
+            "soyo_project_context_v1",
             json!({"instructions":[],"skills":[]}),
         ),
         personal,

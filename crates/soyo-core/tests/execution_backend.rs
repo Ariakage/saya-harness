@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
     if (fd < 3 || separator < 0 || separator + 1 >= argc) return 64;
     char magic[8];
     uint32_t count = 0;
-    if (fill(fd, magic, sizeof(magic)) || memcmp(magic, "SAYAENV1", 8)
+    if (fill(fd, magic, sizeof(magic)) || memcmp(magic, "SOYOENV1", 8)
         || number(fd, &count) || count > 1048576) return 74;
     char **environment = calloc((size_t)count + 1, sizeof(char *));
     if (!environment) return 74;

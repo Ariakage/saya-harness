@@ -291,7 +291,7 @@ fn canonical_redacted_results_survive_history_derivation_and_prompt_injection()
     };
     assert!(!data.contains("fixture-only-private-value"));
     assert_eq!(
-        serde_json::from_str::<Value>(&data)?["saya_runtime_context_v1"]["todos"],
+        serde_json::from_str::<Value>(&data)?["soyo_runtime_context_v1"]["todos"],
         json!(canonical)
     );
     Ok(())
@@ -425,7 +425,7 @@ fn request_todos(request: &ModelRequest) -> Value {
     let HistoryItem::UserText(context) = &request.history[0] else {
         panic!("runtime context")
     };
-    serde_json::from_str::<Value>(context).unwrap()["saya_runtime_context_v1"]["todos"].clone()
+    serde_json::from_str::<Value>(context).unwrap()["soyo_runtime_context_v1"]["todos"].clone()
 }
 
 #[tokio::test]

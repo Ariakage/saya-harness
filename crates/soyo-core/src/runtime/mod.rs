@@ -1121,14 +1121,14 @@ impl AgentRuntime {
             let context_record = snapshot.record(request_id.clone())?;
             state.provided = Some((state.target.clone(), context_record.clone()));
             record = Some(context_record);
-            let mut context = serde_json::json!({"saya_project_context_v1": snapshot});
+            let mut context = serde_json::json!({"soyo_project_context_v1": snapshot});
             crate::redaction::redact(&mut context, &self.review.known_secrets)?;
             history.push(HistoryItem::UserText(context.to_string()));
         }
         if self.personal_context.preferences.is_some() || self.personal_context.memory.is_some() {
             history.push(HistoryItem::UserText(
                 serde_json::json!({
-                    "saya_personal_context_v1": {
+                    "soyo_personal_context_v1": {
                         "preferences": self.personal_context.preferences,
                         "memory": self.personal_context.memory,
                     }

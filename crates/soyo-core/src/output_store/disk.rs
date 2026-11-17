@@ -11,8 +11,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAGIC: &[u8; 8] = b"SAYAOUT1";
-const MEDIA_MAGIC: &[u8; 8] = b"SAYAMED1";
+const MAGIC: &[u8; 8] = b"SOYOOUT1";
+const MEDIA_MAGIC: &[u8; 8] = b"SOYOMED1";
+// Pre-rename stores use the legacy magics; readers accept both.
+const MAGIC_LEGACY: &[u8; 8] = b"SAYAOUT1";
+const MEDIA_MAGIC_LEGACY: &[u8; 8] = b"SAYAMED1";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 
 fn media_error(code: &str, message: &str) -> BoundaryError {
@@ -325,7 +328,7 @@ impl Inner {
         let mut prefix = [0u8; 12];
         file.read_exact(&mut prefix)
             .map_err(|_| error("output_corrupt", "Output header is incomplete"))?;
-        if &prefix[..8] != MAGIC {
+        if &prefix[..8] != MAGIC && &prefix[..8] != MAGIC_LEGACY {
             return Err(error("output_corrupt", "Output format is unsupported"));
         }
         let length = u32::from_be_bytes([prefix[8], prefix[9], prefix[10], prefix[11]]) as usize;
@@ -379,7 +382,7 @@ impl Inner {
         let mut prefix = [0u8; 12];
         file.read_exact(&mut prefix)
             .map_err(|_| media_error("media_corrupt", "Media header is incomplete"))?;
-        if &prefix[..8] != MEDIA_MAGIC {
+        if &prefix[..8] != MEDIA_MAGIC && &prefix[..8] != MEDIA_MAGIC_LEGACY {
             return Err(media_error(
                 "media_corrupt",
                 "Media object format is unsupported",

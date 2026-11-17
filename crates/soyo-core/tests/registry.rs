@@ -209,7 +209,7 @@ fn schemas_are_offline_bounded_and_arguments_follow_the_discovered_contract()
         json!({}),
         json!({"value":4}),
         json!({"value":"x","extra":true}),
-        json!({"__saya_operation":{},"value":"x"}),
+        json!({"__soyo_operation":{},"value":"x"}),
     ] {
         assert!(
             entry

@@ -414,7 +414,7 @@ impl SessionExport {
         crate::redaction::redact(&mut metadata, secrets)?;
         let value = Self {
             schema_version: 1,
-            export_type: "saya.session",
+            export_type: "soyo.session",
             snapshot: ExportMetadata {
                 created_at: metadata["created_at"]
                     .as_str()
