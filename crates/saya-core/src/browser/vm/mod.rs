@@ -16,7 +16,6 @@
 //! VM network access for page traffic is not provided in this increment. The
 //! backend never treats the VM's default egress as a controlled browser exit.
 
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use crate::browser::{
     BrowserFailure,
     network::{
@@ -31,7 +30,6 @@ pub(in crate::browser::vm) use crate::browser::{
         valid_sha256,
     },
 };
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use crate::{
     boundary::Cancellation,
     contract::{BoundaryError, ErrorInfo},
@@ -42,13 +40,9 @@ pub(in crate::browser::vm) use crate::{
     network::RunNetworkBudget,
     tools::exec::{ExecConfig, ExecPlan, ManagedProcess},
 };
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use async_trait::async_trait;
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use serde::{Deserialize, Serialize};
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use serde_json::Value;
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::{OsStr, OsString},
@@ -62,7 +56,6 @@ pub(in crate::browser::vm) use std::{
     },
     time::Duration,
 };
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     sync::Mutex as AsyncMutex,
@@ -75,30 +68,31 @@ mod ssh;
 mod tests;
 mod verifier;
 
+pub(in crate::browser::vm) use launcher::boundary_to_browser_failure;
 pub use launcher::{
     BrowserNetworkFactory, VmBrowserEnvironmentFactory, VmRemoteControl, VmWorkerLauncher,
     assemble_vm_browser_provider,
 };
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(in crate::browser::vm) use launcher::{
-    ConnectionCleanup, NeverCancel, PendingCleanup, RunnerRemoteControl, UPLOAD_SCRIPT,
-    boundary_to_browser_failure, classify_launch_failure, parse_pid, schedule_drop_cleanup,
-    worker_launch_arguments,
+    ConnectionCleanup, NeverCancel, RunnerRemoteControl, UPLOAD_SCRIPT, classify_launch_failure,
+    parse_pid, schedule_drop_cleanup, worker_launch_arguments,
 };
 pub use settings::{BrowserVmBackend, BrowserVmSettings, VmLocalPaths};
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use settings::{
     RemotePaths, identity_failure, invalid_config, normalized_loopback_host,
     remote_cleanup_failure, remote_failure, safe_token, validate_ssh_paths, vm_unavailable,
 };
-#[allow(unused_imports)]
 pub(in crate::browser::vm) use ssh::{
     CAT_SCRIPT, CLEANUP_SCRIPT, INSTALLATION_PROBE, INSTALLATION_PROBE_SCRIPT, LAUNCH_SCRIPT,
     NODE_VERSION_SCRIPT, PID_SCRIPT, PREPARE_RUN_SCRIPT, PROBE_SCRIPT, ReverseForward,
-    SANDBOX_SCRIPT, VmHostEnvironment, host_policy, open_directory, ssh_argv, strict_ssh_config,
-    vm_command_outcome, vm_command_result, write_private,
+    SANDBOX_SCRIPT, VmHostEnvironment, open_directory, ssh_argv, strict_ssh_config,
+    vm_command_result, write_private,
 };
 pub use ssh::{SshVmCommandRunner, VmCommandOutput, VmCommandRunner, VmCommandSpec};
+#[cfg(test)]
+pub(in crate::browser::vm) use ssh::{host_policy, vm_command_outcome};
+#[cfg(test)]
+pub(in crate::browser::vm) use verifier::headless_shell_path;
+pub(in crate::browser::vm) use verifier::worker_config_json;
 pub use verifier::{VmChromiumSandboxInspector, VmWorkerIdentityVerifier, VmWorkerLaunchPlanner};
-#[allow(unused_imports)]
-pub(in crate::browser::vm) use verifier::{headless_shell_path, worker_config_json};

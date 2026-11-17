@@ -256,18 +256,11 @@ fn bounded_file(path: &Path) -> Result<String, BoundaryError> {
 }
 
 async fn create_goal(
-    action: &GoalAction,
-    _cli: &Cli,
+    objective: &str,
+    acceptance: &[String],
+    budget: &GoalBudgetArgs,
     config: &Config,
 ) -> Result<Value, BoundaryError> {
-    let GoalAction::Create {
-        objective,
-        acceptance,
-        budget,
-    } = action
-    else {
-        unreachable!()
-    };
     if objective.trim().is_empty() {
         return Err(failure("invalid_goal", "Goal objective cannot be empty"));
     }
@@ -288,7 +281,7 @@ async fn create_goal(
         .ok_or_else(|| failure("invalid_goal", "Goal profile is not selected"))?;
     let mut goal = GoalRecord::new(GoalSeed {
         session_id,
-        objective: objective.clone(),
+        objective: objective.to_owned(),
         workspace,
         profile,
         mode: selected.mode,
@@ -715,7 +708,11 @@ async fn control(
 
 pub async fn run(action: &GoalAction, cli: &Cli, config: &Config) -> Result<u8, BoundaryError> {
     let value = match action {
-        GoalAction::Create { .. } => create_goal(action, cli, config).await?,
+        GoalAction::Create {
+            objective,
+            acceptance,
+            budget,
+        } => create_goal(objective, acceptance, budget, config).await?,
         GoalAction::Plan { goal_id, plan_file } => {
             plan(parse_goal(goal_id)?, plan_file.as_ref(), config).await?
         }

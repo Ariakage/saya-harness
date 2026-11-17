@@ -13,12 +13,10 @@
 mod installation;
 pub(crate) use installation::InstallationTrees;
 
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use super::{
     BrowserAction, BrowserElement, BrowserFacts, BrowserFailure, BrowserOpened, BrowserProvider,
     BrowserSnapshot,
 };
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use crate::{
     boundary::Cancellation,
     contract::{BoundaryError, ErrorInfo},
@@ -29,24 +27,16 @@ pub(in crate::browser::worker) use crate::{
     mcp::{McpCatalog, McpLimits, McpToolResult},
     tools::exec::{ExecConfig, ManagedProcess},
 };
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use async_trait::async_trait;
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use base64::{Engine as _, engine::general_purpose::STANDARD};
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use cap_std::fs::{
     Dir, OpenOptions as CapOpenOptions, OpenOptionsExt as CapOpenOptionsExt,
 };
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use serde::{Deserialize, Serialize};
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use serde_json::{Value, json};
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::OsString,
@@ -63,7 +53,6 @@ pub(in crate::browser::worker) use std::{
     },
     time::{Duration, Instant},
 };
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use tokio::{io::AsyncReadExt, sync::Mutex as AsyncMutex};
 
 /// Pinned worker versions. The identity manifest must agree with these values
@@ -159,7 +148,6 @@ pub use environment::{
     WorkerIdentityVerifier, WorkerLaunchPlanner, WorkerLaunchRequest, WorkerLauncher,
     WorkerPidNamespace, WorkerProcessInfo,
 };
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use environment::{
     RemoteUploadGuard, TempArtifacts, map_environment_failure, map_mcp_failure,
     parse_captured_screenshot, stage_worker_upload,
@@ -170,36 +158,36 @@ pub(crate) use environment::{
 #[cfg(test)]
 pub(in crate::browser::worker) use identity::{ChromiumIdentity, FileIdentity, VersionedIdentity};
 pub(crate) use identity::{IdentityManifest, VerifiedLocalImages, parse_browsers, parse_package};
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use identity::{
-    PinnedWorkerImage, expected, open_absolute_file, open_directory, verify_worker_identity_checked,
+    PinnedWorkerImage, open_directory, verify_worker_identity_checked,
 };
 pub use identity::{VerifiedWorkerIdentity, verify_worker_identity};
 pub use launcher::ManagedProcessLauncher;
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(in crate::browser::worker) use launcher::RealWorkerConnection;
-#[allow(unused_imports)]
 pub(in crate::browser::worker) use protocol::{
-    download_path, expected_worker_schemas, first_text, page_fields, parse_action, parse_elements,
-    parse_snapshot, result_detail, validate_catalog, worker_metadata_file,
+    download_path, first_text, page_fields, parse_action, parse_snapshot, result_detail,
+    validate_catalog, worker_metadata_file,
 };
+#[cfg(test)]
+pub(in crate::browser::worker) use protocol::{expected_worker_schemas, parse_elements};
 pub use provider::PlaywrightMcpProvider;
 pub use sandbox::{
     ChromiumSandboxEvidence, ChromiumSandboxInspector, NativeSandboxContext,
     ProcfsChromiumSandboxInspector,
 };
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(in crate::browser::worker) use sandbox::{
-    HostProcessPin, KernelNamespaceId, KernelNamespaceKind, KernelProcStatus, MAX_NAMESPACE_HOPS,
-    MAX_SANDBOX_PROC_FILE_BYTES, MAX_SANDBOX_PROCESSES, NativeKernelProbe, NativeLaunchBaseline,
-    NodeLaunchBaseline, RealKernelProbe, SandboxProbeFailure, VerifiedNamespace,
-    parse_cmdline_tokens, parse_proc_stat_starttime, read_bounded_proc_file_strict,
-    read_proc_status_file,
+    HostProcessPin, KernelNamespaceId, KernelNamespaceKind, KernelProcStatus,
+    MAX_SANDBOX_PROC_FILE_BYTES, NativeKernelProbe, NodeLaunchBaseline, SandboxProbeFailure,
+    VerifiedNamespace, parse_cmdline_tokens, parse_proc_stat_starttime,
+    read_bounded_proc_file_strict,
 };
+pub(in crate::browser::worker) use sandbox::{MAX_SANDBOX_PROCESSES, NativeLaunchBaseline};
 #[cfg(target_os = "linux")]
 pub(in crate::browser::worker) use sandbox::{
-    capture_linux_process_pin, check_linux_process_pin, descendant_pids_strict,
-    linux_pid_ns_owner_user_ns, open_linux_namespace, verify_linux_process_exe,
-    verify_namespace_descends,
+    RealKernelProbe, capture_linux_process_pin, check_linux_process_pin, descendant_pids_strict,
+    linux_pid_ns_owner_user_ns, open_linux_namespace, read_proc_status_file,
+    verify_linux_process_exe, verify_namespace_descends,
 };
 pub use settings::{BrowserWorkerSettings, browser_install_roots};

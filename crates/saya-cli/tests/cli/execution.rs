@@ -1,13 +1,10 @@
 use crate::common::*;
 use crate::fixture;
-#[allow(unused_imports)]
 use serde_json::json;
-#[allow(unused_imports)]
 use std::{
     fs,
     io::{Read, Write},
-    path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     time::Duration,
 };
 use tempfile::TempDir;

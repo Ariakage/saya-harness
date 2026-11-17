@@ -28,7 +28,6 @@ mod seccomp;
 mod tests;
 
 #[cfg(test)]
-#[allow(unused_imports)]
 pub(in crate::execution::linux) use seccomp::{
     ALLOW, AND, BITS, DENY, EQUAL, LOAD, RETURN, instruction,
 };
