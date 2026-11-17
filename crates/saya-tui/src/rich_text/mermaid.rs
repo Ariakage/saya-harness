@@ -17,10 +17,20 @@ const MAX_NODES: usize = 32;
 const MAX_EDGES: usize = 64;
 const MAX_DETAILS: usize = 128;
 
+/// A pre-release parser/layout path processes model-authored text; a panic in
+/// it must degrade to the source fallback rather than terminate the TUI.
+fn unwind_safe<T>(work: impl FnOnce() -> Option<T> + std::panic::UnwindSafe) -> Option<T> {
+    std::panic::catch_unwind(work).ok().flatten()
+}
+
 /// Render a complete Mermaid block without I/O or terminal escape sequences.
 /// Invalid, unsupported, oversized and non-fitting diagrams return `None` so
 /// the caller can retain the complete fenced source instead of a partial chart.
 pub(super) fn render(source: &str, width: usize) -> Option<Vec<String>> {
+    unwind_safe(|| render_inner(source, width))
+}
+
+fn render_inner(source: &str, width: usize) -> Option<Vec<String>> {
     if width < 8 || source.len() > MAX_SOURCE_BYTES {
         return None;
     }
@@ -226,6 +236,17 @@ fn has_yaml_reference(yaml: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_and_layout_panics_fall_back_to_source() {
+        assert!(
+            unwind_safe(|| -> Option<Vec<String>> { panic!("upstream parse panic") }).is_none()
+        );
+        assert!(
+            unwind_safe(|| -> Option<Vec<String>> { panic!("upstream layout panic") }).is_none()
+        );
+        assert!(unwind_safe(|| Some(vec!["ok".to_string()])).is_some());
+    }
 
     #[test]
     fn renders_unicode_flowcharts_deterministically_at_display_width() {
