@@ -42,9 +42,9 @@ profile 明确选择 strict 时，无法在不改变工具语义的情况下转�
 
 ## Anthropic Messages
 
-`provider::anthropic::AnthropicModel` 支持已选 `2026-10-21` 与 `2023-06-01` 两个版本的文本／本地工具子集，发送明确的版本头，不发送 `temperature`、`top_p` 或 `top_k`。仅当配置 `thinking_effort` 时附带 `output_config.effort`，默认不发送显式 `thinking` 参数；遇到 `max_tokens` 截断时按 `LimitReached` 收口而不自动续写。流式与完整响应均保留签名 thinking、redacted thinking 和原始内容块；thinking 不作为普通回答显示。
+`provider::anthropic::AnthropicModel` 支持已选 `2026-10-21` 与 `2023-06-01` 两个版本的文本／本地工具子集，发送明确的版本头，不发送 `temperature`、`top_p` 或 `top_k`。默认仅当配置 `thinking_effort` 时附带 `output_config.effort`，不主动发送显式 `thinking` 参数，遇到 `max_tokens` 截断时按 `LimitReached` 收口而不自动续写。流式与完整响应均保留签名 thinking、redacted thinking 和原始内容块；thinking 不作为普通回答显示。
 
-Prompt Caching 默认关闭以保持与兼容端点（例如 DeepSeek Anthropic 兼容服务）的互操作性；通过 `[profiles.<name>].prompt_cache = true` 或 CLI `--anthropic-prompt-cache` 显式开启后，适配器会在不超过 4 个 `ephemeral` 断点上限内依次标注静态 `system`、末尾工具定义以及至多 2 处滚动历史消息断点。
+Prompt Caching 默认关闭以保持与兼容端点（例如 DeepSeek Anthropic 兼容服务）的互操作性；通过 `[profiles.<name>].prompt_cache = true` 或 CLI `--anthropic-prompt-cache` 显式开启后，适配器会在不超过 4 个 `ephemeral` 断点上限内依次标注静态 `system`、末尾工具定义以及至多 2 处滚动历史消息断点。若面对 Anthropic 官方端点（`api_version = "2026-10-21"`）需一次性启用全套官方特性，可在 profile 中设置 `anthropic_official_provider = true`（兼容 `anthropic_offical_provider` 别名）：系统将自动开启 Prompt Caching、随请求发送 `thinking: {"type": "adaptive", "display": "summarized"}`（可与 `thinking_effort` 的 `output_config.effort` 并存），并在执行期仅遇到纯文本／thinking 被 `max_tokens` 截断时，于同一 `Run` 预算内通过末尾追加 `user` 续写消息（不使用已废弃的 assistant prefill）最多自动续写 3 次；遇到不完整工具调用、Review/Compaction 请求或超过 3 次仍达 `max_tokens` 时继续返回 `output_limit`／`LimitReached`。
 
 工具输入分片在内容块和消息完成后才形成调用。多个工具结果合并到紧随调用的 user 消息中，并分别关联 `tool_use_id`；截断、拒绝、签名缺失、未完成流与不支持的内容不会被视为成功。
 

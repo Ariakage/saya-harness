@@ -33,7 +33,7 @@ cp examples/config.example.toml ~/.config/saya/config.toml
 Optional opt-in flags you may want to add:
 
 - **Developer toolchains inside the sandbox**: under `[sandbox]`, set `ca_certs = true` and `toolchain_presets = ["auto"]` (or pick from `"rust"`, `"python"`, `"node"`, `"homebrew"`, `"xcode_clt"`, `"minimal_etc"`). Strict defaults remain unchanged (`network.mode = "deny"`, `/proc` omitted).
-- **Anthropic Prompt Caching**: set `prompt_cache = true` on an `anthropic-messages` profile or pass `--anthropic-prompt-cache` (off by default to keep compatibility with DeepSeek's Anthropic-compatible endpoint).
+- **Anthropic Official & Prompt Caching**: set `prompt_cache = true` (or pass `--anthropic-prompt-cache`) for ephemeral prompt caching alone, or set `anthropic_official_provider = true` (alias `anthropic_offical_provider` accepted; requires `api_version = "2026-10-21"`) on an `anthropic-messages` profile to enable prompt caching, `thinking: {"type": "adaptive", "display": "summarized"}`, and bounded `max_tokens` text continuation (off by default to keep compatibility with DeepSeek's Anthropic-compatible endpoint).
 
 ### 3. Run
 

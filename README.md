@@ -31,7 +31,7 @@ cp examples/config.example.toml ~/.config/saya/config.toml
 
 > `config check` 只校验 TOML 语法、规则与环境变量引用，**不会联网或调用付费模型**。
 >
-> 如需在受控沙箱内运行常见构建工具链，可在 `[sandbox]` 中显式启用 `ca_certs = true` 与 `toolchain_presets = ["auto"]`（或按需指定 `["rust", "python", "node", "homebrew", "xcode_clt", "minimal_etc"]`）。若对接官方 Anthropic Messages 服务并需要 Prompt Caching，可在对应 `[profiles.<name>]` 下设置 `prompt_cache = true`，或追加 `--anthropic-prompt-cache`（默认关闭以兼容 DeepSeek Anthropic 接口）。
+> 如需在受控沙箱内运行常见构建工具链，可在 `[sandbox]` 中显式启用 `ca_certs = true` 与 `toolchain_presets = ["auto"]`（或按需指定 `["rust", "python", "node", "homebrew", "xcode_clt", "minimal_etc"]`）。若对接官方 Anthropic Messages 服务，可在对应 `[profiles.<name>]` 设置 `prompt_cache = true`（或 `--anthropic-prompt-cache`）仅启用缓存，或设置 `anthropic_official_provider = true`（兼容 `anthropic_offical_provider` 别名）全开启 Prompt Caching、自适应思考摘要与 `max_tokens` 纯文本续写（默认关闭以兼容 DeepSeek Anthropic 接口）。
 
 ### 3. 启动运行
 

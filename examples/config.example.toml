@@ -38,6 +38,9 @@ stream = true
 # context_window_tokens = 128000
 # Optional opt-in Anthropic prompt caching (system, tools, and history breakpoints):
 # prompt_cache = true
+# Optional full official Anthropic Messages mode (requires anthropic-messages + 2026-10-21;
+# enables prompt caching, adaptive+summarized thinking, and bounded max_tokens text continuation):
+# anthropic_official_provider = true
 
 # N2 development defaults. Backend preparation happens when a run starts.
 # config check validates policy syntax without launching native isolation.
