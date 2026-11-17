@@ -8,16 +8,11 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, pa
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs::{self, File},
     io::ErrorKind,
-    os::{
-        fd::AsRawFd,
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
-    },
     path::{Path, PathBuf},
     str::FromStr,
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 /// Directory under `data_dir` that holds persistent module toggles.
@@ -170,10 +165,13 @@ pub fn load_overrides(data_dir: &Path) -> Result<ModuleOverrides, BoundaryError>
     }
 
     let dir_path = data_dir.join(MODULE_DIR_NAME);
-    let Some((_dir, dir_meta)) = open_existing_private_dir(&dir_path)? else {
+    let Some((_dir, dir_meta)) =
+        saya_fs::open_existing_private_dir(&dir_path, error_codes::STORAGE_ERROR, "module")?
+    else {
         return Ok(ModuleOverrides::default());
     };
-    let canonical_dir = verify_canonical_dir(&dir_path, &dir_meta)?;
+    let canonical_dir =
+        saya_fs::verify_canonical_dir(&dir_path, &dir_meta, error_codes::STORAGE_ERROR, "module")?;
     let db_path = canonical_dir.join(MODULE_DB_NAME);
     if !verify_existing_db_files(&db_path)? {
         return Ok(ModuleOverrides::default());
@@ -239,16 +237,24 @@ impl ModuleStore {
     /// Refuses symlinks, non-regular files, unexpected link counts, and files or
     /// directories owned by another user or writable/readable by group/other.
     pub fn open(data_dir: &Path) -> Result<Self, BoundaryError> {
-        ensure_data_root(data_dir)?;
+        saya_fs::ensure_root_dir(data_dir, error_codes::STORAGE_ERROR, "module store")?;
         let dir_path = data_dir.join(MODULE_DIR_NAME);
-        ensure_private_dir(&dir_path)?;
-        let (_dir_guard, dir_meta) = open_existing_private_dir(&dir_path)?
-            .ok_or_else(|| storage_error("module directory disappeared while opening"))?;
-        let canonical_dir = verify_canonical_dir(&dir_path, &dir_meta)?;
+        let (_dir_guard, _dir_meta, canonical_dir) =
+            saya_fs::ensure_private_dir(&dir_path, error_codes::STORAGE_ERROR, "module")?;
 
-        let lock = acquire_lock(&canonical_dir.join(LOCK_NAME))?;
+        let lock = saya_fs::acquire_flock(
+            &canonical_dir.join(LOCK_NAME),
+            BUSY_TIMEOUT,
+            error_codes::STORAGE_ERROR,
+            error_codes::STORAGE_ERROR,
+            "module store",
+        )?;
         let db_path = canonical_dir.join(MODULE_DB_NAME);
-        let created = create_or_verify_db_file(&db_path)?;
+        let (created, _meta) =
+            saya_fs::create_or_verify_private_file(&db_path, error_codes::STORAGE_ERROR, "module")?;
+        if !created && !verify_existing_db_files(&db_path)? {
+            return Err(storage_error("module database disappeared while opening"));
+        }
 
         let connection = Connection::open_with_flags(
             &db_path,
@@ -388,192 +394,27 @@ fn build_status(
     }
 }
 
-fn ensure_data_root(data_dir: &Path) -> Result<(), BoundaryError> {
-    match fs::symlink_metadata(data_dir) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || !meta.is_dir() {
-                return Err(storage_error("module store root must be a real directory"));
-            }
-            Ok(())
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(data_dir)
-            .map_err(|_| storage_error("cannot create module store root directory")),
-        Err(_) => Err(storage_error("cannot inspect module store root directory")),
-    }
-}
-
-fn ensure_private_dir(dir_path: &Path) -> Result<(), BoundaryError> {
-    match DirBuilder::new().mode(0o700).create(dir_path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
-        Err(_) => Err(storage_error("cannot create private module directory")),
-    }
-}
-
-fn open_existing_private_dir(
-    dir_path: &Path,
-) -> Result<Option<(File, fs::Metadata)>, BoundaryError> {
-    let named = match fs::symlink_metadata(dir_path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(storage_error("cannot inspect module directory")),
-    };
-    if named.file_type().is_symlink() || !named.is_dir() {
-        return Err(storage_error("module directory must not be a symlink"));
-    }
-    let dir = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(dir_path)
-        .map_err(|_| storage_error("cannot open module directory safely"))?;
-    let meta = dir
-        .metadata()
-        .map_err(|_| storage_error("cannot read module directory metadata"))?;
-    // SAFETY: geteuid takes no pointers and retains no ownership.
-    if !meta.is_dir()
-        || meta.uid() != unsafe { libc::geteuid() }
-        || meta.mode() & 0o077 != 0
-        || (meta.dev(), meta.ino()) != (named.dev(), named.ino())
-    {
-        return Err(storage_error("module directory must be owned and private"));
-    }
-    Ok(Some((dir, meta)))
-}
-
-fn verify_canonical_dir(
-    dir_path: &Path,
-    dir_meta: &fs::Metadata,
-) -> Result<PathBuf, BoundaryError> {
-    let canonical =
-        fs::canonicalize(dir_path).map_err(|_| storage_error("cannot resolve module directory"))?;
-    let named = fs::symlink_metadata(&canonical)
-        .map_err(|_| storage_error("module directory identity is unavailable"))?;
-    if !named.is_dir() || (named.dev(), named.ino()) != (dir_meta.dev(), dir_meta.ino()) {
-        return Err(storage_error("module directory changed while opening"));
-    }
-    Ok(canonical)
-}
-
-fn acquire_lock(lock_path: &Path) -> Result<File, BoundaryError> {
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(lock_path)
-        .map_err(|_| storage_error("cannot open module store lock file"))?;
-    verify_private_regular_file(lock_path, &lock)?;
-    let deadline = Instant::now() + BUSY_TIMEOUT;
-    loop {
-        // SAFETY: `lock` owns a valid regular file descriptor for this scope.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(lock);
-        }
-        let cause = std::io::Error::last_os_error();
-        if cause.kind() != ErrorKind::WouldBlock {
-            return Err(storage_error("cannot acquire module store lock"));
-        }
-        if Instant::now() >= deadline {
-            return Err(BoundaryError::new(
-                error_codes::STORAGE_ERROR,
-                "module store lock timed out",
-            ));
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn create_or_verify_db_file(db_path: &Path) -> Result<bool, BoundaryError> {
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(db_path)
-    {
-        Ok(file) => {
-            verify_private_regular_file(db_path, &file)?;
-            Ok(true)
-        }
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            if !verify_existing_db_files(db_path)? {
-                return Err(storage_error("module database disappeared while opening"));
-            }
-            Ok(false)
-        }
-        Err(_) => Err(storage_error("cannot create module database")),
-    }
-}
-
 fn verify_existing_db_files(db_path: &Path) -> Result<bool, BoundaryError> {
-    let named = match fs::symlink_metadata(db_path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err(storage_error("cannot inspect module database")),
+    let Some((_file, meta)) = saya_fs::open_existing_private_file_read(
+        db_path,
+        error_codes::STORAGE_ERROR,
+        "module database",
+    )?
+    else {
+        return Ok(false);
     };
-    if named.file_type().is_symlink() || !named.is_file() {
-        return Err(storage_error("module database must be a regular file"));
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(db_path)
-        .map_err(|_| storage_error("cannot open module database safely"))?;
-    let meta = verify_private_regular_file(db_path, &file)?;
     if meta.len() == 0 {
         return Err(storage_error("module database is empty or corrupt"));
     }
     for suffix in ["-wal", "-shm"] {
         let sidecar = PathBuf::from(format!("{}{suffix}", db_path.display()));
-        verify_optional_sidecar(&sidecar)?;
+        let _ = saya_fs::open_existing_private_file_read(
+            &sidecar,
+            error_codes::STORAGE_ERROR,
+            "module database sidecar",
+        )?;
     }
     Ok(true)
-}
-
-fn verify_optional_sidecar(path: &Path) -> Result<(), BoundaryError> {
-    let named = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(storage_error("cannot inspect module database sidecar")),
-    };
-    if named.file_type().is_symlink() || !named.is_file() {
-        return Err(storage_error(
-            "module database sidecar must be a regular file",
-        ));
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| storage_error("cannot open module database sidecar safely"))?;
-    verify_private_regular_file(path, &file)?;
-    Ok(())
-}
-
-fn verify_private_regular_file(path: &Path, file: &File) -> Result<fs::Metadata, BoundaryError> {
-    let named = fs::symlink_metadata(path)
-        .map_err(|_| storage_error("module database file identity unavailable"))?;
-    let meta = file
-        .metadata()
-        .map_err(|_| storage_error("module database metadata unavailable"))?;
-    // SAFETY: geteuid takes no pointers and retains no ownership.
-    if named.file_type().is_symlink()
-        || !meta.is_file()
-        || meta.nlink() != 1
-        || meta.uid() != unsafe { libc::geteuid() }
-        || meta.mode() & 0o077 != 0
-        || (meta.dev(), meta.ino()) != (named.dev(), named.ino())
-    {
-        return Err(storage_error(
-            "module database files must be owned private regular files",
-        ));
-    }
-    Ok(meta)
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), BoundaryError> {

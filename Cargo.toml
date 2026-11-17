@@ -1,5 +1,12 @@
 [workspace]
-members = ["crates/saya-core", "crates/saya-cli", "crates/saya-app", "crates/saya-tui"]
+members = [
+    "crates/saya-contract",
+    "crates/saya-fs",
+    "crates/saya-core",
+    "crates/saya-cli",
+    "crates/saya-app",
+    "crates/saya-tui",
+]
 resolver = "3"
 
 [workspace.package]

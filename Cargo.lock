@@ -2891,12 +2891,23 @@ dependencies = [
  "libc",
  "rusqlite",
  "saya-app",
+ "saya-contract",
  "saya-core",
+ "saya-fs",
  "saya-tui",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "saya-contract"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -2921,6 +2932,8 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rusqlite",
+ "saya-contract",
+ "saya-fs",
  "semver",
  "serde",
  "serde_json",
@@ -2937,6 +2950,15 @@ dependencies = [
  "unicase",
  "unicode-normalization",
  "uuid",
+]
+
+[[package]]
+name = "saya-fs"
+version = "0.2.0"
+dependencies = [
+ "libc",
+ "saya-contract",
+ "tempfile",
 ]
 
 [[package]]

@@ -11,6 +11,8 @@ tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt", "sync", "time", "test-util"] }
 
 [dependencies]
+saya-contract = { path = "../saya-contract" }
+saya-fs = { path = "../saya-fs" }
 async-trait = "0.1.89"
 base64 = "0.22.1"
 cap-std = "4.0.3"

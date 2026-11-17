@@ -22,10 +22,8 @@ use saya_core::{
 };
 use serde_json::{Value, json};
 use std::{
-    fs::OpenOptions,
-    io::{self, IsTerminal, Read, Write},
-    os::unix::fs::OpenOptionsExt,
-    path::PathBuf,
+    io::{self, IsTerminal, Write},
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -253,32 +251,8 @@ fn goal_text(goal: &GoalRecord) {
     }
 }
 
-fn bounded_file(path: &PathBuf) -> Result<String, BoundaryError> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| failure("invalid_goal_plan", "Goal plan file is unavailable"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| failure("invalid_goal_plan", "Goal plan file is unavailable"))?;
-    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
-        return Err(failure(
-            "invalid_goal_plan",
-            "Goal plan file is not a bounded regular file",
-        ));
-    }
-    let mut text = String::new();
-    file.take(1024 * 1024 + 1)
-        .read_to_string(&mut text)
-        .map_err(|_| failure("invalid_goal_plan", "Goal plan file is not UTF-8"))?;
-    if text.len() > 1024 * 1024 {
-        return Err(failure(
-            "invalid_goal_plan",
-            "Goal plan file exceeded its size limit while being read",
-        ));
-    }
-    Ok(text)
+fn bounded_file(path: &Path) -> Result<String, BoundaryError> {
+    saya_fs::read_bounded_utf8_file(path, 1024 * 1024, "invalid_goal_plan", "Goal plan file")
 }
 
 async fn create_goal(
