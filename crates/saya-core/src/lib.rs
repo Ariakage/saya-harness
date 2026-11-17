@@ -34,6 +34,7 @@ pub mod memory;
 pub mod memory_context;
 pub mod metrics;
 pub mod mode;
+pub mod modules;
 pub mod network;
 pub mod output_store;
 pub mod permissions;

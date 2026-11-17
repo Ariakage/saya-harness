@@ -6,6 +6,7 @@ mod goal_commands;
 mod logs;
 mod mcp;
 mod memory_commands;
+mod module_commands;
 mod plugin_commands;
 mod signals;
 use saya_app::{new_session, session};
@@ -129,6 +130,8 @@ enum Command {
         #[command(subcommand)]
         action: mcp::McpAction,
     },
+    /// Manage runtime capability module switches (`browser`, `vm`).
+    Module(module_commands::ModuleArgs),
     /// Open the debug-only interactive TUI fixture viewer.
     #[cfg(debug_assertions)]
     TuiPreview {
@@ -1216,10 +1219,13 @@ async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -
         Ok(cwd) => cwd,
         Err(_) => return fail("cannot determine current directory"),
     };
-    let config = match config::load(overrides, environment, &cwd) {
+    let mut config = match config::load(overrides, environment, &cwd) {
         Ok(config) => config,
         Err(error) => return fail(error),
     };
+    if let Err(error) = saya_app::apply_module_overrides(&mut config) {
+        return fail(safe_output(&error.to_string(), &config));
+    }
     if config.output != Output::Text {
         return fail("Choose an explicit CLI subcommand for JSON or JSONL output");
     }
@@ -1375,6 +1381,22 @@ async fn main() -> std::process::ExitCode {
                 ),
             },
         },
+        Some(Command::Module(args)) => match std::env::current_dir()
+            .map_err(|_| "cannot determine current directory".to_owned())
+            .and_then(|cwd| config::load(o, env, &cwd).map_err(|error| error.to_string()))
+        {
+            Err(error) => query_error(error, cli.output.map(Into::into)),
+            Ok(config) => match module_commands::run(args, &config) {
+                Ok(output) => match module_commands::write_line(&output) {
+                    Ok(()) => 0,
+                    Err(_) => query_error("cannot write module result", Some(config.output)),
+                },
+                Err(error) => query_error(
+                    safe_output(&error.to_string(), &config),
+                    Some(config.output),
+                ),
+            },
+        },
         Some(Command::Config {
             action: ConfigAction::Init,
         }) => match init(&o, &env) {
@@ -1390,10 +1412,13 @@ async fn main() -> std::process::ExitCode {
             .map_err(|_| "cannot determine current directory".to_owned())
             .and_then(|cwd| config::load(o, env, &cwd).map_err(|e| e.to_string()))
         {
-            Ok(_) => {
-                println!("Configuration is valid.");
-                0
-            }
+            Ok(mut config) => match saya_app::apply_module_overrides(&mut config) {
+                Ok(_) => {
+                    println!("Configuration is valid.");
+                    0
+                }
+                Err(error) => fail(safe_output(&error.to_string(), &config)),
+            },
             Err(e) => fail(e),
         },
         Some(Command::Compact {

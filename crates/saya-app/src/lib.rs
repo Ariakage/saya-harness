@@ -14,6 +14,7 @@ use saya_core::{
     approvals::Preauthorizations,
     boundary::{Cancellation, Model, Store},
     browser::{
+        BrowserSettings,
         vm::assemble_vm_browser_provider,
         worker::{NativeBrowserEnvironmentFactory, PlaywrightMcpProvider, browser_install_roots},
     },
@@ -22,6 +23,7 @@ use saya_core::{
         BoundaryError, ErrorInfo, ModelProtocol, PermissionMode, Run, RunId, Session, SessionId,
     },
     input::InputHandler,
+    modules::{ModuleOverrides, resolve_browser_settings},
     permissions::Policy,
     project_context::ProjectContext,
     provider::{
@@ -160,16 +162,35 @@ pub fn new_session(config: &Config) -> Result<Session, Box<dyn std::error::Error
 /// only the SSH port and the Run broker's loopback port; page traffic reaches
 /// the broker through a reverse streamlocal forward and a namespace-confined
 /// `socat`. `worker.proxy` remains reserved and is not injected.
+/// Apply any persisted module overrides (`browser`, `vm`) onto `config`
+/// without creating missing state files on disk, validating the resulting
+/// browser configuration fail-closed.
+pub fn apply_module_overrides(config: &mut Config) -> Result<ModuleOverrides, BoundaryError> {
+    let (effective, overrides) = resolve_browser_settings(&config.data_dir, &config.browser)?;
+    config.browser = effective;
+    Ok(overrides)
+}
+
 pub fn assemble_browser_provider(
     config: &Config,
     exec: ExecConfig,
     run_id: &str,
 ) -> Result<Option<Arc<PlaywrightMcpProvider>>, BoundaryError> {
-    if !config.browser.enabled {
+    let (effective, _) = resolve_browser_settings(&config.data_dir, &config.browser)?;
+    assemble_browser_provider_from_settings(config, &effective, exec, run_id)
+}
+
+fn assemble_browser_provider_from_settings(
+    config: &Config,
+    browser: &BrowserSettings,
+    exec: ExecConfig,
+    run_id: &str,
+) -> Result<Option<Arc<PlaywrightMcpProvider>>, BoundaryError> {
+    if !browser.enabled {
         return Ok(None);
     }
-    if config.browser.vm.enabled {
-        if config.browser.worker.enabled {
+    if browser.vm.enabled {
+        if browser.worker.enabled {
             return Err(BoundaryError(
                 ErrorInfo {
                     code: "invalid_config".into(),
@@ -181,14 +202,14 @@ pub fn assemble_browser_provider(
             ));
         }
         let provider = assemble_vm_browser_provider(
-            config.browser.vm.clone(),
-            config.browser.network.clone(),
+            browser.vm.clone(),
+            browser.network.clone(),
             run_id,
             exec,
         )?;
         return Ok(Some(Arc::new(provider)));
     }
-    if !config.browser.worker.enabled {
+    if !browser.worker.enabled {
         return Err(BoundaryError(
             ErrorInfo {
                 code: "invalid_config".into(),
@@ -199,7 +220,7 @@ pub fn assemble_browser_provider(
             None,
         ));
     }
-    let settings = config.browser.worker.clone();
+    let settings = browser.worker.clone();
     let install_roots = browser_install_roots(&settings)?;
     let factory = Arc::new(NativeBrowserEnvironmentFactory::new(
         install_roots,
@@ -479,8 +500,11 @@ pub fn build_runtime(
     } else {
         runtime = runtime.with_secret_registry(registry.clone())?;
     }
-    if let Some(provider) = assemble_browser_provider(config, browser_exec, &run_id)? {
-        runtime = runtime.with_browser(config.browser.clone(), provider)?;
+    let (effective_browser, _) = resolve_browser_settings(&config.data_dir, &config.browser)?;
+    if let Some(provider) =
+        assemble_browser_provider_from_settings(config, &effective_browser, browser_exec, &run_id)?
+    {
+        runtime = runtime.with_browser(effective_browser, provider)?;
     }
     let review_profile = config.review.profile.as_ref().unwrap_or(profile);
     runtime = runtime.with_pricing(

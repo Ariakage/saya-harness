@@ -632,7 +632,9 @@ pub fn goal_profile_fingerprint(config: &Config, profile: &str) -> Result<String
             "Goal web configuration cannot be fingerprinted",
         )
     })?);
-    hash.update(serde_json::to_vec(&config.browser).map_err(|_| {
+    let (effective_browser, _) =
+        saya_core::modules::resolve_browser_settings(&config.data_dir, &config.browser)?;
+    hash.update(serde_json::to_vec(&effective_browser).map_err(|_| {
         failure(
             "invalid_goal",
             "Goal browser configuration cannot be fingerprinted",
