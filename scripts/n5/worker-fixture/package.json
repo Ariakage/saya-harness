@@ -1,0 +1,9 @@
+{
+  "name": "saya-n5-worker-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "@playwright/mcp": "0.0.85",
+    "playwright": "1.66.0-alpha-2026-11-09"
+  }
+}

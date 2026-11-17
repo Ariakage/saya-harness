@@ -54,18 +54,7 @@ render-preview *args:
 
 # 执行发行、N2、N3 与提示词评估脚本的离线 Python 回归
 test-tooling:
-    python3 -B scripts/test_prompt_eval.py
-    python3 -B scripts/n2/test_install_linux_tools.py
-    python3 -B scripts/n2/test_native_acceptance.py
-    python3 -B scripts/n2/test_verify_performance.py
-    python3 -B scripts/release/test_package.py
-    python3 -B scripts/release/test_verify_macos15.py
-    python3 -B scripts/release/test_verify_linux.py
-    python3 -B scripts/release/test_script_helpers.py
-    python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py'
-    python3 -B scripts/n5/test_browser_vm.py
-    python3 -I -B scripts/n5/test_acceptance.py
-    python3 -B scripts/n5/test_witness.py
+    ./scripts/test-tooling.sh
 
 # 验证显式 Node 与固定 worker 的私有协议和通道范围
 test-n5-worker-protocol node worker_root:

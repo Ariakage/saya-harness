@@ -65,20 +65,7 @@ jobs:
         id: tooling
         run: |
           set -euo pipefail
-          {
-            python3 -B scripts/test_prompt_eval.py
-            python3 -B scripts/n2/test_install_linux_tools.py -v
-            python3 -B scripts/n2/test_native_acceptance.py -v
-            python3 -B scripts/n2/test_verify_performance.py -v
-            python3 -B scripts/release/test_package.py -v
-            python3 -B scripts/release/test_verify_macos15.py -v
-            python3 -B scripts/release/test_verify_linux.py -v
-            python3 -B scripts/release/test_script_helpers.py -v
-            python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py' -v
-            python3 -B scripts/n5/test_browser_vm.py -v
-            python3 -I -B scripts/n5/test_acceptance.py -v
-            python3 -B scripts/n5/test_witness.py -v
-          } 2>&1 | tee target/n5/acceptance/tooling.log
+          ./scripts/test-tooling.sh -v 2>&1 | tee target/n5/acceptance/tooling.log
       - name: Freeze one fixed-source candidate image
         id: candidate
         run: |
@@ -191,10 +178,12 @@ jobs:
           N5_WORK="$(python3 -c 'import os, pathlib; print((pathlib.Path(os.environ["RUNNER_TEMP"]).resolve() / "n5-worker"))')"
           rm -rf "$N5_WORK"
           mkdir -p "$N5_WORK/worker"
+          # The pinned manifest and lockfile live under scripts/n5/worker-fixture
+          # so transitive dependencies stay frozen across runners.
+          cp scripts/n5/worker-fixture/package.json scripts/n5/worker-fixture/package-lock.json "$N5_WORK/worker/"
           (
             cd "$N5_WORK/worker"
-            npm init -y >/dev/null 2>&1
-            npm install --no-save --ignore-scripts @playwright/mcp@0.0.85 playwright@1.66.0-alpha-2026-11-09
+            npm ci --ignore-scripts
           )
           python3 scripts/n5/witness.py worker-prepare \
             --source-sha "$SOURCE_SHA" \

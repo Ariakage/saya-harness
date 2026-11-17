@@ -20,7 +20,7 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal
       - name: Run cargo audit
         run: |
-          cargo install --locked cargo-audit
+          cargo install --locked cargo-audit --version 0.22.2
           cargo audit
 
   checks:
@@ -45,19 +45,7 @@ jobs:
       - name: Check workspace
         run: ./scripts/check.sh
       - name: Check workspace tooling
-        run: |
-          python3 -B scripts/test_prompt_eval.py
-          python3 -B scripts/n2/test_install_linux_tools.py
-          python3 -B scripts/n2/test_native_acceptance.py
-          python3 -B scripts/n2/test_verify_performance.py
-          python3 -B scripts/release/test_package.py
-          python3 -B scripts/release/test_verify_macos15.py
-          python3 -B scripts/release/test_verify_linux.py
-          python3 -B scripts/release/test_script_helpers.py
-          python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py'
-          python3 -B scripts/n5/test_browser_vm.py
-          python3 -I -B scripts/n5/test_acceptance.py
-          python3 -B scripts/n5/test_witness.py
+        run: ./scripts/test-tooling.sh
       - name: Verify macOS 15 release smoke
         if: startsWith(matrix.os, 'macos-')
         run: |
