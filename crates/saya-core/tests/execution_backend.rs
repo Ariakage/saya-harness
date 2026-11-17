@@ -960,10 +960,26 @@ async fn file_worker_reuses_native_read_write_patch_and_discovery_tools() {
     assert!(read.ok);
     let data = read.data.expect("read payload");
     assert_eq!(data["content"], "first\n");
+    let edit = file_request(
+        &workspace,
+        "edit_file",
+        json!({"path":"example.txt","old_string":"first","new_string":"edited","expected_version":data["version"]}),
+        &path,
+    );
+    let edit_result = execution::execute_file_worker(edit)
+        .await
+        .expect("worker edit");
+    assert!(edit_result.ok);
+    let edited_version = edit_result
+        .data
+        .expect("edit payload")
+        .get("version")
+        .cloned()
+        .expect("edit version");
     let patch = file_request(
         &workspace,
         "apply_patch",
-        json!({"path":"example.txt","patch":"--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-first\n+second\n","expected_version":data["version"]}),
+        json!({"path":"example.txt","patch":"--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-edited\n+second\n","expected_version":edited_version}),
         &path,
     );
     assert!(

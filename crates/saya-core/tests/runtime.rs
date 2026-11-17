@@ -1800,12 +1800,10 @@ async fn read_only_runtime_blocks_fabricated_foreground_and_background_mutations
             "{name} mutated the workspace"
         );
         let seen = model.seen.lock().map_err(|_| "lock")?;
-        assert!(
-            seen[0]
-                .tools
-                .iter()
-                .all(|t| !matches!(t.name.as_str(), "write_file" | "apply_patch" | "exec"))
-        );
+        assert!(seen[0].tools.iter().all(|t| !matches!(
+            t.name.as_str(),
+            "write_file" | "edit_file" | "apply_patch" | "exec"
+        )));
         let background = seen[0]
             .tools
             .iter()
@@ -2868,5 +2866,133 @@ async fn dynamically_learned_credentials_keep_original_dispatch_and_sanitized_hi
             assert!(!saya_core::redaction::contains_secret(&row?, &known));
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn parallel_read_batches_preserve_order_across_mutations_and_respect_manual_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("a.txt"), "alpha needle\n")?;
+    std::fs::write(temp.path().join("b.txt"), "beta value\n")?;
+    std::fs::write(temp.path().join("c.txt"), "gamma needle\n")?;
+
+    let (mut session, run) = fixture(temp.path(), PermissionMode::Auto);
+    let store = Arc::new(MemoryStore::default());
+    let model = Arc::new(FakeModel::new(vec![
+        vec![
+            call(
+                "r1",
+                "read_file",
+                serde_json::json!({"path": "a.txt", "start_line": 1, "line_count": 5}),
+            ),
+            call(
+                "r2",
+                "read_file",
+                serde_json::json!({"path": "b.txt", "start_line": 1, "line_count": 5}),
+            ),
+            call(
+                "w1",
+                "write_file",
+                serde_json::json!({"path": "out.txt", "content": "written\n", "expected_version": null}),
+            ),
+            call(
+                "r3",
+                "read_file",
+                serde_json::json!({"path": "c.txt", "start_line": 1, "line_count": 5}),
+            ),
+            call(
+                "s1",
+                "search_text",
+                serde_json::json!({"path": ".", "pattern": "needle"}),
+            ),
+        ],
+        vec![HistoryItem::AssistantText("done".into())],
+    ]));
+    let mut rt = runtime(
+        temp.path(),
+        run,
+        model.clone(),
+        store.clone(),
+        Arc::new(NoCancel),
+    )?;
+    let outcome = rt.run(&mut session).await?;
+    assert_eq!(outcome.status, RunStatus::Completed);
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("out.txt"))?,
+        "written\n"
+    );
+    let saved = store.load_session(session.id).await?.ok_or("saved")?;
+    assert_eq!(saved.history, session.history);
+    let result_ids: Vec<&str> = session
+        .history
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::ToolResult { call_id, result } => {
+                assert!(result.ok, "{call_id}: {:?}", result.error);
+                Some(call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(result_ids, vec!["r1", "r2", "w1", "r3", "s1"]);
+
+    // Manual mode never skips individual confirmation even across consecutive reads.
+    struct CountApproval(Arc<std::sync::atomic::AtomicUsize>);
+    impl saya_core::runtime::ApprovalHandler for CountApproval {
+        fn confirm<'a>(
+            &'a self,
+            _: &'a saya_core::contract::ApprovalRequest,
+            _: &'a dyn Cancellation,
+        ) -> Operation<'a, Option<bool>> {
+            Box::pin(async move {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Some(true))
+            })
+        }
+    }
+    let approvals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (mut manual_session, manual_run) = fixture(temp.path(), PermissionMode::Manual);
+    let manual_store = Arc::new(MemoryStore::default());
+    let manual_model = Arc::new(FakeModel::new(vec![
+        vec![
+            call(
+                "mr1",
+                "read_file",
+                serde_json::json!({"path": "a.txt", "start_line": 1, "line_count": 5}),
+            ),
+            call(
+                "mr2",
+                "read_file",
+                serde_json::json!({"path": "b.txt", "start_line": 1, "line_count": 5}),
+            ),
+        ],
+        vec![HistoryItem::AssistantText("manual done".into())],
+    ]));
+    let mut manual_rt = AgentRuntime::new(RuntimeSetup {
+        run: manual_run,
+        model: manual_model,
+        store: manual_store,
+        policy: Arc::new(Policy::new(temp.path(), PermissionConfig::default())?),
+        files: Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        cancellation: Arc::new(NoCancel),
+        review: ReviewConfig::new("fake".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "manual reads".into(),
+        confirmation: Some(Arc::new(CountApproval(approvals.clone()))),
+        limits: RuntimeLimits::default(),
+    })?;
+    assert_eq!(
+        manual_rt.run(&mut manual_session).await?.status,
+        RunStatus::Completed
+    );
+    assert_eq!(approvals.load(std::sync::atomic::Ordering::SeqCst), 2);
     Ok(())
 }

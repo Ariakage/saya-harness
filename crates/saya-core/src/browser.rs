@@ -31,11 +31,13 @@ pub use settings::{
     BrowserCredentialPurpose, BrowserCredentialSettings, BrowserCredentialSlot, BrowserFileSettings,
 };
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::sync::{Mutex, atomic::AtomicU64};
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 use tokio::sync::{Mutex as AsyncMutex, watch};
@@ -2834,6 +2836,7 @@ pub(crate) fn register_tools(
 
 /// Deterministic provider for state and permission tests. It performs no
 /// network access and exposes bounded, inspectable call counters.
+#[cfg(test)]
 pub struct FixtureProvider {
     facts: BrowserFacts,
     delay_ms: u64,
@@ -2865,6 +2868,7 @@ pub struct FixtureProvider {
     framed_element: AtomicBool,
     pause_started: Arc<tokio::sync::Notify>,
 }
+#[cfg(test)]
 impl FixtureProvider {
     pub fn new(facts: BrowserFacts) -> Self {
         Self {
@@ -3099,6 +3103,7 @@ impl FixtureProvider {
 }
 
 #[async_trait::async_trait]
+#[cfg(test)]
 impl BrowserProvider for FixtureProvider {
     fn facts(&self) -> BrowserFacts {
         self.facts.clone()
@@ -3320,7 +3325,11 @@ impl BrowserProvider for FixtureProvider {
             width: 640,
             height: 480,
             masked: !self.screenshot_unmasked.load(Ordering::Acquire),
-            url: self.override_screenshot_url.lock().unwrap().take(),
+            url: self
+                .override_screenshot_url
+                .lock()
+                .ok()
+                .and_then(|mut value| value.take()),
         })
     }
     async fn download(

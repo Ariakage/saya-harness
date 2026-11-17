@@ -22,7 +22,7 @@ pub const DEFAULT_OUTPUT_TOKENS: u32 = 65_536;
 pub const MAX_OUTPUT_TOKENS: u32 = 1_000_000;
 
 mod sandbox;
-pub use sandbox::{SandboxNetworkSettings, SandboxSettings};
+pub use sandbox::{SandboxNetworkSettings, SandboxSettings, ToolchainPreset};
 mod plugins;
 pub use plugins::PluginSettings;
 
@@ -196,7 +196,7 @@ pub struct Profile {
     pub api_key_env: Option<String>,
     pub context_window_tokens: u64,
     /// Resolved request target. Explicit configuration overrides the declared
-    /// model default, which otherwise falls back to 32,000 tokens.
+    /// model default, which otherwise falls back to 65,536 tokens.
     pub max_output_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<ProfileLimits>,
@@ -222,9 +222,16 @@ pub struct Profile {
     pub omit_stream_usage: bool,
     #[serde(default)]
     pub omit_reasoning_include: bool,
+    /// Opt-in Anthropic prompt cache breakpoints for system, tools, and history.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub prompt_cache: bool,
     /// Optional explicit rates; excluded from the provider identity fingerprint.
     #[serde(default, skip_serializing)]
     pub pricing: Option<Pricing>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 /// Model-declared defaults. An explicit request target takes precedence.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -276,6 +283,8 @@ struct RawProfile {
     omit_stream_usage: bool,
     #[serde(default)]
     omit_reasoning_include: bool,
+    #[serde(default)]
+    prompt_cache: bool,
     pricing: Option<Pricing>,
 }
 impl TryFrom<RawProfile> for Profile {
@@ -315,6 +324,7 @@ impl TryFrom<RawProfile> for Profile {
             legacy_max_tokens: raw.legacy_max_tokens,
             omit_stream_usage: raw.omit_stream_usage,
             omit_reasoning_include: raw.omit_reasoning_include,
+            prompt_cache: raw.prompt_cache,
             pricing: raw.pricing,
         })
     }

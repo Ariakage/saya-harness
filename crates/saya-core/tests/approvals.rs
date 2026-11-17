@@ -2600,7 +2600,9 @@ async fn background_submit_supports_every_local_tool() -> Result<(), Box<dyn std
         true,
         ReadLimits::default(),
     )?);
+    std::fs::write(temp.path().join("edit.md"), "before\n")?;
     let version = files.read_file(Path::new("source.txt"), 1, 1)?.version;
+    let edit_version = files.read_file(Path::new("edit.md"), 1, 1)?.version;
     let dispatcher = Arc::new(ToolDispatcher::new(
         policy(temp.path(), "")?,
         modes.clone(),
@@ -2635,6 +2637,10 @@ async fn background_submit_supports_every_local_tool() -> Result<(), Box<dyn std
         (
             "write_file",
             serde_json::json!({"path":"out.txt","content":"new","expected_version":null}),
+        ),
+        (
+            "edit_file",
+            serde_json::json!({"path":"edit.md","old_string":"before","new_string":"edited","expected_version":edit_version}),
         ),
         (
             "apply_patch",

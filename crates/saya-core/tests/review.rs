@@ -555,3 +555,48 @@ async fn rules_and_plan_do_not_trigger_review_model() -> Result<(), Box<dyn std:
     assert!(model.seen.lock().map_err(|_| "lock")?.is_empty());
     Ok(())
 }
+
+#[tokio::test]
+async fn fenced_json_review_responses_are_accepted_while_prose_still_falls_back()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = support::temp_workspace()?;
+    let (policy, op) = setup(root.path())?;
+    for (raw, expected_decision, expected_source) in [
+        (
+            "```json\n{\"decision\":\"allow\",\"reason\":\"safe read\"}\n```",
+            Decision::Allow,
+            ReviewDecisionSource::Model,
+        ),
+        (
+            "  ```\n{\"decision\":\"deny\",\"reason\":\"destructive\"}\n```  ",
+            Decision::Deny,
+            ReviewDecisionSource::Model,
+        ),
+        (
+            "Result:\n```json\n{\"decision\":\"allow\",\"reason\":\"safe\"}\n```",
+            Decision::Ask,
+            ReviewDecisionSource::HumanFallback,
+        ),
+        (
+            "```yaml\n{\"decision\":\"allow\",\"reason\":\"safe\"}\n```",
+            Decision::Ask,
+            ReviewDecisionSource::HumanFallback,
+        ),
+    ] {
+        let outcome = review_operation(
+            &policy,
+            input(&op),
+            &FakeModel::new(vec![finished(raw)]),
+            &SharedBudget::default(),
+            &ReviewConfig::new("exec".into()),
+            &NeverCancel,
+        )
+        .await?;
+        assert_eq!(
+            (outcome.decision, outcome.source),
+            (expected_decision, expected_source),
+            "raw response: {raw}"
+        );
+    }
+    Ok(())
+}

@@ -107,6 +107,7 @@ enum Target {
     Exec {
         cwd: PathBuf,
         executable: PathBuf,
+        invoked_executable: String,
         args: Vec<String>,
         environment_digest: String,
         analysis: Arc<crate::command_analysis::CommandAnalysis>,
@@ -128,23 +129,8 @@ impl Operation {
         read_only: bool,
         review: serde_json::Value,
     ) -> Result<Self, BoundaryError> {
-        if !matches!(
-            tool,
-            "memory_read"
-                | "memory_search"
-                | "memory_evidence"
-                | "memory_update"
-                | "memory_forget"
-                | "skill_catalog"
-                | "skill_activate"
-                | "skill_deactivate"
-                | "skill_read_resource"
-                | "checkpoint_create"
-                | "checkpoint_list"
-                | "checkpoint_diff"
-                | "checkpoint_accept"
-                | "checkpoint_restore"
-        ) || paths.len() > 1024
+        if !crate::registry::is_managed_tool(tool)
+            || paths.len() > 1024
             || paths.iter().any(|path| !path.is_absolute())
             || binding.is_empty()
             || binding.len() > 128
@@ -158,7 +144,7 @@ impl Operation {
                 binding,
                 read_only,
                 review,
-                independent_review: matches!(tool, "memory_update" | "memory_forget"),
+                independent_review: crate::registry::managed_requires_independent_review(tool),
             },
         })
     }
@@ -220,10 +206,7 @@ impl Operation {
     /// Construct a file operation. Existing targets and existing parents of new
     /// targets are canonicalized. This reads filesystem metadata, not content.
     pub fn file(workspace: &Path, tool: &str, path: &Path) -> Result<Self, BoundaryError> {
-        if !matches!(
-            tool,
-            "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
-        ) {
+        if !crate::registry::is_local_file_tool(tool) {
             return Err(failure("invalid_args", "unknown file tool"));
         }
         Ok(Self {
@@ -243,13 +226,13 @@ impl Operation {
     ) -> Result<Self, BoundaryError> {
         let cwd =
             std::fs::canonicalize(&plan.cwd).map_err(|e| failure("invalid_path", e.to_string()))?;
-        let executable = plan
+        let invoked = plan
             .argv
             .first()
             .ok_or_else(|| failure("invalid_args", "empty argv"))?;
-        let exe = std::fs::canonicalize(executable)
-            .map_err(|e| failure("invalid_path", e.to_string()))?;
-        if !Path::new(executable).is_absolute() || !cwd.is_dir() {
+        let exe =
+            std::fs::canonicalize(invoked).map_err(|e| failure("invalid_path", e.to_string()))?;
+        if !Path::new(invoked).is_absolute() || !cwd.is_dir() {
             return Err(failure(
                 "invalid_args",
                 "command must have absolute executable and directory cwd",
@@ -275,6 +258,7 @@ impl Operation {
             target: Target::Exec {
                 cwd,
                 executable: exe,
+                invoked_executable: invoked.clone(),
                 args: plan.argv[1..].to_vec(),
                 environment_digest: plan.environment_digest.clone(),
                 analysis: Arc::new(analysis),
@@ -366,6 +350,7 @@ impl Operation {
             Target::Exec {
                 cwd,
                 executable,
+                invoked_executable,
                 args,
                 environment_digest,
                 analysis,
@@ -405,6 +390,7 @@ impl Operation {
                         "schema_version": analysis.schema_version,
                         "analyzer_version": analysis.analyzer_version,
                         "limits": analysis.limits,
+                        "invoked_executable": invoked_executable,
                     }),
                 );
             }
@@ -657,49 +643,8 @@ impl Policy {
         let mut rules = Vec::new();
         for mut rule in config.rules {
             if let Some(tool) = &rule.tool {
-                if !matches!(
-                    tool.as_str(),
-                    "read_file"
-                        | "list_dir"
-                        | "find_files"
-                        | "search_text"
-                        | "write_file"
-                        | "apply_patch"
-                        | "exec"
-                        | "ask_user"
-                        | "background_status"
-                        | "background_cancel"
-                        | "todo_write"
-                        | "output_read"
-                        | "output_search"
-                        | "memory_read"
-                        | "memory_search"
-                        | "memory_evidence"
-                        | "memory_update"
-                        | "memory_forget"
-                        | "skill_catalog"
-                        | "skill_activate"
-                        | "skill_deactivate"
-                        | "skill_read_resource"
-                        | "checkpoint_create"
-                        | "checkpoint_list"
-                        | "checkpoint_diff"
-                        | "checkpoint_accept"
-                        | "checkpoint_restore"
-                        | "fetch_url"
-                        | "web_search"
-                        | "browser_open"
-                        | "browser_close"
-                        | "browser_navigate"
-                        | "browser_snapshot"
-                        | "browser_click"
-                        | "browser_fill"
-                        | "browser_press"
-                        | "browser_wait"
-                        | "browser_screenshot"
-                        | "browser_download"
-                        | "browser_upload"
-                ) && !crate::registry::valid_external_name(tool)
+                if !crate::registry::is_known_rule_tool(tool)
+                    && !crate::registry::valid_external_name(tool)
                 {
                     return Err(failure("invalid_config", "unknown rule tool"));
                 }
@@ -787,10 +732,8 @@ impl Policy {
                 _ => return decision(Decision::Deny, "host_managed_resource"),
             }
         }
-        let read = matches!(
-            op.tool.as_str(),
-            "read_file" | "list_dir" | "find_files" | "search_text"
-        ) || matches!(&op.target, Target::External(descriptor)
+        let read = crate::registry::is_local_read_tool(&op.tool)
+            || matches!(&op.target, Target::External(descriptor)
             if descriptor.effect == crate::registry::ToolEffect::ExternalReadOnly)
             || matches!(
                 op.target,
@@ -871,7 +814,7 @@ impl Policy {
             || input
             || control
             || metadata
-            || matches!(op.tool.as_str(), "write_file" | "apply_patch")
+            || crate::registry::is_local_write_tool(&op.tool)
         {
             return decision(
                 Decision::Allow,

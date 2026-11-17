@@ -488,7 +488,9 @@ impl App {
                         };
                         goal = match continue_once(&config, &goal_store, goal.id, context).await {
                             Ok(outcome) => outcome.goal,
-                            Err(error) if error.0.code == "goal_budget" => {
+                            Err(error)
+                                if error.is_code(saya_core::contract::error_codes::GOAL_BUDGET) =>
+                            {
                                 goal = goal_store.load(goal.id).await?;
                                 break;
                             }

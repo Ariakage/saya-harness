@@ -231,6 +231,25 @@ pub struct ReviewInput<'a> {
     pub goal_summary: &'a str,
 }
 
+fn extract_fenced_json(text: &str) -> &str {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let Some(newline) = rest.find('\n') else {
+        return trimmed;
+    };
+    let lang = rest[..newline].trim();
+    if !lang.is_empty() && !lang.eq_ignore_ascii_case("json") {
+        return trimmed;
+    }
+    let body = &rest[newline + 1..];
+    let Some(inner) = body.strip_suffix("```") else {
+        return trimmed;
+    };
+    inner.trim()
+}
+
 /// Evaluate the policy, then only when required call a separate, tool-free model
 /// request. Malformed/failed reviews fall back to `Ask`; cancellation and budget
 /// exhaustion are returned as errors and must stop dispatch.
@@ -367,7 +386,8 @@ pub async fn review_operation(
         .await;
         match result {
             Ok(Some(text)) => {
-                if let Ok(parsed) = serde_json::from_str::<ModelDecision>(&text)
+                let candidate = extract_fenced_json(&text);
+                if let Ok(parsed) = serde_json::from_str::<ModelDecision>(candidate)
                     && !parsed.reason.trim().is_empty()
                     && parsed.reason.chars().count() <= 512
                 {

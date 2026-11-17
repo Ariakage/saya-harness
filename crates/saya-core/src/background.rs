@@ -3,7 +3,9 @@
 use crate::{
     approvals::{Authorization, OneShotPermit},
     boundary::{Cancellation, ToolContext},
-    contract::{ApprovalRequest, BoundaryError, ErrorInfo, ToolCall, ToolResult, WorkMode},
+    contract::{
+        ApprovalRequest, BoundaryError, ErrorInfo, ToolCall, ToolResult, WorkMode, error_codes,
+    },
     dispatch::{DispatchReview, ToolDispatcher},
     output_store::SealedMedia,
 };
@@ -22,14 +24,32 @@ pub const DEFAULT_MAX_BACKGROUND_RUNNING: usize = 4;
 pub const DEFAULT_MAX_BACKGROUND_JOBS: usize = 256;
 
 fn failure(code: &str, message: &str) -> BoundaryError {
-    BoundaryError(
-        ErrorInfo {
-            code: code.into(),
-            message: message.into(),
-        },
-        None,
-        None,
-    )
+    BoundaryError::new(code, message)
+}
+
+fn outcome_from_result(value: &ToolResult) -> BackgroundOutcome {
+    if value.ok {
+        BackgroundOutcome::Succeeded
+    } else if value.has_error_code(error_codes::CANCELLED) {
+        BackgroundOutcome::Cancelled
+    } else {
+        BackgroundOutcome::Failed {
+            code: value
+                .error_code()
+                .unwrap_or(error_codes::TOOL_ERROR)
+                .to_owned(),
+        }
+    }
+}
+
+fn outcome_from_error(error: &BoundaryError) -> BackgroundOutcome {
+    if error.is_code(error_codes::CANCELLED) {
+        BackgroundOutcome::Cancelled
+    } else {
+        BackgroundOutcome::Failed {
+            code: error.code().to_owned(),
+        }
+    }
 }
 #[derive(Clone)]
 struct JobCancel(watch::Sender<bool>);
@@ -387,16 +407,7 @@ impl BackgroundJobs {
                 "permit belongs to another dispatcher",
             ));
         }
-        if !matches!(
-            call.name.as_str(),
-            "read_file"
-                | "list_dir"
-                | "find_files"
-                | "search_text"
-                | "write_file"
-                | "apply_patch"
-                | "exec"
-        ) {
+        if !crate::registry::LOCAL_TOOL_NAMES.contains(&call.name.as_str()) {
             return Err(failure("unknown_tool", "unsupported background tool"));
         }
         let runtime = tokio::runtime::Handle::try_current()
@@ -440,7 +451,7 @@ impl BackgroundJobs {
             ));
         }
         let lease = ModeLease(modes);
-        let mutating = matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec");
+        let mutating = crate::registry::is_local_mutation_tool(&call.name);
         state.jobs.insert(
             id.clone(),
             Job {
@@ -469,7 +480,14 @@ impl BackgroundJobs {
         let worker_id = id.clone();
         let tool_timeout = self.tool_timeout;
         let job_id = id.clone();
-        let span = tracing::info_span!(target: "saya::background", "background", session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str(), job_id = job_id.as_str());
+        let span = tracing::info_span!(
+            target: "saya::background",
+            "background",
+            session_id = %context.run.session_id.0,
+            run_id = %context.run.id.0,
+            call_id = call.call_id.as_str(),
+            job_id = job_id.as_str(),
+        );
         let worker_span = span.clone();
         let task = runtime.spawn(
             async move {
@@ -500,7 +518,7 @@ impl BackgroundJobs {
                     }
                     Err(_) => {
                         signal.job.cancel();
-                        Err(failure("background_error", "job lock poisoned"))
+                        Err(failure(error_codes::BACKGROUND_ERROR, "job lock poisoned"))
                     }
                 };
                 // Keep polling the same future. In particular, a write which
@@ -510,12 +528,12 @@ impl BackgroundJobs {
                     return observed;
                 }
                 match observed {
-                    Err(error) if error.0.code != "cancelled" => Err(error),
-                    observed => {
-                        let mut error = failure("tool_timeout", "background tool timed out");
-                        error.2 = observed.ok().map(Box::new);
-                        Err(error)
-                    }
+                    Err(error) if !error.is_code(error_codes::CANCELLED) => Err(error),
+                    observed => Err(failure(
+                        error_codes::TOOL_TIMEOUT,
+                        "background tool timed out",
+                    )
+                    .with_observed_result(observed.ok())),
                 }
             }
             .instrument(worker_span)
@@ -525,13 +543,16 @@ impl BackgroundJobs {
             async move {
                 let outcome = task.await.unwrap_or_else(|_| {
                     Err(failure(
-                        "background_error",
+                        error_codes::BACKGROUND_ERROR,
                         "background task failed unexpectedly",
                     ))
                 });
                 if let Ok(mut state) = shared.state.lock() {
                     if let Err(error) = &outcome
-                        && !matches!(error.0.code.as_str(), "cancelled" | "tool_timeout")
+                        && !matches!(
+                            error.code(),
+                            error_codes::CANCELLED | error_codes::TOOL_TIMEOUT
+                        )
                         && is_fatal_background_error(error)
                     {
                         state.closed = true;
@@ -549,32 +570,11 @@ impl BackgroundJobs {
                     if let Some(job) = state.jobs.get_mut(&job_id) {
                         let (status, outcome) = match outcome {
                             Ok(value) => {
-                                let outcome = if value.ok {
-                                    BackgroundOutcome::Succeeded
-                                } else if value
-                                    .error
-                                    .as_ref()
-                                    .is_some_and(|e| e.code == "cancelled")
-                                {
-                                    BackgroundOutcome::Cancelled
-                                } else {
-                                    BackgroundOutcome::Failed {
-                                        code: value.error.as_ref().map_or_else(
-                                            || "tool_error".into(),
-                                            |e| e.code.clone(),
-                                        ),
-                                    }
-                                };
+                                let outcome = outcome_from_result(&value);
                                 (JobStatus::Finished(value), outcome)
                             }
                             Err(error) => {
-                                let outcome = if error.0.code == "cancelled" {
-                                    BackgroundOutcome::Cancelled
-                                } else {
-                                    BackgroundOutcome::Failed {
-                                        code: error.0.code.clone(),
-                                    }
-                                };
+                                let outcome = outcome_from_error(&error);
                                 (JobStatus::Failed(error), outcome)
                             }
                         };
@@ -684,7 +684,14 @@ impl BackgroundJobs {
         });
         let timeout_cancel = cancel;
         let job_signal = signal.clone();
-        let span = tracing::info_span!(target: "saya::background", "background", session_id = %context.run.session_id.0, run_id = %context.run.id.0, tool = tool, job_id = job_id.as_str());
+        let span = tracing::info_span!(
+            target: "saya::background",
+            "background",
+            session_id = %context.run.session_id.0,
+            run_id = %context.run.id.0,
+            tool = tool,
+            job_id = job_id.as_str(),
+        );
         let worker_span = span.clone();
         let task = runtime.spawn(
             async move {
@@ -710,7 +717,7 @@ impl BackgroundJobs {
                     }
                     Err(_) => {
                         timeout_cancel.cancel();
-                        Err(failure("background_error", "job lock poisoned"))
+                        Err(failure(error_codes::BACKGROUND_ERROR, "job lock poisoned"))
                     }
                 };
                 let observed = operation.await;
@@ -718,9 +725,10 @@ impl BackgroundJobs {
                     return observed;
                 }
                 match observed {
-                    Err(error) if error.0.code != "cancelled" => Err(error),
+                    Err(error) if !error.is_code(error_codes::CANCELLED) => Err(error),
                     observed => {
-                        let mut error = failure("tool_timeout", "background tool timed out");
+                        let mut error =
+                            failure(error_codes::TOOL_TIMEOUT, "background tool timed out");
                         if let Ok((result, pins)) = observed {
                             // The operation may have completed after the
                             // deadline. Keep every produced artifact lease in
@@ -733,7 +741,7 @@ impl BackgroundJobs {
                             {
                                 job._pins.extend(pins);
                             }
-                            error.2 = Some(Box::new(result));
+                            error.set_observed_result(Some(result));
                         }
                         Err(error)
                     }
@@ -748,14 +756,17 @@ impl BackgroundJobs {
                     redactor.as_ref(),
                     task.await.unwrap_or_else(|_| {
                         Err(failure(
-                            "background_error",
+                            error_codes::BACKGROUND_ERROR,
                             "background task failed unexpectedly",
                         ))
                     }),
                 );
                 if let Ok(mut state) = shared.state.lock() {
                     if let Err(error) = &outcome
-                        && !matches!(error.0.code.as_str(), "cancelled" | "tool_timeout")
+                        && !matches!(
+                            error.code(),
+                            error_codes::CANCELLED | error_codes::TOOL_TIMEOUT
+                        )
                         && state.jobs.get(&job_id).is_none_or(|job| job.fatal_on_error)
                     {
                         state.closed = true;
@@ -773,32 +784,11 @@ impl BackgroundJobs {
                     if let Some(job) = state.jobs.get_mut(&job_id) {
                         let (status, outcome, pins) = match outcome {
                             Ok((value, pins)) => {
-                                let outcome = if value.ok {
-                                    BackgroundOutcome::Succeeded
-                                } else if value
-                                    .error
-                                    .as_ref()
-                                    .is_some_and(|e| e.code == "cancelled")
-                                {
-                                    BackgroundOutcome::Cancelled
-                                } else {
-                                    BackgroundOutcome::Failed {
-                                        code: value.error.as_ref().map_or_else(
-                                            || "tool_error".into(),
-                                            |e| e.code.clone(),
-                                        ),
-                                    }
-                                };
+                                let outcome = outcome_from_result(&value);
                                 (JobStatus::Finished(value), outcome, pins)
                             }
                             Err(error) => {
-                                let outcome = if error.0.code == "cancelled" {
-                                    BackgroundOutcome::Cancelled
-                                } else {
-                                    BackgroundOutcome::Failed {
-                                        code: error.0.code.clone(),
-                                    }
-                                };
+                                let outcome = outcome_from_error(&error);
                                 (JobStatus::Failed(error), outcome, Vec::new())
                             }
                         };
@@ -1109,16 +1099,15 @@ impl BackgroundTools {
                 }
                 Some(JobStatus::Failed(error)) => {
                     let media_refs = error
-                        .2
-                        .as_deref()
+                        .observed_result()
                         .map(|result| valid_media_refs(&result.media_refs))
                         .unwrap_or_default();
                     tool_result_with_media(
                         serde_json::json!({
-                            "status":"failed",
-                            "error":error.0,
+                            "status": "failed",
+                            "error": error.info(),
                             // Host-only artifact references never reach the model.
-                            "observed_result": error.2.as_deref().map(ToolResult::model_view),
+                            "observed_result": error.observed_result().map(ToolResult::model_view),
                         }),
                         media_refs,
                     )
@@ -1199,12 +1188,22 @@ impl crate::boundary::Tool for BackgroundTool {
             BackgroundToolKind::Start => (
                 "background_start",
                 "Start one authorized local tool in the current run; return a job ID without waiting for completion.",
-                serde_json::json!({"tool":{"type":"string","enum":["read_file","list_dir","find_files","search_text","write_file","apply_patch","exec"]},"arguments":{"type":"object"}}),
+                serde_json::json!({
+                    "tool": {
+                        "type": "string",
+                        "enum": crate::registry::LOCAL_TOOL_NAMES,
+                    },
+                    "arguments": {"type": "object"}
+                }),
                 serde_json::json!(["tool", "arguments"]),
             ),
             BackgroundToolKind::Status => (
                 "background_status",
-                "Get a background job's current status without waiting. Continue independent work first, then inspect the completed inner result before using or delivering it; a successful status query does not prove the job succeeded.",
+                concat!(
+                    "Get a background job's current status without waiting. Continue independent work first, ",
+                    "then inspect the completed inner result before using or delivering it; ",
+                    "a successful status query does not prove the job succeeded.",
+                ),
                 serde_json::json!({"job_id":{"type":"string"}}),
                 serde_json::json!(["job_id"]),
             ),

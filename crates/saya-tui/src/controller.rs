@@ -257,7 +257,7 @@ impl App {
     fn report_error(&mut self, error: Box<dyn std::error::Error>) -> Result<()> {
         if error
             .downcast_ref::<BoundaryError>()
-            .is_some_and(|error| error.0.code.starts_with("storage_") || error.2.is_some())
+            .is_some_and(|error| error.is_storage_error() || error.has_observed_result())
         {
             return Err(error);
         }
@@ -711,7 +711,7 @@ impl App {
                     Err(error) => {
                         self.state.status = common::FAILED.into();
                         self.notice(&error.to_string());
-                        if error.0.code.starts_with("storage_") || error.2.is_some() {
+                        if error.is_storage_error() || error.has_observed_result() {
                             failure = Some(Box::new(error) as Box<dyn std::error::Error>);
                         }
                     }

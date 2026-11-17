@@ -562,7 +562,7 @@ impl App {
                 self.notice(&text::exported(&self.safe(&receipt.to_string())))
             }
             Err(error) => {
-                let message = self.safe(&format!("{} — {}", error.0.code, error.0.message));
+                let message = self.safe(&format!("{} — {}", error.code(), error.message()));
                 let operation = self
                     .memory_last_operation
                     .as_ref()

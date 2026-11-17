@@ -22,12 +22,12 @@ use crate::{
     contract::{
         ApprovalRequest, ApprovalSource, BoundaryError, ErrorInfo, EventPayload, HistoryItem,
         ModelPurpose, Persistence, Run, RunResult, RunStatus, SCHEMA_VERSION, Session, ToolCall,
-        ToolResult, WorkMode,
+        ToolResult, WorkMode, error_codes,
     },
-    dispatch::{DispatchReview, ToolDispatcher},
+    dispatch::{BufferedReadStore, DispatchReview, ToolDispatcher},
     input::{InputHandler, InputRequest},
     metrics::{MeasuredModel, Metrics},
-    mode::ModeController,
+    mode::{ModeController, ModeSnapshot, SharedModeLease},
     permissions::Policy,
     project_context::ProjectContext,
     review::{ReviewConfig, SharedBudget},
@@ -49,39 +49,27 @@ use tokio::time::{Instant, sleep};
 const MAX_STEER_MESSAGES: usize = 16;
 const MAX_STEER_BYTES: usize = 256 * 1024;
 
-fn error(code: &str, message: &str) -> BoundaryError {
-    BoundaryError(
-        ErrorInfo {
-            code: code.into(),
-            message: message.into(),
-        },
-        None,
-        None,
-    )
+pub(crate) fn error(code: &str, message: &str) -> BoundaryError {
+    BoundaryError::new(code, message)
 }
-fn failed(code: &str, message: &str) -> ToolResult {
-    ToolResult {
-        ok: false,
-        data: None,
-        error: Some(ErrorInfo {
-            code: code.into(),
-            message: message.into(),
-        }),
-        truncated: false,
-        media_refs: Vec::new(),
-    }
+pub(super) fn failed(code: &str, message: &str) -> ToolResult {
+    ToolResult::failure(code, message)
 }
+
 fn invalid_tool_request(error: &BoundaryError) -> bool {
     matches!(
-        error.0.code.as_str(),
-        "unknown_tool"
-            | "durability_required"
-            | "invalid_args"
-            | "invalid_path"
-            | "path_denied"
-            | "stale_approval"
-            | "executable_not_found"
+        error.code(),
+        error_codes::UNKNOWN_TOOL
+            | error_codes::DURABILITY_REQUIRED
+            | error_codes::INVALID_ARGS
+            | error_codes::INVALID_PATH
+            | error_codes::PATH_DENIED
+            | error_codes::STALE_APPROVAL
+            | error_codes::EXECUTABLE_NOT_FOUND
     )
+}
+fn is_parallel_read_tool_name(name: &str) -> bool {
+    crate::registry::is_local_read_tool(name) || matches!(name, "output_read" | "output_search")
 }
 fn context_target(call: &ToolCall) -> Option<PathBuf> {
     let value: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
@@ -90,17 +78,20 @@ fn context_target(call: &ToolCall) -> Option<PathBuf> {
     } else {
         (call.name.as_str(), &value)
     };
-    match tool {
-        "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch" => {
-            args.get("path")?.as_str().map(PathBuf::from)
-        }
-        "exec" => Some(
+    if crate::registry::is_local_file_tool(tool) {
+        return args
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from);
+    }
+    if tool == "exec" {
+        return Some(
             args.get("cwd")
                 .and_then(serde_json::Value::as_str)
                 .map_or_else(|| PathBuf::from("."), PathBuf::from),
-        ),
-        _ => None,
+        );
     }
+    None
 }
 struct RuntimeStore {
     inner: Arc<dyn Store>,
@@ -154,7 +145,7 @@ impl Store for RuntimeStore {
     }
 }
 fn normalize_storage_error(mut error: BoundaryError) -> BoundaryError {
-    error.0.code = "storage_error".into();
+    error.set_code(error_codes::STORAGE_ERROR);
     error
 }
 
@@ -180,7 +171,17 @@ impl Cancellation for CallCancel {
     fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let mut receiver = self.signal.subscribe();
-            tokio::select! { () = self.root.cancelled() => (), () = async { while !*receiver.borrow_and_update() { if receiver.changed().await.is_err() { break; } } } => () }
+            let signalled = async {
+                while !*receiver.borrow_and_update() {
+                    if receiver.changed().await.is_err() {
+                        break;
+                    }
+                }
+            };
+            tokio::select! {
+                () = self.root.cancelled() => (),
+                () = signalled => (),
+            }
         })
     }
 }
@@ -290,14 +291,17 @@ struct SteerQueue(Arc<Mutex<SteerState>>);
 impl SteerQueue {
     fn push(&self, text: String) -> Result<(), BoundaryError> {
         if text.trim().is_empty() {
-            return Err(error("invalid_steer", "steering message is empty"));
+            return Err(BoundaryError::new(
+                "invalid_steer",
+                "steering message is empty",
+            ));
         }
         let mut state = self
             .0
             .lock()
-            .map_err(|_| error("steer_state", "steering queue lock failed"))?;
+            .map_err(|_| BoundaryError::new("steer_state", "steering queue lock failed"))?;
         if state.closed {
-            return Err(error(
+            return Err(BoundaryError::new(
                 "steer_closed",
                 "run no longer accepts steering messages",
             ));
@@ -308,7 +312,7 @@ impl SteerQueue {
                 .checked_add(text.len())
                 .is_none_or(|bytes| bytes > MAX_STEER_BYTES)
         {
-            return Err(error(
+            return Err(BoundaryError::new(
                 "steer_limit",
                 "queued steering messages exceed their limit",
             ));
@@ -330,7 +334,7 @@ impl SteerQueue {
         let mut state = self
             .0
             .lock()
-            .map_err(|_| error("steer_state", "steering queue lock failed"))?;
+            .map_err(|_| BoundaryError::new("steer_state", "steering queue lock failed"))?;
         if state.closed {
             return Ok(Vec::new());
         }
@@ -374,9 +378,12 @@ fn project_context_is_current(
     state: &Mutex<ProjectState>,
     call: &ToolCall,
 ) -> Result<bool, BoundaryError> {
-    let state = state
-        .lock()
-        .map_err(|_| error("project_context_error", "project context lock failed"))?;
+    let state = state.lock().map_err(|_| {
+        BoundaryError::new(
+            error_codes::PROJECT_CONTEXT_ERROR,
+            "project context lock failed",
+        )
+    })?;
     let target = context_target(call).or_else(|| state.target.clone());
     let snapshot = state.loader.snapshot(target.as_deref())?;
     let Some((provided_target, provided)) = &state.provided else {
@@ -434,10 +441,9 @@ impl RuntimeHandle {
             .is_some_and(|state| state.requested.load(Ordering::Acquire))
     }
     pub fn request_compaction(&self) -> Result<(), BoundaryError> {
-        let state = self
-            .context_state
-            .as_ref()
-            .ok_or_else(|| error("context_config", "Context budgeting is unavailable"))?;
+        let state = self.context_state.as_ref().ok_or_else(|| {
+            BoundaryError::new("context_config", "Context budgeting is unavailable")
+        })?;
         state.requested.store(true, Ordering::Release);
         Ok(())
     }
@@ -520,7 +526,10 @@ impl AgentRuntime {
             || limits.tool_timeout.is_zero()
             || limits.write_max_bytes == 0
         {
-            return Err(error("invalid_config", "runtime limits must be positive"));
+            return Err(BoundaryError::new(
+                error_codes::INVALID_CONFIG,
+                "runtime limits must be positive",
+            ));
         }
         let metrics = Arc::new(Metrics::default());
         let secret_source = secrets::source();
@@ -659,7 +668,7 @@ impl AgentRuntime {
         )?;
         self.dispatcher.set_secret_registry(registry.clone())?;
         *self.secret_source.write().map_err(|_| {
-            error(
+            BoundaryError::new(
                 "sensitive_data",
                 "Dynamic secret registry could not be attached",
             )
@@ -771,8 +780,8 @@ impl AgentRuntime {
         provider: Arc<dyn crate::browser::BrowserProvider>,
     ) -> Result<Self, BoundaryError> {
         if self.dispatcher.is_read_only() {
-            return Err(error(
-                "invalid_config",
+            return Err(BoundaryError::new(
+                error_codes::INVALID_CONFIG,
                 "Browser tools are unavailable in a read-only runtime",
             ));
         }
@@ -780,7 +789,7 @@ impl AgentRuntime {
             .secret_source
             .read()
             .map_err(|_| {
-                error(
+                BoundaryError::new(
                     "sensitive_data",
                     "Dynamic secret registry could not be read for browser credentials",
                 )
@@ -789,8 +798,8 @@ impl AgentRuntime {
         let registry = match registry {
             Some(registry) => registry,
             None if settings.credentials.enabled => {
-                return Err(error(
-                    "invalid_config",
+                return Err(BoundaryError::new(
+                    error_codes::INVALID_CONFIG,
                     "Browser credential slots require the Run secret registry",
                 ));
             }
@@ -913,7 +922,7 @@ impl AgentRuntime {
     }
     fn check(&self) -> Result<(), BoundaryError> {
         if self.cancel.is_cancelled() {
-            return Err(error("cancelled", "run cancelled"));
+            return Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"));
         }
         if let Some(error) = self.jobs.fatal_failure()? {
             return Err(error);
@@ -922,10 +931,14 @@ impl AgentRuntime {
             return Err(error);
         }
         if self.budget.remaining()?.is_zero() {
-            return Err(error("limit_reached", "active time budget exceeded"));
+            return Err(BoundaryError::new(
+                error_codes::LIMIT_REACHED,
+                "active time budget exceeded",
+            ));
         }
         Ok(())
     }
+
     async fn bounded<T>(
         &self,
         operation: impl Future<Output = Result<T, BoundaryError>>,
@@ -933,233 +946,332 @@ impl AgentRuntime {
         code: &'static str,
     ) -> Result<T, BoundaryError> {
         self.check()?;
-        tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), () = sleep(self.budget.remaining()?) => Err(error("limit_reached", "active time budget exceeded")), () = sleep(timeout) => Err(error(code, "operation timed out")), result = operation => result }
+        let remaining = self.budget.remaining()?;
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => {
+                Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"))
+            }
+            () = sleep(remaining) => {
+                Err(BoundaryError::new(error_codes::LIMIT_REACHED, "active time budget exceeded"))
+            }
+            () = sleep(timeout) => Err(BoundaryError::new(code, "operation timed out")),
+            result = operation => result,
+        }
     }
+
+    async fn acquire_shared_mode(
+        &self,
+        session: &mut Session,
+    ) -> Result<(ModeSnapshot, SharedModeLease<'_>), BoundaryError> {
+        loop {
+            let notified = self.modes.notified();
+            let snap = self.sync_mode(session).await?;
+            self.check()?;
+            if let Some(lease) = self.modes.lock_shared(snap.revision)? {
+                return Ok((snap, lease));
+            }
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => {
+                    return Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"));
+                }
+                () = sleep(self.budget.remaining()?) => {
+                    return Err(BoundaryError::new(
+                        error_codes::LIMIT_REACHED,
+                        "active time budget exceeded",
+                    ));
+                }
+                () = notified => {}
+            }
+        }
+    }
+
+    async fn wait_for_mode_ready(
+        &self,
+        session: &mut Session,
+    ) -> Result<ModeSnapshot, BoundaryError> {
+        loop {
+            let notified = self.modes.notified();
+            let snap = self.sync_mode(session).await?;
+            self.check()?;
+            if snap.pending.is_none() {
+                return Ok(snap);
+            }
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => {
+                    return Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"));
+                }
+                () = sleep(self.budget.remaining()?) => {
+                    return Err(BoundaryError::new(
+                        error_codes::LIMIT_REACHED,
+                        "active time budget exceeded",
+                    ));
+                }
+                () = notified => {}
+            }
+        }
+    }
+
+    async fn build_model_request(
+        &self,
+        session: &mut Session,
+        mode: WorkMode,
+    ) -> Result<
+        Option<(
+            ModelRequest,
+            Option<crate::project_context::ContextRecord>,
+            Option<managed_memory::MemoryFrame>,
+            Option<crate::skills::ActiveSkillSet>,
+        )>,
+        BoundaryError,
+    > {
+        let environment_facts = self.services.facts(mode).await?;
+        let memory_frame = self.memory_frame(session).await?;
+        let skill_frame = self.skill_frame(session).await?;
+        let tools = self.definitions(mode)?;
+        let instructions = crate::prompt::execution_with_memory(
+            mode,
+            self.run.permissions,
+            &tools,
+            self.managed_memory.is_some(),
+        )?
+        .instructions;
+        let mut run = self.run.clone();
+        run.work_mode = mode;
+        let dynamic_instructions = Some(crate::prompt::system_context(
+            session,
+            &run,
+            self.project_context.is_some(),
+            self.personal_context.preferences.is_some(),
+            self.personal_context.memory.is_some(),
+        )?);
+        let request_id = uuid::Uuid::now_v7().to_string();
+        let mut record = None;
+        let mut history = vec![crate::prompt::runtime_context_at(
+            session,
+            &run,
+            self.started_at,
+        )?];
+        if let Some(facts) = environment_facts {
+            history.push(HistoryItem::UserText(facts));
+        }
+        if let Some(state) = &self.project_context {
+            let mut state = state.lock().map_err(|_| {
+                BoundaryError::new(
+                    error_codes::PROJECT_CONTEXT_ERROR,
+                    "project context lock failed",
+                )
+            })?;
+            let snapshot = state.loader.snapshot(state.target.as_deref())?;
+            let context_record = snapshot.record(request_id.clone())?;
+            state.provided = Some((state.target.clone(), context_record.clone()));
+            record = Some(context_record);
+            let mut context = serde_json::json!({"saya_project_context_v1": snapshot});
+            crate::redaction::redact(&mut context, &self.review.known_secrets)?;
+            history.push(HistoryItem::UserText(context.to_string()));
+        }
+        if self.personal_context.preferences.is_some() || self.personal_context.memory.is_some() {
+            history.push(HistoryItem::UserText(
+                serde_json::json!({
+                    "saya_personal_context_v1": {
+                        "preferences": self.personal_context.preferences,
+                        "memory": self.personal_context.memory,
+                    }
+                })
+                .to_string(),
+            ));
+        }
+        if let Some(text) = memory_frame.as_ref().and_then(|frame| frame.text.as_ref()) {
+            history.push(HistoryItem::UserText(text.clone()));
+        }
+        if let Some(skills) = &skill_frame {
+            history.push(HistoryItem::UserText(skills.context_data().to_string()));
+        }
+        history.extend(session.history.iter().cloned());
+        let request = ModelRequest {
+            request_id,
+            purpose: ModelPurpose::Execution,
+            profile: session.profile.clone(),
+            instructions,
+            dynamic_instructions,
+            max_output_tokens: None,
+            history,
+            media: Default::default(),
+            tools,
+        };
+        let request = self
+            .context_request(
+                session,
+                request,
+                memory_frame.as_ref(),
+                skill_frame.as_ref(),
+            )
+            .await?;
+        if self
+            .context_state
+            .as_ref()
+            .is_some_and(|state| state.rebuild.swap(false, Ordering::AcqRel))
+        {
+            return Ok(None);
+        }
+        Ok(Some((request, record, memory_frame, skill_frame)))
+    }
+
+    async fn stream_model_attempt(
+        &self,
+        request: &ModelRequest,
+        partial: &mut String,
+        received: &mut bool,
+    ) -> Result<Vec<HistoryItem>, BoundaryError> {
+        let start = Instant::now();
+        self.budget.consume()?;
+        let connect_timeout = if self.limits.model_total.is_zero() {
+            self.limits.model_connect
+        } else {
+            self.limits.model_connect.min(self.limits.model_total)
+        };
+        let mut stream = self
+            .bounded(
+                self.model.start(request, self.cancel.as_ref()),
+                connect_timeout,
+                error_codes::MODEL_CONNECT_TIMEOUT,
+            )
+            .await?;
+        loop {
+            let left = if self.limits.model_total.is_zero() {
+                self.limits.model_idle
+            } else {
+                self.limits
+                    .model_idle
+                    .min(self.limits.model_total.saturating_sub(start.elapsed()))
+            };
+            match self
+                .bounded(
+                    stream.next(self.cancel.as_ref()),
+                    self.limits.model_idle.min(left),
+                    error_codes::MODEL_TIMEOUT,
+                )
+                .await?
+            {
+                Some(ModelUpdate::TextDelta(text)) => {
+                    *received = true;
+                    partial.push_str(&text);
+                }
+                Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {
+                    *received = true;
+                }
+                Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
+                None => {
+                    return Err(BoundaryError::new(
+                        error_codes::INCOMPLETE_MODEL_RESPONSE,
+                        "stream ended before completion",
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn handle_model_failure(
+        &self,
+        session: &mut Session,
+        attempt: u32,
+        received: bool,
+        partial: String,
+        err: BoundaryError,
+    ) -> Result<bool, BoundaryError> {
+        if received {
+            let item =
+                HistoryItem::AssistantPartial(secrets::redact(partial, &self.secret_source)?);
+            let mut changes = vec![StoreChange::History {
+                session_id: session.id,
+                item: item.clone(),
+            }];
+            if let Some(record) =
+                self.memory_response_change(session, std::slice::from_ref(&item))?
+            {
+                changes.push(record);
+            }
+            self.store.commit(&changes).await?;
+            session.history.push(item);
+        }
+        if !received && attempt < 2 && err.is_transient_model_error() {
+            let jitter_max = self
+                .limits
+                .retry_jitter_max
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64;
+            let jitter = if jitter_max == 0 {
+                Duration::ZERO
+            } else {
+                Duration::from_millis(
+                    (uuid::Uuid::now_v7().as_u128() as u64) % jitter_max.saturating_add(1),
+                )
+            };
+            let delay = (Duration::from_secs(1u64 << attempt) + jitter).max(
+                err.retry_after()
+                    .unwrap_or_default()
+                    .min(Duration::from_secs(30)),
+            );
+            self.bounded(
+                async {
+                    sleep(delay).await;
+                    Ok(())
+                },
+                self.limits.active_time,
+                error_codes::RETRY_TIMEOUT,
+            )
+            .await?;
+            return Ok(true);
+        }
+        Err(err)
+    }
+
     async fn model_turn(&self, session: &mut Session) -> Result<Vec<HistoryItem>, BoundaryError> {
         let mut attempt = 0u32;
         loop {
             self.check()?;
             self.services.refresh(self).await?;
-            let snap = loop {
-                let snap = self.sync_mode(session).await?;
-                self.check()?;
-                if self.modes.begin_shared(snap.revision)? {
-                    break snap;
-                }
-                sleep(Duration::from_millis(10)).await;
-            };
-            let environment_facts = match self.services.facts(snap.current).await {
-                Ok(facts) => facts,
-                Err(error) => {
-                    self.modes.finish()?;
-                    return Err(error);
-                }
-            };
-            let memory_frame = match self.memory_frame(session).await {
-                Ok(frame) => frame,
-                Err(error) => {
-                    self.modes.finish()?;
-                    return Err(error);
-                }
-            };
-            let skill_frame = match self.skill_frame(session).await {
-                Ok(frame) => frame,
-                Err(error) => {
-                    self.modes.finish()?;
-                    return Err(error);
-                }
-            };
-            let request = (|| {
-                let tools = self.definitions(snap.current)?;
-                let instructions = crate::prompt::execution_with_memory(
-                    snap.current,
-                    self.run.permissions,
-                    &tools,
-                    self.managed_memory.is_some(),
-                )?
-                .instructions;
-                let mut run = self.run.clone();
-                run.work_mode = snap.current;
-                let dynamic_instructions = Some(crate::prompt::system_context(
-                    session,
-                    &run,
-                    self.project_context.is_some(),
-                    self.personal_context.preferences.is_some(),
-                    self.personal_context.memory.is_some(),
-                )?);
-                let request_id = uuid::Uuid::now_v7().to_string();
-                let mut record = None;
-                let mut history = vec![crate::prompt::runtime_context_at(
-                    session,
-                    &run,
-                    self.started_at,
-                )?];
-                if let Some(facts) = environment_facts {
-                    history.push(HistoryItem::UserText(facts));
-                }
-                if let Some(state) = &self.project_context {
-                    let mut state = state.lock().map_err(|_| {
-                        error("project_context_error", "project context lock failed")
-                    })?;
-                    let snapshot = state.loader.snapshot(state.target.as_deref())?;
-                    let context_record = snapshot.record(request_id.clone())?;
-                    state.provided = Some((state.target.clone(), context_record.clone()));
-                    record = Some(context_record);
-                    let mut context = serde_json::json!({"saya_project_context_v1": snapshot});
-                    crate::redaction::redact(&mut context, &self.review.known_secrets)?;
-                    history.push(HistoryItem::UserText(context.to_string()));
-                }
-                if self.personal_context.preferences.is_some()
-                    || self.personal_context.memory.is_some()
-                {
-                    history.push(HistoryItem::UserText(serde_json::json!({"saya_personal_context_v1": {"preferences": self.personal_context.preferences, "memory": self.personal_context.memory}}).to_string()));
-                }
-                if let Some(text) = memory_frame.as_ref().and_then(|frame| frame.text.as_ref()) {
-                    history.push(HistoryItem::UserText(text.clone()));
-                }
-                if let Some(skills) = &skill_frame {
-                    history.push(HistoryItem::UserText(skills.context_data().to_string()));
-                }
-                history.extend(session.history.iter().cloned());
-                let request = ModelRequest {
-                    request_id,
-                    purpose: ModelPurpose::Execution,
-                    profile: session.profile.clone(),
-                    instructions,
-                    dynamic_instructions,
-                    max_output_tokens: None,
-                    history,
-                    media: Default::default(),
-                    tools,
-                };
-                Ok::<_, BoundaryError>((request, record))
-            })();
-            let (request, record) = match request {
-                Ok(v) => v,
-                Err(e) => {
-                    self.modes.finish()?;
-                    return Err(e);
-                }
-            };
-            let request = match self
-                .context_request(
-                    session,
-                    request,
-                    memory_frame.as_ref(),
-                    skill_frame.as_ref(),
-                )
-                .await
-            {
-                Ok(request) => request,
-                Err(error) => {
-                    self.modes.finish()?;
-                    return Err(error);
-                }
-            };
-            if self
-                .context_state
-                .as_ref()
-                .is_some_and(|state| state.rebuild.swap(false, Ordering::AcqRel))
-            {
-                self.modes.finish()?;
+            let (snap, mode_lease) = self.acquire_shared_mode(session).await?;
+            let Some((request, record, memory_frame, skill_frame)) =
+                self.build_model_request(session, snap.current).await?
+            else {
                 continue;
-            }
+            };
             if self
                 .context_state
                 .as_ref()
                 .is_some_and(|state| state.manual_only.load(Ordering::Acquire))
             {
-                self.modes.finish()?;
+                mode_lease.complete()?;
                 return Ok(Vec::new());
             }
-            if let Err(error) = secrets::model_request(&request, &self.secret_source) {
-                self.modes.finish()?;
-                return Err(error);
-            }
-            if let Some(record) = record
-                && let Err(e) = self
-                    .store
+            secrets::model_request(&request, &self.secret_source)?;
+            if let Some(record) = record {
+                self.store
                     .commit(&[StoreChange::ProjectContext {
                         run_id: self.run.id,
                         record,
                     }])
-                    .await
-            {
-                self.modes.finish()?;
-                return Err(e);
+                    .await?;
             }
-            if let Err(error) = self.bind_memory_request(&request.request_id, memory_frame.as_ref())
-            {
-                self.modes.finish()?;
-                return Err(error);
-            }
+            self.bind_memory_request(&request.request_id, memory_frame.as_ref())?;
             if let (Some(state), Some(frame)) = (&self.skill_state, &skill_frame) {
-                let current = match state.context_version() {
-                    Ok(current) => current,
-                    Err(error) => {
-                        self.modes.finish()?;
-                        return Err(error);
-                    }
-                };
+                let current = state.context_version()?;
                 if current != frame.version_sha256 {
-                    self.modes.finish()?;
-                    return Err(error(
-                        "skill_context_changed",
+                    return Err(BoundaryError::new(
+                        error_codes::SKILL_CONTEXT_CHANGED,
                         "Active Skill context changed before model dispatch",
                     ));
                 }
             }
-            let start = Instant::now();
             let mut partial = String::new();
             let mut received = false;
-            let response: Result<Vec<HistoryItem>, BoundaryError> = async {
-                self.budget.consume()?;
-                let mut stream = self
-                    .bounded(
-                        self.model.start(&request, self.cancel.as_ref()),
-                        if self.limits.model_total.is_zero() {
-                            self.limits.model_connect
-                        } else {
-                            self.limits.model_connect.min(self.limits.model_total)
-                        },
-                        "model_connect_timeout",
-                    )
-                    .await?;
-                loop {
-                    let left = if self.limits.model_total.is_zero() {
-                        self.limits.model_idle
-                    } else {
-                        self.limits
-                            .model_idle
-                            .min(self.limits.model_total.saturating_sub(start.elapsed()))
-                    };
-                    match self
-                        .bounded(
-                            stream.next(self.cancel.as_ref()),
-                            self.limits.model_idle.min(left),
-                            "model_timeout",
-                        )
-                        .await?
-                    {
-                        Some(ModelUpdate::TextDelta(text)) => {
-                            received = true;
-                            partial.push_str(&text);
-                        }
-                        Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {
-                            received = true
-                        }
-                        Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
-                        None => {
-                            return Err(error(
-                                "incomplete_model_response",
-                                "stream ended before completion",
-                            ));
-                        }
-                    }
-                }
-            }
-            .await;
-            self.modes.finish()?;
+            let response = self
+                .stream_model_attempt(&request, &mut partial, &mut received)
+                .await;
+            mode_lease.complete()?;
             match response {
                 Ok(items) => {
                     if !items.iter().any(|item| {
@@ -1168,80 +1280,37 @@ impl AgentRuntime {
                             HistoryItem::AssistantText(_) | HistoryItem::ToolCall(_)
                         )
                     }) {
-                        return Err(error(
-                            "invalid_model_response",
+                        return Err(BoundaryError::new(
+                            error_codes::INVALID_MODEL_RESPONSE,
                             "model completed without text or tool calls",
                         ));
                     }
                     return secrets::model_response(items, &self.secret_source);
                 }
                 Err(err) => {
-                    if received {
-                        let item = HistoryItem::AssistantPartial(secrets::redact(
-                            partial,
-                            &self.secret_source,
-                        )?);
-                        let mut changes = vec![StoreChange::History {
-                            session_id: session.id,
-                            item: item.clone(),
-                        }];
-                        if let Some(record) =
-                            self.memory_response_change(session, std::slice::from_ref(&item))?
-                        {
-                            changes.push(record);
-                        }
-                        self.store.commit(&changes).await?;
-                        session.history.push(item);
-                    }
-                    if !received
-                        && attempt < 2
-                        && matches!(
-                            err.0.code.as_str(),
-                            "transient_connection"
-                                | "rate_limited"
-                                | "server_error"
-                                | "model_timeout"
-                                | "model_connect_timeout"
-                        )
+                    if self
+                        .handle_model_failure(session, attempt, received, partial, err)
+                        .await?
                     {
-                        let jitter_max =
-                            self.limits
-                                .retry_jitter_max
-                                .as_millis()
-                                .min(u128::from(u64::MAX)) as u64;
-                        let jitter = if jitter_max == 0 {
-                            Duration::ZERO
-                        } else {
-                            Duration::from_millis(
-                                (uuid::Uuid::now_v7().as_u128() as u64)
-                                    % jitter_max.saturating_add(1),
-                            )
-                        };
-                        let delay = (Duration::from_secs(1u64 << attempt) + jitter)
-                            .max(err.1.unwrap_or_default().min(Duration::from_secs(30)));
-                        self.bounded(
-                            async {
-                                sleep(delay).await;
-                                Ok(())
-                            },
-                            self.limits.active_time,
-                            "retry_timeout",
-                        )
-                        .await?;
                         attempt += 1;
-                    } else {
-                        return Err(err);
                     }
                 }
             }
         }
     }
+
     async fn confirm(&self, request: &ApprovalRequest) -> Result<Option<bool>, BoundaryError> {
         let Some(handler) = &self.confirmation else {
             return Ok(None);
         };
         self.budget.pause()?;
-        let answer = tokio::select! { biased; ()=self.cancel.cancelled()=>Err(error("cancelled","run cancelled")), answer=handler.confirm(request,self.cancel.as_ref())=>answer };
+        let answer = tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => {
+                Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"))
+            }
+            answer = handler.confirm(request, self.cancel.as_ref()) => answer,
+        };
         self.budget.resume()?;
         answer
     }
@@ -1316,9 +1385,13 @@ impl AgentRuntime {
                 item: item.clone(),
             },
         ];
-        let state = match result.error.as_ref().map(|error| error.code.as_str()) {
-            Some("permission_denied" | "mode_denied") => Some(crate::contract::ToolState::Denied),
-            Some("needs_confirmation") => Some(crate::contract::ToolState::WaitingConfirmation),
+        let state = match result.error_code() {
+            Some(error_codes::PERMISSION_DENIED | error_codes::MODE_DENIED) => {
+                Some(crate::contract::ToolState::Denied)
+            }
+            Some(error_codes::NEEDS_CONFIRMATION) => {
+                Some(crate::contract::ToolState::WaitingConfirmation)
+            }
             _ => None,
         };
         if let Some(state) = state {
@@ -1329,12 +1402,13 @@ impl AgentRuntime {
             });
         }
         if let Err(mut error) = self.store.commit(&changes).await {
-            error.2 = Some(Box::new(result));
+            error.set_observed_result(Some(result));
             return Err(error);
         }
         session.history.push(item);
         Ok(result)
     }
+
     async fn close_calls(
         &self,
         session: &mut Session,
@@ -1344,26 +1418,30 @@ impl AgentRuntime {
         let mut changes = Vec::new();
         let mut items = Vec::new();
         for (index, call) in calls.iter().enumerate() {
-            if session.history.iter().any(|item| matches!(item, HistoryItem::ToolResult { call_id, .. } if call_id == &call.call_id)) { continue; }
+            if session.history.iter().any(|item| {
+                matches!(item, HistoryItem::ToolResult { call_id, .. } if call_id == &call.call_id)
+            }) {
+                continue;
+            }
             let result = match (index == 0, first_progress) {
-                (true, CallProgress::Dispatched) => failed(
-                    "outcome_unknown",
+                (true, CallProgress::Dispatched) => ToolResult::failure(
+                    error_codes::OUTCOME_UNKNOWN,
                     "operation may have started; do not replay automatically",
                 ),
-                (true, CallProgress::BackgroundStart) => failed(
-                    "outcome_unknown",
+                (true, CallProgress::BackgroundStart) => ToolResult::failure(
+                    error_codes::OUTCOME_UNKNOWN,
                     "background submission was interrupted; do not replay automatically",
                 ),
-                (true, CallProgress::BackgroundWaitingApproval) => failed(
-                    "needs_confirmation",
+                (true, CallProgress::BackgroundWaitingApproval) => ToolResult::failure(
+                    error_codes::NEEDS_CONFIRMATION,
                     "background approval was interrupted; no authorization was restored",
                 ),
-                (true, CallProgress::WaitingInput) => failed(
-                    "input_interrupted",
+                (true, CallProgress::WaitingInput) => ToolResult::failure(
+                    error_codes::INPUT_INTERRUPTED,
                     "clarification ended before an answer was received",
                 ),
-                _ => failed(
-                    "not_executed",
+                _ => ToolResult::failure(
+                    error_codes::NOT_EXECUTED,
                     "run ended before this operation was dispatched",
                 ),
             };
@@ -1397,38 +1475,19 @@ impl AgentRuntime {
         }
         Ok(())
     }
-    async fn execute(
+
+    async fn check_pre_dispatch_hooks(
         &self,
         session: &mut Session,
         call: &ToolCall,
-        progress: &mut CallProgress,
-    ) -> Result<ToolResult, BoundaryError> {
-        self.check()?;
-        if let Some(state) = &self.project_context {
-            if let Some(target) = context_target(call) {
-                state
-                    .lock()
-                    .map_err(|_| error("project_context_error", "project context lock failed"))?
-                    .target = Some(target);
-            }
-            let changed = !project_context_is_current(state, call)?;
-            if changed {
-                return self.save_local(session, call, failed("project_context_changed", "applicable project context changed; review it before requesting this operation again")).await;
-            }
-        }
-        let snap = loop {
-            let snap = self.sync_mode(session).await?;
-            self.check()?;
-            if snap.pending.is_none() {
-                break snap;
-            }
-            sleep(Duration::from_millis(10)).await;
-        };
-        let context = self.context(session, snap.current);
+    ) -> Result<Option<ToolResult>, BoundaryError> {
         let mut arguments: serde_json::Value = serde_json::from_str(&call.arguments)
-            .unwrap_or_else(|_| serde_json::json!({"invalid_arguments":true}));
+            .unwrap_or_else(|_| serde_json::json!({"invalid_arguments": true}));
         if call.name.starts_with("memory_") {
-            arguments = serde_json::json!({"host_managed_data":true,"arguments_sha256":crate::memory_context::digest(call.arguments.as_bytes())});
+            arguments = serde_json::json!({
+                "host_managed_data": true,
+                "arguments_sha256": crate::memory_context::digest(call.arguments.as_bytes()),
+            });
         }
         let hooks = self
             .services
@@ -1441,147 +1500,371 @@ impl AgentRuntime {
                     crate::memory_context::digest(call.call_id.as_bytes())
                 ),
                 Some(call.call_id.clone()),
-                serde_json::json!({"tool":call.name,"arguments":arguments}),
+                serde_json::json!({"tool": call.name, "arguments": arguments}),
             )
             .await?;
         if hooks.cleanup_pending {
-            return Err(error(
-                "outcome_unknown",
+            return Err(BoundaryError::new(
+                error_codes::OUTCOME_UNKNOWN,
                 "A pre-dispatch hook requires cleanup reconciliation",
             ));
         }
         if hooks.blocked {
+            return Ok(Some(ToolResult::failure(
+                error_codes::HOOK_DENIED,
+                "A configured check hook blocked this operation",
+            )));
+        }
+        Ok(None)
+    }
+
+    async fn execute_background_control(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        kind: BackgroundToolKind,
+        progress: &mut CallProgress,
+    ) -> Result<ToolResult, BoundaryError> {
+        if matches!(kind, BackgroundToolKind::Start) {
+            self.store
+                .commit(&[StoreChange::ToolIntent {
+                    run_id: self.run.id,
+                    call: call.clone(),
+                }])
+                .await?;
+            *progress = CallProgress::BackgroundStart;
+        }
+        if matches!(kind, BackgroundToolKind::Cancel) {
+            *progress = CallProgress::Dispatched;
+        }
+        let outcome = self
+            .background
+            .tool(kind)
+            .execute(call, context, self.cancel.as_ref())
+            .await;
+        let result = match outcome {
+            Ok(result) => result,
+            Err(error) if invalid_tool_request(&error) => {
+                ToolResult::failure(error.code(), error.message())
+            }
+            Err(error) => return Err(error),
+        };
+        if result.has_error_code(error_codes::NEEDS_CONFIRMATION) {
+            if matches!(kind, BackgroundToolKind::Start) {
+                *progress = CallProgress::BackgroundWaitingApproval;
+            }
+            let request: ApprovalRequest = serde_json::from_value(
+                result
+                    .data
+                    .as_ref()
+                    .and_then(|v| v.get("request"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        BoundaryError::new(error_codes::INVALID_ARGS, "missing approval request")
+                    })?,
+            )
+            .map_err(|_| {
+                BoundaryError::new(error_codes::INVALID_ARGS, "invalid approval request")
+            })?;
+            let answer = match self.confirm(&request).await {
+                Err(e) if e.is_code(error_codes::STALE_APPROVAL) => {
+                    return self
+                        .finish_control(
+                            session,
+                            call,
+                            kind,
+                            ToolResult::failure(
+                                error_codes::STALE_APPROVAL,
+                                "mode changed while awaiting approval",
+                            ),
+                        )
+                        .await;
+                }
+                other => other?,
+            };
+            if let Some(answer) = answer {
+                self.store
+                    .commit(&[StoreChange::Activity {
+                        run_id: self.run.id,
+                        payload: EventPayload::PermissionResolved {
+                            approval_id: request.approval_id.clone(),
+                            call_id: request.call_id.clone(),
+                            decision: if answer { "allow" } else { "deny" }.into(),
+                            source: ApprovalSource::User,
+                        },
+                    }])
+                    .await?;
+                if let Some(state) = &self.project_context
+                    && !project_context_is_current(state, call)?
+                {
+                    return self
+                        .finish_control(
+                            session,
+                            call,
+                            kind,
+                            ToolResult::failure(
+                                error_codes::PROJECT_CONTEXT_CHANGED,
+                                "project context changed while awaiting approval",
+                            ),
+                        )
+                        .await;
+                }
+                if matches!(kind, BackgroundToolKind::Start) {
+                    *progress = CallProgress::BackgroundStart;
+                }
+                let result = self.background.resolve(&request.approval_id, answer)?;
+                return self.finish_control(session, call, kind, result).await;
+            }
+        }
+        self.finish_control(session, call, kind, result).await
+    }
+
+    async fn execute_ask_user(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: std::sync::Arc<crate::approvals::OneShotPermit>,
+        progress: &mut CallProgress,
+    ) -> Result<ToolResult, BoundaryError> {
+        if !self.dispatcher.owns_permit(&permit) {
+            return Err(BoundaryError::new(
+                error_codes::PERMISSION_DENIED,
+                "permit belongs to another dispatcher",
+            ));
+        }
+        let request = InputRequest::parse(call)?;
+        let mut redacted = serde_json::to_value(&request).map_err(|_| {
+            BoundaryError::new(error_codes::INVALID_ARGS, "cannot encode input request")
+        })?;
+        crate::redaction::redact(&mut redacted, &self.review.known_secrets)?;
+        let request: InputRequest = serde_json::from_value(redacted).map_err(|_| {
+            BoundaryError::new(error_codes::INVALID_ARGS, "cannot redact input request")
+        })?;
+        permit.consume_input(call, context)?;
+        self.store
+            .commit(&[StoreChange::Activity {
+                run_id: self.run.id,
+                payload: EventPayload::InputRequested {
+                    input_id: call.call_id.clone(),
+                    question: request.question.clone(),
+                    options: request.options.clone(),
+                },
+            }])
+            .await?;
+        let answer = if let Some(handler) = &self.input {
+            self.store
+                .commit(&[StoreChange::ToolIntent {
+                    run_id: self.run.id,
+                    call: call.clone(),
+                }])
+                .await?;
+            *progress = CallProgress::WaitingInput;
+            self.budget.pause()?;
+            let result = tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => {
+                    Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"))
+                }
+                result = handler.ask(&request, self.cancel.as_ref()) => result,
+            };
+            self.budget.resume()?;
+            result?
+        } else {
+            None
+        };
+        let result = match answer {
+            Some(answer) if !answer.trim().is_empty() && answer.len() <= 65536 => {
+                self.store
+                    .commit(&[StoreChange::Activity {
+                        run_id: self.run.id,
+                        payload: EventPayload::InputReceived {
+                            input_id: call.call_id.clone(),
+                            answer: answer.clone(),
+                        },
+                    }])
+                    .await?;
+                ToolResult::success(Some(serde_json::json!({"answer": answer})))
+            }
+            _ => ToolResult {
+                ok: false,
+                data: Some(serde_json::json!({
+                    "question": request.question,
+                    "options": request.options,
+                })),
+                error: Some(ErrorInfo {
+                    code: error_codes::NEEDS_INPUT.into(),
+                    message: "user input required".into(),
+                }),
+                truncated: false,
+                media_refs: Vec::new(),
+            },
+        };
+        let result = crate::redaction::tool_result(&result, &self.review.known_secrets)?;
+        if self.input.is_some() {
+            crate::tools::write::save_result(self.store.as_ref(), call, context, &result).await?;
+            session.history.push(HistoryItem::ToolResult {
+                call_id: call.call_id.clone(),
+                result: result.clone(),
+            });
+            return Ok(result);
+        }
+        self.save_local(session, call, result).await
+    }
+
+    async fn execute_authorized_tool(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: std::sync::Arc<crate::approvals::OneShotPermit>,
+        progress: &mut CallProgress,
+    ) -> Result<ToolResult, BoundaryError> {
+        if let Some(state) = &self.project_context
+            && !project_context_is_current(state, call)?
+        {
             return self
                 .save_local(
                     session,
                     call,
-                    failed(
-                        "hook_denied",
-                        "A configured check hook blocked this operation",
+                    ToolResult::failure(
+                        error_codes::PROJECT_CONTEXT_CHANGED,
+                        "project context changed while awaiting approval",
                     ),
                 )
                 .await;
         }
-        if matches!(
-            call.name.as_str(),
-            "memory_read" | "memory_search" | "memory_evidence" | "memory_update" | "memory_forget"
-        ) {
-            return self.execute_memory(session, call, &context, progress).await;
-        }
-        if matches!(
-            call.name.as_str(),
-            "skill_catalog" | "skill_activate" | "skill_deactivate" | "skill_read_resource"
-        ) {
-            return self.execute_skill(session, call, &context, progress).await;
-        }
-        if matches!(
-            call.name.as_str(),
-            "checkpoint_create"
-                | "checkpoint_list"
-                | "checkpoint_diff"
-                | "checkpoint_accept"
-                | "checkpoint_restore"
-        ) {
+        if call.name == "ask_user" {
             return self
-                .execute_checkpoint(session, call, &context, progress)
+                .execute_ask_user(session, call, context, permit, progress)
                 .await;
         }
-        let control = match call.name.as_str() {
-            "background_start" => Some(BackgroundToolKind::Start),
-            "background_status" => Some(BackgroundToolKind::Status),
-            "background_cancel" => Some(BackgroundToolKind::Cancel),
-            _ => None,
-        };
-        if let Some(kind) = control {
-            if matches!(kind, BackgroundToolKind::Start) {
-                self.store
-                    .commit(&[StoreChange::ToolIntent {
-                        run_id: self.run.id,
-                        call: call.clone(),
-                    }])
-                    .await?;
-                *progress = CallProgress::BackgroundStart;
+        let cancel = CallCancel::new(self.cancel.clone());
+        *progress = CallProgress::Dispatched;
+        let operation = self
+            .dispatcher
+            .execute_with_cancel(call, context, permit, &cancel, false);
+        tokio::pin!(operation);
+        let interrupted = tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => {
+                Some(BoundaryError::new(error_codes::CANCELLED, "run cancelled"))
             }
-            if matches!(kind, BackgroundToolKind::Cancel) {
-                *progress = CallProgress::Dispatched;
+            () = sleep(self.budget.remaining()?) => {
+                Some(BoundaryError::new(
+                    error_codes::LIMIT_REACHED,
+                    "active time budget exceeded",
+                ))
             }
-            let outcome = self
-                .background
-                .tool(kind)
-                .execute(call, &context, self.cancel.as_ref())
-                .await;
-            let result = match outcome {
-                Ok(result) => result,
-                Err(error) if invalid_tool_request(&error) => {
-                    failed(&error.0.code, &error.0.message)
-                }
-                Err(error) => return Err(error),
-            };
-            if result
-                .error
-                .as_ref()
-                .is_some_and(|e| e.code == "needs_confirmation")
-            {
-                if matches!(kind, BackgroundToolKind::Start) {
-                    *progress = CallProgress::BackgroundWaitingApproval;
-                }
-                let request: ApprovalRequest = serde_json::from_value(
-                    result
-                        .data
-                        .as_ref()
-                        .and_then(|v| v.get("request"))
-                        .cloned()
-                        .ok_or_else(|| error("invalid_args", "missing approval request"))?,
-                )
-                .map_err(|_| error("invalid_args", "invalid approval request"))?;
-                let answer = match self.confirm(&request).await {
-                    Err(e) if e.0.code == "stale_approval" => {
+            () = sleep(self.limits.tool_timeout), if call.name != "exec" => {
+                Some(BoundaryError::new(error_codes::TOOL_TIMEOUT, "tool timed out"))
+            }
+            result = &mut operation => {
+                let result = match result {
+                    Err(err) if err.is_code(error_codes::PROJECT_CONTEXT_CHANGED) => {
                         return self
-                            .finish_control(
+                            .save_local(
                                 session,
                                 call,
-                                kind,
-                                failed("stale_approval", "mode changed while awaiting approval"),
+                                ToolResult::failure(
+                                    error_codes::PROJECT_CONTEXT_CHANGED,
+                                    "project context changed before dispatch",
+                                ),
                             )
                             .await;
                     }
                     other => other?,
                 };
-                if let Some(answer) = answer {
-                    self.store
-                        .commit(&[StoreChange::Activity {
-                            run_id: self.run.id,
-                            payload: EventPayload::PermissionResolved {
-                                approval_id: request.approval_id.clone(),
-                                call_id: request.call_id.clone(),
-                                decision: if answer { "allow" } else { "deny" }.into(),
-                                source: ApprovalSource::User,
-                            },
-                        }])
-                        .await?;
-                    if let Some(state) = &self.project_context
-                        && !project_context_is_current(state, call)?
-                    {
-                        return self
-                            .finish_control(
-                                session,
-                                call,
-                                kind,
-                                failed(
-                                    "project_context_changed",
-                                    "project context changed while awaiting approval",
-                                ),
-                            )
-                            .await;
-                    }
-                    if matches!(kind, BackgroundToolKind::Start) {
-                        *progress = CallProgress::BackgroundStart;
-                    }
-                    let result = self.background.resolve(&request.approval_id, answer)?;
-                    return self.finish_control(session, call, kind, result).await;
-                }
+                session.history.push(HistoryItem::ToolResult {
+                    call_id: call.call_id.clone(),
+                    result: result.clone(),
+                });
+                return Ok(result);
             }
-            return self.finish_control(session, call, kind, result).await;
+        };
+        cancel.stop();
+        let result = operation.await;
+        if let Err(err) = &result
+            && !err.is_code(error_codes::CANCELLED)
+        {
+            return Err(err.clone());
+        }
+        if let Ok(result) = result {
+            session.history.push(HistoryItem::ToolResult {
+                call_id: call.call_id.clone(),
+                result,
+            });
+        } else if let Some(saved) = self.store.load_session(session.id).await? {
+            if saved.history.len() < session.history.len() {
+                return Err(BoundaryError::new(
+                    error_codes::STORAGE_ERROR,
+                    "saved session history became shorter during tool cleanup",
+                ));
+            }
+            session.history = saved.history;
+        }
+        Err(interrupted
+            .unwrap_or_else(|| BoundaryError::new(error_codes::CANCELLED, "run interrupted")))
+    }
+
+    async fn execute(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        progress: &mut CallProgress,
+    ) -> Result<ToolResult, BoundaryError> {
+        self.check()?;
+        if let Some(state) = &self.project_context {
+            if let Some(target) = context_target(call) {
+                state
+                    .lock()
+                    .map_err(|_| {
+                        BoundaryError::new(
+                            error_codes::PROJECT_CONTEXT_ERROR,
+                            "project context lock failed",
+                        )
+                    })?
+                    .target = Some(target);
+            }
+            if !project_context_is_current(state, call)? {
+                return self
+                    .save_local(
+                        session,
+                        call,
+                        ToolResult::failure(
+                            error_codes::PROJECT_CONTEXT_CHANGED,
+                            "applicable project context changed; review it before requesting this operation again",
+                        ),
+                    )
+                    .await;
+            }
+        }
+        let snap = self.wait_for_mode_ready(session).await?;
+        let context = self.context(session, snap.current);
+        if let Some(blocked) = self.check_pre_dispatch_hooks(session, call).await? {
+            return self.save_local(session, call, blocked).await;
+        }
+        if call.name.starts_with("memory_") {
+            return self.execute_memory(session, call, &context, progress).await;
+        }
+        if call.name.starts_with("skill_") {
+            return self.execute_skill(session, call, &context, progress).await;
+        }
+        if call.name.starts_with("checkpoint_") {
+            return self
+                .execute_checkpoint(session, call, &context, progress)
+                .await;
+        }
+        if let Some(kind) = match call.name.as_str() {
+            "background_start" => Some(BackgroundToolKind::Start),
+            "background_status" => Some(BackgroundToolKind::Status),
+            "background_cancel" => Some(BackgroundToolKind::Cancel),
+            _ => None,
+        } {
+            return self
+                .execute_background_control(session, call, &context, kind, progress)
+                .await;
         }
         let review = DispatchReview {
             model: self.model.as_ref(),
@@ -1602,7 +1885,7 @@ impl AgentRuntime {
             Ok(value) => value,
             Err(e) if invalid_tool_request(&e) => {
                 return self
-                    .save_local(session, call, failed(&e.0.code, &e.0.message))
+                    .save_local(session, call, ToolResult::failure(e.code(), e.message()))
                     .await;
             }
             Err(e) => return Err(e),
@@ -1623,14 +1906,17 @@ impl AgentRuntime {
                         .await?;
                     self.dispatcher.resolve(&request.approval_id, answer)?
                 }
-                Err(e) if e.0.code == "stale_approval" => Authorization::Stale,
+                Err(e) if e.is_code(error_codes::STALE_APPROVAL) => Authorization::Stale,
                 Err(e) => return Err(e),
                 Ok(None) => {
                     return self
                         .save_local(
                             session,
                             call,
-                            failed("needs_confirmation", "confirmation unavailable"),
+                            ToolResult::failure(
+                                error_codes::NEEDS_CONFIRMATION,
+                                "confirmation unavailable",
+                            ),
                         )
                         .await;
                 }
@@ -1639,159 +1925,14 @@ impl AgentRuntime {
         };
         match authorization {
             Authorization::Permit(permit) => {
-                if let Some(state) = &self.project_context
-                    && !project_context_is_current(state, call)?
-                {
-                    return self
-                        .save_local(
-                            session,
-                            call,
-                            failed(
-                                "project_context_changed",
-                                "project context changed while awaiting approval",
-                            ),
-                        )
-                        .await;
-                }
-                if call.name == "ask_user" {
-                    if !self.dispatcher.owns_permit(&permit) {
-                        return Err(error(
-                            "permission_denied",
-                            "permit belongs to another dispatcher",
-                        ));
-                    }
-                    let request = InputRequest::parse(call)?;
-                    let mut redacted = serde_json::to_value(&request)
-                        .map_err(|_| error("invalid_args", "cannot encode input request"))?;
-                    crate::redaction::redact(&mut redacted, &self.review.known_secrets)?;
-                    let request: InputRequest = serde_json::from_value(redacted)
-                        .map_err(|_| error("invalid_args", "cannot redact input request"))?;
-                    permit.consume_input(call, &context)?;
-                    self.store
-                        .commit(&[StoreChange::Activity {
-                            run_id: self.run.id,
-                            payload: EventPayload::InputRequested {
-                                input_id: call.call_id.clone(),
-                                question: request.question.clone(),
-                                options: request.options.clone(),
-                            },
-                        }])
-                        .await?;
-                    let answer = if let Some(handler) = &self.input {
-                        self.store
-                            .commit(&[StoreChange::ToolIntent {
-                                run_id: self.run.id,
-                                call: call.clone(),
-                            }])
-                            .await?;
-                        *progress = CallProgress::WaitingInput;
-                        self.budget.pause()?;
-                        let result = tokio::select! { biased; () = self.cancel.cancelled() => Err(error("cancelled", "run cancelled")), result = handler.ask(&request, self.cancel.as_ref()) => result };
-                        self.budget.resume()?;
-                        result?
-                    } else {
-                        None
-                    };
-                    let result = match answer {
-                        Some(answer) if !answer.trim().is_empty() && answer.len() <= 65536 => {
-                            self.store
-                                .commit(&[StoreChange::Activity {
-                                    run_id: self.run.id,
-                                    payload: EventPayload::InputReceived {
-                                        input_id: call.call_id.clone(),
-                                        answer: answer.clone(),
-                                    },
-                                }])
-                                .await?;
-                            ToolResult {
-                                ok: true,
-                                data: Some(serde_json::json!({"answer": answer})),
-                                error: None,
-                                truncated: false,
-                                media_refs: Vec::new(),
-                            }
-                        }
-                        _ => ToolResult {
-                            ok: false,
-                            data: Some(
-                                serde_json::json!({"question": request.question, "options": request.options}),
-                            ),
-                            error: Some(ErrorInfo {
-                                code: "needs_input".into(),
-                                message: "user input required".into(),
-                            }),
-                            truncated: false,
-                            media_refs: Vec::new(),
-                        },
-                    };
-                    let result =
-                        crate::redaction::tool_result(&result, &self.review.known_secrets)?;
-                    if self.input.is_some() {
-                        crate::tools::write::save_result(
-                            self.store.as_ref(),
-                            call,
-                            &context,
-                            &result,
-                        )
-                        .await?;
-                        session.history.push(HistoryItem::ToolResult {
-                            call_id: call.call_id.clone(),
-                            result: result.clone(),
-                        });
-                        return Ok(result);
-                    }
-                    return self.save_local(session, call, result).await;
-                }
-                let cancel = CallCancel::new(self.cancel.clone());
-                *progress = CallProgress::Dispatched;
-                let operation = self
-                    .dispatcher
-                    .execute_with_cancel(call, &context, permit, &cancel, false);
-                tokio::pin!(operation);
-                let interrupted = tokio::select! {
-                    biased;
-                    () = self.cancel.cancelled() => Some(error("cancelled", "run cancelled")),
-                    () = sleep(self.budget.remaining()?) => Some(error("limit_reached", "active time budget exceeded")),
-                    () = sleep(self.limits.tool_timeout), if call.name != "exec" => Some(error("tool_timeout", "tool timed out")),
-                    result = &mut operation => {
-                        let result = match result {
-                            Err(err) if err.0.code == "project_context_changed" => {
-                                return self.save_local(session, call, failed("project_context_changed", "project context changed before dispatch")).await;
-                            }
-                            other => other?,
-                        };
-                        session.history.push(HistoryItem::ToolResult { call_id:call.call_id.clone(), result:result.clone() });
-                        return Ok(result);
-                    }
-                };
-                cancel.stop();
-                let result = operation.await;
-                if let Err(err) = &result
-                    && err.0.code != "cancelled"
-                {
-                    return Err(err.clone());
-                }
-                if let Ok(result) = result {
-                    session.history.push(HistoryItem::ToolResult {
-                        call_id: call.call_id.clone(),
-                        result,
-                    });
-                } else if let Some(saved) = self.store.load_session(session.id).await? {
-                    if saved.history.len() < session.history.len() {
-                        return Err(error(
-                            "storage_error",
-                            "saved session history became shorter during tool cleanup",
-                        ));
-                    }
-                    session.history = saved.history;
-                }
-                Err(interrupted.unwrap_or_else(|| error("cancelled", "run interrupted")))
+                self.execute_authorized_tool(session, call, &context, permit, progress)
+                    .await
             }
             Authorization::NeedsConfirmation(_) | Authorization::Pending(_) => {
                 self.save_local(
                     session,
                     call,
-                    failed("needs_confirmation", "confirmation required"),
+                    ToolResult::failure(error_codes::NEEDS_CONFIRMATION, "confirmation required"),
                 )
                 .await
             }
@@ -1799,7 +1940,7 @@ impl AgentRuntime {
                 self.save_local(
                     session,
                     call,
-                    failed("permission_denied", "operation denied"),
+                    ToolResult::failure(error_codes::PERMISSION_DENIED, "operation denied"),
                 )
                 .await
             }
@@ -1807,7 +1948,7 @@ impl AgentRuntime {
                 self.save_local(
                     session,
                     call,
-                    failed("stale_approval", "mode or permission changed"),
+                    ToolResult::failure(error_codes::STALE_APPROVAL, "mode or permission changed"),
                 )
                 .await
             }
@@ -1829,7 +1970,7 @@ impl AgentRuntime {
                 continue;
             }
             let store = self.media_store.as_ref().ok_or_else(|| {
-                error(
+                BoundaryError::new(
                     "media_unavailable",
                     "durable media storage is not configured",
                 )
@@ -1854,18 +1995,21 @@ impl AgentRuntime {
     async fn run_inner(&self, session: &mut Session) -> Result<String, BoundaryError> {
         self.check()?;
         if session.id != self.run.session_id || session.work_mode != self.run.work_mode {
-            return Err(error("invalid_run", "session or mode mismatch"));
+            return Err(BoundaryError::new(
+                "invalid_run",
+                "session or mode mismatch",
+            ));
         }
         if self.review.execution_profile != session.profile {
-            return Err(error(
-                "invalid_config",
+            return Err(BoundaryError::new(
+                error_codes::INVALID_CONFIG,
                 "review execution profile differs from the session",
             ));
         }
         self.model.validate_session(session)?;
         let existing = self.store.load_session(session.id).await?;
         if existing.as_ref().is_some_and(|saved| saved != session) {
-            return Err(error(
+            return Err(BoundaryError::new(
                 "session_conflict",
                 "saved session differs from provided session",
             ));
@@ -1895,8 +2039,8 @@ impl AgentRuntime {
                 )
                 .await?;
             if hooks.cleanup_pending || hooks.blocked {
-                return Err(error(
-                    "outcome_unknown",
+                return Err(BoundaryError::new(
+                    error_codes::OUTCOME_UNKNOWN,
                     "A run-started hook did not complete safely",
                 ));
             }
@@ -1934,16 +2078,16 @@ impl AgentRuntime {
                     HistoryItem::ToolCall(call)
                         if call.call_id.is_empty() || !seen_ids.insert(call.call_id.as_str()) =>
                     {
-                        return Err(error(
-                            "invalid_model_response",
+                        return Err(BoundaryError::new(
+                            error_codes::INVALID_MODEL_RESPONSE,
                             "tool call IDs must be nonempty and unique",
                         ));
                     }
                     HistoryItem::UserText(_)
                     | HistoryItem::ToolResult { .. }
                     | HistoryItem::AssistantPartial(_) => {
-                        return Err(error(
-                            "invalid_model_response",
+                        return Err(BoundaryError::new(
+                            error_codes::INVALID_MODEL_RESPONSE,
                             "unexpected item in model response",
                         ));
                     }
@@ -1991,7 +2135,25 @@ impl AgentRuntime {
                     })
                     .collect());
             }
-            for (index, call) in calls.iter().enumerate() {
+            let mut index = 0usize;
+            while index < calls.len() {
+                if calls.len().saturating_sub(index) >= 2
+                    && is_parallel_read_tool_name(&calls[index].name)
+                    && is_parallel_read_tool_name(&calls[index + 1].name)
+                    && self.run.permissions != crate::contract::PermissionMode::Manual
+                {
+                    let (consumed, stop_turn) = self
+                        .execute_parallel_read_batch(session, &calls[index..], &mut previous)
+                        .await?;
+                    if consumed > 0 {
+                        index += consumed;
+                        if stop_turn {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+                let call = &calls[index];
                 if let Err(err) = self.check() {
                     self.close_calls(session, &calls[index..], CallProgress::NotDispatched)
                         .await?;
@@ -2007,104 +2169,477 @@ impl AgentRuntime {
                 let result = match self.execute(session, call, &mut progress).await {
                     Ok(result) => result,
                     Err(err) => {
-                        if err.0.code != "storage_error" && err.2.is_none() {
+                        if !err.is_code(error_codes::STORAGE_ERROR) && !err.has_observed_result() {
                             self.close_calls(session, &calls[index..], progress).await?;
                         }
                         return Err(err);
                     }
                 };
-                let finished = self.services.fire_hooks(self,session,crate::hooks::HookEvent::ToolFinished,
-                    format!("tool.finished:{}",crate::memory_context::digest(call.call_id.as_bytes())),Some(call.call_id.clone()),
-                    serde_json::json!({"tool":call.name,"ok":result.ok,"truncated":result.truncated,"error_code":result.error.as_ref().map(|error|error.code.as_str())})).await;
-                if let Err(failure) = &finished {
-                    if failure.0.code != "storage_error" && failure.2.is_none() {
-                        self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                            .await?;
-                    }
-                    return Err(failure.clone());
-                }
-                if finished?.cleanup_pending {
-                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                        .await?;
-                    return Err(error(
-                        "outcome_unknown",
-                        "A tool-finished hook requires cleanup reconciliation",
-                    ));
-                }
-                if result
-                    .error
-                    .as_ref()
-                    .is_some_and(|e| e.code == "needs_confirmation")
+                if self
+                    .post_tool_call_checks(
+                        session,
+                        call,
+                        &result,
+                        &calls[index + 1..],
+                        &mut previous,
+                    )
+                    .await?
                 {
-                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                        .await?;
-                    return Err(error("needs_confirmation", "confirmation required"));
-                }
-                if result
-                    .error
-                    .as_ref()
-                    .is_some_and(|e| e.code == "needs_input")
-                {
-                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                        .await?;
-                    return Err(error("needs_input", "user input required"));
-                }
-                if let Some(failure) = &result.error
-                    && matches!(failure.code.as_str(), "needs_auth" | "outcome_unknown")
-                {
-                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                        .await?;
-                    return Err(BoundaryError(failure.clone(), None, None));
-                }
-                if result
-                    .error
-                    .as_ref()
-                    .is_some_and(|e| e.code == "project_context_changed")
-                {
-                    self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                        .await?;
                     break;
                 }
-                let args = serde_json::from_str::<serde_json::Value>(&call.arguments)
-                    .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));
-                if !result.ok {
-                    let count = match &previous {
-                        Some((name, old, count)) if name == &call.name && old == &args => {
-                            count.saturating_add(1)
-                        }
-                        _ => 1,
-                    };
-                    previous = Some((call.name.clone(), args, count));
-                    if count >= 3 {
-                        self.close_calls(session, &calls[index + 1..], CallProgress::NotDispatched)
-                            .await?;
-                        return Err(error(
-                            "repeated_tool_failure",
-                            "same tool and arguments failed three times",
-                        ));
-                    }
-                } else {
-                    previous = None;
-                }
+                index += 1;
             }
         }
     }
+
+    async fn post_tool_call_checks(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        result: &ToolResult,
+        tail_calls: &[ToolCall],
+        previous: &mut Option<(String, serde_json::Value, u8)>,
+    ) -> Result<bool, BoundaryError> {
+        let finished = self
+            .services
+            .fire_hooks(
+                self,
+                session,
+                crate::hooks::HookEvent::ToolFinished,
+                format!(
+                    "tool.finished:{}",
+                    crate::memory_context::digest(call.call_id.as_bytes())
+                ),
+                Some(call.call_id.clone()),
+                serde_json::json!({
+                    "tool": call.name,
+                    "ok": result.ok,
+                    "truncated": result.truncated,
+                    "error_code": result.error_code(),
+                }),
+            )
+            .await;
+        if let Err(failure) = &finished {
+            if !failure.is_code(error_codes::STORAGE_ERROR) && !failure.has_observed_result() {
+                self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                    .await?;
+            }
+            return Err(failure.clone());
+        }
+        if finished?.cleanup_pending {
+            self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                .await?;
+            return Err(BoundaryError::new(
+                error_codes::OUTCOME_UNKNOWN,
+                "A tool-finished hook requires cleanup reconciliation",
+            ));
+        }
+        if result.has_error_code(error_codes::NEEDS_CONFIRMATION) {
+            self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                .await?;
+            return Err(BoundaryError::new(
+                error_codes::NEEDS_CONFIRMATION,
+                "confirmation required",
+            ));
+        }
+        if result.has_error_code(error_codes::NEEDS_INPUT) {
+            self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                .await?;
+            return Err(BoundaryError::new(
+                error_codes::NEEDS_INPUT,
+                "user input required",
+            ));
+        }
+        if let Some(failure) = &result.error
+            && matches!(
+                failure.code.as_str(),
+                error_codes::NEEDS_AUTH | error_codes::OUTCOME_UNKNOWN
+            )
+        {
+            self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                .await?;
+            return Err(BoundaryError::from_info(failure.clone()));
+        }
+        if result.has_error_code(error_codes::PROJECT_CONTEXT_CHANGED) {
+            self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                .await?;
+            return Ok(true);
+        }
+        let args = serde_json::from_str::<serde_json::Value>(&call.arguments)
+            .unwrap_or_else(|_| serde_json::Value::String(call.arguments.clone()));
+        if !result.ok {
+            let count = match previous {
+                Some((name, old, count)) if name == &call.name && old == &args => {
+                    count.saturating_add(1)
+                }
+                _ => 1,
+            };
+            *previous = Some((call.name.clone(), args, count));
+            if count >= 3 {
+                self.close_calls(session, tail_calls, CallProgress::NotDispatched)
+                    .await?;
+                return Err(BoundaryError::new(
+                    error_codes::REPEATED_TOOL_FAILURE,
+                    "same tool and arguments failed three times",
+                ));
+            }
+        } else {
+            *previous = None;
+        }
+        Ok(false)
+    }
+
+    async fn execute_parallel_read_batch(
+        &self,
+        session: &mut Session,
+        calls: &[ToolCall],
+        previous: &mut Option<(String, serde_json::Value, u8)>,
+    ) -> Result<(usize, bool), BoundaryError> {
+        enum BatchStep<'a> {
+            Ready {
+                call: &'a ToolCall,
+                context: ToolContext,
+                permit: Arc<crate::approvals::OneShotPermit>,
+                buffered_store: Arc<BufferedReadStore>,
+            },
+            ImmediateLocal {
+                call: &'a ToolCall,
+                result: ToolResult,
+            },
+        }
+
+        let snap = self.wait_for_mode_ready(session).await?;
+        let context = self.context(session, snap.current);
+        let max_batch = calls.len().min(8);
+        let mut steps: Vec<BatchStep<'_>> = Vec::with_capacity(max_batch);
+
+        for (offset, call) in calls[..max_batch].iter().enumerate() {
+            if !is_parallel_read_tool_name(&call.name)
+                || !self.dispatcher.is_parallel_read_preapproved(call, &context)
+            {
+                break;
+            }
+            if let Err(err) = self.check() {
+                if steps.is_empty() {
+                    return Ok((0, false));
+                }
+                let _ = err;
+                break;
+            }
+            if let Some(state) = &self.project_context {
+                if let Some(target) = context_target(call) {
+                    state
+                        .lock()
+                        .map_err(|_| {
+                            BoundaryError::new(
+                                error_codes::PROJECT_CONTEXT_ERROR,
+                                "project context lock failed",
+                            )
+                        })?
+                        .target = Some(target);
+                }
+                if !project_context_is_current(state, call)? {
+                    if steps.is_empty() {
+                        return Ok((0, false));
+                    }
+                    break;
+                }
+            }
+            if let Err(failure) = self.services.reserve_tool(self.limits.tool_calls) {
+                if steps.is_empty() {
+                    self.close_calls(session, &calls[offset..], CallProgress::NotDispatched)
+                        .await?;
+                    return Err(failure);
+                }
+                break;
+            }
+            self.metrics.tool_call();
+            if let Some(blocked) = match self.check_pre_dispatch_hooks(session, call).await {
+                Ok(val) => val,
+                Err(err) => {
+                    self.close_calls(session, &calls[offset..], CallProgress::NotDispatched)
+                        .await?;
+                    return Err(err);
+                }
+            } {
+                steps.push(BatchStep::ImmediateLocal {
+                    call,
+                    result: blocked,
+                });
+                continue;
+            }
+            let review = DispatchReview {
+                model: self.model.as_ref(),
+                budget: &self.budget,
+                config: &self.review,
+            };
+            match self
+                .dispatcher
+                .authorize(
+                    call,
+                    &context,
+                    &self.summary,
+                    self.confirmation.is_some(),
+                    review,
+                )
+                .await
+            {
+                Ok(Authorization::Permit(permit)) => {
+                    steps.push(BatchStep::Ready {
+                        call,
+                        context: context.clone(),
+                        permit,
+                        buffered_store: Arc::new(BufferedReadStore::new(self.store.clone())),
+                    });
+                }
+                Ok(Authorization::Stale) => {
+                    steps.push(BatchStep::ImmediateLocal {
+                        call,
+                        result: ToolResult::failure(
+                            error_codes::STALE_APPROVAL,
+                            "mode or permission changed",
+                        ),
+                    });
+                    break;
+                }
+                Ok(Authorization::Denied(_)) => {
+                    steps.push(BatchStep::ImmediateLocal {
+                        call,
+                        result: ToolResult::failure(
+                            error_codes::PERMISSION_DENIED,
+                            "operation denied",
+                        ),
+                    });
+                    break;
+                }
+                Ok(Authorization::NeedsConfirmation(_) | Authorization::Pending(_)) => {
+                    steps.push(BatchStep::ImmediateLocal {
+                        call,
+                        result: ToolResult::failure(
+                            error_codes::NEEDS_CONFIRMATION,
+                            "confirmation required",
+                        ),
+                    });
+                    break;
+                }
+                Err(e) if invalid_tool_request(&e) => {
+                    steps.push(BatchStep::ImmediateLocal {
+                        call,
+                        result: ToolResult::failure(e.code(), e.message()),
+                    });
+                }
+                Err(e) => {
+                    self.close_calls(session, &calls[offset..], CallProgress::NotDispatched)
+                        .await?;
+                    return Err(e);
+                }
+            }
+        }
+
+        if steps.is_empty() {
+            return Ok((0, false));
+        }
+
+        let batch_cancel = CallCancel::new(self.cancel.clone());
+        let mut outcomes: VecDeque<Result<ToolResult, BoundaryError>> = {
+            let ready_indices: Vec<usize> = steps
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, step)| matches!(step, BatchStep::Ready { .. }).then_some(idx))
+                .collect();
+            if ready_indices.is_empty() {
+                VecDeque::new()
+            } else {
+                let operation = futures::future::join_all(ready_indices.iter().map(|&idx| {
+                    let BatchStep::Ready {
+                        call,
+                        context,
+                        permit,
+                        buffered_store,
+                    } = &steps[idx]
+                    else {
+                        unreachable!();
+                    };
+                    let store: Arc<dyn Store> = buffered_store.clone();
+                    self.dispatcher.execute_with_cancel_on_store(
+                        call,
+                        context,
+                        permit.clone(),
+                        &batch_cancel,
+                        false,
+                        store,
+                    )
+                }));
+                tokio::pin!(operation);
+                let mut interrupted: Option<BoundaryError> = None;
+                let completed = tokio::select! {
+                    biased;
+                    () = self.cancel.cancelled() => {
+                        interrupted = Some(BoundaryError::new(error_codes::CANCELLED, "run cancelled"));
+                        None
+                    }
+                    () = sleep(self.budget.remaining()?) => {
+                        interrupted = Some(BoundaryError::new(
+                            error_codes::LIMIT_REACHED,
+                            "active time budget exceeded",
+                        ));
+                        None
+                    }
+                    () = sleep(self.limits.tool_timeout) => {
+                        interrupted = Some(BoundaryError::new(error_codes::TOOL_TIMEOUT, "tool timed out"));
+                        None
+                    }
+                    results = &mut operation => Some(results),
+                };
+                if let Some(results) = completed {
+                    results.into()
+                } else {
+                    batch_cancel.stop();
+                    let settled = operation.await;
+                    let mut settled_iter = settled.into_iter();
+                    for (offset, step) in steps.iter().enumerate() {
+                        match step {
+                            BatchStep::ImmediateLocal { call, result } => {
+                                let _ = self.save_local(session, call, result.clone()).await?;
+                            }
+                            BatchStep::Ready {
+                                call,
+                                buffered_store,
+                                ..
+                            } => match settled_iter.next() {
+                                Some(Ok(result)) => {
+                                    let changes = buffered_store.take_changes()?;
+                                    if !changes.is_empty() {
+                                        self.store.commit(&changes).await?;
+                                    }
+                                    session.history.push(HistoryItem::ToolResult {
+                                        call_id: call.call_id.clone(),
+                                        result,
+                                    });
+                                }
+                                _ => {
+                                    if let Some(saved) = self.store.load_session(session.id).await?
+                                    {
+                                        if saved.history.len() < session.history.len() {
+                                            return Err(BoundaryError::new(
+                                                error_codes::STORAGE_ERROR,
+                                                "saved session history became shorter during tool cleanup",
+                                            ));
+                                        }
+                                        session.history = saved.history;
+                                    }
+                                    self.close_calls(
+                                        session,
+                                        &calls[offset..],
+                                        CallProgress::Dispatched,
+                                    )
+                                    .await?;
+                                    return Err(interrupted.unwrap_or_else(|| {
+                                        BoundaryError::new(
+                                            error_codes::CANCELLED,
+                                            "run interrupted",
+                                        )
+                                    }));
+                                }
+                            },
+                        }
+                    }
+                    return Err(interrupted.unwrap_or_else(|| {
+                        BoundaryError::new(error_codes::CANCELLED, "run interrupted")
+                    }));
+                }
+            }
+        };
+
+        let consumed = steps.len();
+        for (offset, step) in steps.into_iter().enumerate() {
+            let (call, result) = match step {
+                BatchStep::ImmediateLocal { call, result } => {
+                    (call, self.save_local(session, call, result).await?)
+                }
+                BatchStep::Ready {
+                    call,
+                    buffered_store,
+                    ..
+                } => {
+                    let outcome = outcomes.pop_front().ok_or_else(|| {
+                        BoundaryError::new(error_codes::RUNTIME_ERROR, "missing batch outcome")
+                    })?;
+                    match outcome {
+                        Ok(result) => {
+                            let changes = buffered_store.take_changes()?;
+                            if !changes.is_empty()
+                                && let Err(mut err) = self.store.commit(&changes).await
+                            {
+                                err.set_observed_result(Some(result));
+                                return Err(err);
+                            }
+                            session.history.push(HistoryItem::ToolResult {
+                                call_id: call.call_id.clone(),
+                                result: result.clone(),
+                            });
+                            (call, result)
+                        }
+                        Err(err) if err.is_code(error_codes::PROJECT_CONTEXT_CHANGED) => {
+                            let res = self
+                                .save_local(
+                                    session,
+                                    call,
+                                    ToolResult::failure(
+                                        error_codes::PROJECT_CONTEXT_CHANGED,
+                                        "project context changed before dispatch",
+                                    ),
+                                )
+                                .await?;
+                            (call, res)
+                        }
+                        Err(err) => {
+                            if !err.is_code(error_codes::STORAGE_ERROR)
+                                && !err.has_observed_result()
+                            {
+                                self.close_calls(
+                                    session,
+                                    &calls[offset..],
+                                    CallProgress::Dispatched,
+                                )
+                                .await?;
+                            }
+                            return Err(err);
+                        }
+                    }
+                }
+            };
+            if self
+                .post_tool_call_checks(session, call, &result, &calls[offset + 1..], previous)
+                .await?
+            {
+                return Ok((offset + 1, true));
+            }
+        }
+        Ok((consumed, false))
+    }
+
     /// Run only a tool-free compaction operation against the saved history.
     pub async fn compact(&mut self, session: &mut Session) -> Result<RunResult, BoundaryError> {
-        let state = self
-            .context_state
-            .as_ref()
-            .ok_or_else(|| error("context_config", "Context budgeting is unavailable"))?;
+        let state = self.context_state.as_ref().ok_or_else(|| {
+            BoundaryError::new("context_config", "Context budgeting is unavailable")
+        })?;
         state.manual_only.store(true, Ordering::Release);
         state.requested.store(true, Ordering::Release);
         self.run(session).await
     }
+
     /// Run once, then cancel and await all background work. Execution returns
     /// typed status; storage failures return errors retaining observed results.
-    #[tracing::instrument(target = "saya::runtime", name = "run", skip_all, fields(session_id = %session.id.0, run_id = %self.run.id.0))]
+    #[tracing::instrument(
+        target = "saya::runtime",
+        name = "run",
+        skip_all,
+        fields(session_id = %session.id.0, run_id = %self.run.id.0)
+    )]
     pub async fn run(&mut self, session: &mut Session) -> Result<RunResult, BoundaryError> {
         if self.used {
-            return Err(error("invalid_run", "runtime is single-use"));
+            return Err(BoundaryError::new("invalid_run", "runtime is single-use"));
         }
         tracing::info!(target: "saya::runtime", event = "run.started");
         self.budget.start_run()?;
@@ -2121,18 +2656,29 @@ impl AgentRuntime {
                 .context_state
                 .as_ref()
                 .is_some_and(|state| state.manual_only.load(Ordering::Acquire))
-            && !outcome
-                .as_ref()
-                .err()
-                .is_some_and(|failure| failure.0.code == "storage_error" || failure.2.is_some())
+            && !outcome.as_ref().err().is_some_and(|failure| {
+                failure.is_code(error_codes::STORAGE_ERROR) || failure.has_observed_result()
+            })
         {
-            let finished=self.services.fire_hooks(self,session,crate::hooks::HookEvent::RunFinished,
-                format!("run.finished:{}",self.run.id.0),None,serde_json::json!({"completed":outcome.is_ok(),"stop_code":outcome.as_ref().err().map(|failure|failure.0.code.as_str())})).await;
+            let finished = self
+                .services
+                .fire_hooks(
+                    self,
+                    session,
+                    crate::hooks::HookEvent::RunFinished,
+                    format!("run.finished:{}", self.run.id.0),
+                    None,
+                    serde_json::json!({
+                        "completed": outcome.is_ok(),
+                        "stop_code": outcome.as_ref().err().map(|failure| failure.code()),
+                    }),
+                )
+                .await;
             match finished {
                 Err(failure) => outcome = Err(failure),
                 Ok(hooks) if hooks.cleanup_pending => {
-                    outcome = Err(error(
-                        "outcome_unknown",
+                    outcome = Err(BoundaryError::new(
+                        error_codes::OUTCOME_UNKNOWN,
                         "A run-finished hook requires cleanup reconciliation",
                     ))
                 }
@@ -2153,15 +2699,15 @@ impl AgentRuntime {
             return Err(error);
         }
         if let Err(e) = &outcome
-            && (e.0.code == "storage_error" || e.2.is_some())
+            && (e.is_code(error_codes::STORAGE_ERROR) || e.has_observed_result())
         {
             return Err(e.clone());
         }
         let outcome = match service_cleanup {
             Ok(()) => outcome,
-            Err(failure) if failure.0.code == "storage_error" => return Err(failure),
-            Err(_) => Err(error(
-                "outcome_unknown",
+            Err(failure) if failure.is_code(error_codes::STORAGE_ERROR) => return Err(failure),
+            Err(_) => Err(BoundaryError::new(
+                error_codes::OUTCOME_UNKNOWN,
                 "Run service cleanup could not be confirmed",
             )),
         };
@@ -2181,18 +2727,19 @@ impl AgentRuntime {
                 None,
             ),
             Err(err) => {
-                let status = match err.0.code.as_str() {
-                    "cancelled" => RunStatus::Cancelled,
-                    "limit_reached" | "context_budget" | "context_limit" | "output_limit" => {
-                        RunStatus::LimitReached
-                    }
-                    "needs_confirmation" => RunStatus::NeedsConfirmation,
-                    "needs_input" | "needs_auth" => RunStatus::NeedsInput,
+                let status = match err.code() {
+                    error_codes::CANCELLED => RunStatus::Cancelled,
+                    error_codes::LIMIT_REACHED
+                    | error_codes::CONTEXT_BUDGET
+                    | error_codes::CONTEXT_LIMIT
+                    | error_codes::OUTPUT_LIMIT => RunStatus::LimitReached,
+                    error_codes::NEEDS_CONFIRMATION => RunStatus::NeedsConfirmation,
+                    error_codes::NEEDS_INPUT | error_codes::NEEDS_AUTH => RunStatus::NeedsInput,
                     _ => RunStatus::Failed,
                 };
                 let recent_history = session.history.get(initial..).ok_or_else(|| {
-                    error(
-                        "storage_error",
+                    BoundaryError::new(
+                        error_codes::STORAGE_ERROR,
                         "session history became shorter during the run",
                     )
                 })?;
@@ -2210,10 +2757,7 @@ impl AgentRuntime {
                         if status == RunStatus::NeedsInput {
                             recent_history.iter().rev().find_map(|item| match item {
                                 HistoryItem::ToolResult { result, .. }
-                                    if result
-                                        .error
-                                        .as_ref()
-                                        .is_some_and(|e| e.code == "needs_input") =>
+                                    if result.has_error_code(error_codes::NEEDS_INPUT) =>
                                 {
                                     result
                                         .data
@@ -2228,14 +2772,14 @@ impl AgentRuntime {
                             None
                         }
                     });
-                (status, err.0.code.clone(), text, Some(err.0))
+                (status, err.code().to_owned(), text, Some(err.0))
             }
         };
         let started = self.started.load(Ordering::Acquire);
         let (metrics, usage, artifacts) = self
             .metrics
             .snapshot()
-            .ok_or_else(|| error("metrics_error", "run metrics lock failed"))?;
+            .ok_or_else(|| BoundaryError::new("metrics_error", "run metrics lock failed"))?;
         let result = RunResult {
             schema_version: SCHEMA_VERSION,
             session_id: Some(session.id),
@@ -2337,8 +2881,8 @@ mod mode_event_tests {
                     )
                 });
                 if mode_activity && self.fail.swap(false, Ordering::AcqRel) {
-                    return Err(error(
-                        "storage_error",
+                    return Err(BoundaryError::new(
+                        error_codes::STORAGE_ERROR,
                         "controlled mode transaction failure",
                     ));
                 }
@@ -2400,8 +2944,10 @@ mod mode_event_tests {
             request: &'a ModelRequest,
             cancel: &'a dyn Cancellation,
         ) -> Operation<'a, Box<dyn crate::boundary::ModelStream>> {
-            self.0
-                .fail(error("outcome_unknown", "controlled cleanup failure"));
+            self.0.fail(BoundaryError::new(
+                error_codes::OUTCOME_UNKNOWN,
+                "controlled cleanup failure",
+            ));
             EndModel.start(request, cancel)
         }
     }

@@ -74,7 +74,16 @@ impl Store for ObservedStore {
                         call_id, result, ..
                     } if call_id == &self.call_id => {
                         self.finished.store(true, Ordering::Release);
-                        tracing::info!(target: "saya::tools", event = "tool.finished", status = if result.ok { "completed" } else { "failed" }, error_code = result.error.as_ref().map(|error| error.code.as_str()).unwrap_or(""));
+                        tracing::info!(
+                            target: "saya::tools",
+                            event = "tool.finished",
+                            status = if result.ok { "completed" } else { "failed" },
+                            error_code = result
+                                .error
+                                .as_ref()
+                                .map(|error| error.code.as_str())
+                                .unwrap_or("")
+                        );
                     }
                     _ => {}
                 }
@@ -85,14 +94,61 @@ impl Store for ObservedStore {
 }
 
 fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
-    BoundaryError(
-        ErrorInfo {
-            code: code.into(),
-            message: message.into(),
-        },
-        None,
-        None,
-    )
+    BoundaryError::new(code, message)
+}
+
+/// Buffers per-call `StoreChange` records during concurrent read execution so
+/// the caller can commit intents and results in deterministic call order.
+pub(crate) struct BufferedReadStore {
+    inner: Arc<dyn Store>,
+    pending: std::sync::Mutex<Vec<StoreChange>>,
+}
+impl BufferedReadStore {
+    pub(crate) fn new(inner: Arc<dyn Store>) -> Self {
+        Self {
+            inner,
+            pending: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn take_changes(&self) -> Result<Vec<StoreChange>, BoundaryError> {
+        let mut guard = self.pending.lock().map_err(|_| {
+            BoundaryError::new("storage_error", "buffered read store lock poisoned")
+        })?;
+        Ok(std::mem::take(&mut *guard))
+    }
+}
+impl Store for BufferedReadStore {
+    fn memory_exposures(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        self.inner.memory_exposures(id)
+    }
+    fn context_checkpoint(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        self.inner.context_checkpoint(id)
+    }
+    fn output_references(
+        &self,
+        id: SessionId,
+    ) -> StoreOperation<'_, Vec<crate::output_store::OutputMetadata>> {
+        self.inner.output_references(id)
+    }
+    fn load_session(&self, id: SessionId) -> StoreOperation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> StoreOperation<'a, ()> {
+        Box::pin(async move {
+            let mut guard = self.pending.lock().map_err(|_| {
+                BoundaryError::new("storage_error", "buffered read store lock poisoned")
+            })?;
+            guard.extend(changes.iter().cloned());
+            Ok(())
+        })
+    }
 }
 /// A background child operation is not a provider tool call. Persist its
 /// intent/result but never inject its synthetic call ID into model history.
@@ -510,7 +566,11 @@ impl ToolDispatcher {
         if self.read_only {
             return definitions;
         }
-        for kind in [WriteToolKind::WriteFile, WriteToolKind::ApplyPatch] {
+        for kind in [
+            WriteToolKind::WriteFile,
+            WriteToolKind::EditFile,
+            WriteToolKind::ApplyPatch,
+        ] {
             definitions.push(
                 WriteTool::new(
                     self.files.clone(),
@@ -644,7 +704,16 @@ impl ToolDispatcher {
     /// Normalize and authorize a single call. A `Pending` or
     /// `NeedsConfirmation` result never executes the operation. The caller
     /// must use the returned permit exactly once, or resolve a pending request.
-    #[tracing::instrument(target = "saya::tools", name = "authorize", skip_all, fields(session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str()))]
+    #[tracing::instrument(
+        target = "saya::tools",
+        name = "authorize",
+        skip_all,
+        fields(
+            session_id = %context.run.session_id.0,
+            run_id = %context.run.id.0,
+            call_id = call.call_id.as_str()
+        )
+    )]
     pub async fn authorize(
         &self,
         call: &ToolCall,
@@ -653,7 +722,7 @@ impl ToolDispatcher {
         interactive: bool,
         review: DispatchReview<'_>,
     ) -> Result<Authorization, BoundaryError> {
-        if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
+        if self.read_only && crate::registry::is_local_mutation_tool(&call.name) {
             return Err(failure(
                 "durability_required",
                 "side effects require durable storage",
@@ -681,10 +750,7 @@ impl ToolDispatcher {
         } else if call.name == "todo_write" {
             crate::tools::todo::parse(call)?;
             Operation::todo_write()
-        } else if matches!(
-            call.name.as_str(),
-            "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
-        ) {
+        } else if crate::registry::is_local_file_tool(&call.name) {
             let args: serde_json::Value = serde_json::from_str(&call.arguments)
                 .map_err(|e| failure("invalid_args", e.to_string()))?;
             let path = args
@@ -767,7 +833,56 @@ impl ToolDispatcher {
         self.execute_with_cancel(call, context, permit, self.cancel.as_ref(), false)
             .await
     }
-    #[tracing::instrument(target = "saya::tools", name = "tool", skip_all, fields(session_id = %context.run.session_id.0, run_id = %context.run.id.0, call_id = call.call_id.as_str()))]
+    /// Check in-memory whether a pure read-only tool call is immediately allowed
+    /// without persisting any confirmation or approval state.
+    pub(crate) fn is_parallel_read_preapproved(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> bool {
+        if context.run.permissions == crate::contract::PermissionMode::Manual {
+            return false;
+        }
+        let operation = match call.name.as_str() {
+            "read_file" | "list_dir" | "find_files" | "search_text" => {
+                let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
+                    return false;
+                };
+                let Some(path) = args.get("path").and_then(serde_json::Value::as_str) else {
+                    return false;
+                };
+                Operation::file(&context.workspace, &call.name, Path::new(path))
+            }
+            "output_read" | "output_search" => {
+                let Some(store) = self.output_store.get() else {
+                    return false;
+                };
+                if crate::tools::output::validate_call(call, store.limits()).is_err() {
+                    return false;
+                }
+                Operation::output_query(&call.name)
+            }
+            _ => return false,
+        };
+        let Ok(op) = operation else {
+            return false;
+        };
+        let policy = self
+            .policy
+            .evaluate(context.run.work_mode, context.run.permissions, &op);
+        policy.decision == crate::permissions::Decision::Allow
+    }
+
+    #[tracing::instrument(
+        target = "saya::tools",
+        name = "tool",
+        skip_all,
+        fields(
+            session_id = %context.run.session_id.0,
+            run_id = %context.run.id.0,
+            call_id = call.call_id.as_str()
+        )
+    )]
     pub(crate) async fn execute_with_cancel(
         &self,
         call: &ToolCall,
@@ -776,8 +891,39 @@ impl ToolDispatcher {
         cancel: &dyn Cancellation,
         background: bool,
     ) -> Result<ToolResult, BoundaryError> {
+        let store: Arc<dyn Store> = if background {
+            Arc::new(BackgroundStore {
+                inner: self.store.clone(),
+                call_id: call.call_id.clone(),
+            })
+        } else {
+            self.store.clone()
+        };
+        self.execute_with_cancel_on_store(call, context, permit, cancel, background, store)
+            .await
+    }
+
+    #[tracing::instrument(
+        target = "saya::tools",
+        name = "tool",
+        skip_all,
+        fields(
+            session_id = %context.run.session_id.0,
+            run_id = %context.run.id.0,
+            call_id = call.call_id.as_str()
+        )
+    )]
+    pub(crate) async fn execute_with_cancel_on_store(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: Arc<OneShotPermit>,
+        cancel: &dyn Cancellation,
+        background: bool,
+        store: Arc<dyn Store>,
+    ) -> Result<ToolResult, BoundaryError> {
         let known_secrets = self.current_secrets()?;
-        if self.read_only && matches!(call.name.as_str(), "write_file" | "apply_patch" | "exec") {
+        if self.read_only && crate::registry::is_local_mutation_tool(&call.name) {
             return Err(failure(
                 "durability_required",
                 "side effects require durable storage",
@@ -789,14 +935,6 @@ impl ToolDispatcher {
                 "permit belongs to another dispatcher",
             ));
         }
-        let store: Arc<dyn Store> = if background {
-            Arc::new(BackgroundStore {
-                inner: self.store.clone(),
-                call_id: call.call_id.clone(),
-            })
-        } else {
-            self.store.clone()
-        };
         if let Some(guard) = self.context_guard.get()
             && !guard(call)?
         {
@@ -824,10 +962,8 @@ impl ToolDispatcher {
             return Ok(result);
         }
         tracing::info!(target: "saya::tools", event = "tool.dispatched");
-        if matches!(
-            call.name.as_str(),
-            "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
-        ) && let Some(environment) = self.effective_exec_config()?.execution
+        if crate::registry::is_local_file_tool(&call.name)
+            && let Some(environment) = self.effective_exec_config()?.execution
         {
             return self
                 .execute_file_worker(call, context, &permit, store.as_ref(), cancel, &environment)
@@ -986,14 +1122,14 @@ impl ToolDispatcher {
                     }
                 }
             }
-            "write_file" | "apply_patch" | "exec" => {
+            name if crate::registry::is_local_mutation_tool(name) => {
                 let observed = Arc::new(ObservedStore {
                     inner: store.clone(),
                     call_id: call.call_id.clone(),
                     intent: AtomicBool::new(false),
                     finished: AtomicBool::new(false),
                 });
-                let tool: Box<dyn Tool> = match call.name.as_str() {
+                let tool: Box<dyn Tool> = match name {
                     "exec" => Box::new(
                         ExecTool::new(
                             self.files.clone(),
@@ -1003,16 +1139,32 @@ impl ToolDispatcher {
                         )
                         .with_output_capture(self.output_store.get().cloned()),
                     ),
-                    name => Box::new(
+                    "write_file" => Box::new(
                         WriteTool::new(
                             self.files.clone(),
                             observed.clone(),
                             permit,
-                            if name == "write_file" {
-                                WriteToolKind::WriteFile
-                            } else {
-                                WriteToolKind::ApplyPatch
-                            },
+                            WriteToolKind::WriteFile,
+                            self.write_max_bytes,
+                        )
+                        .with_known_secrets(known_secrets.clone()),
+                    ),
+                    "edit_file" => Box::new(
+                        WriteTool::new(
+                            self.files.clone(),
+                            observed.clone(),
+                            permit,
+                            WriteToolKind::EditFile,
+                            self.write_max_bytes,
+                        )
+                        .with_known_secrets(known_secrets.clone()),
+                    ),
+                    _ => Box::new(
+                        WriteTool::new(
+                            self.files.clone(),
+                            observed.clone(),
+                            permit,
+                            WriteToolKind::ApplyPatch,
                             self.write_max_bytes,
                         )
                         .with_known_secrets(known_secrets.clone()),

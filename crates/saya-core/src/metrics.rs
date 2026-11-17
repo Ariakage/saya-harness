@@ -186,7 +186,7 @@ impl Metrics {
                     && state
                         .calls
                         .get(call_id)
-                        .is_some_and(|name| name == "write_file" || name == "apply_patch")
+                        .is_some_and(|name| crate::registry::is_local_write_tool(name))
                     && let Some(artifact) = artifact(result) =>
                 {
                     state.artifacts.push(artifact);

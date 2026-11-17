@@ -184,11 +184,14 @@ fn private_cli_worker_receives_host_private_inode_snapshot_and_preserves_normal_
     let snapshot = host
         .worker_protection_snapshot("search_text", &workspace)
         .unwrap();
-    for name in ["read_file", "write_file", "apply_patch"] {
+    for name in ["read_file", "write_file", "edit_file", "apply_patch"] {
         let args = match name {
             "read_file" => json!({"path":"private-alias.txt","start_line":1,"line_count":10}),
             "write_file" => {
                 json!({"path":"private-alias.txt","content":"blocked","expected_version":"0".repeat(64)})
+            }
+            "edit_file" => {
+                json!({"path":"private-alias.txt","old_string":"SYNTHETIC","new_string":"blocked","expected_version":"invalid"})
             }
             _ => {
                 json!({"path":"private-alias.txt","patch":"--- a/private-alias.txt\n+++ b/private-alias.txt\n@@ -1 +1 @@\n-SYNTHETIC-PRIVATE-MEMORY\n+blocked\n","expected_version":"invalid"})

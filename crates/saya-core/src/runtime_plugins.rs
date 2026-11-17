@@ -357,7 +357,11 @@ fn prepare_process(
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     execution.apply_environment(&mut expected)?;
-    if plan.argv.first().map(Path::new) != Some(process.program.as_path()) || resolved != expected {
+    let resolved_program = plan
+        .argv
+        .first()
+        .and_then(|value| std::fs::canonicalize(value).ok());
+    if resolved_program.as_deref() != Some(process.program.as_path()) || resolved != expected {
         return Err(error(
             "plugin_runtime_scope",
             "Plugin process differs from its host descriptor",

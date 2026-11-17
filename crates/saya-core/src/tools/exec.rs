@@ -78,7 +78,8 @@ pub struct ExecArgs {
     #[serde(default)]
     pub env: BTreeMap<String, EnvValue>,
 }
-/// A command normalized before authorization. `argv[0]` is an absolute path.
+/// A command normalized before authorization. `argv[0]` is an absolute path
+/// preserving any invoked executable symlink while resolving ancestor directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecPlan {
     pub argv: Vec<String>,
@@ -369,9 +370,11 @@ impl ExecTool {
         if let Some(execution) = &self.config.execution {
             execution.apply_environment(&mut env)?;
         }
-        let executable = resolve_executable(&args.argv[0], &cwd, env.get(OsStr::new("PATH")))?;
+        let executable =
+            resolve_executable_identity(&args.argv[0], &cwd, env.get(OsStr::new("PATH")))?;
         let mut argv = args.argv.clone();
         argv[0] = executable
+            .invoked
             .to_str()
             .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?
             .to_owned();
@@ -417,11 +420,25 @@ pub(crate) fn environment_digest(
         .collect();
     environment_digest
 }
-pub(crate) fn resolve_executable(
+pub(crate) struct ResolvedExecutable {
+    pub invoked: PathBuf,
+    pub canonical: PathBuf,
+}
+fn invoked_executable_path(candidate: &Path, canonical: &Path) -> Option<PathBuf> {
+    let name = candidate.file_name()?;
+    let invoked = match candidate.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            std::fs::canonicalize(parent).ok()?.join(name)
+        }
+        _ => candidate.to_path_buf(),
+    };
+    (std::fs::canonicalize(&invoked).ok().as_deref() == Some(canonical)).then_some(invoked)
+}
+pub(crate) fn resolve_executable_identity(
     program: &str,
     cwd: &Path,
     path: Option<&OsString>,
-) -> Result<PathBuf, BoundaryError> {
+) -> Result<ResolvedExecutable, BoundaryError> {
     let candidate = Path::new(program);
     let search: Vec<PathBuf> = if program.contains('/') || candidate.is_absolute() {
         vec![if candidate.is_absolute() {
@@ -443,18 +460,30 @@ pub(crate) fn resolve_executable(
         .collect()
     };
     for candidate in search {
-        if let Ok(real) = std::fs::canonicalize(candidate)
+        if let Ok(real) = std::fs::canonicalize(&candidate)
             && let Ok(meta) = std::fs::metadata(&real)
             && meta.is_file()
             && meta.permissions().mode() & 0o111 != 0
         {
-            return Ok(real);
+            let invoked =
+                invoked_executable_path(&candidate, &real).unwrap_or_else(|| real.clone());
+            return Ok(ResolvedExecutable {
+                invoked,
+                canonical: real,
+            });
         }
     }
     Err(failure(
         "executable_not_found",
         "executable not found or not executable",
     ))
+}
+pub(crate) fn resolve_executable(
+    program: &str,
+    cwd: &Path,
+    path: Option<&OsString>,
+) -> Result<PathBuf, BoundaryError> {
+    resolve_executable_identity(program, cwd, path).map(|resolved| resolved.canonical)
 }
 
 #[derive(Default)]
@@ -551,11 +580,13 @@ fn leader_exited(pid: Pid) -> Result<bool, BoundaryError> {
     }
 }
 async fn wait_leader(pid: Pid) -> Result<(), BoundaryError> {
+    let mut interval = Duration::from_millis(1);
     loop {
         if leader_exited(pid)? {
             return Ok(());
         }
-        sleep(Duration::from_millis(10)).await;
+        sleep(interval).await;
+        interval = (interval * 2).min(Duration::from_millis(16));
     }
 }
 
@@ -564,16 +595,20 @@ async fn wait_leader(pid: Pid) -> Result<(), BoundaryError> {
 // inaccessible is a cleanup failure, not an assumed success.
 async fn confirm_group_gone(pid: Pid) -> Result<(), BoundaryError> {
     let check = async {
+        let mut interval = Duration::from_millis(1);
         loop {
             match killpg(pid, None) {
                 Err(Errno::ESRCH) => return Ok(()),
-                Ok(()) | Err(Errno::EPERM) => sleep(Duration::from_millis(10)).await,
-                Err(e) => return Err(failure("process_cleanup_error", e.to_string())),
+                Ok(()) | Err(Errno::EPERM) => {
+                    sleep(interval).await;
+                    interval = (interval * 2).min(Duration::from_millis(16));
+                }
+                Err(e) => return Err(BoundaryError::new("process_cleanup_error", e.to_string())),
             }
         }
     };
     timeout(Duration::from_secs(1), check).await.map_err(|_| {
-        failure(
+        BoundaryError::new(
             "process_cleanup_error",
             "could not confirm process group cleanup",
         )

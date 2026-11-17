@@ -505,3 +505,31 @@ fn gate_never_treats_ask_or_model_review_as_authorization() -> Result<(), Box<dy
     assert!(ExecGate::authorize(&gate, &plan, &command, &context)?);
     Ok(())
 }
+
+#[test]
+fn symlinked_executable_still_matches_canonical_policy_rules()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+
+    let root = support::temp_workspace()?;
+    let workspace = root.path().canonicalize()?;
+    let link = workspace.join("alias_echo");
+    let canonical = std::fs::canonicalize("/bin/echo")?;
+    symlink(&canonical, &link)?;
+    let config = PermissionConfig::from_toml(&format!(
+        "[[rules]]\neffect='deny'\ntool='exec'\nexecutable={:?}\n",
+        canonical.display().to_string()
+    ))?;
+    let policy = Policy::new(&workspace, config)?;
+    let plan = ExecPlan {
+        argv: vec![link.to_string_lossy().into_owned(), "hello".into()],
+        cwd: workspace,
+        timeout: Duration::from_secs(1),
+        environment_digest: "test".into(),
+    };
+    let op = Operation::exec(&plan)?;
+    let decision = policy.evaluate(WorkMode::Work, PermissionMode::Auto, &op);
+    assert_eq!(decision.decision, Decision::Deny);
+    assert_eq!(decision.reason, "explicit_deny");
+    Ok(())
+}

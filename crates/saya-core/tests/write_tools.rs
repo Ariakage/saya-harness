@@ -935,3 +935,170 @@ async fn write_rejects_oversized_binary_and_symlink_escape()
     assert!(!temp.path().join("binary.txt").exists());
     Ok(())
 }
+
+#[tokio::test]
+async fn edit_file_enforces_exact_unique_match_or_replace_all_and_version_check()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    std::fs::write(
+        temp.path().join("code.rs"),
+        "fn a() { let x = 1; }\nfn b() { let x = 1; }\n",
+    )?;
+    let (session, run) = fixture(temp.path());
+    let store = store_for(&session, &run).await?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let version = files.read_file(Path::new("code.rs"), 1, 10)?.version;
+    let gate = Arc::new(Gate {
+        count: AtomicUsize::new(0),
+        allowed_checks: usize::MAX,
+    });
+    let tool = WriteTool::new(
+        files.clone(),
+        store,
+        gate,
+        WriteToolKind::EditFile,
+        DEFAULT_WRITE_MAX_BYTES,
+    );
+    let ctx = ToolContext {
+        run,
+        workspace: temp.path().into(),
+    };
+
+    // Ambiguous match fails without mutating the file.
+    let ambiguous = tool
+        .execute(
+            &call(
+                "edit_file",
+                "edit-ambig",
+                serde_json::json!({
+                    "path": "code.rs",
+                    "old_string": "let x = 1;",
+                    "new_string": "let x = 2;",
+                    "expected_version": version.clone(),
+                }),
+            ),
+            &ctx,
+            &NeverCancel,
+        )
+        .await?;
+    assert_eq!(
+        ambiguous.error.as_ref().map(|e| e.code.as_str()),
+        Some("edit_conflict")
+    );
+
+    // Unique match succeeds and advances version.
+    let single = tool
+        .execute(
+            &call(
+                "edit_file",
+                "edit-single",
+                serde_json::json!({
+                    "path": "code.rs",
+                    "old_string": "fn b() { let x = 1; }",
+                    "new_string": "fn b() { let x = 2; }",
+                    "expected_version": version,
+                }),
+            ),
+            &ctx,
+            &NeverCancel,
+        )
+        .await?;
+    assert!(single.ok, "{:?}", single.error);
+    let v2 = single
+        .data
+        .as_ref()
+        .and_then(|d| d["version"].as_str())
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("code.rs"))?,
+        "fn a() { let x = 1; }\nfn b() { let x = 2; }\n"
+    );
+
+    // replace_all updates every matching occurrence.
+    let replaced_all = tool
+        .execute(
+            &call(
+                "edit_file",
+                "edit-all",
+                serde_json::json!({
+                    "path": "code.rs",
+                    "old_string": "fn ",
+                    "new_string": "pub fn ",
+                    "replace_all": true,
+                    "expected_version": v2,
+                }),
+            ),
+            &ctx,
+            &NeverCancel,
+        )
+        .await?;
+    assert!(replaced_all.ok, "{:?}", replaced_all.error);
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("code.rs"))?,
+        "pub fn a() { let x = 1; }\npub fn b() { let x = 2; }\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_patch_tolerates_wrong_hunk_counts_and_unique_line_offset_drift()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        "line 1\nline 2\nline 3\nline 4\nline 5\nfn target() {\n    old_call();\n}\nline 9\n",
+    )?;
+    let (session, run) = fixture(temp.path());
+    let store = store_for(&session, &run).await?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let version = files.read_file(Path::new("lib.rs"), 1, 20)?.version;
+    let gate = Arc::new(Gate {
+        count: AtomicUsize::new(0),
+        allowed_checks: usize::MAX,
+    });
+    let tool = WriteTool::new(
+        files,
+        store,
+        gate,
+        WriteToolKind::ApplyPatch,
+        DEFAULT_WRITE_MAX_BYTES,
+    );
+    let ctx = ToolContext {
+        run,
+        workspace: temp.path().into(),
+    };
+
+    // Wrong hunk counts (99,99 instead of 3,3) AND shifted line origin (line 1 instead of line 6).
+    let tolerant = tool
+        .execute(
+            &call(
+                "apply_patch",
+                "tolerant-1",
+                serde_json::json!({
+                    "path": "lib.rs",
+                    "patch": "--- a/lib.rs\n+++ b/lib.rs\n@@ -1,99 +1,99 @@\n fn target() {\n-    old_call();\n+    new_call();\n }\n",
+                    "expected_version": version,
+                }),
+            ),
+            &ctx,
+            &NeverCancel,
+        )
+        .await?;
+    assert!(tolerant.ok, "{:?}", tolerant.error);
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("lib.rs"))?,
+        "line 1\nline 2\nline 3\nline 4\nline 5\nfn target() {\n    new_call();\n}\nline 9\n"
+    );
+    Ok(())
+}

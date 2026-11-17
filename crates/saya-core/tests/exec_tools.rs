@@ -781,3 +781,53 @@ async fn aborted_native_owner_keeps_cleanup_unconfirmed_until_reaped()
     assert!(!environment.runtime_directory().exists());
     Ok(())
 }
+
+#[tokio::test]
+async fn symlink_executable_preserves_invoked_argv0() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let temp = support::temp_workspace()?;
+    let workspace = temp.path().canonicalize()?;
+    let target = workspace.join("real_tool");
+    std::fs::write(&target, "#!/bin/sh\nprintf '%s' \"$0\"\n")?;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
+    let bin = workspace.join("venv/bin");
+    std::fs::create_dir_all(&bin)?;
+    let link = bin.join("python");
+    symlink(&target, &link)?;
+
+    let (session, run) = fixture(&workspace);
+    let config = ExecConfig {
+        environment: Environment::from_pairs([
+            (
+                "PATH".into(),
+                format!("{}:/usr/bin:/bin", bin.display()).into(),
+            ),
+            ("HOME".into(), workspace.as_os_str().to_owned()),
+        ]),
+        ..Default::default()
+    };
+    let executor = tool(&workspace, store_for(&session, &run).await?, config)?;
+    let context = ToolContext {
+        run,
+        workspace: workspace.clone(),
+    };
+    for (idx, requested) in ["./venv/bin/python", "python"].iter().enumerate() {
+        let result = executor
+            .execute(
+                &call(
+                    &format!("sym-{idx}"),
+                    serde_json::json!({"argv": [requested]}),
+                ),
+                &context,
+                &NeverCancel,
+            )
+            .await?;
+        assert!(result.ok, "{result:?}");
+        assert_eq!(
+            result.data.as_ref().and_then(|v| v["stdout"].as_str()),
+            Some(link.to_string_lossy().as_ref())
+        );
+    }
+    Ok(())
+}

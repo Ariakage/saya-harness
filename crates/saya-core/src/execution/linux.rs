@@ -284,7 +284,9 @@ impl LinuxBackend {
                 bind(&mut args, &mut mount_fds, "--bind-fd", path, path)?;
             }
         }
-        if matches!(policy.network, NetworkPolicy::LoopbackPort { .. }) {
+        if policy.synthetic_etc_identity
+            || matches!(policy.network, NetworkPolicy::LoopbackPort { .. })
+        {
             // SAFETY: numeric identity queries have no side effects.
             let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
             for (name, contents) in [

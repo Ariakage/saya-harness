@@ -113,17 +113,14 @@ fn validate_request(request: &FileWorkerRequest) -> Result<(), BoundaryError> {
             "File worker schema must be 1",
         ));
     }
-    if !matches!(
-        request.call.name.as_str(),
-        "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
-    ) {
+    if !crate::registry::is_local_file_tool(&request.call.name) {
         return Err(failure(
             "unsupported_worker_tool",
             "File workers accept only local file tools",
         ));
     }
     if request.context.run.work_mode == WorkMode::Plan
-        && matches!(request.call.name.as_str(), "write_file" | "apply_patch")
+        && crate::registry::is_local_write_tool(&request.call.name)
     {
         return Err(failure(
             "mode_denied",

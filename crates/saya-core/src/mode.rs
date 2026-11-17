@@ -1,10 +1,11 @@
 //! Coordination of user-requested work mode changes. This state machine does
 //! not itself persist changes, dispatch tools, or enforce permissions.
-use crate::contract::{BoundaryError, ErrorInfo, EventPayload, WorkMode};
+use crate::contract::{BoundaryError, EventPayload, WorkMode, error_codes};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
+use tokio::sync::{Notify, futures::Notified};
 
 const MAX_MODE_EVENTS: usize = 256;
 #[derive(Clone)]
@@ -14,7 +15,11 @@ pub(crate) struct ModeEvent {
 }
 
 #[derive(Clone)]
-pub struct ModeController(Arc<Mutex<State>>);
+pub struct ModeController(Arc<ControllerInner>);
+struct ControllerInner {
+    state: Mutex<State>,
+    changed: Notify,
+}
 struct State {
     current: WorkMode,
     pending: Option<WorkMode>,
@@ -32,15 +37,26 @@ pub struct ModeSnapshot {
     pub revision: u64,
 }
 
+pub(crate) struct SharedModeLease<'a> {
+    controller: &'a ModeController,
+    finished: bool,
+}
+impl SharedModeLease<'_> {
+    pub(crate) fn complete(mut self) -> Result<(), BoundaryError> {
+        self.finished = true;
+        self.controller.finish()
+    }
+}
+impl Drop for SharedModeLease<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.controller.finish();
+        }
+    }
+}
+
 fn poisoned() -> BoundaryError {
-    BoundaryError(
-        ErrorInfo {
-            code: "mode_state_error".into(),
-            message: "mode lock poisoned".into(),
-        },
-        None,
-        None,
-    )
+    BoundaryError::new(error_codes::MODE_STATE_ERROR, "mode lock poisoned")
 }
 impl ModeController {
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
@@ -54,16 +70,35 @@ impl ModeController {
         Self::create(initial, true)
     }
     fn create(initial: WorkMode, record_events: bool) -> Self {
-        Self(Arc::new(Mutex::new(State {
-            current: initial,
-            pending: None,
-            active: 0,
-            exclusive: false,
-            revision: 0,
-            events: VecDeque::new(),
-            event_sequence: 0,
-            record_events,
-        })))
+        Self(Arc::new(ControllerInner {
+            state: Mutex::new(State {
+                current: initial,
+                pending: None,
+                active: 0,
+                exclusive: false,
+                revision: 0,
+                events: VecDeque::new(),
+                event_sequence: 0,
+                record_events,
+            }),
+            changed: Notify::new(),
+        }))
+    }
+    pub(crate) fn notified(&self) -> Notified<'_> {
+        self.0.changed.notified()
+    }
+    pub(crate) fn lock_shared(
+        &self,
+        revision: u64,
+    ) -> Result<Option<SharedModeLease<'_>>, BoundaryError> {
+        if self.begin_shared(revision)? {
+            Ok(Some(SharedModeLease {
+                controller: self,
+                finished: false,
+            }))
+        } else {
+            Ok(None)
+        }
     }
     /// Queue a user request during a call, or apply it immediately while idle.
     /// Requesting the current mode withdraws a pending change without blocking
@@ -79,45 +114,44 @@ impl ModeController {
         target: WorkMode,
         before: impl FnOnce(),
     ) -> Result<(), BoundaryError> {
-        let mut s = self.0.lock().map_err(|_| poisoned())?;
-        let immediate = s.active == 0 && s.current != target;
-        let pending = s.active != 0 && s.current != target;
-        // A queued request reserves its eventual Changed entry. Finishing an
-        // existing invocation can therefore always apply the pending mode.
-        let needed = 1 + usize::from(immediate) + usize::from(pending);
-        if s.record_events
-            && (s.events.len() + needed > MAX_MODE_EVENTS
-                || s.event_sequence.checked_add(needed as u64).is_none())
         {
-            return Err(BoundaryError(
-                ErrorInfo {
-                    code: "mode_event_limit".into(),
-                    message: "mode event journal is full".into(),
-                },
-                None,
-                None,
-            ));
-        }
-        before();
-        let from = s.current;
-        s.record(EventPayload::ModeChangeRequested { from, to: target });
-        if s.current == target {
-            if s.pending.take().is_some() {
-                s.revision += 1;
+            let mut s = self.0.state.lock().map_err(|_| poisoned())?;
+            let immediate = s.active == 0 && s.current != target;
+            let pending = s.active != 0 && s.current != target;
+            // A queued request reserves its eventual Changed entry. Finishing an
+            // existing invocation can therefore always apply the pending mode.
+            let needed = 1 + usize::from(immediate) + usize::from(pending);
+            if s.record_events
+                && (s.events.len() + needed > MAX_MODE_EVENTS
+                    || s.event_sequence.checked_add(needed as u64).is_none())
+            {
+                return Err(BoundaryError::new(
+                    error_codes::MODE_EVENT_LIMIT,
+                    "mode event journal is full",
+                ));
             }
-        } else if s.active != 0 {
-            s.pending = Some(target);
-        } else {
-            s.current = target;
-            s.revision += 1;
-            s.record(EventPayload::ModeChanged { from, to: target });
+            before();
+            let from = s.current;
+            s.record(EventPayload::ModeChangeRequested { from, to: target });
+            if s.current == target {
+                if s.pending.take().is_some() {
+                    s.revision += 1;
+                }
+            } else if s.active != 0 {
+                s.pending = Some(target);
+            } else {
+                s.current = target;
+                s.revision += 1;
+                s.record(EventPayload::ModeChanged { from, to: target });
+            }
         }
+        self.0.changed.notify_waiters();
         Ok(())
     }
     /// Read the current and pending modes and the confirmation revision.
     /// Returns an error if the state lock is poisoned.
     pub fn snapshot(&self) -> Result<ModeSnapshot, BoundaryError> {
-        let s = self.0.lock().map_err(|_| poisoned())?;
+        let s = self.0.state.lock().map_err(|_| poisoned())?;
         Ok(ModeSnapshot {
             current: s.current,
             pending: s.pending,
@@ -125,7 +159,7 @@ impl ModeController {
         })
     }
     pub(crate) fn event_snapshot(&self) -> Result<(ModeSnapshot, Vec<ModeEvent>), BoundaryError> {
-        let s = self.0.lock().map_err(|_| poisoned())?;
+        let s = self.0.state.lock().map_err(|_| poisoned())?;
         Ok((
             ModeSnapshot {
                 current: s.current,
@@ -136,7 +170,7 @@ impl ModeController {
         ))
     }
     pub(crate) fn acknowledge_events(&self, through: u64) -> Result<(), BoundaryError> {
-        let mut s = self.0.lock().map_err(|_| poisoned())?;
+        let mut s = self.0.state.lock().map_err(|_| poisoned())?;
         while s
             .events
             .front()
@@ -150,7 +184,7 @@ impl ModeController {
     /// if another call or request raced, or an error if the lock is poisoned.
     /// The caller must persist the mode and check authorization before dispatch.
     pub fn begin(&self, revision: u64) -> Result<bool, BoundaryError> {
-        let mut s = self.0.lock().map_err(|_| poisoned())?;
+        let mut s = self.0.state.lock().map_err(|_| poisoned())?;
         if s.active != 0 || s.revision != revision || s.pending.is_some() {
             return Ok(false);
         }
@@ -161,7 +195,7 @@ impl ModeController {
     /// Begin a concurrently dispatched call at the same mode revision.
     /// Pending mode changes and exclusive calls prevent new dispatch.
     pub fn begin_shared(&self, revision: u64) -> Result<bool, BoundaryError> {
-        let mut s = self.0.lock().map_err(|_| poisoned())?;
+        let mut s = self.0.state.lock().map_err(|_| poisoned())?;
         if s.exclusive || s.revision != revision || s.pending.is_some() {
             return Ok(false);
         }
@@ -174,48 +208,50 @@ impl ModeController {
     /// Hold a host cleanup barrier before requesting a mode transition. The
     /// owner must release it with `finish`, including on cancellation or error.
     pub(crate) fn hold_transition(&self) -> Result<(), BoundaryError> {
-        let mut state = self.0.lock().map_err(|_| poisoned())?;
+        let mut state = self.0.state.lock().map_err(|_| poisoned())?;
         state.active = state.active.checked_add(1).ok_or_else(|| {
-            BoundaryError(
-                ErrorInfo {
-                    code: "mode_busy".into(),
-                    message: "mode transition guard capacity exhausted".into(),
-                },
-                None,
-                None,
+            BoundaryError::new(
+                error_codes::MODE_BUSY,
+                "mode transition guard capacity exhausted",
             )
         })?;
         Ok(())
     }
     pub(crate) fn active_invocations(&self) -> Result<usize, BoundaryError> {
-        Ok(self.0.lock().map_err(|_| poisoned())?.active)
+        Ok(self.0.state.lock().map_err(|_| poisoned())?.active)
     }
     /// Mark an invocation complete, including on failure, timeout or cancel,
     /// and apply the last pending request. The caller must persist the change
     /// before dispatching again; lock poisoning returns an error.
     pub fn finish(&self) -> Result<(), BoundaryError> {
-        let mut s = self.0.lock().map_err(|_| poisoned())?;
-        if s.active == 0 {
-            return Err(poisoned());
-        }
-        s.active -= 1;
-        if s.active != 0 {
-            return Ok(());
-        }
-        s.exclusive = false;
-        if let Some(mode) = s.pending.take()
-            && s.current != mode
-        {
-            let from = s.current;
-            s.current = mode;
-            s.revision += 1;
-            s.record(EventPayload::ModeChanged { from, to: mode });
+        let became_idle = {
+            let mut s = self.0.state.lock().map_err(|_| poisoned())?;
+            if s.active == 0 {
+                return Err(poisoned());
+            }
+            s.active -= 1;
+            if s.active != 0 {
+                return Ok(());
+            }
+            s.exclusive = false;
+            if let Some(mode) = s.pending.take()
+                && s.current != mode
+            {
+                let from = s.current;
+                s.current = mode;
+                s.revision += 1;
+                s.record(EventPayload::ModeChanged { from, to: mode });
+            }
+            true
+        };
+        if became_idle {
+            self.0.changed.notify_waiters();
         }
         Ok(())
     }
     /// Execute an internal permission-setting change only while no call is active.
     pub(crate) fn while_idle(&self, action: impl FnOnce()) -> Result<bool, BoundaryError> {
-        let state = self.0.lock().map_err(|_| poisoned())?;
+        let state = self.0.state.lock().map_err(|_| poisoned())?;
         if state.active != 0 {
             return Ok(false);
         }
@@ -226,11 +262,11 @@ impl ModeController {
     /// pending change. Returns an error if the state lock is poisoned; this
     /// check alone does not grant authorization.
     pub fn approval_is_current(&self, revision: u64) -> Result<bool, BoundaryError> {
-        let s = self.0.lock().map_err(|_| poisoned())?;
+        let s = self.0.state.lock().map_err(|_| poisoned())?;
         Ok(s.active == 0 && s.pending.is_none() && s.revision == revision)
     }
     pub(crate) fn shared_approval_is_current(&self, revision: u64) -> Result<bool, BoundaryError> {
-        let s = self.0.lock().map_err(|_| poisoned())?;
+        let s = self.0.state.lock().map_err(|_| poisoned())?;
         Ok(!s.exclusive && s.pending.is_none() && s.revision == revision)
     }
 }

@@ -1,5 +1,5 @@
 use saya_core::{
-    config::{self, Environment, Output, Overrides, Protocol},
+    config::{self, Environment, Output, Overrides, Protocol, SandboxSettings, ToolchainPreset},
     contract::{PermissionMode, WorkMode},
 };
 use std::{ffi::OsString, fs, path::Path};
@@ -1169,5 +1169,91 @@ fn browser_credentials_validate_without_browser_enablement_and_require_https() {
             let error = result.err().expect("HTTP credential slot accepted");
             assert_eq!(error.0.code, "invalid_config");
         }
+    }
+}
+
+#[test]
+fn sandbox_presets_add_safe_existing_toolchain_roots_without_changing_defaults() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    let home = temp.path().join("home");
+    let rustup = home.join(".rustup");
+    let cargo = home.join(".cargo");
+    let saya = home.join(".saya");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&rustup).unwrap();
+    fs::create_dir_all(&cargo).unwrap();
+    fs::create_dir_all(&saya).unwrap();
+
+    let base = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "base.toml", fixture())),
+            ..Default::default()
+        },
+        env(&[
+            ("HOME", home.to_str().unwrap()),
+            ("EXAMPLE_KEY", "fixture-secret"),
+        ]),
+        &workspace,
+    )
+    .unwrap();
+    assert!(!base.profiles["anthropic"].prompt_cache);
+    let (base_policy, _) = base
+        .sandbox
+        .resolve_with_environment(&workspace, base.environment())
+        .unwrap();
+    assert_eq!(base_policy.read_roots, std::slice::from_ref(&workspace));
+    assert!(!base_policy.synthetic_etc_identity);
+    assert_eq!(
+        serde_json::to_vec(&base.sandbox).unwrap(),
+        serde_json::to_vec(&SandboxSettings::default()).unwrap()
+    );
+
+    let preset_toml = format!(
+        "{}\n[sandbox]\nca_certs = true\ntoolchain_presets = [\"rust\", \"python\", \"minimal_etc\"]\n",
+        fixture().replace(
+            "api_version = \"2023-06-01\"",
+            "api_version = \"2023-06-01\"\nprompt_cache = true"
+        )
+    );
+    let configured = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "presets.toml", &preset_toml)),
+            ..Default::default()
+        },
+        env(&[
+            ("HOME", home.to_str().unwrap()),
+            ("EXAMPLE_KEY", "fixture-secret"),
+            ("RUSTUP_HOME", rustup.to_str().unwrap()),
+            // Hostile overrides pointing at root, HOME, and .saya must all be skipped.
+            ("CARGO_HOME", "/"),
+            ("PYENV_ROOT", home.to_str().unwrap()),
+            ("VIRTUAL_ENV", saya.to_str().unwrap()),
+        ]),
+        &workspace,
+    )
+    .unwrap();
+    assert!(configured.profiles["anthropic"].prompt_cache);
+    assert!(configured.sandbox.ca_certs);
+    assert_eq!(
+        configured.sandbox.toolchain_presets,
+        vec![
+            ToolchainPreset::Rust,
+            ToolchainPreset::Python,
+            ToolchainPreset::MinimalEtc,
+        ]
+    );
+    let (policy, _) = configured
+        .sandbox
+        .resolve_with_environment(&workspace, configured.environment())
+        .unwrap();
+    assert!(policy.synthetic_etc_identity);
+    assert!(policy.read_roots.contains(&rustup));
+    assert!(policy.read_roots.contains(&cargo));
+    assert!(!policy.read_roots.iter().any(|p| p == Path::new("/")));
+    assert!(!policy.read_roots.iter().any(|p| p == &home));
+    assert!(!policy.read_roots.iter().any(|p| p == &saya));
+    if Path::new("/etc/ssl").is_dir() {
+        assert!(policy.read_roots.iter().any(|p| p == Path::new("/etc/ssl")));
     }
 }

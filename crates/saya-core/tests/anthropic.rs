@@ -1022,3 +1022,81 @@ async fn anthropic_adapter_drives_core_tool_loop() -> Result<(), Box<dyn std::er
         })));
     Ok(())
 }
+
+fn count_cache_breakpoints(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(items) => items.iter().map(count_cache_breakpoints).sum(),
+        serde_json::Value::Object(map) => {
+            usize::from(map.contains_key("cache_control"))
+                + map.values().map(count_cache_breakpoints).sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+#[tokio::test]
+async fn prompt_cache_marks_static_system_last_tool_and_rolling_history_within_four_breakpoints()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::contract::HistoryItem;
+
+    let response = json!({"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}).to_string();
+    let (url, requests) = fixture::server(vec![("application/json", response)])?;
+    let model = AnthropicModel::new(
+        transport(url)?,
+        settings(false),
+        AnthropicVersion::default(),
+    )
+    .with_prompt_cache(true);
+    let mut req = request();
+    req.dynamic_instructions = None;
+    req.tools = vec![
+        ToolDefinition {
+            name: "read_file".into(),
+            description: "read".into(),
+            input_schema: json!({"type":"object"}),
+        },
+        ToolDefinition {
+            name: "edit_file".into(),
+            description: "edit".into(),
+            input_schema: json!({"type":"object"}),
+        },
+    ];
+    req.history = vec![
+        HistoryItem::UserText("first".into()),
+        HistoryItem::AssistantText("ack".into()),
+        HistoryItem::UserText("second".into()),
+        HistoryItem::AssistantText("ack2".into()),
+        HistoryItem::UserText("third".into()),
+    ];
+    collect(&model, &req).await?;
+    let body = requests.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(body["system"][0]["text"], "be helpful");
+    assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    assert!(body["tools"][0].get("cache_control").is_none());
+    assert_eq!(body["tools"][1]["cache_control"]["type"], "ephemeral");
+    assert!(
+        body["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none()
+    );
+    assert!(
+        body["messages"][1]["content"][0]
+            .get("cache_control")
+            .is_none()
+    );
+    assert_eq!(
+        body["messages"][2]["content"][0]["cache_control"]["type"],
+        "ephemeral"
+    );
+    assert!(
+        body["messages"][3]["content"][0]
+            .get("cache_control")
+            .is_none()
+    );
+    assert_eq!(
+        body["messages"][4]["content"][0]["cache_control"]["type"],
+        "ephemeral"
+    );
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    Ok(())
+}

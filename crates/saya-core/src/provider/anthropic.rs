@@ -90,20 +90,21 @@ impl AnthropicModel {
         check_budget: bool,
     ) -> Result<Value, BoundaryError> {
         let output = self.settings.validate(request)?;
-        let messages = history(
+        let mut messages = history(
             &request.history,
             self.settings.multimodal,
             &request.media,
             request.purpose == ModelPurpose::Execution,
         )?;
-        let system = if self.prompt_cache
-            && ((request.purpose == crate::contract::ModelPurpose::Execution
-                && request.dynamic_instructions.is_some())
-                || request.purpose == crate::contract::ModelPurpose::Compaction)
-        {
+        let cached_system = self.prompt_cache && !request.instructions.is_empty();
+        let system = if self.prompt_cache {
             let mut blocks = Vec::new();
             if !request.instructions.is_empty() {
-                blocks.push(json!({"type":"text","text":request.instructions,"cache_control":{"type":"ephemeral"}}));
+                blocks.push(json!({
+                    "type": "text",
+                    "text": request.instructions,
+                    "cache_control": {"type": "ephemeral"},
+                }));
             }
             if let Some(dynamic) = &request.dynamic_instructions
                 && !dynamic.is_empty()
@@ -114,6 +115,20 @@ impl AnthropicModel {
         } else {
             json!(request.combined_instructions())
         };
+        let cached_tools = self.prompt_cache && !request.tools.is_empty();
+        if self.prompt_cache && !messages.is_empty() {
+            let used = usize::from(cached_tools) + usize::from(cached_system);
+            let remaining = 4usize.saturating_sub(used);
+            if remaining >= 2 && messages.len() >= 3 {
+                let index = messages.len() - 3;
+                mark_message_cache_control(&mut messages[index]);
+            }
+            if remaining >= 1
+                && let Some(last) = messages.last_mut()
+            {
+                mark_message_cache_control(last);
+            }
+        }
         let mut body = json!({"model":self.settings.model,"messages":messages,"max_tokens":output,"stream":self.settings.stream});
         let map = body
             .as_object_mut()
@@ -125,13 +140,24 @@ impl AnthropicModel {
             map.insert("output_config".into(), json!({"effort":effort}));
         }
         if !request.tools.is_empty() {
-            let tools: Vec<_> = request.tools.iter().map(|tool| {
-                let mut definition = json!({"name":tool.name,"description":tool.description,"input_schema":tool.input_schema});
-                if self.settings.strict_tools {
-                    definition["strict"] = json!(true);
-                }
-                definition
-            }).collect();
+            let mut tools: Vec<_> = request
+                .tools
+                .iter()
+                .map(|tool| {
+                    let mut definition = json!({
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": tool.input_schema,
+                    });
+                    if self.settings.strict_tools {
+                        definition["strict"] = json!(true);
+                    }
+                    definition
+                })
+                .collect();
+            if cached_tools && let Some(last) = tools.last_mut() {
+                last["cache_control"] = json!({"type": "ephemeral"});
+            }
             map.insert("tools".into(), Value::Array(tools));
         }
         self.settings
@@ -181,7 +207,13 @@ impl Model for AnthropicModel {
     ) -> Operation<'a, Box<dyn ModelStream>> {
         Box::pin(async move {
             let body = self.request_body(request)?;
-            let mut warmup = if body["system"][0].get("cache_control").is_some() {
+            let warmup_eligible = body["system"][0].get("cache_control").is_some()
+                || body["tools"]
+                    .as_array()
+                    .and_then(|tools| tools.last())
+                    .and_then(|tool| tool.get("cache_control"))
+                    .is_some();
+            let mut warmup = if warmup_eligible {
                 if let Some(slot) = self.warmup_slot(&body) {
                     let guard = tokio::select! { biased; () = cancel.cancelled() => return Err(failure("cancelled", "request cancelled")), guard = slot.lock_owned() => guard };
                     if guard.is_some_and(|at| at.elapsed() < Duration::from_secs(240)) {
@@ -447,6 +479,17 @@ fn parse_message(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bou
         .ok_or_else(|| failure("incomplete_model_response", "message stop reason missing"))?;
     Ok((parse_blocks(blocks, stop)?, usage(obj.get("usage"))?))
 }
+fn mark_message_cache_control(message: &mut Value) {
+    if let Some(last_block) = message
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+        .and_then(|blocks| blocks.last_mut())
+        .and_then(Value::as_object_mut)
+    {
+        last_block.insert("cache_control".into(), json!({"type": "ephemeral"}));
+    }
+}
+
 fn append_message(messages: &mut Vec<Value>, role: &str, block: Value) {
     if let Some(last) = messages.last_mut()
         && last.get("role").and_then(Value::as_str) == Some(role)

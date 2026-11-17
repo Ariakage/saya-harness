@@ -236,7 +236,7 @@ pub fn build_runtime(
                     config,
                     name,
                     p,
-                    launch.anthropic_prompt_cache && name == profile,
+                    p.prompt_cache || (launch.anthropic_prompt_cache && name == profile),
                 )?,
             ))
         })
@@ -342,7 +342,9 @@ pub fn build_runtime(
         config.context.auto_compact,
         compact,
     )?;
-    let (mut sandbox, broker) = config.sandbox.resolve(&session.workspace)?;
+    let (mut sandbox, broker) = config
+        .sandbox
+        .resolve_with_environment(&session.workspace, config.environment())?;
     sandbox
         .read_roots
         .extend(config.permissions.additional_roots.iter().cloned());

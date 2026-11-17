@@ -4,7 +4,7 @@
 //! Preparing an environment never runs the caller's payload. Callers supervise
 //! every launched process, then call `cleanup` after all calls have stopped.
 
-use crate::contract::{BoundaryError, ErrorInfo};
+use crate::contract::{BoundaryError, error_codes};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -159,6 +159,9 @@ pub struct SandboxPolicy {
     /// Browser workers use a separate filesystem and syscall profile. Generic
     /// policies leave this unset and keep the existing behavior unchanged.
     pub browser: Option<BrowserSandboxProfile>,
+    /// Expose minimal synthetic `/etc/{passwd,group,nsswitch.conf}` identity
+    /// entries on Linux even when network loopback is disabled.
+    pub synthetic_etc_identity: bool,
 }
 impl SandboxPolicy {
     pub fn workspace(workspace: PathBuf) -> Self {
@@ -173,6 +176,7 @@ impl SandboxPolicy {
             resources: ResourceLimits::default(),
             cgroup_root: None,
             browser: None,
+            synthetic_etc_identity: false,
         }
     }
     /// Browser-specific policy. Only `install_roots` are exposed read-only;
@@ -191,6 +195,7 @@ impl SandboxPolicy {
             resources: ResourceLimits::default(),
             cgroup_root: None,
             browser: Some(profile),
+            synthetic_etc_identity: false,
         }
     }
 }
@@ -237,6 +242,7 @@ struct Environment {
     cleanup_lock: Mutex<()>,
     host_worker: Mutex<Option<PathBuf>>,
     active_processes: AtomicUsize,
+    process_idle: tokio::sync::Notify,
     #[cfg(target_os = "linux")]
     linux: Option<linux::LinuxBackend>,
     #[cfg(target_os = "macos")]
@@ -602,6 +608,7 @@ fn prepare_inner(
             cleanup_lock: Mutex::new(()),
             host_worker: Mutex::new(None),
             active_processes: AtomicUsize::new(0),
+            process_idle: tokio::sync::Notify::new(),
             #[cfg(target_os = "linux")]
             linux,
             #[cfg(target_os = "macos")]
@@ -621,29 +628,35 @@ impl PreparedEnvironment {
     pub async fn wait_for_process_cleanup(&self) -> Result<(), BoundaryError> {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while self.active_processes() != 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                let notified = self.inner.process_idle.notified();
+                if self.active_processes() == 0 {
+                    break;
+                }
+                notified.await;
             }
         })
         .await
         .map_err(|_| {
-            failure(
-                "sandbox_cleanup_unknown",
+            BoundaryError::new(
+                error_codes::SANDBOX_CLEANUP_UNKNOWN,
                 "owned process cleanup could not be confirmed",
             )
         })
     }
     pub(crate) fn process_lease(&self) -> Result<ProcessLease, BoundaryError> {
         if self.inner.closed.load(Ordering::Acquire) {
-            return Err(failure(
-                "sandbox_environment_closed",
+            return Err(BoundaryError::new(
+                error_codes::SANDBOX_ENVIRONMENT_CLOSED,
                 "sandbox environment has been closed",
             ));
         }
         self.inner.active_processes.fetch_add(1, Ordering::AcqRel);
         if self.inner.closed.load(Ordering::Acquire) {
-            self.inner.active_processes.fetch_sub(1, Ordering::AcqRel);
-            return Err(failure(
-                "sandbox_environment_closed",
+            if self.inner.active_processes.fetch_sub(1, Ordering::AcqRel) == 1 {
+                self.inner.process_idle.notify_waiters();
+            }
+            return Err(BoundaryError::new(
+                error_codes::SANDBOX_ENVIRONMENT_CLOSED,
                 "sandbox environment has been closed",
             ));
         }
@@ -995,10 +1008,15 @@ pub(crate) struct ProcessLease {
 impl ProcessLease {
     pub(crate) fn complete(&mut self) {
         if !self.completed {
-            self.environment
+            if self
+                .environment
                 .inner
                 .active_processes
-                .fetch_sub(1, Ordering::AcqRel);
+                .fetch_sub(1, Ordering::AcqRel)
+                == 1
+            {
+                self.environment.inner.process_idle.notify_waiters();
+            }
             self.completed = true;
         }
     }
@@ -1173,14 +1191,7 @@ pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, BoundaryError> {
     }
 }
 fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
-    BoundaryError(
-        ErrorInfo {
-            code: code.into(),
-            message: message.into(),
-        },
-        None,
-        None,
-    )
+    BoundaryError::new(code, message)
 }
 fn io_error(error: io::Error) -> BoundaryError {
     failure("sandbox_prepare_failed", error.to_string())

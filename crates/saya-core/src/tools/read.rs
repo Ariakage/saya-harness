@@ -178,10 +178,7 @@ impl ReadTools {
         tool: &str,
         target: &Path,
     ) -> Result<ProtectedPathSnapshot, ReadError> {
-        if !matches!(
-            tool,
-            "read_file" | "list_dir" | "find_files" | "search_text" | "write_file" | "apply_patch"
-        ) {
+        if !crate::registry::is_local_file_tool(tool) {
             return Err(err("invalid_args", "Unknown file worker operation"));
         }
         self.check_private_path(target)?;
@@ -942,8 +939,26 @@ impl crate::boundary::Tool for ReadTool {
         let (name, description, properties, required) = match self.kind {
             ReadToolKind::ReadFile => (
                 "read_file",
-                "Read a UTF-8 file with 1-based start_line and bounded line_count. The returned version is required for later writes. A truncated result is not the end of the file; narrow the range or continue reading. Use the returned 1-based start_line and end_line to calculate patch hunk origins instead of guessing line numbers. When the task is to find matching text or a specific entry, use search_text before read_file, even if the file size is unknown; do not scan from line 1 with read_file. For large files, read only the needed range after searching. Search hits already include the path, line number, and matching text; never reread an entire large file merely to confirm a hit.",
-                json!({"path":{"type":"string","description":"Workspace-relative file path"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"description":"Bounded number of lines to read; do not use large pages to scan for matching text"}}),
+                concat!(
+                    "Read a UTF-8 file with 1-based start_line and bounded line_count. ",
+                    "The returned version is required for later writes. ",
+                    "A truncated result is not the end of the file; narrow the range or continue reading. ",
+                    "Use the returned 1-based start_line and end_line to calculate patch hunk origins ",
+                    "instead of guessing line numbers. When the task is to find matching text or a specific entry, ",
+                    "use search_text before read_file, even if the file size is unknown; ",
+                    "do not scan from line 1 with read_file. For large files, read only the needed range after searching. ",
+                    "Search hits already include the path, line number, and matching text; ",
+                    "never reread an entire large file merely to confirm a hit.",
+                ),
+                json!({
+                    "path": {"type": "string", "description": "Workspace-relative file path"},
+                    "start_line": {"type": "integer", "minimum": 1},
+                    "line_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Bounded number of lines to read; do not use large pages to scan for matching text"
+                    }
+                }),
                 json!(["path", "start_line", "line_count"]),
             ),
             ReadToolKind::ListDir => (
@@ -954,14 +969,34 @@ impl crate::boundary::Tool for ReadTool {
             ),
             ReadToolKind::FindFiles => (
                 "find_files",
-                "Find workspace paths using a glob, not a regular expression. Hidden or ignored entries depend on include_ignored. Results are bounded by host limits.",
-                json!({"path":{"type":"string","description":"Directory root to search (use . for workspace root)"},"glob":{"type":"string","description":"Glob matched against relative paths under path"},"include_ignored":{"type":"boolean"}}),
+                concat!(
+                    "Find workspace paths using a glob, not a regular expression. ",
+                    "Hidden or ignored entries depend on include_ignored. Results are bounded by host limits.",
+                ),
+                json!({
+                    "path": {"type": "string", "description": "Directory root to search (use . for workspace root)"},
+                    "glob": {"type": "string", "description": "Glob matched against relative paths under path"},
+                    "include_ignored": {"type": "boolean"}
+                }),
                 json!(["path", "glob"]),
             ),
             ReadToolKind::SearchText => (
                 "search_text",
-                "Search text recursively under a directory path (use `.` for the workspace) with a literal pattern, or a regular expression when regex is true. Hits report the file and 1-based line number. Use focused paths and patterns; a truncated result is incomplete evidence, not proof of absence.",
-                json!({"path":{"type":"string","description":"Directory root to search (must be a directory such as ., not a file path)"},"pattern":{"type":"string","description":"Literal text to match, or regex when regex is true"},"regex":{"type":"boolean"},"include_ignored":{"type":"boolean"}}),
+                concat!(
+                    "Search text recursively under a directory path (use `.` for the workspace) ",
+                    "with a literal pattern, or a regular expression when regex is true. ",
+                    "Hits report the file and 1-based line number. Use focused paths and patterns; ",
+                    "a truncated result is incomplete evidence, not proof of absence.",
+                ),
+                json!({
+                    "path": {
+                        "type": "string",
+                        "description": "Directory root to search (must be a directory such as ., not a file path)"
+                    },
+                    "pattern": {"type": "string", "description": "Literal text to match, or regex when regex is true"},
+                    "regex": {"type": "boolean"},
+                    "include_ignored": {"type": "boolean"}
+                }),
                 json!(["path", "pattern"]),
             ),
         };
@@ -978,25 +1013,14 @@ impl crate::boundary::Tool for ReadTool {
         cancel: &'a dyn crate::boundary::Cancellation,
     ) -> crate::boundary::Operation<'a, crate::contract::ToolResult> {
         Box::pin(async move {
-            use crate::contract::{BoundaryError, ErrorInfo, ToolResult};
+            use crate::contract::{BoundaryError, ErrorInfo, ToolResult, error_codes};
             if cancel.is_cancelled() {
-                return Err(BoundaryError(
-                    ErrorInfo {
-                        code: "cancelled".into(),
-                        message: "tool cancelled".into(),
-                    },
-                    None,
-                    None,
-                ));
+                return Err(BoundaryError::new(error_codes::CANCELLED, "tool cancelled"));
             }
             let handle = tokio::runtime::Handle::try_current().map_err(|_| {
-                BoundaryError(
-                    ErrorInfo {
-                        code: "runtime_error".into(),
-                        message: "Tokio runtime required for file tools".into(),
-                    },
-                    None,
-                    None,
+                BoundaryError::new(
+                    error_codes::RUNTIME_ERROR,
+                    "Tokio runtime required for file tools",
                 )
             })?;
             let flag = std::sync::Arc::new(AtomicBool::new(false));
@@ -1015,19 +1039,14 @@ impl crate::boundary::Tool for ReadTool {
                 _ = cancel.cancelled() => {
                     flag.store(true, Ordering::Relaxed);
                     let _ = task.await;
-                    return Err(BoundaryError(ErrorInfo { code: "cancelled".into(), message: "tool cancelled".into() }, None, None));
+                    return Err(BoundaryError::new(error_codes::CANCELLED, "tool cancelled"));
                 }
-                outcome = &mut task => outcome.map_err(|e| BoundaryError(ErrorInfo { code: "tool_error".into(), message: e.to_string() }, None, None))?,
+                outcome = &mut task => outcome.map_err(|e| {
+                    BoundaryError::new(error_codes::TOOL_ERROR, e.to_string())
+                })?,
             };
             if cancel.is_cancelled() {
-                return Err(BoundaryError(
-                    ErrorInfo {
-                        code: "cancelled".into(),
-                        message: "tool cancelled".into(),
-                    },
-                    None,
-                    None,
-                ));
+                return Err(BoundaryError::new(error_codes::CANCELLED, "tool cancelled"));
             }
             Ok(match outcome {
                 Ok((data, truncated)) => ToolResult {

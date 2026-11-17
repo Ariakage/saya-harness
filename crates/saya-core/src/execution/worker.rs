@@ -112,6 +112,13 @@ pub async fn execute_file_worker(request: FileWorkerRequest) -> Result<ToolResul
             WriteToolKind::WriteFile,
             request.write_max_bytes,
         )),
+        "edit_file" => Box::new(WriteTool::new(
+            files,
+            store,
+            gate,
+            WriteToolKind::EditFile,
+            request.write_max_bytes,
+        )),
         "apply_patch" => Box::new(WriteTool::new(
             files,
             store,
@@ -122,7 +129,7 @@ pub async fn execute_file_worker(request: FileWorkerRequest) -> Result<ToolResul
         _ => {
             return Err(failure(
                 "unsupported_worker_tool",
-                "file workers only accept the six local file tools",
+                "file workers accept only local file tools",
             ));
         }
     };

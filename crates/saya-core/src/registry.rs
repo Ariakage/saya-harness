@@ -365,10 +365,83 @@ pub fn mcp_model_name(server: &str, remote: &str) -> Result<String, BoundaryErro
     }
     Ok(external_name(server, remote))
 }
+/// Local file and process tool names executable within the run workspace.
+pub const LOCAL_TOOL_NAMES: [&str; 8] = [
+    "read_file",
+    "list_dir",
+    "find_files",
+    "search_text",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "exec",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinFileKind {
+    Read,
+    Write,
+}
+
+pub fn builtin_file_kind(name: &str) -> Option<BuiltinFileKind> {
+    match name {
+        "read_file" | "list_dir" | "find_files" | "search_text" => Some(BuiltinFileKind::Read),
+        "write_file" | "edit_file" | "apply_patch" => Some(BuiltinFileKind::Write),
+        _ => None,
+    }
+}
+
+pub fn is_local_file_tool(name: &str) -> bool {
+    builtin_file_kind(name).is_some()
+}
+
+pub fn is_local_read_tool(name: &str) -> bool {
+    builtin_file_kind(name) == Some(BuiltinFileKind::Read)
+}
+
+pub fn is_local_write_tool(name: &str) -> bool {
+    builtin_file_kind(name) == Some(BuiltinFileKind::Write)
+}
+
+pub fn is_local_mutation_tool(name: &str) -> bool {
+    matches!(
+        builtin_effect(name),
+        Some(ToolEffect::FileWrite | ToolEffect::Process)
+    )
+}
+
+pub fn is_managed_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "memory_read"
+            | "memory_search"
+            | "memory_evidence"
+            | "memory_update"
+            | "memory_forget"
+            | "skill_catalog"
+            | "skill_activate"
+            | "skill_deactivate"
+            | "skill_read_resource"
+            | "checkpoint_create"
+            | "checkpoint_list"
+            | "checkpoint_diff"
+            | "checkpoint_accept"
+            | "checkpoint_restore"
+    )
+}
+
+pub fn managed_requires_independent_review(name: &str) -> bool {
+    matches!(name, "memory_update" | "memory_forget")
+}
+
+pub fn is_known_rule_tool(name: &str) -> bool {
+    (builtin_effect(name).is_some() && name != "background_start") || is_managed_tool(name)
+}
+
 pub fn builtin_effect(name: &str) -> Option<ToolEffect> {
     Some(match name {
         "read_file" | "list_dir" | "find_files" | "search_text" => ToolEffect::FileRead,
-        "write_file" | "apply_patch" => ToolEffect::FileWrite,
+        "write_file" | "edit_file" | "apply_patch" => ToolEffect::FileWrite,
         "exec" => ToolEffect::Process,
         "todo_write" | "output_read" | "output_search" => ToolEffect::SessionMetadata,
         "ask_user" => ToolEffect::Interaction,
