@@ -1,42 +1,59 @@
 # Saya Harness
 
-使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用运行时，GUI 按后续计划推进。
+[English](README.en.md)
 
-**Saya Harness 0.2.0** 提供 CLI 和默认 TUI，支持 macOS 15+、Linux glibc 2.35+ 的 x86_64 与 aarch64。包含 N0 共享基础、N1 终端界面、交互完善及两轮审查整改。直接运行 `saya` 进入 TUI，文本交互使用 `saya chat`。[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[中英双语说明](docs/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
+使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Saya 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用共享运行时，GUI 按后续计划推进。当前支持 macOS 15+ 与 Linux glibc 2.35+（`x86_64` / `aarch64`）。
 
-0.1.0 与 0.2.0-rc.2 的历史发行及验收保留各自源码和产物归属。
+## 快速上手
 
-当前开发线已完成 N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 和凭据管理，并接入 CLI 与 TUI；固定源码 `aaec8c5` 已完成四平台验收。N3 上下文、插件／Hooks 与全局记忆由固定源码 `e1da373` 完成四平台验收。N4 Goal 已实现独立持久存储、结构化计划、手动／有限自动 Run、恢复、预算、证据验收和 CLI／TUI 面板，并完成本机受控验收。0.2.0 的功能与限制继续归属已发布产物。[隔离配置](docs/configuration.md#n2-原生隔离配置)、[N2 验收](docs/n2-validation.md)、[N3 验收](docs/n3-validation.md)、[N4 验收](docs/n4-validation.md)
+### 1. 构建与安装
 
-## 已确认方向
+仓库固定 Rust `1.99.1`（见 `rust-toolchain.toml`）。在仓库根目录构建或安装 CLI：
 
-- 实现语言：Rust。
-- 交付路线：CLI MVP → TUI → GUI。
-- 核心职责：接收任务，调用模型，执行模型请求的工具，将工具结果交回模型，继续运行至结束。
-- 任务范围：同时支持编程任务与通用任务。
-- 工作模式：PLAN、BUILD、CODE、WORK，四者可切换，新会话默认 WORK。
-- 模式分工：PLAN 负责需求分析与规划；BUILD 负责端到端实现和交付；CODE 聚焦代码编写、修改与调试；WORK 负责通用任务执行。
-- CLI 交互：同时支持连续对话的交互会话和用于脚本调用的单次命令。
-- 模式规则：用户手动切换，Agent 可建议；当前调用完成后、下一次调用前生效，同一会话保留上下文。
-- 权限模式：`auto`、`bypass permissions`、`Manual Approval`，默认 `auto`。Manual Approval 对每次工具调用要求人工批准；PLAN 在三种权限模式下均只读，不修改工作区文件。
-- 模型协议：OpenAI Chat Completions、OpenAI Responses API、Anthropic Messages。
-- 首批工具：本地文件读写、目录／内容搜索、命令执行；可显式在当前运行内后台启动、查询与取消。运行结束时清理未完成任务。
-- 输出：流式交互、JSON 最终结果与 JSONL 事件输出。
-- 单次命令：允许显式预授权命令执行；无法询问且未获授权时，返回需要确认并退出。
-- 会话：本地保存、列出和恢复。恢复历史、原工作模式与配置引用后等待新输入，不自动重放工具；权限采用本次启动设置，不恢复历史授权。
+```sh
+cargo build --workspace --release --locked
+# 或安装到 ~/.cargo/bin
+cargo install --path crates/saya-cli --locked
+```
 
-## MVP 基线
+### 2. 初始化与校验配置
 
-项目负责人已整套确认[完整基线](docs/mvp-baseline.md) B-01 至 B-24，并在 D-029 补充运行内后台工具调用、D-033 纳入用户级与工作区的指令及 Skill 发现，D-035 将最低支持系统调整为 macOS 15；当前没有尚待选择的 MVP 产品阻塞项。
+复制无凭据示例配置（或运行 `saya config init`），填入你的模型端点、模型名与 API Key 环境变量名（凭据只通过环境变量引用，不写入配置文件）：
 
-0.1.0 提供以下执行路径。
+```sh
+mkdir -p ~/.config/saya
+cp examples/config.example.toml ~/.config/saya/config.toml
+# 或使用自定义路径：
+# ./target/release/saya --config /path/to/saya.toml config init
 
-1. 用户通过交互会话或单次命令选择模式、输入任务，并提供模型配置。
-2. 运行时调用模型，处理最终回答或工具调用。
-3. 工具执行结果返回模型，运行时继续下一轮。
-4. CLI 展示结果并保存会话，后续可列出或恢复；失败、取消或达到运行限制时明确结束。
+./target/release/saya config check
+```
 
-已确定命令名 saya、Rust 1.99.1／2024、core＋CLI workspace、TOML 配置、SQLite WAL、schema v1、macOS／Linux 首批平台和 MIT 许可证。核心运行时、CLI、本地会话持久化、并发与中断恢复已通过本机受控验证；四类任务与三协议已通过本机受控端到端验证，P7 验收已完成，正式发行状态见开发进度。完整接口、默认值和验证条件见基线、[需求规格](docs/requirements.md)与[执行契约](docs/execution.md)。
+> `config check` 只校验 TOML 语法、规则与环境变量引用，**不会联网或调用付费模型**。
+>
+> 如需在受控沙箱内运行常见构建工具链，可在 `[sandbox]` 中显式启用 `ca_certs = true` 与 `toolchain_presets = ["auto"]`（或按需指定 `["rust", "python", "node", "homebrew", "xcode_clt", "minimal_etc"]`）。若对接官方 Anthropic Messages 服务并需要 Prompt Caching，可在对应 `[profiles.<name>]` 下设置 `prompt_cache = true`，或追加 `--anthropic-prompt-cache`（默认关闭以兼容 DeepSeek Anthropic 接口）。
+
+### 3. 启动运行
+
+```sh
+# 进入默认交互式 TUI
+./target/release/saya --cwd /path/to/project
+
+# 启动纯文本对话模式
+./target/release/saya --cwd /path/to/project chat
+
+# 非交互单次执行（可显式指定工作模式）
+./target/release/saya --cwd /path/to/project --mode code run "Inspect this repository"
+```
+
+详细用法、快捷键、会话恢复与导出见[使用指南](docs/usage.md)和[配置说明](docs/configuration.md)。
+
+## 核心特性
+
+- **运行模式**：提供 `WORK`（默认，通用任务）、`CODE`（代码读写与调试）、`PLAN`（严格只读调研与规划）、`BUILD`（端到端实现与交付），同一会话保留上下文手动切换，在调用边界生效。
+- **权限与隔离**：默认 `auto`（规则 + 命令 CST 结构分析 + 可选独立模型核查 + 人工确认），另支持 `bypass`（仍遵守 PLAN 只读、显式 `deny` 与沙箱硬边界）与 `manual`（逐工具人工确认）。原生执行默认启用 macOS Seatbelt / Linux Bubblewrap + Seccomp + `NetworkBroker` 域名白名单代理，默认网络 `deny`。
+- **模型协议**：支持 OpenAI Chat Completions、OpenAI Responses API 与 Anthropic Messages；统一维护上下文预算、输出限制与超时重试。
+- **工具与长程能力**：内置文件读写与搜索（`read_file`、`list_dir`、`find_files`、`search_text`、`write_file`、`edit_file`、`apply_patch`）、受控命令执行（`exec`）、运行内后台任务、预授权非手动只读并发批处理、stdio / Streamable HTTP MCP、SQLite WAL 会话持久化与导出、上下文压缩、插件／Hooks 与 Goal 编排。
 
 ## 开发
 
@@ -48,6 +65,18 @@ just check
 just test-tooling
 just tui-preview syntax
 ```
+
+## 当前版本与开发线状态
+
+- **已发布版本**：**Saya Harness 0.2.0** 提供 CLI 和默认 TUI（含已确认的[完整基线](docs/mvp-baseline.md) B-01 至 B-24、D-029、D-033、D-035）。历史 0.1.0、0.2.0-rc.2 与 0.2.0 发行各自保留独立源码与产物归属。[GitHub Release](https://github.com/Ariakage/saya-harness/releases/tag/v0.2.0)、[0.2.0 双语说明](docs/release-notes-0.2.0.md)、[开发进度](docs/progress.md)
+- **0.2.0 之后的主线增量**：
+  - N2 原生隔离、命令 CST 风险事实、stdio／Streamable HTTP MCP 与凭据管理：固定源码 `aaec8c5` 已完成四平台验收（[N2 验收](docs/n2-validation.md)）。
+  - N3 上下文压缩、插件／Hooks 与全局记忆：固定源码 `e1da373` 已完成四平台验收（[N3 验收](docs/n3-validation.md)）。
+  - N4 Goal 独立持久存储、结构化计划、手动／有限自动 Run 与证据验收：已完成本机受控验收（[N4 验收](docs/n4-validation.md)）。
+  - N5 Browser 已交付受控 Web、托管 worker、专用 VM 网络与文件 broker、定制 pre-capture 遮蔽截图引擎、CLI／TUI 与原生／VM 媒体链路；本机 macOS、专用 VM 联合验收（`--require-screenshot` 22 passed、0 failed）及 Linux ARM64（`n5arm22` 1729 passed + 原生 Masked PNG 实测）已通过，见 [N5 验收](docs/n5-validation.md)。Linux x86-64／macOS Intel、多架构定制引擎分发及远端四平台 CI／发行证据仍有外部平台范围待完成，暂未推送或发布。
+  - GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[后续开发计划](docs/post-mvp-plan.md)
+
+完整接口、默认值与验证条件见[需求规格](docs/requirements.md)、[执行与恢复契约](docs/execution.md)与[验收索引](docs/acceptance.md)。
 
 ## 文档
 

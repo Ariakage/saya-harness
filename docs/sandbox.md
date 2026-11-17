@@ -104,9 +104,9 @@ HTTPS CONNECT 的授权粒度为主机／端口，隧道中的加密方法和路
 默认使用原生路径约束和按需 bind，运行库、工具链与工作区直接复用。开销来源包含策略准备、进程启动、代理桥及 syscall 检查，实际性能由验收数据记录。
 
 - macOS 将规范化路径及保护规则编译进 Seatbelt profile。
-- Linux 根据允许根及更具体的只读／拒绝路径构建 mount 图，系统目录按最小可用集提供。
+- Linux 根据允许根及更具体的只读／拒绝路径构建 mount 图，系统目录按最小可用集提供；默认继续省略 `/proc` 与宿主 `/etc/passwd`，但当配置显式启用 `sandbox.ca_certs` 或 `sandbox.toolchain_presets`（如 `"auto"`、`"rust"`、`"python"`、`"node"`、`"homebrew"`、`"xcode_clt"`、`"minimal_etc"`）时，运行准备阶段会只读追加存在且安全（排除 `/`、`$HOME`、`.saya`）的工具链／CA 目录，并在 Linux 按需生成仅含当前数值 UID／GID 的合成 `/etc/{passwd,group,nsswitch.conf}`。
 - Linux 对既有保护路径建立私有拒绝视图，可写根下缺失的保护路径返回 `unsupported_fs_policy`。macOS 将缺失路径的拒绝规则编译进 profile，规则覆盖随后创建的目标。
-- 六种内置文件工具通过同一准备环境启动私有 worker。宿主负责意图、授权和结果记录，worker 复核目标、版本及单文件替换；实际 RPC 请求和响应上限为 32 MiB。通用命令在获准可写根中运行。
+- 七种内置文件工具通过同一准备环境启动私有 worker。宿主负责意图、授权和结果记录，worker 复核目标、版本及单文件替换；实际 RPC 请求和响应上限为 32 MiB。通用命令在获准可写根中运行。
 - 宿主把启动时已存在的配置、data、state、cache 和工作区 `.saya/local` 加入原生保护集合，活动凭据引用使用的实际私有存储另行强制保护。`.saya/skills` 的正文读取继续经过文件权限与后端根策略，发现过程使用[项目上下文规则](project-context.md)。
 
 通用程序写入与外部编辑可能并发，执行记录保存实际结果。DEV-064 增加 Diff、检查点和恢复，具体文件一致性保证在该层验收。

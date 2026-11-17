@@ -42,7 +42,9 @@ profile 明确选择 strict 时，无法在不改变工具语义的情况下转�
 
 ## Anthropic Messages
 
-`provider::anthropic::AnthropicModel` 支持已选 `2026-10-21` 与 `2023-06-01` 两个版本的文本／本地工具子集，发送明确的版本头，不发送 `temperature`、`top_p` 或 `top_k`。流式与完整响应均保留签名 thinking、redacted thinking 和原始内容块；thinking 不作为普通回答显示。
+`provider::anthropic::AnthropicModel` 支持已选 `2026-10-21` 与 `2023-06-01` 两个版本的文本／本地工具子集，发送明确的版本头，不发送 `temperature`、`top_p` 或 `top_k`。仅当配置 `thinking_effort` 时附带 `output_config.effort`，默认不发送显式 `thinking` 参数；遇到 `max_tokens` 截断时按 `LimitReached` 收口而不自动续写。流式与完整响应均保留签名 thinking、redacted thinking 和原始内容块；thinking 不作为普通回答显示。
+
+Prompt Caching 默认关闭以保持与兼容端点（例如 DeepSeek Anthropic 兼容服务）的互操作性；通过 `[profiles.<name>].prompt_cache = true` 或 CLI `--anthropic-prompt-cache` 显式开启后，适配器会在不超过 4 个 `ephemeral` 断点上限内依次标注静态 `system`、末尾工具定义以及至多 2 处滚动历史消息断点。
 
 工具输入分片在内容块和消息完成后才形成调用。多个工具结果合并到紧随调用的 user 消息中，并分别关联 `tool_use_id`；截断、拒绝、签名缺失、未完成流与不支持的内容不会被视为成功。
 

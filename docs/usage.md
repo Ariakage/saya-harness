@@ -21,7 +21,7 @@ cp examples/config.example.toml "$config_path"
 
 `config check` 检查配置及环境引用，**不会连接模型服务**。也可用 `saya --config PATH config init` 新建空模板，再自行填写 profile；该命令拒绝覆盖已有文件。不指定 `--config` 时使用 `$XDG_CONFIG_HOME/saya/config.toml`，或 `~/.config/saya/config.toml`；`SAYA_CONFIG` 也可选择配置文件。优先级为 CLI 参数、相应环境变量、配置文件、默认值。
 
-支持 `openai-chat-completions`、`openai-responses`、`anthropic-messages`。`base_url` 是 API 根地址，程序分别追加 `/chat/completions`、`/responses`、`/messages`；应核对服务商实际接口，兼容协议不代表支持全部参数。远程明文 HTTP 默认禁用。本机样例无需鉴权；远程服务可参考样例中注释的 profile，凭据只通过 `api_key_env` 指定**环境变量名**，值由使用者在启动前安全提供，不写入配置、提交或日志。配置校验会检查所有 profile 引用的环境变量，即使该 profile 未选中。具体鉴权和可选参数见[配置](configuration.md)。
+支持 `openai-chat-completions`、`openai-responses`、`anthropic-messages`。`base_url` 是 API 根地址，程序分别追加 `/chat/completions`、`/responses`、`/messages`；应核对服务商实际接口，兼容协议不代表支持全部参数。使用 Anthropic 官方服务时，可通过 `--anthropic-prompt-cache` 或 `[profiles.NAME].prompt_cache = true` 显式开启 Prompt Caching（默认关闭以兼容 DeepSeek Anthropic 接口）。远程明文 HTTP 默认禁用。本机样例无需鉴权；远程服务可参考样例中注释的 profile，凭据只通过 `api_key_env` 指定**环境变量名**，值由使用者在启动前安全提供，不写入配置、提交或日志。配置校验会检查所有 profile 引用的环境变量，即使该 profile 未选中。具体鉴权和可选参数见[配置](configuration.md)。
 
 输出token目标省略时继承profile.limit.output声明值，再采用适配器返回的可识别上游output limit，最后回退65536；单个目标上限为1000000。可用profile.max_output_tokens显式覆盖，审核／摘要还可设置用途覆盖。实际请求按剩余上下文动态收缩，既有显式1024／4096等配置继续生效。已保存会话的profile指纹变化时，使用 `--accept-config-change`或TUI的 `/resume-accept`显式接受后恢复。声明元数据及完整优先级见[输出目标配置](configuration.md#模型输出-token-目标)。
 
@@ -108,7 +108,7 @@ Thinking与长工具卡片支持点击标题或Ctrl+O展开，鼠标滚轮控制
 
 默认 Auto 在 macOS 选择 Seatbelt，在 Linux 选择 Bubblewrap 与 Seccomp。Linux 代理网络使用 socat 与宿主 NetworkBroker。缺少依赖或必需能力时，Run 返回明确启动错误。`config check` 验证配置，实际隔离能力在 Run 开始时探测。
 
-工作区默认进入原生视图。额外工具链目录通过 `sandbox.read_roots` 显式提供，原生文件工具的逻辑权限仍由工作区与 `permissions.additional_roots` 控制。默认网络为 `deny`，代理 origin、资源限额和显式 Host 兼容模式见[配置](configuration.md#n2-原生隔离配置)。已有凭据存储或活动 `credential_ref` 会使 Host 启动失败。
+工作区默认进入原生视图，默认不暴露用户主目录工具链、CA 证书或 `/proc`；若需在受控隔离内运行 `cargo`、`python`、`node` 或 Homebrew 工具，可在 `[sandbox]` 中显式启用 `ca_certs = true` 与 `toolchain_presets = ["auto"]`（或按需枚举具体预设），或通过 `sandbox.read_roots` 手动指定只读目录，原生文件工具的逻辑权限仍由工作区与 `permissions.additional_roots` 控制。默认网络为 `deny`，代理 origin、资源限额、预设枚举和显式 Host 兼容模式见[配置](configuration.md#n2-原生隔离配置)。已有凭据存储或活动 `credential_ref` 会使 Host 启动失败。
 
 MCP 的 stdio 启动、HTTP 服务、宿主只读分类和凭据管理见[MCP 使用说明](mcp.md)。配置文件中的服务默认仅是待连接项，运行实际连接并完成目录发现后，TUI 侧栏才显示 Connected 和真实工具数。结束时清理服务，JSONL 可看到 `mcp.status` 生命周期事件。
 

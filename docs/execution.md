@@ -46,7 +46,7 @@ TUI 的 Agent 执行期间可以继续提交普通用户消息。消息进入有
 
 例如：BUILD 的模型调用进行中，用户请求切到 PLAN。模型返回写文件请求时，PLAN 已在下一次调用前生效，该写入不能执行。若切换请求到来时写入已经执行中，则先完成当前调用；PLAN 的只读边界从实际生效时开始，不追溯撤销此前的操作。
 
-同一会话保留上下文，切换不重置历史，也不意味着任务已完成。工具默认串行；显式后台任务可与模型及其他获准工具并发，逐次检查模式和权限。切入 PLAN 前取消并清理后台写入与命令；运行结束时清理所有未完成后台任务。具体实现状态见开发进度。
+同一会话保留上下文，切换不重置历史，也不意味着任务已完成。带副作用或需人工逐次批准的工具默认串行；在 `auto` 与 `bypass permissions` 模式下，同一轮中相邻且已预授权的纯只读文件／输出读取工具（`read_file`、`list_dir`、`find_files`、`search_text`、`output_read`、`output_search`）会按有序批处理（最多 8 个）并发执行，并严格按调用顺序提交历史与事件。显式后台任务可与模型及其他获准工具并发，逐次检查模式和权限。切入 PLAN 前取消并清理后台写入与命令；运行结束时清理所有未完成后台任务。具体实现状态见开发进度。
 
 边界情况已经按 B-08 确定：
 
@@ -57,7 +57,7 @@ TUI 的 Agent 执行期间可以继续提交普通用户消息。消息进入有
 
 ## 工具与人工确认
 
-工具为 read_file、list_dir、find_files、search_text、write_file、apply_patch、exec，以及人工澄清用的 ask_user；后台控制工具为 background_start、background_status 和 background_cancel。核心输入输出见 B-14。
+工具为 read_file、list_dir、find_files、search_text、write_file、edit_file、apply_patch、exec，以及人工澄清用的 ask_user；后台控制工具为 background_start、background_status 和 background_cancel。其中 `edit_file` 执行精确原文替换，`apply_patch` 在保留精确上下文与版本校验的前提下自动容忍 hunk 计数与行号偏移误差。核心输入输出见 B-14。
 
 开发线按D-046增加 `todo_write` 会话任务清单工具，PLAN可更新任务元数据，Manual Approval每次调用均需批准。完整列表替换、校验限额及恢复规则见[运行时](runtime.md#会话任务清单)。
 

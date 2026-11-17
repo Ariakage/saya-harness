@@ -6,7 +6,7 @@
 
 每个 profile 显式声明协议、API 根 URL、模型、鉴权方式和上下文窗口，模型凭据和额外请求头的值只能通过环境变量名引用。默认没有 profile 或付费模型；未知字段、未定义的 profile、缺失的环境变量引用、不合法的鉴权、权限规则和预算均报错。解析错误不回显原始 TOML 或环境变量值。程序使用环境快照，可在测试中注入；CLI 将配置应用于模型、执行器和权限控制。
 
-profile 可选 `strict_tools`、`stream`、`allow_remote_http`、`headers_env`，以及兼容网关使用的 `legacy_max_tokens`、`omit_stream_usage`、`omit_reasoning_include`；Anthropic 的 `api_version` 支持基线约定的两个版本。`strict_tools` 默认关闭：当前后台调用的开放参数对象和部分可选字段不能无损转为 OpenAI strict schema，显式开启时会在请求前报错，而不静默改变工具语义。工具参数仍在运行时校验。`commands.inherit_env` 显式列出额外继承的变量名，执行器接线时必须同时传入所有凭据和请求头引用名，避免这些敏感变量进入子进程。
+profile 可选 `strict_tools`、`stream`、`allow_remote_http`、`headers_env`、`prompt_cache`，以及兼容网关使用的 `legacy_max_tokens`、`omit_stream_usage`、`omit_reasoning_include`；Anthropic 的 `api_version` 支持基线约定的两个版本。`prompt_cache` 默认为 `false`（也可通过 CLI `--anthropic-prompt-cache` 为当前调用开启），启用后在 Anthropic Messages 请求中对静态 `system`、末尾工具定义以及至多 2 处滚动历史断点添加 `ephemeral` 缓存标记，同时保持默认值对 DeepSeek 等 Anthropic 兼容端点的兼容性。`strict_tools` 默认关闭：当前后台调用的开放参数对象和部分可选字段不能无损转为 OpenAI strict schema，显式开启时会在请求前报错，而不静默改变工具语义。工具参数仍在运行时校验。`commands.inherit_env` 显式列出额外继承的变量名，执行器接线时必须同时传入所有凭据和请求头引用名，避免这些敏感变量进入子进程。
 
 `limits.write_max_bytes` 限制原生写入／补丁的输入和输出字节数，默认 1 MiB。CLI 将该值传到运行共享的调度器，前台和后台使用相同上限；零值会使配置校验失败。
 
@@ -122,6 +122,8 @@ backend = "auto"
 read_roots = []
 write_roots = []
 protected_paths = []
+ca_certs = false
+toolchain_presets = []
 
 [sandbox.network]
 mode = "deny"
@@ -136,6 +138,10 @@ mode = "deny"
 | `resources` | 可选的单进程与已委派 cgroup 资源限制 |
 | `cgroup_root` | 原生 Linux 后端使用的显式委派 cgroup v2 绝对目录，Host 指定此项会在准备时失败 |
 | `network` | 默认 `deny`，或显式 `proxy` 与完整 origin 允许列表 |
+| `ca_certs` | 默认 `false`；设为 `true` 时按平台只读挂载已存在的系统 CA 目录（macOS `/etc/ssl`；Linux `/etc/ssl`、`/etc/pki`、`/etc/ca-certificates`） |
+| `toolchain_presets` | 默认 `[]`；显式按需只读探测并加入宿主工具链目录，可选 `"auto"`、`"rust"`、`"python"`、`"node"`、`"homebrew"`、`"xcode_clt"`、`"minimal_etc"`，最多 32 项 |
+
+省略时默认严格视图保持不变。开启 `toolchain_presets` 时仅在运行准备阶段加入当前实际存在的绝对目录，并过滤 `/`、`$HOME`（及其规范路径）、包含 `.saya` 的路径以及非目录项；`"auto"` 会展开为其余全部预设。选择 `"rust"`、`"python"`、`"node"`、`"minimal_etc"` 或 `"auto"` 时，会在 Linux 沙箱额外启用只含当前数值 UID／GID 的合成 `/etc/{passwd,group,nsswitch.conf}` 身份视图，仍不挂载宿主账号库或 `/proc`。
 
 Linux默认只读系统视图在目录存在时包含 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 和 `/etc/alternatives`，使系统工具的包管理器别名可沿既有可见目标解析。目录内容按实际只读映射，保护路径在所有根挂载后应用，并覆盖系统目录的全部规范路径／guest别名。[执行边界](sandbox.md)
 

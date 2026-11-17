@@ -20,12 +20,12 @@ stream = true
 # multimodal = { image = true, audio = false, video = false }
 # Optional, only for models that support the requested effort level.
 # thinking_effort = "max"
-# Optional explicit request target. Omission uses limit.output, or 32000 when
+# Optional explicit request target. Omission uses limit.output, or 65536 when
 # the model has no declared output default. Explicit values take precedence.
 # max_output_tokens = 16000
 # Optional model metadata. Replace this illustrative value for your model.
 # [profiles.local.limit]
-# output = 32000
+# output = 65536
 
 # For an authenticated service, configure an additional profile and reference
 # an environment variable NAME. Never put its value in this file:
@@ -36,6 +36,8 @@ stream = true
 # auth = "bearer"
 # api_key_env = "SAYA_API_KEY"
 # context_window_tokens = 128000
+# Optional opt-in Anthropic prompt caching (system, tools, and history breakpoints):
+# prompt_cache = true
 
 # N2 development defaults. Backend preparation happens when a run starts.
 # config check validates policy syntax without launching native isolation.
@@ -44,6 +46,9 @@ backend = "auto"
 read_roots = []
 write_roots = []
 protected_paths = []
+# Optional opt-in presets keep strict defaults untouched unless requested.
+# ca_certs = true
+# toolchain_presets = ["rust", "python", "node", "homebrew", "xcode_clt"]
 
 [sandbox.network]
 mode = "deny"
