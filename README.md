@@ -53,7 +53,7 @@ cp examples/config.example.toml ~/.config/saya/config.toml
 - **运行模式**：提供 `WORK`（默认，通用任务）、`CODE`（代码读写与调试）、`PLAN`（严格只读调研与规划）、`BUILD`（端到端实现与交付），同一会话保留上下文手动切换，在调用边界生效。
 - **权限与隔离**：默认 `auto`（规则 + 命令 CST 结构分析 + 可选独立模型核查 + 人工确认），另支持 `bypass`（仍遵守 PLAN 只读、显式 `deny` 与沙箱硬边界）与 `manual`（逐工具人工确认）。原生执行默认启用 macOS Seatbelt / Linux Bubblewrap + Seccomp + `NetworkBroker` 域名白名单代理，默认网络 `deny`。
 - **模型协议**：支持 OpenAI Chat Completions、OpenAI Responses API 与 Anthropic Messages；统一维护上下文预算、输出限制与超时重试。
-- **工具与长程能力**：内置文件读写与搜索（`read_file`、`list_dir`、`find_files`、`search_text`、`write_file`、`edit_file`、`apply_patch`）、受控命令执行（`exec`）、运行内后台任务、预授权非手动只读并发批处理、stdio / Streamable HTTP MCP、SQLite WAL 会话持久化与导出、上下文压缩、插件／Hooks 与 Goal 编排。
+- **工具与长程能力**：内置文件读写与搜索（`read_file`、`list_dir`、`find_files`、`search_text`、`write_file`、`edit_file`、`apply_patch`）、受控命令执行（`exec`）、运行内后台任务、预授权非手动只读并发批处理、stdio / Streamable HTTP MCP、SQLite WAL 会话持久化与导出、上下文压缩、插件／Hooks、`saya module browser|vm enable|disable` 模块开关与 Goal 编排。
 
 ## 开发
 

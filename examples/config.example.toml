@@ -102,3 +102,15 @@ write = true
 # Local installation and enablement require explicit plugin management commands.
 [plugins]
 enabled = true
+
+# Browser and dedicated VM capabilities default to disabled. You can either set
+# `enabled = true` below or toggle them cleanly with `saya module browser enable`
+# and `saya module vm enable` (persisted in `$XDG_DATA_HOME/saya/modules/modules.sqlite3`
+# without modifying this file).
+# [browser]
+# enabled = false
+# [browser.vm]
+# enabled = false
+# [browser.network]
+# enabled = false
+

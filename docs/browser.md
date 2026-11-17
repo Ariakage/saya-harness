@@ -132,6 +132,14 @@ DEV-081A 的阶段性范围仅包含网络出口、策略与验收；登录、�
 - 受控执行的 worker 侧变化：`WorkerConnection` 增加 Run 私有 staging 写入与输出目录内下载读取；VM 使用同一严格 SSH 通道，以 `stat`／`cat` 和 0600 staging 写入实现，拒绝 `..` 与 Run 输出目录之外的路径。宿主本地的上传 staging 位于 OutputStore 保护目录下。
 - 真实入口为 `crates/saya-core/tests/browser_vm_files_real.rs`，默认 `#[ignore]`，只使用宿主本地 fixture 与合成测试凭据。2026-11-13 在专用 Colima VM 上实际通过：表单凭据填充且未自动提交、错误 origin／stale document／次数耗尽、子 frame 凭据引用拒绝、accessible name 中的伪 `[ref=...]` 不改变真实元素定位、实际下载并写入 artifact、实际上传 `downloaded bytes` 且页面 multipart 收到原名 `invoice.txt`、路径穿越拒绝、provider `download_missing` 与宿主 `file_too_large` 后旧 document 失效并可由新 snapshot 恢复、后台下载 artifact 在 GC 后仍可上传、超时后完成的下载 artifact 在 job failed 状态期间仍被 lease 固定并在 job 状态释放后可回收、后台结果在回报前脱敏、后台慢导航取消为 unknown、snapshot 恢复、PLAN 清理后显式 open 再执行真实后台导航，以及 shutdown 后无 Run 根／worker 残留；artifact 在重新打开 OutputStore 后仍可读取。同环境 `browser_vm_real` 与 `browser_vm_network_real` 一并通过。该结果不构成 native 浏览器、四平台或 DEV-082／DEV-083 验收。
 
+## Module 开关管理（D-071）
+
+`browser`（对应有效 `[browser].enabled`）与 `vm`（对应有效 `[browser.vm].enabled`）支持通过 `saya module` 独立开关与查询，同时保留 `config.toml` 中同名 `enabled` 字段的向后兼容：
+
+- **命令形式**：`saya module list`（或省略子命令的 `saya module`）列出当前各模块状态、配置值、覆盖来源（`config` / `module_store`）与就绪提示；`saya module <browser|vm> <enable|disable|status>` 切换或查看单个模块，支持 `text`、`--output json` 和 `--output jsonl`（事件类型 `module.result`）。
+- **持久化与优先级**：显式开关存储在 `data_dir/modules/modules.sqlite3`（WAL 模式、`0700` 私有目录、`0600` 文件、校验属主与禁止 symlink），不会重写用户带注释的 `config.toml`。模块尚未在 `modules.sqlite3` 中覆盖时继承 `config.toml` 的 `enabled` 字段；一旦显式切换，则以模块存储为准。只读查询、`saya config check` 与 `PLAN` 模式不会自动创建 `data_dir` 或数据库。
+- **D-066 校验与不回退**：执行 `saya module vm enable` 时，在写入存储前先预校验有效配置（`[browser.vm]` 必要路径、`[browser.network]` 与 `worker.enabled` 互斥），若与 `[browser.worker]` 同时启用或前提不完整则拒绝并退出码 `2`；`saya module vm disable` 仅关闭 `vm` 覆盖，不会自动激活 `worker` 或回退 native/Host（若此时 `browser` 仍开启且无有效后端，运行时会显式失败关闭）。`saya module browser disable` 跳过浏览器 provider 装配但继续保留 `[browser.credentials].store` 的宿主路径保护，同时最终有效浏览器配置会进入 Goal `goal_profile_fingerprint`。
+
 ## 范围与首个实现
 
 浏览器能力包含 URL 读取、网页观察与交互、截图、下载以及本地网页验证。首版候选为宿主管理的临时 Chromium 会话，通过受控 Playwright MCP worker 接入。Rust core 负责工具、权限、生命周期和预算，Playwright 运行在可选隔离环境中。

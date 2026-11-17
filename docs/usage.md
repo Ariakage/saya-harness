@@ -116,7 +116,12 @@ MCP 的 stdio 启动、HTTP 服务、宿主只读分类和凭据管理见[MCP �
 saya --config /path/to/config.toml mcp credentials list
 saya --config /path/to/config.toml mcp login remote --scope files:read --open-browser
 saya --config /path/to/config.toml mcp credentials revoke RETURNED_REFERENCE
+saya --config /path/to/config.toml module list
+saya --config /path/to/config.toml module browser enable
+saya --config /path/to/config.toml module vm enable
 ```
+
+通过 `saya module <browser|vm> enable|disable|status` 与 `saya module list` 管理浏览器和专用 VM 运行时能力开关；开关状态保存在 `data_dir/modules/modules.sqlite3` 中且不会改写 `config.toml`，未显式覆盖时沿用 `config.toml` 的对应 `enabled` 默认值，并参与 `saya config check` 与 Goal 指纹校验。
 
 登录在宿主交互终端中完成，运行期缺失授权时返回 `needs_auth`。凭据引用绑定服务器、精确 endpoint、批准 scope 以及 OAuth 的 issuer／canonical resource，令牌刷新与撤销由宿主处理。工具已执行但无法确认完成时保留 `unknown`，恢复与重连继续遵守执行记录，原始工具调用保持单次派发。
 
