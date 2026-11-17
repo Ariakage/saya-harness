@@ -82,7 +82,7 @@ impl LogReader {
         cancellation: Option<&dyn Cancellation>,
     ) -> Result<LogPage, BoundaryError> {
         if query.offset != 0 {
-            return Err(failure());
+            return Err(invalid_query());
         }
         self.scan(query, Some(cursor), cancellation)
     }
@@ -94,12 +94,12 @@ impl LogReader {
     ) -> Result<LogPage, BoundaryError> {
         check_cancel(cancellation)?;
         if query.limit == 0 || query.limit > 1000 || query.offset > 1_000_000 {
-            return Err(failure());
+            return Err(invalid_query());
         }
         let since = query.since.as_deref().map(parse_time).transpose()?;
         let until = query.until.as_deref().map(parse_time).transpose()?;
         if since.zip(until).is_some_and(|(start, end)| start > end) {
-            return Err(failure());
+            return Err(invalid_query());
         }
         let mut page = LogPage {
             records: vec![],
@@ -212,6 +212,17 @@ impl LogReader {
         Ok(page)
     }
 }
+fn invalid_query() -> BoundaryError {
+    BoundaryError(
+        crate::contract::ErrorInfo {
+            code: "invalid_query".into(),
+            message: "log query is invalid".into(),
+        },
+        None,
+        None,
+    )
+}
+
 fn check_cancel(cancellation: Option<&dyn Cancellation>) -> Result<(), BoundaryError> {
     if cancellation.is_some_and(Cancellation::is_cancelled) {
         return Err(crate::contract::BoundaryError(
@@ -324,11 +335,11 @@ fn parse_time(value: &str) -> Result<Time, BoundaryError> {
         || bytes.get(13) != Some(&b':')
         || bytes.get(16) != Some(&b':')
     {
-        return Err(failure());
+        return Err(invalid_query());
     }
     for range in [0..4, 5..7, 8..10, 11..13, 14..16, 17..19] {
         if !bytes[range].iter().all(u8::is_ascii_digit) {
-            return Err(failure());
+            return Err(invalid_query());
         }
     }
     let number = |start: usize, end: usize| {
@@ -336,7 +347,7 @@ fn parse_time(value: &str) -> Result<Time, BoundaryError> {
             .get(start..end)
             .ok_or_else(failure)?
             .parse::<i32>()
-            .map_err(|_| failure())
+            .map_err(|_| invalid_query())
     };
     let (year, month, day, hour, minute, second) = (
         number(0, 4)?,
@@ -353,7 +364,7 @@ fn parse_time(value: &str) -> Result<Time, BoundaryError> {
         || !(0..=59).contains(&minute)
         || !(0..=59).contains(&second)
     {
-        return Err(failure());
+        return Err(invalid_query());
     }
     let mut position = 19;
     let mut nanos = 0;
@@ -365,11 +376,11 @@ fn parse_time(value: &str) -> Result<Time, BoundaryError> {
         }
         let length = position - start;
         if length == 0 || length > 9 {
-            return Err(failure());
+            return Err(invalid_query());
         }
         nanos = value[start..position]
             .parse::<u32>()
-            .map_err(|_| failure())?
+            .map_err(|_| invalid_query())?
             * 10_u32.pow((9 - length) as u32);
     }
     let zone = value.get(position..).ok_or_else(failure)?;
@@ -380,27 +391,27 @@ fn parse_time(value: &str) -> Result<Time, BoundaryError> {
             || !matches!(zone.as_bytes()[0], b'+' | b'-')
             || zone.as_bytes()[3] != b':'
         {
-            return Err(failure());
+            return Err(invalid_query());
         }
         if !zone.as_bytes()[1..3]
             .iter()
             .chain(&zone.as_bytes()[4..6])
             .all(u8::is_ascii_digit)
         {
-            return Err(failure());
+            return Err(invalid_query());
         }
         let hours = zone
             .get(1..3)
             .ok_or_else(failure)?
             .parse::<i32>()
-            .map_err(|_| failure())?;
+            .map_err(|_| invalid_query())?;
         let minutes = zone
             .get(4..6)
             .ok_or_else(failure)?
             .parse::<i32>()
-            .map_err(|_| failure())?;
+            .map_err(|_| invalid_query())?;
         if !(0..=23).contains(&hours) || !(0..=59).contains(&minutes) {
-            return Err(failure());
+            return Err(invalid_query());
         }
         (hours * 3600 + minutes * 60) * if zone.starts_with('-') { -1 } else { 1 }
     };
@@ -414,7 +425,7 @@ fn parse_time(value: &str) -> Result<Time, BoundaryError> {
     tm.tm_sec = second;
     let seconds = unsafe { libc::timegm(&mut tm) };
     if tm.tm_year != year - 1900 || tm.tm_mon != month - 1 || tm.tm_mday != day {
-        return Err(failure());
+        return Err(invalid_query());
     }
     Ok(Time(seconds - i64::from(offset), nanos))
 }

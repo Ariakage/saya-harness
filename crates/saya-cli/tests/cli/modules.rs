@@ -74,7 +74,7 @@ fn module_command_manages_browser_and_vm_switches() {
         .unwrap();
     assert_eq!(vm_missing.status.code(), Some(2));
     let vm_err: serde_json::Value = serde_json::from_slice(&vm_missing.stdout).unwrap();
-    assert_eq!(vm_err["error"]["code"], "invalid_query");
+    assert_eq!(vm_err["error"]["code"], "invalid_config");
     assert!(
         vm_err["error"]["message"]
             .as_str()

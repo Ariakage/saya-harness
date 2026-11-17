@@ -345,7 +345,10 @@ pub async fn run(config: &Config, action: &McpAction) -> u8 {
     });
     if !safe {
         return super::query_error(
-            "Sensitive MCP administration details were withheld",
+            super::cli_error(
+                "runtime_error",
+                "Sensitive MCP administration details were withheld",
+            ),
             Some(config.output),
         );
     }

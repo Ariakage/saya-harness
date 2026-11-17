@@ -221,21 +221,64 @@ fn fail(message: impl std::fmt::Display) -> u8 {
     eprintln!("saya: {message}");
     2
 }
-fn output_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
-    if !matches!(output, Some(Output::Json | Output::Jsonl)) {
-        return fail(message);
+/// B-17: exit code 2 is reserved for invalid CLI input or configuration;
+/// storage and other runtime failures before a run starts exit 1. Status-like
+/// codes keep the same exit codes used by the run and MCP result paths.
+fn failure_exit_code(code: &str) -> u8 {
+    match code {
+        "cancelled" => 130,
+        "needs_input" | "needs_auth" => 4,
+        "needs_confirmation" => 3,
+        "limit_reached" | "credential_limit" => 5,
+        // `invalid_*` codes that describe malformed model, provider, tool or
+        // persisted data are runtime failures, not invalid CLI input.
+        "invalid_model_response"
+        | "invalid_provider_result"
+        | "invalid_response"
+        | "invalid_search_response"
+        | "invalid_redirect"
+        | "invalid_html"
+        | "invalid_worker_args"
+        | "invalid_worker_request"
+        | "invalid_history"
+        | "invalid_tool"
+        | "invalid_tool_registry"
+        | "invalid_tool_schema" => 1,
+        "credential_scope" | "plan_write_denied" => 2,
+        _ if code.starts_with("invalid_") => 2,
+        _ => 1,
     }
+}
+/// Preserve the error's stable code while redacting configured secrets from
+/// its message.
+fn sanitized_error(error: &BoundaryError, config: &Config) -> BoundaryError {
+    cli_error(&error.0.code, &safe_output(&error.0.message, config))
+}
+/// Recover the original boundary error carried inside a boxed CLI failure.
+/// Plain I/O or string errors keep the generic CLI input/query code.
+fn boxed_error(
+    error: &(dyn std::error::Error + 'static),
+    fallback: &str,
+    config: &Config,
+) -> BoundaryError {
+    match error.downcast_ref::<BoundaryError>() {
+        Some(error) => sanitized_error(error, config),
+        None => cli_error(fallback, &safe_output(&error.to_string(), config)),
+    }
+}
+fn output_error(error: BoundaryError, output: Option<Output>) -> u8 {
+    if !matches!(output, Some(Output::Json | Output::Jsonl)) {
+        return fail(&error);
+    }
+    let exit = failure_exit_code(&error.0.code);
     let result = RunResult {
         schema_version: SCHEMA_VERSION,
         session_id: None,
         run_id: None,
         status: RunStatus::Failed,
-        stop_reason: Some("invalid_input".into()),
+        stop_reason: Some(error.0.code.clone()),
         text: None,
-        error: Some(ErrorInfo {
-            code: "invalid_input".into(),
-            message: message.to_string(),
-        }),
+        error: Some(error.0),
         usage: None,
         artifacts: vec![],
         persistence: None,
@@ -255,18 +298,19 @@ fn output_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
             serde_json::to_string(&result).unwrap_or_else(|_| "{}".into())
         );
     }
-    2
+    exit
 }
-fn query_error(message: impl std::fmt::Display, output: Option<Output>) -> u8 {
+fn query_error(error: BoundaryError, output: Option<Output>) -> u8 {
     if matches!(output, Some(Output::Json | Output::Jsonl)) {
-        let mut value = serde_json::json!({"schema_version":1,"data":null,"error":{"code":"invalid_query","message":message.to_string()}});
+        let exit = failure_exit_code(&error.0.code);
+        let mut value = serde_json::json!({"schema_version":1,"data":null,"error":error.0});
         if output == Some(Output::Jsonl) {
             value["type"] = "query.failed".into();
         }
         println!("{value}");
-        2
+        exit
     } else {
-        fail(message)
+        fail(&error)
     }
 }
 
@@ -283,10 +327,10 @@ pub(crate) fn config_secrets(config: &Config) -> Result<Vec<String>, Box<dyn std
         .map(|name| config.secret(name).map(str::to_owned))
         .collect::<Result<Vec<_>, _>>()?)
 }
-fn load_config(overrides: Overrides, environment: Environment) -> Result<Config, String> {
-    std::env::current_dir()
-        .map_err(|_| "cannot determine current directory".to_owned())
-        .and_then(|cwd| config::load(overrides, environment, &cwd).map_err(|e| e.to_string()))
+fn load_config(overrides: Overrides, environment: Environment) -> Result<Config, BoundaryError> {
+    let cwd = std::env::current_dir()
+        .map_err(|_| cli_error("invalid_workspace", "cannot determine current directory"))?;
+    config::load(overrides, environment, &cwd)
 }
 fn failed_run_result(session_id: SessionId, run_id: RunId, error: ErrorInfo) -> RunResult {
     RunResult {
@@ -308,13 +352,19 @@ fn failed_run_result(session_id: SessionId, run_id: RunId, error: ErrorInfo) -> 
 async fn administer_memory(action: &memory_commands::MemoryAction, config: &Config) -> u8 {
     use std::sync::atomic::{AtomicBool, Ordering};
     let Ok(secrets) = config_secrets(config) else {
-        return query_error("memory credentials are unavailable", Some(config.output));
+        return query_error(
+            cli_error("invalid_config", "memory credentials are unavailable"),
+            Some(config.output),
+        );
     };
     let mut signals = match signals::Signals::new() {
         Ok(signals) => signals,
         Err(_) => {
             return query_error(
-                "cannot listen for memory administration cancellation",
+                cli_error(
+                    "runtime_error",
+                    "cannot listen for memory administration cancellation",
+                ),
                 Some(config.output),
             );
         }
@@ -336,7 +386,12 @@ async fn administer_memory(action: &memory_commands::MemoryAction, config: &Conf
     let (mut value, status) = match outcome {
         Ok(Ok(value)) => (value, 0),
         Ok(Err(error)) => (memory_failure_value(action, error), 2),
-        Err(_) => return query_error("memory administration worker failed", Some(config.output)),
+        Err(_) => {
+            return query_error(
+                cli_error("runtime_error", "memory administration worker failed"),
+                Some(config.output),
+            );
+        }
     };
     let status = match interrupted {
         Some(signals::Received::Interrupt) => 130,
@@ -348,7 +403,10 @@ async fn administer_memory(action: &memory_commands::MemoryAction, config: &Conf
     }
     if saya_core::redaction::redact(&mut value, &secrets).is_err() {
         return query_error(
-            "memory result contains unavailable sensitive details",
+            cli_error(
+                "runtime_error",
+                "memory result contains unavailable sensitive details",
+            ),
             Some(config.output),
         );
     }
@@ -357,7 +415,10 @@ async fn administer_memory(action: &memory_commands::MemoryAction, config: &Conf
     }
     match writeln!(io::stdout().lock(), "{value}") {
         Ok(()) => status,
-        Err(_) => query_error("cannot write memory result", Some(config.output)),
+        Err(_) => query_error(
+            cli_error("runtime_error", "cannot write memory result"),
+            Some(config.output),
+        ),
     }
 }
 fn init(overrides: &Overrides, env: &Environment) -> Result<(), Box<dyn std::error::Error>> {
@@ -924,7 +985,7 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
             Ok(config) => match logs::run(&config, action).await {
                 Ok(code) => code,
                 Err(error) => query_error(
-                    safe_output(&error.to_string(), &config),
+                    boxed_error(&*error, "invalid_query", &config),
                     Some(config.output),
                 ),
             },
@@ -937,10 +998,7 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
             Err(error) => query_error(error, cli.output.map(Into::into)),
             Ok(config) => match goal_commands::run(action, cli, &config).await {
                 Ok(code) => code,
-                Err(error) => query_error(
-                    safe_output(&error.to_string(), &config),
-                    Some(config.output),
-                ),
+                Err(error) => query_error(sanitized_error(&error, &config), Some(config.output)),
             },
         },
         Some(Command::Memory { action }) => match load_config(overrides, env) {
@@ -956,27 +1014,40 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
                     }
                     match writeln!(io::stdout().lock(), "{value}") {
                         Ok(()) => 0,
-                        Err(_) => query_error("cannot write plugin result", Some(config.output)),
+                        Err(_) => query_error(
+                            cli_error("runtime_error", "cannot write plugin result"),
+                            Some(config.output),
+                        ),
                     }
                 }
-                Err(error) => query_error(
-                    safe_output(&error.to_string(), &config),
-                    Some(config.output),
-                ),
+                Err(error) => query_error(sanitized_error(&error, &config), Some(config.output)),
             },
         },
         Some(Command::Module(args)) => match load_config(overrides, env) {
             Err(error) => query_error(error, cli.output.map(Into::into)),
-            Ok(config) => match module_commands::run(args, &config) {
-                Ok(output) => match module_commands::write_line(&output) {
-                    Ok(()) => 0,
-                    Err(_) => query_error("cannot write module result", Some(config.output)),
-                },
-                Err(error) => query_error(
-                    safe_output(&error.to_string(), &config),
-                    Some(config.output),
-                ),
-            },
+            Ok(config) => {
+                let module = {
+                    let args = args.clone();
+                    let owned = config.clone();
+                    saya_app::offload(move || {
+                        module_commands::run(&args, &owned).map_err(|error| error.into())
+                    })
+                    .await
+                };
+                match module {
+                    Ok(output) => match module_commands::write_line(&output) {
+                        Ok(()) => 0,
+                        Err(_) => query_error(
+                            cli_error("runtime_error", "cannot write module result"),
+                            Some(config.output),
+                        ),
+                    },
+                    Err(error) => query_error(
+                        boxed_error(&*error, "invalid_query", &config),
+                        Some(config.output),
+                    ),
+                }
+            }
         },
         Some(Command::Config {
             action: ConfigAction::Init,
@@ -1008,7 +1079,7 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
                 match compact_session(cli, &config, session_id, *accept_config_change).await {
                     Ok(code) => code,
                     Err(error) => output_error(
-                        safe_output(&error.to_string(), &config),
+                        boxed_error(&*error, "invalid_input", &config),
                         Some(config.output),
                     ),
                 }
@@ -1023,7 +1094,10 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
             Err(e) => query_error(e, cli.output.map(Into::into)),
             Ok(config) => match query_sessions(&config, action).await {
                 Ok(code) => code,
-                Err(e) => query_error(safe_output(&e.to_string(), &config), Some(config.output)),
+                Err(e) => query_error(
+                    boxed_error(&*e, "invalid_query", &config),
+                    Some(config.output),
+                ),
             },
         },
         Some(Command::Resume {
@@ -1062,11 +1136,21 @@ async fn dispatch_run_command(
     };
     let text = match prompt(args) {
         Ok(text) => text,
-        Err(e) => return output_error(safe_output(&e.to_string(), &config), Some(config.output)),
+        Err(e) => {
+            return output_error(
+                boxed_error(&*e, "invalid_input", &config),
+                Some(config.output),
+            );
+        }
     };
     let personal = match personal_context(cli, &config) {
         Ok(personal) => personal,
-        Err(e) => return output_error(safe_output(&e.to_string(), &config), Some(config.output)),
+        Err(e) => {
+            return output_error(
+                boxed_error(&*e, "invalid_input", &config),
+                Some(config.output),
+            );
+        }
     };
     let output = config.output;
     match run(
@@ -1096,7 +1180,7 @@ async fn dispatch_run_command(
                     serde_json::json!({"message": safe_output(&e.to_string(), &config)}),
                 );
             }
-            output_error(safe_output(&e.to_string(), &config), Some(output))
+            output_error(boxed_error(&*e, "invalid_input", &config), Some(output))
         }
     }
 }
@@ -1148,7 +1232,7 @@ async fn main() -> std::process::ExitCode {
         Ok(level) => level,
         Err(_) => {
             return std::process::ExitCode::from(output_error(
-                "invalid log level",
+                cli_error("invalid_args", "invalid log level"),
                 cli.output.map(Into::into),
             ));
         }

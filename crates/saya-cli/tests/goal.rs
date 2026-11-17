@@ -792,7 +792,8 @@ fn file_evidence_is_deferred_refreshed_and_host_rechecked() {
         .args(["goal", "verify", goal_id, "file"])
         .output()
         .unwrap();
-    assert_eq!(mismatch.status.code(), Some(2));
+    // A verification that ran and did not match is a runtime failure.
+    assert_eq!(mismatch.status.code(), Some(1));
     assert!(requests.try_recv().is_err());
 
     fs::write(root.path().join("final.txt"), "hello").unwrap();

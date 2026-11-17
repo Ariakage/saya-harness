@@ -260,7 +260,8 @@ fn query_rejects_symlinks_and_missing_logs_have_no_write_side_effects() {
         .args(["--output", "json", "logs", "show"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(2));
+    // A symlinked log root is a storage-integrity failure, not invalid input.
+    assert_eq!(output.status.code(), Some(1));
     assert_eq!(fs::read(target.path()).unwrap(), b"");
 }
 #[test]

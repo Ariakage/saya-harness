@@ -11,7 +11,7 @@ use saya_core::{
 use serde_json::{Value, json};
 use std::io::{self, Write};
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct ModuleArgs {
     #[command(subcommand)]
@@ -24,7 +24,7 @@ pub struct ModuleArgs {
     pub action: Option<ModuleAction>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum ModuleSubcommand {
     /// List runtime modules and their effective states.
     List,

@@ -118,6 +118,32 @@ fn busy_session_does_not_prevent_resuming_another_session() -> Result<(), Box<dy
         "{}",
         String::from_utf8_lossy(&busy.stderr)
     );
+    // B-17: machine output must preserve the real error code and use exit 1
+    // for runtime failures rather than the generic invalid_input/2.
+    let busy_json = command(temp.path(), home.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "json", "run", "--session", &held, "retry"])
+        .output()?;
+    assert_eq!(busy_json.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&busy_json.stdout)?;
+    assert_eq!(result["status"], "failed");
+    assert_eq!(result["stop_reason"], "session_busy");
+    assert_eq!(result["error"]["code"], "session_busy");
+    let busy_jsonl = command(temp.path(), home.path())
+        .arg("--config")
+        .arg(&cfg)
+        .args(["--output", "jsonl", "run", "--session", &held, "retry"])
+        .output()?;
+    assert_eq!(busy_jsonl.status.code(), Some(1));
+    let final_event: serde_json::Value = String::from_utf8(busy_jsonl.stdout)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|event: &serde_json::Value| event["type"] == "run.finished")
+        .ok_or("missing run.finished")?;
+    assert_eq!(final_event["data"]["error"]["code"], "session_busy");
     let available = command(temp.path(), home.path())
         .arg("--config")
         .arg(&cfg)
