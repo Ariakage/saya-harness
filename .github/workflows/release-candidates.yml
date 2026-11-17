@@ -32,6 +32,9 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Install native Linux isolation tools
+        if: startsWith(matrix.runner, 'ubuntu-')
+        run: ./scripts/n2/install-linux-tools.sh
       - name: Check workspace and build release binary
         run: |
           ./scripts/check.sh

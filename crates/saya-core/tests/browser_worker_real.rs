@@ -87,7 +87,7 @@ fn required_path(name: &str) -> PathBuf {
 async fn real_playwright_worker_verifies_chromium_sandbox() {
     assert_eq!(std::env::consts::OS, "linux", "real Browser requires Linux");
     let provider = native_worker_provider();
-    let outcome = tokio::time::timeout(Duration::from_secs(40), async {
+    let outcome = tokio::time::timeout(Duration::from_secs(90), async {
         let opened = provider
             .open(None, &NeverCancel)
             .await
@@ -157,6 +157,8 @@ fn native_worker_provider() -> PlaywrightMcpProvider {
         identity_sha256: Some(manifest_digest(&identity_manifest)),
         proxy: None,
         temp_root: None,
+        // Debug test builds hash the ~440 MB pinned Node/worker/Chromium trees unoptimized.
+        connect_timeout_ms: 60_000,
         ..Default::default()
     };
     let install_roots = browser_install_roots(&settings).expect("installation roots");
@@ -176,7 +178,7 @@ async fn real_playwright_worker_captures_masked_png_in_native_sandbox() {
     let facts = provider.facts();
     assert!(facts.screenshots);
     assert!(facts.screenshot_masking);
-    let outcome = tokio::time::timeout(Duration::from_secs(40), async {
+    let outcome = tokio::time::timeout(Duration::from_secs(90), async {
         let opened = provider
             .open(None, &NeverCancel)
             .await

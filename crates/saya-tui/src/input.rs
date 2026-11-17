@@ -125,7 +125,11 @@ impl TerminalInput {
                     let mut event = match event::poll(POLL_INTERVAL) {
                         Ok(false) => continue,
                         Ok(true) if stopping.load(Ordering::Acquire) => break,
-                        Ok(true) => event::read(),
+                        Ok(true) => match event::read() {
+                            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                            other => other,
+                        },
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                         Err(error) => Err(error),
                     };
                     let failed = event.is_err();

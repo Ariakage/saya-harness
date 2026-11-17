@@ -26,6 +26,8 @@ fn answer(text: &str) -> String {
 fn read_call() -> String {
     json!({"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"read","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"input.txt\",\"start_line\":1,\"line_count\":2}"}}]}}]}).to_string()
 }
+static PTY_SETUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Pty {
     master: Option<fs::File>,
     child: Child,
@@ -37,6 +39,7 @@ impl Pty {
         Self::start_with_storage(root, cfg, extra, Arc::new(TempDir::new().unwrap()))
     }
     fn start_with_storage(root: &Path, cfg: &Path, extra: &[&str], storage: Arc<TempDir>) -> Self {
+        let _pty_guard = PTY_SETUP.lock().unwrap_or_else(|e| e.into_inner());
         let mut master = -1;
         let mut slave = -1;
         // SAFETY: arguments point to valid descriptors; ownership moves to File below.
@@ -54,6 +57,12 @@ impl Pty {
         );
         let master = unsafe { fs::File::from_raw_fd(master) };
         let slave = unsafe { fs::File::from_raw_fd(slave) };
+        for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+            // SAFETY: descriptors are owned above; set FD_CLOEXEC before concurrent spawns.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert!(flags >= 0);
+            assert!(unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } >= 0);
+        }
         // A fresh PTY has a zero-sized window; give the terminal UI a stable
         // viewport so its details pane actually renders.
         let size = libc::winsize {
@@ -216,7 +225,7 @@ impl Pty {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    fn finish_preview(mut self) -> std::process::ExitStatus {
+    fn finish_preview(mut self) -> (std::process::ExitStatus, String) {
         // The preview handles SIGTERM by leaving its loop through the same
         // terminal guard, which exercises restoration without relying on a
         // synthetic key event from the PTY master.
@@ -227,9 +236,9 @@ impl Pty {
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            // Keep draining frames; otherwise the PTY buffer fills and the
-            // process cannot reach its signal handler.
-            let _ = self.read_output(10);
+            // Drain all ready bytes immediately so macOS's small PTY buffer does
+            // not stall the child before its signal handler runs.
+            while matches!(self.read_output(0), Ok(true)) {}
             if let Some(status) = self.child.try_wait().unwrap() {
                 // Drain the final screen-control bytes so a missing alternate
                 // screen restore cannot pass unnoticed.
@@ -240,16 +249,20 @@ impl Pty {
                         _ => break,
                     }
                 }
+                let output = String::from_utf8_lossy(&self.buffer).into_owned();
                 assert!(
                     self.buffer.windows(8).any(|w| w == b"\x1b[?1049l"),
-                    "preview did not leave the alternate screen"
+                    "preview did not leave the alternate screen; status={status:?}; output={output:?}"
                 );
-                return status;
+                return (status, output);
             }
             if Instant::now() >= deadline {
-                panic!("preview did not exit");
+                panic!(
+                    "preview did not exit; output={:?}",
+                    String::from_utf8_lossy(&self.buffer)
+                );
             }
-            std::thread::sleep(Duration::from_millis(10));
+            let _ = self.read_output(10);
         }
     }
 }
@@ -998,10 +1011,26 @@ fn tui_preview_renders_browser_artifact_details_and_restores_the_terminal() {
     pty.until("URL: https://allowed.example/final");
     pty.until("Artifact: media_demo");
     pty.until("Masked: yes");
-    let status = pty.finish_preview();
+    let (status, output) = pty.finish_preview();
     assert_eq!(
         status.code(),
         Some(130),
-        "preview did not exit through its signal path"
+        "preview did not exit through its signal path; output={output:?}"
+    );
+}
+
+#[test]
+fn tui_preview_signal_path_tolerates_initial_frame_backpressure() {
+    let temp = TempDir::new().unwrap();
+    let cfg = config(temp.path(), "http://127.0.0.1:1/v1", "auto", true);
+    let mut pty = Pty::start(temp.path(), &cfg, &["tui-preview", "browser"]);
+    pty.until("Masked: yes");
+    // Exercise WRITE_WAIT (100 ms) backpressure before draining/signalling.
+    std::thread::sleep(Duration::from_millis(150));
+    let (status, output) = pty.finish_preview();
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "preview failed under initial frame backpressure; output={output:?}"
     );
 }

@@ -227,7 +227,16 @@ impl Output {
         state.ended = true;
         // Writers hold this same short lock, so restoring blocking flags cannot
         // race a fresh frame write after its active-state check.
-        let raw = disable_raw_mode();
+        let mut raw = disable_raw_mode();
+        for _ in 0..8 {
+            match raw {
+                Err(ref error) if error.kind() == io::ErrorKind::Interrupted => {
+                    std::thread::sleep(Duration::from_millis(1));
+                    raw = disable_raw_mode();
+                }
+                _ => break,
+            }
+        }
         let screen = if state.presentation_started {
             write_restore(self.file.as_raw_fd(), state.title_saved)
         } else {

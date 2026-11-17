@@ -12,8 +12,13 @@ use crate::{
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use saya_core::tools::todo::{TodoItem, TodoStatus};
-use std::{io, time::Duration};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 use tokio::signal::unix::{SignalKind, signal};
+
+const DRAW_BACKPRESSURE_WAIT: Duration = Duration::from_secs(2);
 
 pub const SCENES: &[&str] = &[
     "chat",
@@ -78,17 +83,37 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
     let mut activity = tokio::time::interval(Duration::from_millis(120));
     activity.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut exit = 0;
+    let mut dirty = true;
+    let mut backpressure_since: Option<Instant> = None;
     loop {
-        if let Some(text) = state.take_clipboard_request()
-            && let Err(error) = terminal.copy_text(&text)
-        {
-            if error.kind() != io::ErrorKind::InvalidInput {
-                return Err(error);
+        if let Some(text) = state.take_clipboard_request() {
+            if let Err(error) = terminal.copy_text(&text) {
+                if error.kind() != io::ErrorKind::InvalidInput {
+                    return Err(error);
+                }
+                state.push_message(Role::System, "Clipboard", error.to_string());
             }
-            state.push_message(Role::System, "Clipboard", error.to_string());
+            dirty = true;
         }
-        terminal.set_title(&format!("Saya | TUI preview · {}", SCENES[index]))?;
-        terminal.draw(|frame| view::draw(frame, &mut state))?;
+        if dirty {
+            let rendered = terminal
+                .set_title(&format!("Saya | TUI preview · {}", SCENES[index]))
+                .and_then(|()| terminal.draw(|frame| view::draw(frame, &mut state)));
+            match rendered {
+                Ok(()) => {
+                    backpressure_since = None;
+                    dirty = false;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    let now = Instant::now();
+                    let started = *backpressure_since.get_or_insert(now);
+                    if now.duration_since(started) >= DRAW_BACKPRESSURE_WAIT {
+                        return Err(error);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let event = tokio::select! {
             biased;
             _ = interrupt.recv() => { exit = 130; break; },
@@ -97,9 +122,12 @@ pub async fn run(scene: &str, source: bool) -> io::Result<u8> {
             event = input.next() => match event { Some(event) => event?, None => break },
             _ = activity.tick(), if state.activity_visible() => {
                 state.activity_frame = state.activity_frame.wrapping_add(1);
+                dirty = true;
                 continue;
             },
+            _ = tokio::time::sleep(Duration::from_millis(10)), if dirty => continue,
         };
+        dirty = true;
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 if key.kind == KeyEventKind::Press
