@@ -9,6 +9,20 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    name: Advisory audit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Run cargo audit
+        run: |
+          cargo install --locked cargo-audit
+          cargo audit
+
   checks:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

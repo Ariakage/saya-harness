@@ -94,17 +94,17 @@ fn auth_error() -> BoundaryError {
     )
 }
 pub(crate) fn authorization_resource(input: &str) -> Result<String, BoundaryError> {
-    let url = reqwest_mcp::Url::parse(input).map_err(|_| auth_error())?;
+    let url = reqwest::Url::parse(input).map_err(|_| auth_error())?;
     let mut resources = url.query_pairs().filter(|(name, _)| name == "resource");
     let resource = resources.next().ok_or_else(auth_error)?.1.into_owned();
     if resources.next().is_some() {
         return Err(auth_error());
     }
-    reqwest_mcp::Url::parse(&resource)
+    reqwest::Url::parse(&resource)
         .map(|url| url.to_string())
         .map_err(|_| auth_error())
 }
-fn loopback(url: &reqwest_mcp::Url) -> bool {
+fn loopback(url: &reqwest::Url) -> bool {
     url.host_str().is_some_and(|host| {
         host == "localhost"
             || host == "[::1]"
@@ -117,7 +117,7 @@ pub(crate) fn validate_oauth_metadata(
     metadata: &AuthorizationMetadata,
     audience: &str,
 ) -> Result<(), BoundaryError> {
-    let resource = reqwest_mcp::Url::parse(audience).map_err(|_| auth_error())?;
+    let resource = reqwest::Url::parse(audience).map_err(|_| auth_error())?;
     let issuer = metadata.issuer.as_deref().ok_or_else(auth_error)?;
     for endpoint in [
         Some(issuer),
@@ -128,7 +128,7 @@ pub(crate) fn validate_oauth_metadata(
     .into_iter()
     .flatten()
     {
-        let url = reqwest_mcp::Url::parse(endpoint).map_err(|_| auth_error())?;
+        let url = reqwest::Url::parse(endpoint).map_err(|_| auth_error())?;
         if url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
@@ -266,8 +266,8 @@ impl McpOAuthLogin {
         if input.len() > 16 * 1024 {
             return Err(auth_error());
         }
-        let url = reqwest_mcp::Url::parse(input).map_err(|_| auth_error())?;
-        let redirect = reqwest_mcp::Url::parse(&self.redirect_uri).map_err(|_| auth_error())?;
+        let url = reqwest::Url::parse(input).map_err(|_| auth_error())?;
+        let redirect = reqwest::Url::parse(&self.redirect_uri).map_err(|_| auth_error())?;
         if url.origin() != redirect.origin()
             || url.path() != redirect.path()
             || !url.username().is_empty()
@@ -297,7 +297,7 @@ impl McpOAuthLogin {
             return Err(auth_error());
         }
         let authorization =
-            reqwest_mcp::Url::parse(&self.authorization_url).map_err(|_| auth_error())?;
+            reqwest::Url::parse(&self.authorization_url).map_err(|_| auth_error())?;
         let expected = authorization
             .query_pairs()
             .find(|(name, _)| name == "state")

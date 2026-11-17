@@ -64,9 +64,9 @@ pub struct CredentialScope {
 
 impl CredentialScope {
     fn validate_oauth_resource(&self, resource: &str) -> Result<String, BoundaryError> {
-        let resource = reqwest_mcp::Url::parse(resource)
+        let resource = reqwest::Url::parse(resource)
             .map_err(|_| error("credential_scope", "OAuth resource is invalid"))?;
-        let endpoint = reqwest_mcp::Url::parse(&self.audience)
+        let endpoint = reqwest::Url::parse(&self.audience)
             .map_err(|_| error("credential_scope", "Credential endpoint is invalid"))?;
         let parent_path = resource.path();
         let endpoint_path = endpoint.path();
@@ -92,7 +92,7 @@ impl CredentialScope {
         resource: &str,
         scopes: BTreeSet<String>,
     ) -> Result<Self, BoundaryError> {
-        let url = reqwest_mcp::Url::parse(resource)
+        let url = reqwest::Url::parse(resource)
             .map_err(|_| error("credential_scope", "Credential resource URL is invalid"))?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
@@ -161,7 +161,7 @@ impl CredentialScope {
                 "Credential scope is invalid or exceeds limits",
             ));
         }
-        let url = reqwest_mcp::Url::parse(&self.audience)
+        let url = reqwest::Url::parse(&self.audience)
             .map_err(|_| error("credential_scope", "Credential audience URL is invalid"))?;
         if !matches!(url.scheme(), "https" | "http")
             || url.host_str().is_none()
@@ -277,7 +277,7 @@ impl CredentialValue {
                         "Active OAuth credentials require a bound authorization issuer",
                     )
                 })?;
-                let url = reqwest_mcp::Url::parse(issuer)
+                let url = reqwest::Url::parse(issuer)
                     .map_err(|_| error("credential_scope", "OAuth issuer URL is invalid"))?;
                 let loopback = url.host_str().is_some_and(|host| {
                     host == "localhost"

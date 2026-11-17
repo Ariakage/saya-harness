@@ -161,7 +161,7 @@ impl McpSettings {
                 }
                 McpTransportSettings::Http(settings) => {
                     let mut header_names = BTreeSet::new();
-                    let url = reqwest_mcp::Url::parse(&settings.endpoint)
+                    let url = reqwest::Url::parse(&settings.endpoint)
                         .map_err(|_| error("invalid_config", "MCP HTTP endpoint is invalid"))?;
                     if settings.endpoint.len() > 4096
                         || url.host_str().is_none()
@@ -178,7 +178,7 @@ impl McpSettings {
                             .is_some_and(|name| !valid_env_name(name))
                         || settings.headers_env.len() > 32
                         || settings.headers_env.iter().any(|(name, source)| {
-                            reqwest_mcp::header::HeaderName::from_bytes(name.as_bytes()).is_err()
+                            reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err()
                                 || !valid_env_name(source)
                                 || !header_names.insert(name.to_ascii_lowercase())
                                 || matches!(

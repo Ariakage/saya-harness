@@ -132,7 +132,7 @@ fn fixture_resource(grant: &str, ancestor: bool) -> Fixture {
                 )
             } else if headers.starts_with("POST /token ") {
                 calls.fetch_add(1, Ordering::AcqRel);
-                let form = reqwest_mcp::Url::parse(&format!(
+                let form = reqwest::Url::parse(&format!(
                     "http://fixture.invalid/?{}",
                     String::from_utf8_lossy(&bytes[body_start..])
                 ))
@@ -196,14 +196,14 @@ fn options() -> OAuthLoginOptions {
     }
 }
 fn callback(login: &McpOAuthLogin, issuer: &str) -> String {
-    let url = reqwest_mcp::Url::parse(login.authorization_url()).unwrap();
+    let url = reqwest::Url::parse(login.authorization_url()).unwrap();
     let state = url
         .query_pairs()
         .find(|(key, _)| key == "state")
         .unwrap()
         .1
         .into_owned();
-    let mut callback = reqwest_mcp::Url::parse(login.redirect_uri()).unwrap();
+    let mut callback = reqwest::Url::parse(login.redirect_uri()).unwrap();
     callback
         .query_pairs_mut()
         .append_pair("code", "login-fixture-authorization-code")
@@ -238,7 +238,7 @@ async fn manual_callback_uses_pkce_exact_scopes_issuer_and_a_fresh_private_refer
     let login = McpOAuthLogin::begin(store.clone(), scope.clone(), options(), &Never)
         .await
         .unwrap();
-    let auth = reqwest_mcp::Url::parse(login.authorization_url()).unwrap();
+    let auth = reqwest::Url::parse(login.authorization_url()).unwrap();
     let params = auth
         .query_pairs()
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -283,7 +283,7 @@ async fn forged_callback_state_issuer_destination_and_duplicate_keys_never_excha
         let login = McpOAuthLogin::begin(store.clone(), scope(&fixture), options(), &Never)
             .await
             .unwrap();
-        let mut url = reqwest_mcp::Url::parse(&callback(
+        let mut url = reqwest::Url::parse(&callback(
             &login,
             &format!("{}/", fixture.endpoint.trim_end_matches("/mcp")),
         ))
@@ -344,7 +344,7 @@ async fn loopback_callback_supports_dynamic_public_registration_and_closes_its_l
         &format!("{}/", fixture.endpoint.trim_end_matches("/mcp")),
     );
     let task = tokio::spawn(async move {
-        reqwest_mcp::Client::builder()
+        reqwest::Client::builder()
             .no_proxy()
             .build()
             .unwrap()

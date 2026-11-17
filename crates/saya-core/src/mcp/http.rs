@@ -3,7 +3,7 @@ use super::{McpLimits, error};
 use crate::contract::BoundaryError;
 use crate::credentials::{CredentialRef, CredentialScope, CredentialValue, FileCredentialStore};
 use futures::{StreamExt, stream::BoxStream};
-use reqwest_mcp::{
+use reqwest::{
     Client,
     header::{HeaderName, HeaderValue},
 };
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::instrument::WithSubscriber;
 
-type HttpError = StreamableHttpError<reqwest_mcp::Error>;
+type HttpError = StreamableHttpError<reqwest::Error>;
 
 /// Single-send HTTP transport with early JSON and SSE byte limits.
 /// OAuth tokens may refresh before a request. A 401 never resends the MCP request.
@@ -81,12 +81,12 @@ impl McpHttpClient {
     ) -> Result<Self, BoundaryError> {
         limits.validate()?;
         let mut builder = Client::builder()
-            .redirect(reqwest_mcp::redirect::Policy::none())
-            .retry(reqwest_mcp::retry::never())
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .no_proxy()
             .connect_timeout(limits.connect_timeout);
         if let Some(endpoint) = endpoint {
-            let proxy = reqwest_mcp::Proxy::all(format!("http://{endpoint}/"))
+            let proxy = reqwest::Proxy::all(format!("http://{endpoint}/"))
                 .map_err(|_| error("mcp_transport", "Scoped MCP proxy setup failed"))?
                 .no_proxy(None);
             builder = builder.proxy(proxy);
@@ -114,7 +114,7 @@ impl McpHttpClient {
                 "MCP authentication sources conflict",
             ));
         }
-        let url = reqwest_mcp::Url::parse(endpoint)
+        let url = reqwest::Url::parse(endpoint)
             .map_err(|_| error("credential_scope", "Authorized MCP endpoint is invalid"))?;
         if !matches!(url.scheme(), "https" | "http")
             || url.host_str().is_none()
@@ -226,10 +226,10 @@ impl McpHttpClient {
         supplied: Option<String>,
     ) -> Result<Option<String>, HttpError> {
         if let Some(expected) = &self.authorized_endpoint
-            && reqwest_mcp::Url::parse(uri)
+            && reqwest::Url::parse(uri)
                 .ok()
                 .as_ref()
-                .map(reqwest_mcp::Url::as_str)
+                .map(reqwest::Url::as_str)
                 != Some(expected.as_str())
         {
             return Err(StreamableHttpError::Io(std::io::Error::new(
@@ -403,7 +403,7 @@ impl McpHttpClient {
 }
 
 impl StreamableHttpClient for McpHttpClient {
-    type Error = reqwest_mcp::Error;
+    type Error = reqwest::Error;
     async fn post_message(
         &self,
         uri: Arc<str>,
@@ -480,10 +480,7 @@ impl StreamableHttpClient for McpHttpClient {
     }
 }
 
-async fn read_body(
-    response: reqwest_mcp::Response,
-    max_bytes: usize,
-) -> Result<Vec<u8>, HttpError> {
+async fn read_body(response: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, HttpError> {
     if response
         .content_length()
         .is_some_and(|length| length > max_bytes as u64)
@@ -543,10 +540,7 @@ impl FrameBudget {
     }
 }
 
-fn sse(
-    response: reqwest_mcp::Response,
-    max_bytes: usize,
-) -> BoxStream<'static, Result<Sse, SseError>> {
+fn sse(response: reqwest::Response, max_bytes: usize) -> BoxStream<'static, Result<Sse, SseError>> {
     let stream = futures::stream::try_unfold(
         (response.bytes_stream().boxed(), FrameBudget::default()),
         move |(mut stream, mut budget)| async move {

@@ -837,7 +837,7 @@ fn http_transport_config(
     config: McpHttpConfig,
     limits: &McpLimits,
 ) -> Result<StreamableHttpClientTransportConfig, BoundaryError> {
-    let url = reqwest_mcp::Url::parse(&config.endpoint)
+    let url = reqwest::Url::parse(&config.endpoint)
         .map_err(|_| error("invalid_config", "MCP endpoint URL is invalid"))?;
     if !url.username().is_empty()
         || url.password().is_some()
@@ -851,9 +851,9 @@ fn http_transport_config(
             "MCP endpoint requires HTTPS and no embedded credentials, query, or fragment",
         ));
     }
-    let mut headers = reqwest_mcp::header::HeaderMap::new();
+    let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in config.headers {
-        let name = reqwest_mcp::header::HeaderName::from_bytes(name.as_bytes())
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
             .map_err(|_| error("invalid_config", "MCP header name is invalid"))?;
         if matches!(
             name.as_str(),
@@ -872,7 +872,7 @@ fn http_transport_config(
                 "MCP custom header conflicts with a transport-owned header",
             ));
         }
-        let mut value = reqwest_mcp::header::HeaderValue::from_str(&value)
+        let mut value = reqwest::header::HeaderValue::from_str(&value)
             .map_err(|_| error("invalid_config", "MCP header value is invalid"))?;
         value.set_sensitive(true);
         headers.insert(name, value);
@@ -888,7 +888,7 @@ fn http_transport_config(
                 .collect(),
         );
     if let Some(token) = config.bearer_token {
-        if reqwest_mcp::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
+        if reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).is_err() {
             return Err(error(
                 "invalid_config",
                 "MCP bearer credential contains invalid header bytes",
@@ -1065,7 +1065,7 @@ fn transport_error(transport: &rmcp::transport::DynamicTransportError) -> Bounda
             }
         }
         if matches!(
-            source.downcast_ref::<StreamableHttpError<reqwest_mcp::Error>>(),
+            source.downcast_ref::<StreamableHttpError<reqwest::Error>>(),
             Some(StreamableHttpError::SessionExpired)
         ) {
             return error(
@@ -1073,7 +1073,7 @@ fn transport_error(transport: &rmcp::transport::DynamicTransportError) -> Bounda
                 "MCP server session expired. Tool execution was not replayed",
             );
         }
-        if let Some(request_error) = source.downcast_ref::<reqwest_mcp::Error>() {
+        if let Some(request_error) = source.downcast_ref::<reqwest::Error>() {
             if matches!(
                 request_error.status().map(|status| status.as_u16()),
                 Some(401 | 403)
@@ -1102,7 +1102,7 @@ fn transport_error(transport: &rmcp::transport::DynamicTransportError) -> Bounda
                 );
             }
         }
-        if let Some(http_error) = source.downcast_ref::<StreamableHttpError<reqwest_mcp::Error>>() {
+        if let Some(http_error) = source.downcast_ref::<StreamableHttpError<reqwest::Error>>() {
             match http_error {
                 StreamableHttpError::UnexpectedServerResponse(_) => {
                     return error(
