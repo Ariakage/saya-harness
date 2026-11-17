@@ -95,6 +95,12 @@ async fn complete_text(
                 }
                 return Ok((text, usage));
             }
+            Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                return Err(failure(
+                    "output_limit",
+                    "Goal model reached provider output limit",
+                ));
+            }
             Some(
                 ModelUpdate::TextDelta(_)
                 | ModelUpdate::ThinkingDelta { .. }

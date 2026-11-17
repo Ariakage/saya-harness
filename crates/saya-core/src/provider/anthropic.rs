@@ -39,6 +39,7 @@ pub struct AnthropicModel {
     settings: ModelSettings,
     version: AnthropicVersion,
     prompt_cache: bool,
+    official_provider: bool,
     warmups: Mutex<BTreeMap<String, Arc<AsyncMutex<Option<Instant>>>>>,
 }
 impl AnthropicModel {
@@ -52,12 +53,23 @@ impl AnthropicModel {
             settings,
             version,
             prompt_cache: false,
+            official_provider: false,
             warmups: Mutex::new(BTreeMap::new()),
         }
     }
     /// Enable Anthropic ephemeral caching when the endpoint explicitly supports it.
     pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
         self.prompt_cache = enabled;
+        self
+    }
+    /// Enable official Anthropic Messages endpoint capabilities: ephemeral prompt
+    /// caching, adaptive thinking with summarized display, and resumable text
+    /// truncation handling at `max_tokens`.
+    pub fn with_official_provider(mut self, enabled: bool) -> Self {
+        self.official_provider = enabled;
+        if enabled {
+            self.prompt_cache = true;
+        }
         self
     }
     fn warmup_slot(&self, body: &Value) -> Option<Arc<AsyncMutex<Option<Instant>>>> {
@@ -135,6 +147,12 @@ impl AnthropicModel {
             .ok_or_else(|| failure("invalid_config", "invalid request body"))?;
         if !request.combined_instructions().is_empty() {
             map.insert("system".into(), system);
+        }
+        if self.official_provider && matches!(self.version, AnthropicVersion::V20261021) {
+            map.insert(
+                "thinking".into(),
+                json!({"type": "adaptive", "display": "summarized"}),
+            );
         }
         if let Some(effort) = self.settings.thinking_effort {
             map.insert("output_config".into(), json!({"effort":effort}));
@@ -231,12 +249,15 @@ impl Model for AnthropicModel {
                 .transport
                 .post("messages", &body, Some(self.version.header()), cancel)
                 .await?;
+            let allow_truncated =
+                self.official_provider && request.purpose == ModelPurpose::Execution;
             if self.settings.stream {
                 let stream = AnthropicStream {
                     events: response.events()?,
                     state: StreamState::default(),
                     finished: false,
                     settings: self.settings.clone(),
+                    allow_truncated,
                 };
                 Ok(Box::new(WarmStream {
                     inner: stream,
@@ -245,14 +266,17 @@ impl Model for AnthropicModel {
             } else {
                 let value = response.json(cancel).await?;
                 self.settings.observe_output_limit(&value);
-                let (items, usage) = parse_message(&value)?;
+                let (parsed, usage) = parse_message(&value, allow_truncated)?;
                 if let Some(mut guard) = warmup.take() {
                     *guard = Some(Instant::now());
                 }
-                Ok(
-                    Box::new(Ready(Some(ModelUpdate::Finished { items, usage })))
-                        as Box<dyn ModelStream>,
-                )
+                let update = match parsed {
+                    ParsedBlocks::Complete(items) => ModelUpdate::Finished { items, usage },
+                    ParsedBlocks::Truncated(items) => {
+                        ModelUpdate::OutputLimitTruncated { items, usage }
+                    }
+                };
+                Ok(Box::new(Ready(Some(update))) as Box<dyn ModelStream>)
             }
         })
     }
@@ -349,21 +373,11 @@ fn semantic(block: &Value) -> Result<Option<HistoryItem>, BoundaryError> {
         )),
     }
 }
-fn parse_blocks(blocks: &[Value], stop: &str) -> Result<Vec<HistoryItem>, BoundaryError> {
-    match stop {
-        "end_turn" | "tool_use" => {}
-        "max_tokens" => return Err(failure("output_limit", "provider output limit reached")),
-        "model_context_window_exceeded" => {
-            return Err(failure("context_budget", "provider context limit reached"));
-        }
-        "refusal" => return Err(failure("provider_refusal", "provider refused the request")),
-        _ => {
-            return Err(failure(
-                "invalid_model_response",
-                "unsupported message stop reason",
-            ));
-        }
-    }
+enum ParsedBlocks {
+    Complete(Vec<HistoryItem>),
+    Truncated(Vec<HistoryItem>),
+}
+fn collect_blocks(blocks: &[Value]) -> Result<Vec<HistoryItem>, BoundaryError> {
     if blocks.len() > MAX_BLOCKS {
         return Err(failure(
             "invalid_model_response",
@@ -398,19 +412,79 @@ fn parse_blocks(blocks: &[Value], stop: &str) -> Result<Vec<HistoryItem>, Bounda
             items.push(item);
         }
     }
+    Ok(items)
+}
+fn parse_truncated_blocks(blocks: &[Value]) -> Result<Vec<HistoryItem>, BoundaryError> {
+    let items = collect_blocks(blocks)
+        .map_err(|_| failure("output_limit", "provider output limit reached"))?;
+    let has_tools = items
+        .iter()
+        .any(|item| matches!(item, HistoryItem::ToolCall(_)));
+    let has_text = items
+        .iter()
+        .any(|item| matches!(item, HistoryItem::AssistantText(s) if !s.is_empty()));
+    let has_signed_thinking = items.iter().any(|item| {
+        matches!(
+            item,
+            HistoryItem::ProviderItem {
+                protocol: ModelProtocol::AnthropicMessages,
+                value,
+            } if matches!(
+                value.get("type").and_then(Value::as_str),
+                Some("thinking" | "redacted_thinking")
+            )
+        )
+    });
+    if has_tools || (!has_text && !has_signed_thinking) {
+        return Err(failure("output_limit", "provider output limit reached"));
+    }
+    Ok(items)
+}
+fn parse_blocks(
+    blocks: &[Value],
+    stop: &str,
+    allow_truncated: bool,
+    invalid_input: bool,
+) -> Result<ParsedBlocks, BoundaryError> {
+    match stop {
+        "end_turn" | "tool_use" => {}
+        "max_tokens" => {
+            if !allow_truncated || invalid_input {
+                return Err(failure("output_limit", "provider output limit reached"));
+            }
+            return parse_truncated_blocks(blocks).map(ParsedBlocks::Truncated);
+        }
+        "model_context_window_exceeded" => {
+            return Err(failure("context_budget", "provider context limit reached"));
+        }
+        "refusal" => return Err(failure("provider_refusal", "provider refused the request")),
+        _ => {
+            return Err(failure(
+                "invalid_model_response",
+                "unsupported message stop reason",
+            ));
+        }
+    }
+    let items = collect_blocks(blocks)?;
     let tools = items
         .iter()
         .any(|item| matches!(item, HistoryItem::ToolCall(_)));
     let text = items
         .iter()
-        .any(|item| matches!(item,HistoryItem::AssistantText(s) if !s.is_empty()));
+        .any(|item| matches!(item, HistoryItem::AssistantText(s) if !s.is_empty()));
     if (stop == "tool_use") != tools || (!tools && !text) {
         return Err(failure(
             "invalid_model_response",
             "message stop reason does not match its content",
         ));
     }
-    Ok(items)
+    if invalid_input {
+        return Err(failure(
+            "invalid_model_response",
+            "tool input JSON is invalid or incomplete",
+        ));
+    }
+    Ok(ParsedBlocks::Complete(items))
 }
 fn usage(value: Option<&Value>) -> Result<Option<Usage>, BoundaryError> {
     let Some(value) = value.filter(|v| !v.is_null()) else {
@@ -464,7 +538,10 @@ fn total_input_tokens(
         })
         .transpose()
 }
-fn parse_message(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), BoundaryError> {
+fn parse_message(
+    value: &Value,
+    allow_truncated: bool,
+) -> Result<(ParsedBlocks, Option<Usage>), BoundaryError> {
     let obj = object(value)?;
     if obj.get("role").and_then(Value::as_str) != Some("assistant") {
         return Err(failure("invalid_model_response", "invalid message role"));
@@ -477,7 +554,10 @@ fn parse_message(value: &Value) -> Result<(Vec<HistoryItem>, Option<Usage>), Bou
         .get("stop_reason")
         .and_then(Value::as_str)
         .ok_or_else(|| failure("incomplete_model_response", "message stop reason missing"))?;
-    Ok((parse_blocks(blocks, stop)?, usage(obj.get("usage"))?))
+    Ok((
+        parse_blocks(blocks, stop, allow_truncated, false)?,
+        usage(obj.get("usage"))?,
+    ))
 }
 fn mark_message_cache_control(message: &mut Value) {
     if let Some(last_block) = message
@@ -971,7 +1051,7 @@ impl StreamState {
         )?;
         Ok(())
     }
-    fn finish(self) -> Result<(Vec<HistoryItem>, Option<Usage>), BoundaryError> {
+    fn finish(self, allow_truncated: bool) -> Result<(ParsedBlocks, Option<Usage>), BoundaryError> {
         if !self.stopped {
             return Err(failure(
                 "incomplete_model_response",
@@ -983,13 +1063,7 @@ impl StreamState {
             .ok_or_else(|| failure("incomplete_model_response", "message stop reason missing"))?;
         let invalid_input = self.blocks.values().any(|block| block.invalid_input);
         let blocks: Vec<Value> = self.blocks.into_values().map(|b| b.value).collect();
-        let result = parse_blocks(&blocks, &reason)?;
-        if invalid_input {
-            return Err(failure(
-                "invalid_model_response",
-                "tool input JSON is invalid or incomplete",
-            ));
-        }
+        let result = parse_blocks(&blocks, &reason, allow_truncated, invalid_input)?;
         let usage = match (self.input_tokens, self.output_tokens) {
             (Some(i), Some(o)) => Some(Usage {
                 input_tokens: total_input_tokens(
@@ -1011,6 +1085,7 @@ struct AnthropicStream {
     state: StreamState,
     finished: bool,
     settings: ModelSettings,
+    allow_truncated: bool,
 }
 impl ModelStream for AnthropicStream {
     fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
@@ -1021,13 +1096,25 @@ impl ModelStream for AnthropicStream {
             match self.events.next(cancel).await? {
                 None => {
                     self.finished = true;
-                    let (items, usage) = std::mem::take(&mut self.state).finish()?;
-                    Ok(Some(ModelUpdate::Finished { items, usage }))
+                    let (parsed, usage) =
+                        std::mem::take(&mut self.state).finish(self.allow_truncated)?;
+                    Ok(Some(match parsed {
+                        ParsedBlocks::Complete(items) => ModelUpdate::Finished { items, usage },
+                        ParsedBlocks::Truncated(items) => {
+                            ModelUpdate::OutputLimitTruncated { items, usage }
+                        }
+                    }))
                 }
                 Some(event) if event.data == "[DONE]" => {
                     self.finished = true;
-                    let (items, usage) = std::mem::take(&mut self.state).finish()?;
-                    Ok(Some(ModelUpdate::Finished { items, usage }))
+                    let (parsed, usage) =
+                        std::mem::take(&mut self.state).finish(self.allow_truncated)?;
+                    Ok(Some(match parsed {
+                        ParsedBlocks::Complete(items) => ModelUpdate::Finished { items, usage },
+                        ParsedBlocks::Truncated(items) => {
+                            ModelUpdate::OutputLimitTruncated { items, usage }
+                        }
+                    }))
                 }
                 Some(event) => {
                     let value: Value = serde_json::from_str(&event.data).map_err(|_| {

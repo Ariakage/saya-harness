@@ -115,6 +115,9 @@ async fn combined_reasoning_and_visible_deltas_are_delivered_independently()
                 );
                 break;
             }
+            Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                return Err("unexpected output limit truncation".into());
+            }
             Some(ModelUpdate::Progress) => {}
             None => return Err("missing completion".into()),
         }
@@ -144,6 +147,9 @@ async fn collect(
             Some(ModelUpdate::TextDelta(delta)) => text.push_str(&delta),
             Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {}
             Some(ModelUpdate::Finished { items, usage }) => return Ok((items, usage, text)),
+            Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                return Err("unexpected output limit truncation".into());
+            }
             None => return Err("missing finished event".into()),
         }
     }

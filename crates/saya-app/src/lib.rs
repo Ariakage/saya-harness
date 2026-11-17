@@ -109,7 +109,8 @@ fn model(
                     AnthropicVersion::V20261021
                 },
             )
-            .with_prompt_cache(anthropic_prompt_cache),
+            .with_prompt_cache(anthropic_prompt_cache || p.anthropic_official_provider)
+            .with_official_provider(p.anthropic_official_provider),
         ),
     })
 }

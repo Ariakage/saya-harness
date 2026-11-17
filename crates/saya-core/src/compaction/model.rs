@@ -220,6 +220,12 @@ impl Runner<'_, '_> {
                         }
                         return Ok(text);
                     }
+                    Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                        return Err(error(
+                            "output_limit",
+                            "Summary stream reached provider output limit",
+                        ));
+                    }
                     None => {
                         return Err(error(
                             "compaction_invalid",

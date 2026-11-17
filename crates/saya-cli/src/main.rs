@@ -579,7 +579,10 @@ impl ModelStream for PrintStream {
                     Self::write_text(text)?;
                     self.displayed.push_str(text);
                 }
-                Some(ModelUpdate::Finished { items, .. }) => {
+                Some(
+                    ModelUpdate::Finished { items, .. }
+                    | ModelUpdate::OutputLimitTruncated { items, .. },
+                ) => {
                     // AssistantText is the adapter's validated visible projection.
                     let completed: String = items
                         .iter()

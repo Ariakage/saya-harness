@@ -34,6 +34,9 @@ async fn turn(model: &dyn Model, request: &ModelRequest) -> Result<Vec<HistoryIt
     loop {
         match stream.next(&Never).await.map_err(|e| e.0.code)? {
             Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
+            Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                return Err("output_limit".into());
+            }
             Some(_) => {}
             None => return Err("incomplete_model_response".into()),
         }

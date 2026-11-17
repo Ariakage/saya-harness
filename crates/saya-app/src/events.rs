@@ -535,7 +535,10 @@ impl ModelStream for EventStream {
                         self.buffered.push_str(text);
                     }
                 }
-                Some(ModelUpdate::Finished { usage, .. }) => {
+                Some(
+                    ModelUpdate::Finished { usage, .. }
+                    | ModelUpdate::OutputLimitTruncated { usage, .. },
+                ) => {
                     self.guard.finished = true;
                     if !self.buffered.is_empty() {
                         self.events

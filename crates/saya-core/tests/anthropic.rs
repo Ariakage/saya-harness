@@ -240,7 +240,10 @@ async fn collect(
         match stream.next(&Never).await? {
             Some(ModelUpdate::TextDelta(s)) => text.push_str(&s),
             Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {}
-            Some(ModelUpdate::Finished { items, usage }) => return Ok((items, usage, text)),
+            Some(
+                ModelUpdate::Finished { items, usage }
+                | ModelUpdate::OutputLimitTruncated { items, usage },
+            ) => return Ok((items, usage, text)),
             None => return Err("missing completion".into()),
         }
     }
@@ -1098,5 +1101,379 @@ async fn prompt_cache_marks_static_system_last_tool_and_rolling_history_within_f
         "ephemeral"
     );
     assert_eq!(count_cache_breakpoints(&body), 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_provider_enables_caching_adaptive_summarized_thinking_and_output_limit_signal()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::config::ThinkingEffort;
+    use saya_core::contract::HistoryItem;
+
+    // 1. Official provider sends adaptive+summarized thinking even without effort, plus 4 cache breakpoints.
+    let ok_json = json!({
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": "ok"}]
+    })
+    .to_string();
+    let mut s_effort = settings(false);
+    s_effort.thinking_effort = Some(ThinkingEffort::High);
+    let (url, requests) = fixture::server(vec![
+        ("application/json", ok_json.clone()),
+        ("application/json", ok_json),
+    ])?;
+    let model_no_effort = AnthropicModel::new(
+        transport(url.clone())?,
+        settings(false),
+        AnthropicVersion::default(),
+    )
+    .with_official_provider(true);
+    let model_with_effort =
+        AnthropicModel::new(transport(url)?, s_effort, AnthropicVersion::default())
+            .with_official_provider(true);
+    let mut req = request();
+    req.dynamic_instructions = None;
+    req.tools.push(ToolDefinition {
+        name: "read_file".into(),
+        description: "read".into(),
+        input_schema: json!({"type":"object"}),
+    });
+    req.history = vec![
+        HistoryItem::UserText("u1".into()),
+        HistoryItem::AssistantText("a1".into()),
+        HistoryItem::UserText("u2".into()),
+    ];
+    collect(&model_no_effort, &req).await?;
+    let body_no_effort = requests.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(
+        body_no_effort["thinking"],
+        json!({"type": "adaptive", "display": "summarized"})
+    );
+    assert!(body_no_effort.get("output_config").is_none());
+    assert_eq!(count_cache_breakpoints(&body_no_effort), 4);
+
+    collect(&model_with_effort, &req).await?;
+    let body_with_effort = requests.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(
+        body_with_effort["thinking"],
+        json!({"type": "adaptive", "display": "summarized"})
+    );
+    assert_eq!(body_with_effort["output_config"], json!({"effort": "high"}));
+
+    // 2. Truncated text in streaming execution emits OutputLimitTruncated, while Review & partial tool_use stay output_limit.
+    let text_truncated_sse = sse(&[
+        start(),
+        block_start(0, json!({"type":"thinking","thinking":""})),
+        delta(0, json!({"type":"thinking_delta","thinking":"plan"})),
+        delta(0, json!({"type":"signature_delta","signature":"sig-1"})),
+        block_stop(0),
+        block_start(1, json!({"type":"text","text":"half "})),
+        delta(1, json!({"type":"text_delta","text":"answer"})),
+        block_stop(1),
+        event(
+            "message_delta",
+            json!({"delta":{"stop_reason":"max_tokens"}}),
+        ),
+        event("message_stop", json!({})),
+    ]);
+    let tool_truncated_sse = sse(&[
+        start(),
+        block_start(
+            0,
+            json!({"type":"tool_use","id":"c1","name":"read_file","input":{}}),
+        ),
+        delta(0, json!({"type":"input_json_delta","partial_json":"{"})),
+        block_stop(0),
+        event(
+            "message_delta",
+            json!({"delta":{"stop_reason":"max_tokens"}}),
+        ),
+        event("message_stop", json!({})),
+    ]);
+    let (url, _) = fixture::server(vec![
+        ("text/event-stream", text_truncated_sse.clone()),
+        ("text/event-stream", text_truncated_sse),
+        ("text/event-stream", tool_truncated_sse),
+    ])?;
+    let stream_model =
+        AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default())
+            .with_official_provider(true);
+
+    let mut stream = stream_model.start(&request(), &Never).await?;
+    let mut saw_truncated = false;
+    while let Some(update) = stream.next(&Never).await? {
+        if let ModelUpdate::OutputLimitTruncated { items, .. } = update {
+            saw_truncated = true;
+            assert!(items.iter().any(|item| matches!(
+                item,
+                HistoryItem::AssistantText(text) if text == "half answer"
+            )));
+        }
+    }
+    assert!(saw_truncated);
+
+    let mut review_req = request();
+    review_req.purpose = ModelPurpose::Review;
+    let mut review_stream = stream_model.start(&review_req, &Never).await?;
+    loop {
+        match review_stream.next(&Never).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err("review truncation should error".into()),
+            Err(err) => {
+                assert_eq!(err.code(), "output_limit");
+                break;
+            }
+        }
+    }
+
+    let mut tool_stream = stream_model.start(&request(), &Never).await?;
+    loop {
+        match tool_stream.next(&Never).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err("broken tool_use truncation should error".into()),
+            Err(err) => {
+                assert_eq!(err.code(), "output_limit");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn official_provider_runtime_continues_truncated_text_without_prefill_and_caps_at_three()
+-> Result<(), Box<dyn std::error::Error>> {
+    use saya_core::contract::HistoryItem;
+
+    let part_one = sse(&[
+        start(),
+        block_start(0, json!({"type":"thinking","thinking":""})),
+        delta(0, json!({"type":"thinking_delta","thinking":"t1"})),
+        delta(0, json!({"type":"signature_delta","signature":"sig-t1"})),
+        block_stop(0),
+        block_start(1, json!({"type":"text","text":""})),
+        delta(1, json!({"type":"text_delta","text":"Part 1 "})),
+        block_stop(1),
+        event(
+            "message_delta",
+            json!({"delta":{"stop_reason":"max_tokens"}}),
+        ),
+        event("message_stop", json!({})),
+    ]);
+    let part_two = sse(&[
+        start(),
+        block_start(0, json!({"type":"thinking","thinking":""})),
+        delta(0, json!({"type":"thinking_delta","thinking":"t2"})),
+        delta(0, json!({"type":"signature_delta","signature":"sig-t2"})),
+        block_stop(0),
+        block_start(1, json!({"type":"text","text":""})),
+        delta(1, json!({"type":"text_delta","text":"Part 2"})),
+        block_stop(1),
+        event("message_delta", json!({"delta":{"stop_reason":"end_turn"}})),
+        event("message_stop", json!({})),
+    ]);
+    let follow_up = sse(&[
+        start(),
+        block_start(0, json!({"type":"text","text":"Follow up ok"})),
+        block_stop(0),
+        event("message_delta", json!({"delta":{"stop_reason":"end_turn"}})),
+        event("message_stop", json!({})),
+    ]);
+
+    let (url, requests) = fixture::server(vec![
+        ("text/event-stream", part_one.clone()),
+        ("text/event-stream", part_two),
+        ("text/event-stream", follow_up),
+    ])?;
+    let model = Arc::new(
+        AnthropicModel::new(transport(url)?, settings(true), AnthropicVersion::default())
+            .with_official_provider(true),
+    );
+    let temp = support::temp_workspace()?;
+    let mut session = Session {
+        id: SessionId::new(),
+        workspace: temp.path().into(),
+        work_mode: WorkMode::Work,
+        profile: "test".into(),
+        protocol: ModelProtocol::AnthropicMessages,
+        model: "fixture-model".into(),
+        history: vec![HistoryItem::UserText("Write a long explanation".into())],
+    };
+    let store = Arc::new(MemoryStore::default());
+    let run = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    let mut runtime = AgentRuntime::new(RuntimeSetup {
+        run,
+        model: model.clone(),
+        store: store.clone(),
+        policy: Arc::new(Policy::new(temp.path(), PermissionConfig::default())?),
+        files: Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        cancellation: Arc::new(Never),
+        review: ReviewConfig::new("test".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "long reply".into(),
+        confirmation: None,
+        limits: RuntimeLimits::default(),
+    })?;
+    let result = runtime.run(&mut session).await?;
+    assert_eq!(result.status, RunStatus::Completed);
+    assert_eq!(result.text.as_deref(), Some("Part 1 Part 2"));
+    // No ephemeral continuation UserText should leak into persisted session history.
+    assert_eq!(
+        session
+            .history
+            .iter()
+            .filter(|item| matches!(item, HistoryItem::UserText(_)))
+            .count(),
+        1
+    );
+
+    let first_wire = requests.recv_timeout(Duration::from_secs(1))?;
+    assert_eq!(
+        first_wire["thinking"],
+        json!({"type": "adaptive", "display": "summarized"})
+    );
+    let second_wire = requests.recv_timeout(Duration::from_secs(1))?;
+    let messages = second_wire["messages"].as_array().ok_or("messages")?;
+    assert_eq!(
+        messages.last().and_then(|m| m["role"].as_str()),
+        Some("user")
+    );
+    assert!(messages.iter().any(|m| {
+        m["role"] == "assistant"
+            && m["content"].as_array().is_some_and(|blocks| {
+                blocks.first().is_some_and(|b| b["type"] == "thinking")
+                    && blocks.iter().any(|b| b["text"] == "Part 1 ")
+            })
+    }));
+
+    // Subsequent user turn in the same session must replay valid history without interleaved thinking violations.
+    let follow_up_user = HistoryItem::UserText("Another question".into());
+    store
+        .commit(&[saya_core::boundary::StoreChange::History {
+            session_id: session.id,
+            item: follow_up_user.clone(),
+        }])
+        .await?;
+    session.history.push(follow_up_user);
+    let run2 = Run {
+        id: RunId::new(),
+        session_id: session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    let mut runtime2 = AgentRuntime::new(RuntimeSetup {
+        run: run2,
+        model,
+        store,
+        policy: Arc::new(Policy::new(temp.path(), PermissionConfig::default())?),
+        files: Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        cancellation: Arc::new(Never),
+        review: ReviewConfig::new("test".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "follow up".into(),
+        confirmation: None,
+        limits: RuntimeLimits::default(),
+    })?;
+    let result2 = runtime2.run(&mut session).await?;
+    assert_eq!(result2.status, RunStatus::Completed, "{result2:?}");
+    assert_eq!(result2.text.as_deref(), Some("Follow up ok"));
+    let third_wire = requests.recv_timeout(Duration::from_secs(1))?;
+    assert!(third_wire["messages"].is_array());
+
+    // Exceeding the 3-continuation cap returns LimitReached with output_limit and retains AssistantPartial.
+    let chunk = |text: &str| {
+        sse(&[
+            start(),
+            block_start(0, json!({"type":"text","text":""})),
+            delta(0, json!({"type":"text_delta","text":text})),
+            block_stop(0),
+            event(
+                "message_delta",
+                json!({"delta":{"stop_reason":"max_tokens"}}),
+            ),
+            event("message_stop", json!({})),
+        ])
+    };
+    let (cap_url, cap_requests) = fixture::server(vec![
+        ("text/event-stream", chunk("A")),
+        ("text/event-stream", chunk("B")),
+        ("text/event-stream", chunk("C")),
+        ("text/event-stream", chunk("D")),
+    ])?;
+    let cap_model = Arc::new(
+        AnthropicModel::new(
+            transport(cap_url)?,
+            settings(true),
+            AnthropicVersion::default(),
+        )
+        .with_official_provider(true),
+    );
+    let mut cap_session = Session {
+        id: SessionId::new(),
+        workspace: temp.path().into(),
+        work_mode: WorkMode::Work,
+        profile: "test".into(),
+        protocol: ModelProtocol::AnthropicMessages,
+        model: "fixture-model".into(),
+        history: vec![HistoryItem::UserText("Never ends".into())],
+    };
+    let cap_run = Run {
+        id: RunId::new(),
+        session_id: cap_session.id,
+        work_mode: WorkMode::Work,
+        permissions: PermissionMode::Auto,
+    };
+    let mut cap_runtime = AgentRuntime::new(RuntimeSetup {
+        run: cap_run,
+        model: cap_model,
+        store: Arc::new(MemoryStore::default()),
+        policy: Arc::new(Policy::new(temp.path(), PermissionConfig::default())?),
+        files: Arc::new(ReadTools::new(
+            temp.path(),
+            &[],
+            false,
+            ReadLimits::default(),
+        )?),
+        cancellation: Arc::new(Never),
+        review: ReviewConfig::new("test".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "cap continuations".into(),
+        confirmation: None,
+        limits: RuntimeLimits::default(),
+    })?;
+    let cap_result = cap_runtime.run(&mut cap_session).await?;
+    assert_eq!(cap_result.status, RunStatus::LimitReached);
+    assert_eq!(cap_result.stop_reason.as_deref(), Some("output_limit"));
+    assert_eq!(cap_result.text.as_deref(), Some("ABCD"));
+    assert!(matches!(
+        cap_session.history.last(),
+        Some(HistoryItem::AssistantPartial(text)) if text == "ABCD"
+    ));
+    for _ in 0..4 {
+        cap_requests.recv_timeout(Duration::from_secs(1))?;
+    }
+    assert!(cap_requests.try_recv().is_err());
     Ok(())
 }

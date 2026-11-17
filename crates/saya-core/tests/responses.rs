@@ -151,6 +151,9 @@ async fn public_reasoning_deltas_exclude_encrypted_native_content()
                 );
                 break;
             }
+            Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                return Err("unexpected output limit truncation".into());
+            }
             Some(ModelUpdate::Progress) => {}
             None => return Err("missing completion".into()),
         }
@@ -495,6 +498,9 @@ async fn collect(
             Some(ModelUpdate::TextDelta(s)) => text.push_str(&s),
             Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {}
             Some(ModelUpdate::Finished { items, usage }) => return Ok((items, usage, text)),
+            Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                return Err("unexpected output limit truncation".into());
+            }
             None => return Err("missing completion".into()),
         }
     }

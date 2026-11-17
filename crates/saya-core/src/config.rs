@@ -225,6 +225,10 @@ pub struct Profile {
     /// Opt-in Anthropic prompt cache breakpoints for system, tools, and history.
     #[serde(default, skip_serializing_if = "is_false")]
     pub prompt_cache: bool,
+    /// Enable full official Anthropic Messages features: prompt caching, adaptive
+    /// thinking with summarized display, and bounded max_tokens text continuation.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub anthropic_official_provider: bool,
     /// Optional explicit rates; excluded from the provider identity fingerprint.
     #[serde(default, skip_serializing)]
     pub pricing: Option<Pricing>,
@@ -285,6 +289,8 @@ struct RawProfile {
     omit_reasoning_include: bool,
     #[serde(default)]
     prompt_cache: bool,
+    #[serde(default, alias = "anthropic_offical_provider")]
+    anthropic_official_provider: bool,
     pricing: Option<Pricing>,
 }
 impl TryFrom<RawProfile> for Profile {
@@ -325,6 +331,7 @@ impl TryFrom<RawProfile> for Profile {
             omit_stream_usage: raw.omit_stream_usage,
             omit_reasoning_include: raw.omit_reasoning_include,
             prompt_cache: raw.prompt_cache,
+            anthropic_official_provider: raw.anthropic_official_provider,
             pricing: raw.pricing,
         })
     }
@@ -758,10 +765,20 @@ fn validate_profile(p: &Profile, env: &Environment) -> Result<(), BoundaryError>
                 .map_err(|_| invalid("invalid authentication value"))?;
         }
     }
+    if p.anthropic_official_provider && p.protocol != Protocol::AnthropicMessages {
+        return Err(invalid(
+            "anthropic_official_provider requires anthropic-messages protocol",
+        ));
+    }
     if p.protocol == Protocol::AnthropicMessages
         && !matches!(p.api_version.as_str(), "2026-10-21" | "2023-06-01")
     {
         return Err(invalid("unsupported Anthropic API version"));
+    }
+    if p.anthropic_official_provider && p.api_version != "2026-10-21" {
+        return Err(invalid(
+            "anthropic_official_provider requires api_version 2026-10-21",
+        ));
     }
     let mut names = BTreeSet::new();
     for (name, reference) in &p.headers_env {

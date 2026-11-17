@@ -73,6 +73,12 @@ pub enum ModelUpdate {
         items: Vec<HistoryItem>,
         usage: Option<Usage>,
     },
+    /// Execution turn hit `max_tokens` with valid text/thinking blocks and no
+    /// incomplete tool calls; eligible for bounded continuation.
+    OutputLimitTruncated {
+        items: Vec<HistoryItem>,
+        usage: Option<Usage>,
+    },
 }
 
 /// An in-flight model response; adapters report incomplete streams as errors.

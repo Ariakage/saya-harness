@@ -1257,3 +1257,103 @@ fn sandbox_presets_add_safe_existing_toolchain_roots_without_changing_defaults()
         assert!(policy.read_roots.iter().any(|p| p == Path::new("/etc/ssl")));
     }
 }
+
+#[test]
+fn anthropic_official_provider_flag_supports_alias_and_validates_protocol_and_version() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    fs::create_dir(&workspace).unwrap();
+
+    let base_env = || {
+        env(&[
+            ("HOME", temp.path().to_str().unwrap()),
+            ("EXAMPLE_KEY", "fixture-secret"),
+        ])
+    };
+    let base_toml = fixture().replace(
+        "api_version = \"2023-06-01\"",
+        "api_version = \"2026-10-21\"",
+    );
+    let base = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "base.toml", &base_toml)),
+            ..Default::default()
+        },
+        base_env(),
+        &workspace,
+    )
+    .unwrap();
+    assert!(!base.profiles["anthropic"].anthropic_official_provider);
+
+    let official_toml = base_toml.replace(
+        "api_version = \"2026-10-21\"",
+        "api_version = \"2026-10-21\"\nanthropic_official_provider = true",
+    );
+    let official = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "official.toml", &official_toml)),
+            ..Default::default()
+        },
+        base_env(),
+        &workspace,
+    )
+    .unwrap();
+    assert!(official.profiles["anthropic"].anthropic_official_provider);
+    assert_ne!(
+        base.profiles["anthropic"].fingerprint().unwrap(),
+        official.profiles["anthropic"].fingerprint().unwrap()
+    );
+
+    let alias_toml = base_toml.replace(
+        "api_version = \"2026-10-21\"",
+        "api_version = \"2026-10-21\"\nanthropic_offical_provider = true",
+    );
+    let aliased = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "alias.toml", &alias_toml)),
+            ..Default::default()
+        },
+        base_env(),
+        &workspace,
+    )
+    .unwrap();
+    assert!(aliased.profiles["anthropic"].anthropic_official_provider);
+    assert_eq!(
+        official.profiles["anthropic"].fingerprint().unwrap(),
+        aliased.profiles["anthropic"].fingerprint().unwrap()
+    );
+
+    let wrong_version = fixture().replace(
+        "api_version = \"2023-06-01\"",
+        "api_version = \"2023-06-01\"\nanthropic_official_provider = true",
+    );
+    let err = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "old-version.toml", &wrong_version)),
+            ..Default::default()
+        },
+        base_env(),
+        &workspace,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(err.0.code, "invalid_config");
+    assert!(err.0.message.contains("2026-10-21"));
+
+    let wrong_protocol = base_toml.replace(
+        "protocol = \"openai-chat-completions\"",
+        "protocol = \"openai-chat-completions\"\nanthropic_official_provider = true",
+    );
+    let err = config::load(
+        Overrides {
+            config: Some(write(temp.path(), "wrong-protocol.toml", &wrong_protocol)),
+            ..Default::default()
+        },
+        base_env(),
+        &workspace,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(err.0.code, "invalid_config");
+    assert!(err.0.message.contains("anthropic-messages"));
+}

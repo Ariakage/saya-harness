@@ -298,6 +298,9 @@ async fn model_turn(
                         received = true
                     }
                     Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
+                    Some(ModelUpdate::OutputLimitTruncated { .. }) => {
+                        return Err(error("output_limit", "provider output limit reached"));
+                    }
                     None => {
                         return Err(error(
                             "incomplete_model_response",

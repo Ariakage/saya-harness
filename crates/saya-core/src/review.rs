@@ -379,7 +379,7 @@ pub async fn review_operation(
                         }
                         return Ok(Some(text));
                     }
-                    None => return Ok(None),
+                    Some(ModelUpdate::OutputLimitTruncated { .. }) | None => return Ok(None),
                 }
             }
         }

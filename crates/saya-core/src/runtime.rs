@@ -48,6 +48,57 @@ use tokio::time::{Instant, sleep};
 
 const MAX_STEER_MESSAGES: usize = 16;
 const MAX_STEER_BYTES: usize = 256 * 1024;
+const MAX_ANTHROPIC_OUTPUT_CONTINUATIONS: usize = 3;
+const OUTPUT_CONTINUATION_PROMPT: &str = concat!(
+    "Your previous response was truncated at the output token limit. ",
+    "Continue seamlessly from where you stopped without repeating prior text."
+);
+
+enum AttemptResponse {
+    Complete(Vec<HistoryItem>),
+    Truncated(Vec<HistoryItem>),
+}
+
+fn collect_assistant_text(items: &[HistoryItem]) -> String {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::AssistantText(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_anthropic_thinking_block(item: &HistoryItem) -> bool {
+    matches!(
+        item,
+        HistoryItem::ProviderItem {
+            protocol: crate::contract::ModelProtocol::AnthropicMessages,
+            value,
+        } if matches!(
+            value.get("type").and_then(serde_json::Value::as_str),
+            Some("thinking" | "redacted_thinking")
+        )
+    )
+}
+
+fn merge_continued_items(
+    accumulated_prefix_text: String,
+    final_items: Vec<HistoryItem>,
+) -> Vec<HistoryItem> {
+    if accumulated_prefix_text.is_empty() {
+        return final_items;
+    }
+    let split = final_items
+        .iter()
+        .position(|item| !is_anthropic_thinking_block(item))
+        .unwrap_or(final_items.len());
+    let mut merged = Vec::with_capacity(final_items.len() + 1);
+    merged.extend(final_items[..split].iter().cloned());
+    merged.push(HistoryItem::AssistantText(accumulated_prefix_text));
+    merged.extend(final_items[split..].iter().cloned());
+    merged
+}
 
 pub(crate) fn error(code: &str, message: &str) -> BoundaryError {
     BoundaryError::new(code, message)
@@ -1018,6 +1069,7 @@ impl AgentRuntime {
         &self,
         session: &mut Session,
         mode: WorkMode,
+        continuation_tail: &[HistoryItem],
     ) -> Result<
         Option<(
             ModelRequest,
@@ -1101,7 +1153,7 @@ impl AgentRuntime {
             media: Default::default(),
             tools,
         };
-        let request = self
+        let mut request = self
             .context_request(
                 session,
                 request,
@@ -1109,6 +1161,9 @@ impl AgentRuntime {
                 skill_frame.as_ref(),
             )
             .await?;
+        if !continuation_tail.is_empty() {
+            request.history.extend_from_slice(continuation_tail);
+        }
         if self
             .context_state
             .as_ref()
@@ -1124,7 +1179,7 @@ impl AgentRuntime {
         request: &ModelRequest,
         partial: &mut String,
         received: &mut bool,
-    ) -> Result<Vec<HistoryItem>, BoundaryError> {
+    ) -> Result<AttemptResponse, BoundaryError> {
         let start = Instant::now();
         self.budget.consume()?;
         let connect_timeout = if self.limits.model_total.is_zero() {
@@ -1162,7 +1217,12 @@ impl AgentRuntime {
                 Some(ModelUpdate::Progress | ModelUpdate::ThinkingDelta { .. }) => {
                     *received = true;
                 }
-                Some(ModelUpdate::Finished { items, .. }) => return Ok(items),
+                Some(ModelUpdate::Finished { items, .. }) => {
+                    return Ok(AttemptResponse::Complete(items));
+                }
+                Some(ModelUpdate::OutputLimitTruncated { items, .. }) => {
+                    return Ok(AttemptResponse::Truncated(items));
+                }
                 None => {
                     return Err(BoundaryError::new(
                         error_codes::INCOMPLETE_MODEL_RESPONSE,
@@ -1173,29 +1233,33 @@ impl AgentRuntime {
         }
     }
 
+    async fn commit_partial_history(
+        &self,
+        session: &mut Session,
+        partial: String,
+    ) -> Result<(), BoundaryError> {
+        let item = HistoryItem::AssistantPartial(secrets::redact(partial, &self.secret_source)?);
+        let mut changes = vec![StoreChange::History {
+            session_id: session.id,
+            item: item.clone(),
+        }];
+        if let Some(record) = self.memory_response_change(session, std::slice::from_ref(&item))? {
+            changes.push(record);
+        }
+        self.store.commit(&changes).await?;
+        session.history.push(item);
+        Ok(())
+    }
+
     async fn handle_model_failure(
         &self,
         session: &mut Session,
         attempt: u32,
         received: bool,
+        prior_partial: &str,
         partial: String,
         err: BoundaryError,
     ) -> Result<bool, BoundaryError> {
-        if received {
-            let item =
-                HistoryItem::AssistantPartial(secrets::redact(partial, &self.secret_source)?);
-            let mut changes = vec![StoreChange::History {
-                session_id: session.id,
-                item: item.clone(),
-            }];
-            if let Some(record) =
-                self.memory_response_change(session, std::slice::from_ref(&item))?
-            {
-                changes.push(record);
-            }
-            self.store.commit(&changes).await?;
-            session.history.push(item);
-        }
         if !received && attempt < 2 && err.is_transient_model_error() {
             let jitter_max = self
                 .limits
@@ -1225,17 +1289,25 @@ impl AgentRuntime {
             .await?;
             return Ok(true);
         }
+        if received || !prior_partial.is_empty() {
+            let combined = format!("{prior_partial}{partial}");
+            self.commit_partial_history(session, combined).await?;
+        }
         Err(err)
     }
 
     async fn model_turn(&self, session: &mut Session) -> Result<Vec<HistoryItem>, BoundaryError> {
         let mut attempt = 0u32;
+        let mut continuation_count = 0usize;
+        let mut continuation_tail = Vec::new();
+        let mut accumulated_text = String::new();
         loop {
             self.check()?;
             self.services.refresh(self).await?;
             let (snap, mode_lease) = self.acquire_shared_mode(session).await?;
-            let Some((request, record, memory_frame, skill_frame)) =
-                self.build_model_request(session, snap.current).await?
+            let Some((request, record, memory_frame, skill_frame)) = self
+                .build_model_request(session, snap.current, &continuation_tail)
+                .await?
             else {
                 continue;
             };
@@ -1273,7 +1345,7 @@ impl AgentRuntime {
                 .await;
             mode_lease.complete()?;
             match response {
-                Ok(items) => {
+                Ok(AttemptResponse::Complete(items)) => {
                     if !items.iter().any(|item| {
                         matches!(
                             item,
@@ -1285,11 +1357,40 @@ impl AgentRuntime {
                             "model completed without text or tool calls",
                         ));
                     }
-                    return secrets::model_response(items, &self.secret_source);
+                    let items = secrets::model_response(items, &self.secret_source)?;
+                    let merged = merge_continued_items(accumulated_text, items);
+                    return secrets::model_response(merged, &self.secret_source);
+                }
+                Ok(AttemptResponse::Truncated(items)) => {
+                    let redacted = secrets::model_response(items, &self.secret_source)?;
+                    let chunk_text = collect_assistant_text(&redacted);
+                    accumulated_text.push_str(&chunk_text);
+                    if continuation_count >= MAX_ANTHROPIC_OUTPUT_CONTINUATIONS {
+                        if !accumulated_text.is_empty() {
+                            self.commit_partial_history(session, accumulated_text)
+                                .await?;
+                        }
+                        return Err(BoundaryError::new(
+                            error_codes::OUTPUT_LIMIT,
+                            "provider output limit reached after maximum continuations",
+                        ));
+                    }
+                    continuation_count += 1;
+                    attempt = 0;
+                    continuation_tail.extend(redacted);
+                    continuation_tail
+                        .push(HistoryItem::UserText(OUTPUT_CONTINUATION_PROMPT.into()));
                 }
                 Err(err) => {
                     if self
-                        .handle_model_failure(session, attempt, received, partial, err)
+                        .handle_model_failure(
+                            session,
+                            attempt,
+                            received,
+                            &accumulated_text,
+                            partial,
+                            err,
+                        )
                         .await?
                     {
                         attempt += 1;

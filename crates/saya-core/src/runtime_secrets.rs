@@ -287,6 +287,13 @@ impl ModelStream for GuardedStream {
                         usage,
                     }))
                 }
+                Ok(Some(ModelUpdate::OutputLimitTruncated { items, usage })) => {
+                    self.partial.clear();
+                    Ok(Some(ModelUpdate::OutputLimitTruncated {
+                        items: model_response(items, &self.source)?,
+                        usage,
+                    }))
+                }
                 Ok(None) if !self.partial.is_empty() => {
                     let partial = redact(std::mem::take(&mut self.partial), &self.source)?;
                     Ok(Some(ModelUpdate::TextDelta(partial)))

@@ -368,7 +368,10 @@ impl ModelStream for MeasuredStream {
                     self.completion.status = "failed";
                     self.completion.error_code = Some(error.0.code.clone());
                 })?;
-            if let Some(ModelUpdate::Finished { usage, .. }) = &next
+            if let Some(
+                ModelUpdate::Finished { usage, .. }
+                | ModelUpdate::OutputLimitTruncated { usage, .. },
+            ) = &next
                 && !self.completion.done
             {
                 self.completion

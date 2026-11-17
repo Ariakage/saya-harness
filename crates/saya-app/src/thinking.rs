@@ -119,7 +119,10 @@ impl ModelStream for ThinkingStream {
                     }
                     return Ok(Some(ModelUpdate::Progress));
                 }
-                Ok(Some(ModelUpdate::Finished { items, .. })) => {
+                Ok(Some(
+                    ModelUpdate::Finished { items, .. }
+                    | ModelUpdate::OutputLimitTruncated { items, .. },
+                )) => {
                     if let Some(capture) = &mut self.capture {
                         capture.finish(Some(items));
                     }
