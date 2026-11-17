@@ -67,8 +67,15 @@ fn package(name: &str, version: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({"name": name, "version": version})).unwrap()
 }
 
+fn canonical_tempdir() -> TempDir {
+    // macOS default TMPDIR (/var/folders/...) traverses the /var -> private/var symlink;
+    // canonicalize only the test root so ancestor O_NOFOLLOW checks still reject fixture links.
+    let base = fs::canonicalize(std::env::temp_dir()).unwrap();
+    tempfile::Builder::new().tempdir_in(base).unwrap()
+}
+
 fn fixture_identity() -> IdentityFixture {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = canonical_tempdir();
     let root = directory.path();
     let worker_root = root.join("worker");
     let node_path = root.join("node/bin/node");
@@ -1005,7 +1012,7 @@ fn verifies_each_pinned_identity_file() {
 
 #[test]
 fn installation_tree_matches_portable_golden_identity() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = canonical_tempdir();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
     fs::create_dir(directory.path().join("lib")).unwrap();
     fs::set_permissions(

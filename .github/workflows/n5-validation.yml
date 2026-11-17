@@ -1,0 +1,319 @@
+name: N5 native acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Complete source commit to build and validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      RUNNER_LABEL: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Witness exact clean source and native platform
+        id: source
+        run: |
+          set -euo pipefail
+          mkdir -p target/n5/acceptance
+          python3 scripts/n5/witness.py source --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --report target/n5/acceptance/source-platform.json 2>&1 | tee target/n5/acceptance/source-platform.log
+      - name: Install pinned Rust toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy 2>&1 | tee target/n5/acceptance/toolchain.log
+          node --version 2>&1 | tee -a target/n5/acceptance/toolchain.log
+      - name: Install native Linux isolation tools
+        id: linux_tools
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          set -euo pipefail
+          ./scripts/n2/install-linux-tools.sh 2>&1 | tee target/n5/acceptance/linux-tools.log
+      - name: Check workspace and build optimized program
+        id: rust
+        run: |
+          set -euo pipefail
+          (umask 022 && ./scripts/check.sh) 2>&1 | tee target/n5/acceptance/workspace-check.log
+      - name: Validate offline workspace tooling
+        id: tooling
+        run: |
+          set -euo pipefail
+          {
+            python3 -B scripts/test_prompt_eval.py
+            python3 -B scripts/n2/test_install_linux_tools.py -v
+            python3 -B scripts/n2/test_native_acceptance.py -v
+            python3 -B scripts/n2/test_verify_performance.py -v
+            python3 -B scripts/release/test_package.py -v
+            python3 -B scripts/release/test_verify_macos15.py -v
+            python3 -B scripts/release/test_verify_linux.py -v
+            python3 -B scripts/release/test_script_helpers.py -v
+            python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py' -v
+            python3 -B scripts/n5/test_browser_vm.py -v
+            python3 -I -B scripts/n5/test_acceptance.py -v
+            python3 -B scripts/n5/test_witness.py -v
+          } 2>&1 | tee target/n5/acceptance/tooling.log
+      - name: Freeze one fixed-source candidate image
+        id: candidate
+        run: |
+          set -euo pipefail
+          python3 scripts/n5/witness.py candidate --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --copy-from target/release/saya --binary target/n5/acceptance/program/saya \
+            --report target/n5/acceptance/candidate.json 2>&1 | tee target/n5/acceptance/candidate.log
+      - name: Verify candidate architecture and minimum platform
+        id: baseline
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/n5/witness.py baseline --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --binary "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" \
+            --report target/n5/acceptance/baseline.json 2>&1 | tee target/n5/acceptance/baseline.log
+      - name: Native macOS isolation acceptance
+        id: native_macos
+        if: startsWith(matrix.os, 'macos-')
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          python3 scripts/n2/native_acceptance.py "$CANDIDATE" --output target/n5/acceptance/native-evidence.json \
+            2>&1 | tee target/n5/acceptance/native.log
+      - name: Native Linux isolation and delegated resource acceptance
+        id: native_linux
+        if: startsWith(matrix.os, 'ubuntu-')
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          sudo systemd-run --collect --wait --pipe \
+            --unit="saya-n5-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --property='Delegate=cpu memory pids' \
+            --property=RuntimeMaxSec=1800 --property=KillMode=control-group \
+            --working-directory="$PWD" \
+            /bin/sh "$PWD/scripts/n2/delegated-linux.sh" "$CANDIDATE" \
+            --require-cgroup --output "$PWD/target/n5/acceptance/native-evidence.json" \
+            2>&1 | tee target/n5/acceptance/native.log
+      - name: Verify complete native performance evidence
+        id: performance
+        run: |
+          set -euo pipefail
+          python3 scripts/n2/verify_performance.py target/n5/acceptance/native-evidence.json --samples 3 \
+            2>&1 | tee target/n5/acceptance/performance-verification.json
+      - name: Preserve MCP and OAuth regression acceptance
+        id: mcp
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          python3 scripts/n2/mcp_acceptance.py "$CANDIDATE" 2>&1 | tee target/n5/acceptance/mcp.log
+      - name: Preserve Markdown, TUI and recovery regression acceptance
+        id: legacy
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release/smoke.py "$CANDIDATE" 2>&1 | tee target/n5/acceptance/smoke.log
+          python3 scripts/release/journey.py "$CANDIDATE" 2>&1 | tee target/n5/acceptance/journey.log
+          python3 scripts/release/review_regressions.py "$CANDIDATE" 2>&1 | tee target/n5/acceptance/review-regressions.log
+          python3 scripts/release/tui_journey.py "$CANDIDATE" --report target/n5/acceptance/legacy-tui.json \
+            2>&1 | tee target/n5/acceptance/legacy-tui.log
+      - name: Exercise all eight real native plugin service fixtures
+        id: plugins
+        env:
+          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          cargo test -p saya-core --locked --test plugin_services -- --ignored --test-threads=1 \
+            2>&1 | tee target/n5/acceptance/native-plugin-services.log
+          python3 - <<'PY' | tee target/n5/acceptance/native-plugin-summary.json
+          import json, pathlib, re
+          text = pathlib.Path('target/n5/acceptance/native-plugin-services.log').read_text()
+          match = re.search(r'test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;', text)
+          evidence = {'status': 'passed' if match and tuple(map(int, match.groups())) == (8, 0, 0) else 'failed',
+                      'expected_real_native_fixtures': 8, 'actual_counts': list(map(int, match.groups())) if match else None}
+          print(json.dumps(evidence))
+          if evidence['status'] != 'passed':
+              raise SystemExit('Every native plugin fixture must actually execute successfully')
+          PY
+      - name: Preserve N3 CLI journeys across all three protocols
+        id: n3_cli
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/n3/acceptance.py "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" --source-commit "$SOURCE_SHA" \
+            --source-root "$PWD" --report target/n5/acceptance/n3-cli-report.json --work-dir target/n5/acceptance/n3-cli-work \
+            2>&1 | tee target/n5/acceptance/n3-cli.log
+      - name: Preserve N3 real PTY TUI journeys across all three protocols
+        id: n3_tui
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/n3/tui_acceptance.py "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" --source-commit "$SOURCE_SHA" \
+            --source-root "$PWD" --report target/n5/acceptance/n3-tui-report.json --work-dir target/n5/acceptance/n3-tui-work \
+            2>&1 | tee target/n5/acceptance/n3-tui.log
+      - name: Assemble and verify three-patch Playwright worker
+        id: worker_patches
+        run: |
+          set -euo pipefail
+          umask 022
+          N5_WORK="$(python3 -c 'import os, pathlib; print((pathlib.Path(os.environ["RUNNER_TEMP"]).resolve() / "n5-worker"))')"
+          rm -rf "$N5_WORK"
+          mkdir -p "$N5_WORK/worker"
+          (
+            cd "$N5_WORK/worker"
+            npm init -y >/dev/null 2>&1
+            npm install --no-save --ignore-scripts @playwright/mcp@0.0.85 playwright@1.66.0-alpha-2026-11-09
+          )
+          python3 scripts/n5/witness.py worker-prepare \
+            --source-sha "$SOURCE_SHA" \
+            --runner "$RUNNER_LABEL" \
+            --worker-root "$N5_WORK/worker" \
+            --snapshot-node-dir "$N5_WORK/node/bin" \
+            --report target/n5/acceptance/worker-patches.json 2>&1 | tee target/n5/acceptance/worker-patches.log
+          {
+            echo "N5_WORK=$N5_WORK"
+            echo "N5_NODE=$N5_WORK/node/bin/node"
+            echo "N5_WORKER_ROOT=$N5_WORK/worker"
+          } >> "$GITHUB_ENV"
+      - name: Exercise N5 worker stdio and HTTP scope protocol
+        id: worker_protocol
+        run: |
+          set -euo pipefail
+          python3 -I -B scripts/n5/test_worker_protocol.py \
+            --node "$N5_NODE" \
+            --worker-root "$N5_WORKER_ROOT" \
+            --temp-root "$PWD/target/tmp/n5-worker-protocol" 2>&1 | tee target/n5/acceptance/worker-protocol.log
+      - name: Exercise N5 worker private processInfo contract
+        id: worker_process_info
+        run: |
+          set -euo pipefail
+          "$N5_NODE" scripts/n5/test_worker_process_info.cjs "$N5_WORKER_ROOT" 2>&1 | tee target/n5/acceptance/worker-process-info.log
+      - name: Exercise N5 worker private captureScreenshot contract
+        id: worker_capture
+        run: |
+          set -euo pipefail
+          "$N5_NODE" scripts/n5/test_worker_capture.cjs "$N5_WORKER_ROOT" 2>&1 | tee target/n5/acceptance/worker-capture.log
+      - name: Verify fail-closed browser prerequisite and assembly contracts
+        id: browser_negative_controls
+        run: |
+          set -euo pipefail
+          {
+            cargo test -p saya-core --locked --test browser_worker_real
+            cargo test -p saya-core --locked --test browser_vm_real
+            cargo test -p saya-core --locked --test browser_vm_network_real
+            cargo test -p saya-core --locked --test browser_vm_files_real
+            cargo test -p saya-core --locked --test browser_screenshot_real
+            cargo test -p saya-app --locked --test browser_assembly
+          } 2>&1 | tee target/n5/acceptance/browser-negative-controls.log
+      - name: Exercise Linux private VM host channel
+        id: browser_vm_host_linux
+        if: startsWith(matrix.os, 'ubuntu-')
+        env:
+          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          cargo test -p saya-core --locked --test browser_vm_host_linux -- --ignored --exact \
+            private_vm_channel_preserves_literals_and_denies_other_host_access --nocapture \
+            2>&1 | tee target/n5/acceptance/browser-vm-host-linux.log
+      - name: Exercise real native Linux Chromium sandbox with schema v2 manifest
+        id: native_chromium_sandbox
+        if: startsWith(matrix.os, 'ubuntu-')
+        env:
+          SAYA_TEST_EXECUTABLE: ${{ steps.candidate.outputs.binary }}
+        run: |
+          set -euo pipefail
+          umask 022
+          mkdir -p "$N5_WORK/browsers"
+          sudo env PLAYWRIGHT_BROWSERS_PATH="$N5_WORK/browsers" \
+            "$N5_NODE" "$N5_WORKER_ROOT/node_modules/.bin/playwright" install-deps chromium-headless-shell \
+            2>&1 | tee target/n5/acceptance/chromium-deps.log
+          PLAYWRIGHT_BROWSERS_PATH="$N5_WORK/browsers" \
+            "$N5_NODE" "$N5_WORKER_ROOT/node_modules/.bin/playwright" install chromium-headless-shell \
+            2>&1 | tee target/n5/acceptance/chromium-install.log
+          CHROMIUM_BIN="$(find "$N5_WORK/browsers" -type f -name 'chrome-headless-shell' | head -n 1)"
+          test -x "$CHROMIUM_BIN"
+          python3 scripts/n5/witness.py native-manifest \
+            --source-sha "$SOURCE_SHA" \
+            --runner "$RUNNER_LABEL" \
+            --node "$N5_NODE" \
+            --worker-root "$N5_WORKER_ROOT" \
+            --chromium "$CHROMIUM_BIN" \
+            --manifest "$N5_WORK/identity.json" \
+            --report target/n5/acceptance/native-manifest.json 2>&1 | tee target/n5/acceptance/native-manifest.log
+          SAYA_TEST_NODE="$N5_NODE" \
+          SAYA_TEST_WORKER_ROOT="$N5_WORKER_ROOT" \
+          SAYA_TEST_CHROMIUM_BIN="$CHROMIUM_BIN" \
+          SAYA_TEST_IDENTITY_MANIFEST="$N5_WORK/identity.json" \
+          cargo test -p saya-core --locked --test browser_worker_real -- --ignored --exact \
+            real_playwright_worker_verifies_chromium_sandbox --nocapture \
+            2>&1 | tee target/n5/acceptance/native-chromium-sandbox.log
+      - name: Clean temporary worker installation
+        if: always()
+        run: |
+          if [ -n "${N5_WORK:-}" ]; then
+            rm -rf "$N5_WORK"
+          fi
+      - name: Recheck exact source and tested candidate image
+        id: final_witness
+        if: ${{ always() && steps.candidate.outcome == 'success' }}
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.binary }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/n5/witness.py final --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --binary "$CANDIDATE" --expected-sha256 "$CANDIDATE_SHA" \
+            --report target/n5/acceptance/final-witness.json 2>&1 | tee target/n5/acceptance/final-witness.log
+      - name: Require all applicable N5 validation outcomes
+        id: outcomes
+        if: always()
+        env:
+          STEP_OUTCOMES: ${{ toJSON(steps) }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/n5/acceptance
+          python3 scripts/n5/witness.py outcomes --source-sha "$SOURCE_SHA" --runner "$RUNNER_LABEL" \
+            --report target/n5/acceptance/workflow-outcomes.json
+      - name: Retain tested candidate and acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: n5-acceptance-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/n5/acceptance/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

@@ -326,7 +326,7 @@ class AcceptanceOracles(unittest.TestCase):
             if arguments[0] == 'cc':
                 probe_source = Path(arguments[-3])
                 self.assertTrue(probe_source.is_file())
-                self.assertEqual(probe_source.parent.parent, Path(os.environ['TMPDIR']))
+                self.assertEqual(probe_source.parent.parent, Path(os.environ['TMPDIR']).resolve())
                 raise subprocess.CalledProcessError(17, arguments, stderr=b'N2_SYNTHETIC_COMPILER_FAILURE')
             return real_run(arguments, **options)
         with tempfile.TemporaryDirectory() as directory:

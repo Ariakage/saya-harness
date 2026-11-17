@@ -19,6 +19,12 @@ browser_vm = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(browser_vm)
 
 
+def canonical_tempdir():
+    # macOS default TMPDIR (/var/folders/...) traverses the /var -> private/var symlink;
+    # resolve only the test parent so open_root still rejects symlinks created inside tests.
+    return tempfile.TemporaryDirectory(dir=str(Path(tempfile.gettempdir()).resolve()))
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -138,7 +144,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_golden_tree_includes_modes_files_and_internal_link(self):
         self.assertTrue(hasattr(browser_vm, "installation_tree"), "closed tree scanner missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             self.tree(root)
             self.assertEqual(browser_vm.installation_tree(root), {
@@ -147,7 +153,7 @@ class InstallationTreeTests(unittest.TestCase):
             })
 
     def test_directory_depth_allows_leaf_below_128_directories(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             current = root
             for _ in range(128):
@@ -165,7 +171,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_directory_collection_stops_before_consuming_unbounded_names(self):
         self.assertTrue(hasattr(browser_vm, "MAX_TREE_ENTRIES"), "shared tree bound missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             for name in ("a", "b", "c", "d", "e"):
                 (root / name).write_bytes(b"")
@@ -191,7 +197,7 @@ class InstallationTreeTests(unittest.TestCase):
             self.assertEqual(len(observed), 3)
 
     def test_rejects_hardlinked_symlink_even_when_alias_is_outside_tree(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             parent = Path(temporary)
             root = parent / "tree"
             root.mkdir()
@@ -204,7 +210,7 @@ class InstallationTreeTests(unittest.TestCase):
                 browser_vm.installation_tree(root)
 
     def test_link_mode_is_normalized_across_platforms(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             self.tree(root)
             try:
@@ -219,7 +225,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_bundle_same_size_add_remove_and_mode_change_identity(self):
         self.assertTrue(hasattr(browser_vm, "installation_tree"), "closed tree scanner missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             self.tree(root)
             original = browser_vm.installation_tree(root)
@@ -236,7 +242,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_rejects_symlinked_root_and_intermediate_directory(self):
         self.assertTrue(hasattr(browser_vm, "installation_tree"), "closed tree scanner missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             (root / "real").mkdir()
             (root / "real/sub").mkdir()
@@ -247,7 +253,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_rejects_escaping_dangling_cyclic_and_file_traversal_links(self):
         self.assertTrue(hasattr(browser_vm, "installation_tree"), "closed tree scanner missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             (root / "file").write_bytes(b"x")
             for target in ("../outside", "/etc/passwd", "missing", "link", "file/../file"):
@@ -261,7 +267,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_rejects_hardlinks_fifo_unsafe_mode_and_controls(self):
         self.assertTrue(hasattr(browser_vm, "installation_tree"), "closed tree scanner missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             file = root / "file"
             file.write_bytes(b"x")
@@ -293,7 +299,7 @@ class InstallationTreeTests(unittest.TestCase):
                 browser_vm.validate_manifest_structure(manifest)
 
     def test_deadline_and_mutation_during_read_fail_closed(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             file = root / "bundle.js"
             file.write_bytes(b"a" * 70000)
@@ -315,7 +321,7 @@ class InstallationTreeTests(unittest.TestCase):
             self.assertTrue(mutated)
 
     def _assert_prefix_mutation_rejected(self, snapshot, same_timestamp_tick):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             file = root / ("node" if snapshot else "bundle.js")
             file.write_bytes(b"a" * 70000)
@@ -376,7 +382,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_node_snapshot_copies_only_binary_preserving_safe_mode(self):
         self.assertTrue(hasattr(browser_vm, "snapshot_node"), "single node snapshot missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             source = root / "bin"
             source.mkdir()
@@ -395,7 +401,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_remote_reply_mismatch_and_oversized_shape_fail(self):
         self.assertTrue(hasattr(browser_vm, "remote_installation_trees"), "remote tree verifier missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             args = ssh_namespace(root)
             layout = browser_vm.remote_layout(args)
@@ -408,7 +414,7 @@ class InstallationTreeTests(unittest.TestCase):
 
     def test_fresh_remote_root_refuses_existing_tree_without_changing_it(self):
         self.assertTrue(hasattr(browser_vm, "require_fresh_remote_root"), "fresh root guard missing")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary) / "install"
             def local_ssh(args, config, script, arguments, input_bytes=None):
                 return browser_vm.checked(["/bin/sh", "-c", script, "test"] + arguments, input_bytes)
@@ -467,7 +473,7 @@ class SshTests(unittest.TestCase):
     def test_bracketed_ipv6_is_normalized_before_ssh_and_config(self):
         self.assertEqual(browser_vm.loopback_host("[::1]"), "::1")
         self.assertEqual(browser_vm.loopback_host("127.0.0.1"), "127.0.0.1")
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(Path(temporary), host="[::1]")
             config = browser_vm.strict_ssh_config(args)
             self.assertIn("HostName ::1", config)
@@ -481,7 +487,7 @@ class SshTests(unittest.TestCase):
             self.assertEqual(scp[-1], "saya@[::1]:/opt/saya/node")
 
     def test_symlink_to_unsafe_target_is_rejected(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             target = root / "key\nProxyCommand=evil"
             target.write_bytes(b"placeholder")
@@ -501,7 +507,7 @@ class SshTests(unittest.TestCase):
                 browser_vm.strict_ssh_config(args)
 
     def test_strict_config_has_no_secret_or_agent_forwarding(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(Path(temporary))
             config = browser_vm.strict_ssh_config(args)
             for required in [
@@ -521,7 +527,7 @@ class SshTests(unittest.TestCase):
             self.assertNotIn("PRIVATE KEY", config)
 
     def test_ssh_argv_is_strict_and_quotes_remote_arguments(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(Path(temporary))
             argv = browser_vm.ssh_argv(
                 args,
@@ -536,7 +542,7 @@ class SshTests(unittest.TestCase):
             self.assertTrue(argv[-1].startswith("sh -c '"))
 
     def test_user_and_host_reject_injection(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             with self.assertRaises(browser_vm.ToolError):
                 browser_vm.strict_ssh_config(
                     ssh_namespace(Path(temporary), user="root@evil")
@@ -650,7 +656,7 @@ class IdentityTests(unittest.TestCase):
                 return b"v22.23.0\n"
             raise AssertionError(f"unexpected script: {script}")
 
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             for payload in malformed:
                 fake_ssh.payload = payload
                 args = ssh_namespace(
@@ -661,7 +667,7 @@ class IdentityTests(unittest.TestCase):
                         browser_vm.command_check(args)
 
     def test_remote_layout_revalidates_generated_paths(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(Path(temporary))
             layout = browser_vm.remote_layout(args)
             for path in layout.values():
@@ -678,7 +684,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_provision_rejects_worker_source_directory_mismatch(self):
         fixture = Fixture()
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             worker = root / "not-worker"
             worker.mkdir()
@@ -750,7 +756,7 @@ class IdentityTests(unittest.TestCase):
                 return b"v22.23.0\n"
             raise AssertionError(f"unexpected script: {script}")
 
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(
                 Path(temporary),
                 manifest_sha256=expected_digest or digest(manifest_bytes),
@@ -831,7 +837,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_provision_existing_remote_root_never_copies_or_alters_members(self):
         fixture = Fixture()
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             worker = root / "worker"
             worker.mkdir()
@@ -868,7 +874,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_provision_reuses_the_remote_identity_checks(self):
         fixture = Fixture()
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             worker = root / "worker"
             worker.mkdir()
@@ -1022,12 +1028,12 @@ class LocalProvisionTests(unittest.TestCase):
             return copied
 
     def test_real_local_archives_preserve_links_and_check_matches(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             copied = self.provision(Path(temporary))
             self.assertTrue(any(path.endswith("chromium.tar") for path in copied))
 
     def test_provision_rejects_remote_tree_mismatch_before_manifest_upload(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             root = Path(temporary)
             with self.assertRaises(browser_vm.ToolError):
                 self.provision(root, corrupt_tree=True)
@@ -1072,7 +1078,7 @@ class NetworkPrerequisiteTests(unittest.TestCase):
         self.assertNotIn("sysctl --system", apparmor)
 
     def test_network_prerequisites_are_verified_and_fail_controlled(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(Path(temporary))
             calls = []
 
@@ -1109,7 +1115,7 @@ class NetworkPrerequisiteTests(unittest.TestCase):
                     browser_vm.verify_network_prerequisites(args, Path("/tmp/config"))
 
     def test_apparmor_user_namespace_opt_in_runs_only_when_requested(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with canonical_tempdir() as temporary:
             args = ssh_namespace(Path(temporary))
             calls = []
 

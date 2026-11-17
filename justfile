@@ -65,6 +65,7 @@ test-tooling:
     python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py'
     python3 -B scripts/n5/test_browser_vm.py
     python3 -I -B scripts/n5/test_acceptance.py
+    python3 -B scripts/n5/test_witness.py
 
 # 验证显式 Node 与固定 worker 的私有协议和通道范围
 test-n5-worker-protocol node worker_root:
