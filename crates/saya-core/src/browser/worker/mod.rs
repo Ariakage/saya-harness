@@ -184,12 +184,12 @@ pub(in crate::browser::worker) use sandbox::{
 };
 // The launch baseline probe runs only on Linux; the probe tests exercise the
 // same types through a fake kernel on every platform.
+#[cfg(target_os = "linux")]
+pub(in crate::browser::worker) use identity::open_absolute_file;
 #[cfg(any(test, target_os = "linux"))]
 pub(in crate::browser::worker) use sandbox::{
     HostProcessPin, KernelNamespaceKind, NodeLaunchBaseline, SandboxProbeFailure,
 };
-#[cfg(target_os = "linux")]
-pub(in crate::browser::worker) use identity::open_absolute_file;
 pub(in crate::browser::worker) use sandbox::{MAX_SANDBOX_PROCESSES, NativeLaunchBaseline};
 #[cfg(target_os = "linux")]
 pub(in crate::browser::worker) use sandbox::{
