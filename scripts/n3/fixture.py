@@ -238,6 +238,29 @@ class ProcessFailure(AssertionError):
                      "stderr":bytes(outputs[1]).decode("utf-8","replace")[:16384],"elapsed_seconds":round(elapsed,3)}
 
 
+def _kill_process_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _process_group_alive(pgid):
+    # Darwin XNU returns EPERM for killpg(pgid, 0) during the brief window a
+    # terminating or reparented zombie still lingers in the process group.
+    deadline = time.monotonic() + 0.05
+    while True:
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.002)
+
+
 def bounded_process(arguments, cwd, env, timeout=120):
     process = subprocess.Popen(arguments, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
@@ -274,21 +297,16 @@ def bounded_process(arguments, cwd, env, timeout=120):
         try:
             process.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            _kill_process_group(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
     finally:
-        group_survived = False
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            group_survived = True
+        group_survived = _process_group_alive(process.pid)
+        if group_survived:
+            _kill_process_group(process.pid, signal.SIGKILL)
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 pass
-            process.wait(timeout=5)
         for reader in readers:
             reader.join(timeout=5)
     if timed_out or exceeded.is_set() or any(reader.is_alive() for reader in readers) or group_survived:

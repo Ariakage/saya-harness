@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import traceback
 
 ROOT = Path(__file__).resolve().parents[2]
 N3_DIR = ROOT / "scripts/n3"
@@ -363,7 +364,11 @@ def main(argv: list[str] | None = None) -> int:
             evidence.update(_delegated_n3_phase(options))
             evidence["status"] = "passed"
     except Exception as cause:  # fail-closed diagnostic recording
-        evidence["failure"] = {"type": type(cause).__name__, "message": str(cause)[:4096]}
+        evidence["failure"] = {
+            "type": type(cause).__name__,
+            "message": str(cause)[:4096],
+            "traceback": traceback.format_exc()[-2048:],
+        }
     options.report.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(evidence, indent=2) + "\n"
     require(len(encoded.encode("utf-8")) <= 2 * 1024 * 1024, "witness report exceeds byte bound")

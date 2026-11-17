@@ -246,6 +246,29 @@ class FixtureTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+    def test_bounded_process_handles_darwin_zombie_eperm_and_live_recovery(self):
+        import fixture
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Transient PermissionError resolving to ProcessLookupError must not raise or misreport survival.
+            with patch.object(
+                fixture.os,
+                "killpg",
+                side_effect=[PermissionError(1, "Operation not permitted"), ProcessLookupError(3, "No such process")],
+            ):
+                code, stdout, _stderr, _elapsed = bounded_process([sys.executable, "-c", "print('ok')"], root, {})
+                self.assertEqual((code, stdout), (0, "ok\n"))
+
+            # Persistent PermissionError on an exiting group after wait() must not raise PermissionError.
+            with patch.object(
+                fixture.os,
+                "killpg",
+                side_effect=PermissionError(1, "Operation not permitted"),
+            ):
+                code, stdout, _stderr, _elapsed = bounded_process([sys.executable, "-c", "print('ok')"], root, {})
+                self.assertEqual((code, stdout), (0, "ok\n"))
+
     def test_process_capture_and_source_hash_are_bounded_and_content_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

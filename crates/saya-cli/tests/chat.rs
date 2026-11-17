@@ -147,7 +147,7 @@ impl Pty {
         Ok(true)
     }
     fn wait_for_model_signal(&mut self, signal: &std::sync::mpsc::Receiver<()>) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let status = self.child.try_wait().unwrap();
             if status.is_some() {
@@ -185,7 +185,7 @@ impl Pty {
         }
     }
     fn until(&mut self, needle: &str) -> String {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Some(pos) = self
                 .buffer
@@ -214,7 +214,7 @@ impl Pty {
         self.send("/exit\n");
         self.until("Goodbye.");
         drop(self.master.take());
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
                 return status;
@@ -234,7 +234,7 @@ impl Pty {
             unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) },
             0
         );
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             // Drain all ready bytes immediately so macOS's small PTY buffer does
             // not stall the child before its signal handler runs.

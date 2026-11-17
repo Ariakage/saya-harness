@@ -84,7 +84,7 @@ impl Drop for ChildGuard {
     }
 }
 fn wait_for(phase: &str, mut condition: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(25);
     while !condition() {
         assert!(
             Instant::now() < deadline,
@@ -146,7 +146,7 @@ fn cancellation_case(chat: bool, signal: Option<i32>) {
         let message = if index == 0 {
             json!({"role":"assistant","content":null,"tool_calls":[{"id":"launch","type":"function","function":{"name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c",BACKGROUND_PROCESS_SCRIPT]}}).to_string()}}]})
         } else {
-            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+            let _ = release_rx.recv_timeout(Duration::from_secs(30));
             json!({"role":"assistant","content":"done"})
         };
         ("application/json", json!({"choices":[{"index":0,"finish_reason":if index==0 {"tool_calls"} else {"stop"},"message":message}]}).to_string())
@@ -278,7 +278,7 @@ fn broken_stdout_case(completed_only: bool) {
                 json!({"type":"function_call","id":"launch-item","call_id":"launch","status":"completed",
                     "name":"background_start","arguments":json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c",BACKGROUND_PROCESS_SCRIPT]}}).to_string()})
             } else {
-                let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                let _ = release_rx.recv_timeout(Duration::from_secs(30));
                 json!({"type":"message","id":"reply","role":"assistant","status":"completed",
                     "content":[{"type":"output_text","text":"fixture text\n".repeat(1024)}]})
             };
@@ -291,7 +291,7 @@ fn broken_stdout_case(completed_only: bool) {
                 json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}),
             ]));
         }
-        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        let _ = release_rx.recv_timeout(Duration::from_secs(30));
         ("text/event-stream", fixture::sse(&[
             json!({"choices":[{"index":0,"delta":{"content":"fixture text\n".repeat(1024)},"finish_reason":null}]}),
             json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),

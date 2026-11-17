@@ -179,7 +179,7 @@ class Worker:
                     if process.returncode is None:
                         try:
                             os.killpg(process.pid, signal.SIGTERM)
-                        except ProcessLookupError:
+                        except (ProcessLookupError, PermissionError):
                             pass
                     try:
                         process.wait(timeout=0.5)
@@ -187,17 +187,23 @@ class Worker:
                         if process.returncode is None:
                             try:
                                 os.killpg(process.pid, signal.SIGKILL)
-                            except ProcessLookupError:
+                            except (ProcessLookupError, PermissionError):
                                 pass
                         process.wait(timeout=2)
-                try:
-                    os.killpg(process.pid, 0)
-                except ProcessLookupError:
-                    pass
-                else:
-                    raise AssertionError(
-                        f"cleanup failed: process group {process.pid} still exists"
-                    )
+                deadline = time.monotonic() + 0.05
+                while True:
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        break
+                    except PermissionError:
+                        if time.monotonic() >= deadline:
+                            break
+                        time.sleep(0.002)
+                    else:
+                        raise AssertionError(
+                            f"cleanup failed: process group {process.pid} still exists"
+                        )
         except BaseException as caught:
             error = caught
         finally:

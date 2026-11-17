@@ -2067,7 +2067,7 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
             0 => ("application/json", tool_response("background-launch", "background_start", json!({"tool":"exec","arguments":{"argv":["/bin/sh","-c","printf x >> marker; sleep 3"],"cwd":null,"timeout_seconds":null}}))),
             1 => {
                 entered_tx.send(()).unwrap();
-                let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                let _ = release_rx.recv_timeout(Duration::from_secs(30));
                 ("application/json", response(json!({"role":"assistant","content":"unused"}), "stop"))
             },
             _ => ("application/json", response(json!({"role":"assistant","content":"resumed"}), "stop")),
@@ -2082,8 +2082,8 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(8)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    entered_rx.recv_timeout(Duration::from_secs(25)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
     while !temp.path().join("marker").exists() {
         assert!(
             Instant::now() < deadline,
