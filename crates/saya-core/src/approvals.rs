@@ -422,6 +422,61 @@ impl ApprovalManager {
                 }
             }))
     }
+    /// Consume an exact argv/cwd preauthorization for this operation when one
+    /// covers it, yielding a permit or `Ok(None)` to continue the normal flow.
+    /// Environment overrides and mode/permission changes never match.
+    async fn try_preauthorization(
+        &self,
+        input: &AuthorizationInput<'_>,
+        binding: &Binding,
+        environment_override: bool,
+    ) -> Result<Option<Authorization>, BoundaryError> {
+        let Some((argv, cwd)) = input.operation.command_identity() else {
+            return Ok(None);
+        };
+        if environment_override
+            || binding.mode_revision != self.initial_mode_revision
+            || binding.permission_revision != self.initial_permission_revision
+            || binding.permissions != self.initial_permissions
+        {
+            return Ok(None);
+        }
+        let preapproved = {
+            let mut state = self.state.lock().map_err(|_| locked())?;
+            if state.rejected.contains(&rejection_key(binding)) {
+                return Ok(Some(Authorization::Denied("previously_denied")));
+            }
+            if let Some(index) = state
+                .preapproved
+                .iter()
+                .position(|item| item.argv == argv && item.cwd == cwd)
+            {
+                state.preapproved.remove(index);
+                true
+            } else {
+                false
+            }
+        };
+        if !preapproved {
+            return Ok(None);
+        }
+        self.store
+            .commit(&[StoreChange::Activity {
+                run_id: self.run_id,
+                payload: EventPayload::PermissionResolved {
+                    approval_id: format!("preauthorization-{}", input.call.call_id),
+                    call_id: input.call.call_id.clone(),
+                    decision: "allow".into(),
+                    source: ApprovalSource::Preauthorization,
+                },
+            }])
+            .await?;
+        Ok(Some(Authorization::Permit(self.permit(
+            binding.clone(),
+            input.call.call_id.clone(),
+            PermitSource::Preauthorization,
+        ))))
+    }
     /// Decide rules, perform isolated model review only when required, and create
     /// an exact one-use permit or a stored confirmation request. No tool runs.
     pub async fn authorize(
@@ -451,6 +506,22 @@ impl ApprovalManager {
         let raw: Value = serde_json::from_str(&input.call.arguments)
             .map_err(|e| failure("invalid_args", e.to_string()))?;
         let environment_override = has_exec_environment_override(&raw);
+        // An exact user preauthorization resolves before any model review: a
+        // rule Allow or Deny never reaches this point, and a reviewer cannot
+        // overturn or redundantly re-check what the user already approved.
+        let initial = self.policy.evaluate_with_arguments(
+            binding.mode,
+            binding.permissions,
+            input.operation,
+            &raw,
+        );
+        if matches!(initial.decision, Decision::Ask | Decision::ModelReview)
+            && let Some(authorization) = self
+                .try_preauthorization(&input, &binding, environment_override)
+                .await?
+        {
+            return Ok(authorization);
+        }
         let mut review_config = config.clone();
         review_config.known_secrets.extend(self.current_secrets()?);
         let review = review_operation(
@@ -519,46 +590,11 @@ impl ApprovalManager {
                 return Err(failure("approval_error", "unresolved review decision"));
             }
         }
-        if let Some((argv, cwd)) = input.operation.command_identity()
-            && !environment_override
-            && binding.mode_revision == self.initial_mode_revision
-            && binding.permission_revision == self.initial_permission_revision
-            && binding.permissions == self.initial_permissions
+        if let Some(authorization) = self
+            .try_preauthorization(&input, &binding, environment_override)
+            .await?
         {
-            let preapproved = {
-                let mut state = self.state.lock().map_err(|_| locked())?;
-                if state.rejected.contains(&rejection_key(&binding)) {
-                    return Ok(Authorization::Denied("previously_denied"));
-                }
-                if let Some(index) = state
-                    .preapproved
-                    .iter()
-                    .position(|item| item.argv == argv && item.cwd == cwd)
-                {
-                    state.preapproved.remove(index);
-                    true
-                } else {
-                    false
-                }
-            };
-            if preapproved {
-                self.store
-                    .commit(&[StoreChange::Activity {
-                        run_id: self.run_id,
-                        payload: EventPayload::PermissionResolved {
-                            approval_id: format!("preauthorization-{}", input.call.call_id),
-                            call_id: input.call.call_id.clone(),
-                            decision: "allow".into(),
-                            source: ApprovalSource::Preauthorization,
-                        },
-                    }])
-                    .await?;
-                return Ok(Authorization::Permit(self.permit(
-                    binding,
-                    input.call.call_id.clone(),
-                    PermitSource::Preauthorization,
-                )));
-            }
+            return Ok(authorization);
         }
         let mut arguments: Value = serde_json::from_str(&binding.normalized_args)
             .map_err(|e| failure("invalid_args", e.to_string()))?;

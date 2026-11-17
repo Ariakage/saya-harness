@@ -3010,3 +3010,58 @@ async fn manual_background_tools_each_require_one_user_approval()
     jobs.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn exact_preauthorization_resolves_before_model_review_in_auto()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = support::temp_workspace()?;
+    let (session, run, context) = fixture(temp.path(), PermissionMode::Auto);
+    let store = store_for(&session, &run).await?;
+    let files = Arc::new(ReadTools::new(
+        temp.path(),
+        &[],
+        false,
+        ReadLimits::default(),
+    )?);
+    let inspect = ExecTool::new(
+        files.clone(),
+        store.clone(),
+        Arc::new(DummyGate),
+        ExecConfig::default(),
+    );
+    let call = command_call("a", "hello");
+    let operation = Operation::exec(&inspect.plan(&call, &context)?)?;
+    let preauth = Preauthorizations::from_json(&command_input(temp.path(), "hello"), temp.path())?;
+    let modes = ModeController::new(WorkMode::Work);
+    let manager = manager(
+        policy(temp.path(), "")?,
+        modes.clone(),
+        PermissionRevision::new(modes.clone(), run.permissions),
+        store.clone(),
+        &run,
+        preauth,
+        Arc::new(Signal::default()),
+    )?;
+    let model = deny_model();
+    let permit = match manager
+        .authorize(
+            input(&operation, &call, &context, false),
+            &model,
+            &SharedBudget::default(),
+            &config(),
+        )
+        .await?
+    {
+        Authorization::Permit(p) => p,
+        _ => return Err("expected preauthorization permit".into()),
+    };
+    assert_eq!(
+        model.0.load(Ordering::Acquire),
+        0,
+        "exact preauthorization must resolve without a model review request"
+    );
+    let exec = ExecTool::new(files, store.clone(), permit, ExecConfig::default());
+    let result = exec.execute(&call, &context, &Signal::default()).await?;
+    assert!(result.ok);
+    Ok(())
+}
