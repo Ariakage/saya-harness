@@ -2775,7 +2775,7 @@ fn jsonl_interrupted_model_has_matching_finish_and_cancelled_result() {
             let mut data = [0u8; 2048];
             let _ = stream.read(&mut data);
             let _ = entered_tx.send(());
-            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+            let _ = release_rx.recv_timeout(Duration::from_secs(30));
         }
     });
     let cfg = config(temp.path(), &format!("http://{address}/v1"), "auto");
@@ -2787,7 +2787,7 @@ fn jsonl_interrupted_model_has_matching_finish_and_cancelled_result() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(20)).unwrap();
     // SAFETY: child is a live process spawned by this test.
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },

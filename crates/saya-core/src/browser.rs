@@ -2863,6 +2863,7 @@ pub struct FixtureProvider {
     shutdown_delay_ms: u64,
     next_element: AtomicU64,
     framed_element: AtomicBool,
+    pause_started: Arc<tokio::sync::Notify>,
 }
 impl FixtureProvider {
     pub fn new(facts: BrowserFacts) -> Self {
@@ -2895,6 +2896,7 @@ impl FixtureProvider {
             shutdown_delay_ms: 0,
             next_element: AtomicU64::new(1),
             framed_element: AtomicBool::new(false),
+            pause_started: Arc::new(tokio::sync::Notify::new()),
         }
     }
     pub fn full() -> Self {
@@ -3081,6 +3083,7 @@ impl FixtureProvider {
         if milliseconds == 0 {
             return Self::cancelled(cancel);
         }
+        self.pause_started.notify_one();
         tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(BrowserFailure::new(
@@ -3089,6 +3092,9 @@ impl FixtureProvider {
             )),
             _ = tokio::time::sleep(std::time::Duration::from_millis(milliseconds)) => Ok(()),
         }
+    }
+    pub fn pause_started(&self) -> Arc<tokio::sync::Notify> {
+        self.pause_started.clone()
     }
 }
 
@@ -4004,11 +4010,12 @@ mod tests {
             .await
             .unwrap();
 
+        let pause_started = provider.pause_started();
         let flag = Arc::new(AtomicBool::new(false));
         let cancel = SwitchCancel(flag.clone());
         let trigger = flag.clone();
         let task = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            pause_started.notified().await;
             trigger.store(true, Ordering::Release);
         });
         let error = state
@@ -4018,7 +4025,8 @@ mod tests {
         task.await.unwrap();
         assert_eq!(error.0.code, "cancelled");
 
-        let provider = Arc::new(FixtureProvider::full().with_delay(500));
+        let provider = Arc::new(FixtureProvider::full().with_delay(5_000));
+        let pause_started = provider.pause_started();
         let run = make_run();
         let state = make_state(provider, &run);
         let context = make_context(run);
@@ -4027,7 +4035,7 @@ mod tests {
         let cancel = SwitchCancel(flag.clone());
         let trigger = flag.clone();
         let task = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            pause_started.notified().await;
             trigger.store(true, Ordering::Release);
         });
         let error = state
