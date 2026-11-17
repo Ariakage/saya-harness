@@ -137,7 +137,7 @@ DEV-081A 的阶段性范围仅包含网络出口、策略与验收；登录、�
 `browser`（对应有效 `[browser].enabled`）与 `vm`（对应有效 `[browser.vm].enabled`）支持通过 `saya module` 独立开关与查询，同时保留 `config.toml` 中同名 `enabled` 字段的向后兼容：
 
 - **命令形式**：`saya module list`（或省略子命令的 `saya module`）列出当前各模块状态、配置值、覆盖来源（`config` / `module_store`）与就绪提示；`saya module <browser|vm> <enable|disable|status>` 切换或查看单个模块，支持 `text`、`--output json` 和 `--output jsonl`（事件类型 `module.result`）。
-- **持久化与优先级**：显式开关存储在 `data_dir/modules/modules.sqlite3`（WAL 模式、`0700` 私有目录、`0600` 文件、校验属主与禁止 symlink），不会重写用户带注释的 `config.toml`。模块尚未在 `modules.sqlite3` 中覆盖时继承 `config.toml` 的 `enabled` 字段；一旦显式切换，则以模块存储为准。只读查询、`saya config check` 与 `PLAN` 模式不会自动创建 `data_dir` 或数据库。
+- **持久化与优先级**：显式开关存储在 `data_dir/modules/modules.sqlite3`（WAL 模式、`0700` 私有目录、`0600` 文件、校验属主与禁止 symlink），不会重写用户带注释的 `config.toml`。模块尚未在 `modules.sqlite3` 中覆盖时继承 `config.toml` 的 `enabled` 字段；一旦显式切换，则以模块存储为准。只读查询、`saya config check` 与 `PLAN` 模式不会自动创建 `data_dir` 或数据库。首次写入被中断而留下的空库或 schema 未提交的库会视为未初始化：只读查询按无覆盖处理，下一次持锁打开自动补建表；真正损坏或属于其他 schema 的库仍失败关闭，需手工删除 `data_dir/modules/modules.sqlite3` 后重试。
 - **D-066 校验与不回退**：执行 `saya module vm enable` 时，在写入存储前先预校验有效配置（`[browser.vm]` 必要路径、`[browser.network]` 与 `worker.enabled` 互斥），若与 `[browser.worker]` 同时启用或前提不完整则拒绝并退出码 `2`；`saya module vm disable` 仅关闭 `vm` 覆盖，不会自动激活 `worker` 或回退 native/Host（若此时 `browser` 仍开启且无有效后端，运行时会显式失败关闭）。`saya module browser disable` 跳过浏览器 provider 装配但继续保留 `[browser.credentials].store` 的宿主路径保护，同时最终有效浏览器配置会进入 Goal `goal_profile_fingerprint`。
 
 ## 范围与首个实现

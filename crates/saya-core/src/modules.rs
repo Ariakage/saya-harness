@@ -173,8 +173,9 @@ pub fn load_overrides(data_dir: &Path) -> Result<ModuleOverrides, BoundaryError>
     let canonical_dir =
         saya_fs::verify_canonical_dir(&dir_path, &dir_meta, error_codes::STORAGE_ERROR, "module")?;
     let db_path = canonical_dir.join(MODULE_DB_NAME);
-    if !verify_existing_db_files(&db_path)? {
-        return Ok(ModuleOverrides::default());
+    match existing_db_presence(&db_path)? {
+        DbPresence::Missing | DbPresence::Empty => return Ok(ModuleOverrides::default()),
+        DbPresence::Present => {}
     }
 
     let connection = Connection::open_with_flags(
@@ -185,8 +186,13 @@ pub fn load_overrides(data_dir: &Path) -> Result<ModuleOverrides, BoundaryError>
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(|_| storage_error("cannot configure module database timeout"))?;
-    verify_schema_headers(&connection, false)?;
-    read_overrides(&connection)
+    match schema_state(&connection)? {
+        // An interrupted initialization left a valid but table-less file; it
+        // holds no overrides yet, so reads behave as if none were stored.
+        SchemaState::Incomplete => Ok(ModuleOverrides::default()),
+        SchemaState::Foreign => Err(storage_error("unrecognized or unsupported module database")),
+        SchemaState::Ready => read_overrides(&connection),
+    }
 }
 
 /// Resolve effective [`BrowserSettings`] by applying any stored module overrides
@@ -252,9 +258,16 @@ impl ModuleStore {
         let db_path = canonical_dir.join(MODULE_DB_NAME);
         let (created, _meta) =
             saya_fs::create_or_verify_private_file(&db_path, error_codes::STORAGE_ERROR, "module")?;
-        if !created && !verify_existing_db_files(&db_path)? {
-            return Err(storage_error("module database disappeared while opening"));
-        }
+        let presence = if created {
+            DbPresence::Missing
+        } else {
+            match existing_db_presence(&db_path)? {
+                DbPresence::Missing => {
+                    return Err(storage_error("module database disappeared while opening"));
+                }
+                presence => presence,
+            }
+        };
 
         let connection = Connection::open_with_flags(
             &db_path,
@@ -273,10 +286,17 @@ impl ModuleStore {
             )
             .map_err(|_| storage_error("cannot configure module database pragmas"))?;
 
-        if created {
-            initialize_schema(&connection)?;
-        } else {
-            verify_schema_headers(&connection, true)?;
+        match presence {
+            // A zero-byte or partially initialized file is completed under the
+            // store lock so an interrupted first open cannot wedge the store.
+            DbPresence::Missing | DbPresence::Empty => initialize_schema(&connection)?,
+            DbPresence::Present => match schema_state(&connection)? {
+                SchemaState::Ready => {}
+                SchemaState::Incomplete => initialize_schema(&connection)?,
+                SchemaState::Foreign => {
+                    return Err(storage_error("unrecognized or unsupported module database"));
+                }
+            },
         }
 
         Ok(Self {
@@ -394,18 +414,25 @@ fn build_status(
     }
 }
 
-fn verify_existing_db_files(db_path: &Path) -> Result<bool, BoundaryError> {
+/// Whether the module database file is absent, present but empty, or has
+/// content. A zero-byte file is a recoverable interrupted creation, not
+/// corruption: readers see default overrides and writers complete the schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DbPresence {
+    Missing,
+    Empty,
+    Present,
+}
+
+fn existing_db_presence(db_path: &Path) -> Result<DbPresence, BoundaryError> {
     let Some((_file, meta)) = saya_fs::open_existing_private_file_read(
         db_path,
         error_codes::STORAGE_ERROR,
         "module database",
     )?
     else {
-        return Ok(false);
+        return Ok(DbPresence::Missing);
     };
-    if meta.len() == 0 {
-        return Err(storage_error("module database is empty or corrupt"));
-    }
     for suffix in ["-wal", "-shm"] {
         let sidecar = PathBuf::from(format!("{}{suffix}", db_path.display()));
         let _ = saya_fs::open_existing_private_file_read(
@@ -414,14 +441,53 @@ fn verify_existing_db_files(db_path: &Path) -> Result<bool, BoundaryError> {
             "module database sidecar",
         )?;
     }
-    Ok(true)
+    Ok(if meta.len() == 0 {
+        DbPresence::Empty
+    } else {
+        DbPresence::Present
+    })
+}
+
+/// Schema state of an opened module database. `Incomplete` covers an empty
+/// file or one whose headers/table were never committed; writers may finish
+/// initialization while readers treat it as holding no overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaState {
+    Ready,
+    Incomplete,
+    Foreign,
+}
+
+fn schema_state(connection: &Connection) -> Result<SchemaState, BoundaryError> {
+    let app_id: i64 = connection
+        .pragma_query_value(None, "application_id", |row| row.get(0))
+        .map_err(|_| storage_error("cannot read module database application_id"))?;
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|_| storage_error("cannot read module database user_version"))?;
+    let table: Option<String> = connection
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'module_states'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| storage_error("cannot inspect module database tables"))?;
+    Ok(match (app_id, version, table.is_some()) {
+        (APPLICATION_ID, SCHEMA_VERSION, true) => SchemaState::Ready,
+        // Recognized headers without the table, or a completely untouched
+        // SQLite file, can be completed idempotently. Any other combination
+        // belongs to another schema or a corrupted file and fails closed.
+        (APPLICATION_ID, SCHEMA_VERSION, false) | (0, 0, false) => SchemaState::Incomplete,
+        _ => SchemaState::Foreign,
+    })
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), BoundaryError> {
     connection
         .execute_batch(&format!(
             "BEGIN IMMEDIATE;
-             CREATE TABLE module_states (
+             CREATE TABLE IF NOT EXISTS module_states (
                  name TEXT PRIMARY KEY,
                  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
                  updated_at INTEGER NOT NULL
@@ -431,32 +497,6 @@ fn initialize_schema(connection: &Connection) -> Result<(), BoundaryError> {
              COMMIT;"
         ))
         .map_err(|_| storage_error("cannot initialize module database schema"))?;
-    Ok(())
-}
-
-fn verify_schema_headers(connection: &Connection, verify_table: bool) -> Result<(), BoundaryError> {
-    let app_id: i64 = connection
-        .pragma_query_value(None, "application_id", |row| row.get(0))
-        .map_err(|_| storage_error("cannot read module database application_id"))?;
-    let version: i64 = connection
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(|_| storage_error("cannot read module database user_version"))?;
-    if app_id != APPLICATION_ID || version != SCHEMA_VERSION {
-        return Err(storage_error("unrecognized or unsupported module database"));
-    }
-    if verify_table {
-        let table: Option<String> = connection
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'module_states'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|_| storage_error("cannot inspect module database tables"))?;
-        if table.is_none() {
-            return Err(storage_error("module database schema is missing"));
-        }
-    }
     Ok(())
 }
 
@@ -657,5 +697,77 @@ mod tests {
         fs::set_permissions(&db, fs::Permissions::from_mode(0o644)).unwrap();
         let err = load_overrides(dir2.path()).unwrap_err();
         assert_eq!(err.0.code, error_codes::STORAGE_ERROR);
+    }
+
+    fn make_private_db_file(dir: &tempfile::TempDir) -> PathBuf {
+        let db = module_db_path(dir.path());
+        let parent = db.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+        db
+    }
+
+    #[test]
+    fn empty_database_self_heals_and_reads_default() {
+        let dir = tempdir().unwrap();
+        let db = make_private_db_file(&dir);
+        fs::File::create(&db).unwrap();
+        fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            load_overrides(dir.path()).unwrap(),
+            ModuleOverrides::default()
+        );
+        {
+            let mut store = ModuleStore::open(dir.path()).unwrap();
+            let configured = configured_vm_capable_browser();
+            store.set(&configured, ModuleKind::Browser, true).unwrap();
+        }
+        assert_eq!(load_overrides(dir.path()).unwrap().browser, Some(true));
+    }
+
+    #[test]
+    fn uninitialized_sqlite_database_self_heals() {
+        let dir = tempdir().unwrap();
+        let db = make_private_db_file(&dir);
+        // Simulate an interrupted first open: a valid SQLite file whose
+        // schema was never committed (headers and table both absent).
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .execute_batch("CREATE TABLE scratch (id INTEGER); DROP TABLE scratch;")
+            .unwrap();
+        drop(connection);
+        fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(db.metadata().unwrap().len() > 0);
+        assert_eq!(
+            load_overrides(dir.path()).unwrap(),
+            ModuleOverrides::default()
+        );
+        {
+            let mut store =
+                ModuleStore::open(dir.path()).expect("uninitialized database should self-heal");
+            let configured = BrowserSettings::default();
+            store.set(&configured, ModuleKind::Browser, true).unwrap();
+        }
+        assert_eq!(load_overrides(dir.path()).unwrap().browser, Some(true));
+    }
+
+    #[test]
+    fn foreign_database_still_fails_closed() {
+        let dir = tempdir().unwrap();
+        let db = make_private_db_file(&dir);
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .execute_batch("CREATE TABLE other (id INTEGER); PRAGMA application_id = 42;")
+            .unwrap();
+        drop(connection);
+        fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            load_overrides(dir.path()).unwrap_err().0.code,
+            error_codes::STORAGE_ERROR
+        );
+        assert_eq!(
+            ModuleStore::open(dir.path()).err().unwrap().0.code,
+            error_codes::STORAGE_ERROR
+        );
     }
 }
