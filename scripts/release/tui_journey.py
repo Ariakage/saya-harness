@@ -3310,6 +3310,8 @@ def selection_and_clipboard_journey(binary):
                 terminal.wait(lambda: terminal.editor_text() == draft, 'active-run copy draft')
                 terminal.wait(lambda: len(fixture.requests) == 3 and terminal.screen.status() == 'Thinking',
                               'tool result waiting for its final model response')
+                terminal.wait(lambda: len([h for h in terminal.screen.fold_headers() if 'read_file' in h[2]]) == 1,
+                              'visible read_file tool card in selection journey')
                 tool_headers = [header for header in terminal.screen.fold_headers() if 'read_file' in header[2]]
                 if len(tool_headers) != 1:
                     raise RuntimeError('selection journey did not retain one visible read_file tool card')

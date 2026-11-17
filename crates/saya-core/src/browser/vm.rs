@@ -3776,13 +3776,13 @@ mod tests {
     #[test]
     fn upload_script_preserves_original_name_and_cleans_partial_staging() {
         use std::{
-            io::Write as _,
+            io::{ErrorKind, Write as _},
             process::{Command, Stdio},
         };
 
         let root = tempfile::tempdir().unwrap();
         let root_text = root.path().to_str().unwrap().to_owned();
-        let run = |name: &str, input: &[u8]| {
+        let run = |name: &str, input: &[u8], allow_early_exit: bool| {
             let mut child = Command::new("sh")
                 .arg("-c")
                 .arg(UPLOAD_SCRIPT)
@@ -3794,11 +3794,17 @@ mod tests {
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
-            child.stdin.take().unwrap().write_all(input).unwrap();
+            if let Some(mut stdin) = child.stdin.take() {
+                match stdin.write_all(input) {
+                    Ok(()) => {}
+                    Err(error) if allow_early_exit && error.kind() == ErrorKind::BrokenPipe => {}
+                    Err(error) => panic!("failed to write upload payload for {name}: {error}"),
+                }
+            }
             child.wait_with_output().unwrap()
         };
 
-        let output = run("invoice 2026.txt", b"payload");
+        let output = run("invoice 2026.txt", b"payload", false);
         assert!(
             output.status.success(),
             "{}",
@@ -3817,7 +3823,7 @@ mod tests {
         );
 
         // A `..` inside a basename is not traversal and must be preserved.
-        let output = run("archive..tar", b"dots");
+        let output = run("archive..tar", b"dots", false);
         assert!(output.status.success());
         assert_eq!(
             std::fs::read(root.path().join("uploads/archive..tar")).unwrap(),
@@ -3826,7 +3832,7 @@ mod tests {
 
         // A refused move must remove the temporary file, not leave a partial.
         std::fs::create_dir(root.path().join("uploads/blocked.txt")).unwrap();
-        let output = run("blocked.txt", b"payload");
+        let output = run("blocked.txt", b"payload", false);
         assert!(!output.status.success());
         let partial: Vec<String> = std::fs::read_dir(root.path().join("uploads"))
             .unwrap()
@@ -3837,7 +3843,10 @@ mod tests {
         assert!(partial.is_empty(), "partial staging remained: {partial:?}");
 
         for name in ["../escape.txt", "dir/name.txt", ".hidden", "-rf", ".."] {
-            assert!(!run(name, b"x").status.success(), "{name} was accepted");
+            assert!(
+                !run(name, b"x", true).status.success(),
+                "{name} was accepted"
+            );
         }
     }
 
