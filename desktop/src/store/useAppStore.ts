@@ -70,6 +70,8 @@ export interface AppState {
   recentSessions: SessionItemDto_Serialize[];
   runActive: boolean;
   cancelling: boolean;
+  /** A compaction request is queued behind the active run. */
+  compactionPending: boolean;
   activeRunId: string | null;
   summaryLine: string | null;
   markdownMode: MarkdownDisplayMode;
@@ -79,6 +81,10 @@ export interface AppState {
   stagedAttachments: StagedAttachmentDto[];
   ultracodeEnabled: boolean;
   submitMode: "steer" | "queue";
+  queuedPrompt: { prompt: string; attachments: AttachmentTokenDto[] } | null;
+  /** True while a streaming channel owned by this window is attached to the
+   * active run; false for runs started elsewhere (polled via get_run_state). */
+  streamOwned: boolean;
   configChangeSessionId: string | null;
   recoveryBanner: string | null;
   userName: string | null;
@@ -91,6 +97,9 @@ export interface AppState {
   setThinkingEffort: (effort: string | null, ultracode?: boolean) => Promise<boolean>;
   selectProfile: (profile: string) => Promise<boolean>;
   setSubmitMode: (mode: "steer" | "queue") => void;
+  clearQueuedPrompt: () => void;
+  refreshBootstrap: () => Promise<void>;
+  syncRunState: () => Promise<void>;
   refreshSessions: (page?: number) => Promise<void>;
   startNewSession: () => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<boolean>;
@@ -121,6 +130,31 @@ export interface AppState {
 }
 
 const MAX_RENDERED_MESSAGES = 400;
+const RUN_STATE_POLL_MS = 1500;
+
+let runStatePollTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopRunStatePoll() {
+  if (runStatePollTimer !== null) {
+    clearInterval(runStatePollTimer);
+    runStatePollTimer = null;
+  }
+}
+
+/** Keep the helper's run state mirrored while a run owned by another client
+ * (CLI/TUI) is active — this window has no event channel for it. */
+function ensureRunStatePoll() {
+  const state = useAppStore.getState();
+  if (state.runActive && !state.streamOwned) {
+    if (runStatePollTimer === null) {
+      runStatePollTimer = setInterval(() => {
+        void useAppStore.getState().syncRunState();
+      }, RUN_STATE_POLL_MS);
+    }
+  } else {
+    stopRunStatePoll();
+  }
+}
 
 function trimMessages(messages: DesktopMessage[]): DesktopMessage[] {
   if (messages.length <= MAX_RENDERED_MESSAGES) {
@@ -416,6 +450,7 @@ export const useAppStore = create<AppState>((set, get) => {
     recentSessions: [],
     runActive: false,
     cancelling: false,
+    compactionPending: false,
     activeRunId: null,
     summaryLine: null,
     markdownMode: "render",
@@ -425,6 +460,8 @@ export const useAppStore = create<AppState>((set, get) => {
     stagedAttachments: [],
     ultracodeEnabled: false,
     submitMode: "steer",
+    queuedPrompt: null,
+    streamOwned: false,
     configChangeSessionId: null,
     recoveryBanner: null,
     userName: null,
@@ -432,7 +469,7 @@ export const useAppStore = create<AppState>((set, get) => {
     avatarData: null,
     error: null,
 
-    applyBootstrap: (boot) =>
+    applyBootstrap: (boot) => {
       set((state) => ({
         bootstrap: boot,
         workMode: boot.work_mode,
@@ -441,12 +478,15 @@ export const useAppStore = create<AppState>((set, get) => {
         runActive: boot.run_active,
         activeRunId: boot.active_run_id,
         error: null,
-        ...(boot.session && boot.session.id !== state.sessionId
+        ...(boot.session &&
+        (boot.session.id !== state.sessionId || !state.runActive)
           ? applySessionDto(boot.session)
           : boot.session === null
             ? applySessionDto(null)
             : {}),
-      })),
+      }));
+      ensureRunStatePoll();
+    },
 
     setThinkingEffort: async (effort, ultracode = false) => {
       try {
@@ -480,6 +520,40 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setSubmitMode: (mode) => set({ submitMode: mode }),
+
+    clearQueuedPrompt: () => set({ queuedPrompt: null }),
+
+    refreshBootstrap: async () => {
+      try {
+        const res = await commands.getBootstrapState();
+        if (res.status === "ok") {
+          get().applyBootstrap(res.data);
+        }
+      } catch (err) {
+        set({ error: normalizeError(err) });
+      }
+    },
+
+    syncRunState: async () => {
+      try {
+        const res = await commands.getRunState();
+        if (res.status !== "ok") return;
+        const wasActive = get().runActive;
+        set({
+          runActive: res.data.active_run,
+          workMode: res.data.current,
+          pendingMode: res.data.pending ?? null,
+          compactionPending: res.data.compaction_pending,
+        });
+        if (wasActive && !res.data.active_run) {
+          stopRunStatePoll();
+          await get().refreshBootstrap();
+          await get().refreshSessions(1);
+        }
+      } catch {
+        // Helper unreachable: leave the last known state untouched.
+      }
+    },
 
     initApp: async () => {
       set({ loading: true });
@@ -519,6 +593,7 @@ export const useAppStore = create<AppState>((set, get) => {
           updates.recentSessions = listRes.data.items;
         }
         set(updates);
+        ensureRunStatePoll();
       } catch (err) {
         set({
           initialized: true,
@@ -548,10 +623,14 @@ export const useAppStore = create<AppState>((set, get) => {
             thinkingEntries: [],
             contextEntries: [],
             contextSkillsCount: null,
+            contextEstimated: false,
             summaryLine: null,
             pendingApproval: null,
             pendingInput: null,
             stagedAttachments: [],
+            queuedPrompt: null,
+            streamOwned: false,
+            compactionPending: false,
             configChangeSessionId: null,
             recoveryBanner: null,
             error: null,
@@ -612,6 +691,13 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!trimmed && mergedAttachments.length === 0) {
         return false;
       }
+      if (get().runActive && get().submitMode === "queue") {
+        set({
+          queuedPrompt: { prompt: trimmed, attachments: mergedAttachments },
+          stagedAttachments: [],
+        });
+        return true;
+      }
       const channel = createEventChannel();
       try {
         const res = await commands.submitPrompt(trimmed, mergedAttachments, channel);
@@ -628,17 +714,32 @@ export const useAppStore = create<AppState>((set, get) => {
           truncated: false,
           mediaRefs: [],
         };
+        const recoveryParts: string[] = [];
+        if ((res.data.recovered_runs ?? 0) > 0) {
+          recoveryParts.push(`${res.data.recovered_runs} interrupted run(s)`);
+        }
+        if ((res.data.recovered_tools ?? 0) > 0) {
+          recoveryParts.push(`${res.data.recovered_tools} closed tool call(s)`);
+        }
+        // A "steered" submission attaches to a run this window may not own:
+        // keep streamOwned untouched there so a foreign run keeps polling.
+        const steered = res.data.action === "steered";
         set((state) => ({
           sessionId: res.data.session_id || state.sessionId,
           activeRunId: res.data.run_id,
           runActive: true,
+          streamOwned: steered ? state.streamOwned : true,
           cancelling: false,
           stagedAttachments: [],
           error: null,
-          summaryLine:
-            res.data.action === "steered" ? state.summaryLine : null,
+          summaryLine: steered ? state.summaryLine : null,
+          recoveryBanner:
+            recoveryParts.length > 0
+              ? `Recovered ${recoveryParts.join(", ")}.`
+              : state.recoveryBanner,
           messages: trimMessages([...state.messages, userMessage]),
         }));
+        ensureRunStatePoll();
         return true;
       } catch (err) {
         set({ error: normalizeError(err) });
@@ -652,7 +753,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const res = await commands.cancelRun();
         if (res.status === "ok") {
           if (!res.data) {
-            set({ cancelling: false, runActive: false });
+            set({ cancelling: false, runActive: false, streamOwned: false });
           }
         } else {
           set({ cancelling: false, error: res.error });
@@ -670,11 +771,17 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ error: res.error });
           return false;
         }
+        const queued = res.data.action === "compaction_queued";
         set({
-          activeRunId: res.data.run_id,
-          runActive: true,
+          activeRunId: res.data.run_id || null,
+          runActive: !queued || get().runActive,
+          streamOwned: !queued || get().streamOwned,
+          compactionPending: queued,
           error: null,
         });
+        if (!queued) {
+          stopRunStatePoll();
+        }
         return true;
       } catch (err) {
         set({ error: normalizeError(err) });
@@ -799,9 +906,14 @@ export const useAppStore = create<AppState>((set, get) => {
           ...applySessionDto(boot.session),
           thinkingEntries: [],
           contextEntries: [],
+          contextSkillsCount: null,
+          contextEstimated: false,
           summaryLine: null,
           pendingApproval: null,
           pendingInput: null,
+          queuedPrompt: null,
+          streamOwned: false,
+          compactionPending: false,
           configChangeSessionId: null,
           recoveryBanner:
             recoveryParts.length > 0
@@ -897,7 +1009,12 @@ export const useAppStore = create<AppState>((set, get) => {
               pendingInput: envelope.data,
             };
           case "run_completed": {
-            const summaryText = sanitizeDisplayText(envelope.data.summary_line);
+            const question = envelope.data.needs_input_question?.trim();
+            const summaryText = sanitizeDisplayText(
+              question
+                ? `${envelope.data.summary_line}\n\n${question}`
+                : envelope.data.summary_line
+            );
             const settled = state.messages.map((m) =>
               m.streaming ? { ...m, streaming: false } : m
             );
@@ -918,7 +1035,9 @@ export const useAppStore = create<AppState>((set, get) => {
               todos: envelope.data.todos,
               summaryLine: summaryText,
               runActive: false,
+              streamOwned: false,
               cancelling: false,
+              compactionPending: envelope.data.compaction_pending === true,
               pendingApproval: null,
               pendingInput: null,
               error: envelope.data.error ?? state.error,
@@ -930,6 +1049,23 @@ export const useAppStore = create<AppState>((set, get) => {
       });
 
       if (envelope.kind === "run_completed") {
+        const followUpCompaction = envelope.data.compaction_pending === true;
+        const queued = get().queuedPrompt;
+        // Fire the compaction that was queued mid-run before replaying a
+        // queued prompt, so the prompt lands on the compacted history.
+        if (followUpCompaction) {
+          setTimeout(() => {
+            void get().compactCurrentSession();
+          }, 0);
+        } else if (queued) {
+          set({ queuedPrompt: null });
+          setTimeout(() => {
+            void get().submitPrompt(queued.prompt, queued.attachments);
+          }, 0);
+        }
+        // Reconcile authoritative session state (title, history, usage) and
+        // the session list once the stream settles.
+        void get().refreshBootstrap();
         void get().refreshSessions(1);
       }
     },

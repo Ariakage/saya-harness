@@ -5,7 +5,7 @@ use crate::{
     types::{
         ActiveSessionDto, AttachmentTokenDto, BootstrapStateDto, DesktopError,
         DesktopStreamEnvelope, ModeStateDto, PermissionModeDto, ResumeSessionResultDto,
-        SessionPageDto, SubmitPromptResultDto, WorkModeDto,
+        RunStateDto, SessionPageDto, SubmitPromptResultDto, WorkModeDto,
     },
 };
 use tauri::{State, ipc::Channel};
@@ -59,6 +59,12 @@ pub async fn compact_session(
     on_event: Channel<DesktopStreamEnvelope>,
 ) -> Result<SubmitPromptResultDto, DesktopError> {
     state.compact_session(StreamSink::Tauri(on_event)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_run_state(state: State<'_, DesktopState>) -> Result<RunStateDto, DesktopError> {
+    state.get_run_state().await
 }
 
 #[tauri::command]

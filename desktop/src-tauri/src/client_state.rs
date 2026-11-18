@@ -8,8 +8,8 @@ use crate::types::{
     BootstrapStateDto, CredentialRecordDto, DesktopError, DesktopPrefsDto, DesktopStreamEnvelope,
     ExportFormatDto, ExportResultDto, ExportScopeDto, ExtensionItemDto, GlobalPromptDto,
     McpServerDto, MemoryConfirmResultDto, MemoryQueryResultDto, ModeStateDto, ModuleStatusDto,
-    PermissionModeDto, PreparedMemoryReviewDto, ResumeSessionResultDto, SandboxBackendDto,
-    SessionPageDto, StagedAttachmentDto, SubmitPromptResultDto, WorkModeDto,
+    PermissionModeDto, PreparedMemoryReviewDto, ResumeSessionResultDto, RunStateDto,
+    SandboxBackendDto, SessionPageDto, StagedAttachmentDto, SubmitPromptResultDto, WorkModeDto,
 };
 use serde_json::json;
 use soyo_ipc::HelperClient;
@@ -130,6 +130,13 @@ impl DesktopState {
         self.client()
             .await?
             .call_typed("cancel_run", &json!({}))
+            .await
+    }
+
+    pub async fn get_run_state(&self) -> Result<RunStateDto, DesktopError> {
+        self.client()
+            .await?
+            .call_typed("get_run_state", &json!({}))
             .await
     }
 

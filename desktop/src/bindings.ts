@@ -10,6 +10,7 @@ export const commands = {
 	submitPrompt: (prompt: string, attachments: AttachmentTokenDto[], onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("submit_prompt", { prompt, attachments, onEvent })),
 	cancelRun: () => typedError<boolean, DesktopError>(__TAURI_INVOKE("cancel_run")),
 	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
+	getRunState: () => typedError<RunStateDto_Serialize, DesktopError>(__TAURI_INVOKE("get_run_state")),
 	replyApproval: (approvalId: string, callId: string, approved: boolean) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_approval", { approvalId, callId, approved })),
 	replyInput: (inputId: string, answer: string) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_input", { inputId, answer })),
 	setWorkMode: (mode: WorkModeDto) => typedError<ModeStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_work_mode", { mode })),
@@ -518,6 +519,44 @@ export type RunResultDto_Serialize = {
 	text: string | null,
 	error: ErrorInfoDto | null,
 	usage: UsageDto_Serialize | null,
+};
+
+/**
+ *  Live run/session control state for interactive clients (`/status`, mode
+ *  display, post-run compaction checks).
+ */
+export type RunStateDto = RunStateDto_Serialize | RunStateDto_Deserialize;
+
+/**
+ *  Live run/session control state for interactive clients (`/status`, mode
+ *  display, post-run compaction checks).
+ */
+export type RunStateDto_Deserialize = {
+	current: WorkModeDto,
+	pending?: WorkModeDto | null,
+	active_run: boolean,
+	compaction_pending: boolean,
+	/**
+	 *  Monotonic revision of the helper's mode state; bumped on every
+	 *  `set_work_mode` so clients can detect changes like `ModeSnapshot::revision`.
+	 */
+	revision: number,
+};
+
+/**
+ *  Live run/session control state for interactive clients (`/status`, mode
+ *  display, post-run compaction checks).
+ */
+export type RunStateDto_Serialize = {
+	current: WorkModeDto,
+	pending: WorkModeDto | null,
+	active_run: boolean,
+	compaction_pending: boolean,
+	/**
+	 *  Monotonic revision of the helper's mode state; bumped on every
+	 *  `set_work_mode` so clients can detect changes like `ModeSnapshot::revision`.
+	 */
+	revision: number,
 };
 
 export type RunStatusDto = "completed" | "failed" | "needs_confirmation" | "needs_input" | "limit_reached" | "cancelled";
