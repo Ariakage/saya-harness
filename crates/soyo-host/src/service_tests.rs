@@ -856,6 +856,62 @@ scopes = ["docs:read"]
         assert_eq!(result["text"], "Hello socket!");
     }
 
+    /// Sequential `soyo run --session` against a session the helper already
+    /// holds prepared must not deadlock on the helper's own session lock —
+    /// the held `Prepared` is released before re-resuming the same id.
+    #[tokio::test]
+    async fn run_prompt_reuses_held_session_lock_for_same_session_id() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = test_config(root.path());
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(ScriptedModel {
+                chunks: vec!["ok".into()],
+                thinking: None,
+                delay_ms: 0,
+            })
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let first = state
+            .run_prompt(
+                soyo_ipc::types::RunPromptParams {
+                    prompt: "one".into(),
+                    ..Default::default()
+                },
+                StreamSink::Mpsc(tx),
+            )
+            .await
+            .unwrap();
+        while let Some(env) = rx.recv().await {
+            if matches!(env, DesktopStreamEnvelope::RunCompleted { .. }) {
+                break;
+            }
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let second = state
+            .run_prompt(
+                soyo_ipc::types::RunPromptParams {
+                    prompt: "two".into(),
+                    session_id: Some(first.session_id.clone()),
+                    ..Default::default()
+                },
+                StreamSink::Mpsc(tx),
+            )
+            .await
+            .expect("same-session run must not hit the helper-held lock");
+        assert_eq!(second.action, "started");
+        assert_eq!(second.session_id, first.session_id);
+        let mut completed = None;
+        while let Some(env) = rx.recv().await {
+            if let DesktopStreamEnvelope::RunCompleted { status, .. } = env {
+                completed = Some(status);
+                break;
+            }
+        }
+        assert_eq!(completed.as_deref(), Some("completed"));
+    }
+
     /// Headless `run_prompt` (`interactive: false`): approval requests never
     /// reach the wire — the runtime ends `needs_confirmation` like the
     /// in-process CLI without a terminal.

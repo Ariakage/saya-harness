@@ -716,6 +716,16 @@ impl HostService {
         }
 
         let prepared = if let Some(session_id) = &params.session_id {
+            // A helper-held prepared session still owns the session lock;
+            // release it before re-resuming the same id or sequential
+            // `soyo run --session` calls deadlock on our own lock.
+            if guard
+                .prepared
+                .as_ref()
+                .is_some_and(|p| p.session.id.0.to_string() == *session_id)
+            {
+                guard.prepared = None;
+            }
             session::resume(
                 &cfg,
                 session_id,
