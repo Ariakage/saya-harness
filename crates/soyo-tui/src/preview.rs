@@ -569,7 +569,7 @@ pub fn fixture(scene: &str) -> State {
             state.push_message(
                 Role::Assistant,
                 "configured-model",
-                "## Markdown 显示\n\n支持 **加粗**、__strong__、*强调* 和 `inline code`。\n\n| 能力 | 状态 | 说明 |\n| :--- | :---: | ---: |\n| 表格 | **Ready** | 中英文自动换行 |\n| Unicode | `é` | 组合字符与中文路径 |\n| 链接 | [Guide](https://example.test/docs) | 目标地址可见 |\n\n参考 [Soyo Harness](https://github.com/Ariakage/saya-harness)。\n\n> 窄窗口按可用宽度排列单元格。",
+                "## Markdown 显示\n\n支持 **加粗**、__strong__、*强调* 和 `inline code`。\n\n| 能力 | 状态 | 说明 |\n| :--- | :---: | ---: |\n| 表格 | **Ready** | 中英文自动换行 |\n| Unicode | `é` | 组合字符与中文路径 |\n| 链接 | [Guide](https://example.test/docs) | 目标地址可见 |\n\n参考 [Soyo Harness](https://github.com/Ariakage/soyo-harness)。\n\n> 窄窗口按可用宽度排列单元格。",
             );
             state.editor.set_text("继续检查窄窗口中的表格显示。");
         }
@@ -939,7 +939,7 @@ console.log(message);
 | Math | $x^2 + \alpha$ | Inline formula |
 
 ## Links and autolinks
-[Soyo Harness](https://github.com/Ariakage/saya-harness "Repository")
+[Soyo Harness](https://github.com/Ariakage/soyo-harness "Repository")
 
 <https://example.com/reference> · <reader@example.com>
 
