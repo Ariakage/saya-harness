@@ -3,6 +3,7 @@ mod chat;
 mod events;
 mod export;
 mod goal_commands;
+mod helper_commands;
 mod logs;
 mod mcp;
 mod memory_commands;
@@ -172,6 +173,10 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Run the shared backend daemon used by CLI, TUI, and desktop clients.
+    Helper,
+    /// Stop the running helper daemon.
+    Kill,
 }
 #[derive(Subcommand)]
 enum SessionAction {
@@ -974,12 +979,24 @@ async fn run_chat_session(cli: &Cli, config: Config, prepared: Option<session::P
     }
 }
 
+/// Start the shared helper if it is not running yet. Interactive entry points
+/// (TUI, chat, resume) call this before doing their own runtime work; failure
+/// is a warning, not fatal — the CLI still runs its own embedded runtime.
+async fn ensure_helper_started() {
+    if let Err(err) = helper_commands::ensure_helper().await {
+        eprintln!("soyo: cannot start helper daemon ({err}); continuing without shared backend");
+    }
+}
+
 async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> u8 {
     match &cli.command {
         // The preview is dispatched before runtime configuration and environment capture.
         #[cfg(debug_assertions)]
         Some(Command::TuiPreview { .. }) => fail("TUI preview dispatch is unavailable"),
-        None => launch_tui(cli, overrides, env).await,
+        None => {
+            ensure_helper_started().await;
+            launch_tui(cli, overrides, env).await
+        }
         Some(Command::Logs { action }) => match load_config(overrides, env) {
             Err(error) => query_error(error, cli.output.map(Into::into)),
             Ok(config) => match logs::run(&config, action).await {
@@ -1049,6 +1066,8 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
                 }
             }
         },
+        Some(Command::Helper) => helper_commands::run_helper().await,
+        Some(Command::Kill) => helper_commands::kill_helper().await,
         Some(Command::Config {
             action: ConfigAction::Init,
         }) => match init(&overrides, &env) {
@@ -1088,7 +1107,10 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
         Some(Command::Run(args)) => dispatch_run_command(cli, args, overrides, env).await,
         Some(Command::Chat) => match load_config(overrides, env) {
             Err(e) => fail(e),
-            Ok(config) => run_chat_session(cli, config, None).await,
+            Ok(config) => {
+                ensure_helper_started().await;
+                run_chat_session(cli, config, None).await
+            }
         },
         Some(Command::Session { action }) => match load_config(overrides, env) {
             Err(e) => query_error(e, cli.output.map(Into::into)),
