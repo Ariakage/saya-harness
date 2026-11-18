@@ -1,5 +1,5 @@
 {
- "version": "2.23",
+ "version": "2.22",
  "children": [
   {
    "id": "n102",
@@ -60,6 +60,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -104,6 +105,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -148,6 +150,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -192,6 +195,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -236,6 +240,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -280,6 +285,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -324,6 +330,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -621,7 +628,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -673,6 +680,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -798,6 +806,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   }
@@ -880,6 +889,7 @@
                       16.0,
                       16.0
                      ],
+                     "fill": [],
                      "stroke": "#e8e8e8",
                      "strokeWidth": 1.0
                     }
@@ -909,6 +919,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#7a7a7a",
                      "strokeWidth": 1.4
                     }
@@ -927,6 +938,7 @@
              "name": "composer",
              "fill": "#1d1d1d",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 14.0,
              "effect": {
@@ -963,6 +975,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.167
               },
@@ -984,6 +997,7 @@
              "name": "chip",
              "fill": "#1d1d1d",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": [
               0.0,
@@ -1008,7 +1022,7 @@
                "y": 0,
                "width": 620,
                "height": 21,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "Ideas for you",
                "fontSize": 11.5,
                "fontWeight": "400",
@@ -1047,6 +1061,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.25
                   }
@@ -1054,6 +1069,7 @@
                  "name": "ib",
                  "fill": "#1d1d1d",
                  "stroke": "#2b2b2b",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0,
                  "cornerRadius": 7.0
                 },
@@ -1107,6 +1123,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.25
                   }
@@ -1114,6 +1131,7 @@
                  "name": "ib",
                  "fill": "#1d1d1d",
                  "stroke": "#2b2b2b",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0,
                  "cornerRadius": 7.0
                 },
@@ -1167,6 +1185,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.25
                   }
@@ -1174,6 +1193,7 @@
                  "name": "ib",
                  "fill": "#1d1d1d",
                  "stroke": "#2b2b2b",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0,
                  "cornerRadius": 7.0
                 },
@@ -1271,6 +1291,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -1302,6 +1323,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#e8e8e8",
            "strokeWidth": 1.25
           }
@@ -1333,6 +1355,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -1364,6 +1387,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -1395,6 +1419,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -1426,6 +1451,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -1457,6 +1483,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -1496,6 +1523,7 @@
        "name": "rail",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -1585,6 +1613,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#d9a08e",
            "strokeWidth": 1.25
           },
@@ -1651,6 +1680,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#d9d9d9",
              "strokeWidth": 1.0
             },
@@ -1715,6 +1745,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -1899,6 +1930,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -2041,6 +2073,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -2122,6 +2155,7 @@
        "name": "sessions-col",
        "fill": "#0f0f0f",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -2174,6 +2208,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.25
               },
@@ -2227,7 +2262,7 @@
              "y": 0.5,
              "width": 56.06,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "CODE",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -2241,7 +2276,7 @@
              "y": 0.5,
              "width": 47.66,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "auto",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -2285,6 +2320,7 @@
          "name": "topbar",
          "fill": "#00000000",
          "stroke": "#1f1f1f",
+         "strokeAlignment": "inner",
          "strokeWidth": 1.0
         },
         {
@@ -2321,7 +2357,7 @@
                "y": 0,
                "width": 322.92,
                "height": 36,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "Check the runtime boundary for soyo-desktop.",
                "fontSize": 13.5,
                "fontWeight": "400",
@@ -2374,6 +2410,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   }
@@ -2404,6 +2441,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   }
@@ -2434,6 +2472,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   }
@@ -2464,6 +2503,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   }
@@ -2536,7 +2576,7 @@
                "y": 6,
                "width": 109,
                "height": 23,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "auto-collapsed",
                "fontSize": 12.0,
                "fontWeight": "500",
@@ -2570,6 +2610,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#9a9a9a",
                "strokeWidth": 1.083
               },
@@ -2594,7 +2635,7 @@
                "y": 7,
                "width": 50.88,
                "height": 23,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "done",
                "fontSize": 12.0,
                "fontWeight": "500",
@@ -2962,6 +3003,7 @@
                "name": "codeblock",
                "fill": "#161616",
                "stroke": "#262626",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 10.0
               },
@@ -3049,6 +3091,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#9a9a9a",
                "strokeWidth": 1.083
               },
@@ -3073,7 +3116,7 @@
                "y": 7.0,
                "width": 50.88,
                "height": 23,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "done",
                "fontSize": 12.0,
                "fontWeight": "500",
@@ -3204,6 +3247,7 @@
                "name": "dh",
                "fill": "#00000000",
                "stroke": "#222222",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0
               },
               {
@@ -3685,7 +3729,7 @@
                "y": 222.06,
                "width": 854,
                "height": 24,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "122 unchanged lines hidden · expand ›",
                "fontSize": 11.0,
                "fontWeight": "400",
@@ -3697,6 +3741,7 @@
              "name": "diff",
              "fill": "#131313",
              "stroke": "#262626",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 10.0,
              "clip": true
@@ -3708,7 +3753,7 @@
              "y": 644.38,
              "width": 299.61,
              "height": 36,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "Run git status and summarize the changes.",
              "fontSize": 13.5,
              "fontWeight": "400",
@@ -3763,7 +3808,7 @@
              "y": 738.38,
              "width": 847,
              "height": 24.62,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "The user wants a quick summary — check git status first, then group changes by file type. No need for full test suite yet.",
              "fontSize": 12.5,
              "fontWeight": "400",
@@ -3794,6 +3839,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#9a9a9a",
                "strokeWidth": 1.083
               },
@@ -3818,7 +3864,7 @@
                "y": 7,
                "width": 66.09,
                "height": 23,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "running",
                "fontSize": 12.0,
                "fontWeight": "500",
@@ -3930,6 +3976,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.25
                       }
@@ -3961,6 +4008,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.167
                       }
@@ -3992,6 +4040,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#8a8a8a",
                        "strokeWidth": 1.083
                       },
@@ -4013,6 +4062,7 @@
                      "name": "toolpill",
                      "fill": "#1c1c1c",
                      "stroke": "#2e2e2e",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     },
@@ -4039,6 +4089,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.083
                       }
@@ -4046,6 +4097,7 @@
                      "name": "iconchip",
                      "fill": "#1c1c1c",
                      "stroke": "#2e2e2e",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     }
@@ -4110,7 +4162,7 @@
                      "y": 2.5,
                      "width": 40.98,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "auto",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -4124,7 +4176,7 @@
                      "y": 2.5,
                      "width": 150.86,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "claude-sonnet-4-5 Max",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -4138,7 +4190,7 @@
                      "y": 1.5,
                      "width": 58.81,
                      "height": 25,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Steer ⌄",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -4168,6 +4220,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -4214,6 +4267,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -5015,6 +5069,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#4ade80",
                "strokeWidth": 1.5
               },
@@ -5058,6 +5113,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#fac454",
                "strokeWidth": 0.917
               },
@@ -5101,6 +5157,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#6e6e6e",
                "strokeWidth": 0.917
               },
@@ -5208,6 +5265,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.083
               },
@@ -5251,6 +5309,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.083
               },
@@ -5294,6 +5353,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.083
               },
@@ -5324,6 +5384,7 @@
        "name": "panel",
        "fill": "#0f0f0f",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0,
        "clip": true
       }
@@ -5386,6 +5447,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -5417,6 +5479,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#e8e8e8",
            "strokeWidth": 1.25
           }
@@ -5448,6 +5511,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -5479,6 +5543,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -5510,6 +5575,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -5541,6 +5607,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -5572,6 +5639,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -5611,6 +5679,7 @@
        "name": "rail",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -5700,6 +5769,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#d9a08e",
            "strokeWidth": 1.25
           },
@@ -5766,6 +5836,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#d9d9d9",
              "strokeWidth": 1.0
             },
@@ -5830,6 +5901,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -6014,6 +6086,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -6156,6 +6229,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -6237,6 +6311,7 @@
        "name": "sessions-col",
        "fill": "#0f0f0f",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -6289,6 +6364,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.25
               },
@@ -6342,7 +6418,7 @@
              "y": 0,
              "width": 56.06,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "CODE",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -6356,7 +6432,7 @@
              "y": 0,
              "width": 118.28,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "Manual Approval",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -6370,6 +6446,7 @@
          "name": "topbar",
          "fill": "#00000000",
          "stroke": "#1f1f1f",
+         "strokeAlignment": "inner",
          "strokeWidth": 1.0
         },
         {
@@ -6397,7 +6474,7 @@
              "y": 18,
              "width": 260.5,
              "height": 36,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "Run the workspace verification tests.",
              "fontSize": 13.5,
              "fontWeight": "400",
@@ -6445,6 +6522,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#fac454",
                    "strokeWidth": 1.083
                   },
@@ -6472,7 +6550,7 @@
                  "y": 0,
                  "width": 56.06,
                  "height": 23,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "CODE",
                  "fontSize": 12.0,
                  "fontWeight": "500",
@@ -6608,6 +6686,7 @@
                "name": "kv",
                "fill": "#171512",
                "stroke": "#2e2820",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 9.0
               },
@@ -6632,7 +6711,7 @@
                "y": 172,
                "width": 1134,
                "height": 32,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "$ cargo test -p soyo-core --locked",
                "fontSize": 12.0,
                "fontWeight": "400",
@@ -6746,7 +6825,7 @@
                    "y": 0,
                    "width": 81.31,
                    "height": 27,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Deny (N)",
                    "fontSize": 12.0,
                    "fontWeight": "500",
@@ -6760,7 +6839,7 @@
                    "y": 0,
                    "width": 82.19,
                    "height": 27,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Allow (Y)",
                    "fontSize": 12.0,
                    "fontWeight": "500",
@@ -6778,6 +6857,7 @@
              "name": "approval",
              "fill": "#1c1a15",
              "stroke": "#4a3f2a",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 12.0
             },
@@ -6873,6 +6953,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#a3a3a3",
                      "strokeWidth": 1.25
                     }
@@ -6939,7 +7020,7 @@
                      "y": 2.5,
                      "width": 110.06,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Manual Approval",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -6953,7 +7034,7 @@
                      "y": 2.5,
                      "width": 150.86,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "claude-sonnet-4-5 Max",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -6967,7 +7048,7 @@
                      "y": 1.5,
                      "width": 58.81,
                      "height": 25,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Steer ⌄",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -6997,6 +7078,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -7026,6 +7108,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#7a7a7a",
                        "strokeWidth": 1.4
                       }
@@ -7044,6 +7127,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -7142,6 +7226,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7186,6 +7271,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7230,6 +7316,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7274,6 +7361,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7318,6 +7406,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7362,6 +7451,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7406,6 +7496,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -7703,7 +7794,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -7755,6 +7846,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -7825,6 +7917,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#e8e8e8",
                    "strokeWidth": 1.25
                   },
@@ -7870,6 +7963,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -7914,6 +8008,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.167
                   },
@@ -7958,6 +8053,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.333
                   },
@@ -8002,6 +8098,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -8046,6 +8143,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -8090,6 +8188,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -8134,6 +8233,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -8178,6 +8278,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.333
                   },
@@ -8203,6 +8304,7 @@
                "name": "dnav",
                "fill": "#00000000",
                "stroke": "#232323",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0
               },
               {
@@ -8281,7 +8383,7 @@
                      "y": 8,
                      "width": 50.3,
                      "height": 25,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Apply",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -8292,6 +8394,7 @@
                    "name": "fv",
                    "fill": "#1e1e1e",
                    "stroke": "#2b2b2b",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 8.0
                   }
@@ -8347,7 +8450,7 @@
                        "y": 8,
                        "width": 119.12,
                        "height": 30,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "anthropic-official (claude-so…",
                        "fontSize": 12.5,
                        "fontWeight": "400",
@@ -8372,6 +8475,7 @@
                      "name": "fv",
                      "fill": "#1e1e1e",
                      "stroke": "#2b2b2b",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     }
@@ -8443,6 +8547,7 @@
                      "name": "fv",
                      "fill": "#1e1e1e",
                      "stroke": "#2b2b2b",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     }
@@ -8514,6 +8619,7 @@
                      "name": "fv",
                      "fill": "#1e1e1e",
                      "stroke": "#2b2b2b",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     }
@@ -8563,7 +8669,7 @@
                      "y": 0,
                      "width": 38.5,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "On",
                      "fontSize": 12.0,
                      "fontWeight": "500",
@@ -8604,7 +8710,7 @@
                      "y": 8,
                      "width": 78.19,
                      "height": 25,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Set trigger",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -8615,6 +8721,7 @@
                    "name": "fv",
                    "fill": "#1e1e1e",
                    "stroke": "#2b2b2b",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 8.0
                   }
@@ -8661,7 +8768,7 @@
                      "y": 3,
                      "width": 55.44,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "PLAN",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -8675,7 +8782,7 @@
                      "y": 3,
                      "width": 59.48,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "BUILD",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -8689,7 +8796,7 @@
                      "y": 3,
                      "width": 57.72,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "CODE",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -8703,7 +8810,7 @@
                      "y": 3,
                      "width": 60.27,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "WORK",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -8714,6 +8821,7 @@
                    "name": "seg",
                    "fill": "#1e1e1e",
                    "stroke": "#2b2b2b",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 8.0
                   }
@@ -8751,7 +8859,7 @@
                    "y": 20,
                    "width": 466,
                    "height": 34.5,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Bypass skips path checks, model review, and human confirmation. PLAN, explicit deny and hard backend limits still apply.",
                    "fontSize": 11.5,
                    "fontWeight": "400",
@@ -8783,6 +8891,7 @@
              "name": "dialog",
              "fill": "#181818",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 14.0,
              "effect": {
@@ -8817,7 +8926,7 @@
              "y": 18,
              "width": 322.92,
              "height": 36,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "Check the runtime boundary for soyo-desktop.",
              "fontSize": 13.5,
              "fontWeight": "400",
@@ -8976,6 +9085,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9020,6 +9130,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9064,6 +9175,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9108,6 +9220,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9152,6 +9265,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9196,6 +9310,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9240,6 +9355,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -9537,7 +9653,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -9589,6 +9705,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -9714,6 +9831,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   }
@@ -9796,6 +9914,7 @@
                       16.0,
                       16.0
                      ],
+                     "fill": [],
                      "stroke": "#e8e8e8",
                      "strokeWidth": 1.0
                     }
@@ -9825,6 +9944,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#7a7a7a",
                      "strokeWidth": 1.4
                     }
@@ -9843,6 +9963,7 @@
              "name": "composer",
              "fill": "#1d1d1d",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 14.0,
              "effect": {
@@ -9942,6 +10063,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#c9c9c9",
            "strokeWidth": 1.25
           },
@@ -9986,6 +10108,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#c9c9c9",
            "strokeWidth": 1.083
           },
@@ -10030,6 +10153,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#c9c9c9",
            "strokeWidth": 1.167
           },
@@ -10074,6 +10198,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#c9c9c9",
            "strokeWidth": 1.083
           },
@@ -10118,6 +10243,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#c9c9c9",
            "strokeWidth": 1.333
           },
@@ -10172,6 +10298,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#c9c9c9",
            "strokeWidth": 1.167
           },
@@ -10197,6 +10324,7 @@
        "name": "menu",
        "fill": "#1c1c1c",
        "stroke": "#2b2b2b",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0,
        "cornerRadius": 11.0,
        "effect": {
@@ -10269,6 +10397,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -10300,6 +10429,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#e8e8e8",
            "strokeWidth": 1.25
           }
@@ -10331,6 +10461,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -10362,6 +10493,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -10393,6 +10525,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -10424,6 +10557,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -10455,6 +10589,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -10494,6 +10629,7 @@
        "name": "rail",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -10583,6 +10719,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#d9a08e",
            "strokeWidth": 1.25
           },
@@ -10649,6 +10786,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#d9d9d9",
              "strokeWidth": 1.0
             },
@@ -10713,6 +10851,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -10897,6 +11036,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -11039,6 +11179,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -11120,6 +11261,7 @@
        "name": "sessions-col",
        "fill": "#0f0f0f",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -11212,6 +11354,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.25
               }
@@ -11257,6 +11400,7 @@
          "name": "topbar",
          "fill": "#00000000",
          "stroke": "#1f1f1f",
+         "strokeAlignment": "inner",
          "strokeWidth": 1.0
         },
         {
@@ -11553,6 +11697,7 @@
                "name": "codeblock",
                "fill": "#161616",
                "stroke": "#262626",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 10.0
               }
@@ -11647,6 +11792,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.25
                       }
@@ -11674,7 +11820,7 @@
                      "y": 2.5,
                      "width": 150.86,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "claude-sonnet-4-5 Max",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -11688,7 +11834,7 @@
                      "y": 2.5,
                      "width": 128.23,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Bypass permissions",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -11718,6 +11864,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -11747,6 +11894,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#7a7a7a",
                        "strokeWidth": 1.4
                       }
@@ -11765,6 +11913,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -11863,6 +12012,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -11907,6 +12057,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -11951,6 +12102,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -11995,6 +12147,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -12039,6 +12192,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -12083,6 +12237,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -12127,6 +12282,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -12424,7 +12580,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -12476,6 +12632,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -12610,6 +12767,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#a3a3a3",
                      "strokeWidth": 1.25
                     }
@@ -12617,6 +12775,7 @@
                    "name": "chip",
                    "fill": "#2a2a2a",
                    "stroke": "#333333",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 8.0
                   },
@@ -12694,6 +12853,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -12723,6 +12883,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#7a7a7a",
                        "strokeWidth": 1.4
                       }
@@ -12741,6 +12902,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -12786,6 +12948,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.167
                   },
@@ -12854,6 +13017,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.167
                   },
@@ -12912,6 +13076,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.167
                   },
@@ -12970,6 +13135,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.167
                   },
@@ -12995,6 +13161,7 @@
                "name": "attach-menu",
                "fill": "#1d1d1d",
                "stroke": "#2c2c2c",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 11.0,
                "effect": {
@@ -13034,6 +13201,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#6e6e6e",
                "strokeWidth": 1.25
               },
@@ -13128,6 +13296,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -13159,6 +13328,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#e8e8e8",
            "strokeWidth": 1.25
           }
@@ -13190,6 +13360,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -13221,6 +13392,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -13252,6 +13424,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -13283,6 +13456,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -13314,6 +13488,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -13353,6 +13528,7 @@
        "name": "rail",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -13442,6 +13618,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#d9a08e",
            "strokeWidth": 1.25
           },
@@ -13508,6 +13685,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#d9d9d9",
              "strokeWidth": 1.0
             },
@@ -13572,6 +13750,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -13756,6 +13935,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -13898,6 +14078,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -13979,6 +14160,7 @@
        "name": "sessions-col",
        "fill": "#0f0f0f",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -14031,6 +14213,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.25
               },
@@ -14084,7 +14267,7 @@
              "y": 0.5,
              "width": 56.06,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "CODE",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -14098,7 +14281,7 @@
              "y": 0.5,
              "width": 47.66,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "auto",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -14142,6 +14325,7 @@
          "name": "topbar",
          "fill": "#00000000",
          "stroke": "#1f1f1f",
+         "strokeAlignment": "inner",
          "strokeWidth": 1.0
         },
         {
@@ -14178,7 +14362,7 @@
                "y": 18,
                "width": 350.3,
                "height": 36,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "Spin up the Vite preview and check the new theme.",
                "fontSize": 13.5,
                "fontWeight": "400",
@@ -14208,6 +14392,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#9a9a9a",
                  "strokeWidth": 1.083
                 },
@@ -14232,7 +14417,7 @@
                  "y": 7,
                  "width": 50.88,
                  "height": 23,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "done",
                  "fontSize": 12.0,
                  "fontWeight": "500",
@@ -14280,6 +14465,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#9a9a9a",
                  "strokeWidth": 1.083
                 },
@@ -14304,7 +14490,7 @@
                  "y": 7,
                  "width": 50.88,
                  "height": 23,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "done",
                  "fontSize": 12.0,
                  "fontWeight": "500",
@@ -14354,7 +14540,7 @@
                    "y": 3,
                    "width": 560.7,
                    "height": 38.27,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Preview is live on the right — the sidebar, greeting and composer all render under the new theme. Hot reload is active, so edits in",
                    "fontSize": 13.5,
                    "fontWeight": "400",
@@ -14477,6 +14663,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.25
                       }
@@ -14543,7 +14730,7 @@
                        "y": 2.5,
                        "width": 150.86,
                        "height": 23,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "claude-sonnet-4-5 Max",
                        "fontSize": 12.0,
                        "fontWeight": "400",
@@ -14573,6 +14760,7 @@
                           16.0,
                           16.0
                          ],
+                         "fill": [],
                          "stroke": "#e8e8e8",
                          "strokeWidth": 1.0
                         }
@@ -14602,6 +14790,7 @@
                           24.0,
                           24.0
                          ],
+                         "fill": [],
                          "stroke": "#1c120e",
                          "strokeWidth": 1.4
                         }
@@ -14620,6 +14809,7 @@
                  "name": "composer",
                  "fill": "#1d1d1d",
                  "stroke": "#2b2b2b",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0,
                  "cornerRadius": 14.0,
                  "effect": {
@@ -14685,6 +14875,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#8a8a8a",
                  "strokeWidth": 1.083
                 }
@@ -14716,6 +14907,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#8a8a8a",
                  "strokeWidth": 1.083
                 }
@@ -14747,6 +14939,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#8a8a8a",
                  "strokeWidth": 1.083
                 }
@@ -14778,6 +14971,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#6e6e6e",
                  "strokeWidth": 0.917
                 },
@@ -14799,6 +14993,7 @@
                "name": "url",
                "fill": "#1a1a1a",
                "stroke": "#262626",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 8.0
               },
@@ -14825,6 +15020,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#8a8a8a",
                  "strokeWidth": 1.0
                 }
@@ -14856,6 +15052,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#8a8a8a",
                  "strokeWidth": 1.167
                 }
@@ -14868,6 +15065,7 @@
              "name": "bchrome",
              "fill": "#00000000",
              "stroke": "#1f1f1f",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0
             },
             {
@@ -14904,7 +15102,7 @@
                    "y": 8,
                    "width": 103,
                    "height": 20,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "+ New",
                    "fontSize": 10.5,
                    "fontWeight": "400",
@@ -14918,7 +15116,7 @@
                    "y": 30,
                    "width": 103,
                    "height": 20,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Search",
                    "fontSize": 10.5,
                    "fontWeight": "400",
@@ -14932,7 +15130,7 @@
                    "y": 52,
                    "width": 103,
                    "height": 20,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Sessions",
                    "fontSize": 10.5,
                    "fontWeight": "400",
@@ -14946,7 +15144,7 @@
                    "y": 74,
                    "width": 103,
                    "height": 20,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Memory",
                    "fontSize": 10.5,
                    "fontWeight": "400",
@@ -14960,7 +15158,7 @@
                    "y": 96,
                    "width": 103,
                    "height": 20,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "Customize",
                    "fontSize": 10.5,
                    "fontWeight": "400",
@@ -14971,6 +15169,7 @@
                  "name": "mini-sb",
                  "fill": "#0d0d0d",
                  "stroke": "#1f1f1f",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0
                 },
                 {
@@ -15114,6 +15313,7 @@
                             24.0,
                             24.0
                            ],
+                           "fill": [],
                            "stroke": "#1c120e",
                            "strokeWidth": 1.4
                           }
@@ -15131,6 +15331,7 @@
                    "name": "mini-comp",
                    "fill": "#1d1d1d",
                    "stroke": "#2b2b2b",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   },
@@ -15164,7 +15365,7 @@
                      "y": 19.0,
                      "width": 322.52,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Summarize today's sessions",
                      "fontSize": 11.0,
                      "fontWeight": "400",
@@ -15178,7 +15379,7 @@
                      "y": 46.0,
                      "width": 322.52,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Audit MCP credentials",
                      "fontSize": 11.0,
                      "fontWeight": "400",
@@ -15205,6 +15406,7 @@
            "name": "browser",
            "fill": "#0e0e0e",
            "stroke": "#1f1f1f",
+           "strokeAlignment": "inner",
            "strokeWidth": 1.0
           }
          ],
@@ -15275,6 +15477,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -15306,6 +15509,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#e8e8e8",
            "strokeWidth": 1.25
           }
@@ -15337,6 +15541,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -15368,6 +15573,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -15399,6 +15605,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -15430,6 +15637,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.25
           }
@@ -15461,6 +15669,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#8a8a8a",
            "strokeWidth": 1.333
           }
@@ -15500,6 +15709,7 @@
        "name": "rail",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -15589,6 +15799,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#d9a08e",
            "strokeWidth": 1.25
           },
@@ -15655,6 +15866,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#d9d9d9",
              "strokeWidth": 1.0
             },
@@ -15719,6 +15931,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -15903,6 +16116,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -16045,6 +16259,7 @@
             24.0,
             24.0
            ],
+           "fill": [],
            "stroke": "#6b6b6b",
            "strokeWidth": 1.167
           },
@@ -16126,6 +16341,7 @@
        "name": "sessions-col",
        "fill": "#0f0f0f",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -16178,6 +16394,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#a3a3a3",
                "strokeWidth": 1.25
               },
@@ -16247,6 +16464,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#e8d9b0",
                "strokeWidth": 1.0
               },
@@ -16307,6 +16525,7 @@
                "name": "gbtn",
                "fill": "#262019",
                "stroke": "#3d3527",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 6.0
               },
@@ -16339,6 +16558,7 @@
                "name": "gbtn",
                "fill": "#262019",
                "stroke": "#3d3527",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 6.0
               }
@@ -16346,6 +16566,7 @@
              "name": "goal-pill",
              "fill": "#1c1a16",
              "stroke": "#3d3527",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 9.0
             },
@@ -16356,7 +16577,7 @@
              "y": 4.5,
              "width": 56.06,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "CODE",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -16370,7 +16591,7 @@
              "y": 4.5,
              "width": 47.66,
              "height": 23,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "auto",
              "fontSize": 12.0,
              "fontWeight": "500",
@@ -16385,6 +16606,7 @@
          "name": "topbar",
          "fill": "#00000000",
          "stroke": "#1f1f1f",
+         "strokeAlignment": "inner",
          "strokeWidth": 1.0
         },
         {
@@ -16412,7 +16634,7 @@
              "y": 18,
              "width": 457.05,
              "height": 36,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "Find where session restore is implemented, then wire preview mode.",
              "fontSize": 13.5,
              "fontWeight": "400",
@@ -16451,6 +16673,7 @@
                   24.0,
                   24.0
                  ],
+                 "fill": [],
                  "stroke": "#d9d9d9",
                  "strokeWidth": 1.167
                 },
@@ -16475,7 +16698,7 @@
                  "y": 0,
                  "width": 125.64,
                  "height": 23,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "subagent_explore",
                  "fontSize": 12.0,
                  "fontWeight": "500",
@@ -16489,7 +16712,7 @@
                  "y": 0,
                  "width": 66.09,
                  "height": 23,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "running",
                  "fontSize": 12.0,
                  "fontWeight": "500",
@@ -16546,6 +16769,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   },
@@ -16584,7 +16808,7 @@
                    "y": 0,
                    "width": 50.88,
                    "height": 23,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "done",
                    "fontSize": 12.0,
                    "fontWeight": "500",
@@ -16618,6 +16842,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   },
@@ -16656,7 +16881,7 @@
                    "y": 0,
                    "width": 50.88,
                    "height": 23,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "done",
                    "fontSize": 12.0,
                    "fontWeight": "500",
@@ -16690,6 +16915,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#8a8a8a",
                    "strokeWidth": 1.083
                   },
@@ -16728,7 +16954,7 @@
                    "y": 0,
                    "width": 66.09,
                    "height": 23,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "running",
                    "fontSize": 12.0,
                    "fontWeight": "500",
@@ -16743,12 +16969,14 @@
                "name": "sub",
                "fill": "#00000000",
                "stroke": "#2c2c2c",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0
               }
              ],
              "name": "subagent",
              "fill": "#171717",
              "stroke": "#2c2c2c",
+             "strokeAlignment": "inner",
              "strokeWidth": {
               "top": 1.0,
               "right": 1.0,
@@ -16808,6 +17036,7 @@
                 24.0,
                 24.0
                ],
+               "fill": [],
                "stroke": "#9a9a9a",
                "strokeWidth": 1.083
               },
@@ -16832,7 +17061,7 @@
                "y": 7.0,
                "width": 66.09,
                "height": 23,
-               "textGrowth": "auto",
+               "textGrowth": "fixed-width",
                "content": "running",
                "fontSize": 12.0,
                "fontWeight": "500",
@@ -17032,6 +17261,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#a3a3a3",
                      "strokeWidth": 1.25
                     }
@@ -17098,7 +17328,7 @@
                      "y": 2.5,
                      "width": 40.98,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "auto",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -17112,7 +17342,7 @@
                      "y": 2.5,
                      "width": 150.86,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "claude-sonnet-4-5 Max",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -17126,7 +17356,7 @@
                      "y": 1.5,
                      "width": 58.81,
                      "height": 25,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Steer ⌄",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -17156,6 +17386,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -17202,6 +17433,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -17300,6 +17532,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17344,6 +17577,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17388,6 +17622,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17432,6 +17667,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17476,6 +17712,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17520,6 +17757,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17564,6 +17802,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -17861,7 +18100,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -17913,6 +18152,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -17949,7 +18189,7 @@
              "y": 18,
              "width": 262.16,
              "height": 36,
-             "textGrowth": "auto",
+             "textGrowth": "fixed-width",
              "content": "Show me token usage for this month.",
              "fontSize": 13.5,
              "fontWeight": "400",
@@ -18011,6 +18251,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -18055,6 +18296,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -18099,6 +18341,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#e8e8e8",
                    "strokeWidth": 1.167
                   },
@@ -18144,6 +18387,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.167
                   },
@@ -18188,6 +18432,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.333
                   },
@@ -18232,6 +18477,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -18276,6 +18522,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -18320,6 +18567,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   },
@@ -18345,6 +18593,7 @@
                "name": "dnav",
                "fill": "#00000000",
                "stroke": "#232323",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0
               },
               {
@@ -18395,7 +18644,7 @@
                      "y": 3,
                      "width": 37.62,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "7d",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -18409,7 +18658,7 @@
                      "y": 3,
                      "width": 46.45,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "30d",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -18423,7 +18672,7 @@
                      "y": 3,
                      "width": 46.58,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "90d",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -18434,6 +18683,7 @@
                    "name": "seg",
                    "fill": "#1e1e1e",
                    "stroke": "#2b2b2b",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 8.0
                   }
@@ -18640,6 +18890,7 @@
                    "name": "ucard",
                    "fill": "#1a1a1a",
                    "stroke": "#262626",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   },
@@ -18834,6 +19085,7 @@
                    "name": "ucard",
                    "fill": "#1a1a1a",
                    "stroke": "#262626",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   },
@@ -19028,6 +19280,7 @@
                    "name": "ucard",
                    "fill": "#1a1a1a",
                    "stroke": "#262626",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   }
@@ -19419,7 +19672,7 @@
                        "y": 11.7,
                        "width": 17.91,
                        "height": 28.3,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -19591,7 +19844,7 @@
                        "y": 10,
                        "width": 17.91,
                        "height": 23,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -19735,7 +19988,7 @@
                        "y": 13,
                        "width": 17.91,
                        "height": 31,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -19793,7 +20046,7 @@
                        "y": 11.69,
                        "width": 17.91,
                        "height": 26.31,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -19937,7 +20190,7 @@
                        "y": 17,
                        "width": 17.91,
                        "height": 42,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -19995,7 +20248,7 @@
                        "y": 16,
                        "width": 17.91,
                        "height": 36,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20038,7 +20291,7 @@
                        "y": 2,
                        "width": 17.91,
                        "height": 23,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20053,7 +20306,7 @@
                        "y": 25,
                        "width": 17.91,
                        "height": 59,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20111,7 +20364,7 @@
                        "y": 21,
                        "width": 17.91,
                        "height": 46,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20169,7 +20422,7 @@
                        "y": 17,
                        "width": 17.91,
                        "height": 40,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20212,7 +20465,7 @@
                        "y": 2,
                        "width": 17.91,
                        "height": 23,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20227,7 +20480,7 @@
                        "y": 25,
                        "width": 17.91,
                        "height": 63,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20285,7 +20538,7 @@
                        "y": 21,
                        "width": 17.91,
                        "height": 50,
-                       "textGrowth": "auto",
+                       "textGrowth": "fixed-width",
                        "content": "",
                        "fontSize": 13.0,
                        "fontWeight": "400",
@@ -20477,6 +20730,7 @@
                      "name": "tip",
                      "fill": "#1c1c1c",
                      "stroke": "#2b2b2b",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 7.0,
                      "effect": {
@@ -20538,6 +20792,7 @@
                  "name": "card",
                  "fill": "#1a1a1a",
                  "stroke": "#262626",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0,
                  "cornerRadius": 12.0
                 },
@@ -20619,6 +20874,7 @@
              "name": "dialog",
              "fill": "#181818",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 14.0,
              "effect": {
@@ -20714,6 +20970,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -20758,6 +21015,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -20802,6 +21060,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -20846,6 +21105,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -20890,6 +21150,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -20934,6 +21195,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -20978,6 +21240,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -21275,7 +21538,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -21327,6 +21590,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -21381,7 +21645,7 @@
                  "y": 7,
                  "width": 606,
                  "height": 21,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "Commands",
                  "fontSize": 10.5,
                  "fontWeight": "400",
@@ -21721,6 +21985,7 @@
                "name": "cmdpal",
                "fill": "#1c1c1c",
                "stroke": "#2c2c2c",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 11.0,
                "effect": {
@@ -21816,6 +22081,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#a3a3a3",
                      "strokeWidth": 1.25
                     }
@@ -21882,7 +22148,7 @@
                      "y": 2.5,
                      "width": 40.98,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "auto",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -21896,7 +22162,7 @@
                      "y": 2.5,
                      "width": 150.86,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "claude-sonnet-4-5 Max",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -21926,6 +22192,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -21955,6 +22222,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#7a7a7a",
                        "strokeWidth": 1.4
                       }
@@ -21973,6 +22241,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -22070,6 +22339,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22114,6 +22384,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22158,6 +22429,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22202,6 +22474,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22246,6 +22519,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22290,6 +22564,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22334,6 +22609,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -22631,7 +22907,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -22683,6 +22959,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -22813,6 +23090,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#6e6e6e",
                        "strokeWidth": 1.167
                       }
@@ -22824,6 +23102,7 @@
                    "name": "atch",
                    "fill": "#222222",
                    "stroke": "#2e2e2e",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 9.0
                   },
@@ -22850,6 +23129,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#c9c9c9",
                      "strokeWidth": 1.083
                     },
@@ -22904,6 +23184,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#6e6e6e",
                        "strokeWidth": 1.167
                       }
@@ -22915,6 +23196,7 @@
                    "name": "atch",
                    "fill": "#222222",
                    "stroke": "#2e2e2e",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 9.0
                   },
@@ -22941,6 +23223,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#c9c9c9",
                      "strokeWidth": 1.083
                     },
@@ -22995,6 +23278,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#6e6e6e",
                        "strokeWidth": 1.167
                       }
@@ -23006,6 +23290,7 @@
                    "name": "atch",
                    "fill": "#222222",
                    "stroke": "#2e2e2e",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 9.0
                   }
@@ -23127,6 +23412,7 @@
                  "name": "msgpreview",
                  "fill": "#00000000",
                  "stroke": "#3a3a3a",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0,
                  "cornerRadius": 10.0
                 },
@@ -23162,6 +23448,7 @@
                       24.0,
                       24.0
                      ],
+                     "fill": [],
                      "stroke": "#a3a3a3",
                      "strokeWidth": 1.25
                     }
@@ -23228,7 +23515,7 @@
                      "y": 2.5,
                      "width": 40.98,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "auto",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -23242,7 +23529,7 @@
                      "y": 2.5,
                      "width": 150.86,
                      "height": 23,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "claude-sonnet-4-5 Max",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -23272,6 +23559,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -23301,6 +23589,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#1c120e",
                        "strokeWidth": 1.4
                       }
@@ -23319,6 +23608,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -23416,6 +23706,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23460,6 +23751,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23504,6 +23796,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23548,6 +23841,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23592,6 +23886,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23636,6 +23931,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23680,6 +23976,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -23977,7 +24274,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -24029,6 +24326,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -24363,7 +24661,7 @@
                  "y": 94,
                  "width": 242,
                  "height": 35.62,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "Highest effort, plus dynamic workflows for this session.",
                  "fontSize": 11.5,
                  "fontWeight": "400",
@@ -24410,7 +24708,7 @@
                      "y": 15.0,
                      "width": 190,
                      "height": 29.38,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Standing dynamic-workflow orchestration for this session.",
                      "fontSize": 10.5,
                      "fontWeight": "400",
@@ -24438,12 +24736,14 @@
                  ],
                  "fill": "#00000000",
                  "stroke": "#262626",
+                 "strokeAlignment": "inner",
                  "strokeWidth": 1.0
                 }
                ],
                "name": "effpop",
                "fill": "#1c1c1c",
                "stroke": "#2c2c2c",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 12.0,
                "effect": {
@@ -24473,7 +24773,7 @@
                  "y": 7,
                  "width": 202,
                  "height": 22,
-                 "textGrowth": "auto",
+                 "textGrowth": "fixed-width",
                  "content": "Model profile",
                  "fontSize": 10.5,
                  "fontWeight": "400",
@@ -24503,6 +24803,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#c9c9c9",
                    "strokeWidth": 1.033
                   },
@@ -24513,7 +24814,7 @@
                    "y": 7,
                    "width": 61.3,
                    "height": 30,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "anthropic-official",
                    "fontSize": 12.5,
                    "fontWeight": "400",
@@ -24527,7 +24828,7 @@
                    "y": 9,
                    "width": 64.47,
                    "height": 26,
-                   "textGrowth": "auto",
+                   "textGrowth": "fixed-width",
                    "content": "sonnet-4-5 ✓",
                    "fontSize": 11.0,
                    "fontWeight": "400",
@@ -24561,6 +24862,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#c9c9c9",
                    "strokeWidth": 1.167
                   },
@@ -24619,6 +24921,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#c9c9c9",
                    "strokeWidth": 1.167
                   },
@@ -24677,6 +24980,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#c9c9c9",
                    "strokeWidth": 1.167
                   },
@@ -24745,6 +25049,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#d9a08e",
                    "strokeWidth": 1.25
                   },
@@ -24770,6 +25075,7 @@
                "name": "modelmenu",
                "fill": "#1d1d1d",
                "stroke": "#2c2c2c",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 11.0,
                "effect": {
@@ -24847,6 +25153,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.083
                       }
@@ -24854,6 +25161,7 @@
                      "name": "iconchip",
                      "fill": "#1c1c1c",
                      "stroke": "#2e2e2e",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     },
@@ -24880,6 +25188,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#a3a3a3",
                        "strokeWidth": 1.25
                       }
@@ -24911,6 +25220,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#8a8a8a",
                        "strokeWidth": 1.083
                       },
@@ -24932,6 +25242,7 @@
                      "name": "toolpill",
                      "fill": "#1c1c1c",
                      "stroke": "#2e2e2e",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     }
@@ -24954,7 +25265,7 @@
                      "y": 1.5,
                      "width": 79.25,
                      "height": 25,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Sonnet 4.5",
                      "fontSize": 12.0,
                      "fontWeight": "400",
@@ -24984,6 +25295,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#c8b7f2",
                        "strokeWidth": 1.0
                       },
@@ -25005,6 +25317,7 @@
                      "name": "chip",
                      "fill": "#00000000",
                      "stroke": "#4a4580",
+                     "strokeAlignment": "inner",
                      "strokeWidth": 1.0,
                      "cornerRadius": 8.0
                     },
@@ -25031,6 +25344,7 @@
                         16.0,
                         16.0
                        ],
+                       "fill": [],
                        "stroke": "#e8e8e8",
                        "strokeWidth": 1.0
                       }
@@ -25060,6 +25374,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#1c120e",
                        "strokeWidth": 1.4
                       }
@@ -25078,6 +25393,7 @@
                "name": "composer",
                "fill": "#1d1d1d",
                "stroke": "#2b2b2b",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0,
                "cornerRadius": 14.0,
                "effect": {
@@ -25229,6 +25545,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25273,6 +25590,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25317,6 +25635,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25361,6 +25680,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25405,6 +25725,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25449,6 +25770,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25493,6 +25815,7 @@
               24.0,
               24.0
              ],
+             "fill": [],
              "stroke": "#8a8a8a",
              "strokeWidth": 1.25
             },
@@ -25790,7 +26113,7 @@
          "y": 455,
          "width": 215,
          "height": 27,
-         "textGrowth": "auto",
+         "textGrowth": "fixed-width",
          "content": "View all",
          "fontSize": 12.0,
          "fontWeight": "400",
@@ -25842,6 +26165,7 @@
        "name": "sidebar",
        "fill": "#0d0d0d",
        "stroke": "#1f1f1f",
+       "strokeAlignment": "inner",
        "strokeWidth": 1.0
       },
       {
@@ -25967,6 +26291,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.25
                   }
@@ -25998,6 +26323,7 @@
                     16.0,
                     16.0
                    ],
+                   "fill": [],
                    "stroke": "#e8e8e8",
                    "strokeWidth": 1.0
                   }
@@ -26027,6 +26353,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#7a7a7a",
                    "strokeWidth": 1.4
                   }
@@ -26042,6 +26369,7 @@
              "name": "composer",
              "fill": "#1d1d1d",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 14.0,
              "effect": {
@@ -26123,6 +26451,7 @@
                     24.0,
                     24.0
                    ],
+                   "fill": [],
                    "stroke": "#a3a3a3",
                    "strokeWidth": 1.167
                   }
@@ -26134,6 +26463,7 @@
                ],
                "fill": "#00000000",
                "stroke": "#232323",
+               "strokeAlignment": "inner",
                "strokeWidth": 1.0
               },
               {
@@ -26186,6 +26516,7 @@
                         24.0,
                         24.0
                        ],
+                       "fill": [],
                        "stroke": "#4ade80",
                        "strokeWidth": 1.5
                       }
@@ -26199,7 +26530,7 @@
                      "y": 13.0,
                      "width": 105.33,
                      "height": 32,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "English (United States)",
                      "fontSize": 13.5,
                      "fontWeight": "600",
@@ -26213,7 +26544,7 @@
                      "y": 48.0,
                      "width": 105.33,
                      "height": 26,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "English (United States)",
                      "fontSize": 11.5,
                      "fontWeight": "400",
@@ -26223,6 +26554,7 @@
                    ],
                    "fill": "#d9a08e14",
                    "stroke": "#d9a08e8c",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   },
@@ -26256,7 +26588,7 @@
                      "y": 35.0,
                      "width": 105.34,
                      "height": 26,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Simplified Chinese (China)",
                      "fontSize": 11.5,
                      "fontWeight": "400",
@@ -26266,6 +26598,7 @@
                    ],
                    "fill": "#1c1c1c",
                    "stroke": "#2e2e2e",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   },
@@ -26299,7 +26632,7 @@
                      "y": 35.0,
                      "width": 105.33,
                      "height": 26,
-                     "textGrowth": "auto",
+                     "textGrowth": "fixed-width",
                      "content": "Traditional Chinese (Taiwan)",
                      "fontSize": 11.5,
                      "fontWeight": "400",
@@ -26309,6 +26642,7 @@
                    ],
                    "fill": "#1c1c1c",
                    "stroke": "#2e2e2e",
+                   "strokeAlignment": "inner",
                    "strokeWidth": 1.0,
                    "cornerRadius": 10.0
                   }
@@ -26335,6 +26669,7 @@
              ],
              "fill": "#181818",
              "stroke": "#2b2b2b",
+             "strokeAlignment": "inner",
              "strokeWidth": 1.0,
              "cornerRadius": 14.0,
              "effect": {

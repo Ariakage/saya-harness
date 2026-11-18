@@ -33,7 +33,9 @@ from pathlib import Path
 
 FRAME_W, FRAME_H = 1520, 980
 GRID_COLS, GRID_GAP = 4, 80
-PEN_VERSION = "2.23"
+# Format version accepted by the installed Pencil Dev extension (0.6.81);
+# the checker rejects anything !== this exact string.
+PEN_VERSION = "2.22"
 
 EXTRACT_JS = r"""
 () => {
@@ -350,7 +352,7 @@ class PenWriter:
             "id": self.nid(), "type": "text",
             "x": round(rect["x"] - ox, 2), "y": round(rect["y"] - oy, 2),
             "width": round(rect["w"], 2), "height": round(rect["h"], 2),
-            "textGrowth": "auto",
+            "textGrowth": "auto",  # wrapped text corrected below
             "content": src.get("text", ""),
             "fontSize": px(src.get("fontSize"), 13),
             "fontWeight": str(src.get("fontWeight", "400")),
@@ -374,6 +376,10 @@ class PenWriter:
         lh, fs = px(src.get("lineHeight")), px(src.get("fontSize"), 13)
         if lh and fs and abs(lh / fs - 1.2) > 0.05:
             node["lineHeight"] = round(lh / fs, 3)
+        # Multi-line runs need an explicit wrap mode; "auto" never wraps and
+        # would overflow the measured box.
+        if rect["h"] > 1.7 * fs:
+            node["textGrowth"] = "fixed-width"
         return node
 
     def box_style(self, node, src):
@@ -394,6 +400,8 @@ class PenWriter:
             widths = {v[0] for v in painted.values()}
             stroke = next(v[2] for v in painted.values() if v[2]) or next(iter(colors)) or "#000000"
             node["stroke"] = stroke
+            # CSS borders paint inside the box; pen defaults to center.
+            node["strokeAlignment"] = "inner"
             if len(widths) == 1:
                 node["strokeWidth"] = widths.pop()
             else:
@@ -448,6 +456,9 @@ class PenWriter:
                 if fill:
                     node["fill"] = fill
                 elif stroke:
+                    # Explicit empty fill: lucide icons are stroke-only and an
+                    # omitted fill may resolve to a default color.
+                    node["fill"] = []
                     node["stroke"] = stroke
                     node["strokeWidth"] = p["strokeWidth"]
                     if p.get("linecap") in ("round", "square"):
