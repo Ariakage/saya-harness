@@ -198,3 +198,20 @@
 | [desktop/src-tauri/icons/32x32.png](../../desktop/src-tauri/icons/32x32.png) | `32 × 32` 8-bit RGBA PNG | 小尺寸窗口 / 托盘图标 |
 | [desktop/src-tauri/icons/icon.icns](../../desktop/src-tauri/icons/icon.icns) | macOS `.icns` 集合 | 遵循 macOS HIG `824 / 1024` 安全区边距 |
 | [desktop/src-tauri/icons/icon.ico](../../desktop/src-tauri/icons/icon.ico) | Windows 多尺寸 `.ico` | Windows NSIS 安装包与应用可执行文件图标 |
+
+---
+
+## 7. Figma 设计稿同步工具
+
+设计原稿维护在 Figma 文件 `ocT9XcOCUCifMHyta771gs` 的 `Theme` 页（节点 `20:4`），14 个 `1520 × 980` frame 按 `1520 / 980` 步长网格排列。
+
+[devin_theme_gen.py](devin_theme_gen.py) 是全部 frame 的单源生成器：运行后把每个 frame 写成独立 HTML（内嵌 base64 图标与样式），再经 html_to_figma 导入替换同名 frame。
+
+```bash
+python3 docs/design/devin_theme_gen.py            # 输出到 /tmp/soyo_devin_theme/
+python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
+```
+
+- 脚本以自身位置解析仓库根目录，读取 `desktop/public/app-icon.png` 注入各 frame；任意目录下均可运行。
+- 修改设计时改脚本后重新生成，再对变更 frame 执行导入替换；不要直接在 Figma 里手改样式以免与单源失同步。
+- 当前 frame 序列：`01 Home · 02 Session+Context · 03 Approval · 04 Settings · 05 User Menu · 06 Sessions · 07 Attach Menu · 08 Browser Preview · 09 Subagent & Goal · 10 Usage & Tokens · 11 Slash Commands · 12 Attachments Preview · 13 Model & Effort · 14 Language`。
