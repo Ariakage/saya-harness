@@ -7,7 +7,7 @@ export interface ContextRingProps {
   windowTokens: number | null;
   /** Whether `usedTokens` is an estimate rather than a provider report. */
   estimated?: boolean;
-  /** Pixel size of the square SVG. */
+  /** Pixel size of the square indicator. */
   size?: number;
 }
 
@@ -29,11 +29,6 @@ export function ContextRing({
   }
   const used = Math.max(0, usedTokens ?? 0);
   const percent = Math.min(100, Math.round((used / windowTokens) * 100));
-  const strokeWidth = 2.4;
-  const radius = (size - strokeWidth) / 2;
-  const center = size / 2;
-  const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference * (1 - percent / 100);
   const color = arcColor(percent);
   const tooltip = `${estimated ? "~" : ""}${formatTokenCount(used)} / ${formatTokenCount(windowTokens)} (${percent}%)`;
 
@@ -42,35 +37,17 @@ export function ContextRing({
       role="img"
       aria-label={`Context usage ${percent}%`}
       title={`Context: ${tooltip}`}
-      className="inline-flex shrink-0 items-center justify-center"
-    >
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        className="-rotate-90"
-      >
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke="#3a3a3a"
-          strokeWidth={strokeWidth}
-        />
-        <circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={dashOffset}
-          className="transition-[stroke-dashoffset,stroke] duration-300 ease-out"
-        />
-      </svg>
-    </span>
+      className="relative inline-flex shrink-0 items-center justify-center rounded-full transition-[background] duration-300 ease-out"
+      style={{
+        width: size,
+        height: size,
+        // Conic-gradient arc drawn as a ring via a radial mask: the colored
+        // arc covers `percent` of the circle, the rest stays the track color.
+        background: `conic-gradient(${color} ${percent}%, #3a3a3a ${percent}% 100%)`,
+        WebkitMask:
+          "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.6px))",
+        mask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.6px))",
+      }}
+    />
   );
 }
