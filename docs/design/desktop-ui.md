@@ -76,6 +76,7 @@
 - **普通 assistant 消息无底框**，正文直接铺页面背景；用户消息保留右侧气泡（`#242424` 圆角）。
 - 工具调用为**扁平行**：`>_` 图标 + 等宽工具名 + 状态 pill + 右侧元信息（路径/行数/耗时），无容器边框。
 - thinking 两态：收起 `› Thought for 8 s` + `auto-collapsed` pill；展开 `⌄ Thinking` + 左细引导线 + 弱化正文。
+- **Diff 预览**：文件编辑类工具行右侧附行数统计（`+n` 绿 / `-n` 红）；展开后为统一 diff 卡——头部 `文件路径 +n -n · N hunks ›`，正文等宽行：`@@` hunk 头蓝字、上下文行灰、`+` 行绿字绿底（`rgba(74,222,128,.07)`）、`-` 行红字红底（`rgba(248,113,113,.06)`）、行号列弱化、底部 `N unchanged lines hidden · expand ›` 折叠提示。
 - 用户消息 hover 才显示操作行：时间戳 + Branch / Retry / Edit / Copy 图标。
 
 ### 4.3 Composer
