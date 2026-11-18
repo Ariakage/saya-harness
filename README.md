@@ -26,7 +26,7 @@
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Soyo 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用共享运行时，GUI 按后续计划推进。当前支持 macOS 15+ 与 Linux glibc 2.35+（`x86_64` / `aarch64`）。
 
-> **更名说明**：本项目原名 **Saya Harness**，自提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0` 之后更名为 **Soyo Harness**。变更：二进制 `saya`→`soyo`、crate `saya-*`→`soyo-*`、数据目录 `.saya`→`.soyo`（`.soyo` 优先、`.saya` 自动回退）、环境变量 `SAYA_*`→`SOYO_*`（`SOYO_*` 优先、`SAYA_*` 自动回退）。存储与线缆格式标识符（`saya_*_v1`、`SAYAENV1`/`SAYAOUT1`/`SAYAMED1`、`saya_capture_*`、`saya/browser/*` 等）保留旧拼写以保持既有数据与协议兼容。`v0.2.0` 及更早 Release 仍发布历史 `saya` 资产，见 [docs/releases/](docs/releases/)。
+> **更名说明**：本项目原名 **Saya Harness**，自提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0` 之后更名为 **Soyo Harness**。变更：二进制 `saya`→`soyo`、crate `saya-*`→`soyo-*`、数据目录 `.saya`→`.soyo`（`.soyo` 优先、`.saya` 自动回退）、环境变量 `SAYA_*`→`SOYO_*`（`SOYO_*` 优先、`SAYA_*` 自动回退）。存储与线缆标识符已分批迁移为新名（`soyo_*_v1`、`SOYOENV1`/`SOYOOUT1`/`SOYOMED1`、`soyo_capture_*`、`soyo/browser/*`、`__soyo_*`），读取侧继续接受存储中的 `saya_*` 旧拼写以保持既有数据兼容；哈希绑定域常量（`saya-*-v1` 等）与记忆内部文件名永久保留旧拼写以保护既有摘要身份。`v0.2.0` 及更早 Release 仍发布历史 `saya` 资产，见 [docs/releases/](docs/releases/)。
 
 ## 快速上手
 
