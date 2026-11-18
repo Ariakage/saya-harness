@@ -21,6 +21,15 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Ariakage/soyo-harness/graphs/contributors"><img src="https://img.shields.io/github/contributors/Ariakage/soyo-harness?style=for-the-badge&label=Contributors&color=0f62fe" alt="Contributors"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/commits/main"><img src="https://img.shields.io/github/commit-activity/t/Ariakage/soyo-harness?style=for-the-badge&label=Commits&color=0f62fe" alt="Commits"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/commits/main"><img src="https://img.shields.io/github/last-commit/Ariakage/soyo-harness?style=for-the-badge&label=Last%20Commit&color=0f62fe" alt="Last Commit"></a>
+  <img src="https://img.shields.io/github/repo-size/Ariakage/soyo-harness?style=for-the-badge&label=Repo%20Size&color=0f62fe" alt="Repo Size">
+  <img src="https://img.shields.io/github/languages/top/Ariakage/soyo-harness?style=for-the-badge&logo=rust" alt="Top Language">
+  <img src="https://img.shields.io/github/languages/count/Ariakage/soyo-harness?style=for-the-badge&label=Languages&color=0f62fe" alt="Languages">
+</p>
+
+<p align="center">
   <b>简体中文</b> · <a href="README.en.md">English</a>
 </p>
 
