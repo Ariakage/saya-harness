@@ -248,6 +248,11 @@ export type DesktopStreamEnvelope_Deserialize = { kind: "schema_event"; data: Sc
 	 *  mirrors the CLI's session-history lookup for text output.
 	 */
 	needs_input_question?: string | null,
+	/**
+	 *  Whether a compaction request was still pending when the run ended.
+	 *  Interactive clients (TUI) use it to queue a follow-up compact run.
+	 */
+	compaction_pending?: boolean | null,
 } };
 
 /**  Unified channel message pushed during an active run. */
@@ -268,6 +273,11 @@ export type DesktopStreamEnvelope_Serialize = { kind: "schema_event"; data: Sche
 	 *  mirrors the CLI's session-history lookup for text output.
 	 */
 	needs_input_question?: string,
+	/**
+	 *  Whether a compaction request was still pending when the run ended.
+	 *  Interactive clients (TUI) use it to queue a follow-up compact run.
+	 */
+	compaction_pending?: boolean,
 } };
 
 export type ErrorInfoDto = {
