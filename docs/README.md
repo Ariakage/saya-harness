@@ -49,6 +49,7 @@ Soyo Harness 的说明文档默认使用中文，发行说明提供中英双语�
 | [TUI 布局设计](tui-design.md) | 配色、侧栏、输入区、状态反馈与 `view/` 模块布局 | 已实现；与 `view/` 一致 |
 | [Markdown 与调试预览](markdown-rendering.md) | CommonMark／GFM、数学／图表高亮与 `tui-preview` | 已实现；离线及 PTY 验证通过 |
 | [桌面端设计](desktop.md) | `soyo-desktop`（Tauri 2 + in-process）IPC、安全边界与分发设计 | 已确认（D-072）；分阶段实施中 |
+| [桌面端 UI/UX 设计](design/desktop-ui.md) | 深色主题令牌、pill 组件规范、消息流／审批／Composer／用量等界面规则 | 设计稿已确认（Figma Page 3）；实现未完成 |
 
 ## 开发、进度与阶段验收
 
