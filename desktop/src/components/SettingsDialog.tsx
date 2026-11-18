@@ -20,6 +20,7 @@ import {
   type PermissionModeDto,
   type SandboxBackendDto,
   type UsageDto_Serialize,
+  type UsageStatsDto,
   type WorkModeDto,
 } from "../bindings";
 import { LANGUAGE_OPTIONS, getMessages, type LocaleId } from "../lib/i18n";
@@ -55,55 +56,13 @@ const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"] as const;
 const BACKENDS: SandboxBackendDto[] = ["auto", "seatbelt", "bubblewrap", "host"];
 const WORK_MODES: WorkModeDto[] = ["plan", "build", "code", "work"];
 
-// Sample stacked chart data matching Frame 10 proportions (pixels capped <= 88px).
-const USAGE_SERIES: Record<"7d" | "30d" | "90d", Array<[number, number, number]>> = {
-  "7d": [
-    [16, 6, 1],
-    [28, 11, 1],
-    [14, 5, 0],
-    [36, 14, 2],
-    [48, 19, 2],
-    [62, 24, 2],
-    [54, 21, 2],
-  ],
-  "30d": [
-    [12, 5, 1],
-    [6, 2, 0],
-    [20, 9, 1],
-    [30, 11, 1],
-    [8, 4, 0],
-    [4, 2, 0],
-    [15, 7, 0],
-    [24, 10, 0],
-    [19, 9, 0],
-    [6, 4, 0],
-    [32, 13, 1],
-    [28, 11, 1],
-    [9, 5, 0],
-    [5, 3, 0],
-    [44, 17, 1],
-    [38, 15, 2],
-    [62, 24, 2],
-    [48, 20, 2],
-    [42, 16, 2],
-    [66, 24, 2],
-    [52, 20, 2],
-  ],
-  "90d": [
-    [10, 4, 0],
-    [18, 7, 1],
-    [25, 10, 1],
-    [14, 6, 0],
-    [32, 13, 1],
-    [40, 16, 2],
-    [29, 11, 1],
-    [55, 21, 2],
-    [47, 18, 2],
-    [60, 22, 2],
-    [64, 24, 2],
-    [58, 21, 2],
-  ],
-};
+const USAGE_RANGE_DAYS = { "7d": 7, "30d": 30, "90d": 90 } as const;
+
+const PURPOSE_LABEL_KEYS = {
+  execution: "purposeExecution",
+  review: "purposeReview",
+  compaction: "purposeCompaction",
+} as const;
 
 export function SettingsDialog({
   open,
@@ -137,6 +96,9 @@ export function SettingsDialog({
   const [promptPath, setPromptPath] = useState("");
   const [promptSaved, setPromptSaved] = useState(false);
   const [usageRange, setUsageRange] = useState<"7d" | "30d" | "90d">("30d");
+  const [usageStats, setUsageStats] = useState<UsageStatsDto | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -174,6 +136,28 @@ export function SettingsDialog({
   }, [open]);
 
   useEffect(() => {
+    if (!open || activeTab !== "usage" || !isTauri()) return;
+    let cancelled = false;
+    setUsageLoading(true);
+    setUsageError(null);
+    void commands
+      .getUsageStats(USAGE_RANGE_DAYS[usageRange])
+      .then((res) => {
+        if (cancelled) return;
+        if (res.status === "ok") {
+          setUsageStats(res.data);
+        } else {
+          setUsageStats(null);
+          setUsageError(`${res.error.code}: ${res.error.message}`);
+        }
+        setUsageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, activeTab, usageRange]);
+
+  useEffect(() => {
     if (bootstrap) {
       setWorkspaceInput(bootstrap.workspace);
       setTriggerInput(
@@ -208,9 +192,22 @@ export function SettingsDialog({
     }
   };
 
-  const bars = USAGE_SERIES[usageRange];
-  const maxBarSum = Math.max(1, ...bars.map(([i, o, c]) => i + o + c));
+  const usageDays = usageStats?.days ?? [];
+  const maxBarSum = Math.max(
+    1,
+    ...usageDays.map(
+      (d) => d.input_tokens + d.output_tokens + d.cached_input_tokens
+    )
+  );
   const scalePx = 88 / maxBarSum;
+  const usagePurposes = usageStats?.by_purpose ?? [];
+  const usageHasData = (usageStats?.totals.runs ?? 0) > 0;
+  const est = (estimated: boolean) => (estimated ? "~" : "");
+  const formatDay = (dayStart: number) =>
+    new Date(dayStart * 1000).toLocaleDateString(undefined, {
+      month: "numeric",
+      day: "numeric",
+    });
 
   return (
     <div
@@ -399,163 +396,202 @@ export function SettingsDialog({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2.5">
-                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
-                    <div className="mb-1.5 text-[12px] text-[#c9c9c9]">CLI</div>
-                    <div className="text-[16px] font-semibold text-[#e8e8e8]">
-                      12.4M <span className="text-[10.5px] font-normal text-[#6e6e6e]">{t.settings.tokensUnit}</span>
-                    </div>
-                    <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
-                      <div className="flex justify-between"><span>{t.settings.inputLabel}</span><span>4.1M</span></div>
-                      <div className="flex justify-between"><span>{t.settings.outputLabel}</span><span>8.3M</span></div>
-                      <div className="flex justify-between"><span>{t.settings.cacheReadLabel}</span><span>31.2M</span></div>
-                    </div>
+                {usageLoading && (
+                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3 text-center text-[11.5px] text-[#8a8a8a]">
+                    {t.settings.usageLoading}
                   </div>
-                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
-                    <div className="mb-1.5 text-[12px] text-[#c9c9c9]">TUI</div>
-                    <div className="text-[16px] font-semibold text-[#e8e8e8]">
-                      58.9M <span className="text-[10.5px] font-normal text-[#6e6e6e]">{t.settings.tokensUnit}</span>
-                    </div>
-                    <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
-                      <div className="flex justify-between"><span>{t.settings.inputLabel}</span><span>21.7M</span></div>
-                      <div className="flex justify-between"><span>{t.settings.outputLabel}</span><span>37.2M</span></div>
-                      <div className="flex justify-between"><span>{t.settings.cacheReadLabel}</span><span>104M</span></div>
-                    </div>
+                )}
+                {usageError && !usageLoading && (
+                  <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
+                    {usageError}
                   </div>
-                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
-                    <div className="mb-1.5 text-[12px] text-[#c9c9c9]">Desktop</div>
-                    <div className="text-[16px] font-semibold text-[#e8e8e8]">
-                      {lastUsage
-                        ? formatTokenCount(
-                            (lastUsage.input_tokens ?? 0) +
-                              (lastUsage.output_tokens ?? 0)
-                          )
-                        : "178.9M"}{" "}
-                      <span className="text-[10.5px] font-normal text-[#6e6e6e]">
-                        {t.settings.tokensUnit}
-                      </span>
-                    </div>
-                    <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
-                      <div className="flex justify-between">
-                        <span>{t.settings.inputLabel}</span>
-                        <span>{formatTokenCount(lastUsage?.input_tokens ?? 152300000)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>{t.settings.outputLabel}</span>
-                        <span>{formatTokenCount(lastUsage?.output_tokens ?? 26600000)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>{t.settings.cacheReadLabel}</span>
-                        <span>{formatTokenCount(lastUsage?.cached_input_tokens ?? 79000000)}</span>
-                      </div>
-                    </div>
+                )}
+                {!usageLoading && !usageError && !usageHasData && (
+                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3 text-center text-[11.5px] text-[#8a8a8a]">
+                    {t.settings.usageEmpty}
                   </div>
-                </div>
-
-                <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[12.5px] text-[#e8e8e8]">
-                      {t.settings.tokensPerDay}
-                    </span>
-                    <div className="flex items-center gap-3 text-[11px] text-[#6e6e6e]">
-                      <span className="inline-flex items-center gap-1">
-                        <span className="h-[7px] w-[7px] rounded-[2px] bg-[#d9a08e]" />
-                        {t.settings.inputLower}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <span className="h-[7px] w-[7px] rounded-[2px] bg-[#8aa8d8]" />
-                        {t.settings.outputLower}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <span className="h-[7px] w-[7px] rounded-[2px] bg-[#6b6b6b]" />
-                        {t.settings.cacheReadLower}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Stacked bar chart with pixel heights <= 88px (§4.7); hover shows per-day breakdown */}
-                  <div className="mt-2 flex h-[96px] items-end gap-1 pt-2">
-                    {bars.map(([inp, outp, cache], idx) => {
-                      const alignClass =
-                        idx <= 2
-                          ? "left-0"
-                          : idx >= bars.length - 3
-                            ? "right-0"
-                            : "left-1/2 -translate-x-1/2";
-                      return (
-                        <div
-                          key={idx}
-                          className="group relative flex min-w-[4px] flex-1 flex-col hover:z-30 focus-within:z-30"
-                          style={{
-                            height: `${Math.round((inp + outp + cache) * scalePx)}px`,
-                          }}
-                        >
+                )}
+                {usageHasData && (
+                  <>
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {usagePurposes.map((p) => {
+                        const labelKey =
+                          PURPOSE_LABEL_KEYS[
+                            p.purpose as keyof typeof PURPOSE_LABEL_KEYS
+                          ];
+                        const totals = p.totals;
+                        const total =
+                          totals.input_tokens + totals.output_tokens;
+                        return (
                           <div
-                            className={`pointer-events-none absolute bottom-full z-50 mb-1.5 hidden ${alignClass} whitespace-nowrap rounded-[7px] border border-[#383838] bg-[#161616] px-2.5 py-1.5 text-left text-[10.5px] shadow-[0_12px_32px_rgba(0,0,0,0.8)] group-hover:block`}
+                            key={p.purpose}
+                            className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3"
                           >
-                            <div className="mb-0.5 font-medium text-[#e8e8e8]">
-                              {idx === bars.length - 1 ? t.settings.today : t.settings.dayLabel(idx + 1)}
-                              <span className="ml-1.5 text-[#8a8a8a]">
-                                {inp + outp + cache}k {t.settings.totalLower}
+                            <div className="mb-1.5 text-[12px] text-[#c9c9c9]">
+                              {labelKey ? t.settings[labelKey] : p.purpose}
+                            </div>
+                            <div className="text-[16px] font-semibold text-[#e8e8e8]">
+                              {est(totals.estimated)}
+                              {formatTokenCount(total)}{" "}
+                              <span className="text-[10.5px] font-normal text-[#6e6e6e]">
+                                {t.settings.tokensUnit}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5 text-[#c9c9c9]">
-                              <span
-                                className="h-1.5 w-1.5 rounded-[1px]"
-                                style={{ backgroundColor: "#d9a08e" }}
-                              />
-                              {t.settings.inputLower} {inp}k
-                            </div>
-                            <div className="flex items-center gap-1.5 text-[#c9c9c9]">
-                              <span
-                                className="h-1.5 w-1.5 rounded-[1px]"
-                                style={{ backgroundColor: "#8aa8d8" }}
-                              />
-                              {t.settings.outputLower} {outp}k
-                            </div>
-                            <div className="flex items-center gap-1.5 text-[#c9c9c9]">
-                              <span
-                                className="h-1.5 w-1.5 rounded-[1px]"
-                                style={{ backgroundColor: "#6b6b6b" }}
-                              />
-                              {t.settings.cacheReadLower} {cache}k
+                            <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
+                              <div className="flex justify-between">
+                                <span>{t.settings.inputLabel}</span>
+                                <span>
+                                  {est(totals.estimated)}
+                                  {formatTokenCount(totals.input_tokens)}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>{t.settings.outputLabel}</span>
+                                <span>
+                                  {est(totals.estimated)}
+                                  {formatTokenCount(totals.output_tokens)}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>{t.settings.cacheReadLabel}</span>
+                                <span>
+                                  {est(totals.estimated)}
+                                  {formatTokenCount(
+                                    totals.cached_input_tokens
+                                  )}
+                                </span>
+                              </div>
+                              <div className="flex justify-between pt-0.5 text-[#6e6e6e]">
+                                <span>{t.settings.runsLabel}</span>
+                                <span>{totals.runs}</span>
+                              </div>
                             </div>
                           </div>
-                          <div className="flex h-full w-full flex-col overflow-hidden rounded-[2px] transition-[filter] duration-150 group-hover:brightness-110">
-                            {cache > 0 && (
-                              <div
-                                style={{
-                                  height: `${Math.round(cache * scalePx)}px`,
-                                  backgroundColor: "#6b6b6b",
-                                }}
-                              />
-                            )}
-                            {outp > 0 && (
-                              <div
-                                style={{
-                                  height: `${Math.round(outp * scalePx)}px`,
-                                  backgroundColor: "#8aa8d8",
-                                }}
-                              />
-                            )}
-                            {inp > 0 && (
-                              <div
-                                style={{
-                                  height: `${Math.round(inp * scalePx)}px`,
-                                  backgroundColor: "#d9a08e",
-                                }}
-                              />
-                            )}
+                        );
+                      })}
+                    </div>
+                    {usageStats?.totals.estimated && (
+                      <div className="px-1 text-[10.5px] text-[#6e6e6e]">
+                        ~ {t.settings.usageEstimated}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {usageHasData && usageDays.length > 0 && (
+                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12.5px] text-[#e8e8e8]">
+                        {t.settings.tokensPerDay}
+                      </span>
+                      <div className="flex items-center gap-3 text-[11px] text-[#6e6e6e]">
+                        <span className="inline-flex items-center gap-1">
+                          <span className="h-[7px] w-[7px] rounded-[2px] bg-[#d9a08e]" />
+                          {t.settings.inputLower}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <span className="h-[7px] w-[7px] rounded-[2px] bg-[#8aa8d8]" />
+                          {t.settings.outputLower}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <span className="h-[7px] w-[7px] rounded-[2px] bg-[#6b6b6b]" />
+                          {t.settings.cacheReadLower}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Stacked bar chart with pixel heights <= 88px (§4.7); hover shows per-day breakdown */}
+                    <div className="mt-2 flex h-[96px] items-end gap-1 pt-2">
+                      {usageDays.map((d, idx) => {
+                        const inp = d.input_tokens;
+                        const outp = d.output_tokens;
+                        const cache = d.cached_input_tokens;
+                        const alignClass =
+                          idx <= 2
+                            ? "left-0"
+                            : idx >= usageDays.length - 3
+                              ? "right-0"
+                              : "left-1/2 -translate-x-1/2";
+                        return (
+                          <div
+                            key={d.day_start}
+                            className="group relative flex min-w-[4px] flex-1 flex-col hover:z-30 focus-within:z-30"
+                            style={{
+                              height: `${Math.round((inp + outp + cache) * scalePx)}px`,
+                            }}
+                          >
+                            <div
+                              className={`pointer-events-none absolute bottom-full z-50 mb-1.5 hidden ${alignClass} whitespace-nowrap rounded-[7px] border border-[#383838] bg-[#161616] px-2.5 py-1.5 text-left text-[10.5px] shadow-[0_12px_32px_rgba(0,0,0,0.8)] group-hover:block`}
+                            >
+                              <div className="mb-0.5 font-medium text-[#e8e8e8]">
+                                {formatDay(d.day_start)}
+                                <span className="ml-1.5 text-[#8a8a8a]">
+                                  {est(d.estimated)}
+                                  {formatTokenCount(inp + outp + cache)}{" "}
+                                  {t.settings.totalLower}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                                <span
+                                  className="h-1.5 w-1.5 rounded-[1px]"
+                                  style={{ backgroundColor: "#d9a08e" }}
+                                />
+                                {t.settings.inputLower}{" "}
+                                {formatTokenCount(inp)}
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                                <span
+                                  className="h-1.5 w-1.5 rounded-[1px]"
+                                  style={{ backgroundColor: "#8aa8d8" }}
+                                />
+                                {t.settings.outputLower}{" "}
+                                {formatTokenCount(outp)}
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                                <span
+                                  className="h-1.5 w-1.5 rounded-[1px]"
+                                  style={{ backgroundColor: "#6b6b6b" }}
+                                />
+                                {t.settings.cacheReadLower}{" "}
+                                {formatTokenCount(cache)}
+                              </div>
+                            </div>
+                            <div className="flex h-full w-full flex-col overflow-hidden rounded-[2px] transition-[filter] duration-150 group-hover:brightness-110">
+                              {cache > 0 && (
+                                <div
+                                  style={{
+                                    height: `${Math.round(cache * scalePx)}px`,
+                                    backgroundColor: "#6b6b6b",
+                                  }}
+                                />
+                              )}
+                              {outp > 0 && (
+                                <div
+                                  style={{
+                                    height: `${Math.round(outp * scalePx)}px`,
+                                    backgroundColor: "#8aa8d8",
+                                  }}
+                                />
+                              )}
+                              {inp > 0 && (
+                                <div
+                                  style={{
+                                    height: `${Math.round(inp * scalePx)}px`,
+                                    backgroundColor: "#d9a08e",
+                                  }}
+                                />
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
+                    <div className="mt-1 flex justify-between text-[10px] text-[#5e5e5e]">
+                      <span>{t.settings.windowLabel(usageRange)}</span>
+                      <span>{t.settings.today}</span>
+                    </div>
                   </div>
-                  <div className="mt-1 flex justify-between text-[10px] text-[#5e5e5e]">
-                    <span>{t.settings.windowLabel(usageRange)}</span>
-                    <span>{t.settings.today}</span>
-                  </div>
-                </div>
+                )}
 
                 <div className="flex items-center gap-3.5 px-1 text-[11px] text-[#6e6e6e]">
                   <span className="text-[#4ade80]">● {t.settings.liveSession}</span>

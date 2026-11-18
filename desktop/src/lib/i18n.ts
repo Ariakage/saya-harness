@@ -191,10 +191,16 @@ export interface UiMessages {
     totalLower: string;
     tokensPerDay: string;
     today: string;
-    dayLabel: (n: number) => string;
     windowLabel: (r: string) => string;
     liveSession: string;
     idle: string;
+    purposeExecution: string;
+    purposeReview: string;
+    purposeCompaction: string;
+    runsLabel: string;
+    usageLoading: string;
+    usageEmpty: string;
+    usageEstimated: string;
     workspaceDir: string;
     browse: string;
     apply: string;
@@ -556,7 +562,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       titlePermissions: "Permissions & Modes",
       titleModules: "Modules & Extensions",
       titleGeneral: "Runtime & Modules",
-      usageSubtitle: "Token usage across CLI, TUI and Desktop on this device",
+      usageSubtitle: "Token usage across sessions on this device",
       tokensUnit: "tokens",
       inputLabel: "Input",
       outputLabel: "Output",
@@ -567,10 +573,16 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       totalLower: "total",
       tokensPerDay: "Tokens per day",
       today: "Today",
-      dayLabel: (n) => `Day ${n}`,
       windowLabel: (r) => `Window: ${r}`,
       liveSession: "live session",
       idle: "idle",
+      purposeExecution: "Execution",
+      purposeReview: "Review",
+      purposeCompaction: "Compaction",
+      runsLabel: "runs",
+      usageLoading: "Loading usage…",
+      usageEmpty: "No recorded usage in this window",
+      usageEstimated: "Includes estimated values",
       workspaceDir: "Workspace Directory",
       browse: "Browse…",
       apply: "Apply",
@@ -957,7 +969,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       titlePermissions: "权限与模式",
       titleModules: "模块与扩展",
       titleGeneral: "运行时与模块",
-      usageSubtitle: "本设备 CLI、TUI 与 Desktop 的 Token 用量统计",
+      usageSubtitle: "本设备所有会话的 Token 用量统计",
       tokensUnit: "tokens",
       inputLabel: "输入",
       outputLabel: "输出",
@@ -968,10 +980,16 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       totalLower: "总计",
       tokensPerDay: "每日 Token 用量",
       today: "今天",
-      dayLabel: (n) => `第 ${n} 天`,
       windowLabel: (r) => `窗口范围：${r}`,
       liveSession: "活动会话",
       idle: "空闲",
+      purposeExecution: "执行",
+      purposeReview: "审查",
+      purposeCompaction: "压缩",
+      runsLabel: "次运行",
+      usageLoading: "正在加载用量…",
+      usageEmpty: "此时间范围内暂无用量记录",
+      usageEstimated: "包含估算值",
       workspaceDir: "工作区目录",
       browse: "浏览…",
       apply: "应用",
@@ -1355,7 +1373,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       titlePermissions: "權限與模式",
       titleModules: "模組與擴充功能",
       titleGeneral: "執行階段與模組",
-      usageSubtitle: "此裝置上 CLI、TUI 與 Desktop 的 Token 用量統計",
+      usageSubtitle: "此裝置上所有工作階段的 Token 用量統計",
       tokensUnit: "tokens",
       inputLabel: "輸入",
       outputLabel: "輸出",
@@ -1366,10 +1384,16 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       totalLower: "總計",
       tokensPerDay: "每日 Token 用量",
       today: "今天",
-      dayLabel: (n) => `第 ${n} 天`,
       windowLabel: (r) => `視窗範圍：${r}`,
       liveSession: "作用中工作階段",
       idle: "閒置",
+      purposeExecution: "執行",
+      purposeReview: "審查",
+      purposeCompaction: "壓縮",
+      runsLabel: "次執行",
+      usageLoading: "正在載入用量…",
+      usageEmpty: "此時間範圍內暫無用量記錄",
+      usageEstimated: "包含估算值",
       workspaceDir: "工作區目錄",
       browse: "瀏覽…",
       apply: "套用",

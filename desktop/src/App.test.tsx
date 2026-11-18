@@ -12,22 +12,24 @@ import type {
   SessionPageDto_Serialize,
 } from "./bindings";
 
-const { invokeMock, MockChannel, checkUpdateMock } = vi.hoisted(() => {
-  class HoistedChannel<T> {
-    id = Math.floor(Math.random() * 100000);
-    onmessage: (message: T) => void = () => {};
-  }
-  return {
-    invokeMock: vi.fn(),
-    MockChannel: HoistedChannel,
-    checkUpdateMock: vi.fn(),
-  };
-});
+const { invokeMock, MockChannel, checkUpdateMock, isTauriMock } =
+  vi.hoisted(() => {
+    class HoistedChannel<T> {
+      id = Math.floor(Math.random() * 100000);
+      onmessage: (message: T) => void = () => {};
+    }
+    return {
+      invokeMock: vi.fn(),
+      MockChannel: HoistedChannel,
+      checkUpdateMock: vi.fn(),
+      isTauriMock: vi.fn(() => false),
+    };
+  });
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
   Channel: MockChannel,
-  isTauri: () => false,
+  isTauri: () => isTauriMock(),
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
@@ -132,6 +134,8 @@ describe("App Stage 3 runtime integration", () => {
     invokeMock.mockReset();
     checkUpdateMock.mockReset();
     checkUpdateMock.mockResolvedValue(null);
+    isTauriMock.mockReset();
+    isTauriMock.mockReturnValue(false);
     useAppStore.setState({
       initialized: false,
       loading: false,
@@ -914,13 +918,125 @@ describe("App Stage 3 runtime integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     await waitFor(() => {
       expect(screen.getByTestId("usage-panel")).toBeTruthy();
-      expect(screen.getByText("Tokens per day")).toBeTruthy();
+      expect(
+        screen.getByText("No recorded usage in this window")
+      ).toBeTruthy();
     });
 
     // Escape closes SettingsDialog
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
       expect(screen.queryByTestId("settings-dialog")).toBeNull();
+    });
+  });
+
+  it("loads backend usage stats, renders purpose totals and day chart, and refetches on range change", async () => {
+    isTauriMock.mockReturnValue(true);
+    let requestedDays: number[] = [];
+    const usageStats = (rangeDays: number) => ({
+      range_days: rangeDays,
+      generated_at: 1_700_000_000,
+      totals: {
+        input_tokens: 10_000,
+        output_tokens: 5_000,
+        cached_input_tokens: 2_000,
+        runs: 2,
+        requests: 4,
+        estimated: true,
+      },
+      by_purpose: [
+        {
+          purpose: "execution",
+          totals: {
+            input_tokens: 8_000,
+            output_tokens: 4_000,
+            cached_input_tokens: 1_500,
+            runs: 2,
+            requests: 3,
+            estimated: true,
+          },
+        },
+        {
+          purpose: "review",
+          totals: {
+            input_tokens: 1_500,
+            output_tokens: 800,
+            cached_input_tokens: 400,
+            runs: 1,
+            requests: 1,
+            estimated: false,
+          },
+        },
+        {
+          purpose: "compaction",
+          totals: {
+            input_tokens: 500,
+            output_tokens: 200,
+            cached_input_tokens: 100,
+            runs: 1,
+            requests: 1,
+            estimated: false,
+          },
+        },
+      ],
+      days: [
+        {
+          day_start: 1_699_948_800,
+          input_tokens: 6_000,
+          output_tokens: 3_000,
+          cached_input_tokens: 1_200,
+          estimated: true,
+        },
+        {
+          day_start: 1_700_035_200,
+          input_tokens: 4_000,
+          output_tokens: 2_000,
+          cached_input_tokens: 800,
+          estimated: false,
+        },
+      ],
+    });
+    invokeMock.mockImplementation(
+      async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "get_bootstrap_state") {
+          return sampleBootstrap();
+        }
+        if (cmd === "get_usage_stats") {
+          const days = Number(args?.days ?? 0);
+          requestedDays.push(days);
+          return usageStats(days);
+        }
+        if (cmd === "get_global_prompt") {
+          return { content: "", path: "/tmp/soyo/prompt.md" };
+        }
+        return null;
+      }
+    );
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Prompt input")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
+    fireEvent.click(screen.getByRole("button", { name: "Usage & tokens" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-panel")).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(requestedDays).toEqual([30]);
+      expect(screen.getByText("Execution")).toBeTruthy();
+      expect(screen.getByText("Review")).toBeTruthy();
+      expect(screen.getByText("Compaction")).toBeTruthy();
+      expect(screen.getByText("Tokens per day")).toBeTruthy();
+      expect(screen.getByText(/Includes estimated values/)).toBeTruthy();
+    });
+    // Estimated execution total: ~12.0k input+output.
+    expect(screen.getByText(/~12\.0k/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "7d" }));
+    await waitFor(() => {
+      expect(requestedDays).toEqual([30, 7]);
     });
   });
 
