@@ -94,4 +94,148 @@ mod tests {
             "helper server should exit after its socket path is removed"
         );
     }
+
+    /// Process-global env vars must be restored on drop so other tests in the
+    /// same process never observe a leaked configuration.
+    struct EnvGuard(Vec<(String, Option<std::ffi::OsString>)>);
+
+    impl EnvGuard {
+        fn set(vars: &[(&str, &str)]) -> Self {
+            let saved = vars
+                .iter()
+                .map(|(key, _)| (key.to_string(), std::env::var_os(key)))
+                .collect();
+            // SAFETY: all env-mutating tests in this crate hold `serial()`.
+            unsafe {
+                for (key, value) in vars {
+                    std::env::set_var(key, value);
+                }
+            }
+            Self(saved)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: same serialization as `set`.
+            unsafe {
+                for (key, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    fn setup_params() -> soyo_ipc::types::SetupEnvironmentParams {
+        soyo_ipc::types::SetupEnvironmentParams {
+            profile_name: "openai".into(),
+            protocol: "openai-responses".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            model: "gpt-test".into(),
+            auth: Some("bearer".into()),
+            api_key_env: Some("SOYO_SETUP_TEST_KEY".into()),
+            api_key: Some("sk-test-123".into()),
+            context_window_tokens: Some(64_000),
+            max_output_tokens: Some(4_096),
+            workspace: None,
+            permission_mode: Some(soyo_ipc::types::PermissionModeDto::Manual),
+            work_mode: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_environment_writes_config_overlay_and_bootstrap() {
+        let _guard = serial().await;
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("helper");
+        let config_path = dir.path().join("config.toml");
+        let _env = EnvGuard::set(&[
+            ("SOYO_HELPER_DIR", helper.to_str().unwrap()),
+            ("SOYO_CONFIG", config_path.to_str().unwrap()),
+        ]);
+        let service = HostService::from_environment();
+        assert!(!service.get_bootstrap_state().await.config_ready);
+
+        let boot = service
+            .setup_environment(setup_params())
+            .await
+            .expect("setup should succeed");
+
+        assert!(boot.config_ready);
+        assert_eq!(boot.selected_profile.as_deref(), Some("openai"));
+
+        // config.toml references the variable name, never the secret value.
+        let text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            text.contains("api_key_env = \"SOYO_SETUP_TEST_KEY\""),
+            "{text}"
+        );
+        assert!(text.contains("permissions = \"manual\""), "{text}");
+        assert!(!text.contains("sk-test-123"), "{text}");
+
+        // The secret lives only in the helper-private env overlay.
+        let overlay = std::fs::read_to_string(helper.join("env")).unwrap();
+        assert!(
+            overlay.contains("SOYO_SETUP_TEST_KEY=sk-test-123"),
+            "{overlay}"
+        );
+
+        // Re-running merges into the same document instead of replacing it.
+        let mut second = setup_params();
+        second.profile_name = "secondary".into();
+        second.auth = Some("none".into());
+        second.api_key_env = None;
+        second.api_key = None;
+        second.base_url = "http://localhost:11434/v1".into();
+        service
+            .setup_environment(second)
+            .await
+            .expect("second profile merge");
+        let text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(text.contains("[profiles.openai]"), "{text}");
+        assert!(text.contains("[profiles.secondary]"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn setup_environment_rejects_invalid_params_and_restores() {
+        let _guard = serial().await;
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let _env = EnvGuard::set(&[
+            (
+                "SOYO_HELPER_DIR",
+                dir.path().join("helper").to_str().unwrap(),
+            ),
+            ("SOYO_CONFIG", config_path.to_str().unwrap()),
+        ]);
+        let service = HostService::from_environment();
+
+        // Bearer auth requires an env-var name to reference.
+        let mut params = setup_params();
+        params.api_key_env = None;
+        let err = service.setup_environment(params).await.unwrap_err();
+        assert_eq!(err.code, "invalid_args");
+
+        // auth `none` cannot carry key material.
+        let mut params = setup_params();
+        params.auth = Some("none".into());
+        let err = service.setup_environment(params).await.unwrap_err();
+        assert_eq!(err.code, "invalid_args");
+
+        // Profile names are restricted to TOML-safe keys.
+        let mut params = setup_params();
+        params.profile_name = "bad name!".into();
+        let err = service.setup_environment(params).await.unwrap_err();
+        assert_eq!(err.code, "invalid_args");
+
+        // A config that fails validation leaves no partial file behind.
+        let mut params = setup_params();
+        params.base_url = "http://example.com".into();
+        let err = service.setup_environment(params).await.unwrap_err();
+        assert_ne!(err.code, "invalid_args");
+        assert!(!config_path.exists());
+    }
 }

@@ -2,6 +2,7 @@
 //! streaming sinks, peripheral ops, and the NDJSON socket server.
 
 pub mod attachment;
+pub mod envfile;
 pub mod peripheral;
 pub mod prefs;
 pub mod server;

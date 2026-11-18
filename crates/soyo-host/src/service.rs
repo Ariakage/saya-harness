@@ -300,7 +300,7 @@ impl EventSink for SummarySink {
 
 impl HostService {
     pub fn from_environment() -> Self {
-        let env = Environment::capture();
+        let env = Environment::capture_with(crate::envfile::load_env_pairs());
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         let config_path = config::config_path(&Overrides::default(), &env)
             .ok()

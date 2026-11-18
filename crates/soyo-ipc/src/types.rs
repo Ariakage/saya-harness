@@ -953,3 +953,36 @@ pub struct GlobalPromptDto {
     /// Path the content was read from, when a legacy file was used.
     pub source_path: Option<String>,
 }
+
+/// First-run setup parameters collected by the desktop wizard. `api_key` is a
+/// secret value — it is only ever written to the helper-private env overlay
+/// (`<helper_dir>/env`); `config.toml` stores `api_key_env` by name per the
+/// credential baseline.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct SetupEnvironmentParams {
+    /// TOML-safe profile key: `[A-Za-z0-9_-]+`.
+    pub profile_name: String,
+    /// `openai-responses`, `openai-chat-completions` or `anthropic-messages`.
+    pub protocol: String,
+    pub base_url: String,
+    pub model: String,
+    /// `bearer`, `x-api-key` or `none` (default `bearer`).
+    pub auth: Option<String>,
+    /// Environment variable name the profile references (`api_key_env`).
+    /// Required unless `auth == "none"`.
+    pub api_key_env: Option<String>,
+    /// Secret key value written to the helper env overlay under `api_key_env`.
+    /// Omit to reference an already-exported variable instead.
+    pub api_key: Option<String>,
+    #[specta(type = Option<Number>)]
+    pub context_window_tokens: Option<u64>,
+    #[specta(type = Option<Number>)]
+    pub max_output_tokens: Option<u32>,
+    /// Optional workspace directory applied via `set_workspace` semantics
+    /// after the configuration reloads.
+    pub workspace: Option<String>,
+    /// Defaults persisted into `[defaults]` — `permissions` and `mode` are
+    /// only written when provided.
+    pub permission_mode: Option<PermissionModeDto>,
+    pub work_mode: Option<WorkModeDto>,
+}

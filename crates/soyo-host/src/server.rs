@@ -367,6 +367,19 @@ async fn dispatch(
             };
             r.await.and_then(ok)
         }
+        "setup_environment" => {
+            let r = async {
+                let setup: soyo_ipc::types::SetupEnvironmentParams = serde_json::from_value(params)
+                    .map_err(|err| {
+                        DesktopError::new(
+                            "invalid_params",
+                            format!("setup_environment params: {err}"),
+                        )
+                    })?;
+                service.setup_environment(setup).await
+            };
+            r.await.and_then(ok)
+        }
         "select_profile" => {
             let r = async {
                 let profile = param_string(&params, "profile")?.to_owned();

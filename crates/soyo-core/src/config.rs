@@ -58,6 +58,14 @@ impl Environment {
     pub fn capture() -> Self {
         Self(std::env::vars_os().collect())
     }
+    /// Process environment overlaid with extra pairs — overlay values win on
+    /// duplicate names. Used to fold the helper's private env file into the
+    /// captured environment before configuration resolves `*_env` references.
+    pub fn capture_with(overlay: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
+        let mut env = Self::capture();
+        env.0.extend(overlay);
+        env
+    }
     pub fn from_pairs(pairs: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         Self(pairs.into_iter().collect())
     }
@@ -95,7 +103,7 @@ impl Environment {
             .ok_or_else(|| invalid("required environment reference is missing"))
     }
 }
-fn valid_env_name(name: &str) -> bool {
+pub fn valid_env_name(name: &str) -> bool {
     let mut chars = name.bytes();
     chars
         .next()

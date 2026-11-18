@@ -1,12 +1,15 @@
 //! Peripheral Tauri commands and runtime helpers (settings, extensions, modules, MCP/credentials, memory, export, attachments).
 
-use crate::{attachment, service::HostService};
+use crate::{
+    attachment, envfile,
+    service::{HostService, register_config_secrets},
+};
 use soyo_app::{
     interaction::RunCancellation, memory_admin::MemoryAdmin, offload_boundary, session,
 };
 use soyo_core::{
     background::JobStatus,
-    config::{Config, ThinkingEffort},
+    config::{self, Config, Environment, Overrides, ThinkingEffort},
     contract::{BoundaryError, SessionId, error_codes},
     credentials::{
         CredentialKind, CredentialMetadata, CredentialRef, CredentialScope, CredentialValue,
@@ -25,12 +28,13 @@ use soyo_ipc::{
     types::{
         BackgroundJobDto, BootstrapStateDto, CredentialRecordDto, DesktopError, ExportFormatDto,
         ExportResultDto, ExportScopeDto, ExtensionItemDto, McpServerDto, MemoryConfirmResultDto,
-        MemoryQueryResultDto, ModuleStatusDto, PreparedMemoryReviewDto, SandboxBackendDto,
-        StagedAttachmentDto,
+        MemoryQueryResultDto, ModuleStatusDto, PermissionModeDto, PreparedMemoryReviewDto,
+        SandboxBackendDto, SetupEnvironmentParams, StagedAttachmentDto, WorkModeDto,
     },
 };
 use std::{
     collections::BTreeSet,
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
@@ -305,6 +309,154 @@ impl HostService {
         }
         cfg.profile = Some(profile.to_owned());
         drop(guard);
+        Ok(self.get_bootstrap_state().await)
+    }
+
+    /// First-run setup: validate inputs, store the API key value in the
+    /// helper-private env overlay, merge the profile into `config.toml`
+    /// (preserving an existing valid document), reload configuration, then
+    /// apply the optional workspace. `config.toml` only ever records the
+    /// `api_key_env` *name*; the value lives in `<helper_dir>/env`.
+    ///
+    /// On a failed reload the previous config file is restored so a bad form
+    /// cannot leave the installation broken.
+    pub async fn setup_environment(
+        &self,
+        params: SetupEnvironmentParams,
+    ) -> Result<BootstrapStateDto, DesktopError> {
+        let secrets = self.current_secrets();
+        {
+            let guard = self.inner.lock().await;
+            if guard.active_run_id.is_some() {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Cancel or wait for the active run before running setup",
+                ));
+            }
+        }
+
+        let name = params.profile_name.trim();
+        if name.is_empty()
+            || name.len() > 64
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(DesktopError::new(
+                "invalid_args",
+                "Profile name must be 1-64 letters, digits, '_' or '-'",
+            ));
+        }
+        let protocol = match params.protocol.trim() {
+            p @ ("openai-responses" | "openai-chat-completions" | "anthropic-messages") => p,
+            _ => return Err(DesktopError::new("invalid_args", "Unsupported protocol")),
+        };
+        let auth = match params.auth.as_deref().unwrap_or("bearer").trim() {
+            a @ ("bearer" | "x-api-key" | "none") => a,
+            _ => return Err(DesktopError::new("invalid_args", "Unsupported auth scheme")),
+        };
+        let base_url = params.base_url.trim();
+        let model = params.model.trim();
+        if base_url.is_empty() || model.is_empty() {
+            return Err(DesktopError::new(
+                "invalid_args",
+                "Base URL and model are required",
+            ));
+        }
+        let context_window = params.context_window_tokens.unwrap_or(128_000);
+        let max_output = params.max_output_tokens.unwrap_or(8_192);
+        if context_window == 0 || max_output == 0 {
+            return Err(DesktopError::new(
+                "invalid_args",
+                "Token limits must be positive",
+            ));
+        }
+        let key_env = params
+            .api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let key_value = params
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        if auth == "none" {
+            if key_env.is_some() || key_value.is_some() {
+                return Err(DesktopError::new(
+                    "invalid_args",
+                    "auth 'none' cannot reference an API key",
+                ));
+            }
+        } else {
+            let Some(env_name) = key_env else {
+                return Err(DesktopError::new(
+                    "invalid_args",
+                    "An API key variable name is required for keyed auth",
+                ));
+            };
+            if !soyo_core::config::valid_env_name(env_name) {
+                return Err(DesktopError::new(
+                    "invalid_args",
+                    "Invalid environment variable name",
+                ));
+            }
+        }
+
+        if let (Some(env_name), Some(value)) = (key_env, key_value.as_ref()) {
+            let env_name = env_name.to_owned();
+            let value_owned = value.clone();
+            offload_boundary(move || envfile::upsert_env_pair(&env_name, &value_owned))
+                .await
+                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+            let _ = self.secrets.register(std::slice::from_ref(value));
+        }
+
+        let merge = MergeSetup {
+            name: name.to_owned(),
+            protocol: protocol.to_owned(),
+            base_url: base_url.to_owned(),
+            model: model.to_owned(),
+            auth: auth.to_owned(),
+            key_env: key_env.map(str::to_owned),
+            context_window,
+            max_output,
+            permissions: params.permission_mode.map(permission_label),
+            mode: params.work_mode.map(work_mode_label),
+        };
+        let (config_path, backup_path) = offload_boundary(move || merge_setup_config(&merge))
+            .await
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+
+        let env = Environment::capture_with(envfile::load_env_pairs());
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let reload = offload_boundary(move || config::load(Overrides::default(), env, &cwd))
+            .await
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets));
+        let cfg = match reload {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                restore_config_backup(&config_path, backup_path);
+                return Err(err);
+            }
+        };
+        {
+            let mut guard = self.inner.lock().await;
+            guard.config = Some(cfg.clone());
+            guard.config_error = None;
+            register_config_secrets(&cfg, &self.secrets);
+        }
+
+        let workspace = params
+            .workspace
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        if let Some(path) = workspace {
+            return self.set_workspace(&path).await;
+        }
         Ok(self.get_bootstrap_state().await)
     }
 
@@ -1044,5 +1196,133 @@ impl HostService {
         })
         .await
         .map_err(|err| DesktopError::from_boundary(&err, &secrets))
+    }
+}
+
+struct MergeSetup {
+    name: String,
+    protocol: String,
+    base_url: String,
+    model: String,
+    auth: String,
+    key_env: Option<String>,
+    context_window: u64,
+    max_output: u32,
+    permissions: Option<&'static str>,
+    mode: Option<&'static str>,
+}
+
+fn permission_label(mode: PermissionModeDto) -> &'static str {
+    match mode {
+        PermissionModeDto::Auto => "auto",
+        PermissionModeDto::Bypass => "bypass",
+        PermissionModeDto::Manual => "manual",
+    }
+}
+
+fn work_mode_label(mode: WorkModeDto) -> &'static str {
+    match mode {
+        WorkModeDto::Plan => "plan",
+        WorkModeDto::Build => "build",
+        WorkModeDto::Code => "code",
+        WorkModeDto::Work => "work",
+    }
+}
+
+/// Merge the setup profile into `config.toml`, preserving an existing valid
+/// document (comments and unrelated sections) via `toml_edit`. Returns the
+/// config path and an optional backup of the previous file so a failed
+/// reload can restore it.
+fn merge_setup_config(setup: &MergeSetup) -> Result<(PathBuf, Option<PathBuf>), BoundaryError> {
+    let env = Environment::capture_with(envfile::load_env_pairs());
+    let path = config::config_path(&Overrides::default(), &env)?;
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let had_file = !text.trim().is_empty();
+    let backup = if had_file {
+        let backup_path = path.with_file_name("config.toml.bak");
+        fs::copy(&path, &backup_path).map_err(|_| {
+            BoundaryError::new("config_io", "Cannot back up existing configuration")
+        })?;
+        Some(backup_path)
+    } else {
+        None
+    };
+
+    // Fresh start for a missing or unparseable file: schema_version must sit
+    // before any table header, so seed the document text first.
+    let base = match text.parse::<toml_edit::DocumentMut>() {
+        Ok(_) if had_file => text.clone(),
+        _ => "schema_version = 1\n".to_owned(),
+    };
+    let mut doc = base
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|_| BoundaryError::new("config_io", "Cannot rebuild configuration document"))?;
+    if doc.get("schema_version").is_none() {
+        doc = format!("schema_version = 1\n{doc}")
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| {
+                BoundaryError::new("config_io", "Cannot place schema_version in configuration")
+            })?;
+    }
+
+    if !doc.get("defaults").is_some_and(|item| item.is_table()) {
+        doc["defaults"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let Some(defaults) = doc["defaults"].as_table_mut() else {
+        return Err(BoundaryError::new("config_io", "Invalid defaults section"));
+    };
+    defaults["profile"] = toml_edit::value(setup.name.as_str());
+    if let Some(permissions) = setup.permissions {
+        defaults["permissions"] = toml_edit::value(permissions);
+    }
+    if let Some(mode) = setup.mode {
+        defaults["mode"] = toml_edit::value(mode);
+    }
+    if defaults.get("mode").is_none() {
+        defaults["mode"] = toml_edit::value("work");
+    }
+    if defaults.get("permissions").is_none() {
+        defaults["permissions"] = toml_edit::value("auto");
+    }
+    if defaults.get("output").is_none() {
+        defaults["output"] = toml_edit::value("text");
+    }
+
+    if !doc.get("profiles").is_some_and(|item| item.is_table()) {
+        doc["profiles"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let Some(profiles) = doc["profiles"].as_table_mut() else {
+        return Err(BoundaryError::new("config_io", "Invalid profiles section"));
+    };
+    let mut profile = toml_edit::Table::new();
+    profile["protocol"] = toml_edit::value(setup.protocol.as_str());
+    profile["base_url"] = toml_edit::value(setup.base_url.as_str());
+    profile["model"] = toml_edit::value(setup.model.as_str());
+    profile["auth"] = toml_edit::value(setup.auth.as_str());
+    if let Some(env_name) = &setup.key_env {
+        profile["api_key_env"] = toml_edit::value(env_name.as_str());
+    }
+    profile["context_window_tokens"] = toml_edit::value(setup.context_window as i64);
+    profile["max_output_tokens"] = toml_edit::value(setup.max_output as i64);
+    profiles[setup.name.as_str()] = toml_edit::Item::Table(profile);
+
+    if let Some(parent) = path.parent() {
+        soyo_fs::ensure_root_dir(parent, "config_io", "configuration")?;
+    }
+    fs::write(&path, doc.to_string())
+        .map_err(|_| BoundaryError::new("config_io", "Cannot write configuration file"))?;
+    Ok((path, backup))
+}
+
+/// Best-effort restore after a failed reload: put the backup back, or remove
+/// the file we just created when there was none before.
+fn restore_config_backup(config_path: &Path, backup_path: Option<PathBuf>) {
+    match backup_path {
+        Some(backup) => {
+            let _ = fs::copy(&backup, config_path);
+        }
+        None => {
+            let _ = fs::remove_file(config_path);
+        }
     }
 }
