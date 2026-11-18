@@ -40,6 +40,18 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
     void runQuery("list");
   }, [open, runQuery]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
   if (!open) {
     return null;
   }
@@ -87,9 +99,9 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
       aria-modal="true"
       aria-label="Global Memory Manager"
       data-testid="memory-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex max-h-[85vh] w-full max-w-[700px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      <div className="soyo-dialog-enter flex max-h-[85vh] w-full max-w-[700px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
         <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-[#d9a08e]" />
@@ -101,7 +113,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
             type="button"
             onClick={onClose}
             aria-label="Close memory manager"
-            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -127,7 +139,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 value={queryCmd}
                 onChange={(e) => setQueryCmd(e.target.value)}
                 placeholder="list | search <query> | show <id> | sources | history"
-                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
+                className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               <button
                 type="button"
@@ -157,20 +169,20 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 disabled={runActive || busy}
                 onChange={(e) => setActionCmd(e.target.value)}
                 placeholder="e.g. forget <fact_id> | correct <fact_id> <text> | export <path>"
-                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e] disabled:opacity-50"
+                className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               <button
                 type="button"
                 disabled={runActive || busy || !actionCmd.trim()}
                 onClick={() => void handlePrepare()}
-                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 font-semibold text-[#1c120e] disabled:opacity-40"
+                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
               >
                 Prepare Review
               </button>
             </div>
 
             {prepared && (
-              <div className="mt-2 space-y-2 rounded-[9px] border border-[#4a3f2a] bg-[#1c1a15] p-3">
+              <div className="soyo-panel-enter mt-2 space-y-2 rounded-[9px] border border-[#4a3f2a] bg-[#1c1a15] p-3">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-mono text-[#e8d9b0]">
                     op: {prepared.operation_id} · rev: {prepared.expected_revision}

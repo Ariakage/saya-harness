@@ -121,6 +121,29 @@ Type any prompt below to watch live **Channel** streaming and cancellation in yo
       tool_ok: null,
       media_refs: [],
     },
+    {
+      id: "m-tool-2",
+      role: "tool",
+      label: "Tool · edit_file",
+      text: `--- a/desktop/src/App.tsx
++++ b/desktop/src/App.tsx
+@@ -855,7 +855,10 @@ export function App()
+ const [copiedId, setCopiedId] = useState<string | null>(null);
++const [editDraft, setEditDraft] = useState<Draft | null>(null);
+ const [forceHome, setForceHome] = useState(false);
+@@ -912,4 +915,6 @@ function MessageRow()
+-<Pencil className="h-3 w-3 opacity-50" />
++<button onClick={() => setEditDraft(msg.text)} title="Edit">
++  <Pencil className="h-3 w-3" />
++</button>`,
+      streaming: false,
+      truncated: false,
+      tool_call_id: "call_edit_1",
+      tool_name: "edit_file",
+      tool_summary: "desktop/src/App.tsx",
+      tool_ok: true,
+      media_refs: [],
+    },
   ],
 };
 
@@ -223,7 +246,7 @@ const SUBAGENT_SHOWCASE_SESSION: ActiveSessionDto_Serialize = {
       id: "sub-tool-1",
       role: "tool",
       label: "subagent_explore",
-      text: "grep restore_session -> done\nread_file session_store.rs -> done\nread_file runtime_bridge.rs -> 3 tool calls · 4.2k tok",
+      text: "grep restore_session -> done\nread_file session_store.rs -> done\nread_file runtime_bridge.rs -> running",
       streaming: false,
       truncated: false,
       tool_call_id: "call_sub_1",

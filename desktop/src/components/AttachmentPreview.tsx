@@ -25,7 +25,7 @@ export function StagedAttachmentsStrip({
         return (
           <div
             key={item.id}
-            className="flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#222222] px-[9px] py-[6px] text-[11.5px] text-[#c9c9c9]"
+            className="soyo-panel-enter flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#222222] px-[9px] py-[6px] text-[11.5px] text-[#c9c9c9]"
           >
             {isImage ? (
               <img

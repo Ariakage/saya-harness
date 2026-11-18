@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import type { ThinkingSnapshotDto } from "../bindings";
 
@@ -18,20 +18,24 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
   const anyTruncated = entries.some((entry) => entry.truncated);
 
   return (
-    <div className="text-[12.5px]" data-testid="thinking-card">
+    <div className="soyo-msg-enter text-[12.5px]" data-testid="thinking-card">
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-2 px-0.5 py-1.5 text-left text-[#8a8a8a] transition-colors hover:text-[#c9c9c9]"
+        aria-expanded={expanded}
+        className="group flex w-full items-center gap-2 rounded-[8px] px-1 py-1.5 text-left text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a]/60 hover:text-[#c9c9c9]"
       >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
-        )}
+        <ChevronRight
+          className={`h-3.5 w-3.5 shrink-0 text-[#6e6e6e] transition-transform duration-200 ease-out ${
+            expanded ? "rotate-90" : ""
+          }`}
+        />
         <span>{expanded ? "Thinking" : anyActive ? "Thinking…" : "Thought"}</span>
         {!expanded && (
           <span className="devin-pill text-[#a3a3a3]">
+            {anyActive && (
+              <span className="h-1.5 w-1.5 rounded-full bg-[#a096eb] soyo-pulse-dot" />
+            )}
             {anyActive ? "reasoning" : "auto-collapsed"}
           </span>
         )}
@@ -46,7 +50,7 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
       </button>
 
       {expanded && (
-        <div className="ml-[7px] mt-0.5 space-y-2 border-l-2 border-[#2c2c2c] py-0.5 pl-[14px] text-[12.5px] leading-[1.65] text-[#8a8a8a]">
+        <div className="soyo-panel-enter ml-[7px] mt-0.5 space-y-2 border-l-2 border-[#2c2c2c] py-0.5 pl-[14px] text-[12.5px] leading-[1.65] text-[#8a8a8a]">
           {entries.map((entry) => (
             <div key={entry.request_id} className="space-y-1">
               {entry.available ? (

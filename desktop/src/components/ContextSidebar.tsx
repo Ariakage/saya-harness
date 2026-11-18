@@ -8,6 +8,7 @@ import type {
   WorkModeDto,
 } from "../bindings";
 import { WORK_MODE_STYLES, formatTokenCount } from "../lib/sanitize";
+import type { DesktopMessage } from "../store/useAppStore";
 
 export interface ContextSidebarProps {
   bootstrap: BootstrapStateDto_Serialize | null;
@@ -19,6 +20,44 @@ export interface ContextSidebarProps {
   mcpServers: McpStatusBadgeDto[];
   recentSessions: SessionItemDto_Serialize[];
   activeSessionId: string | null;
+  messages?: DesktopMessage[];
+}
+
+function extractOutputPaths(messages: DesktopMessage[]): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+
+  const pushCandidate = (raw: string | null | undefined) => {
+    if (!raw) return;
+    const candidate = raw.split("·")[0]?.trim().replace(/^[ab]\//, "") ?? "";
+    if (!candidate || candidate.startsWith("$") || candidate.includes(" ")) {
+      return;
+    }
+    if (
+      (candidate.includes("/") || /\.[a-z0-9]{1,8}$/i.test(candidate)) &&
+      !seen.has(candidate)
+    ) {
+      seen.add(candidate);
+      results.push(candidate);
+    }
+  };
+
+  for (const msg of messages) {
+    if (msg.role !== "tool" || msg.toolOk === false) continue;
+    pushCandidate(msg.toolSummary);
+    if (msg.text) {
+      for (const line of msg.text.split(/\r?\n/)) {
+        if (line.startsWith("+++ ")) {
+          const target = line.slice(4).trim();
+          if (target !== "/dev/null") {
+            pushCandidate(target);
+          }
+        }
+      }
+    }
+  }
+
+  return results.slice(0, 6);
 }
 
 // Color rules (§3.2 & devin_theme_gen.py Frame 02):
@@ -49,8 +88,10 @@ export function ContextSidebar({
   mcpServers,
   recentSessions,
   activeSessionId,
+  messages = [],
 }: ContextSidebarProps) {
   const modeStyle = WORK_MODE_STYLES[workMode];
+  const outputPaths = extractOutputPaths(messages);
   const windowTokens = bootstrap?.context_window_tokens ?? null;
   const totalContextTokens = contextEntries.reduce(
     (acc, item) => acc + item.tokens,
@@ -147,6 +188,7 @@ export function ContextSidebar({
                 return (
                   <div
                     key={entry.label}
+                    className="transition-[width] duration-300 ease-out"
                     style={{
                       width: `${widthPct}%`,
                       backgroundColor:
@@ -158,6 +200,7 @@ export function ContextSidebar({
               })}
               {freeTokens > 0 && windowTokens && (
                 <div
+                  className="transition-[width] duration-300 ease-out"
                   style={{
                     width: `${Math.max(0, 100 - usagePercent)}%`,
                     backgroundColor: "#3a3a3a",
@@ -290,15 +333,28 @@ export function ContextSidebar({
 
       <div className="h-px bg-[#1f1f1f]" />
 
-      {/* Recent / Outputs */}
+      {/* Outputs & Recent */}
       <section className="space-y-1.5">
         <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
-          <span>Outputs & Recent</span>
+          <span>{outputPaths.length > 0 ? "Outputs" : "Outputs & Recent"}</span>
           <span className="font-mono text-[11px] text-[#6e6e6e]">
-            {recentSessions.length}
+            {outputPaths.length > 0 ? outputPaths.length : recentSessions.length}
           </span>
         </div>
-        {recentSessions.length === 0 ? (
+        {outputPaths.length > 0 ? (
+          <ul className="space-y-1">
+            {outputPaths.map((filePath) => (
+              <li
+                key={filePath}
+                title={filePath}
+                className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-[11.5px] text-[#a3a3a3] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+              >
+                <FileText className="h-3 w-3 shrink-0 text-[#6e6e6e]" />
+                <span className="truncate font-mono text-[11px]">{filePath}</span>
+              </li>
+            ))}
+          </ul>
+        ) : recentSessions.length === 0 ? (
           <div className="text-[11.5px] text-[#6e6e6e]">No saved sessions.</div>
         ) : (
           <ul className="space-y-1">
@@ -307,7 +363,7 @@ export function ContextSidebar({
               return (
                 <li
                   key={item.id}
-                  className={`flex items-start gap-2 rounded-[7px] px-2 py-1.5 text-[11.5px] ${
+                  className={`flex items-start gap-2 rounded-[7px] px-2 py-1.5 text-[11.5px] transition-colors ${
                     isCurrent
                       ? "bg-[#1c1c1c] text-[#e8e8e8]"
                       : "text-[#a3a3a3]"

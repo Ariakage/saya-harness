@@ -74,7 +74,7 @@ export function ModeAndPermissionBar({
           onChange={(e) =>
             void onSelectPermission(e.target.value as PermissionModeDto)
           }
-          className={`bg-transparent text-[12px] font-medium focus:outline-none disabled:opacity-50 ${
+          className={`devin-select is-inline text-[12px] font-medium ${
             permissionMode === "manual" ? "text-[#fac454]" : "text-[#8aa8d8]"
           }`}
         >

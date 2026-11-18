@@ -101,7 +101,7 @@ export function UpdaterBanner() {
   return (
     <div
       data-testid="updater-banner"
-      className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2e2e2e] bg-[#1a1a1a] px-4 py-1.5 text-xs text-[#e8e8e8]"
+      className="soyo-panel-enter flex flex-wrap items-center justify-between gap-2 border-b border-[#2e2e2e] bg-[#1a1a1a] px-4 py-1.5 text-xs text-[#e8e8e8]"
     >
       <div className="flex min-w-0 items-center gap-2">
         <Download className="h-3.5 w-3.5 shrink-0 text-[#d9a08e]" />

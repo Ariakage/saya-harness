@@ -43,7 +43,7 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
       role="region"
       aria-label="Approval Required"
       data-testid="approval-dialog"
-      className="rounded-[12px] border border-[#4a3f2a] bg-[#1c1a15] p-[14px] text-xs"
+      className="soyo-msg-enter rounded-[12px] border border-[#4a3f2a] bg-[#1c1a15] p-[14px] text-xs shadow-[0_4px_20px_rgba(0,0,0,0.28)]"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-[#e8d9b0]">

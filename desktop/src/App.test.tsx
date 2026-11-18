@@ -894,5 +894,71 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.getByTestId("usage-panel")).toBeTruthy();
       expect(screen.getByText("Tokens per day")).toBeTruthy();
     });
+
+    // Escape closes SettingsDialog
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("settings-dialog")).toBeNull();
+    });
+  });
+
+  it("renders inline diff preview, subagent nested steps, and ContextSidebar outputs", async () => {
+    const boot = sampleBootstrap();
+    boot.session!.messages = [
+      ...boot.session!.messages,
+      {
+        id: "tool-edit-diff",
+        role: "tool",
+        label: "Tool · edit_file",
+        text: [
+          "--- a/desktop/src/App.tsx",
+          "+++ b/desktop/src/App.tsx",
+          "@@ -10,3 +10,4 @@ export function App()",
+          "-const legacy = true;",
+          "+const legacy = false;",
+          "+const refined = true;",
+        ].join("\n"),
+        streaming: false,
+        truncated: false,
+        tool_call_id: "call_edit_diff_1",
+        tool_name: "edit_file",
+        tool_summary: "desktop/src/App.tsx",
+        tool_ok: true,
+        media_refs: [],
+      },
+      {
+        id: "tool-subagent-1",
+        role: "tool",
+        label: "subagent_explore",
+        text: "grep restore_session -> done\nread_file session_store.rs -> running",
+        streaming: false,
+        truncated: false,
+        tool_call_id: "call_sub_nested_1",
+        tool_name: "subagent_explore",
+        tool_summary: "2 tool calls",
+        tool_ok: true,
+        media_refs: [],
+      },
+    ];
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "list_sessions") return samplePage();
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("inline-diff-card")).toBeTruthy();
+      expect(screen.getAllByText("+2").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("-1").length).toBeGreaterThan(0);
+      expect(screen.getByText("1 hunk ›")).toBeTruthy();
+      expect(screen.getByText("restore_session")).toBeTruthy();
+      expect(screen.getByText("session_store.rs")).toBeTruthy();
+      expect(screen.getByTestId("context-sidebar").textContent).toContain(
+        "desktop/src/App.tsx"
+      );
+    });
   });
 });

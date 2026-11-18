@@ -167,6 +167,10 @@ export function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [browserPaneOpen, setBrowserPaneOpen] = useState(false);
+  const [browserMiniTab, setBrowserMiniTab] = useState<
+    "new" | "search" | "sessions" | "memory" | "customize"
+  >("new");
+  const [browserRefreshTick, setBrowserRefreshTick] = useState(0);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<{
@@ -355,12 +359,18 @@ export function App() {
             onClick={() => openPanel(panel)}
             title={title}
             aria-label={`Rail ${title}`}
-            className={`flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors ${
+            className={`relative flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors duration-150 ${
               activePanel === panel
                 ? "bg-[#1e1e1e] text-[#e8e8e8]"
                 : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
             }`}
           >
+            {activePanel === panel && (
+              <span
+                aria-hidden="true"
+                className="absolute -left-[5px] h-4 w-[2px] rounded-r-full bg-[#d9a08e]"
+              />
+            )}
             {icon}
           </button>
         ))}
@@ -381,7 +391,7 @@ export function App() {
             onClick={() => setUserMenuOpen((prev) => !prev)}
             title="Account & Profile Menu"
             aria-label="User menu"
-            className="flex h-9 w-9 items-center justify-center rounded-[9px] hover:bg-[#1a1a1a]"
+            className="flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors hover:bg-[#1a1a1a]"
           >
             <img
               src="/app-icon.png"
@@ -395,7 +405,7 @@ export function App() {
         {userMenuOpen && (
           <div
             data-testid="user-menu-popover"
-            className="absolute bottom-12 left-2 z-40 w-[200px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+            className="soyo-popover-up absolute bottom-12 left-2 z-40 w-[200px] origin-bottom-left rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
           >
             <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[#6e6e6e]">
               <div className="font-medium text-[#e8e8e8]">soyo-desktop</div>
@@ -406,7 +416,7 @@ export function App() {
             <button
               type="button"
               onClick={() => handleOpenSettings("general")}
-              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
             >
               <Settings className="h-3.5 w-3.5 text-[#8a8a8a]" />
               <span>General & Preferences</span>
@@ -414,7 +424,7 @@ export function App() {
             <button
               type="button"
               onClick={() => handleOpenSettings("usage")}
-              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
             >
               <SlidersHorizontal className="h-3.5 w-3.5 text-[#8a8a8a]" />
               <span>Usage analytics</span>
@@ -422,7 +432,7 @@ export function App() {
             <button
               type="button"
               onClick={() => handleOpenSettings("profiles")}
-              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
             >
               <Bookmark className="h-3.5 w-3.5 text-[#8a8a8a]" />
               <span>Model providers</span>
@@ -431,7 +441,7 @@ export function App() {
             <button
               type="button"
               onClick={() => setUserMenuOpen(false)}
-              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#8a8a8a] hover:bg-[#262626] hover:text-[#e8e8e8]"
+              className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#8a8a8a] transition-colors hover:bg-[#262626] hover:text-[#e8e8e8]"
             >
               <X className="h-3.5 w-3.5" />
               <span>Close menu</span>
@@ -453,6 +463,10 @@ export function App() {
             aria-hidden="true"
           />
         )}
+        <div
+          key={activePanel}
+          className="soyo-panel-enter flex min-h-0 flex-1 flex-col"
+        >
         {activePanel === "nav" && (
           <>
             {/* Nav list — Frame 01 (.nav): items switch panels, no dialogs */}
@@ -545,7 +559,7 @@ export function App() {
                 Search
               </span>
             </div>
-            <div className="flex items-center gap-2 rounded-[8px] border border-[#2b2b2b] bg-[#161616] px-2.5 py-1.5">
+            <div className="flex items-center gap-2 rounded-[8px] border border-[#2b2b2b] bg-[#161616] px-2.5 py-1.5 transition-colors focus-within:border-[#d9a08e]">
               <Search className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
               <input
                 value={sessionQuery}
@@ -698,14 +712,22 @@ export function App() {
                 Memory
               </span>
             </div>
-            <p className="px-2 py-1 text-[11.5px] leading-relaxed text-[#8a8a8a]">
-              Global memory entries persist across sessions and are injected
-              into the system context.
-            </p>
+            <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
+              <div className="flex items-center justify-between text-[11.5px]">
+                <span className="font-medium text-[#e8e8e8]">Global store</span>
+                <span className="devin-pill py-0 text-[10px] text-[#4ade80]">
+                  two-phase
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-[#8a8a8a]">
+                Global memory entries persist across sessions and are injected
+                into the system context.
+              </p>
+            </div>
             <button
               type="button"
               onClick={() => setMemoryOpen(true)}
-              className="mt-1 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] hover:bg-[#1a1a1a]"
+              className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
             >
               <Database className="h-3.5 w-3.5" />
               <span>Open memory</span>
@@ -721,27 +743,49 @@ export function App() {
                 MCP & Creds
               </span>
             </div>
-            <p className="px-2 py-1 text-[11.5px] leading-relaxed text-[#8a8a8a]">
-              {mcpServers.length === 0
-                ? "No MCP servers configured for this workspace."
-                : `${mcpServers.length} MCP server${mcpServers.length > 1 ? "s" : ""} configured.`}
-            </p>
-            {mcpServers.slice(0, 4).map((server) => (
-              <div
-                key={server.server}
-                className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12.5px] text-[#c9c9c9]"
-              >
-                <Shield className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
-                <span className="truncate">{server.server}</span>
-                <span className="ml-auto shrink-0 text-[10.5px] text-[#6e6e6e]">
-                  {server.state}
+            <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
+              <div className="flex items-center justify-between text-[11.5px]">
+                <span className="font-medium text-[#e8e8e8]">
+                  Workspace bridges
+                </span>
+                <span className="font-mono text-[10.5px] text-[#7aa2f7]">
+                  {mcpServers.length}
                 </span>
               </div>
-            ))}
+              <p className="mt-1 text-[11px] leading-relaxed text-[#8a8a8a]">
+                {mcpServers.length === 0
+                  ? "No MCP servers active in current run."
+                  : `${mcpServers.length} MCP server${mcpServers.length > 1 ? "s" : ""} registered with host redaction.`}
+              </p>
+            </div>
+            {mcpServers.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {mcpServers.slice(0, 4).map((server) => (
+                  <div
+                    key={server.server}
+                    className="flex items-center gap-2 rounded-[8px] border border-[#222222] bg-[#151515] px-2.5 py-1.5 text-[12px] text-[#c9c9c9]"
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        server.state === "ready" || server.state === "connected"
+                          ? "bg-[#4ade80]"
+                          : "bg-[#fac454]"
+                      }`}
+                    />
+                    <span className="truncate font-mono text-[11.5px]">
+                      {server.server}
+                    </span>
+                    <span className="ml-auto shrink-0 text-[10.5px] text-[#6e6e6e]">
+                      {server.state}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => setMcpCredsOpen(true)}
-              className="mt-1 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] hover:bg-[#1a1a1a]"
+              className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
             >
               <KeyRound className="h-3.5 w-3.5" />
               <span>Manage servers & credentials</span>
@@ -757,13 +801,26 @@ export function App() {
                 Export
               </span>
             </div>
-            <p className="px-2 py-1 text-[11.5px] leading-relaxed text-[#8a8a8a]">
-              Export the current session as a handoff document or archive.
-            </p>
+            <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
+              <div className="truncate text-[12px] font-medium text-[#e8e8e8]">
+                {sessionTitle}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[#6e6e6e]">
+                <span style={{ color: WORK_MODE_STYLES[workMode].color }}>
+                  {WORK_MODE_STYLES[workMode].label}
+                </span>
+                <span>·</span>
+                <span className="truncate font-mono">{currentProject}</span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-[#8a8a8a]">
+                Export the current session as a Markdown handoff or JSON v1
+                archive.
+              </p>
+            </div>
             <button
               type="button"
               onClick={() => setExportOpen(true)}
-              className="mt-1 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] hover:bg-[#1a1a1a]"
+              className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
             >
               <Download className="h-3.5 w-3.5" />
               <span>Export session…</span>
@@ -771,7 +828,7 @@ export function App() {
             <button
               type="button"
               onClick={() => setSessionsOpen(true)}
-              className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+              className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
             >
               <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
               <span>Browse sessions to export</span>
@@ -801,7 +858,7 @@ export function App() {
                   key={tab}
                   type="button"
                   onClick={() => handleOpenSettings(tab)}
-                  className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                  className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5 text-[#8a8a8a]" />
                   <span>{label}</span>
@@ -811,12 +868,13 @@ export function App() {
             <div className="flex-1" />
           </>
         )}
+        </div>
 
         {/* Bottom User Chip (Frame 01 / 05) */}
         <button
           type="button"
           onClick={() => setUserMenuOpen((prev) => !prev)}
-          className="mt-2 flex items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+          className="mt-2 flex items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[12px] text-[#a3a3a3] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
         >
           <img
             src="/app-icon.png"
@@ -884,7 +942,7 @@ export function App() {
             {(runActive || (previewMode && scene === "subagent")) && (
               <div
                 data-testid="goal-topbar-pill"
-                className="inline-flex items-center gap-2 rounded-[9px] border border-[#3d3527] bg-[#1c1a16] px-2.5 py-1 text-[11.5px] text-[#e8d9b0]"
+                className="soyo-panel-enter inline-flex items-center gap-2 rounded-[9px] border border-[#3d3527] bg-[#1c1a16] px-2.5 py-1 text-[11.5px] text-[#e8d9b0]"
               >
                 <Flag className="h-3 w-3 text-[#e8d9b0]" />
                 <span className="max-w-[140px] truncate">{sessionTitle}</span>
@@ -893,7 +951,7 @@ export function App() {
                   onClick={() => void cancelActiveRun()}
                   title="Pause / interrupt active run"
                   aria-label="Pause goal run"
-                  className="flex h-4 w-4 items-center justify-center rounded-[5px] border border-[#3d3527] bg-[#262019] text-[#c9b890]"
+                  className="flex h-4 w-4 items-center justify-center rounded-[5px] border border-[#3d3527] bg-[#262019] text-[#c9b890] transition-colors hover:bg-[#332b22] hover:text-[#e8d9b0]"
                 >
                   <Pause className="h-2.5 w-2.5" />
                 </button>
@@ -902,7 +960,7 @@ export function App() {
                   onClick={() => void cancelActiveRun()}
                   title="Stop active run"
                   aria-label="Stop goal run"
-                  className="flex h-4 w-4 items-center justify-center rounded-[5px] border border-[#3d3527] bg-[#262019] text-[#c9b890]"
+                  className="flex h-4 w-4 items-center justify-center rounded-[5px] border border-[#3d3527] bg-[#262019] text-[#c9b890] transition-colors hover:bg-[#332b22] hover:text-[#e8d9b0]"
                 >
                   <Square className="h-2 w-2 fill-current" />
                 </button>
@@ -914,7 +972,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "mode" ? null : "mode")}
-                className="devin-pill text-[12px]"
+                className="devin-pill text-[12px] hover:border-[#3a3a3a] hover:bg-[#222222]"
                 title="Work mode"
                 aria-haspopup="menu"
               >
@@ -935,7 +993,7 @@ export function App() {
               {topMenu === "mode" && (
                 <div
                   role="menu"
-                  className="absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
                 >
                   {(Object.keys(WORK_MODE_STYLES) as Array<keyof typeof WORK_MODE_STYLES>).map(
                     (mode) => (
@@ -946,7 +1004,7 @@ export function App() {
                           void setWorkMode(mode);
                           setTopMenu(null);
                         }}
-                        className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                        className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
                       >
                         <span
                           className="h-1.5 w-1.5 rounded-full"
@@ -971,7 +1029,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
-                className="devin-pill text-[12px] text-[#a3a3a3]"
+                className="devin-pill text-[12px] text-[#a3a3a3] hover:border-[#3a3a3a] hover:bg-[#222222]"
                 title="Permission mode"
                 aria-haspopup="menu"
               >
@@ -983,7 +1041,7 @@ export function App() {
               {topMenu === "perm" && (
                 <div
                   role="menu"
-                  className="absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
                 >
                   {(
                     ["auto", "bypass", "manual"] as Array<
@@ -998,7 +1056,7 @@ export function App() {
                         void setPermissionMode(perm);
                         setTopMenu(null);
                       }}
-                      className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626] disabled:opacity-40"
+                      className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626] disabled:opacity-40"
                     >
                       <span>{PERMISSION_MODE_LABELS[perm]}</span>
                       {perm === permissionMode && (
@@ -1024,7 +1082,7 @@ export function App() {
               {topMenu === "more" && (
                 <div
                   role="menu"
-                  className="absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
                 >
                   <button
                     type="button"
@@ -1155,7 +1213,7 @@ export function App() {
               <div
                 data-testid="home-empty-state"
                 data-tauri-drag-region
-                className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 pb-10"
+                className="soyo-panel-enter flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 pb-10"
               >
                 <div className="mb-8 flex items-center gap-3 font-serif text-[30px] tracking-tight text-[#e8e8e8]">
                   <img
@@ -1207,10 +1265,19 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => handleOpenSettings("general")}
-                  className="mt-2.5 inline-flex items-center gap-1.5 rounded-[10px] border border-[#2b2b2b] bg-[#1d1d1d] px-3 py-1.5 text-[12px] text-[#a3a3a3] hover:border-[#3a3a3a] hover:text-[#e8e8e8]"
+                  className="-mt-px flex w-full max-w-[592px] items-center justify-between gap-2 rounded-b-[11px] border border-t-0 border-[#2b2b2b] bg-[#181818] px-3.5 py-2 text-[12px] text-[#a3a3a3] transition-colors hover:border-[#3a3a3a] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
                 >
-                  <Folder className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>{currentProject || "Project or folder"}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <Folder className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
+                    <span className="truncate font-medium">
+                      {currentProject || "Project or folder"}
+                    </span>
+                  </span>
+                  {bootstrap?.workspace && (
+                    <span className="max-w-[300px] truncate font-mono text-[10.5px] text-[#6e6e6e]">
+                      {bootstrap.workspace}
+                    </span>
+                  )}
                 </button>
 
                 <div className="mt-8 w-full max-w-[620px] space-y-0.5">
@@ -1240,9 +1307,9 @@ export function App() {
                         key={idea.text}
                         type="button"
                         onClick={idea.action}
-                        className="flex w-full items-center gap-3 rounded-[9px] px-3 py-2 text-left text-[13px] text-[#bdbdbd] transition-colors hover:bg-[#1a1a1a]"
+                        className="group flex w-full items-center gap-3 rounded-[9px] px-3 py-2 text-left text-[13px] text-[#bdbdbd] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
                       >
-                        <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] border border-[#2b2b2b] bg-[#1d1d1d] text-[#8a8a8a]">
+                        <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] border border-[#2b2b2b] bg-[#1d1d1d] text-[#8a8a8a] transition-colors group-hover:border-[#3a3a3a] group-hover:text-[#d9a08e]">
                           <Icon className="h-3.5 w-3.5" />
                         </span>
                         <span>{idea.text}</span>
@@ -1276,7 +1343,7 @@ export function App() {
                       return (
                         <div
                           key={msg.id}
-                          className="group flex flex-col items-end self-end max-w-[640px]"
+                          className="soyo-msg-enter group flex flex-col items-end self-end max-w-[640px]"
                         >
                           <div className="rounded-[14px] border border-[#2e2e2e] bg-[#242424] px-3.5 py-2 text-[13.5px] leading-relaxed text-[#ececec]">
                             <pre className="whitespace-pre-wrap font-sans">
@@ -1284,7 +1351,7 @@ export function App() {
                             </pre>
                           </div>
                           {/* Hover actions row (§4.2): timestamp · branch · retry · edit · copy */}
-                          <div className="mt-1 flex items-center gap-2.5 px-2 text-[11px] text-[#6e6e6e] opacity-0 transition-opacity group-hover:opacity-100">
+                          <div className="mt-1 flex items-center gap-2.5 px-2 text-[11px] text-[#6e6e6e] opacity-0 transition-opacity duration-150 group-hover:opacity-100">
                             <span>{msg.label}</span>
                             <button
                               type="button"
@@ -1372,7 +1439,7 @@ export function App() {
 
                     /* Hard Rule (§4.2): Assistant messages render borderless directly on #141414 */
                     return (
-                      <article key={msg.id} className="py-0.5">
+                      <article key={msg.id} className="soyo-msg-enter py-0.5">
                         <MarkdownRenderer
                           content={msg.text}
                           mode={markdownMode}
@@ -1397,7 +1464,10 @@ export function App() {
                   {(runActive || summaryLine) && (
                     <div className="flex flex-wrap items-center gap-3.5 px-1 pt-1 font-mono text-[11px] tabular-nums text-[#6e6e6e]">
                       {runActive ? (
-                        <span className="text-[#4ade80]">● streaming</span>
+                        <span className="inline-flex items-center gap-1.5 text-[#4ade80]">
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#4ade80] soyo-pulse-dot" />
+                          streaming
+                        </span>
                       ) : null}
                       {summaryLine && <span>{summaryLine}</span>}
                       {lastUsage && (
@@ -1455,44 +1525,123 @@ export function App() {
           {browserPaneOpen && (
             <section
               data-testid="split-browser-pane"
-              className="flex w-[44%] min-w-[320px] flex-col border-l border-[#1f1f1f] bg-[#0e0e0e]"
+              className="soyo-panel-enter flex w-[44%] min-w-[320px] flex-col border-l border-[#1f1f1f] bg-[#0e0e0e]"
             >
-              <div className="flex h-[44px] items-center gap-2 border-b border-[#1f1f1f] px-3 text-[#8a8a8a]">
-                <ArrowLeft className="h-3.5 w-3.5" />
-                <ArrowRight className="h-3.5 w-3.5" />
-                <RotateCw className="h-3.5 w-3.5" />
+              <div className="flex h-[44px] shrink-0 items-center gap-1.5 border-b border-[#1f1f1f] px-3 text-[#8a8a8a]">
+                <button
+                  type="button"
+                  onClick={() => setBrowserMiniTab("new")}
+                  title="Back"
+                  aria-label="Browser back"
+                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBrowserMiniTab("sessions")}
+                  title="Forward"
+                  aria-label="Browser forward"
+                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                >
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBrowserRefreshTick((t) => t + 1)}
+                  title="Reload preview"
+                  aria-label="Reload preview"
+                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                </button>
                 <div className="flex flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-2.5 py-1 text-[11.5px] text-[#a3a3a3]">
                   <Lock className="h-3 w-3 text-[#6e6e6e]" />
-                  <span>localhost:1420</span>
+                  <span className="truncate font-mono text-[11px]">
+                    localhost:1420
+                  </span>
                 </div>
-                <ExternalLink className="h-3.5 w-3.5" />
+                <button
+                  type="button"
+                  onClick={() => handleOpenSettings("general")}
+                  title="Open external settings"
+                  aria-label="Open external preview"
+                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
                 <button
                   type="button"
                   onClick={() => setBrowserPaneOpen(false)}
                   aria-label="Close split browser"
-                  className="rounded p-1 hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#141414] p-6 text-center">
-                <div className="flex items-center gap-2 font-serif text-[17px] text-[#e8e8e8]">
-                  <img
-                    src="/app-icon.png"
-                    alt="Soyo"
-                    className="h-[18px] w-[18px] rounded-full object-cover"
-                  />
-                  <span>Good morning, ariakage.</span>
+              <div
+                key={browserRefreshTick}
+                className="soyo-panel-enter flex min-h-0 flex-1 bg-[#141414] text-[11px]"
+              >
+                <div className="flex w-[118px] shrink-0 flex-col gap-0.5 border-r border-[#1f1f1f] bg-[#0d0d0d] p-2">
+                  {(
+                    [
+                      ["new", "+ New"],
+                      ["search", "Search"],
+                      ["sessions", "Sessions"],
+                      ["memory", "Memory"],
+                      ["customize", "Customize"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setBrowserMiniTab(id)}
+                      className={`rounded-[6px] px-2 py-1 text-left text-[10.5px] transition-colors ${
+                        browserMiniTab === id
+                          ? "bg-[#1c1c1c] text-[#e8e8e8]"
+                          : "text-[#a3a3a3] hover:bg-[#161616] hover:text-[#d9d9d9]"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                <div className="w-full max-w-[300px] rounded-[10px] border border-[#2b2b2b] bg-[#1d1d1d] p-2.5 text-left text-[11px] text-[#6e6e6e]">
-                  <div>How can I help you today?</div>
-                  <div className="mt-2 flex items-center justify-between">
-                    <span className="rounded bg-[#262626] px-1.5 py-0.5 text-[10px] text-[#a3a3a3]">
-                      +
-                    </span>
-                    <span className="rounded bg-[#262626] px-1.5 py-0.5 text-[10px] text-[#a3a3a3]">
-                      {bootstrap?.selected_model ?? "claude-sonnet-4-5"}
-                    </span>
+                <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 p-5 text-center">
+                  <div className="flex items-center gap-2 font-serif text-[17px] text-[#e8e8e8]">
+                    <img
+                      src="/app-icon.png"
+                      alt="Soyo"
+                      className="h-[18px] w-[18px] rounded-full object-cover"
+                    />
+                    <span>Good morning, ariakage.</span>
+                  </div>
+                  <div className="w-full max-w-[320px] rounded-[10px] border border-[#2b2b2b] bg-[#1d1d1d] p-2.5 text-left text-[10.5px] text-[#6e6e6e]">
+                    <div>How can I help you today?</div>
+                    <div className="mt-2.5 flex items-center justify-between">
+                      <span className="rounded-[5px] bg-[#262626] px-1.5 py-0.5 text-[10px] text-[#a3a3a3]">
+                        +
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded-[5px] bg-[#262626] px-1.5 py-0.5 text-[9.5px] text-[#a3a3a3]">
+                          {bootstrap?.selected_model ?? "claude-sonnet-4-5"}
+                        </span>
+                        <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#d9a08e] text-[#1c120e]">
+                          <ArrowLeft className="h-2.5 w-2.5 rotate-90" />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex w-full max-w-[320px] flex-col gap-1 text-left">
+                    <div className="px-1.5 py-0.5 text-[9.5px] text-[#6e6e6e]">
+                      Ideas for you
+                    </div>
+                    <div className="rounded-[6px] bg-[#1a1a1a] px-2 py-1.5 text-[10.5px] text-[#bdbdbd]">
+                      Summarize today&apos;s sessions
+                    </div>
+                    <div className="rounded-[6px] bg-[#1a1a1a] px-2 py-1.5 text-[10.5px] text-[#bdbdbd]">
+                      Audit MCP credentials
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1513,6 +1662,7 @@ export function App() {
           mcpServers={mcpServers}
           recentSessions={recentSessions}
           activeSessionId={sessionId}
+          messages={messages}
         />
       )}
 

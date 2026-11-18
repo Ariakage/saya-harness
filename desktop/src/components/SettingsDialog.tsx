@@ -133,6 +133,18 @@ export function SettingsDialog({
   }, [open, initialTab]);
 
   useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  useEffect(() => {
     if (bootstrap) {
       setWorkspaceInput(bootstrap.workspace);
       setTriggerInput(
@@ -177,9 +189,9 @@ export function SettingsDialog({
       aria-modal="true"
       aria-label="Desktop Settings"
       data-testid="settings-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex h-[560px] max-h-[88vh] w-full max-w-[700px] overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      <div className="soyo-dialog-enter flex h-[560px] max-h-[88vh] w-full max-w-[700px] overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
         {/* Left Navigation (Frame 04 & Frame 10) */}
         <nav className="flex w-[184px] shrink-0 flex-col gap-0.5 border-r border-[#232323] bg-[#141414] px-2 py-3 text-[12.5px]">
           <button
@@ -318,13 +330,16 @@ export function SettingsDialog({
               type="button"
               onClick={onClose}
               aria-label="Close settings"
-              className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
+              className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs">
+          <div
+            key={activeTab}
+            className="soyo-panel-enter flex-1 space-y-4 overflow-y-auto p-4 text-xs"
+          >
             {errorMsg && (
               <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
                 {errorMsg}
@@ -434,7 +449,7 @@ export function SettingsDialog({
                     {bars.map(([inp, outp, cache], idx) => (
                       <div
                         key={idx}
-                        className="group relative flex min-w-[4px] flex-1 flex-col rounded-[2px]"
+                        className="group relative flex min-w-[4px] flex-1 flex-col rounded-[2px] transition-all duration-200 ease-out hover:brightness-110"
                         style={{
                           height: `${Math.round((inp + outp + cache) * scalePx)}px`,
                         }}
@@ -528,7 +543,7 @@ export function SettingsDialog({
                       value={workspaceInput}
                       disabled={runActive || saving}
                       onChange={(e) => setWorkspaceInput(e.target.value)}
-                      className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9] focus:border-[#d9a08e] focus:outline-none disabled:opacity-50"
+                      className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
                     />
                     <button
                       type="button"
@@ -581,7 +596,7 @@ export function SettingsDialog({
                       onChange={(e) =>
                         void runUpdate(() => commands.selectProfile(e.target.value))
                       }
-                      className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#d9d9d9] disabled:opacity-50"
+                      className="devin-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
                     >
                       {(bootstrap?.profiles ?? []).map((p) => (
                         <option key={p.name} value={p.name} className="bg-[#181818]">
@@ -608,7 +623,7 @@ export function SettingsDialog({
                           commands.setThinkingEffort(val === "default" ? null : val)
                         );
                       }}
-                      className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#d9d9d9] disabled:opacity-50"
+                      className="devin-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
                     >
                       {EFFORTS.map((eff) => (
                         <option key={eff} value={eff} className="bg-[#181818]">
@@ -636,7 +651,7 @@ export function SettingsDialog({
                           )
                         )
                       }
-                      className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#d9d9d9] disabled:opacity-50"
+                      className="devin-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
                     >
                       {BACKENDS.map((bk) => (
                         <option key={bk} value={bk} className="bg-[#181818]">
@@ -679,7 +694,7 @@ export function SettingsDialog({
                         disabled={runActive || saving}
                         onChange={(e) => setTriggerInput(e.target.value)}
                         placeholder="Optional exact token trigger (blank = % threshold)"
-                        className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1 font-mono text-xs text-[#d9d9d9] placeholder:text-[#6e6e6e]"
+                        className="devin-input flex-1 px-2.5 py-1 font-mono text-xs text-[#d9d9d9]"
                       />
                       <button
                         type="button"

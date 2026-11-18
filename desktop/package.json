@@ -24,7 +24,7 @@
     "@streamdown/math": "1.0.3",
     "@streamdown/mermaid": "1.0.3",
     "@tauri-apps/api": "2.12.4",
-    "@tauri-apps/plugin-dialog": "~2.8.4",
+    "@tauri-apps/plugin-dialog": "2.8.4",
     "@tauri-apps/plugin-updater": "2.14.1",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",

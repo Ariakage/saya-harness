@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Download, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   commands,
   type ExportFormatDto,
@@ -29,6 +29,18 @@ export function ExportDialog({
   const [result, setResult] = useState<ExportResultDto | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
 
   if (!open) {
     return null;
@@ -63,9 +75,9 @@ export function ExportDialog({
       aria-modal="true"
       aria-label="Export Session"
       data-testid="export-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      <div className="soyo-dialog-enter w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
         <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
             <Download className="h-4 w-4 text-[#d9a08e]" />
@@ -77,7 +89,7 @@ export function ExportDialog({
             type="button"
             onClick={onClose}
             aria-label="Close export dialog"
-            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -113,7 +125,7 @@ export function ExportDialog({
                 type="text"
                 value={targetPath}
                 onChange={(e) => setTargetPath(e.target.value)}
-                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8]"
+                className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               {isTauri() && (
                 <button
@@ -158,7 +170,7 @@ export function ExportDialog({
                     prev.replace(/\.(md|json)$/i, next === "json" ? ".json" : ".md")
                   );
                 }}
-                className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2 py-1.5 text-xs text-[#e8e8e8]"
+                className="devin-select w-full px-2.5 py-1.5 text-xs"
               >
                 <option value="markdown" className="bg-[#181818]">
                   Markdown (.md)
@@ -180,7 +192,7 @@ export function ExportDialog({
                 id="export-scope-select"
                 value={scope}
                 onChange={(e) => setScope(e.target.value as ExportScopeDto)}
-                className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2 py-1.5 text-xs text-[#e8e8e8]"
+                className="devin-select w-full px-2.5 py-1.5 text-xs"
               >
                 <option value="transcript" className="bg-[#181818]">
                   Transcript
@@ -192,11 +204,12 @@ export function ExportDialog({
             </div>
           </div>
 
-          <label className="inline-flex items-center gap-2 text-[#c9c9c9]">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-[#c9c9c9]">
             <input
               type="checkbox"
               checked={includeTools}
               onChange={(e) => setIncludeTools(e.target.checked)}
+              className="devin-checkbox"
             />
             Include tool arguments and result bodies
           </label>
@@ -214,7 +227,7 @@ export function ExportDialog({
             type="button"
             disabled={busy || !sessionId || !targetPath.trim()}
             onClick={() => void handleExport()}
-            className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] disabled:opacity-40"
+            className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
           >
             {busy ? "Exporting..." : "Publish Export"}
           </button>

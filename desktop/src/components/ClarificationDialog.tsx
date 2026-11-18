@@ -32,9 +32,9 @@ export function ClarificationDialog({
       aria-modal="true"
       aria-label="Clarification Needed"
       data-testid="clarification-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      <div className="soyo-dialog-enter w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
         <div className="flex items-center gap-2 border-b border-[#232323] px-4 py-3">
           <MessageSquareMore className="h-4 w-4 text-[#d9a08e]" />
           <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
@@ -91,13 +91,13 @@ export function ClarificationDialog({
                   }
                 }}
                 placeholder="Type your response..."
-                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-3 py-1.5 text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:border-[#d9a08e] focus:outline-none"
+                className="devin-input flex-1 px-3 py-1.5 text-xs"
               />
               <button
                 type="button"
                 disabled={submitting || customAnswer.trim().length === 0}
                 onClick={() => void submitAnswer(customAnswer)}
-                className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] hover:bg-[#e2a68f] disabled:opacity-40"
+                className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
               >
                 Submit
               </button>

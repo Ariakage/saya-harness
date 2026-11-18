@@ -70,6 +70,25 @@
   kbd {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="switch"]:not(:disabled),
+  select:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+
+  button:focus-visible,
+  [role="button"]:focus-visible,
+  [role="switch"]:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 1.5px solid rgba(217, 160, 142, 0.55);
+    outline-offset: 1.5px;
+  }
 }
 
 /* Devin unified pill specification (§4.1) */
@@ -84,6 +103,7 @@
   font-weight: 500;
   line-height: 1.25;
   padding: 3px 10px;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
 }
 
 .devin-pill-btn {
@@ -98,12 +118,371 @@
   font-weight: 500;
   line-height: 1.25;
   padding: 5px 14px;
-  transition: border-color 150ms ease, background-color 150ms ease;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 100ms ease;
 }
 
 .devin-pill-btn:hover:not(:disabled) {
   background-color: #242424;
   border-color: #3a3a3a;
+}
+
+.devin-pill-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.devin-pill-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Unified Devin form controls */
+.devin-input {
+  background-color: #161616;
+  border: 1px solid #2b2b2b;
+  border-radius: 8px;
+  color: #e8e8e8;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.devin-input::placeholder {
+  color: #6e6e6e;
+}
+
+.devin-input:hover:not(:disabled) {
+  border-color: #383838;
+}
+
+.devin-input:focus,
+.devin-input:focus-visible {
+  outline: none;
+  border-color: #d9a08e;
+  box-shadow: 0 0 0 2px rgba(217, 160, 142, 0.14);
+}
+
+.devin-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.devin-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #1a1a1a;
+  border: 1px solid #2b2b2b;
+  border-radius: 8px;
+  color: #e8e8e8;
+  padding-right: 28px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #8a8a8a 50%),
+    linear-gradient(135deg, #8a8a8a 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 52%,
+    calc(100% - 9px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.devin-select:hover:not(:disabled) {
+  background-color: #202020;
+  border-color: #3a3a3a;
+}
+
+.devin-select:focus,
+.devin-select:focus-visible {
+  outline: none;
+  border-color: #d9a08e;
+  box-shadow: 0 0 0 2px rgba(217, 160, 142, 0.14);
+}
+
+.devin-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.devin-select.is-inline {
+  background-color: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding-right: 18px;
+  background-position:
+    calc(100% - 7px) 52%,
+    calc(100% - 2px) 52%;
+  box-shadow: none;
+}
+
+.devin-select.is-inline:hover:not(:disabled),
+.devin-select.is-inline:focus,
+.devin-select.is-inline:focus-visible {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.devin-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  border: 1px solid #3a3a3a;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 120ms ease;
+}
+
+.devin-checkbox:hover:not(:disabled) {
+  border-color: #555555;
+  background-color: #222222;
+}
+
+.devin-checkbox:checked {
+  background-color: #d9a08e;
+  border-color: #d9a08e;
+}
+
+.devin-checkbox:checked::after {
+  content: "";
+  width: 4.5px;
+  height: 8px;
+  border-right: 1.75px solid #1c120e;
+  border-bottom: 1.75px solid #1c120e;
+  transform: translateY(-0.5px) rotate(42deg);
+}
+
+.devin-checkbox:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.devin-checkbox:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Composer shell card */
+.soyo-composer-card {
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.soyo-composer-card:focus-within {
+  border-color: #3d3d3d;
+  box-shadow:
+    0 0 0 1px rgba(217, 160, 142, 0.2),
+    0 10px 34px rgba(0, 0, 0, 0.42);
+}
+
+/* Inline Diff Preview (§4.2) */
+.soyo-diff {
+  border: 1px solid #262626;
+  border-radius: 10px;
+  overflow: hidden;
+  background-color: #131313;
+}
+
+.soyo-diff-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-bottom: 1px solid #222222;
+  background-color: #161616;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+  color: #a3a3a3;
+}
+
+.soyo-diff-body {
+  overflow-x: auto;
+}
+
+.soyo-diff-line {
+  display: flex;
+  align-items: baseline;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.68;
+  color: #8a8a8a;
+  white-space: pre;
+  min-width: max-content;
+}
+
+.soyo-diff-line__ln {
+  width: 36px;
+  flex: none;
+  color: #4d4d4d;
+  text-align: right;
+  padding-right: 8px;
+  font-size: 10.5px;
+  user-select: none;
+}
+
+.soyo-diff-line__sg {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  color: #6e6e6e;
+  user-select: none;
+}
+
+.soyo-diff-line__code {
+  flex: 1;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+.soyo-diff-line.is-add {
+  background-color: rgba(74, 222, 128, 0.07);
+  color: #a9e8c0;
+}
+
+.soyo-diff-line.is-add .soyo-diff-line__sg {
+  color: #4ade80;
+}
+
+.soyo-diff-line.is-del {
+  background-color: rgba(248, 113, 113, 0.06);
+  color: #dca9a4;
+}
+
+.soyo-diff-line.is-del .soyo-diff-line__sg {
+  color: #f87171;
+}
+
+.soyo-diff-line.is-hunk {
+  background-color: #181818;
+  color: #7aa2f7;
+  font-size: 10.5px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+/* In-window motion primitives (exit-faster-than-enter, reduced-motion aware) */
+@keyframes soyo-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes soyo-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes soyo-popover-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes soyo-popover-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes soyo-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes soyo-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes soyo-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.42;
+    transform: scale(0.84);
+  }
+}
+
+.soyo-backdrop-enter {
+  animation: soyo-fade-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.soyo-dialog-enter {
+  animation: soyo-dialog-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: center;
+}
+
+.soyo-popover-up {
+  animation: soyo-popover-up 150ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: bottom center;
+}
+
+.soyo-popover-down {
+  animation: soyo-popover-down 150ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: top right;
+}
+
+.soyo-panel-enter {
+  animation: soyo-panel-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.soyo-msg-enter {
+  animation: soyo-msg-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.soyo-pulse-dot {
+  animation: soyo-pulse-soft 1.6s ease-in-out infinite;
 }
 
 /* Rectangular Devin switch (34x20 track, r5, 15x15 knob r4, §4.6) */
@@ -267,13 +646,13 @@
   position: relative;
   width: 272px;
   padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid #2c2c2c;
   border-radius: 14px;
   background:
-    radial-gradient(120% 80% at 30% -20%, rgba(255, 255, 255, 0.035), transparent 60%),
-    #20201f;
+    radial-gradient(120% 80% at 30% -20%, rgba(255, 255, 255, 0.03), transparent 60%),
+    #1c1c1c;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
     0 24px 60px -22px rgba(0, 0, 0, 0.95),
     0 4px 14px rgba(0, 0, 0, 0.35);
   user-select: none;
@@ -282,11 +661,11 @@
 }
 
 .ccs-popover.is-ultra {
-  border-color: rgba(160, 150, 235, 0.28);
+  border-color: rgba(160, 150, 235, 0.32);
   background:
     radial-gradient(100% 62% at 72% -8%, rgba(160, 150, 235, 0.11), transparent 62%),
-    radial-gradient(120% 80% at 30% -20%, rgba(255, 255, 255, 0.035), transparent 60%),
-    #20201f;
+    radial-gradient(120% 80% at 30% -20%, rgba(255, 255, 255, 0.03), transparent 60%),
+    #1c1c1c;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 24px 60px -22px rgba(0, 0, 0, 0.95),
@@ -294,7 +673,7 @@
 }
 
 .ccs-level {
-  color: #f4f1eb;
+  color: #e8e8e8;
   font-size: 12.5px;
   font-weight: 560;
   letter-spacing: -0.005em;
@@ -314,10 +693,10 @@
   padding: 0;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid #353535;
   border-radius: 50%;
   background: transparent;
-  color: #8b877e;
+  color: #8a8a8a;
   font-family: inherit;
   font-size: 9px;
   font-weight: 600;
@@ -328,8 +707,8 @@
 
 .ccs-help:hover,
 .ccs-help:focus-visible {
-  color: #f4f1eb;
-  border-color: rgba(255, 255, 255, 0.3);
+  color: #e8e8e8;
+  border-color: #525252;
   outline: none;
 }
 
@@ -341,11 +720,11 @@
   right: -2px;
   width: 192px;
   padding: 8px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid #2b2b2b;
   border-radius: 8px;
-  background: #151514;
+  background: #141414;
   box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.9);
-  color: #c9c5bc;
+  color: #c9c9c9;
   font-size: 10.5px;
   font-weight: 400;
   line-height: 1.45;
@@ -532,9 +911,25 @@
   .ccs-popover,
   .ccs-thumb,
   .ccs-stop-dot,
+  .devin-pill,
+  .devin-pill-btn,
+  .devin-input,
+  .devin-select,
+  .devin-checkbox,
   .devin-switch,
-  .devin-switch__knob {
+  .devin-switch__knob,
+  .soyo-composer-card {
     transition: none;
+  }
+
+  .soyo-backdrop-enter,
+  .soyo-dialog-enter,
+  .soyo-popover-up,
+  .soyo-popover-down,
+  .soyo-panel-enter,
+  .soyo-msg-enter,
+  .soyo-pulse-dot {
+    animation: none;
   }
 }
 

@@ -142,23 +142,23 @@ export function preprocessMarkdownForDisplay(raw: string): string {
 
 function MermaidFallbackCard({ chart, error }: MermaidErrorComponentProps) {
   return (
-    <div className="my-2 rounded-md border border-[#F6AD55]/40 bg-[#141416] p-3 text-xs">
-      <div className="mb-2 flex items-center justify-between gap-2 text-[#F6AD55]">
+    <div className="my-2 rounded-[10px] border border-[#4a3f2a] bg-[#1c1a15] p-3 text-xs">
+      <div className="mb-2 flex items-center justify-between gap-2 text-[#fac454]">
         <span className="inline-flex items-center gap-1.5 font-medium">
           <GitBranch className="h-3.5 w-3.5" />
           Mermaid
         </span>
-        <span className="rounded border border-[#F6AD55]/40 bg-[#F6AD55]/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+        <span className="devin-pill py-0 text-[10px] uppercase tracking-wide text-[#fac454]">
           source fallback
         </span>
       </div>
       {error && (
-        <div className="mb-2 flex items-center gap-1 text-[11px] text-[#81818B]">
-          <AlertTriangle className="h-3 w-3 shrink-0 text-[#F6AD55]" />
+        <div className="mb-2 flex items-center gap-1 text-[11px] text-[#a3a3a3]">
+          <AlertTriangle className="h-3 w-3 shrink-0 text-[#fac454]" />
           <span>{sanitizeDisplayText(error)}</span>
         </div>
       )}
-      <pre className="overflow-x-auto rounded bg-[#09090B] p-2.5 text-xs text-[#D4D4D8]">
+      <pre className="overflow-x-auto rounded-[8px] border border-[#2e2820] bg-[#121110] p-2.5 text-xs text-[#c9c9c9]">
         <code>{sanitizeDisplayText(chart)}</code>
       </pre>
     </div>

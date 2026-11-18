@@ -478,7 +478,7 @@ export function EffortPill({
       className={`inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-[9px] text-[11px] transition-colors disabled:opacity-40 ${
         isUltra
           ? "border-[#a096eb]/30 bg-[#a096eb]/10 text-[#d5ceff] shadow-[0_0_20px_-9px_rgba(160,150,235,0.65)]"
-          : "border-[#2e2e2e] bg-[#1c1c1c] text-[#d8d3ca] hover:border-[#3e3e3e] hover:text-[#e8e8e8]"
+          : "border-[#2e2e2e] bg-[#1c1c1c] text-[#c9c9c9] hover:border-[#3e3e3e] hover:text-[#e8e8e8]"
       }`}
     >
       <Gauge
@@ -488,7 +488,7 @@ export function EffortPill({
       />
       <span>Effort: {level.name}</span>
       <ChevronUp
-        className={`h-3 w-3 shrink-0 opacity-60 transition-transform ${
+        className={`h-3 w-3 shrink-0 opacity-60 transition-transform duration-150 ease-out ${
           open ? "rotate-180" : ""
         }`}
       />
@@ -891,13 +891,13 @@ export function EffortPopover({
           "--fill-end": `${fillEndPx.toFixed(2)}px`,
         } as React.CSSProperties
       }
-      className={`ccs-popover ${isUltra ? "is-ultra" : ""} ${
+      className={`ccs-popover soyo-popover-up ${isUltra ? "is-ultra" : ""} ${
         noWebgl ? "no-webgl" : ""
       }`}
     >
       <div className="mb-3 flex min-h-[18px] items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-[12px] font-medium tracking-[0.005em] text-[#8b877e]">
+          <span className="text-[12px] font-medium tracking-[0.005em] text-[#8a8a8a]">
             Effort
           </span>
           <span className="ccs-level" data-testid="effort-level-label">
@@ -915,7 +915,7 @@ export function EffortPopover({
       </div>
 
       <div
-        className="mx-[2px] mb-[7px] flex items-center justify-between gap-2 text-[11px] text-[#8b877e]"
+        className="mx-[2px] mb-[7px] flex items-center justify-between gap-2 text-[11px] text-[#8a8a8a]"
         aria-hidden="true"
       >
         <span>Faster</span>
@@ -979,7 +979,7 @@ export function EffortPopover({
 
       <p
         className={`mx-[2px] mt-[10px] min-h-[34px] text-[11.5px] leading-[1.45] ${
-          activeLevel.warning ? "text-[#fac454]" : "text-[#8b877e]"
+          activeLevel.warning ? "text-[#fac454]" : "text-[#8a8a8a]"
         }`}
       >
         {activeLevel.warning ? (
@@ -990,16 +990,16 @@ export function EffortPopover({
         {activeLevel.warning ?? activeLevel.desc}
       </p>
 
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/[0.07] pt-3">
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#282828] pt-3">
         <div className="min-w-0">
           <div
             className={`text-[12px] font-medium transition-colors ${
-              isUltra ? "text-[#b9aeff]" : "text-[#c9c5bc]"
+              isUltra ? "text-[#b9aeff]" : "text-[#c9c9c9]"
             }`}
           >
             Ultracode
           </div>
-          <p className="mt-0.5 text-[10.5px] leading-[1.4] text-[#8b877e]">
+          <p className="mt-0.5 text-[10.5px] leading-[1.4] text-[#8a8a8a]">
             Standing dynamic-workflow orchestration for this session.
           </p>
         </div>

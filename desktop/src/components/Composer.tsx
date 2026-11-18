@@ -344,7 +344,7 @@ export function Composer({
       {slashOpen && (
         <div
           data-testid="slash-command-palette"
-          className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[11px] border border-[#2c2c2c] bg-[#1c1c1c] p-1.5 shadow-[0_-8px_32px_rgba(0,0,0,0.45)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[11px] border border-[#2c2c2c] bg-[#1c1c1c] p-1.5 shadow-[0_-8px_32px_rgba(0,0,0,0.45)]"
         >
           <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
             Commands
@@ -377,12 +377,12 @@ export function Composer({
       {activePopover === "attach" && (
         <div
           data-testid="attach-menu"
-          className="absolute bottom-[calc(100%+8px)] left-0 z-30 w-[210px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 z-30 w-[210px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
         >
           <button
             type="button"
             onClick={() => void handleBrowse(false)}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <Paperclip className="h-3.5 w-3.5 text-[#8a8a8a]" />
             <span>Add files or photos</span>
@@ -391,7 +391,7 @@ export function Composer({
           <button
             type="button"
             onClick={() => void handleBrowse(true)}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <FolderOpen className="h-3.5 w-3.5 text-[#8a8a8a]" />
             <span>Add folder</span>
@@ -402,7 +402,7 @@ export function Composer({
               setActivePopover(null);
               setAttachInputOpen(true);
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
             <span>Enter path manually</span>
@@ -414,7 +414,7 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
             <span>Skills</span>
@@ -426,7 +426,7 @@ export function Composer({
               setActivePopover(null);
               onOpenMcp?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <Layers className="h-3.5 w-3.5 text-[#8a8a8a]" />
             <span>Connectors</span>
@@ -438,7 +438,7 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <Puzzle className="h-3.5 w-3.5 text-[#8a8a8a]" />
             <span>Add plugins</span>
@@ -450,7 +450,7 @@ export function Composer({
       {activePopover === "model" && (
         <div
           data-testid="model-profile-menu"
-          className="absolute bottom-[calc(100%+12px)] right-16 z-30 w-[240px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+12px)] right-16 z-30 w-[240px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
         >
           <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
             Model profile
@@ -471,7 +471,7 @@ export function Composer({
                     setActivePopover(null);
                     void onSelectProfile?.(prof.name);
                   }}
-                  className={`flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] hover:bg-[#262626] disabled:opacity-50 ${
+                  className={`flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[#262626] disabled:opacity-50 ${
                     active ? "bg-[#262626] text-[#e8e8e8]" : "text-[#c9c9c9]"
                   }`}
                 >
@@ -494,7 +494,7 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9a08e] hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9a08e] transition-colors hover:bg-[#262626]"
           >
             <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
             <span>Manage profiles…</span>
@@ -520,14 +520,14 @@ export function Composer({
       </div>
 
       {/* Composer Card */}
-      <div className="rounded-[14px] border border-[#2b2b2b] bg-[#1d1d1d] px-[14px] py-[12px] shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
+      <div className="soyo-composer-card rounded-[14px] border border-[#2b2b2b] bg-[#1d1d1d] px-[14px] py-[12px] shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
         <StagedAttachmentsStrip
           items={stagedAttachments}
           onRemove={(id) => onRemoveAttachment?.(id)}
         />
 
         {attachInputOpen && (
-          <div className="mb-2.5 flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#141414] p-2 text-xs">
+          <div className="soyo-panel-enter mb-2.5 flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#141414] p-2 text-xs">
             <input
               type="text"
               aria-label="Attachment file path"
@@ -541,13 +541,13 @@ export function Composer({
                 }
               }}
               placeholder="Local file path inside workspace or readable file..."
-              className="flex-1 rounded-[7px] border border-[#2e2e2e] bg-[#1d1d1d] px-2.5 py-1 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:border-[#d9a08e] focus:outline-none"
+              className="devin-input flex-1 px-2.5 py-1 font-mono text-xs"
             />
             <button
               type="button"
               disabled={disabled || staging || attachPath.trim().length === 0}
               onClick={() => void handleStage()}
-              className="inline-flex items-center gap-1 rounded-[7px] bg-[#d9a08e] px-2.5 py-1 text-[11px] font-semibold text-[#1c120e] disabled:opacity-40"
+              className="inline-flex items-center gap-1 rounded-[7px] bg-[#d9a08e] px-2.5 py-1 text-[11px] font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
             >
               <Plus className="h-3 w-3" />
               Stage
@@ -579,7 +579,7 @@ export function Composer({
         {stagedAttachments.length > 0 && hasInput && (
           <div
             data-testid="composer-message-preview"
-            className="mt-2 rounded-[10px] border border-dashed border-[#3a3a3a] px-3 py-2 text-[12px]"
+            className="soyo-panel-enter mt-2 rounded-[10px] border border-dashed border-[#3a3a3a] px-3 py-2 text-[12px]"
           >
             <div className="mb-1 text-[10px] uppercase tracking-[0.06em] text-[#6e6e6e]">
               Message preview
@@ -687,10 +687,10 @@ export function Composer({
                   type="button"
                   onClick={() => void onCycleMode?.()}
                   title="Cycle work mode"
-                  className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-2 text-[11.5px] text-[#c9c9c9] hover:bg-[#262626]"
+                  className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-2 text-[11.5px] text-[#c9c9c9] transition-colors hover:bg-[#262626]"
                 >
                   <span
-                    className="h-1.5 w-1.5 rounded-full"
+                    className="h-1.5 w-1.5 rounded-full transition-colors"
                     style={{ backgroundColor: modeStyle.color }}
                   />
                   <span>{modeStyle.label}</span>
@@ -699,7 +699,7 @@ export function Composer({
                 <button
                   type="button"
                   onClick={() => onOpenSettings?.()}
-                  className={`inline-flex h-[26px] items-center rounded-[7px] px-2 text-[11.5px] hover:bg-[#262626] ${permissionTextColor}`}
+                  className={`inline-flex h-[26px] items-center rounded-[7px] px-2 text-[11.5px] transition-colors hover:bg-[#262626] ${permissionTextColor}`}
                 >
                   {PERMISSION_MODE_LABELS[permissionMode]}
                 </button>
@@ -711,7 +711,7 @@ export function Composer({
               onClick={() =>
                 setActivePopover((p) => (p === "model" ? null : "model"))
               }
-              className="inline-flex h-[26px] items-center rounded-[7px] border border-transparent px-2 text-[11.5px] text-[#b9b5ac] hover:border-[#2e2e2e] hover:bg-[#262626]"
+              className="inline-flex h-[26px] items-center rounded-[7px] border border-transparent px-2 text-[11.5px] text-[#a3a3a3] transition-colors hover:border-[#2e2e2e] hover:bg-[#262626] hover:text-[#e8e8e8]"
             >
               <span className="max-w-[140px] truncate">
                 {selectedModel ?? "claude-sonnet-4-5"}
@@ -738,7 +738,7 @@ export function Composer({
                 type="button"
                 onClick={onToggleSubmitMode}
                 title="Switch run guidance mode (Steer / Queue)"
-                className="inline-flex h-[26px] items-center gap-1 rounded-[7px] border border-[#2e2e2e] bg-[#1c1c1c] px-2 text-[11px] text-[#c9c9c9] hover:border-[#3a3a3a]"
+                className="inline-flex h-[26px] items-center gap-1 rounded-[7px] border border-[#2e2e2e] bg-[#1c1c1c] px-2 text-[11px] text-[#c9c9c9] transition-colors hover:border-[#3a3a3a]"
               >
                 <span>{submitMode === "queue" ? "Queue" : "Steer"}</span>
                 <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
@@ -765,7 +765,7 @@ export function Composer({
                     ? "Steer active run"
                     : "Send prompt"
               }
-              className={`ml-0.5 grid h-[28px] w-[28px] shrink-0 place-items-center rounded-full transition-transform active:scale-95 disabled:cursor-not-allowed ${
+              className={`ml-0.5 grid h-[28px] w-[28px] shrink-0 place-items-center rounded-full transition-all duration-200 ease-out active:scale-95 disabled:cursor-not-allowed ${
                 isStopState || canSend
                   ? "bg-[#d9a08e] text-[#1c120e] hover:bg-[#e2a68f]"
                   : "bg-[#2e2e2e] text-[#7a7a7a] opacity-70"

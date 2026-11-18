@@ -59,6 +59,19 @@ export function SessionBrowserDialog({
     };
   }, [open, page, activeSessionId]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClearConfigChange();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClearConfigChange, onClose]);
+
   if (!open) {
     return null;
   }
@@ -87,9 +100,9 @@ export function SessionBrowserDialog({
       aria-modal="true"
       aria-label="Session Browser"
       data-testid="session-browser-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex max-h-[82vh] w-full max-w-[740px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      <div className="soyo-dialog-enter flex max-h-[82vh] w-full max-w-[740px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
         <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-[#d9a08e]" />
@@ -104,7 +117,7 @@ export function SessionBrowserDialog({
               onClose();
             }}
             aria-label="Close session browser"
-            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -230,7 +243,7 @@ export function SessionBrowserDialog({
           {/* Right: Session details summary (Frame 06) */}
           <div className="hidden w-[250px] shrink-0 flex-col justify-between bg-[#141414] p-4 text-xs sm:flex">
             {selectedItem ? (
-              <div className="space-y-3">
+              <div key={selectedItem.id} className="soyo-panel-enter space-y-3">
                 <div className="text-[11px] uppercase tracking-wider text-[#6e6e6e]">
                   Session Details
                 </div>

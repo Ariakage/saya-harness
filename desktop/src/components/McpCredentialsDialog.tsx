@@ -49,6 +49,18 @@ export function McpCredentialsDialog({
     void loadData();
   }, [open, loadData]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
   if (!open) {
     return null;
   }
@@ -107,9 +119,9 @@ export function McpCredentialsDialog({
       aria-modal="true"
       aria-label="MCP Servers and Credentials"
       data-testid="mcp-credentials-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex max-h-[85vh] w-full max-w-[660px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      <div className="soyo-dialog-enter flex max-h-[85vh] w-full max-w-[660px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
         <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
             <KeyRound className="h-4 w-4 text-[#d9a08e]" />
@@ -121,7 +133,7 @@ export function McpCredentialsDialog({
             type="button"
             onClick={onClose}
             aria-label="Close MCP and credentials dialog"
-            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -244,7 +256,7 @@ export function McpCredentialsDialog({
                 value={importServer}
                 onChange={(e) => setImportServer(e.target.value)}
                 placeholder="HTTP MCP server name"
-                className="rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
+                className="devin-input px-2.5 py-1.5 text-xs"
               />
               <input
                 type="text"
@@ -252,7 +264,7 @@ export function McpCredentialsDialog({
                 value={envVar}
                 onChange={(e) => setEnvVar(e.target.value)}
                 placeholder="Env var name (e.g. MCP_TOKEN)"
-                className="rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
+                className="devin-input px-2.5 py-1.5 font-mono text-xs"
               />
             </div>
             <input
@@ -261,14 +273,15 @@ export function McpCredentialsDialog({
               value={scopesInput}
               onChange={(e) => setScopesInput(e.target.value)}
               placeholder="Optional comma-separated scopes"
-              className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
+              className="devin-input w-full px-2.5 py-1.5 text-xs"
             />
             <div className="flex items-center justify-between pt-1">
-              <label className="inline-flex items-center gap-2 text-[11px] text-[#c9c9c9]">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] text-[#c9c9c9]">
                 <input
                   type="checkbox"
                   checked={approveScopes}
                   onChange={(e) => setApproveScopes(e.target.checked)}
+                  className="devin-checkbox"
                 />
                 Explicitly approve endpoint & scopes
               </label>
@@ -278,7 +291,7 @@ export function McpCredentialsDialog({
                   busy || !importServer.trim() || !envVar.trim() || !approveScopes
                 }
                 onClick={() => void handleImport()}
-                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 text-xs font-semibold text-[#1c120e] disabled:opacity-40"
+                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 text-xs font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
               >
                 Import Reference
               </button>
