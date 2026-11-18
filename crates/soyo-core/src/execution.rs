@@ -903,6 +903,10 @@ impl PreparedEnvironment {
         if let Some(group) = &self.inner.cgroup {
             group.cleanup()?;
         }
+        #[cfg(target_os = "linux")]
+        if let Some(backend) = &self.inner.linux {
+            backend.cleanup_mountpoints();
+        }
         match fs::remove_dir_all(&self.inner.scratch) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -1010,6 +1014,10 @@ impl Drop for Environment {
             let _ = group.cleanup();
         }
         if relay_stopped && self.active_processes.load(Ordering::Acquire) == 0 {
+            #[cfg(target_os = "linux")]
+            if let Some(backend) = &self.linux {
+                backend.cleanup_mountpoints();
+            }
             let _ = fs::remove_dir_all(&self.scratch);
         }
     }

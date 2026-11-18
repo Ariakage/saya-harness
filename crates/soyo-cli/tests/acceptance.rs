@@ -238,7 +238,15 @@ fn plan_investigates_rust_project_without_changing_workspace() {
         fs::read(sandbox.root().join("src/main.rs")).unwrap(),
         before_source
     );
-    assert_eq!(fs::read_dir(sandbox.root()).unwrap().count(), 2);
+    assert_eq!(
+        fs::read_dir(sandbox.root()).unwrap().count(),
+        2,
+        "entries={:?}",
+        fs::read_dir(sandbox.root())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect::<Vec<_>>()
+    );
     let _first = requests.recv_timeout(Duration::from_secs(3)).unwrap();
     let second = requests
         .recv_timeout(Duration::from_secs(3))

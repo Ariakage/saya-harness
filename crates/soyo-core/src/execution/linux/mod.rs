@@ -41,6 +41,7 @@ pub(super) struct LinuxBackend {
     filter_path: PathBuf,
     mount_fds: Vec<Arc<fs::File>>,
     helper_path: PathBuf,
+    mask_mountpoints: Vec<PathBuf>,
 }
 struct BridgeProgram {
     path: PathBuf,
@@ -127,6 +128,13 @@ impl LinuxBackend {
         }
         *relay = None;
         Ok(())
+    }
+    /// Remove host directories created as Bubblewrap mask mountpoints. Only
+    /// empty directories are removed so payload content is never deleted.
+    pub(super) fn cleanup_mountpoints(&self) {
+        for path in &self.mask_mountpoints {
+            let _ = fs::remove_dir(path);
+        }
     }
     pub(super) fn prepare(policy: &SandboxPolicy, scratch: &Path) -> Result<Self, BoundaryError> {
         Self::prepare_with_profile(policy, scratch, None)
@@ -343,6 +351,7 @@ impl LinuxBackend {
         )?;
         // Masks live only in the private filesystem view. Missing names under a
         // writable root cannot safely be masked without altering the host tree.
+        let mut created_mountpoints: Vec<PathBuf> = Vec::new();
         if !browser_mode {
             let empty = scratch.join("empty");
             fs::create_dir(&empty).map_err(super::io_error)?;
@@ -391,8 +400,17 @@ impl LinuxBackend {
             }
             // Write-only denials remount each existing target read-only over
             // itself. A missing target inside a writable root is covered by
-            // the empty mask so it cannot be created later.
+            // masking its shallowest missing ancestor with the empty
+            // directory: Bubblewrap fabricates mountpoint parents on the
+            // host, so the ancestors are created explicitly as real
+            // directories and removed again during cleanup.
             for (source, destination) in write_deny_masks(policy, &system_roots)? {
+                if created_mountpoints
+                    .iter()
+                    .any(|ancestor| destination.starts_with(ancestor))
+                {
+                    continue;
+                }
                 match fs::symlink_metadata(&source) {
                     Ok(_) => {
                         bind(
@@ -409,13 +427,14 @@ impl LinuxBackend {
                             .iter()
                             .any(|root| destination.starts_with(root))
                         {
-                            bind_descriptor(
-                                &mut args,
-                                &mut mount_fds,
-                                "--ro-bind-fd",
-                                Arc::new(mask_file.try_clone().map_err(super::io_error)?),
-                                &destination,
-                            );
+                            let mut ancestor = destination.clone();
+                            while !ancestor.parent().is_none_or(|p| p.exists()) {
+                                ancestor =
+                                    ancestor.parent().unwrap_or(ancestor.as_path()).to_owned();
+                            }
+                            fs::create_dir(&ancestor).map_err(super::io_error)?;
+                            created_mountpoints.push(ancestor.clone());
+                            bind(&mut args, &mut mount_fds, "--ro-bind-fd", &empty, &ancestor)?;
                         }
                     }
                     Err(error) => return Err(super::io_error(error)),
@@ -506,6 +525,7 @@ impl LinuxBackend {
             filter_path,
             mount_fds,
             helper_path,
+            mask_mountpoints: created_mountpoints,
         };
         let mut probe = Command::new(&backend.bwrap);
         probe
