@@ -324,17 +324,21 @@ export function App() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#101010] text-[#e8e8e8]">
-      {/* Unified Overlay Titlebar (40px, §2): avoids macOS traffic-light collision */}
+      {/* Unified Overlay Titlebar (38px, §2): vertically aligned with macOS traffic lights (y=21 -> 12px top/bottom margin) */}
       <header
         data-tauri-drag-region
-        className="relative z-30 flex h-[40px] w-full shrink-0 select-none items-center border-b border-[#1f1f1f] bg-[#141414]"
+        className="relative z-30 flex h-[38px] w-full shrink-0 select-none items-center border-b border-[#1f1f1f] bg-[#0f0f0f]"
       >
-        {/* Left Titlebar Zone: clears traffic lights (~78px) & aligns with Column 1 + 2 seam (296px) */}
+        {/* Left Titlebar Zone: clears traffic lights (~88px) & aligns with Column 1 + 2 seam (296px) when sidebar open */}
         <div
           data-tauri-drag-region
-          className={`flex h-full shrink-0 items-center justify-between gap-2 border-r border-[#1f1f1f] bg-[#0d0d0d] ${
-            TITLEBAR_OVERLAY ? "pl-[78px] pr-2.5" : "px-2.5"
-          } ${sidebarVisible ? "w-[296px]" : ""}`}
+          className={`flex h-full shrink-0 items-center ${
+            sidebarVisible
+              ? `w-[296px] justify-between border-r border-[#1f1f1f] bg-[#0f0f0f] ${
+                  TITLEBAR_OVERLAY ? "pl-[88px] pr-2.5" : "px-2.5"
+                }`
+              : `gap-1.5 ${TITLEBAR_OVERLAY ? "pl-[88px] pr-1" : "pl-2.5 pr-1"}`
+          }`}
         >
           <button
             type="button"
@@ -342,7 +346,7 @@ export function App() {
             aria-label="Toggle sidebar"
             aria-pressed={sidebarVisible}
             title={sidebarVisible ? "Collapse sidebar" : "Expand sidebar"}
-            className="flex h-7 w-7 items-center justify-center rounded-[7px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+            className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#8a8a8a] transition-colors hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
           >
             <PanelLeft className="h-4 w-4" />
           </button>
@@ -350,7 +354,7 @@ export function App() {
           <div
             role="group"
             aria-label="View mode"
-            className="inline-flex items-center rounded-[8px] border border-[#242424] bg-[#141414] p-0.5"
+            className="inline-flex h-[26px] items-center rounded-[7px] border border-[#242424] bg-[#161616] p-0.5"
           >
             <button
               type="button"
@@ -358,7 +362,7 @@ export function App() {
               aria-label="Rendered conversation view"
               aria-pressed={markdownMode === "render"}
               title="Rendered conversation view"
-              className={`flex h-6 w-7 items-center justify-center rounded-[6px] transition-colors ${
+              className={`flex h-[20px] w-[26px] items-center justify-center rounded-[5px] transition-colors ${
                 markdownMode === "render"
                   ? "bg-[#262626] text-[#e8e8e8] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
                   : "text-[#6e6e6e] hover:text-[#c9c9c9]"
@@ -372,7 +376,7 @@ export function App() {
               aria-label="Markdown source view"
               aria-pressed={markdownMode === "source"}
               title="Markdown source view"
-              className={`flex h-6 w-7 items-center justify-center rounded-[6px] transition-colors ${
+              className={`flex h-[20px] w-[26px] items-center justify-center rounded-[5px] transition-colors ${
                 markdownMode === "source"
                   ? "bg-[#262626] text-[#e8e8e8] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
                   : "text-[#6e6e6e] hover:text-[#c9c9c9]"
@@ -383,6 +387,10 @@ export function App() {
           </div>
         </div>
 
+        {!sidebarVisible && (
+          <div className="mx-1 h-3.5 w-px bg-[#222222]" aria-hidden="true" />
+        )}
+
         {/* Right Titlebar Zone: session switcher + draggable space + mode/perm & quick actions */}
         <div
           data-tauri-drag-region
@@ -392,14 +400,9 @@ export function App() {
             type="button"
             onClick={() => setSessionsOpen(true)}
             title="Switch or browse sessions"
-            className="flex min-w-0 max-w-[360px] items-center gap-1.5 rounded-[7px] px-1.5 py-1 text-left transition-colors hover:bg-[#1a1a1a]"
+            className="flex h-[26px] min-w-0 max-w-[380px] items-center gap-1.5 rounded-[6px] px-2 text-left text-[12.5px] transition-colors hover:bg-[#1a1a1a]"
           >
-            <img
-              src="/app-icon.png"
-              alt="Soyo"
-              className="h-4 w-4 shrink-0 rounded-[22%] object-cover"
-            />
-            <span className="truncate font-medium text-[#e8e8e8]">
+            <span className="truncate font-medium text-[#d9d9d9]">
               {isHomeEmpty ? "Home" : sessionTitle}
             </span>
             <span className="hidden shrink-0 text-[#6b6b6b] sm:inline">
@@ -412,7 +415,7 @@ export function App() {
 
           <div
             ref={topbarClusterRef}
-            className="relative flex shrink-0 items-center gap-1.5"
+            className="relative flex shrink-0 items-center gap-1"
             onBlur={(e) => {
               if (!e.currentTarget.contains(e.relatedTarget as Node)) {
                 setTopMenu(null);
@@ -474,7 +477,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "mode" ? null : "mode")}
-                className="soyo-pill h-7 text-[12px] hover:border-[#3a3a3a] hover:bg-[#222222]"
+                className="soyo-pill h-[26px] rounded-[6px] border-[#262626] bg-[#181818] px-2.5 py-0 text-[11.5px] hover:border-[#343434] hover:bg-[#202020]"
                 title="Work mode"
                 aria-haspopup="menu"
               >
@@ -531,7 +534,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
-                className="soyo-pill h-7 text-[12px] text-[#a3a3a3] hover:border-[#3a3a3a] hover:bg-[#222222]"
+                className="soyo-pill h-[26px] rounded-[6px] border-[#262626] bg-[#181818] px-2.5 py-0 text-[11.5px] text-[#a3a3a3] hover:border-[#343434] hover:bg-[#202020]"
                 title="Permission mode"
                 aria-haspopup="menu"
               >
@@ -570,8 +573,6 @@ export function App() {
               )}
             </div>
 
-            <div className="mx-0.5 h-3.5 w-px bg-[#262626]" aria-hidden="true" />
-
             {/* Quick Titlebar Action Icons */}
             {!isHomeEmpty && (
               <button
@@ -580,7 +581,7 @@ export function App() {
                 aria-label="Toggle inspector"
                 aria-pressed={inspectorOpen && !browserPaneOpen}
                 title="Toggle inspector panel"
-                className={`flex h-7 w-7 items-center justify-center rounded-[7px] transition-colors ${
+                className={`flex h-[26px] w-[26px] items-center justify-center rounded-[6px] transition-colors ${
                   inspectorOpen && !browserPaneOpen
                     ? "bg-[#1e1e1e] text-[#e8e8e8]"
                     : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
@@ -596,7 +597,7 @@ export function App() {
               aria-label="Toggle browser preview"
               aria-pressed={browserPaneOpen}
               title="Toggle split browser preview"
-              className={`flex h-7 w-7 items-center justify-center rounded-[7px] transition-colors ${
+              className={`flex h-[26px] w-[26px] items-center justify-center rounded-[6px] transition-colors ${
                 browserPaneOpen
                   ? "bg-[#1e1e1e] text-[#d9a08e]"
                   : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
@@ -610,7 +611,7 @@ export function App() {
               onClick={() => handleOpenSettings("general")}
               aria-label="Workspace settings"
               title="Workspace & general settings"
-              className="flex h-7 w-7 items-center justify-center rounded-[7px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+              className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
             >
               <Folder className="h-3.5 w-3.5" />
             </button>
@@ -622,7 +623,7 @@ export function App() {
                 onClick={() => setTopMenu(topMenu === "more" ? null : "more")}
                 aria-label="More actions"
                 aria-haspopup="menu"
-                className="flex h-7 w-7 items-center justify-center rounded-[7px] text-[#a3a3a3] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#a3a3a3] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
               >
                 <MoreHorizontal className="h-4 w-4" />
               </button>

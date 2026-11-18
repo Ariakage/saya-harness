@@ -15,6 +15,7 @@
         "title": "Soyo",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "trafficLightPosition": { "x": 15, "y": 21 },
         "width": 1280,
         "height": 840,
         "minWidth": 900,

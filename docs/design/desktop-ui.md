@@ -66,26 +66,26 @@
 
 [desktop/src-tauri/tauri.conf.json](../../desktop/src-tauri/tauri.conf.json) 为桌面主窗口配置：
 
-- `titleBarStyle: "Overlay"`、`hiddenTitle: true`
+- `titleBarStyle: "Overlay"`、`hiddenTitle: true`、`trafficLightPosition: { "x": 15, "y": 21 }`
 - 默认尺寸 `1280 × 840`，最小约束 `900 × 620`
 - macOS 最低系统版本 `15.0`
 
-前端在 [desktop/src/App.tsx](../../desktop/src/App.tsx) 中通过 `TITLEBAR_OVERLAY` 判断当前是否运行于 macOS Tauri 打包环境（避让左上角约 `72 × 28px` 原生红绿灯区域）。
+其中 `trafficLightPosition: { x: 15, y: 21 }` 在 macOS AppKit / `tao` 的坐标映射下使三颗 `14pt` 红绿灯按钮位于 `top = 12px`、`bottom = 26px`（距离顶部与底部分界线各 `12px`），从而在 `38px` 统一顶栏内精确垂直居中，水平占据 `x = 15..75px`。前端在 [desktop/src/App.tsx](../../desktop/src/App.tsx) 中通过 `TITLEBAR_OVERLAY` 判断当前是否运行于 macOS Tauri 打包环境。
 
-### 3.2 统一顶栏（`40px`）架构
+### 3.2 统一顶栏（`38px`）架构
 
-窗口顶部全宽部署一条固定高度 `40px`（`h-[40px]`）的统一标题栏 `<header data-tauri-drag-region>`，取代早期局部列内留白，消除红绿灯跨越 Rail/Sidebar 竖缝及报错横幅挤占标题栏拖拽区的冲突：
+窗口顶部全宽部署一条固定高度 `38px`（`h-[38px]`）的统一标题栏 `<header data-tauri-drag-region>`（底色 `#0f0f0f`、底边框 `#1f1f1f`），消除红绿灯未居中及报错横幅挤占标题栏拖拽区的冲突：
 
-1. **左区（`bg-[#0d0d0d]`，右接 `1px solid #1f1f1f` 分界线）**：
-   - macOS Overlay 模式下应用 `pl-[78px] pr-2.5` 避让红绿灯；非 macOS/浏览器预览使用 `px-2.5`。
-   - 当 Column 2（Sidebar）展开时固定宽度 `w-[296px]`（`48px` Rail + `248px` Sidebar = `296px`），使顶栏右边框与下方侧栏竖缝垂直对齐；当侧栏收起时自适应紧凑宽度（`shrink-0`）。
-   - 内置控件：
-     - **侧栏折叠按钮**（`PanelLeft`，`aria-label="Toggle sidebar"`）：在对话态切换 Column 2 显隐；在 Home 态按下则保留 Home 画布同时展开 `Sessions` 栏。
-     - **两段视图切换器**（`role="group"`，`aria-label="View mode"`）：左段 `MessageSquare`（`Rendered conversation view`），右段 `Code2`（`Markdown source view`），直接调用 `setMarkdownMode("render" | "source")`。
-2. **右区 / 主标题栏区（`bg-[#141414]`，`flex-1`）**：
-   - 左侧会话/Home 切换按钮：显示圆角图标（`h-4 w-4 rounded-[22%]`）、当前标题（Home 时为 `"Home"`，会话态为 `sessionTitle`）、工作区短名（`· {currentProject}`）及 `ChevronDown`，点击打开 `SessionBrowserDialog`。
-   - 中间弹性拖拽空白（`<div data-tauri-drag-region className="h-full min-w-[16px] flex-1" />`）：保证单指拖拽空白顶栏即可移动窗口，不误触按钮。
-   - 右侧控制簇：浏览器预览场景切换条（仅预览模式）、Goal 运行状态胶囊（`data-testid="goal-topbar-pill"`，琥珀色 `#1c1a16` / `#3d3527` / `#e8d9b0`）、工作模式胶囊（`title="Work mode"`）、权限模式胶囊（`title="Permission mode"`）、分隔竖线、快捷图标按钮组（非 Home 时显示 `PanelRight` 切换 Inspector、`Globe` 切换 Split Browser、`Folder` 打开设置）以及 `More actions` 溢出菜单（保留 `New session`、`Show markdown source` / `Render markdown`、`Browser preview`、`Inspector`、`Export session…`、`Browse sessions…`）。
+1. **左区（对齐红绿灯安全区与侧栏竖缝）**：
+   - macOS Overlay 模式下应用 `pl-[88px]` 避让红绿灯（与 `x = 75px` 绿灯右缘保持 `13px` 间距）；非 macOS/浏览器预览使用水平对称内边距。
+   - 当 Column 2（Sidebar）展开时固定宽度 `w-[296px] justify-between border-r border-[#1f1f1f] bg-[#0f0f0f]`（`48px` Rail + `248px` Sidebar = `296px`），使顶栏竖线与下方侧栏分界线连续对齐；当 Column 2 收起（含 Home 状态）时取消 `w-[296px]` 与右边框，改以 `gap-1.5` 紧凑排布，并在右侧通过 `1px × 14px` 细竖分隔线（`bg-[#222222]`）与会话标题区分隔。
+   - 内置控件统一 `26px`（`h-[26px]`）高度中线：
+     - **侧栏折叠按钮**（`PanelLeft`，`26 × 26px`，`rounded-[6px]`，`aria-label="Toggle sidebar"`）：在对话态切换 Column 2 显隐；在 Home 态按下则保留 Home 画布同时展开 `Sessions` 栏。
+     - **两段视图切换器**（`role="group"`，`aria-label="View mode"`，`h-[26px]`）：左段 `MessageSquare`（`Rendered conversation view`），右段 `Code2`（`Markdown source view`），直接调用 `setMarkdownMode("render" | "source")`。
+2. **右区（会话标题、拖拽留白与状态/动作控制簇）**：
+   - 左侧会话/Home 切换按钮（`h-[26px]`，纯文字排版无重复图标）：显示当前标题（Home 时为 `"Home"`，会话态为 `sessionTitle`）、工作区短名（`· {currentProject}`）及 `ChevronDown`，点击打开 `SessionBrowserDialog`。
+   - 中间弹性拖拽空白（`<div data-tauri-drag-region className="h-full min-w-[16px] flex-1" />`）：保证拖拽空白顶栏即可移动窗口，不误触按钮。
+   - 右侧控制簇：浏览器预览场景切换条（仅预览模式）、Goal 运行状态胶囊（`data-testid="goal-topbar-pill"`，琥珀色 `#1c1a16` / `#3d3527` / `#e8d9b0`）、工作模式胶囊与权限模式胶囊（统一 `h-[26px] rounded-[6px] border-[#262626] bg-[#181818]`）、`26 × 26px` 快捷图标按钮组（非 Home 时显示 `PanelRight` 切换 Inspector、`Globe` 切换 Split Browser、`Folder` 打开设置）以及 `More actions` 溢出菜单。
 
 ### 3.3 多列工作区与 Home 侧栏自动收起规则
 
@@ -111,7 +111,7 @@
 
 定义于 [desktop/src/index.css](../../desktop/src/index.css)：
 
-- **`.soyo-pill`**：静态/下拉信息胶囊，背景 `#1c1c1c`、边框 `1px solid #2e2e2e`、圆角 `8px`、`padding: 3px 10px`、`font-size: 12px`（在 `40px` 顶栏内搭配 `h-7` 统一中线）。
+- **`.soyo-pill`**：静态/下拉信息胶囊，背景 `#1c1c1c`、边框 `1px solid #2e2e2e`、圆角 `8px`、`padding: 3px 10px`、`font-size: 12px`（在 `38px` 顶栏内收紧为 `h-[26px]`、`rounded-[6px]`、`px-2.5 py-0`、`text-[11.5px]` 统一中线）。
 - **`.soyo-pill-btn`**：交互动作胶囊按钮，`padding: 5px 14px`，悬停背景 `#242424` / 边框 `#3a3a3a`，按下微缩 `scale(0.98)`。
 - **`.soyo-input`**：深色输入域（`#161616` 底、`#2b2b2b` 框、`8px` 圆角），聚焦时边框变为 `#d9a08e` 并附 `0 0 0 2px rgba(217, 160, 142, 0.14)` 光晕。
 - **`.soyo-select` 与 `.soyo-select.is-inline`**：使用双线性渐变渲染纯 CSS 向下箭头（无 `<svg>` data URI）。
