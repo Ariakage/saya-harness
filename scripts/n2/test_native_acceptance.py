@@ -57,7 +57,7 @@ def warm_case(workspace):
     observations = []
     for index in range(4):
         messages = [{'role': 'system', 'content': json.dumps({
-            'saya_execution_environment_v1': case.facts()})}]
+            'soyo_execution_environment_v1': case.facts()})}]
         if index:
             call_id = f'n2-{index}'
             messages.append({'role': 'tool', 'tool_call_id': call_id,
@@ -186,7 +186,7 @@ class AcceptanceOracles(unittest.TestCase):
                 lambda value: value.model.requests.pop(),
                 lambda value: value.model.requests[1]['messages'].pop(),
                 lambda value: value.model.requests[1]['messages'][0].update(content=json.dumps({
-                    'saya_execution_environment_v1': {'identity': {'id': 'another-environment'}}})),
+                    'soyo_execution_environment_v1': {'identity': {'id': 'another-environment'}}})),
                 lambda value: value.model.observations.pop(),
                 lambda value: value.model.observations[0].update(response_sent_ns=None),
                 lambda value: value.model.observations[1].update(request_received_ns=1),

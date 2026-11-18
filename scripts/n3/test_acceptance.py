@@ -119,7 +119,7 @@ class FixtureTests(unittest.TestCase):
             envelope = {"trust": "historical_source_data", "reason": "memory_context_changed", "source_range": {"start": 0, "end": 2},
                         "source_sha256": hashlib.sha256(("[" + ",".join(raw) + "]").encode()).hexdigest(),
                         "current_memory_revision": "e" * 64, "observations": []}
-            request = lambda: {"messages": [{"role": "user", "content": json.dumps({"saya_retired_history_group_v1": envelope})}]}
+            request = lambda: {"messages": [{"role": "user", "content": json.dumps({"soyo_retired_history_group_v1": envelope})}]}
             dialogue = Dialogue("retired", [("forget", "memory_forget", arguments)], retired_result=candidate.retired_result)
             dialogue.respond({})
             # The test uses the dialogue's real generated identity throughout the DB.

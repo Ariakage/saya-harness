@@ -564,13 +564,13 @@ class CaseFixture:
         return ('exec', {'argv': [str(self.probe), *map(str, arguments)]})
 
     def facts(self):
-        marker = '{"saya_execution_environment_v1"'
+        marker = '{"soyo_execution_environment_v1"'
         for request in self.model.requests:
             for message in request.get('messages', []):
                 content = message.get('content')
                 if isinstance(content, str) and marker in content:
                     value, _ = json.JSONDecoder().raw_decode(content[content.index(marker):])
-                    return value['saya_execution_environment_v1']
+                    return value['soyo_execution_environment_v1']
         raise AssertionError('Normal model request did not include execution-environment facts')
 
     def native(self):
@@ -1095,14 +1095,14 @@ def validate_benchmark_sample(case, backend, kind, expected_tools=1):
         identity = facts['identity']
         require(isinstance(identity.get('id'), str) and bool(identity['id']),
                 'Warm benchmark omitted its prepared-environment identity')
-        marker = '{"saya_execution_environment_v1"'
+        marker = '{"soyo_execution_environment_v1"'
         for request in requests:
             identities = []
             for message in request.get('messages', []):
                 content = message.get('content')
                 if isinstance(content, str) and marker in content:
                     value, _ = json.JSONDecoder().raw_decode(content[content.index(marker):])
-                    identities.append(value['saya_execution_environment_v1']['identity'])
+                    identities.append(value['soyo_execution_environment_v1']['identity'])
             require(identities and all(value == identity for value in identities),
                     'Warm benchmark changed its prepared environment between tool calls')
         observations = case.model.observations

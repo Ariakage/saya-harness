@@ -285,7 +285,7 @@ fn sample_memory_context(workspace_id: &str) -> String {
 }
 
 fn preview_environment_facts() -> String {
-    let facts = json!({"saya_execution_environment_v1":{
+    let facts = json!({"soyo_execution_environment_v1":{
         "identity":"preview-native-sandbox",
         "capabilities":{"filesystem":"enforced","network":"deny"},
         "mcp_servers":{"fixture-mcp":{"transport":"stdio","connected":true}},

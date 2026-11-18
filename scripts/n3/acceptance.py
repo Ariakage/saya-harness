@@ -169,7 +169,7 @@ class Candidate:
                     "retired outcome is absent, failed, unknown or differs from its durable intent")
             for text in strings(request.get("messages", []) + request.get("input", [])):
                 try:
-                    envelope = json.loads(text).get("saya_retired_history_group_v1")
+                    envelope = json.loads(text).get("soyo_retired_history_group_v1")
                 except (ValueError, AttributeError):
                     continue
                 if not isinstance(envelope, dict):
