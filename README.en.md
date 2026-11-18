@@ -1,6 +1,28 @@
-# Soyo Harness
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/soyo-harness-readme-header-dark.png">
+    <img src="docs/soyo-harness-readme-header-light.png" alt="Soyo Harness — Rust Agent Runtime">
+  </picture>
+</p>
 
-[简体中文](README.md)
+<p align="center">
+  <a href="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml"><img src="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/releases"><img src="https://img.shields.io/github/v/release/Ariakage/soyo-harness?include_prereleases&display_name=tag&logo=github" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Rust-1.99.1-DEA584?logo=rust&logoColor=white" alt="Rust 1.99.1">
+  <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20%7C%20Linux-lightgrey" alt="Platform">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Ariakage/soyo-harness/stargazers"><img src="https://img.shields.io/github/stars/Ariakage/soyo-harness?style=social" alt="Stars"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/network/members"><img src="https://img.shields.io/github/forks/Ariakage/soyo-harness?style=social" alt="Forks"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/watchers"><img src="https://img.shields.io/github/watchers/Ariakage/soyo-harness?style=social" alt="Watchers"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/issues"><img src="https://img.shields.io/github/issues/Ariakage/soyo-harness" alt="Issues"></a>
+</p>
+
+<p align="center">
+  <a href="README.md">简体中文</a> · <b>English</b>
+</p>
 
 **Soyo Harness** is an Agent Runtime Harness built in Rust for both coding and general-purpose workflows. Soyo owns and drives the model-tool execution loop directly while sharing the same runtime core across its CLI and default TUI (GUI is planned downstream). Supported host targets are **macOS 15+** and **Linux (glibc 2.35+)** on `x86_64` and `aarch64`.
 
@@ -75,6 +97,17 @@ just tui-preview syntax
 - **Latest tagged release**: [`v0.2.0`](https://github.com/Ariakage/soyo-harness/releases/tag/v0.2.0) ([Bilingual release notes](docs/releases/release-notes-0.2.0.md)).
 - Subsequent development on `main` (`version = "0.2.0"` per [`docs/progress.md`](docs/progress.md)) includes N2 native isolation & MCP, N3 context/plugins/memory, N4 Goal orchestration, and N5 controlled Web/Browser work (with cross-platform CI/packaging evidence tracked in [`docs/progress.md`](docs/progress.md) and [`docs/n5-validation.md`](docs/n5-validation.md)).
 - Full architecture, specifications, and guides are indexed in [`README.md`](README.md) and [`docs/README.md`](docs/README.md).
+
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#Ariakage/soyo-harness&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Ariakage/soyo-harness&type=Date&theme=dark">
+      <img src="https://api.star-history.com/svg?repos=Ariakage/soyo-harness&type=Date" alt="Star History Chart" width="600">
+    </picture>
+  </a>
+</p>
 
 ## License
 

@@ -1,6 +1,28 @@
-# Soyo Harness
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/soyo-harness-readme-header-dark.png">
+    <img src="docs/soyo-harness-readme-header-light.png" alt="Soyo Harness — Rust Agent Runtime">
+  </picture>
+</p>
 
-[English](README.en.md)
+<p align="center">
+  <a href="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml"><img src="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/releases"><img src="https://img.shields.io/github/v/release/Ariakage/soyo-harness?include_prereleases&display_name=tag&logo=github" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Rust-1.99.1-DEA584?logo=rust&logoColor=white" alt="Rust 1.99.1">
+  <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20%7C%20Linux-lightgrey" alt="Platform">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Ariakage/soyo-harness/stargazers"><img src="https://img.shields.io/github/stars/Ariakage/soyo-harness?style=social" alt="Stars"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/network/members"><img src="https://img.shields.io/github/forks/Ariakage/soyo-harness?style=social" alt="Forks"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/watchers"><img src="https://img.shields.io/github/watchers/Ariakage/soyo-harness?style=social" alt="Watchers"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/issues"><img src="https://img.shields.io/github/issues/Ariakage/soyo-harness" alt="Issues"></a>
+</p>
+
+<p align="center">
+  <b>简体中文</b> · <a href="README.en.md">English</a>
+</p>
 
 使用 Rust 构建的 Agent Runtime Harness，同时支持编程任务与通用任务。Soyo 自己驱动模型与工具之间的执行循环，CLI 与默认 TUI 复用共享运行时，GUI 按后续计划推进。当前支持 macOS 15+ 与 Linux glibc 2.35+（`x86_64` / `aarch64`）。
 
@@ -134,6 +156,17 @@ just tui-preview syntax
 当前实现和验证证据见[开发进度](docs/progress.md)，[使用指南](docs/usage.md)和[无凭据配置示例](examples/config.example.toml)提供 CLI 入门。
 
 0.2.0 已交付共享应用服务、增强日志、Session Export 和默认 TUI。N2 已完成默认原生隔离、MCP 与对应四平台验收。N3 的上下文、OutputStore、Compact、选定文件检查点、本地插件／Hooks 与全局记忆已接入共享运行入口，并由固定源码 `e1da373` 完成四平台联合验收。N4 Goal 已完成本机实现与受控验收。N5 Browser 已交付受控 Web、托管 worker、专用 VM 网络与文件 broker、定制 pre-capture 遮蔽截图引擎、CLI／TUI 和原生／VM 媒体链路；本机 macOS、专用 VM 联合验收（`--require-screenshot` 22 passed、0 failed）及 Linux ARM64（`n5arm22` 1729 passed + 原生 Masked PNG 实测）已通过，见 [N5 验收](docs/n5-validation.md)。Linux x86-64／macOS Intel、多架构定制引擎分发及远端四平台 CI／发行证据仍有外部平台范围待完成，暂未推送或发布。GUI 继续按依赖规划，后续版本号在发行范围收敛时确定。[开发计划](docs/post-mvp-plan.md)、[N3 实际范围与证据](docs/n3-validation.md#四平台最终验收)、[N4验收](docs/n4-validation.md)
+
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#Ariakage/soyo-harness&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Ariakage/soyo-harness&type=Date&theme=dark">
+      <img src="https://api.star-history.com/svg?repos=Ariakage/soyo-harness&type=Date" alt="Star History Chart" width="600">
+    </picture>
+  </a>
+</p>
 
 ## 许可证
 
