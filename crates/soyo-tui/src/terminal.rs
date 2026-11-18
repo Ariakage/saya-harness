@@ -281,9 +281,16 @@ impl Write for TerminalOutput {
                     if matches!(
                         error.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) && Instant::now() < deadline =>
+                    ) =>
                 {
-                    std::thread::sleep(Duration::from_millis(2));
+                    if Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(2));
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            text::OUTPUT_WRITE_BUDGET,
+                        ));
+                    }
                 }
                 result => return result,
             }
