@@ -142,6 +142,8 @@ export interface UiMessages {
     pausedApproval: string;
     steer: string;
     queue: string;
+    queuedPrompt: string;
+    compactionQueued: string;
     hintEnter: string;
     hintShiftEnter: string;
     hintTab: string;
@@ -516,6 +518,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       pausedApproval: "paused · approval required",
       steer: "Steer",
       queue: "Queue",
+      queuedPrompt: "queued",
+      compactionQueued: "compact queued",
       hintEnter: "Enter send",
       hintShiftEnter: "Shift+Enter newline",
       hintTab: "Empty Tab cycle mode",
@@ -915,6 +919,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       pausedApproval: "已暂停 · 等待审批",
       steer: "引导",
       queue: "排队",
+      queuedPrompt: "已排队",
+      compactionQueued: "压缩已排队",
       hintEnter: "Enter 发送",
       hintShiftEnter: "Shift+Enter 换行",
       hintTab: "空框 Tab 切模式",
@@ -1311,6 +1317,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       pausedApproval: "已暫停 · 等待核准",
       steer: "引導",
       queue: "排程",
+      queuedPrompt: "已排程",
+      compactionQueued: "壓縮已排程",
       hintEnter: "Enter 傳送",
       hintShiftEnter: "Shift+Enter 換行",
       hintTab: "空欄 Tab 切換模式",

@@ -135,6 +135,8 @@ export function App() {
   const stagedAttachments = useAppStore((s) => s.stagedAttachments);
   const ultracodeEnabled = useAppStore((s) => s.ultracodeEnabled);
   const submitMode = useAppStore((s) => s.submitMode);
+  const queuedPrompt = useAppStore((s) => s.queuedPrompt);
+  const compactionPending = useAppStore((s) => s.compactionPending);
   const configChangeSessionId = useAppStore((s) => s.configChangeSessionId);
   const recoveryBanner = useAppStore((s) => s.recoveryBanner);
   const error = useAppStore((s) => s.error);
@@ -155,6 +157,7 @@ export function App() {
   const setWorkMode = useAppStore((s) => s.setWorkMode);
   const cycleWorkMode = useAppStore((s) => s.cycleWorkMode);
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
+  const clearQueuedPrompt = useAppStore((s) => s.clearQueuedPrompt);
   const resumeSession = useAppStore((s) => s.resumeSession);
   const clearConfigChangePrompt = useAppStore((s) => s.clearConfigChangePrompt);
   const setMarkdownMode = useAppStore((s) => s.setMarkdownMode);
@@ -336,6 +339,21 @@ export function App() {
     : recentSessions;
   const forceComposerPopover =
     previewMode && scene === "effort" ? "effort" : null;
+
+  // Context-window fill: prefer the snapshot streamed during runs; fall back
+  // to the last request's reported input tokens so idle sessions still show a
+  // reasonable estimate in the composer ring.
+  const contextEntriesTotal = contextEntries.reduce(
+    (acc, entry) => acc + entry.tokens,
+    0
+  );
+  const contextUsedTokens =
+    contextEntriesTotal > 0
+      ? contextEntriesTotal
+      : (lastUsage?.input_tokens ?? null);
+  const contextWindowTokens = bootstrap?.context_window_tokens ?? null;
+  const composerContextEstimated =
+    contextEntriesTotal === 0 || contextEstimated;
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#101010] text-[#e8e8e8]">
@@ -1531,8 +1549,19 @@ export function App() {
                       ) : null}
                       {summaryLine && <span>{summaryLine}</span>}
                       {lastUsage && (
-                        <span>
-                          ↑{formatTokenCount(lastUsage.input_tokens)} ↓
+                        <span
+                          title={`${
+                            lastUsage.estimated
+                              ? "Estimated token usage"
+                              : "Reported token usage"
+                          }${
+                            lastUsage.cached_input_tokens
+                              ? ` · cached ${formatTokenCount(lastUsage.cached_input_tokens)}`
+                              : ""
+                          }`}
+                        >
+                          {lastUsage.estimated ? "~" : ""}↑
+                          {formatTokenCount(lastUsage.input_tokens)} ↓
                           {formatTokenCount(lastUsage.output_tokens)}
                         </span>
                       )}
@@ -1558,6 +1587,11 @@ export function App() {
                 thinkingEffort={bootstrap?.thinking_effort}
                 ultracodeEnabled={ultracodeEnabled}
                 submitMode={submitMode}
+                queuedPromptPreview={queuedPrompt?.prompt ?? null}
+                compactionPending={compactionPending}
+                contextUsedTokens={contextUsedTokens}
+                contextWindowTokens={contextWindowTokens}
+                contextEstimated={composerContextEstimated}
                 stagedAttachments={stagedAttachments}
                 forcePopover={forceComposerPopover}
                 draftSeed={editDraft}
@@ -1570,6 +1604,7 @@ export function App() {
                 onToggleSubmitMode={() =>
                   setSubmitMode(submitMode === "steer" ? "queue" : "steer")
                 }
+                onClearQueuedPrompt={clearQueuedPrompt}
                 onStageAttachments={stageAttachments}
                 onRemoveAttachment={removeStagedAttachment}
                 onOpenSettings={() => handleOpenSettings("general")}
@@ -1717,7 +1752,8 @@ export function App() {
           workMode={workMode}
           contextEntries={contextEntries}
           contextSkillsCount={contextSkillsCount}
-          contextEstimated={contextEstimated}
+          contextEstimated={composerContextEstimated}
+          contextUsedTokens={contextUsedTokens}
           todos={todos}
           mcpServers={mcpServers}
           recentSessions={recentSessions}

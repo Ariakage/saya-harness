@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BootstrapStateDto_Serialize,
@@ -155,6 +161,9 @@ describe("App Stage 3 runtime integration", () => {
       stagedAttachments: [],
       ultracodeEnabled: false,
       submitMode: "steer",
+      queuedPrompt: null,
+      streamOwned: false,
+      compactionPending: false,
       locale: "en-US",
       configChangeSessionId: null,
       recoveryBanner: null,
@@ -1147,6 +1156,189 @@ describe("App Stage 3 runtime integration", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
       expect(screen.queryByTestId("language-dialog")).toBeNull();
+    });
+  });
+
+  it("renders context ring + estimated usage, replays queued prompts after pending compaction", async () => {
+    const sid = "01930000-0000-7000-8000-000000000001";
+    const submitted: string[] = [];
+    let channel: {
+      onmessage: (message: DesktopStreamEnvelope_Deserialize) => void;
+    } | null = null;
+
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_bootstrap_state") return sampleBootstrap();
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "submit_prompt") {
+        const prompt = (args as { prompt: string }).prompt;
+        submitted.push(prompt);
+        channel = args?.onEvent as typeof channel;
+        return { action: "started", session_id: sid, run_id: `run_${submitted.length}` };
+      }
+      if (cmd === "compact_session") {
+        return { action: "compacting", session_id: sid, run_id: "run_compact" };
+      }
+      return null;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(/Existing session context/)).toBeTruthy();
+    });
+
+    // First prompt starts an owned run.
+    const input = screen.getByLabelText("Prompt input");
+    fireEvent.change(input, { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => {
+      expect(submitted).toEqual(["first"]);
+      expect(useAppStore.getState().runActive).toBe(true);
+      expect(useAppStore.getState().streamOwned).toBe(true);
+    });
+
+    // Context envelope: 60k of 200k window -> ring at 30%.
+    act(() => {
+      useAppStore.getState().handleStreamEnvelope({
+        kind: "context",
+        data: {
+          entries: [
+            { label: "system", tokens: 40000 },
+            { label: "history", tokens: 20000 },
+          ],
+          skills_count: 2,
+          estimated: true,
+        },
+      });
+      // Estimated usage from model.finished.
+      useAppStore.getState().handleStreamEnvelope({
+        kind: "schema_event",
+        data: {
+          schema_version: 1,
+          session_id: sid,
+          run_id: "run_1",
+          seq: 1,
+          timestamp: "2026-11-18T00:00:00Z",
+          payload: {
+            type: "model.finished",
+            data: {
+              request_id: "req_1",
+              purpose: "execution",
+              ok: true,
+              error: null,
+              usage: {
+                input_tokens: 61000,
+                output_tokens: 800,
+                cached_input_tokens: null,
+                estimated: true,
+              },
+            },
+          },
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("img", { name: "Context usage 30%" })
+      ).toBeTruthy();
+      const usage = screen.getByTitle(/Estimated token usage/);
+      expect(usage.textContent).toContain("~↑61.0k");
+    });
+
+    // Queue mode holds the next prompt locally instead of steering.
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    fireEvent.change(input, { target: { value: "second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => {
+      expect(useAppStore.getState().queuedPrompt?.prompt).toBe("second");
+      expect(submitted).toEqual(["first"]);
+      expect(screen.getByText("queued")).toBeTruthy();
+    });
+
+    // Run completes with a still-pending compaction: the follow-up compact
+    // fires first and the queued prompt is NOT flushed yet.
+    act(() => {
+      useAppStore.getState().handleStreamEnvelope({
+        kind: "run_completed",
+        data: {
+          status: "completed",
+          summary_line: "claude-sonnet-4-5 · done",
+          todos: [],
+          error: null,
+          compaction_pending: true,
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "compact_session",
+        expect.anything()
+      );
+      expect(submitted).toEqual(["first"]);
+      expect(useAppStore.getState().queuedPrompt?.prompt).toBe("second");
+    });
+
+    // Once the compaction run settles, the queued prompt replays.
+    act(() => {
+      useAppStore.getState().handleStreamEnvelope({
+        kind: "run_completed",
+        data: {
+          status: "completed",
+          summary_line: "compacted",
+          todos: [],
+          error: null,
+          compaction_pending: false,
+          needs_input_question: "Which region should deploy?",
+        },
+      });
+    });
+    // The needs-input question lands in the summary line before the queued
+    // resubmission clears it on the next tick.
+    expect(
+      useAppStore.getState().summaryLine?.includes("Which region")
+    ).toBe(true);
+    await waitFor(() => {
+      expect(submitted).toEqual(["first", "second"]);
+      expect(useAppStore.getState().queuedPrompt).toBeNull();
+    });
+  });
+
+  it("polls run state for runs owned by another client and reconciles on finish", async () => {
+    const boot = sampleBootstrap();
+    boot.run_active = true;
+    boot.active_run_id = "run_foreign";
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "get_run_state") {
+        // Simulate the helper having finished: bootstrap refresh agrees.
+        boot.run_active = false;
+        boot.active_run_id = null;
+        boot.work_mode = "code";
+        boot.session!.work_mode = "code";
+        return {
+          current: "code",
+          pending: null,
+          active_run: false,
+          compaction_pending: false,
+        };
+      }
+      return null;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(useAppStore.getState().runActive).toBe(true);
+      expect(useAppStore.getState().streamOwned).toBe(false);
+    });
+
+    // Foreign run finished: polling sync picks it up and reconciles bootstrap.
+    await act(async () => {
+      await useAppStore.getState().syncRunState();
+    });
+    await waitFor(() => {
+      expect(useAppStore.getState().runActive).toBe(false);
+      expect(useAppStore.getState().workMode).toBe("code");
     });
   });
 });

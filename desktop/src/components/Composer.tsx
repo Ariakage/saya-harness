@@ -15,6 +15,7 @@ import {
   Puzzle,
   SlidersHorizontal,
   Square,
+  X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -33,6 +34,7 @@ import {
 } from "../lib/sanitize";
 import { useAppStore } from "../store/useAppStore";
 import { StagedAttachmentsStrip } from "./AttachmentPreview";
+import { ContextRing } from "./ContextRing";
 import { EffortPill, EffortPopover } from "./EffortPopover";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
@@ -51,6 +53,11 @@ export interface ComposerProps {
   thinkingEffort?: string | null;
   ultracodeEnabled?: boolean;
   submitMode?: "steer" | "queue";
+  queuedPromptPreview?: string | null;
+  compactionPending?: boolean;
+  contextUsedTokens?: number | null;
+  contextWindowTokens?: number | null;
+  contextEstimated?: boolean;
   stagedAttachments?: StagedAttachmentDto[];
   forcePopover?: "attach" | "commands" | "effort" | "model" | null;
   draftSeed?: { text: string; nonce: number } | null;
@@ -61,6 +68,7 @@ export interface ComposerProps {
   onSelectProfile?: (profile: string) => Promise<boolean>;
   onSelectEffort?: (effort: string, ultracode: boolean) => Promise<boolean>;
   onToggleSubmitMode?: () => void;
+  onClearQueuedPrompt?: () => void;
   onStageAttachments?: (paths: string[]) => Promise<boolean>;
   onRemoveAttachment?: (id: string) => void;
   onOpenSettings?: () => void;
@@ -91,6 +99,11 @@ export function Composer({
   thinkingEffort = "medium",
   ultracodeEnabled = false,
   submitMode = "steer",
+  queuedPromptPreview = null,
+  compactionPending = false,
+  contextUsedTokens = null,
+  contextWindowTokens = null,
+  contextEstimated = false,
   stagedAttachments = [],
   forcePopover = null,
   draftSeed = null,
@@ -101,6 +114,7 @@ export function Composer({
   onSelectProfile,
   onSelectEffort,
   onToggleSubmitMode,
+  onClearQueuedPrompt,
   onStageAttachments,
   onRemoveAttachment,
   onOpenSettings,
@@ -747,6 +761,37 @@ export function Composer({
                 <span>{submitMode === "queue" ? t.composer.queue : t.composer.steer}</span>
                 <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
               </button>
+            )}
+
+            {compactionPending && !queuedPromptPreview && (
+              <span
+                title={t.composer.compactionQueued}
+                className="inline-flex h-[26px] items-center gap-1 rounded-[7px] border border-[#3a3a3a] bg-[#1c1c1c] px-2 text-[11px] text-[#8aa8d8]"
+              >
+                <Minimize2 className="h-3 w-3" />
+                <span>{t.composer.compactionQueued}</span>
+              </span>
+            )}
+
+            {queuedPromptPreview && (
+              <button
+                type="button"
+                onClick={onClearQueuedPrompt}
+                title={`${t.composer.queuedPrompt}: ${queuedPromptPreview}`}
+                className="inline-flex h-[26px] max-w-[140px] items-center gap-1 rounded-[7px] border border-[#3a3a3a] bg-[#242019] px-2 text-[11px] text-[#fac454] transition-colors hover:border-[#4a4a3a]"
+              >
+                <span className="truncate">{t.composer.queuedPrompt}</span>
+                <X className="h-3 w-3 shrink-0" />
+              </button>
+            )}
+
+            {variant !== "home" && contextWindowTokens != null && (
+              <ContextRing
+                usedTokens={contextUsedTokens}
+                windowTokens={contextWindowTokens}
+                estimated={contextEstimated}
+                size={19}
+              />
             )}
 
             <button

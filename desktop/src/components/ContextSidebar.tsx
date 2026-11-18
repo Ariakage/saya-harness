@@ -17,6 +17,9 @@ export interface ContextSidebarProps {
   contextEntries: ContextEntryDto[];
   contextSkillsCount: number | null;
   contextEstimated: boolean;
+  /** Total tokens filling the window — the same figure the composer ring
+   * shows. When omitted it is derived from `contextEntries`. */
+  contextUsedTokens?: number | null;
   todos: TodoItemDto[];
   mcpServers: McpStatusBadgeDto[];
   recentSessions: SessionItemDto_Serialize[];
@@ -85,6 +88,7 @@ export function ContextSidebar({
   contextEntries,
   contextSkillsCount,
   contextEstimated,
+  contextUsedTokens = null,
   todos,
   mcpServers,
   recentSessions,
@@ -96,10 +100,9 @@ export function ContextSidebar({
   const modeStyle = WORK_MODE_STYLES[workMode];
   const outputPaths = extractOutputPaths(messages);
   const windowTokens = bootstrap?.context_window_tokens ?? null;
-  const totalContextTokens = contextEntries.reduce(
-    (acc, item) => acc + item.tokens,
-    0
-  );
+  const totalContextTokens =
+    contextUsedTokens ??
+    contextEntries.reduce((acc, item) => acc + item.tokens, 0);
   const freeTokens =
     windowTokens && windowTokens > totalContextTokens
       ? windowTokens - totalContextTokens
