@@ -6,13 +6,17 @@ import {
   type ExtensionItemDto_Serialize,
   type ModuleStatusDto_Serialize,
 } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 
 export interface ModulesPanelProps {
   runActive: boolean;
 }
 
 export function ModulesPanel({ runActive }: ModulesPanelProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [modules, setModules] = useState<ModuleStatusDto_Serialize[]>([]);
   const [extensions, setExtensions] = useState<ExtensionItemDto_Serialize[]>([]);
   const [jobs, setJobs] = useState<BackgroundJobDto_Serialize[]>([]);
@@ -64,11 +68,11 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
       <section className="space-y-2">
         <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
           <Blocks className="h-3.5 w-3.5 text-[#d9a08e]" />
-          <span>Runtime Modules</span>
+          <span>{t.modulesPanel.runtimeModules}</span>
         </div>
         {modules.length === 0 ? (
           <div className="text-[11px] text-[#6e6e6e]">
-            No module status available.
+            {t.modulesPanel.noModules}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -104,7 +108,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                     mod.enabled ? "text-[#4ade80]" : "text-[#8a8a8a]"
                   } disabled:opacity-40`}
                 >
-                  {mod.enabled ? "Enabled" : "Disabled"}
+                  {mod.enabled ? t.modulesPanel.enabled : t.modulesPanel.disabled}
                 </button>
               </li>
             ))}
@@ -115,11 +119,11 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
       <section className="space-y-2">
         <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
           <Puzzle className="h-3.5 w-3.5 text-[#a096eb]" />
-          <span>Extensions & Project Discovery ({extensions.length})</span>
+          <span>{t.modulesPanel.extensionsHeader(extensions.length)}</span>
         </div>
         {extensions.length === 0 ? (
           <div className="text-[11px] text-[#6e6e6e]">
-            No discovered rules, skills, or plugins in current workspace.
+            {t.modulesPanel.noExtensions}
           </div>
         ) : (
           <ul className="max-h-40 space-y-1 overflow-y-auto">
@@ -148,11 +152,11 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
       <section className="space-y-2">
         <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
           <Briefcase className="h-3.5 w-3.5 text-[#fac454]" />
-          <span>Background Jobs ({jobs.length})</span>
+          <span>{t.modulesPanel.jobsHeader(jobs.length)}</span>
         </div>
         {jobs.length === 0 ? (
           <div className="text-[11px] text-[#6e6e6e]">
-            No background jobs recorded in active session.
+            {t.modulesPanel.noJobs}
           </div>
         ) : (
           <ul className="max-h-36 space-y-1 overflow-y-auto">
@@ -166,7 +170,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                     {job.tool ?? "job"} · {job.job_id}
                   </div>
                   <div className="truncate text-[10px] text-[#8a8a8a]">
-                    state: {job.state}
+                    {t.modulesPanel.stateLabel}: {job.state}
                     {job.summary ? ` · ${sanitizeDisplayText(job.summary)}` : ""}
                   </div>
                 </div>
@@ -177,7 +181,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                     className="soyo-pill-btn shrink-0 text-[10px] text-[#f87171]"
                   >
                     <XCircle className="h-3 w-3" />
-                    Cancel
+                    {t.modulesPanel.cancel}
                   </button>
                 )}
               </li>

@@ -257,7 +257,7 @@ export function ContextSidebar({
 
             {contextSkillsCount != null && (
               <div className="text-[11px] text-[#6e6e6e]">
-                {contextSkillsCount} active skill(s)
+                {t.inspector.activeSkills(contextSkillsCount)}
               </div>
             )}
           </div>

@@ -39,7 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionItemDto_Serialize } from "./bindings";
 import { ApprovalDialog } from "./components/ApprovalDialog";
 import { ClarificationDialog } from "./components/ClarificationDialog";
@@ -50,7 +50,7 @@ import { LanguageDialog } from "./components/LanguageDialog";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { McpCredentialsDialog } from "./components/McpCredentialsDialog";
 import { MemoryDialog } from "./components/MemoryDialog";
-import { getMessages } from "./lib/i18n";
+import { getMessages, pickGreeting } from "./lib/i18n";
 import {
   PERMISSION_MODE_LABELS,
   WORK_MODE_STYLES,
@@ -163,6 +163,11 @@ export function App() {
   const setLocale = useAppStore((s) => s.setLocale);
   const clearError = useAppStore((s) => s.clearError);
   const t = getMessages(locale);
+  const greeting = useMemo(
+    () => pickGreeting(t.home),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [locale],
+  );
 
   const previewMode = isBrowserPreview();
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
@@ -1104,7 +1109,7 @@ export function App() {
               <p className="mt-1 text-[11px] leading-relaxed text-[#8a8a8a]">
                 {mcpServers.length === 0
                   ? t.sidebar.noMcpActive
-                  : `${mcpServers.length} MCP server${mcpServers.length > 1 ? "s" : ""} registered with host redaction.`}
+                  : t.sidebar.mcpActiveCount(mcpServers.length)}
               </p>
             </div>
             {mcpServers.length > 0 && (
@@ -1270,7 +1275,7 @@ export function App() {
                     alt="Soyo"
                     className="h-[30px] w-[30px] rounded-[22%] object-cover"
                   />
-                  <span>{t.home.greeting}</span>
+                  <span>{greeting}</span>
                 </div>
 
                 <Composer
@@ -1405,7 +1410,7 @@ export function App() {
                             <button
                               type="button"
                               disabled
-                              title="Branch session from this message (not yet supported by the runtime)"
+                              title={t.home.branchUnsupported}
                               className="opacity-40"
                             >
                               <GitBranch className="h-3 w-3" />
@@ -1414,7 +1419,7 @@ export function App() {
                               type="button"
                               onClick={() => void submitPrompt(msg.text)}
                               disabled={runActive}
-                              title="Retry prompt"
+                              title={t.home.retryPrompt}
                               className="hover:text-[#e8e8e8] disabled:opacity-40"
                             >
                               <RotateCw className="h-3 w-3" />
@@ -1424,7 +1429,7 @@ export function App() {
                               onClick={() =>
                                 setEditDraft({ text: msg.text, nonce: Date.now() })
                               }
-                              title="Edit message in composer"
+                              title={t.home.editMessage}
                               className="hover:text-[#e8e8e8]"
                             >
                               <Pencil className="h-3 w-3" />
@@ -1432,16 +1437,16 @@ export function App() {
                             <button
                               type="button"
                               onClick={() => void handleCopyMessage(msg.id, msg.text)}
-                              title="Copy message"
+                              title={t.home.copyMessage}
                               className="inline-flex items-center gap-1 hover:text-[#e8e8e8]"
                             >
                               <Copy className="h-3 w-3" />
-                              {copiedId === msg.id && <span>Copied</span>}
+                              {copiedId === msg.id && <span>{t.home.copied}</span>}
                             </button>
                             <button
                               type="button"
                               onClick={() => setExportOpen(true)}
-                              title="Export / share"
+                              title={t.home.exportShare}
                               className="hover:text-[#e8e8e8]"
                             >
                               <Share2 className="h-3 w-3" />
@@ -1515,7 +1520,7 @@ export function App() {
                       {runActive ? (
                         <span className="inline-flex items-center gap-1.5 text-[#4ade80]">
                           <span className="h-1.5 w-1.5 rounded-full bg-[#4ade80] soyo-pulse-dot" />
-                          streaming
+                          {t.home.streaming}
                         </span>
                       ) : null}
                       {summaryLine && <span>{summaryLine}</span>}
@@ -1635,11 +1640,11 @@ export function App() {
                 <div className="flex w-[118px] shrink-0 flex-col gap-0.5 border-r border-[#1f1f1f] bg-[#0d0d0d] p-2">
                   {(
                     [
-                      ["new", "+ New"],
-                      ["search", "Search"],
-                      ["sessions", "Sessions"],
-                      ["memory", "Memory"],
-                      ["customize", "Customize"],
+                      ["new", t.home.browserNew],
+                      ["search", t.sidebar.searchTitle],
+                      ["sessions", t.sidebar.sessionsTitle],
+                      ["memory", t.sidebar.memoryTitle],
+                      ["customize", t.sidebar.customizeTitle],
                     ] as const
                   ).map(([id, label]) => (
                     <button
@@ -1663,10 +1668,10 @@ export function App() {
                       alt="Soyo"
                       className="h-[18px] w-[18px] rounded-[22%] object-cover"
                     />
-                    <span>Good morning, ariakage.</span>
+                    <span>{greeting}</span>
                   </div>
                   <div className="w-full max-w-[320px] rounded-[10px] border border-[#2b2b2b] bg-[#1d1d1d] p-2.5 text-left text-[10.5px] text-[#6e6e6e]">
-                    <div>How can I help you today?</div>
+                    <div>{t.composer.placeholderHome}</div>
                     <div className="mt-2.5 flex items-center justify-between">
                       <span className="rounded-[5px] bg-[#262626] px-1.5 py-0.5 text-[10px] text-[#a3a3a3]">
                         +
@@ -1683,13 +1688,13 @@ export function App() {
                   </div>
                   <div className="flex w-full max-w-[320px] flex-col gap-1 text-left">
                     <div className="px-1.5 py-0.5 text-[9.5px] text-[#6e6e6e]">
-                      Ideas for you
+                      {t.home.ideasForYou}
                     </div>
                     <div className="rounded-[6px] bg-[#1a1a1a] px-2 py-1.5 text-[10.5px] text-[#bdbdbd]">
-                      Summarize today&apos;s sessions
+                      {t.home.ideaSummarize}
                     </div>
                     <div className="rounded-[6px] bg-[#1a1a1a] px-2 py-1.5 text-[10.5px] text-[#bdbdbd]">
-                      Audit MCP credentials
+                      {t.home.ideaAuditMcp}
                     </div>
                   </div>
                 </div>

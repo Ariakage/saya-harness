@@ -41,6 +41,7 @@ vi.mock("@streamdown/mermaid", () => ({
 }));
 
 import App from "./App";
+import { getMessages, greetingCandidates } from "./lib/i18n";
 import { formatTokenCount } from "./lib/sanitize";
 import { useAppStore } from "./store/useAppStore";
 
@@ -1016,13 +1017,28 @@ describe("App Stage 3 runtime integration", () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "get_bootstrap_state") return boot;
       if (cmd === "list_sessions") return samplePage();
+      if (cmd === "list_modules" || cmd === "list_extensions" || cmd === "list_jobs") {
+        return [];
+      }
+      if (cmd === "list_mcp_servers" || cmd === "list_credentials") {
+        return [];
+      }
+      if (cmd === "query_memory") {
+        return { settings: { enabled: true }, data: { entries: [] } };
+      }
       return null;
     });
+
+    const expectGreetingFrom = (locale: "en-US" | "zh-CN" | "zh-TW") => {
+      const candidates = greetingCandidates(getMessages(locale).home);
+      const shown = candidates.some((g) => screen.queryByText(g) !== null);
+      expect(shown).toBeTruthy();
+    };
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Good morning, ariakage.")).toBeTruthy();
+      expectGreetingFrom("en-US");
     });
 
     // Open user menu and verify Language entry
@@ -1044,16 +1060,66 @@ describe("App Stage 3 runtime integration", () => {
       expect(useAppStore.getState().locale).toBe("zh-CN");
       expect(document.documentElement.lang).toBe("zh-CN");
       expect(screen.getByText("选择语言")).toBeTruthy();
-      expect(screen.getByText("早上好，ariakage。")).toBeTruthy();
+      expectGreetingFrom("zh-CN");
     });
 
-    // Switch to Traditional Chinese
-    fireEvent.click(screen.getByTestId("language-option-zh-TW"));
+    // Escape closes LanguageDialog, verify dialogs localize cleanly in zh-CN
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("language-dialog")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
+    fireEvent.click(screen.getByRole("button", { name: "常规与偏好设置" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-dialog")).toBeTruthy();
+      expect(screen.getByText("工作区目录")).toBeTruthy();
+      expect(screen.getByText("界面语言")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("Close settings"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail Sessions" }));
+    fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("session-browser-dialog")).toBeTruthy();
+      expect(screen.getByText("会话与项目历史")).toBeTruthy();
+      expect(screen.getByText("会话详情")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("Close session browser"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail MCP & Credentials" }));
+    fireEvent.click(screen.getByRole("button", { name: "管理服务器与凭据" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-credentials-dialog")).toBeTruthy();
+      expect(screen.getByText("已配置的 MCP 服务器")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("Close MCP and credentials dialog"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail Memory" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开记忆管理" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("memory-dialog")).toBeTruthy();
+      expect(screen.getByText("全局记忆管理（两阶段复核）")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("Close memory manager"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail Export" }));
+    fireEvent.click(screen.getByRole("button", { name: "导出会话…" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("export-dialog")).toBeTruthy();
+      expect(screen.getByText("导出会话记录")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("Close export dialog"));
+
+    // Switch to Traditional Chinese and verify LanguageDialog + SettingsDialog
+    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+    fireEvent.click(await screen.findByTestId("user-menu-language"));
+    fireEvent.click(await screen.findByTestId("language-option-zh-TW"));
     await waitFor(() => {
       expect(useAppStore.getState().locale).toBe("zh-TW");
       expect(document.documentElement.lang).toBe("zh-TW");
       expect(screen.getByText("選擇語言")).toBeTruthy();
-      expect(screen.getByText("早安，ariakage。")).toBeTruthy();
+      expectGreetingFrom("zh-TW");
     });
 
     // Switch back to English (United States)
@@ -1061,7 +1127,7 @@ describe("App Stage 3 runtime integration", () => {
     await waitFor(() => {
       expect(useAppStore.getState().locale).toBe("en-US");
       expect(screen.getByText("Choose your language")).toBeTruthy();
-      expect(screen.getByText("Good morning, ariakage.")).toBeTruthy();
+      expectGreetingFrom("en-US");
     });
 
     // Escape closes LanguageDialog

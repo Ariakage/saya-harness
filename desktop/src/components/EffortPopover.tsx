@@ -7,6 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { getMessages } from "../lib/i18n";
+import { useAppStore } from "../store/useAppStore";
 
 export interface EffortLevelDef {
   id: "low" | "medium" | "high" | "max" | "ultracode";
@@ -463,8 +465,11 @@ export function EffortPill({
   disabled,
   onClick,
 }: EffortPillProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const index = resolveEffortIndex(effort, ultracodeEnabled);
   const level = EFFORT_LEVELS[index];
+  const levelText = t.effort.levels[level.id];
   const isUltra = index === ULTRA_INDEX;
 
   return (
@@ -473,7 +478,7 @@ export function EffortPill({
       disabled={disabled}
       onClick={onClick}
       aria-expanded={open}
-      aria-label={`Effort: ${level.name}. Open effort settings.`}
+      aria-label={`${t.effort.pillPrefix}: ${levelText.name}`}
       data-testid="effort-pill"
       className={`inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-[9px] text-[11px] transition-colors disabled:opacity-40 ${
         isUltra
@@ -486,7 +491,7 @@ export function EffortPill({
           isUltra ? "text-[#b9aeff]" : "text-[#8a8a8a]"
         }`}
       />
-      <span>Effort: {level.name}</span>
+      <span>{t.effort.pillPrefix}: {levelText.name}</span>
       <ChevronUp
         className={`h-3 w-3 shrink-0 opacity-60 transition-transform duration-150 ease-out ${
           open ? "rotate-180" : ""
@@ -513,6 +518,8 @@ export function EffortPopover({
   onSelectEffort,
   onClose,
 }: EffortPopoverProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const externalIndex = resolveEffortIndex(effort, ultracodeEnabled);
   const [selectedIndex, setSelectedIndex] = useState(externalIndex);
   const [dragging, setDragging] = useState(false);
@@ -878,6 +885,7 @@ export function EffortPopover({
   };
 
   const activeLevel = EFFORT_LEVELS[selectedIndex];
+  const activeLevelText = t.effort.levels[activeLevel.id];
   const isUltra = selectedIndex === ULTRA_INDEX;
 
   return (
@@ -898,17 +906,17 @@ export function EffortPopover({
       <div className="mb-3 flex min-h-[18px] items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[12px] font-medium tracking-[0.005em] text-[#8a8a8a]">
-            Effort
+            {t.effort.header}
           </span>
           <span className="ccs-level" data-testid="effort-level-label">
-            {activeLevel.name}
+            {activeLevelText.name}
           </span>
         </div>
         <button
           type="button"
           className="ccs-help"
           aria-label="About effort"
-          data-tip="Faster on the left, smarter on the right. Choose Ultracode to add dynamic workflows."
+          data-tip={t.effort.helpTip}
         >
           ?
         </button>
@@ -918,8 +926,8 @@ export function EffortPopover({
         className="mx-[2px] mb-[7px] flex items-center justify-between gap-2 text-[11px] text-[#8a8a8a]"
         aria-hidden="true"
       >
-        <span>Faster</span>
-        <span>Smarter</span>
+        <span>{t.effort.faster}</span>
+        <span>{t.effort.smarter}</span>
       </div>
 
       <div
@@ -930,7 +938,7 @@ export function EffortPopover({
         aria-valuemin={0}
         aria-valuemax={ULTRA_INDEX}
         aria-valuenow={selectedIndex}
-        aria-valuetext={`${activeLevel.name}. ${activeLevel.warning ?? activeLevel.desc}`}
+        aria-valuetext={`${activeLevelText.name}. ${activeLevelText.warning ?? activeLevelText.desc}`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={finishDrag}
@@ -952,7 +960,7 @@ export function EffortPopover({
               <button
                 key={lvl.id}
                 type="button"
-                title={lvl.name}
+                title={t.effort.levels[lvl.id].name}
                 aria-label={`Set effort to ${lvl.name}`}
                 style={{ left: `${stopCenters[idx] ?? 10}px` }}
                 onPointerDown={(ev) => {
@@ -979,15 +987,15 @@ export function EffortPopover({
 
       <p
         className={`mx-[2px] mt-[10px] min-h-[34px] text-[11.5px] leading-[1.45] ${
-          activeLevel.warning ? "text-[#fac454]" : "text-[#8a8a8a]"
+          activeLevelText.warning ? "text-[#fac454]" : "text-[#8a8a8a]"
         }`}
       >
-        {activeLevel.warning ? (
+        {activeLevelText.warning ? (
           <span className="mr-1.5 inline-grid h-[11px] w-[11px] place-items-center rounded-full border border-current text-[8px] font-semibold leading-none">
             !
           </span>
         ) : null}
-        {activeLevel.warning ?? activeLevel.desc}
+        {activeLevelText.warning ?? activeLevelText.desc}
       </p>
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#282828] pt-3">
@@ -997,10 +1005,10 @@ export function EffortPopover({
               isUltra ? "text-[#b9aeff]" : "text-[#c9c9c9]"
             }`}
           >
-            Ultracode
+            {t.effort.ultracodeTitle}
           </div>
           <p className="mt-0.5 text-[10.5px] leading-[1.4] text-[#8a8a8a]">
-            Standing dynamic-workflow orchestration for this session.
+            {t.effort.ultracodeDesc}
           </p>
         </div>
         <button

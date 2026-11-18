@@ -379,23 +379,23 @@ export function SettingsDialog({
                   <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
                     <div className="mb-1.5 text-[12px] text-[#c9c9c9]">CLI</div>
                     <div className="text-[16px] font-semibold text-[#e8e8e8]">
-                      12.4M <span className="text-[10.5px] font-normal text-[#6e6e6e]">tokens</span>
+                      12.4M <span className="text-[10.5px] font-normal text-[#6e6e6e]">{t.settings.tokensUnit}</span>
                     </div>
                     <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
-                      <div className="flex justify-between"><span>Input</span><span>4.1M</span></div>
-                      <div className="flex justify-between"><span>Output</span><span>8.3M</span></div>
-                      <div className="flex justify-between"><span>Cache read</span><span>31.2M</span></div>
+                      <div className="flex justify-between"><span>{t.settings.inputLabel}</span><span>4.1M</span></div>
+                      <div className="flex justify-between"><span>{t.settings.outputLabel}</span><span>8.3M</span></div>
+                      <div className="flex justify-between"><span>{t.settings.cacheReadLabel}</span><span>31.2M</span></div>
                     </div>
                   </div>
                   <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
                     <div className="mb-1.5 text-[12px] text-[#c9c9c9]">TUI</div>
                     <div className="text-[16px] font-semibold text-[#e8e8e8]">
-                      58.9M <span className="text-[10.5px] font-normal text-[#6e6e6e]">tokens</span>
+                      58.9M <span className="text-[10.5px] font-normal text-[#6e6e6e]">{t.settings.tokensUnit}</span>
                     </div>
                     <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
-                      <div className="flex justify-between"><span>Input</span><span>21.7M</span></div>
-                      <div className="flex justify-between"><span>Output</span><span>37.2M</span></div>
-                      <div className="flex justify-between"><span>Cache read</span><span>104M</span></div>
+                      <div className="flex justify-between"><span>{t.settings.inputLabel}</span><span>21.7M</span></div>
+                      <div className="flex justify-between"><span>{t.settings.outputLabel}</span><span>37.2M</span></div>
+                      <div className="flex justify-between"><span>{t.settings.cacheReadLabel}</span><span>104M</span></div>
                     </div>
                   </div>
                   <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
@@ -408,20 +408,20 @@ export function SettingsDialog({
                           )
                         : "178.9M"}{" "}
                       <span className="text-[10.5px] font-normal text-[#6e6e6e]">
-                        tokens
+                        {t.settings.tokensUnit}
                       </span>
                     </div>
                     <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
                       <div className="flex justify-between">
-                        <span>Input</span>
+                        <span>{t.settings.inputLabel}</span>
                         <span>{formatTokenCount(lastUsage?.input_tokens ?? 152300000)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Output</span>
+                        <span>{t.settings.outputLabel}</span>
                         <span>{formatTokenCount(lastUsage?.output_tokens ?? 26600000)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Cache read</span>
+                        <span>{t.settings.cacheReadLabel}</span>
                         <span>{formatTokenCount(lastUsage?.cached_input_tokens ?? 79000000)}</span>
                       </div>
                     </div>
@@ -436,15 +436,15 @@ export function SettingsDialog({
                     <div className="flex items-center gap-3 text-[11px] text-[#6e6e6e]">
                       <span className="inline-flex items-center gap-1">
                         <span className="h-[7px] w-[7px] rounded-[2px] bg-[#d9a08e]" />
-                        input
+                        {t.settings.inputLower}
                       </span>
                       <span className="inline-flex items-center gap-1">
                         <span className="h-[7px] w-[7px] rounded-[2px] bg-[#8aa8d8]" />
-                        output
+                        {t.settings.outputLower}
                       </span>
                       <span className="inline-flex items-center gap-1">
                         <span className="h-[7px] w-[7px] rounded-[2px] bg-[#6b6b6b]" />
-                        cache read
+                        {t.settings.cacheReadLower}
                       </span>
                     </div>
                   </div>
@@ -470,9 +470,9 @@ export function SettingsDialog({
                             className={`pointer-events-none absolute bottom-full z-50 mb-1.5 hidden ${alignClass} whitespace-nowrap rounded-[7px] border border-[#383838] bg-[#161616] px-2.5 py-1.5 text-left text-[10.5px] shadow-[0_12px_32px_rgba(0,0,0,0.8)] group-hover:block`}
                           >
                             <div className="mb-0.5 font-medium text-[#e8e8e8]">
-                              {idx === bars.length - 1 ? t.settings.today : `Day ${idx + 1}`}
+                              {idx === bars.length - 1 ? t.settings.today : t.settings.dayLabel(idx + 1)}
                               <span className="ml-1.5 text-[#8a8a8a]">
-                                {inp + outp + cache}k total
+                                {inp + outp + cache}k {t.settings.totalLower}
                               </span>
                             </div>
                             <div className="flex items-center gap-1.5 text-[#c9c9c9]">
@@ -480,21 +480,21 @@ export function SettingsDialog({
                                 className="h-1.5 w-1.5 rounded-[1px]"
                                 style={{ backgroundColor: "#d9a08e" }}
                               />
-                              input {inp}k
+                              {t.settings.inputLower} {inp}k
                             </div>
                             <div className="flex items-center gap-1.5 text-[#c9c9c9]">
                               <span
                                 className="h-1.5 w-1.5 rounded-[1px]"
                                 style={{ backgroundColor: "#8aa8d8" }}
                               />
-                              output {outp}k
+                              {t.settings.outputLower} {outp}k
                             </div>
                             <div className="flex items-center gap-1.5 text-[#c9c9c9]">
                               <span
                                 className="h-1.5 w-1.5 rounded-[1px]"
                                 style={{ backgroundColor: "#6b6b6b" }}
                               />
-                              cache read {cache}k
+                              {t.settings.cacheReadLower} {cache}k
                             </div>
                           </div>
                           <div className="flex h-full w-full flex-col overflow-hidden rounded-[2px] transition-[filter] duration-150 group-hover:brightness-110">
@@ -528,7 +528,7 @@ export function SettingsDialog({
                     })}
                   </div>
                   <div className="mt-1 flex justify-between text-[10px] text-[#5e5e5e]">
-                    <span>Window: {usageRange}</span>
+                    <span>{t.settings.windowLabel(usageRange)}</span>
                     <span>{t.settings.today}</span>
                   </div>
                 </div>

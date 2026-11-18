@@ -1,10 +1,14 @@
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
 import { isBrowserPreview } from "../preview/browserPreview";
+import { useAppStore } from "../store/useAppStore";
 
 export function UpdaterBanner() {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [update, setUpdate] = useState<Update | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installed, setInstalled] = useState(false);
@@ -60,13 +64,14 @@ export function UpdaterBanner() {
     let downloaded = 0;
 
     try {
+      const msg = getMessages(useAppStore.getState().locale);
       await update.downloadAndInstall((event: DownloadEvent) => {
         if (event.event === "Started") {
           totalBytes = event.data.contentLength ?? 0;
           setProgressText(
             totalBytes > 0
               ? `0 / ${Math.max(1, Math.round(totalBytes / 1024))} KiB`
-              : "Downloading..."
+              : msg.updater.downloading
           );
         } else if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
@@ -76,12 +81,12 @@ export function UpdaterBanner() {
               : `${Math.max(1, Math.round(downloaded / 1024))} KiB`
           );
         } else if (event.event === "Finished") {
-          setProgressText("Downloaded; installing...");
+          setProgressText(msg.updater.downloadedInstalling);
         }
       });
       installedRef.current = true;
       setInstalled(true);
-      setProgressText("Update installed — restart Soyo to finish applying.");
+      setProgressText(msg.updater.installedRestart);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMsg(sanitizeDisplayText(msg));
@@ -106,10 +111,10 @@ export function UpdaterBanner() {
       <div className="flex min-w-0 items-center gap-2">
         <Download className="h-3.5 w-3.5 shrink-0 text-[#d9a08e]" />
         <span className="font-medium">
-          Update available: v{sanitizeDisplayText(update.version)}
+          {t.updater.available(sanitizeDisplayText(update.version))}
         </span>
         <span className="font-mono text-[11px] text-[#7a7a7a]">
-          (current v{sanitizeDisplayText(update.currentVersion)})
+          {t.updater.current(sanitizeDisplayText(update.currentVersion))}
         </span>
         {progressText && (
           <span className="font-mono text-[11px] text-[#4ade80]">
@@ -132,7 +137,7 @@ export function UpdaterBanner() {
             <RefreshCw
               className={`h-3 w-3 ${installing ? "animate-spin" : ""}`}
             />
-            {installing ? "Installing..." : "Install & Restart"}
+            {installing ? t.updater.installingBtn : t.updater.installRestartBtn}
           </button>
         )}
         <button

@@ -1,6 +1,7 @@
 import { Bot, ChevronRight, Globe, Pencil, Terminal } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { DesktopMessage } from "../store/useAppStore";
+import { getMessages } from "../lib/i18n";
+import { type DesktopMessage, useAppStore } from "../store/useAppStore";
 import { SessionMediaPreview } from "./AttachmentPreview";
 
 export interface ToolCardViewProps {
@@ -202,6 +203,8 @@ function renderStepStatusBadge(status: string | null) {
 }
 
 export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const toolName = message.toolName ?? message.label;
   const toolNameLower = toolName.toLowerCase();
   const isSubagent =
@@ -232,25 +235,25 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
   const statusPill = (() => {
     switch (message.toolState) {
       case "requested":
-        return <span className="soyo-pill text-[#7aa2f7]">requested</span>;
+        return <span className="soyo-pill text-[#7aa2f7]">{t.cards.requested}</span>;
       case "running":
         return (
           <span className="soyo-pill text-[#fac454]">
             <span className="h-1.5 w-1.5 rounded-full bg-[#fac454] soyo-pulse-dot" />
-            running
+            {t.cards.running}
           </span>
         );
       case "error":
-        return <span className="soyo-pill text-[#f87171]">error</span>;
+        return <span className="soyo-pill text-[#f87171]">{t.cards.error}</span>;
       case "ok":
-        return <span className="soyo-pill text-[#4ade80]">done</span>;
+        return <span className="soyo-pill text-[#4ade80]">{t.cards.done}</span>;
       default:
         return message.toolOk === true ? (
-          <span className="soyo-pill text-[#4ade80]">done</span>
+          <span className="soyo-pill text-[#4ade80]">{t.cards.done}</span>
         ) : message.toolOk === false ? (
-          <span className="soyo-pill text-[#f87171]">error</span>
+          <span className="soyo-pill text-[#f87171]">{t.cards.error}</span>
         ) : (
-          <span className="soyo-pill text-[#a3a3a3]">tool</span>
+          <span className="soyo-pill text-[#a3a3a3]">{t.cards.tool}</span>
         );
     }
   })();
@@ -271,7 +274,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
           <span className="font-medium text-[#e8e8e8]">
             {message.toolName ?? "Subagent"}
           </span>
-          <span className="soyo-pill py-0 text-[11px] text-[#7aa2f7]">subagent</span>
+          <span className="soyo-pill py-0 text-[11px] text-[#7aa2f7]">{t.cards.subagent}</span>
           {statusPill}
           <span className="flex-1" />
           {message.toolSummary && (
@@ -362,7 +365,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
         </span>
         {statusPill}
         {message.truncated && (
-          <span className="soyo-pill text-[#fac454]">truncated</span>
+          <span className="soyo-pill text-[#fac454]">{t.cards.truncated}</span>
         )}
         <span className="flex-1" />
         {parsedDiff ? (
@@ -399,7 +402,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
         <div className="soyo-panel-enter ml-[7px] mt-1 space-y-2 border-l-2 border-[#2c2c2c] pb-1.5 pl-3.5 text-xs">
           {message.toolReviewNote && (
             <div className="rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-2.5 py-1.5 text-[11px] text-[#a3a3a3]">
-              Review: {message.toolReviewNote}
+              {t.cards.reviewPrefix} {message.toolReviewNote}
             </div>
           )}
 
@@ -425,7 +428,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
                 )}
                 <span className="flex-1" />
                 <span className="text-[#5e5e5e]">
-                  {parsedDiff.hunkCount} {parsedDiff.hunkCount === 1 ? "hunk" : "hunks"} ›
+                  {t.cards.hunkCount(parsedDiff.hunkCount)} ›
                 </span>
               </div>
               <div className="soyo-diff-body">
@@ -458,8 +461,8 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
                     className="w-full border-t border-[#1f1f1f] px-3 py-1.5 text-center text-[11px] text-[#6e6e6e] transition-colors hover:bg-[#181818] hover:text-[#c9c9c9]"
                   >
                     {showAllDiffLines
-                      ? "Collapse diff preview ‹"
-                      : `${hiddenDiffCount} lines hidden · expand ›`}
+                      ? t.cards.collapseDiff
+                      : t.cards.expandDiff(hiddenDiffCount)}
                   </button>
                 )}
             </div>
@@ -469,7 +472,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
                 message.toolRequestFormatted !== message.text && (
                   <div>
                     <div className="mb-1 text-[10px] uppercase tracking-wider text-[#6e6e6e]">
-                      Request
+                      {t.cards.requestHeader}
                     </div>
                     <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[#262626] bg-[#161616] p-2 font-mono text-[11px] text-[#c9d1d9]">
                       {message.toolRequestFormatted}
@@ -479,7 +482,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
               {message.text && (
                 <div>
                   <div className="mb-1 text-[10px] uppercase tracking-wider text-[#6e6e6e]">
-                    Output
+                    {t.cards.outputHeader}
                   </div>
                   <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[#262626] bg-[#161616] p-2 font-mono text-[11px] text-[#c9d1d9]">
                     {message.text}

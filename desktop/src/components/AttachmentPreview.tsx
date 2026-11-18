@@ -1,6 +1,8 @@
 import { FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
 import type { StagedAttachmentDto } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 
 export interface StagedAttachmentsStripProps {
   items: StagedAttachmentDto[];
@@ -72,6 +74,9 @@ export function SessionMediaPreview({
   sessionId,
   mediaRefs,
 }: SessionMediaPreviewProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
+
   if (!sessionId || mediaRefs.length === 0) {
     return null;
   }
@@ -79,7 +84,7 @@ export function SessionMediaPreview({
   return (
     <div className="space-y-1.5" data-testid="session-media-preview">
       <div className="text-[10px] uppercase tracking-wider text-[#6e6e6e]">
-        Attachments ({mediaRefs.length})
+        {t.cards.attachmentsHeader(mediaRefs.length)}
       </div>
       <div className="flex flex-wrap gap-2">
         {mediaRefs.map((ref) => {

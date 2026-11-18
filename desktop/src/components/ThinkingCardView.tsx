@@ -1,12 +1,16 @@
 import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import type { ThinkingSnapshotDto } from "../bindings";
+import { getMessages } from "../lib/i18n";
+import { useAppStore } from "../store/useAppStore";
 
 export interface ThinkingCardViewProps {
   entries: ThinkingSnapshotDto[];
 }
 
 export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [expanded, setExpanded] = useState(false);
 
   if (entries.length === 0) {
@@ -30,17 +34,17 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
             expanded ? "rotate-90" : ""
           }`}
         />
-        <span>{expanded ? "Thinking" : anyActive ? "Thinking…" : "Thought"}</span>
+        <span>{expanded ? t.cards.thinking : anyActive ? t.cards.thinkingActive : t.cards.thought}</span>
         {!expanded && (
           <span className="soyo-pill text-[#a3a3a3]">
             {anyActive && (
               <span className="h-1.5 w-1.5 rounded-full bg-[#a096eb] soyo-pulse-dot" />
             )}
-            {anyActive ? "reasoning" : "auto-collapsed"}
+            {anyActive ? t.cards.reasoning : t.cards.autoCollapsed}
           </span>
         )}
         {anyTruncated && (
-          <span className="soyo-pill text-[#7a7a7a]">truncated</span>
+          <span className="soyo-pill text-[#7a7a7a]">{t.cards.truncated}</span>
         )}
         {!expanded && latest.available && (
           <span className="ml-auto max-w-md truncate text-[11.5px] text-[#6e6e6e]">
@@ -55,11 +59,11 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
             <div key={entry.request_id} className="space-y-1">
               {entry.available ? (
                 <div className="whitespace-pre-wrap">
-                  {entry.text || "(empty)"}
+                  {entry.text || t.cards.empty}
                 </div>
               ) : (
                 <div className="text-[#6e6e6e]">
-                  Reasoning trace unavailable or redacted.
+                  {t.cards.reasoningUnavailable}
                 </div>
               )}
             </div>

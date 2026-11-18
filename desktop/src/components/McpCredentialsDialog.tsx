@@ -5,7 +5,9 @@ import {
   type CredentialRecordDto_Serialize,
   type McpServerDto_Serialize,
 } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 
 export interface McpCredentialsDialogProps {
   open: boolean;
@@ -18,6 +20,8 @@ export function McpCredentialsDialog({
   runActive,
   onClose,
 }: McpCredentialsDialogProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [servers, setServers] = useState<McpServerDto_Serialize[]>([]);
   const [credentials, setCredentials] = useState<CredentialRecordDto_Serialize[]>([]);
   const [importServer, setImportServer] = useState("");
@@ -126,7 +130,7 @@ export function McpCredentialsDialog({
           <div className="flex items-center gap-2">
             <KeyRound className="h-4 w-4 text-[#d9a08e]" />
             <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-              MCP Servers & Credentials (Redacted Metadata Only)
+              {t.mcpDialog.title}
             </h2>
           </div>
           <button
@@ -149,11 +153,11 @@ export function McpCredentialsDialog({
           <section className="space-y-2">
             <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
               <Plug className="h-3.5 w-3.5 text-[#7aa2f7]" />
-              <span>Configured MCP Servers</span>
+              <span>{t.mcpDialog.configuredServers}</span>
             </div>
             {servers.length === 0 ? (
               <div className="rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-3 text-[#6e6e6e]">
-                No MCP servers configured.
+                {t.mcpDialog.noServers}
               </div>
             ) : (
               <ul className="space-y-2">
@@ -183,7 +187,7 @@ export function McpCredentialsDialog({
                         srv.enabled ? "text-[#4ade80]" : "text-[#8a8a8a]"
                       } disabled:opacity-40`}
                     >
-                      {srv.enabled ? "Enabled" : "Disabled"}
+                      {srv.enabled ? t.mcpDialog.enabled : t.mcpDialog.disabled}
                     </button>
                   </li>
                 ))}
@@ -194,11 +198,11 @@ export function McpCredentialsDialog({
           <section className="space-y-2">
             <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
               <ShieldCheck className="h-3.5 w-3.5 text-[#4ade80]" />
-              <span>Stored Credential References</span>
+              <span>{t.mcpDialog.storedCredentials}</span>
             </div>
             {credentials.length === 0 ? (
               <div className="rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-3 text-[#6e6e6e]">
-                No stored host credential references.
+                {t.mcpDialog.noCredentials}
               </div>
             ) : (
               <ul className="space-y-2">
@@ -217,7 +221,7 @@ export function McpCredentialsDialog({
                         </span>
                         {cred.revoked && (
                           <span className="soyo-pill py-0 text-[10px] text-[#f87171]">
-                            revoked
+                            {t.mcpDialog.revoked}
                           </span>
                         )}
                       </div>
@@ -232,7 +236,7 @@ export function McpCredentialsDialog({
                         className="soyo-pill-btn shrink-0 text-[#f87171]"
                       >
                         <Trash2 className="h-3 w-3" />
-                        Revoke
+                        {t.mcpDialog.revoke}
                       </button>
                     )}
                   </li>
@@ -243,11 +247,10 @@ export function McpCredentialsDialog({
 
           <section className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
             <div className="font-medium text-[#e8e8e8]">
-              Import Bearer Secret from Environment Variable
+              {t.mcpDialog.importTitle}
             </div>
             <p className="text-[11px] text-[#7a7a7a]">
-              Plaintext tokens stay in host memory and private storage; enter
-              only the environment variable name.
+              {t.mcpDialog.importDesc}
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <input
@@ -255,7 +258,7 @@ export function McpCredentialsDialog({
                 aria-label="MCP server name"
                 value={importServer}
                 onChange={(e) => setImportServer(e.target.value)}
-                placeholder="HTTP MCP server name"
+                placeholder={t.mcpDialog.serverPlaceholder}
                 className="soyo-input px-2.5 py-1.5 text-xs"
               />
               <input
@@ -263,7 +266,7 @@ export function McpCredentialsDialog({
                 aria-label="Secret environment variable"
                 value={envVar}
                 onChange={(e) => setEnvVar(e.target.value)}
-                placeholder="Env var name (e.g. MCP_TOKEN)"
+                placeholder={t.mcpDialog.envPlaceholder}
                 className="soyo-input px-2.5 py-1.5 font-mono text-xs"
               />
             </div>
@@ -272,7 +275,7 @@ export function McpCredentialsDialog({
               aria-label="Credential scopes"
               value={scopesInput}
               onChange={(e) => setScopesInput(e.target.value)}
-              placeholder="Optional comma-separated scopes"
+              placeholder={t.mcpDialog.scopesPlaceholder}
               className="soyo-input w-full px-2.5 py-1.5 text-xs"
             />
             <div className="flex items-center justify-between pt-1">
@@ -283,7 +286,7 @@ export function McpCredentialsDialog({
                   onChange={(e) => setApproveScopes(e.target.checked)}
                   className="soyo-checkbox"
                 />
-                Explicitly approve endpoint & scopes
+                {t.mcpDialog.approveScopesLabel}
               </label>
               <button
                 type="button"
@@ -293,7 +296,7 @@ export function McpCredentialsDialog({
                 onClick={() => void handleImport()}
                 className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 text-xs font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
               >
-                Import Reference
+                {t.mcpDialog.importBtn}
               </button>
             </div>
           </section>

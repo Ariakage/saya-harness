@@ -1,7 +1,9 @@
 import { MessageSquareMore } from "lucide-react";
 import { useState } from "react";
 import type { InputRequestDto } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 
 export interface ClarificationDialogProps {
   request: InputRequestDto;
@@ -12,6 +14,8 @@ export function ClarificationDialog({
   request,
   onReply,
 }: ClarificationDialogProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [customAnswer, setCustomAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -38,7 +42,7 @@ export function ClarificationDialog({
         <div className="flex items-center gap-2 border-b border-[#232323] px-4 py-3">
           <MessageSquareMore className="h-4 w-4 text-[#d9a08e]" />
           <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-            Clarification Needed
+            {t.clarification.title}
           </h2>
         </div>
 
@@ -50,7 +54,7 @@ export function ClarificationDialog({
           {request.options.length > 0 && (
             <div className="space-y-1.5">
               <div className="text-[10px] uppercase tracking-wider text-[#6e6e6e]">
-                Suggested Options
+                {t.clarification.suggestedOptions}
               </div>
               <div className="flex flex-col gap-1.5">
                 {request.options.map((opt, idx) => (
@@ -76,7 +80,7 @@ export function ClarificationDialog({
               htmlFor="clarification-custom-input"
               className="block text-[10px] uppercase tracking-wider text-[#6e6e6e]"
             >
-              Custom Answer
+              {t.clarification.customAnswer}
             </label>
             <div className="flex gap-2">
               <input
@@ -90,7 +94,7 @@ export function ClarificationDialog({
                     void submitAnswer(customAnswer);
                   }
                 }}
-                placeholder="Type your response..."
+                placeholder={t.clarification.placeholder}
                 className="soyo-input flex-1 px-3 py-1.5 text-xs"
               />
               <button
@@ -99,7 +103,7 @@ export function ClarificationDialog({
                 onClick={() => void submitAnswer(customAnswer)}
                 className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
               >
-                Submit
+                {t.clarification.submitBtn}
               </button>
             </div>
           </div>

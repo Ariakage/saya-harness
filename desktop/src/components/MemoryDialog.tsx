@@ -5,6 +5,8 @@ import {
   type MemoryQueryResultDto,
   type PreparedMemoryReviewDto,
 } from "../bindings";
+import { getMessages } from "../lib/i18n";
+import { useAppStore } from "../store/useAppStore";
 
 export interface MemoryDialogProps {
   open: boolean;
@@ -13,6 +15,8 @@ export interface MemoryDialogProps {
 }
 
 export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [queryCmd, setQueryCmd] = useState("list");
   const [queryResult, setQueryResult] = useState<MemoryQueryResultDto | null>(
     null
@@ -81,7 +85,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
     try {
       const res = await commands.confirmMemoryAction(prepared.action_id);
       if (res.status === "ok") {
-        setConfirmMsg(`Applied memory operation ${prepared.operation_id}`);
+        setConfirmMsg(t.memoryDialog.appliedMsg(prepared.operation_id));
         setPrepared(null);
         setActionCmd("");
         await runQuery(queryCmd);
@@ -106,7 +110,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-[#d9a08e]" />
             <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-              Global Memory Administration (Two-Phase Review)
+              {t.memoryDialog.title}
             </h2>
           </div>
           <button
@@ -147,7 +151,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 className="soyo-pill-btn font-medium text-[#e8e8e8]"
               >
                 <Search className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                Query
+                {t.memoryDialog.queryBtn}
               </button>
             </div>
             {queryResult && (
@@ -159,7 +163,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
 
           <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
             <div className="font-medium text-[#e8e8e8]">
-              Prepare Memory Mutation / Export
+              {t.memoryDialog.prepareTitle}
             </div>
             <div className="flex gap-2">
               <input
@@ -168,7 +172,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 value={actionCmd}
                 disabled={runActive || busy}
                 onChange={(e) => setActionCmd(e.target.value)}
-                placeholder="e.g. forget <fact_id> | correct <fact_id> <text> | export <path>"
+                placeholder={t.memoryDialog.preparePlaceholder}
                 className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               <button
@@ -177,7 +181,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 onClick={() => void handlePrepare()}
                 className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
               >
-                Prepare Review
+                {t.memoryDialog.prepareBtn}
               </button>
             </div>
 
@@ -197,7 +201,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                     onClick={() => setPrepared(null)}
                     className="soyo-pill-btn text-[#c9c9c9]"
                   >
-                    Discard
+                    {t.memoryDialog.discardBtn}
                   </button>
                   <button
                     type="button"
@@ -206,7 +210,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                     className="soyo-pill-btn font-semibold text-[#4ade80]"
                   >
                     <Check className="h-3.5 w-3.5" />
-                    Confirm Apply
+                    {t.memoryDialog.confirmBtn}
                   </button>
                 </div>
               </div>

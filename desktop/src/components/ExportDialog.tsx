@@ -8,6 +8,8 @@ import {
   type ExportResultDto,
   type ExportScopeDto,
 } from "../bindings";
+import { getMessages } from "../lib/i18n";
+import { useAppStore } from "../store/useAppStore";
 
 export interface ExportDialogProps {
   open: boolean;
@@ -22,6 +24,8 @@ export function ExportDialog({
   workspace,
   onClose,
 }: ExportDialogProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [targetPath, setTargetPath] = useState("session-export.md");
   const [format, setFormat] = useState<ExportFormatDto>("markdown");
   const [scope, setScope] = useState<ExportScopeDto>("transcript");
@@ -82,7 +86,7 @@ export function ExportDialog({
           <div className="flex items-center gap-2">
             <Download className="h-4 w-4 text-[#d9a08e]" />
             <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-              Export Session Transcript
+              {t.exportDialog.title}
             </h2>
           </div>
           <button
@@ -104,7 +108,7 @@ export function ExportDialog({
 
           {result && (
             <div className="space-y-1 rounded-[9px] border border-[#4ade80]/35 bg-[#161c17] p-2.5 text-[#4ade80]">
-              <div className="font-medium">Export published</div>
+              <div className="font-medium">{t.exportDialog.published}</div>
               <div className="truncate font-mono text-[11px]">
                 {result.path} ({result.bytes} bytes · {result.format})
               </div>
@@ -116,8 +120,7 @@ export function ExportDialog({
               htmlFor="export-target-path"
               className="block text-[12px] text-[#a3a3a3]"
             >
-              Output File Path (relative to {workspace || "workspace"} or
-              absolute)
+              {t.exportDialog.outputPathLabel(workspace || t.inspector.workspace)}
             </label>
             <div className="flex gap-2">
               <input
@@ -134,7 +137,7 @@ export function ExportDialog({
                   onClick={() => {
                     void saveDialog({
                       defaultPath: targetPath || undefined,
-                      title: "Export session transcript",
+                      title: t.exportDialog.title,
                       filters: [
                         format === "json"
                           ? { name: "JSON", extensions: ["json"] }
@@ -146,7 +149,7 @@ export function ExportDialog({
                   }}
                   className="soyo-pill-btn shrink-0 font-medium text-[#c9c9c9]"
                 >
-                  Browse…
+                  {t.exportDialog.browse}
                 </button>
               )}
             </div>
@@ -158,7 +161,7 @@ export function ExportDialog({
                 htmlFor="export-format-select"
                 className="block text-[12px] text-[#a3a3a3]"
               >
-                Format
+                {t.exportDialog.format}
               </label>
               <select
                 id="export-format-select"
@@ -186,7 +189,7 @@ export function ExportDialog({
                 htmlFor="export-scope-select"
                 className="block text-[12px] text-[#a3a3a3]"
               >
-                Scope
+                {t.exportDialog.scope}
               </label>
               <select
                 id="export-scope-select"
@@ -195,10 +198,10 @@ export function ExportDialog({
                 className="soyo-select w-full px-2.5 py-1.5 text-xs"
               >
                 <option value="transcript" className="bg-[#181818]">
-                  Transcript
+                  {t.exportDialog.scopeTranscript}
                 </option>
                 <option value="full" className="bg-[#181818]">
-                  Full (with events/metrics)
+                  {t.exportDialog.scopeFull}
                 </option>
               </select>
             </div>
@@ -211,7 +214,7 @@ export function ExportDialog({
               onChange={(e) => setIncludeTools(e.target.checked)}
               className="soyo-checkbox"
             />
-            Include tool arguments and result bodies
+            {t.exportDialog.includeTools}
           </label>
         </div>
 
@@ -221,7 +224,7 @@ export function ExportDialog({
             onClick={onClose}
             className="soyo-pill-btn text-[#c9c9c9]"
           >
-            Close
+            {t.exportDialog.close}
           </button>
           <button
             type="button"
@@ -229,7 +232,7 @@ export function ExportDialog({
             onClick={() => void handleExport()}
             className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
           >
-            {busy ? "Exporting..." : "Publish Export"}
+            {busy ? t.exportDialog.exporting : t.exportDialog.publishBtn}
           </button>
         </div>
       </div>
