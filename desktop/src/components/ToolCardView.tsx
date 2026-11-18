@@ -181,18 +181,18 @@ function renderStepStatusBadge(status: string | null) {
   if (!status) return null;
   const normalized = status.toLowerCase();
   if (normalized === "done" || normalized === "ok" || normalized === "completed") {
-    return <span className="devin-pill py-0 text-[10.5px] text-[#4ade80]">{status}</span>;
+    return <span className="soyo-pill py-0 text-[10.5px] text-[#4ade80]">{status}</span>;
   }
   if (normalized === "running" || normalized === "in_progress") {
     return (
-      <span className="devin-pill py-0 text-[10.5px] text-[#fac454]">
+      <span className="soyo-pill py-0 text-[10.5px] text-[#fac454]">
         <span className="h-1.5 w-1.5 rounded-full bg-[#fac454] soyo-pulse-dot" />
         {status}
       </span>
     );
   }
   if (normalized === "error" || normalized === "failed") {
-    return <span className="devin-pill py-0 text-[10.5px] text-[#f87171]">{status}</span>;
+    return <span className="soyo-pill py-0 text-[10.5px] text-[#f87171]">{status}</span>;
   }
   return (
     <span className="ml-auto shrink-0 font-mono text-[11px] text-[#6e6e6e]">
@@ -232,25 +232,25 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
   const statusPill = (() => {
     switch (message.toolState) {
       case "requested":
-        return <span className="devin-pill text-[#7aa2f7]">requested</span>;
+        return <span className="soyo-pill text-[#7aa2f7]">requested</span>;
       case "running":
         return (
-          <span className="devin-pill text-[#fac454]">
+          <span className="soyo-pill text-[#fac454]">
             <span className="h-1.5 w-1.5 rounded-full bg-[#fac454] soyo-pulse-dot" />
             running
           </span>
         );
       case "error":
-        return <span className="devin-pill text-[#f87171]">error</span>;
+        return <span className="soyo-pill text-[#f87171]">error</span>;
       case "ok":
-        return <span className="devin-pill text-[#4ade80]">done</span>;
+        return <span className="soyo-pill text-[#4ade80]">done</span>;
       default:
         return message.toolOk === true ? (
-          <span className="devin-pill text-[#4ade80]">done</span>
+          <span className="soyo-pill text-[#4ade80]">done</span>
         ) : message.toolOk === false ? (
-          <span className="devin-pill text-[#f87171]">error</span>
+          <span className="soyo-pill text-[#f87171]">error</span>
         ) : (
-          <span className="devin-pill text-[#a3a3a3]">tool</span>
+          <span className="soyo-pill text-[#a3a3a3]">tool</span>
         );
     }
   })();
@@ -271,7 +271,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
           <span className="font-medium text-[#e8e8e8]">
             {message.toolName ?? "Subagent"}
           </span>
-          <span className="devin-pill py-0 text-[11px] text-[#7aa2f7]">subagent</span>
+          <span className="soyo-pill py-0 text-[11px] text-[#7aa2f7]">subagent</span>
           {statusPill}
           <span className="flex-1" />
           {message.toolSummary && (
@@ -362,7 +362,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
         </span>
         {statusPill}
         {message.truncated && (
-          <span className="devin-pill text-[#fac454]">truncated</span>
+          <span className="soyo-pill text-[#fac454]">truncated</span>
         )}
         <span className="flex-1" />
         {parsedDiff ? (

@@ -50,7 +50,7 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[#fac454]" />
           <span>Approval required</span>
         </div>
-        <span className={`devin-pill ${modeStyle.badgeClass}`}>
+        <span className={`soyo-pill ${modeStyle.badgeClass}`}>
           {modeStyle.label}
         </span>
       </div>
@@ -96,7 +96,7 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
             type="button"
             disabled={submitting}
             onClick={() => void handleDecision(false)}
-            className="devin-pill-btn text-[#f87171] disabled:opacity-40"
+            className="soyo-pill-btn text-[#f87171] disabled:opacity-40"
           >
             Deny (N)
           </button>
@@ -104,7 +104,7 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
             type="button"
             disabled={submitting}
             onClick={() => void handleDecision(true)}
-            className="devin-pill-btn text-[#4ade80] disabled:opacity-40"
+            className="soyo-pill-btn text-[#4ade80] disabled:opacity-40"
           >
             Allow (Y)
           </button>

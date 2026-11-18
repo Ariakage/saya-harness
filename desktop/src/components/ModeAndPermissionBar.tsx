@@ -60,12 +60,12 @@ export function ModeAndPermissionBar({
       </div>
 
       {pendingMode && pendingMode !== workMode && (
-        <span className="devin-pill text-[#8a8a8a]">
+        <span className="soyo-pill text-[#8a8a8a]">
           → {WORK_MODE_STYLES[pendingMode].label} next
         </span>
       )}
 
-      <div className="devin-pill">
+      <div className="soyo-pill">
         <Shield className="h-3 w-3 text-[#7a7a7a]" />
         <select
           aria-label="Permission mode"
@@ -74,7 +74,7 @@ export function ModeAndPermissionBar({
           onChange={(e) =>
             void onSelectPermission(e.target.value as PermissionModeDto)
           }
-          className={`devin-select is-inline text-[12px] font-medium ${
+          className={`soyo-select is-inline text-[12px] font-medium ${
             permissionMode === "manual" ? "text-[#fac454]" : "text-[#8aa8d8]"
           }`}
         >

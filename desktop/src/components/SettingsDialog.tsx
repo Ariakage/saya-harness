@@ -446,69 +446,81 @@ export function SettingsDialog({
 
                   {/* Stacked bar chart with pixel heights <= 88px (§4.7); hover shows per-day breakdown */}
                   <div className="mt-2 flex h-[96px] items-end gap-1 pt-2">
-                    {bars.map(([inp, outp, cache], idx) => (
-                      <div
-                        key={idx}
-                        className="group relative flex min-w-[4px] flex-1 flex-col rounded-[2px] transition-all duration-200 ease-out hover:brightness-110"
-                        style={{
-                          height: `${Math.round((inp + outp + cache) * scalePx)}px`,
-                        }}
-                      >
-                        <div className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-[7px] border border-[#2b2b2b] bg-[#1c1c1c] px-2 py-1.5 text-left text-[10.5px] shadow-[0_8px_24px_rgba(0,0,0,0.5)] group-hover:block">
-                          <div className="mb-0.5 font-medium text-[#e8e8e8]">
-                            {idx === bars.length - 1 ? "Today" : `Day ${idx + 1}`}
-                            <span className="ml-1.5 text-[#6e6e6e]">
-                              {inp + outp + cache}k total
-                            </span>
+                    {bars.map(([inp, outp, cache], idx) => {
+                      const alignClass =
+                        idx <= 2
+                          ? "left-0"
+                          : idx >= bars.length - 3
+                            ? "right-0"
+                            : "left-1/2 -translate-x-1/2";
+                      return (
+                        <div
+                          key={idx}
+                          className="group relative flex min-w-[4px] flex-1 flex-col hover:z-30 focus-within:z-30"
+                          style={{
+                            height: `${Math.round((inp + outp + cache) * scalePx)}px`,
+                          }}
+                        >
+                          <div
+                            className={`pointer-events-none absolute bottom-full z-50 mb-1.5 hidden ${alignClass} whitespace-nowrap rounded-[7px] border border-[#383838] bg-[#161616] px-2.5 py-1.5 text-left text-[10.5px] shadow-[0_12px_32px_rgba(0,0,0,0.8)] group-hover:block`}
+                          >
+                            <div className="mb-0.5 font-medium text-[#e8e8e8]">
+                              {idx === bars.length - 1 ? "Today" : `Day ${idx + 1}`}
+                              <span className="ml-1.5 text-[#8a8a8a]">
+                                {inp + outp + cache}k total
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                              <span
+                                className="h-1.5 w-1.5 rounded-[1px]"
+                                style={{ backgroundColor: "#d9a08e" }}
+                              />
+                              input {inp}k
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                              <span
+                                className="h-1.5 w-1.5 rounded-[1px]"
+                                style={{ backgroundColor: "#8aa8d8" }}
+                              />
+                              output {outp}k
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                              <span
+                                className="h-1.5 w-1.5 rounded-[1px]"
+                                style={{ backgroundColor: "#6b6b6b" }}
+                              />
+                              cache read {cache}k
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1.5 text-[#c9c9c9]">
-                            <span
-                              className="h-1.5 w-1.5 rounded-[1px]"
-                              style={{ backgroundColor: "#d9a08e" }}
-                            />
-                            input {inp}k
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[#c9c9c9]">
-                            <span
-                              className="h-1.5 w-1.5 rounded-[1px]"
-                              style={{ backgroundColor: "#8aa8d8" }}
-                            />
-                            output {outp}k
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[#c9c9c9]">
-                            <span
-                              className="h-1.5 w-1.5 rounded-[1px]"
-                              style={{ backgroundColor: "#6b6b6b" }}
-                            />
-                            cache read {cache}k
+                          <div className="flex h-full w-full flex-col overflow-hidden rounded-[2px] transition-[filter] duration-150 group-hover:brightness-110">
+                            {cache > 0 && (
+                              <div
+                                style={{
+                                  height: `${Math.round(cache * scalePx)}px`,
+                                  backgroundColor: "#6b6b6b",
+                                }}
+                              />
+                            )}
+                            {outp > 0 && (
+                              <div
+                                style={{
+                                  height: `${Math.round(outp * scalePx)}px`,
+                                  backgroundColor: "#8aa8d8",
+                                }}
+                              />
+                            )}
+                            {inp > 0 && (
+                              <div
+                                style={{
+                                  height: `${Math.round(inp * scalePx)}px`,
+                                  backgroundColor: "#d9a08e",
+                                }}
+                              />
+                            )}
                           </div>
                         </div>
-                        {cache > 0 && (
-                          <div
-                            style={{
-                              height: `${Math.round(cache * scalePx)}px`,
-                              backgroundColor: "#6b6b6b",
-                            }}
-                          />
-                        )}
-                        {outp > 0 && (
-                          <div
-                            style={{
-                              height: `${Math.round(outp * scalePx)}px`,
-                              backgroundColor: "#8aa8d8",
-                            }}
-                          />
-                        )}
-                        {inp > 0 && (
-                          <div
-                            style={{
-                              height: `${Math.round(inp * scalePx)}px`,
-                              backgroundColor: "#d9a08e",
-                            }}
-                          />
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div className="mt-1 flex justify-between text-[10px] text-[#5e5e5e]">
                     <span>Window: {usageRange}</span>
@@ -543,7 +555,7 @@ export function SettingsDialog({
                       value={workspaceInput}
                       disabled={runActive || saving}
                       onChange={(e) => setWorkspaceInput(e.target.value)}
-                      className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
+                      className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
                     />
                     <button
                       type="button"
@@ -564,7 +576,7 @@ export function SettingsDialog({
                           void runUpdate(() => commands.setWorkspace(path));
                         });
                       }}
-                      className="devin-pill-btn font-medium text-[#c9c9c9] disabled:opacity-40"
+                      className="soyo-pill-btn font-medium text-[#c9c9c9] disabled:opacity-40"
                     >
                       Browse…
                     </button>
@@ -574,7 +586,7 @@ export function SettingsDialog({
                       onClick={() =>
                         void runUpdate(() => commands.setWorkspace(workspaceInput))
                       }
-                      className="devin-pill-btn font-medium text-[#d9a08e] disabled:opacity-40"
+                      className="soyo-pill-btn font-medium text-[#d9a08e] disabled:opacity-40"
                     >
                       Apply
                     </button>
@@ -596,7 +608,7 @@ export function SettingsDialog({
                       onChange={(e) =>
                         void runUpdate(() => commands.selectProfile(e.target.value))
                       }
-                      className="devin-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
+                      className="soyo-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
                     >
                       {(bootstrap?.profiles ?? []).map((p) => (
                         <option key={p.name} value={p.name} className="bg-[#181818]">
@@ -623,7 +635,7 @@ export function SettingsDialog({
                           commands.setThinkingEffort(val === "default" ? null : val)
                         );
                       }}
-                      className="devin-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
+                      className="soyo-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
                     >
                       {EFFORTS.map((eff) => (
                         <option key={eff} value={eff} className="bg-[#181818]">
@@ -651,7 +663,7 @@ export function SettingsDialog({
                           )
                         )
                       }
-                      className="devin-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
+                      className="soyo-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
                     >
                       {BACKENDS.map((bk) => (
                         <option key={bk} value={bk} className="bg-[#181818]">
@@ -677,7 +689,7 @@ export function SettingsDialog({
                             commands.setAutocompact(!bootstrap?.auto_compact, null)
                           )
                         }
-                        className={`devin-pill font-semibold ${
+                        className={`soyo-pill font-semibold ${
                           bootstrap?.auto_compact
                             ? "text-[#4ade80]"
                             : "text-[#8a8a8a]"
@@ -694,7 +706,7 @@ export function SettingsDialog({
                         disabled={runActive || saving}
                         onChange={(e) => setTriggerInput(e.target.value)}
                         placeholder="Optional exact token trigger (blank = % threshold)"
-                        className="devin-input flex-1 px-2.5 py-1 font-mono text-xs text-[#d9d9d9]"
+                        className="soyo-input flex-1 px-2.5 py-1 font-mono text-xs text-[#d9d9d9]"
                       />
                       <button
                         type="button"
@@ -707,7 +719,7 @@ export function SettingsDialog({
                             commands.setAutocompact(true, parsed)
                           );
                         }}
-                        className="devin-pill-btn text-[#e8e8e8] disabled:opacity-40"
+                        className="soyo-pill-btn text-[#e8e8e8] disabled:opacity-40"
                       >
                         Set Trigger
                       </button>
@@ -764,9 +776,9 @@ export function SettingsDialog({
                         permissionMode === "bypass" ? "auto" : "bypass"
                       )
                     }
-                    className="devin-switch mt-0.5 disabled:opacity-40"
+                    className="soyo-switch mt-0.5 disabled:opacity-40"
                   >
-                    <span className="devin-switch__knob" />
+                    <span className="soyo-switch__knob" />
                   </button>
                 </div>
               </div>

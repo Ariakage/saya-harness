@@ -41,6 +41,7 @@ vi.mock("@streamdown/mermaid", () => ({
 }));
 
 import App from "./App";
+import { formatTokenCount } from "./lib/sanitize";
 import { useAppStore } from "./store/useAppStore";
 
 function sampleBootstrap(): BootstrapStateDto_Serialize {
@@ -959,6 +960,51 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.getByTestId("context-sidebar").textContent).toContain(
         "desktop/src/App.tsx"
       );
+    });
+  });
+
+  it("collapses sidebar on Home, exposes unified titlebar controls, and formats large token counts", async () => {
+    expect(formatTokenCount(850)).toBe("850");
+    expect(formatTokenCount(12_400)).toBe("12.4k");
+    expect(formatTokenCount(152_300_000)).toBe("152.3M");
+    expect(formatTokenCount(2_500_000_000)).toBe("2.5B");
+
+    const boot = sampleBootstrap();
+    boot.session!.messages = [];
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "list_sessions") return samplePage();
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("home-empty-state")).toBeTruthy();
+    });
+
+    // Home state collapses Column 2 sidebar instead of keeping Sessions expanded
+    expect(screen.queryByTestId("sidebar-panel")).toBeNull();
+    expect(screen.queryByRole("button", { name: "More session actions" })).toBeNull();
+    // User avatar menu stays accessible from the primary rail while collapsed
+    expect(screen.getByRole("button", { name: "User menu" })).toBeTruthy();
+
+    // Unified titlebar toggle expands Column 2 on demand; clicking Rail Home collapses it again
+    fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar-panel")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "More session actions" })).toBeTruthy();
+    });
+
+    // Segmented markdown view switcher in the unified titlebar updates store state
+    fireEvent.click(screen.getByRole("button", { name: "Markdown source view" }));
+    expect(useAppStore.getState().markdownMode).toBe("source");
+    fireEvent.click(screen.getByRole("button", { name: "Rendered conversation view" }));
+    expect(useAppStore.getState().markdownMode).toBe("render");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rail Home" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("sidebar-panel")).toBeNull();
     });
   });
 });

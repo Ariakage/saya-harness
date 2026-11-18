@@ -139,12 +139,12 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 value={queryCmd}
                 onChange={(e) => setQueryCmd(e.target.value)}
                 placeholder="list | search <query> | show <id> | sources | history"
-                className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs"
+                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               <button
                 type="button"
                 onClick={() => void runQuery(queryCmd)}
-                className="devin-pill-btn font-medium text-[#e8e8e8]"
+                className="soyo-pill-btn font-medium text-[#e8e8e8]"
               >
                 <Search className="h-3.5 w-3.5 text-[#8a8a8a]" />
                 Query
@@ -169,7 +169,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 disabled={runActive || busy}
                 onChange={(e) => setActionCmd(e.target.value)}
                 placeholder="e.g. forget <fact_id> | correct <fact_id> <text> | export <path>"
-                className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs"
+                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               <button
                 type="button"
@@ -195,7 +195,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                   <button
                     type="button"
                     onClick={() => setPrepared(null)}
-                    className="devin-pill-btn text-[#c9c9c9]"
+                    className="soyo-pill-btn text-[#c9c9c9]"
                   >
                     Discard
                   </button>
@@ -203,7 +203,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                     type="button"
                     disabled={busy}
                     onClick={() => void handleConfirm()}
-                    className="devin-pill-btn font-semibold text-[#4ade80]"
+                    className="soyo-pill-btn font-semibold text-[#4ade80]"
                   >
                     <Check className="h-3.5 w-3.5" />
                     Confirm Apply

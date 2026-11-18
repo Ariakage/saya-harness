@@ -82,7 +82,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                     <span className="font-mono font-semibold text-[#e8e8e8]">
                       {mod.module}
                     </span>
-                    <span className="devin-pill text-[10px] text-[#7a7a7a]">
+                    <span className="soyo-pill text-[10px] text-[#7a7a7a]">
                       {mod.source}
                     </span>
                   </div>
@@ -100,7 +100,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                   type="button"
                   disabled={runActive}
                   onClick={() => void handleToggleModule(mod)}
-                  className={`devin-pill-btn shrink-0 ${
+                  className={`soyo-pill-btn shrink-0 ${
                     mod.enabled ? "text-[#4ade80]" : "text-[#8a8a8a]"
                   } disabled:opacity-40`}
                 >
@@ -174,7 +174,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                   <button
                     type="button"
                     onClick={() => void handleCancelJob(job.job_id)}
-                    className="devin-pill-btn shrink-0 text-[10px] text-[#f87171]"
+                    className="soyo-pill-btn shrink-0 text-[10px] text-[#f87171]"
                   >
                     <XCircle className="h-3 w-3" />
                     Cancel

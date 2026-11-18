@@ -1010,9 +1010,9 @@ export function EffortPopover({
           aria-label="Ultracode toggle"
           disabled={disabled}
           onClick={() => startSpring(isUltra ? MAX_INDEX : ULTRA_INDEX, true)}
-          className={`devin-switch ${isUltra ? "is-ultra" : ""}`}
+          className={`soyo-switch ${isUltra ? "is-ultra" : ""}`}
         >
-          <span className="devin-switch__knob" />
+          <span className="soyo-switch__knob" />
         </button>
       </div>
     </section>

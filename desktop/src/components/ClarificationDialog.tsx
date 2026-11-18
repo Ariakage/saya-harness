@@ -61,7 +61,7 @@ export function ClarificationDialog({
                     onClick={() => void submitAnswer(opt)}
                     className="flex items-center gap-2 rounded-[9px] border border-[#262626] bg-[#1a1a1a] px-3 py-2 text-left text-xs text-[#e8e8e8] transition-colors hover:border-[#d9a08e]/50 hover:bg-[#222222] disabled:opacity-50"
                   >
-                    <span className="devin-pill py-0 font-mono text-[10px] text-[#7aa2f7]">
+                    <span className="soyo-pill py-0 font-mono text-[10px] text-[#7aa2f7]">
                       {idx + 1}
                     </span>
                     <span>{sanitizeDisplayText(opt)}</span>
@@ -91,7 +91,7 @@ export function ClarificationDialog({
                   }
                 }}
                 placeholder="Type your response..."
-                className="devin-input flex-1 px-3 py-1.5 text-xs"
+                className="soyo-input flex-1 px-3 py-1.5 text-xs"
               />
               <button
                 type="button"

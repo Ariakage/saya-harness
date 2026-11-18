@@ -141,14 +141,14 @@ export function SessionBrowserDialog({
                     onClick={() =>
                       void handleResume(configChangeSessionId, true)
                     }
-                    className="devin-pill-btn text-[#d9a08e]"
+                    className="soyo-pill-btn text-[#d9a08e]"
                   >
                     Accept Config Change & Resume
                   </button>
                   <button
                     type="button"
                     onClick={onClearConfigChange}
-                    className="devin-pill-btn text-[#c9c9c9]"
+                    className="soyo-pill-btn text-[#c9c9c9]"
                   >
                     Cancel
                   </button>
@@ -203,7 +203,7 @@ export function SessionBrowserDialog({
                                   )}
                                 </span>
                                 <span
-                                  className={`devin-pill py-0 text-[10.5px] ${modeStyle.badgeClass}`}
+                                  className={`soyo-pill py-0 text-[10.5px] ${modeStyle.badgeClass}`}
                                 >
                                   {modeStyle.label}
                                 </span>
@@ -226,7 +226,7 @@ export function SessionBrowserDialog({
                                 e.stopPropagation();
                                 void handleResume(item.id, false);
                               }}
-                              className="devin-pill-btn shrink-0 text-[#e8e8e8] disabled:opacity-40"
+                              className="soyo-pill-btn shrink-0 text-[#e8e8e8] disabled:opacity-40"
                             >
                               {isCurrent ? "Current" : "Resume"}
                             </button>
@@ -299,7 +299,7 @@ export function SessionBrowserDialog({
               type="button"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="devin-pill-btn text-[#c9c9c9] disabled:opacity-40"
+              className="soyo-pill-btn text-[#c9c9c9] disabled:opacity-40"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
               Prev
@@ -308,7 +308,7 @@ export function SessionBrowserDialog({
               type="button"
               disabled={items.length < 20}
               onClick={() => setPage((p) => p + 1)}
-              className="devin-pill-btn text-[#c9c9c9] disabled:opacity-40"
+              className="soyo-pill-btn text-[#c9c9c9] disabled:opacity-40"
             >
               Next
               <ChevronRight className="h-3.5 w-3.5" />

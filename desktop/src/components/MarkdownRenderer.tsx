@@ -148,7 +148,7 @@ function MermaidFallbackCard({ chart, error }: MermaidErrorComponentProps) {
           <GitBranch className="h-3.5 w-3.5" />
           Mermaid
         </span>
-        <span className="devin-pill py-0 text-[10px] uppercase tracking-wide text-[#fac454]">
+        <span className="soyo-pill py-0 text-[10px] uppercase tracking-wide text-[#fac454]">
           source fallback
         </span>
       </div>
@@ -211,7 +211,7 @@ export function MarkdownRenderer({
             <button
               type="button"
               onClick={onToggleMode}
-              className="devin-pill-btn text-[11px] text-[#c9c9c9] hover:text-[#e8e8e8]"
+              className="soyo-pill-btn text-[11px] text-[#c9c9c9] hover:text-[#e8e8e8]"
             >
               <Eye className="h-3 w-3" />
               Render
@@ -232,7 +232,7 @@ export function MarkdownRenderer({
           <button
             type="button"
             onClick={onToggleMode}
-            className="devin-pill-btn text-[11px] text-[#a3a3a3] hover:text-[#e8e8e8]"
+            className="soyo-pill-btn text-[11px] text-[#a3a3a3] hover:text-[#e8e8e8]"
           >
             <Code2 className="h-3 w-3" />
             Source
@@ -269,7 +269,7 @@ export function MarkdownRenderer({
                 <div className="my-2 rounded-[10px] border border-[#4a3f2a] bg-[#1c1a15] p-3 text-xs">
                   <div className="mb-1.5 flex items-center justify-between text-[#fac454]">
                     <span className="font-medium">{kindLabel}</span>
-                    <span className="devin-pill text-[10px] uppercase tracking-wide text-[#fac454]">
+                    <span className="soyo-pill text-[10px] uppercase tracking-wide text-[#fac454]">
                       source fallback
                     </span>
                   </div>

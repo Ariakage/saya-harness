@@ -167,7 +167,7 @@ export function McpCredentialsDialog({
                         <span className="font-mono font-semibold text-[#e8e8e8]">
                           {sanitizeDisplayText(srv.name)}
                         </span>
-                        <span className="devin-pill py-0 text-[10.5px] text-[#7aa2f7]">
+                        <span className="soyo-pill py-0 text-[10.5px] text-[#7aa2f7]">
                           {srv.transport}
                         </span>
                       </div>
@@ -179,7 +179,7 @@ export function McpCredentialsDialog({
                       type="button"
                       disabled={runActive}
                       onClick={() => void handleToggleServer(srv)}
-                      className={`devin-pill-btn shrink-0 ${
+                      className={`soyo-pill-btn shrink-0 ${
                         srv.enabled ? "text-[#4ade80]" : "text-[#8a8a8a]"
                       } disabled:opacity-40`}
                     >
@@ -216,7 +216,7 @@ export function McpCredentialsDialog({
                           rev {cred.revision}
                         </span>
                         {cred.revoked && (
-                          <span className="devin-pill py-0 text-[10px] text-[#f87171]">
+                          <span className="soyo-pill py-0 text-[10px] text-[#f87171]">
                             revoked
                           </span>
                         )}
@@ -229,7 +229,7 @@ export function McpCredentialsDialog({
                       <button
                         type="button"
                         onClick={() => void handleRevoke(cred.reference)}
-                        className="devin-pill-btn shrink-0 text-[#f87171]"
+                        className="soyo-pill-btn shrink-0 text-[#f87171]"
                       >
                         <Trash2 className="h-3 w-3" />
                         Revoke
@@ -256,7 +256,7 @@ export function McpCredentialsDialog({
                 value={importServer}
                 onChange={(e) => setImportServer(e.target.value)}
                 placeholder="HTTP MCP server name"
-                className="devin-input px-2.5 py-1.5 text-xs"
+                className="soyo-input px-2.5 py-1.5 text-xs"
               />
               <input
                 type="text"
@@ -264,7 +264,7 @@ export function McpCredentialsDialog({
                 value={envVar}
                 onChange={(e) => setEnvVar(e.target.value)}
                 placeholder="Env var name (e.g. MCP_TOKEN)"
-                className="devin-input px-2.5 py-1.5 font-mono text-xs"
+                className="soyo-input px-2.5 py-1.5 font-mono text-xs"
               />
             </div>
             <input
@@ -273,7 +273,7 @@ export function McpCredentialsDialog({
               value={scopesInput}
               onChange={(e) => setScopesInput(e.target.value)}
               placeholder="Optional comma-separated scopes"
-              className="devin-input w-full px-2.5 py-1.5 text-xs"
+              className="soyo-input w-full px-2.5 py-1.5 text-xs"
             />
             <div className="flex items-center justify-between pt-1">
               <label className="inline-flex cursor-pointer items-center gap-2 text-[11px] text-[#c9c9c9]">
@@ -281,7 +281,7 @@ export function McpCredentialsDialog({
                   type="checkbox"
                   checked={approveScopes}
                   onChange={(e) => setApproveScopes(e.target.checked)}
-                  className="devin-checkbox"
+                  className="soyo-checkbox"
                 />
                 Explicitly approve endpoint & scopes
               </label>

@@ -60,7 +60,7 @@ function extractOutputPaths(messages: DesktopMessage[]): string[] {
   return results.slice(0, 6);
 }
 
-// Color rules (§3.2 & devin_theme_gen.py Frame 02):
+// Color rules (§3.2 & Soyo Dark Frame 02):
 // Messages primary segment uses #d9a08e, followed by orange/green/ochre/neutral free space.
 const CONTEXT_BAR_COLORS = [
   "#d9a08e",

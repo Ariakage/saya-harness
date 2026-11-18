@@ -32,7 +32,7 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
         />
         <span>{expanded ? "Thinking" : anyActive ? "Thinking…" : "Thought"}</span>
         {!expanded && (
-          <span className="devin-pill text-[#a3a3a3]">
+          <span className="soyo-pill text-[#a3a3a3]">
             {anyActive && (
               <span className="h-1.5 w-1.5 rounded-full bg-[#a096eb] soyo-pulse-dot" />
             )}
@@ -40,7 +40,7 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
           </span>
         )}
         {anyTruncated && (
-          <span className="devin-pill text-[#7a7a7a]">truncated</span>
+          <span className="soyo-pill text-[#7a7a7a]">truncated</span>
         )}
         {!expanded && latest.available && (
           <span className="ml-auto max-w-md truncate text-[11.5px] text-[#6e6e6e]">

@@ -125,7 +125,7 @@ export function ExportDialog({
                 type="text"
                 value={targetPath}
                 onChange={(e) => setTargetPath(e.target.value)}
-                className="devin-input flex-1 px-2.5 py-1.5 font-mono text-xs"
+                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
               />
               {isTauri() && (
                 <button
@@ -144,7 +144,7 @@ export function ExportDialog({
                       if (picked) setTargetPath(picked);
                     });
                   }}
-                  className="devin-pill-btn shrink-0 font-medium text-[#c9c9c9]"
+                  className="soyo-pill-btn shrink-0 font-medium text-[#c9c9c9]"
                 >
                   Browse…
                 </button>
@@ -170,7 +170,7 @@ export function ExportDialog({
                     prev.replace(/\.(md|json)$/i, next === "json" ? ".json" : ".md")
                   );
                 }}
-                className="devin-select w-full px-2.5 py-1.5 text-xs"
+                className="soyo-select w-full px-2.5 py-1.5 text-xs"
               >
                 <option value="markdown" className="bg-[#181818]">
                   Markdown (.md)
@@ -192,7 +192,7 @@ export function ExportDialog({
                 id="export-scope-select"
                 value={scope}
                 onChange={(e) => setScope(e.target.value as ExportScopeDto)}
-                className="devin-select w-full px-2.5 py-1.5 text-xs"
+                className="soyo-select w-full px-2.5 py-1.5 text-xs"
               >
                 <option value="transcript" className="bg-[#181818]">
                   Transcript
@@ -209,7 +209,7 @@ export function ExportDialog({
               type="checkbox"
               checked={includeTools}
               onChange={(e) => setIncludeTools(e.target.checked)}
-              className="devin-checkbox"
+              className="soyo-checkbox"
             />
             Include tool arguments and result bodies
           </label>
@@ -219,7 +219,7 @@ export function ExportDialog({
           <button
             type="button"
             onClick={onClose}
-            className="devin-pill-btn text-[#c9c9c9]"
+            className="soyo-pill-btn text-[#c9c9c9]"
           >
             Close
           </button>

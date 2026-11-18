@@ -541,7 +541,7 @@ export function Composer({
                 }
               }}
               placeholder="Local file path inside workspace or readable file..."
-              className="devin-input flex-1 px-2.5 py-1 font-mono text-xs"
+              className="soyo-input flex-1 px-2.5 py-1 font-mono text-xs"
             />
             <button
               type="button"
@@ -676,7 +676,7 @@ export function Composer({
 
           <div className="flex items-center gap-1">
             {approvalPending && (
-              <span className="devin-pill text-[#fac454]">
+              <span className="soyo-pill text-[#fac454]">
                 paused · approval required
               </span>
             )}

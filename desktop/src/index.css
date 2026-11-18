@@ -91,8 +91,8 @@
   }
 }
 
-/* Devin unified pill specification (§4.1) */
-.devin-pill {
+/* Soyo Dark unified pill specification (§4.1) */
+.soyo-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -106,7 +106,7 @@
   transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
 }
 
-.devin-pill-btn {
+.soyo-pill-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -125,22 +125,22 @@
     transform 100ms ease;
 }
 
-.devin-pill-btn:hover:not(:disabled) {
+.soyo-pill-btn:hover:not(:disabled) {
   background-color: #242424;
   border-color: #3a3a3a;
 }
 
-.devin-pill-btn:active:not(:disabled) {
+.soyo-pill-btn:active:not(:disabled) {
   transform: scale(0.98);
 }
 
-.devin-pill-btn:disabled {
+.soyo-pill-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-/* Unified Devin form controls */
-.devin-input {
+/* Unified Soyo Dark form controls */
+.soyo-input {
   background-color: #161616;
   border: 1px solid #2b2b2b;
   border-radius: 8px;
@@ -151,27 +151,27 @@
     box-shadow 150ms ease;
 }
 
-.devin-input::placeholder {
+.soyo-input::placeholder {
   color: #6e6e6e;
 }
 
-.devin-input:hover:not(:disabled) {
+.soyo-input:hover:not(:disabled) {
   border-color: #383838;
 }
 
-.devin-input:focus,
-.devin-input:focus-visible {
+.soyo-input:focus,
+.soyo-input:focus-visible {
   outline: none;
   border-color: #d9a08e;
   box-shadow: 0 0 0 2px rgba(217, 160, 142, 0.14);
 }
 
-.devin-input:disabled {
+.soyo-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.devin-select {
+.soyo-select {
   appearance: none;
   -webkit-appearance: none;
   background-color: #1a1a1a;
@@ -193,24 +193,24 @@
     box-shadow 150ms ease;
 }
 
-.devin-select:hover:not(:disabled) {
+.soyo-select:hover:not(:disabled) {
   background-color: #202020;
   border-color: #3a3a3a;
 }
 
-.devin-select:focus,
-.devin-select:focus-visible {
+.soyo-select:focus,
+.soyo-select:focus-visible {
   outline: none;
   border-color: #d9a08e;
   box-shadow: 0 0 0 2px rgba(217, 160, 142, 0.14);
 }
 
-.devin-select:disabled {
+.soyo-select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.devin-select.is-inline {
+.soyo-select.is-inline {
   background-color: transparent;
   border: 0;
   border-radius: 5px;
@@ -221,15 +221,15 @@
   box-shadow: none;
 }
 
-.devin-select.is-inline:hover:not(:disabled),
-.devin-select.is-inline:focus,
-.devin-select.is-inline:focus-visible {
+.soyo-select.is-inline:hover:not(:disabled),
+.soyo-select.is-inline:focus,
+.soyo-select.is-inline:focus-visible {
   background-color: transparent;
   border-color: transparent;
   box-shadow: none;
 }
 
-.devin-checkbox {
+.soyo-checkbox {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
@@ -249,17 +249,17 @@
     transform 120ms ease;
 }
 
-.devin-checkbox:hover:not(:disabled) {
+.soyo-checkbox:hover:not(:disabled) {
   border-color: #555555;
   background-color: #222222;
 }
 
-.devin-checkbox:checked {
+.soyo-checkbox:checked {
   background-color: #d9a08e;
   border-color: #d9a08e;
 }
 
-.devin-checkbox:checked::after {
+.soyo-checkbox:checked::after {
   content: "";
   width: 4.5px;
   height: 8px;
@@ -268,11 +268,11 @@
   transform: translateY(-0.5px) rotate(42deg);
 }
 
-.devin-checkbox:active:not(:disabled) {
+.soyo-checkbox:active:not(:disabled) {
   transform: scale(0.94);
 }
 
-.devin-checkbox:disabled {
+.soyo-checkbox:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -485,8 +485,8 @@
   animation: soyo-pulse-soft 1.6s ease-in-out infinite;
 }
 
-/* Rectangular Devin switch (34x20 track, r5, 15x15 knob r4, §4.6) */
-.devin-switch {
+/* Rectangular Soyo Dark switch (34x20 track, r5, 15x15 knob r4, §4.6) */
+.soyo-switch {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -501,15 +501,15 @@
   transition: background-color 180ms ease;
 }
 
-.devin-switch[aria-checked="true"] {
+.soyo-switch[aria-checked="true"] {
   background-color: #d9a08e;
 }
 
-.devin-switch[aria-checked="true"].is-ultra {
+.soyo-switch[aria-checked="true"].is-ultra {
   background-color: #8a7bd8;
 }
 
-.devin-switch__knob {
+.soyo-switch__knob {
   position: absolute;
   top: 2.5px;
   left: 2.5px;
@@ -520,11 +520,11 @@
   transition: transform 180ms cubic-bezier(0.34, 1.3, 0.64, 1);
 }
 
-.devin-switch[aria-checked="true"] .devin-switch__knob {
+.soyo-switch[aria-checked="true"] .soyo-switch__knob {
   transform: translateX(14px);
 }
 
-/* Markdown typography (Devin Theme §3.1 & §3.2) */
+/* Markdown typography (Soyo Dark §3.1 & §3.2) */
 .soyo-markdown {
   color: #c9c9c9;
   font-size: 13.5px;
@@ -911,13 +911,13 @@
   .ccs-popover,
   .ccs-thumb,
   .ccs-stop-dot,
-  .devin-pill,
-  .devin-pill-btn,
-  .devin-input,
-  .devin-select,
-  .devin-checkbox,
-  .devin-switch,
-  .devin-switch__knob,
+  .soyo-pill,
+  .soyo-pill-btn,
+  .soyo-input,
+  .soyo-select,
+  .soyo-checkbox,
+  .soyo-switch,
+  .soyo-switch__knob,
   .soyo-composer-card {
     transition: none;
   }
