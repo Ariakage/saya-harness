@@ -17,6 +17,7 @@ import {
   type RestoredMessageDto_Serialize,
   type SchemaEnvelopeDto_Deserialize,
   type SessionItemDto_Serialize,
+  type StagedAttachmentDto,
   type ThinkingSnapshotDto,
   type TodoItemDto,
   type UsageDto_Serialize,
@@ -70,13 +71,17 @@ export interface AppState {
   markdownMode: MarkdownDisplayMode;
   pendingApproval: ApprovalRequestDto_Deserialize | null;
   pendingInput: InputRequestDto | null;
+  stagedAttachments: StagedAttachmentDto[];
   configChangeSessionId: string | null;
   recoveryBanner: string | null;
   error: DesktopError | null;
 
   initApp: () => Promise<void>;
+  applyBootstrap: (boot: BootstrapStateDto_Serialize) => void;
   refreshSessions: (page?: number) => Promise<void>;
   startNewSession: () => Promise<void>;
+  stageAttachments: (paths: string[]) => Promise<boolean>;
+  removeStagedAttachment: (id: string) => void;
   submitPrompt: (
     prompt: string,
     attachments?: AttachmentTokenDto[]
@@ -400,9 +405,26 @@ export const useAppStore = create<AppState>((set, get) => {
     markdownMode: "render",
     pendingApproval: null,
     pendingInput: null,
+    stagedAttachments: [],
     configChangeSessionId: null,
     recoveryBanner: null,
     error: null,
+
+    applyBootstrap: (boot) =>
+      set((state) => ({
+        bootstrap: boot,
+        workMode: boot.work_mode,
+        pendingMode: boot.pending_mode,
+        permissionMode: boot.permission_mode,
+        runActive: boot.run_active,
+        activeRunId: boot.active_run_id,
+        error: null,
+        ...(boot.session && boot.session.id !== state.sessionId
+          ? applySessionDto(boot.session)
+          : boot.session === null
+            ? applySessionDto(null)
+            : {}),
+      })),
 
     initApp: async () => {
       set({ loading: true });
@@ -462,6 +484,9 @@ export const useAppStore = create<AppState>((set, get) => {
             summaryLine: null,
             pendingApproval: null,
             pendingInput: null,
+            stagedAttachments: [],
+            configChangeSessionId: null,
+            recoveryBanner: null,
             error: null,
           });
           await get().refreshSessions(1);
@@ -473,14 +498,56 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
+    stageAttachments: async (paths) => {
+      const cleaned = paths.map((p) => p.trim()).filter(Boolean);
+      if (cleaned.length === 0) {
+        return false;
+      }
+      try {
+        const res = await commands.stageAttachments(cleaned);
+        if (res.status !== "ok") {
+          set({ error: res.error });
+          return false;
+        }
+        set((state) => {
+          const existingIds = new Set(state.stagedAttachments.map((a) => a.id));
+          const merged = [
+            ...state.stagedAttachments,
+            ...res.data.filter((item) => !existingIds.has(item.id)),
+          ];
+          return {
+            stagedAttachments: merged,
+            error: null,
+          };
+        });
+        return true;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    removeStagedAttachment: (id) =>
+      set((state) => ({
+        stagedAttachments: state.stagedAttachments.filter((a) => a.id !== id),
+      })),
+
     submitPrompt: async (prompt, attachments = []) => {
       const trimmed = prompt.trim();
-      if (!trimmed) {
+      const staged = get().stagedAttachments.map((a) => ({
+        token: a.token,
+        path: a.path,
+      }));
+      const mergedAttachments = [
+        ...attachments,
+        ...staged.filter((s) => !attachments.some((a) => a.token === s.token)),
+      ];
+      if (!trimmed && mergedAttachments.length === 0) {
         return false;
       }
       const channel = createEventChannel();
       try {
-        const res = await commands.submitPrompt(trimmed, attachments, channel);
+        const res = await commands.submitPrompt(trimmed, mergedAttachments, channel);
         if (res.status !== "ok") {
           set({ error: res.error });
           return false;
@@ -499,6 +566,7 @@ export const useAppStore = create<AppState>((set, get) => {
           activeRunId: res.data.run_id,
           runActive: true,
           cancelling: false,
+          stagedAttachments: [],
           error: null,
           summaryLine:
             res.data.action === "steered" ? state.summaryLine : null,

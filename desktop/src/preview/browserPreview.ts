@@ -4,10 +4,17 @@ import type {
   ActiveSessionDto_Serialize,
   ApprovalRequestDto_Deserialize,
   BootstrapStateDto_Serialize,
+  CredentialRecordDto_Serialize,
   DesktopStreamEnvelope_Deserialize,
+  ExportFormatDto,
+  ExportScopeDto,
   InputRequestDto,
+  McpServerDto_Serialize,
+  ModuleStatusDto_Serialize,
   PermissionModeDto,
+  SandboxBackendDto,
   SessionPageDto_Serialize,
+  StagedAttachmentDto,
   WorkModeDto,
 } from "../bindings";
 
@@ -15,7 +22,8 @@ export type PreviewScene =
   | "conversation"
   | "markdown"
   | "approval"
-  | "clarification";
+  | "clarification"
+  | "peripheral";
 
 let installed = false;
 let currentScene: PreviewScene = "conversation";
@@ -212,7 +220,8 @@ export function getPreviewScene(): PreviewScene {
       param === "markdown" ||
       param === "conversation" ||
       param === "approval" ||
-      param === "clarification"
+      param === "clarification" ||
+      param === "peripheral"
     ) {
       currentScene = param;
     }
@@ -511,6 +520,105 @@ export function installBrowserPreviewMock(): boolean {
   };
 
   let lastChannel: Channel<DesktopStreamEnvelope_Deserialize> | null = null;
+  let previewWorkspace = CONVERSATION_SESSION.workspace;
+  let previewProfile = "anthropic-official";
+  let previewEffort: string | null = "medium";
+  let previewBackend: SandboxBackendDto = "seatbelt";
+  let previewAutoCompact = true;
+  let previewTriggerTokens: number | null = 160000;
+
+  let previewModules: ModuleStatusDto_Serialize[] = [
+    {
+      module: "mcp",
+      description: "Managed MCP tool bridges with credential injection",
+      enabled: true,
+      configured_enabled: true,
+      override_enabled: null,
+      source: "config",
+      active: true,
+      issue: null,
+    },
+    {
+      module: "memory",
+      description: "Global memory store with two-phase mutation review",
+      enabled: true,
+      configured_enabled: true,
+      override_enabled: null,
+      source: "config",
+      active: true,
+      issue: null,
+    },
+    {
+      module: "browser",
+      description: "Isolated headless browser automation module",
+      enabled: false,
+      configured_enabled: false,
+      override_enabled: false,
+      source: "session_override",
+      active: false,
+      issue: null,
+    },
+  ];
+
+  let previewMcpServers: McpServerDto_Serialize[] = [
+    {
+      name: "filesystem",
+      transport: "stdio",
+      enabled: true,
+      target: "soyo-fs-mcp --readonly",
+      scopes: ["read:workspace"],
+      credential_ref: null,
+    },
+    {
+      name: "remote-docs",
+      transport: "http",
+      enabled: true,
+      target: "https://docs.example.internal/mcp",
+      scopes: ["docs:read"],
+      credential_ref: "cred_docs_01",
+    },
+  ];
+
+  let previewCredentials: CredentialRecordDto_Serialize[] = [
+    {
+      reference: "cred_docs_01",
+      server: "remote-docs",
+      audience: "https://docs.example.internal",
+      scopes: ["docs:read"],
+      kind: "bearer_env",
+      revision: 1,
+      revoked: false,
+      oauth_resource: null,
+    },
+  ];
+
+  const previewMemoryEntries = [
+    {
+      id: "mem_001",
+      topic: "desktop-ui",
+      text: "Lucide icons (lucide-react) are required for all desktop UI controls.",
+      revision: 1,
+    },
+  ];
+  const pendingPreviewActions = new Map<string, string>();
+
+  const currentBootstrapState = (): BootstrapStateDto_Serialize => {
+    const base = buildBootstrap(currentScene);
+    const chosenProfile =
+      base.profiles.find((p) => p.name === previewProfile) ?? base.profiles[0];
+    return {
+      ...base,
+      workspace: previewWorkspace,
+      selected_profile: previewProfile,
+      selected_model: chosenProfile?.model ?? base.selected_model,
+      context_window_tokens:
+        chosenProfile?.context_window_tokens ?? base.context_window_tokens,
+      thinking_effort: previewEffort,
+      sandbox_backend: previewBackend,
+      auto_compact: previewAutoCompact,
+      auto_compact_trigger_tokens: previewTriggerTokens,
+    };
+  };
 
   mockIPC((cmd, args) => {
     switch (cmd) {
@@ -522,7 +630,7 @@ export function installBrowserPreviewMock(): boolean {
         };
       }
       case "get_bootstrap_state":
-        return buildBootstrap(currentScene);
+        return currentBootstrapState();
       case "new_session":
         return {
           id: `01930000-0000-7000-8000-${String(Date.now()).slice(-12)}`,
@@ -645,6 +753,159 @@ export function installBrowserPreviewMock(): boolean {
           recovered_runs: 0,
           recovered_tools: 0,
         };
+      }
+      case "set_workspace": {
+        previewWorkspace = (args as { path: string }).path;
+        return currentBootstrapState();
+      }
+      case "select_profile": {
+        previewProfile = (args as { profile: string }).profile;
+        return currentBootstrapState();
+      }
+      case "set_thinking_effort": {
+        previewEffort = (args as { effort: string | null }).effort;
+        return currentBootstrapState();
+      }
+      case "set_sandbox_backend": {
+        previewBackend = (args as { backend: SandboxBackendDto }).backend;
+        return currentBootstrapState();
+      }
+      case "set_autocompact": {
+        const payload = args as {
+          enabled: boolean;
+          triggerTokens: number | null;
+        };
+        previewAutoCompact = payload.enabled;
+        previewTriggerTokens = payload.triggerTokens;
+        return currentBootstrapState();
+      }
+      case "list_extensions":
+        return [
+          {
+            kind: "skill",
+            id: "skill:lucide-guidelines",
+            name: "lucide-icons",
+            description: "Workspace UI icon conventions using lucide-react",
+            scope: "workspace",
+            version: "1.0.0",
+            active: true,
+          },
+        ];
+      case "list_jobs":
+        return [];
+      case "cancel_background_job":
+        return false;
+      case "list_modules":
+        return previewModules;
+      case "set_module_enabled": {
+        const payload = args as { module: string; enabled: boolean };
+        previewModules = previewModules.map((m) =>
+          m.module === payload.module
+            ? {
+                ...m,
+                enabled: payload.enabled,
+                active: payload.enabled,
+                override_enabled: payload.enabled,
+                source: "desktop_override",
+              }
+            : m
+        );
+        return previewModules;
+      }
+      case "list_mcp_servers":
+        return previewMcpServers;
+      case "toggle_mcp_server": {
+        const payload = args as { name: string; enabled: boolean };
+        previewMcpServers = previewMcpServers.map((s) =>
+          s.name === payload.name ? { ...s, enabled: payload.enabled } : s
+        );
+        return previewMcpServers;
+      }
+      case "list_credentials":
+        return previewCredentials;
+      case "import_credential": {
+        const payload = args as {
+          server: string;
+          envVar: string;
+          scopes: string[];
+          approveScopes: boolean;
+        };
+        const record: CredentialRecordDto_Serialize = {
+          reference: `cred_${payload.server}_${Date.now()}`,
+          server: payload.server,
+          audience: `env://${payload.envVar}`,
+          scopes: payload.scopes,
+          kind: payload.approveScopes ? "bearer_env" : "pending_approval",
+          revision: 1,
+          revoked: false,
+          oauth_resource: null,
+        };
+        previewCredentials = [...previewCredentials, record];
+        return record;
+      }
+      case "revoke_credential": {
+        const { reference } = args as { reference: string };
+        previewCredentials = previewCredentials.map((c) =>
+          c.reference === reference ? { ...c, revoked: true } : c
+        );
+        return true;
+      }
+      case "query_memory": {
+        const { command } = args as { command: string };
+        return {
+          settings: { enabled: true, root: "~/.soyo/memory" },
+          data: { command, entries: previewMemoryEntries },
+        };
+      }
+      case "prepare_memory_action": {
+        const { command } = args as { command: string };
+        const actionId = `act_${Date.now()}`;
+        pendingPreviewActions.set(actionId, command);
+        return {
+          action_id: actionId,
+          operation_id: "op_preview_1",
+          expected_revision: "1",
+          review: { command, effect: "preview staged mutation" },
+        };
+      }
+      case "confirm_memory_action": {
+        const { actionId } = args as { actionId: string };
+        const command = pendingPreviewActions.get(actionId) ?? "unknown";
+        pendingPreviewActions.delete(actionId);
+        return {
+          result: { applied: true, action_id: actionId, command },
+        };
+      }
+      case "export_session": {
+        const payload = args as {
+          targetPath: string;
+          format: ExportFormatDto;
+          scope: ExportScopeDto;
+        };
+        return {
+          path: `${previewWorkspace}/${payload.targetPath}`,
+          format: payload.format,
+          scope: payload.scope,
+          bytes: 2048,
+          receipt: { verified: true, preview: true },
+        };
+      }
+      case "stage_attachments": {
+        const { paths } = args as { paths: string[] };
+        return paths.map((p, idx): StagedAttachmentDto => {
+          const filename = p.split("/").pop() || `attachment-${idx + 1}`;
+          const isImg = /\.(png|jpe?g|webp|gif)$/i.test(filename);
+          return {
+            id: `draft_${Date.now()}_${idx}`,
+            token: `tok_${Date.now()}_${idx}`,
+            path: p,
+            filename,
+            mime: isImg ? "image/png" : "text/plain",
+            size_bytes: 4096,
+            kind: isImg ? "image" : "file",
+            preview_url: `soyo-attachment://localhost/draft/draft_${idx}`,
+          };
+        });
       }
       default:
         throw {

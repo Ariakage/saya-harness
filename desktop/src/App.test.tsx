@@ -142,6 +142,7 @@ describe("App Stage 3 runtime integration", () => {
       markdownMode: "render",
       pendingApproval: null,
       pendingInput: null,
+      stagedAttachments: [],
       configChangeSessionId: null,
       recoveryBanner: null,
       error: null,
@@ -441,6 +442,310 @@ describe("App Stage 3 runtime integration", () => {
         acceptConfigChange: true,
       });
       expect(screen.getAllByText("Resumed Session").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("opens settings, toggles modules, manages MCP/credentials metadata, and runs two-phase memory admin", async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_bootstrap_state") return sampleBootstrap();
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "set_workspace") {
+        return {
+          ...sampleBootstrap(),
+          workspace: (args as { path: string }).path,
+        };
+      }
+      if (cmd === "list_modules") {
+        return [
+          {
+            module: "mcp",
+            description: "Managed MCP bridge",
+            enabled: true,
+            configured_enabled: true,
+            override_enabled: null,
+            source: "config",
+            active: true,
+            issue: null,
+          },
+        ];
+      }
+      if (cmd === "set_module_enabled") {
+        const { module, enabled } = args as { module: string; enabled: boolean };
+        return [
+          {
+            module,
+            description: "Managed MCP bridge",
+            enabled,
+            configured_enabled: true,
+            override_enabled: enabled,
+            source: "desktop_override",
+            active: enabled,
+            issue: null,
+          },
+        ];
+      }
+      if (cmd === "list_extensions") return [];
+      if (cmd === "list_jobs") return [];
+      if (cmd === "list_mcp_servers") {
+        return [
+          {
+            name: "docs-http",
+            transport: "http",
+            enabled: true,
+            target: "https://docs.example.internal/mcp",
+            scopes: ["docs:read"],
+            credential_ref: "cred_ref_1",
+          },
+        ];
+      }
+      if (cmd === "list_credentials") {
+        return [
+          {
+            reference: "cred_ref_1",
+            server: "docs-http",
+            audience: "https://docs.example.internal",
+            scopes: ["docs:read"],
+            kind: "bearer_env",
+            revision: 1,
+            revoked: false,
+            oauth_resource: null,
+          },
+        ];
+      }
+      if (cmd === "import_credential") {
+        const { server, envVar, scopes } = args as {
+          server: string;
+          envVar: string;
+          scopes: string[];
+        };
+        return {
+          reference: `cred_${server}_2`,
+          server,
+          audience: `env://${envVar}`,
+          scopes,
+          kind: "bearer_env",
+          revision: 1,
+          revoked: false,
+          oauth_resource: null,
+        };
+      }
+      if (cmd === "query_memory") {
+        return {
+          settings: { enabled: true },
+          data: { entries: [{ id: "fact_1", text: "Lucide icons required" }] },
+        };
+      }
+      if (cmd === "prepare_memory_action") {
+        return {
+          action_id: "mem_act_1",
+          operation_id: "op_1",
+          expected_revision: "rev_1",
+          review: { target: "fact_1", action: "forget" },
+        };
+      }
+      if (cmd === "confirm_memory_action") {
+        return { result: { applied: true } };
+      }
+      return null;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Inspect workspace").length).toBeGreaterThan(0);
+    });
+
+    // Settings + Modules
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-dialog")).toBeTruthy();
+      expect(screen.getByTestId("modules-panel")).toBeTruthy();
+    });
+
+    const wsInput = screen.getByLabelText("Workspace Directory");
+    fireEvent.change(wsInput, { target: { value: "/workspace/updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_workspace", {
+        path: "/workspace/updated",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Enabled" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_module_enabled", {
+        module: "mcp",
+        enabled: false,
+      });
+    });
+    fireEvent.click(screen.getByLabelText("Close settings"));
+
+    // MCP & Credentials
+    fireEvent.click(screen.getByRole("button", { name: "MCP & Creds" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-credentials-dialog")).toBeTruthy();
+      expect(screen.getByText(/docs-http \(bearer_env\)/)).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Secret environment variable"), {
+      target: { value: "DOCS_BEARER_TOKEN" },
+    });
+    fireEvent.change(screen.getByLabelText("Credential scopes"), {
+      target: { value: "docs:read" },
+    });
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Explicitly approve endpoint & scopes/i,
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Import Reference" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("import_credential", {
+        server: "docs-http",
+        envVar: "DOCS_BEARER_TOKEN",
+        scopes: ["docs:read"],
+        approveScopes: true,
+      });
+    });
+    fireEvent.click(screen.getByLabelText("Close MCP and credentials dialog"));
+
+    // Memory two-phase review/confirm
+    fireEvent.click(screen.getByRole("button", { name: "Memory" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("memory-dialog")).toBeTruthy();
+      expect(invokeMock).toHaveBeenCalledWith("query_memory", { command: "list" });
+    });
+
+    fireEvent.change(screen.getByLabelText("Prepare memory command"), {
+      target: { value: "forget fact_1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Review" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("prepare_memory_action", {
+        command: "forget fact_1",
+      });
+      expect(screen.getByRole("button", { name: "Confirm Apply" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Apply" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("confirm_memory_action", {
+        actionId: "mem_act_1",
+      });
+    });
+  });
+
+  it("exports sessions, stages composer attachments, and renders session media previews", async () => {
+    const boot = sampleBootstrap();
+    boot.session!.messages = [
+      ...boot.session!.messages,
+      {
+        id: "tool-media-1",
+        role: "tool",
+        label: "browser_screenshot",
+        text: "Captured viewport png",
+        streaming: false,
+        truncated: false,
+        tool_call_id: "call_shot_1",
+        tool_name: "browser_screenshot",
+        tool_summary: "shot.png",
+        tool_ok: true,
+        media_refs: ["shot-1.png"],
+      },
+    ];
+
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "export_session") {
+        return {
+          path: "/workspace/demo/session-export.md",
+          format: (args as { format: string }).format,
+          scope: (args as { scope: string }).scope,
+          bytes: 512,
+          receipt: { verified: true },
+        };
+      }
+      if (cmd === "stage_attachments") {
+        return [
+          {
+            id: "draft_img_1",
+            token: "att_tok_1",
+            path: "/workspace/demo/preview.png",
+            filename: "preview.png",
+            mime: "image/png",
+            size_bytes: 2048,
+            kind: "image",
+            preview_url: "soyo-attachment://localhost/draft/draft_img_1",
+          },
+        ];
+      }
+      if (cmd === "submit_prompt") {
+        return {
+          action: "started",
+          session_id: "01930000-0000-7000-8000-000000000001",
+          run_id: "run_att_1",
+        };
+      }
+      return null;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId("session-media-preview")).toBeTruthy();
+    });
+    const sessionMediaImg = screen
+      .getByTestId("session-media-preview")
+      .querySelector("img");
+    expect(sessionMediaImg?.getAttribute("src")).toContain(
+      "soyo-attachment://localhost/media/"
+    );
+
+    // Export session
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("export-dialog")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Publish Export" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("export_session", {
+        sessionId: "01930000-0000-7000-8000-000000000001",
+        targetPath: "session-export.md",
+        format: "markdown",
+        scope: "transcript",
+        includeTools: true,
+      });
+      expect(screen.getByText("Export published")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("Close export dialog"));
+
+    // Stage attachment & submit
+    fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+    fireEvent.change(screen.getByLabelText("Attachment file path"), {
+      target: { value: "/workspace/demo/preview.png" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stage" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("staged-attachments-strip")).toBeTruthy();
+      expect(screen.getByText("preview.png")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Prompt input"), {
+      target: { value: "Inspect attached image" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "submit_prompt",
+        expect.objectContaining({
+          prompt: "Inspect attached image",
+          attachments: [
+            {
+              token: "att_tok_1",
+              path: "/workspace/demo/preview.png",
+            },
+          ],
+        })
+      );
     });
   });
 });

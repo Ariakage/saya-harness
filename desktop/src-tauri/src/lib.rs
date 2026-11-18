@@ -1,6 +1,8 @@
 //! Tauri 2 in-process desktop shell for Soyo Harness.
 
+pub mod attachment_protocol;
 pub mod commands;
+pub mod peripheral_commands;
 pub mod redaction;
 pub mod runtime_bridge;
 pub mod tool_format;
@@ -26,6 +28,26 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         commands::set_work_mode,
         commands::set_permission_mode,
         commands::resume_session,
+        peripheral_commands::set_workspace,
+        peripheral_commands::select_profile,
+        peripheral_commands::set_thinking_effort,
+        peripheral_commands::set_sandbox_backend,
+        peripheral_commands::set_autocompact,
+        peripheral_commands::list_extensions,
+        peripheral_commands::list_jobs,
+        peripheral_commands::cancel_background_job,
+        peripheral_commands::list_modules,
+        peripheral_commands::set_module_enabled,
+        peripheral_commands::list_mcp_servers,
+        peripheral_commands::toggle_mcp_server,
+        peripheral_commands::list_credentials,
+        peripheral_commands::import_credential,
+        peripheral_commands::revoke_credential,
+        peripheral_commands::query_memory,
+        peripheral_commands::prepare_memory_action,
+        peripheral_commands::confirm_memory_action,
+        peripheral_commands::export_session,
+        peripheral_commands::stage_attachments,
     ])
 }
 
@@ -33,7 +55,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
 pub fn run() {
     let builder = specta_builder();
     let desktop_state = DesktopState::from_environment();
-    tauri::Builder::default()
+    let app_builder = attachment_protocol::register_attachment_protocols(tauri::Builder::default());
+    app_builder
         .manage(desktop_state)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(builder.invoke_handler())
@@ -283,6 +306,26 @@ backend = "host"
             "setWorkMode",
             "setPermissionMode",
             "resumeSession",
+            "setWorkspace",
+            "selectProfile",
+            "setThinkingEffort",
+            "setSandboxBackend",
+            "setAutocompact",
+            "listExtensions",
+            "listJobs",
+            "cancelBackgroundJob",
+            "listModules",
+            "setModuleEnabled",
+            "listMcpServers",
+            "toggleMcpServer",
+            "listCredentials",
+            "importCredential",
+            "revokeCredential",
+            "queryMemory",
+            "prepareMemoryAction",
+            "confirmMemoryAction",
+            "exportSession",
+            "stageAttachments",
         ] {
             assert!(content.contains(symbol), "missing {symbol} in bindings.ts");
         }
@@ -597,5 +640,248 @@ backend = "host"
         let session = resumed.bootstrap.session.expect("session should resume");
         assert_eq!(session.id, submit_res.session_id);
         assert!(session.messages.iter().any(|m| m.text == "Saved answer"));
+    }
+
+    #[tokio::test]
+    async fn attachment_protocol_enforces_scope_symlinks_and_safe_mime() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "auto");
+        let state = DesktopState::with_config(cfg);
+
+        // Stage a valid PNG-like file.
+        let img_path = workspace.join("sample.png");
+        std::fs::write(&img_path, b"\x89PNG\r\n\x1a\n").unwrap();
+        let staged = state
+            .stage_attachments(vec![img_path.to_string_lossy().into_owned()])
+            .await
+            .unwrap();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].mime, "image/png");
+
+        // Protocol serves the staged draft cleanly with strict nosniff headers.
+        let ok_resp = attachment_protocol::resolve_attachment_request(
+            &state.attachment_scope,
+            &state.staged_drafts,
+            "GET",
+            &staged[0].preview_url,
+        );
+        assert_eq!(ok_resp.status, tauri::http::StatusCode::OK);
+        assert_eq!(ok_resp.content_type, "image/png");
+
+        // Legacy saya-attachment scheme alias resolves staged draft too.
+        let legacy_uri = staged[0]
+            .preview_url
+            .replace("soyo-attachment://", "saya-attachment://");
+        let legacy_resp = attachment_protocol::resolve_attachment_request(
+            &state.attachment_scope,
+            &state.staged_drafts,
+            "GET",
+            &legacy_uri,
+        );
+        assert_eq!(legacy_resp.status, tauri::http::StatusCode::OK);
+
+        // Reject path traversal & un-scoped session media requests.
+        let traversal = attachment_protocol::resolve_attachment_request(
+            &state.attachment_scope,
+            &state.staged_drafts,
+            "GET",
+            "soyo-attachment://localhost/draft/../../etc/passwd",
+        );
+        assert_eq!(traversal.status, tauri::http::StatusCode::BAD_REQUEST);
+
+        let no_session_media = attachment_protocol::resolve_attachment_request(
+            &state.attachment_scope,
+            &state.staged_drafts,
+            "GET",
+            "soyo-attachment://localhost/media/01930000-0000-7000-8000-000000000001?ref=soyo-media://obj",
+        );
+        assert_eq!(no_session_media.status, tauri::http::StatusCode::FORBIDDEN);
+
+        // Reject symlinks during staging.
+        #[cfg(unix)]
+        {
+            let link_path = workspace.join("link.png");
+            std::os::unix::fs::symlink(&img_path, &link_path).unwrap();
+            let err = state
+                .stage_attachments(vec![link_path.to_string_lossy().into_owned()])
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, "attachment_denied");
+        }
+    }
+
+    #[tokio::test]
+    async fn module_toggles_and_settings_update_bootstrap() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let alt_ws = root.path().join("alt_workspace");
+        std::fs::create_dir_all(&alt_ws).unwrap();
+        let cfg = test_config_with_workspace(&home, &workspace, "auto");
+        let state = DesktopState::with_config(cfg);
+
+        let modules = state.set_module_enabled("browser", false).await.unwrap();
+        let browser = modules.iter().find(|m| m.module == "browser").unwrap();
+        assert!(!browser.enabled);
+        assert_eq!(browser.source, "module_store");
+
+        let boot = state
+            .set_thinking_effort(Some("high".into()))
+            .await
+            .unwrap();
+        assert_eq!(boot.thinking_effort.as_deref(), Some("high"));
+
+        let boot = state
+            .set_sandbox_backend(crate::types::SandboxBackendDto::Host)
+            .await
+            .unwrap();
+        assert_eq!(boot.sandbox_backend, "host");
+
+        let boot = state.set_autocompact(true, Some(260_000)).await.unwrap();
+        assert_eq!(boot.auto_compact_trigger_tokens, Some(260_000));
+
+        let boot = state
+            .set_workspace(&alt_ws.to_string_lossy())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::path::Path::new(&boot.workspace),
+            alt_ws.canonicalize().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn credentials_import_and_revoke_never_expose_secret_values() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let secret_plaintext = "sk-test-secret-token-never-leak-98765";
+        let cfg_path = home.join("config.toml");
+        std::fs::write(
+            &cfg_path,
+            r#"
+schema_version = 1
+
+[defaults]
+profile = "fixture"
+
+[profiles.fixture]
+protocol = "openai-chat-completions"
+base_url = "http://127.0.0.1:9/v1"
+model = "fixture-model"
+auth = "none"
+context_window_tokens = 400000
+max_output_tokens = 4096
+
+[mcp.servers.docs]
+enabled = true
+
+[mcp.servers.docs.transport]
+type = "http"
+endpoint = "https://mcp.example.com/sse"
+bearer_env = "MCP_SECRET_TOKEN"
+scopes = ["docs:read"]
+"#,
+        )
+        .unwrap();
+        let cfg = config::load(
+            Overrides {
+                config: Some(cfg_path),
+                cwd: Some(workspace.clone()),
+                ..Default::default()
+            },
+            Environment::from_pairs([
+                ("HOME".into(), home.as_os_str().to_owned()),
+                ("MCP_SECRET_TOKEN".into(), secret_plaintext.into()),
+            ]),
+            &workspace,
+        )
+        .unwrap();
+
+        let state = DesktopState::with_config(cfg);
+        let imported = state
+            .import_credential("docs", "MCP_SECRET_TOKEN", vec!["docs:read".into()], true)
+            .await
+            .unwrap();
+        assert_eq!(imported.server, "docs");
+        assert!(!imported.revoked);
+
+        let listed = state.list_credentials().await.unwrap();
+        let encoded = serde_json::to_string(&listed).unwrap();
+        assert!(!encoded.contains(secret_plaintext));
+        assert!(listed.iter().any(|c| c.reference == imported.reference));
+
+        assert!(state.revoke_credential(&imported.reference).await.unwrap());
+        let listed_after = state.list_credentials().await.unwrap();
+        let revoked_item = listed_after
+            .iter()
+            .find(|c| c.reference == imported.reference)
+            .unwrap();
+        assert!(revoked_item.revoked);
+    }
+
+    #[tokio::test]
+    async fn memory_admin_two_phase_and_session_export_work_end_to_end() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "auto");
+
+        let state = DesktopState::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(QueueModel::new(vec![vec![
+                ModelUpdate::TextDelta("Exportable reply".into()),
+                ModelUpdate::Finished {
+                    items: vec![HistoryItem::AssistantText("Exportable reply".into())],
+                    usage: None,
+                },
+            ]]))
+        }));
+
+        // Memory query + two-phase backup export prepare -> confirm.
+        let query = state.query_memory("list").await.unwrap();
+        assert!(query.data.get("entries").is_some());
+
+        let mem_backup_path = root.path().join("memory-backup.json");
+        let prepared = state
+            .prepare_memory_action(&format!("export {}", mem_backup_path.display()))
+            .await
+            .unwrap();
+        let confirmed = state
+            .confirm_memory_action(&prepared.action_id)
+            .await
+            .unwrap();
+        assert!(confirmed.result.is_object());
+        assert!(mem_backup_path.exists());
+
+        // Create and run a session, then export as Markdown and JSON.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let submit = state
+            .submit_prompt("Run before export".into(), vec![], StreamSink::Mpsc(tx))
+            .await
+            .unwrap();
+        while let Some(env) = rx.recv().await {
+            if matches!(env, DesktopStreamEnvelope::RunCompleted { .. }) {
+                break;
+            }
+        }
+
+        let md_path = workspace.join("session-export.md");
+        let md_res = state
+            .export_session(
+                Some(submit.session_id.clone()),
+                &md_path.to_string_lossy(),
+                crate::types::ExportFormatDto::Markdown,
+                crate::types::ExportScopeDto::Transcript,
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(md_res.bytes > 0);
+        let md_text = std::fs::read_to_string(&md_path).unwrap();
+        assert!(md_text.contains("Exportable reply"));
     }
 }

@@ -1,13 +1,17 @@
 import { CheckCircle2, ChevronDown, ChevronRight, Clock, Terminal, XCircle } from "lucide-react";
 import { useState } from "react";
 import type { DesktopMessage } from "../store/useAppStore";
+import { SessionMediaPreview } from "./AttachmentPreview";
 
 export interface ToolCardViewProps {
   message: DesktopMessage;
+  sessionId?: string | null;
 }
 
-export function ToolCardView({ message }: ToolCardViewProps) {
-  const [expanded, setExpanded] = useState(message.toolOk === false);
+export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
+  const [expanded, setExpanded] = useState(
+    message.toolOk === false || message.mediaRefs.length > 0
+  );
 
   const statusBadge = (() => {
     switch (message.toolState) {
@@ -110,6 +114,10 @@ export function ToolCardView({ message }: ToolCardViewProps) {
               </pre>
             </div>
           )}
+          <SessionMediaPreview
+            sessionId={sessionId}
+            mediaRefs={message.mediaRefs}
+          />
         </div>
       )}
     </div>

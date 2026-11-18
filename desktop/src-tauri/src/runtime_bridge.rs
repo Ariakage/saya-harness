@@ -1,6 +1,7 @@
 //! In-process bridge between Tauri commands/channels and `soyo-app` / `soyo-core`.
 
 use crate::{
+    attachment_protocol::{ActiveAttachmentScope, StagedDraft},
     redaction, tool_format,
     types::{
         ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
@@ -16,6 +17,7 @@ use soyo_app::{
     context::{ContextModel, ContextSnapshot, ContextSources},
     events::{ChannelSink, EventModel, EventSink, EventStore, EventWriter},
     interaction::{Request, RunCancellation, input_channel},
+    memory_admin::PreparedMemoryAction,
     offload, offload_boundary,
     session::{self, Prepared},
     thinking::{ThinkingLog, ThinkingModel, extract_reasoning},
@@ -104,6 +106,9 @@ pub struct DesktopInner {
 pub struct DesktopState {
     pub inner: Arc<AsyncMutex<DesktopInner>>,
     pub active_control: Arc<StdMutex<Option<ActiveControl>>>,
+    pub attachment_scope: Arc<StdMutex<Option<ActiveAttachmentScope>>>,
+    pub staged_drafts: Arc<StdMutex<HashMap<String, StagedDraft>>>,
+    pub pending_memory_actions: Arc<StdMutex<HashMap<String, PreparedMemoryAction>>>,
     pub secrets: Arc<SecretRegistry>,
     pub test_model_factory: Option<TestModelFactory>,
 }
@@ -256,6 +261,9 @@ impl DesktopState {
                     last_usage: None,
                 })),
                 active_control: Arc::new(StdMutex::new(None)),
+                attachment_scope: Arc::new(StdMutex::new(None)),
+                staged_drafts: Arc::new(StdMutex::new(HashMap::new())),
+                pending_memory_actions: Arc::new(StdMutex::new(HashMap::new())),
                 secrets: Arc::new(SecretRegistry::default()),
                 test_model_factory: None,
             },
@@ -277,8 +285,20 @@ impl DesktopState {
                 last_usage: None,
             })),
             active_control: Arc::new(StdMutex::new(None)),
+            attachment_scope: Arc::new(StdMutex::new(None)),
+            staged_drafts: Arc::new(StdMutex::new(HashMap::new())),
+            pending_memory_actions: Arc::new(StdMutex::new(HashMap::new())),
             secrets: registry,
             test_model_factory: None,
+        }
+    }
+
+    pub fn sync_attachment_scope(&self, prepared: Option<&Prepared>) {
+        if let Ok(mut scope) = self.attachment_scope.lock() {
+            *scope = prepared.map(|p| ActiveAttachmentScope {
+                session_id: p.session.id,
+                media: p.media.clone(),
+            });
         }
     }
 
@@ -451,6 +471,7 @@ impl DesktopState {
             )
         })?;
         let dto = build_active_session_dto(&prepared.session, None, &secrets);
+        self.sync_attachment_scope(Some(&prepared));
         guard.last_usage = None;
         guard.prepared = Some(prepared);
         Ok(dto)
@@ -599,6 +620,7 @@ impl DesktopState {
                     redaction::redact_str(&err.to_string(), &secrets),
                 )
             })?;
+            self.sync_attachment_scope(Some(&prepared));
             guard.prepared = Some(prepared);
         }
 
@@ -1175,6 +1197,7 @@ impl DesktopState {
                 cfg.profile = Some(prepared.session.profile.clone());
             }
             guard.last_usage = None;
+            self.sync_attachment_scope(Some(&prepared));
             guard.prepared = Some(prepared);
         }
 

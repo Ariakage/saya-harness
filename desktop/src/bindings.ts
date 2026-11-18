@@ -15,6 +15,26 @@ export const commands = {
 	setWorkMode: (mode: WorkModeDto) => typedError<ModeStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_work_mode", { mode })),
 	setPermissionMode: (permissions: PermissionModeDto) => typedError<PermissionModeDto, DesktopError>(__TAURI_INVOKE("set_permission_mode", { permissions })),
 	resumeSession: (sessionId: string, acceptConfigChange: boolean) => typedError<ResumeSessionResultDto_Serialize, DesktopError>(__TAURI_INVOKE("resume_session", { sessionId, acceptConfigChange })),
+	setWorkspace: (path: string) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_workspace", { path })),
+	selectProfile: (profile: string) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("select_profile", { profile })),
+	setThinkingEffort: (effort: string | null) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_thinking_effort", { effort })),
+	setSandboxBackend: (backend: SandboxBackendDto) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_sandbox_backend", { backend })),
+	setAutocompact: (enabled: boolean, triggerTokens: number | null) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_autocompact", { enabled, triggerTokens })),
+	listExtensions: () => typedError<ExtensionItemDto_Serialize[], DesktopError>(__TAURI_INVOKE("list_extensions")),
+	listJobs: () => typedError<BackgroundJobDto_Serialize[], DesktopError>(__TAURI_INVOKE("list_jobs")),
+	cancelBackgroundJob: (jobId: string) => typedError<boolean, DesktopError>(__TAURI_INVOKE("cancel_background_job", { jobId })),
+	listModules: () => typedError<ModuleStatusDto_Serialize[], DesktopError>(__TAURI_INVOKE("list_modules")),
+	setModuleEnabled: (module: string, enabled: boolean) => typedError<ModuleStatusDto_Serialize[], DesktopError>(__TAURI_INVOKE("set_module_enabled", { module, enabled })),
+	listMcpServers: () => typedError<McpServerDto_Serialize[], DesktopError>(__TAURI_INVOKE("list_mcp_servers")),
+	toggleMcpServer: (name: string, enabled: boolean) => typedError<McpServerDto_Serialize[], DesktopError>(__TAURI_INVOKE("toggle_mcp_server", { name, enabled })),
+	listCredentials: () => typedError<CredentialRecordDto_Serialize[], DesktopError>(__TAURI_INVOKE("list_credentials")),
+	importCredential: (server: string, envVar: string, scopes: string[], approveScopes: boolean) => typedError<CredentialRecordDto_Serialize, DesktopError>(__TAURI_INVOKE("import_credential", { server, envVar, scopes, approveScopes })),
+	revokeCredential: (reference: string) => typedError<boolean, DesktopError>(__TAURI_INVOKE("revoke_credential", { reference })),
+	queryMemory: (command: string) => typedError<MemoryQueryResultDto, DesktopError>(__TAURI_INVOKE("query_memory", { command })),
+	prepareMemoryAction: (command: string) => typedError<PreparedMemoryReviewDto, DesktopError>(__TAURI_INVOKE("prepare_memory_action", { command })),
+	confirmMemoryAction: (actionId: string) => typedError<MemoryConfirmResultDto, DesktopError>(__TAURI_INVOKE("confirm_memory_action", { actionId })),
+	exportSession: (sessionId: string | null, targetPath: string, format: ExportFormatDto, scope: ExportScopeDto, includeTools: boolean) => typedError<ExportResultDto, DesktopError>(__TAURI_INVOKE("export_session", { sessionId, targetPath, format, scope, includeTools })),
+	stageAttachments: (paths: string[]) => typedError<StagedAttachmentDto[], DesktopError>(__TAURI_INVOKE("stage_attachments", { paths })),
 };
 
 /* Types */
@@ -82,6 +102,28 @@ export type AttachmentTokenDto = {
 	path: string,
 };
 
+export type BackgroundJobDto = BackgroundJobDto_Serialize | BackgroundJobDto_Deserialize;
+
+export type BackgroundJobDto_Deserialize = {
+	job_id: string,
+	run_id: string,
+	parent_call_id: string,
+	tool?: string | null,
+	state: string,
+	ok?: boolean | null,
+	summary?: string | null,
+};
+
+export type BackgroundJobDto_Serialize = {
+	job_id: string,
+	run_id: string,
+	parent_call_id: string,
+	tool: string | null,
+	state: string,
+	ok: boolean | null,
+	summary: string | null,
+};
+
 export type BootstrapStateDto = BootstrapStateDto_Serialize | BootstrapStateDto_Deserialize;
 
 export type BootstrapStateDto_Deserialize = {
@@ -135,6 +177,30 @@ export type ContextEntryDto = {
 	tokens: number,
 };
 
+export type CredentialRecordDto = CredentialRecordDto_Serialize | CredentialRecordDto_Deserialize;
+
+export type CredentialRecordDto_Deserialize = {
+	reference: string,
+	server: string,
+	audience: string,
+	scopes: string[],
+	kind: string,
+	revision: number,
+	revoked: boolean,
+	oauth_resource?: string | null,
+};
+
+export type CredentialRecordDto_Serialize = {
+	reference: string,
+	server: string,
+	audience: string,
+	scopes: string[],
+	kind: string,
+	revision: number,
+	revoked: boolean,
+	oauth_resource: string | null,
+};
+
 /**  Structured IPC error returned to the frontend; sensitive values are redacted. */
 export type DesktopError = {
 	code: string,
@@ -179,10 +245,64 @@ export type ErrorInfoDto = {
 	message: string,
 };
 
+export type ExportFormatDto = "json" | "markdown";
+
+export type ExportResultDto = {
+	path: string,
+	format: ExportFormatDto,
+	scope: ExportScopeDto,
+	bytes: number,
+	receipt: unknown,
+};
+
+export type ExportScopeDto = "transcript" | "full";
+
+export type ExtensionItemDto = ExtensionItemDto_Serialize | ExtensionItemDto_Deserialize;
+
+export type ExtensionItemDto_Deserialize = {
+	kind: string,
+	id: string,
+	name: string,
+	description: string,
+	scope: string,
+	version?: string | null,
+	active: boolean,
+};
+
+export type ExtensionItemDto_Serialize = {
+	kind: string,
+	id: string,
+	name: string,
+	description: string,
+	scope: string,
+	version: string | null,
+	active: boolean,
+};
+
 export type InputRequestDto = {
 	input_id: string,
 	question: string,
 	options: string[],
+};
+
+export type McpServerDto = McpServerDto_Serialize | McpServerDto_Deserialize;
+
+export type McpServerDto_Deserialize = {
+	name: string,
+	transport: string,
+	enabled: boolean,
+	target: string,
+	scopes: string[],
+	credential_ref?: string | null,
+};
+
+export type McpServerDto_Serialize = {
+	name: string,
+	transport: string,
+	enabled: boolean,
+	target: string,
+	scopes: string[],
+	credential_ref: string | null,
 };
 
 export type McpStatusBadgeDto = {
@@ -190,6 +310,15 @@ export type McpStatusBadgeDto = {
 	transport: string,
 	state: string,
 	tools: number,
+};
+
+export type MemoryConfirmResultDto = {
+	result: unknown,
+};
+
+export type MemoryQueryResultDto = {
+	settings: unknown,
+	data: unknown,
 };
 
 export type MessageRoleDto = "user" | "assistant" | "thinking" | "tool" | "system" | "run_summary";
@@ -210,7 +339,38 @@ export type ModeStateDto_Serialize = {
 
 export type ModelPurposeDto = "execution" | "review" | "compaction";
 
+export type ModuleStatusDto = ModuleStatusDto_Serialize | ModuleStatusDto_Deserialize;
+
+export type ModuleStatusDto_Deserialize = {
+	module: string,
+	description: string,
+	enabled: boolean,
+	configured_enabled: boolean,
+	override_enabled?: boolean | null,
+	source: string,
+	active: boolean,
+	issue?: string | null,
+};
+
+export type ModuleStatusDto_Serialize = {
+	module: string,
+	description: string,
+	enabled: boolean,
+	configured_enabled: boolean,
+	override_enabled: boolean | null,
+	source: string,
+	active: boolean,
+	issue: string | null,
+};
+
 export type PermissionModeDto = "auto" | "bypass" | "manual";
+
+export type PreparedMemoryReviewDto = {
+	action_id: string,
+	operation_id: string,
+	expected_revision: string,
+	review: unknown,
+};
 
 export type ProfileOptionDto = ProfileOptionDto_Serialize | ProfileOptionDto_Deserialize;
 
@@ -301,6 +461,8 @@ export type RunResultDto_Serialize = {
 };
 
 export type RunStatusDto = "completed" | "failed" | "needs_confirmation" | "needs_input" | "limit_reached" | "cancelled";
+
+export type SandboxBackendDto = "auto" | "seatbelt" | "bubblewrap" | "host";
 
 export type SchemaEnvelopeDto = SchemaEnvelopeDto_Serialize | SchemaEnvelopeDto_Deserialize;
 
@@ -505,6 +667,17 @@ export type SessionPageDto_Serialize = {
 	page: number,
 	page_size: number,
 	items: SessionItemDto_Serialize[],
+};
+
+export type StagedAttachmentDto = {
+	id: string,
+	token: string,
+	path: string,
+	filename: string,
+	mime: string,
+	size_bytes: number,
+	kind: string,
+	preview_url: string,
 };
 
 export type SubmitPromptResultDto = {

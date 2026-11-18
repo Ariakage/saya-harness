@@ -626,3 +626,130 @@ pub struct ResumeSessionResultDto {
     pub recovered_runs: u32,
     pub recovered_tools: u32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxBackendDto {
+    Auto,
+    Seatbelt,
+    Bubblewrap,
+    Host,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ExtensionItemDto {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub scope: String,
+    pub version: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct BackgroundJobDto {
+    pub job_id: String,
+    pub run_id: String,
+    pub parent_call_id: String,
+    pub tool: Option<String>,
+    pub state: String,
+    pub ok: Option<bool>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ModuleStatusDto {
+    pub module: String,
+    pub description: String,
+    pub enabled: bool,
+    pub configured_enabled: bool,
+    pub override_enabled: Option<bool>,
+    pub source: String,
+    pub active: bool,
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct McpServerDto {
+    pub name: String,
+    pub transport: String,
+    pub enabled: bool,
+    pub target: String,
+    pub scopes: Vec<String>,
+    pub credential_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct CredentialRecordDto {
+    pub reference: String,
+    pub server: String,
+    pub audience: String,
+    pub scopes: Vec<String>,
+    pub kind: String,
+    #[specta(type = Number)]
+    pub revision: u64,
+    pub revoked: bool,
+    pub oauth_resource: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct MemoryQueryResultDto {
+    #[specta(type = Unknown)]
+    pub settings: Value,
+    #[specta(type = Unknown)]
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct PreparedMemoryReviewDto {
+    pub action_id: String,
+    pub operation_id: String,
+    pub expected_revision: String,
+    #[specta(type = Unknown)]
+    pub review: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct MemoryConfirmResultDto {
+    #[specta(type = Unknown)]
+    pub result: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormatDto {
+    Json,
+    Markdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportScopeDto {
+    Transcript,
+    Full,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ExportResultDto {
+    pub path: String,
+    pub format: ExportFormatDto,
+    pub scope: ExportScopeDto,
+    #[specta(type = Number)]
+    pub bytes: u64,
+    #[specta(type = Unknown)]
+    pub receipt: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct StagedAttachmentDto {
+    pub id: String,
+    pub token: String,
+    pub path: String,
+    pub filename: String,
+    pub mime: String,
+    #[specta(type = Number)]
+    pub size_bytes: u64,
+    pub kind: String,
+    pub preview_url: String,
+}

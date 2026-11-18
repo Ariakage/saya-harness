@@ -1,12 +1,27 @@
-import { Code2, Eye, History, Plus, Sparkles, X } from "lucide-react";
+import {
+  Code2,
+  Database,
+  Download,
+  Eye,
+  History,
+  KeyRound,
+  Plus,
+  Settings,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApprovalDialog } from "./components/ApprovalDialog";
 import { ClarificationDialog } from "./components/ClarificationDialog";
 import { Composer } from "./components/Composer";
 import { ContextSidebar } from "./components/ContextSidebar";
+import { ExportDialog } from "./components/ExportDialog";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import { McpCredentialsDialog } from "./components/McpCredentialsDialog";
+import { MemoryDialog } from "./components/MemoryDialog";
 import { ModeAndPermissionBar } from "./components/ModeAndPermissionBar";
 import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { ThinkingCardView } from "./components/ThinkingCardView";
 import { ToolCardView } from "./components/ToolCardView";
 import { WORK_MODE_STYLES } from "./lib/sanitize";
@@ -43,12 +58,16 @@ export function App() {
   const markdownMode = useAppStore((s) => s.markdownMode);
   const pendingApproval = useAppStore((s) => s.pendingApproval);
   const pendingInput = useAppStore((s) => s.pendingInput);
+  const stagedAttachments = useAppStore((s) => s.stagedAttachments);
   const configChangeSessionId = useAppStore((s) => s.configChangeSessionId);
   const recoveryBanner = useAppStore((s) => s.recoveryBanner);
   const error = useAppStore((s) => s.error);
 
   const initApp = useAppStore((s) => s.initApp);
+  const applyBootstrap = useAppStore((s) => s.applyBootstrap);
   const startNewSession = useAppStore((s) => s.startNewSession);
+  const stageAttachments = useAppStore((s) => s.stageAttachments);
+  const removeStagedAttachment = useAppStore((s) => s.removeStagedAttachment);
   const submitPrompt = useAppStore((s) => s.submitPrompt);
   const cancelActiveRun = useAppStore((s) => s.cancelActiveRun);
   const compactCurrentSession = useAppStore((s) => s.compactCurrentSession);
@@ -65,6 +84,10 @@ export function App() {
   const previewMode = isBrowserPreview();
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mcpCredsOpen, setMcpCredsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const applyPreviewOverlay = (targetScene: PreviewScene) => {
@@ -75,6 +98,12 @@ export function App() {
       pendingInput:
         targetScene === "clarification" ? PREVIEW_INPUT_REQUEST : null,
     });
+    setSettingsOpen(targetScene === "peripheral");
+    if (targetScene !== "peripheral") {
+      setMcpCredsOpen(false);
+      setMemoryOpen(false);
+      setExportOpen(false);
+    }
   };
 
   useEffect(() => {
@@ -129,22 +158,28 @@ export function App() {
             <div className="flex items-center gap-1 rounded-md border border-[#58A6FF]/40 bg-[#58A6FF]/10 px-2 py-1 text-[11px]">
               <Sparkles className="h-3 w-3 text-[#58A6FF]" />
               <span className="mr-1 text-[#58A6FF]">Preview</span>
-              {(["conversation", "markdown", "approval", "clarification"] as const).map(
-                (item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => handleSceneChange(item)}
-                    className={`rounded px-1.5 py-0.5 text-[10px] ${
-                      scene === item
-                        ? "bg-[#58A6FF] font-semibold text-[#09090B]"
-                        : "text-[#D4D4D8] hover:bg-[#202024]"
-                    }`}
-                  >
-                    {item}
-                  </button>
-                )
-              )}
+              {(
+                [
+                  "conversation",
+                  "markdown",
+                  "approval",
+                  "clarification",
+                  "peripheral",
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => handleSceneChange(item)}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    scene === item
+                      ? "bg-[#58A6FF] font-semibold text-[#09090B]"
+                      : "text-[#D4D4D8] hover:bg-[#202024]"
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
             </div>
           )}
 
@@ -155,6 +190,42 @@ export function App() {
           >
             <History className="h-3 w-3" />
             Sessions
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+          >
+            <Settings className="h-3 w-3" />
+            Settings
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMcpCredsOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+          >
+            <KeyRound className="h-3 w-3" />
+            MCP & Creds
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMemoryOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+          >
+            <Database className="h-3 w-3" />
+            Memory
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setExportOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+          >
+            <Download className="h-3 w-3" />
+            Export
           </button>
 
           <button
@@ -260,7 +331,13 @@ export function App() {
                 }
 
                 if (msg.role === "tool") {
-                  return <ToolCardView key={msg.id} message={msg} />;
+                  return (
+                    <ToolCardView
+                      key={msg.id}
+                      message={msg}
+                      sessionId={sessionId}
+                    />
+                  );
                 }
 
                 if (msg.role === "run_summary") {
@@ -330,10 +407,13 @@ export function App() {
             runActive={runActive}
             cancelling={cancelling}
             hasSession={sessionId !== null}
+            stagedAttachments={stagedAttachments}
             onSubmit={(prompt) => submitPrompt(prompt)}
             onCancel={cancelActiveRun}
             onCompact={compactCurrentSession}
             onCycleMode={cycleWorkMode}
+            onStageAttachments={stageAttachments}
+            onRemoveAttachment={removeStagedAttachment}
           />
         </div>
 
@@ -364,6 +444,29 @@ export function App() {
         onClose={() => setSessionsOpen(false)}
         onResume={resumeSession}
         onClearConfigChange={clearConfigChangePrompt}
+      />
+      <SettingsDialog
+        open={settingsOpen}
+        bootstrap={bootstrap}
+        runActive={runActive}
+        onClose={() => setSettingsOpen(false)}
+        onBootstrapUpdated={applyBootstrap}
+      />
+      <McpCredentialsDialog
+        open={mcpCredsOpen}
+        runActive={runActive}
+        onClose={() => setMcpCredsOpen(false)}
+      />
+      <MemoryDialog
+        open={memoryOpen}
+        runActive={runActive}
+        onClose={() => setMemoryOpen(false)}
+      />
+      <ExportDialog
+        open={exportOpen}
+        sessionId={sessionId}
+        workspace={bootstrap?.workspace ?? ""}
+        onClose={() => setExportOpen(false)}
       />
     </div>
   );
