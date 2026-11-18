@@ -1,17 +1,6 @@
-//! In-process bridge between Tauri commands/channels and `soyo-app` / `soyo-core`.
+//! Runtime service bridging helper-server requests and `soyo-app` / `soyo-core`.
 
-use crate::{
-    attachment_protocol::{ActiveAttachmentScope, StagedDraft},
-    redaction, tool_format,
-    types::{
-        ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
-        ContextEntryDto, DesktopError, DesktopStreamEnvelope, InputRequestDto, McpStatusBadgeDto,
-        MessageRoleDto, ModeStateDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto,
-        ResumeSessionResultDto, RunResultDto, SchemaEnvelopeDto, SchemaEventDto, SessionItemDto,
-        SessionPageDto, SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto,
-        WorkModeDto,
-    },
-};
+use crate::attachment::{ActiveAttachmentScope, StagedDraft};
 use serde_json::Value;
 use soyo_app::{
     context::{ContextModel, ContextSnapshot, ContextSources},
@@ -37,13 +26,23 @@ use soyo_core::{
     sqlite::SessionSummary,
     tools::todo::{current_todos, result_todos},
 };
+use soyo_ipc::{
+    redaction, tool_format,
+    types::{
+        ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
+        ContextEntryDto, DesktopError, DesktopStreamEnvelope, InputRequestDto, McpStatusBadgeDto,
+        MessageRoleDto, ModeStateDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto,
+        ResumeSessionResultDto, RunResultDto, SchemaEnvelopeDto, SchemaEventDto, SessionItemDto,
+        SessionPageDto, SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto,
+        WorkModeDto,
+    },
+};
 use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
     time::{Duration, Instant},
 };
-use tauri::ipc::Channel;
 use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 
 const SESSIONS_PAGE_SIZE: u64 = 20;
@@ -60,15 +59,15 @@ pub struct StreamSendError;
 
 #[derive(Clone)]
 pub enum StreamSink {
-    Tauri(Channel<DesktopStreamEnvelope>),
     Mpsc(mpsc::UnboundedSender<DesktopStreamEnvelope>),
+    Fn(Arc<dyn Fn(DesktopStreamEnvelope) -> Result<(), StreamSendError> + Send + Sync>),
 }
 
 impl StreamSink {
     pub fn send(&self, envelope: DesktopStreamEnvelope) -> Result<(), StreamSendError> {
         match self {
-            Self::Tauri(channel) => channel.send(envelope).map_err(|_| StreamSendError),
             Self::Mpsc(tx) => tx.send(envelope).map_err(|_| StreamSendError),
+            Self::Fn(f) => f(envelope),
         }
     }
 }
@@ -103,7 +102,7 @@ pub struct DesktopInner {
     pub last_usage: Option<Usage>,
 }
 
-pub struct DesktopState {
+pub struct HostService {
     pub inner: Arc<AsyncMutex<DesktopInner>>,
     pub active_control: Arc<StdMutex<Option<ActiveControl>>>,
     pub attachment_scope: Arc<StdMutex<Option<ActiveAttachmentScope>>>,
@@ -239,7 +238,7 @@ impl EventSink for SummarySink {
     }
 }
 
-impl DesktopState {
+impl HostService {
     pub fn from_environment() -> Self {
         let env = Environment::capture();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
@@ -1597,7 +1596,7 @@ fn convert_event(
             usage: usage.map(Into::into),
             error: error
                 .as_ref()
-                .map(|err| crate::types::ErrorInfoDto::from_redacted(err, secrets)),
+                .map(|err| soyo_ipc::types::ErrorInfoDto::from_redacted(err, secrets)),
         },
         EventPayload::ToolRequested {
             call_id,

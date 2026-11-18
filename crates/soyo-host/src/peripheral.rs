@@ -1,15 +1,6 @@
 //! Peripheral Tauri commands and runtime helpers (settings, extensions, modules, MCP/credentials, memory, export, attachments).
 
-use crate::{
-    attachment_protocol, redaction,
-    runtime_bridge::DesktopState,
-    types::{
-        BackgroundJobDto, BootstrapStateDto, CredentialRecordDto, DesktopError, DesktopPrefsDto,
-        ExportFormatDto, ExportResultDto, ExportScopeDto, ExtensionItemDto, GlobalPromptDto,
-        McpServerDto, MemoryConfirmResultDto, MemoryQueryResultDto, ModuleStatusDto,
-        PreparedMemoryReviewDto, SandboxBackendDto, StagedAttachmentDto,
-    },
-};
+use crate::{attachment, service::HostService};
 use soyo_app::{
     interaction::RunCancellation, memory_admin::MemoryAdmin, offload_boundary, session,
 };
@@ -29,26 +20,32 @@ use soyo_core::{
     project_context::ProjectContext,
     sqlite::{SnapshotLimits, SqliteStore},
 };
+use soyo_ipc::{
+    redaction,
+    types::{
+        BackgroundJobDto, BootstrapStateDto, CredentialRecordDto, DesktopError, ExportFormatDto,
+        ExportResultDto, ExportScopeDto, ExtensionItemDto, McpServerDto, MemoryConfirmResultDto,
+        MemoryQueryResultDto, ModuleStatusDto, PreparedMemoryReviewDto, SandboxBackendDto,
+        StagedAttachmentDto,
+    },
+};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
-use tauri::State;
 use uuid::Uuid;
 
-impl From<SandboxBackendDto> for BackendKind {
-    fn from(value: SandboxBackendDto) -> Self {
-        match value {
-            SandboxBackendDto::Auto => Self::Auto,
-            SandboxBackendDto::Seatbelt => Self::Seatbelt,
-            SandboxBackendDto::Bubblewrap => Self::Bubblewrap,
-            SandboxBackendDto::Host => Self::Host,
-        }
+fn backend_kind_from_dto(value: &SandboxBackendDto) -> BackendKind {
+    match value {
+        SandboxBackendDto::Auto => BackendKind::Auto,
+        SandboxBackendDto::Seatbelt => BackendKind::Seatbelt,
+        SandboxBackendDto::Bubblewrap => BackendKind::Bubblewrap,
+        SandboxBackendDto::Host => BackendKind::Host,
     }
 }
 
-async fn require_config_clone(state: &DesktopState) -> Result<Config, DesktopError> {
+async fn require_config_clone(state: &HostService) -> Result<Config, DesktopError> {
     let guard = state.inner.lock().await;
     let err_msg = guard
         .config_error
@@ -60,7 +57,7 @@ async fn require_config_clone(state: &DesktopState) -> Result<Config, DesktopErr
         .ok_or_else(|| DesktopError::new("invalid_config", err_msg))
 }
 
-async fn require_idle_config_clone(state: &DesktopState) -> Result<Config, DesktopError> {
+async fn require_idle_config_clone(state: &HostService) -> Result<Config, DesktopError> {
     {
         let control = state
             .active_control
@@ -197,7 +194,7 @@ async fn open_credential_store(
     .map_err(|err| DesktopError::from_boundary(&err, secrets))
 }
 
-impl DesktopState {
+impl HostService {
     pub async fn set_workspace(&self, path: &str) -> Result<BootstrapStateDto, DesktopError> {
         let cfg = require_idle_config_clone(self).await?;
         let secrets = self.current_secrets();
@@ -359,7 +356,7 @@ impl DesktopState {
             .config
             .as_mut()
             .ok_or_else(|| DesktopError::new("invalid_config", "Configuration is not loaded"))?;
-        cfg.sandbox.backend = backend.into();
+        cfg.sandbox.backend = backend_kind_from_dto(&backend);
         drop(guard);
         Ok(self.get_bootstrap_state().await)
     }
@@ -955,396 +952,10 @@ impl DesktopState {
         let drafts = self.staged_drafts.clone();
         let secrets_for_worker = secrets.clone();
         offload_boundary(move || {
-            attachment_protocol::stage_attachment_files(&paths, &drafts, &secrets_for_worker)
+            attachment::stage_attachment_files(&paths, &drafts, &secrets_for_worker)
                 .map_err(|err| BoundaryError::new(err.code, err.message))
         })
         .await
         .map_err(|err| DesktopError::from_boundary(&err, &secrets))
     }
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_workspace(
-    state: State<'_, DesktopState>,
-    path: String,
-) -> Result<BootstrapStateDto, DesktopError> {
-    state.set_workspace(&path).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn select_profile(
-    state: State<'_, DesktopState>,
-    profile: String,
-) -> Result<BootstrapStateDto, DesktopError> {
-    state.select_profile(&profile).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_thinking_effort(
-    state: State<'_, DesktopState>,
-    effort: Option<String>,
-) -> Result<BootstrapStateDto, DesktopError> {
-    state.set_thinking_effort(effort).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_sandbox_backend(
-    state: State<'_, DesktopState>,
-    backend: SandboxBackendDto,
-) -> Result<BootstrapStateDto, DesktopError> {
-    state.set_sandbox_backend(backend).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_autocompact(
-    state: State<'_, DesktopState>,
-    enabled: bool,
-    trigger_tokens: Option<f64>,
-) -> Result<BootstrapStateDto, DesktopError> {
-    let parsed_tokens = match trigger_tokens {
-        Some(value) => {
-            if !value.is_finite() || value <= 0.0 || value > 9_007_199_254_740_991.0 {
-                return Err(DesktopError::new(
-                    "invalid_args",
-                    "Auto-compact trigger tokens must be a valid positive integer",
-                ));
-            }
-            Some(value.trunc() as u64)
-        }
-        None => None,
-    };
-    state.set_autocompact(enabled, parsed_tokens).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn list_extensions(
-    state: State<'_, DesktopState>,
-) -> Result<Vec<ExtensionItemDto>, DesktopError> {
-    state.list_extensions().await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn list_jobs(
-    state: State<'_, DesktopState>,
-) -> Result<Vec<BackgroundJobDto>, DesktopError> {
-    state.list_jobs().await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn cancel_background_job(
-    state: State<'_, DesktopState>,
-    job_id: String,
-) -> Result<bool, DesktopError> {
-    state.cancel_background_job(&job_id)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn list_modules(
-    state: State<'_, DesktopState>,
-) -> Result<Vec<ModuleStatusDto>, DesktopError> {
-    state.list_modules().await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_module_enabled(
-    state: State<'_, DesktopState>,
-    module: String,
-    enabled: bool,
-) -> Result<Vec<ModuleStatusDto>, DesktopError> {
-    state.set_module_enabled(&module, enabled).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn list_mcp_servers(
-    state: State<'_, DesktopState>,
-) -> Result<Vec<McpServerDto>, DesktopError> {
-    state.list_mcp_servers().await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn toggle_mcp_server(
-    state: State<'_, DesktopState>,
-    name: String,
-    enabled: bool,
-) -> Result<Vec<McpServerDto>, DesktopError> {
-    state.toggle_mcp_server(&name, enabled).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn list_credentials(
-    state: State<'_, DesktopState>,
-) -> Result<Vec<CredentialRecordDto>, DesktopError> {
-    state.list_credentials().await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn import_credential(
-    state: State<'_, DesktopState>,
-    server: String,
-    env_var: String,
-    scopes: Vec<String>,
-    approve_scopes: bool,
-) -> Result<CredentialRecordDto, DesktopError> {
-    state
-        .import_credential(&server, &env_var, scopes, approve_scopes)
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn revoke_credential(
-    state: State<'_, DesktopState>,
-    reference: String,
-) -> Result<bool, DesktopError> {
-    state.revoke_credential(&reference).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn query_memory(
-    state: State<'_, DesktopState>,
-    command: String,
-) -> Result<MemoryQueryResultDto, DesktopError> {
-    state.query_memory(&command).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn prepare_memory_action(
-    state: State<'_, DesktopState>,
-    command: String,
-) -> Result<PreparedMemoryReviewDto, DesktopError> {
-    state.prepare_memory_action(&command).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn confirm_memory_action(
-    state: State<'_, DesktopState>,
-    action_id: String,
-) -> Result<MemoryConfirmResultDto, DesktopError> {
-    state.confirm_memory_action(&action_id).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn export_session(
-    state: State<'_, DesktopState>,
-    session_id: Option<String>,
-    target_path: String,
-    format: ExportFormatDto,
-    scope: ExportScopeDto,
-    include_tools: bool,
-) -> Result<ExportResultDto, DesktopError> {
-    state
-        .export_session(session_id, &target_path, format, scope, include_tools)
-        .await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn stage_attachments(
-    state: State<'_, DesktopState>,
-    paths: Vec<String>,
-) -> Result<Vec<StagedAttachmentDto>, DesktopError> {
-    state.stage_attachments(paths).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn get_user_name() -> Result<Option<String>, DesktopError> {
-    Ok(std::env::var("USER")
-        .ok()
-        .or_else(|| std::env::var("USERNAME").ok())
-        .filter(|name| !name.trim().is_empty()))
-}
-
-fn soyo_home_dir() -> Result<PathBuf, DesktopError> {
-    let home = std::env::var("HOME")
-        .ok()
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| DesktopError::new("invalid_config", "HOME is not set"))?;
-    Ok(PathBuf::from(home).join(".soyo"))
-}
-
-fn desktop_prefs_path() -> Result<PathBuf, DesktopError> {
-    Ok(soyo_home_dir()?.join("desktop_prefs.json"))
-}
-
-fn load_desktop_prefs() -> DesktopPrefsDto {
-    let Ok(path) = desktop_prefs_path() else {
-        return DesktopPrefsDto {
-            nickname: None,
-            avatar_data: None,
-        };
-    };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<DesktopPrefsDto>(&raw).ok())
-        .unwrap_or(DesktopPrefsDto {
-            nickname: None,
-            avatar_data: None,
-        })
-}
-
-fn save_desktop_prefs(prefs: &DesktopPrefsDto) -> Result<(), DesktopError> {
-    let path = desktop_prefs_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            DesktopError::new("io_error", format!("Failed to create {}: {err}", parent.display()))
-        })?;
-    }
-    let raw = serde_json::to_string_pretty(prefs)
-        .map_err(|err| DesktopError::new("io_error", format!("Failed to encode prefs: {err}")))?;
-    std::fs::write(&path, raw).map_err(|err| {
-        DesktopError::new("io_error", format!("Failed to write {}: {err}", path.display()))
-    })
-}
-
-const AVATAR_MAX_BYTES: u64 = 4 * 1024 * 1024;
-
-fn read_avatar_data_url(source: &str) -> Result<String, DesktopError> {
-    let path = Path::new(source);
-    let meta = std::fs::metadata(path).map_err(|err| {
-        DesktopError::new("io_error", format!("Cannot read {}: {err}", path.display()))
-    })?;
-    if meta.len() > AVATAR_MAX_BYTES {
-        return Err(DesktopError::new(
-            "invalid_input",
-            "Avatar image exceeds the 4 MB limit",
-        ));
-    }
-    let mime = match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        _ => {
-            return Err(DesktopError::new(
-                "invalid_input",
-                "Unsupported avatar format; use PNG, JPEG, WebP or GIF",
-            ));
-        }
-    };
-    let bytes = std::fs::read(path).map_err(|err| {
-        DesktopError::new("io_error", format!("Cannot read {}: {err}", path.display()))
-    })?;
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn get_desktop_prefs() -> Result<DesktopPrefsDto, DesktopError> {
-    Ok(load_desktop_prefs())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_nickname(nickname: Option<String>) -> Result<DesktopPrefsDto, DesktopError> {
-    let mut prefs = load_desktop_prefs();
-    prefs.nickname = nickname
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    save_desktop_prefs(&prefs)?;
-    Ok(prefs)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_avatar(source_path: Option<String>) -> Result<DesktopPrefsDto, DesktopError> {
-    let mut prefs = load_desktop_prefs();
-    prefs.avatar_data = match source_path {
-        Some(path) => Some(read_avatar_data_url(&path)?),
-        None => None,
-    };
-    save_desktop_prefs(&prefs)?;
-    Ok(prefs)
-}
-
-fn global_prompt_target() -> Result<PathBuf, DesktopError> {
-    Ok(soyo_home_dir()?.join("AGENTS.md"))
-}
-
-fn global_prompt_candidates() -> Result<Vec<PathBuf>, DesktopError> {
-    let home = std::env::var("HOME")
-        .ok()
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| DesktopError::new("invalid_config", "HOME is not set"))?;
-    let home = PathBuf::from(home);
-    Ok([
-        ".soyo/AGENTS.md",
-        ".saya/AGENTS.md",
-        ".agents/AGENTS.md",
-    ]
-    .iter()
-    .map(|rel| home.join(rel))
-    .collect())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn get_global_prompt() -> Result<GlobalPromptDto, DesktopError> {
-    let target = global_prompt_target()?;
-    for candidate in global_prompt_candidates()? {
-        if candidate.is_file() {
-            let content = std::fs::read_to_string(&candidate).map_err(|err| {
-                DesktopError::new(
-                    "io_error",
-                    format!("Failed to read {}: {err}", candidate.display()),
-                )
-            })?;
-            return Ok(GlobalPromptDto {
-                content,
-                path: target.to_string_lossy().into_owned(),
-                source_path: (candidate != target)
-                    .then(|| candidate.to_string_lossy().into_owned()),
-            });
-        }
-    }
-    Ok(GlobalPromptDto {
-        content: String::new(),
-        path: target.to_string_lossy().into_owned(),
-        source_path: None,
-    })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_global_prompt(content: String) -> Result<GlobalPromptDto, DesktopError> {
-    let target = global_prompt_target()?;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            DesktopError::new("io_error", format!("Failed to create {}: {err}", parent.display()))
-        })?;
-    }
-    std::fs::write(&target, &content).map_err(|err| {
-        DesktopError::new("io_error", format!("Failed to write {}: {err}", target.display()))
-    })?;
-    Ok(GlobalPromptDto {
-        content,
-        path: target.to_string_lossy().into_owned(),
-        source_path: None,
-    })
 }

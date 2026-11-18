@@ -15,7 +15,7 @@ use specta_typescript::{Number, Unknown};
 use crate::redaction;
 
 /// Structured IPC error returned to the frontend; sensitive values are redacted.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct DesktopError {
     pub code: String,
     pub message: String,
@@ -96,7 +96,7 @@ impl From<PermissionModeDto> for PermissionMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPurposeDto {
     Execution,
@@ -114,7 +114,7 @@ impl From<ModelPurpose> for ModelPurposeDto {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatusDto {
     Completed,
@@ -138,7 +138,7 @@ impl From<RunStatus> for RunStatusDto {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum TodoStatusDto {
     Pending,
@@ -156,7 +156,7 @@ impl From<TodoStatus> for TodoStatusDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct TodoItemDto {
     pub id: String,
     pub content: String,
@@ -173,7 +173,7 @@ impl TodoItemDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ErrorInfoDto {
     pub code: String,
     pub message: String,
@@ -188,7 +188,7 @@ impl ErrorInfoDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct UsageDto {
     #[specta(type = Option<Number>)]
     pub input_tokens: Option<u64>,
@@ -210,14 +210,14 @@ impl From<Usage> for UsageDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ContextEntryDto {
     pub label: String,
     #[specta(type = Number)]
     pub tokens: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ThinkingSnapshotDto {
     pub request_id: String,
     pub text: String,
@@ -226,7 +226,7 @@ pub struct ThinkingSnapshotDto {
     pub available: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ToolResultDto {
     pub ok: bool,
     #[specta(type = Option<Unknown>)]
@@ -274,7 +274,7 @@ impl ToolResultDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RunResultDto {
     pub schema_version: u8,
     pub session_id: Option<String>,
@@ -310,7 +310,7 @@ impl RunResultDto {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewSourceDto {
     Rule,
@@ -326,7 +326,7 @@ impl From<ReviewSource> for ReviewSourceDto {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalSourceDto {
     User,
@@ -342,7 +342,7 @@ impl From<ApprovalSource> for ApprovalSourceDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "type", content = "data")]
 pub enum SchemaEventDto {
     #[serde(rename = "session.created")]
@@ -437,7 +437,7 @@ pub enum SchemaEventDto {
     RunFinished(RunResultDto),
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct McpStatusBadgeDto {
     pub server: String,
     pub transport: String,
@@ -445,7 +445,7 @@ pub struct McpStatusBadgeDto {
     pub tools: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SchemaEnvelopeDto {
     pub schema_version: u8,
     pub session_id: String,
@@ -456,7 +456,7 @@ pub struct SchemaEnvelopeDto {
     pub payload: SchemaEventDto,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ApprovalRequestDto {
     pub approval_id: String,
     pub call_id: String,
@@ -471,15 +471,24 @@ pub struct ApprovalRequestDto {
     pub work_mode: WorkModeDto,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct InputRequestDto {
     pub input_id: String,
     pub question: String,
     pub options: Vec<String>,
 }
 
+/// Transport-neutral attachment payload returned by `fetch_attachment`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct AttachmentPayloadDto {
+    pub status: u16,
+    pub content_type: String,
+    /// Base64-encoded body (attachments can be 32 MiB of binary).
+    pub body_b64: String,
+}
+
 /// Unified channel message pushed during an active run.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum DesktopStreamEnvelope {
     SchemaEvent(SchemaEnvelopeDto),
@@ -504,14 +513,14 @@ pub enum DesktopStreamEnvelope {
 }
 
 /// Attachment reference sent from the desktop composer.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct AttachmentTokenDto {
     pub token: String,
     pub path: String,
 }
 
 /// Paginated session metadata returned by `list_sessions`.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SessionItemDto {
     pub id: String,
     pub workspace: String,
@@ -523,14 +532,14 @@ pub struct SessionItemDto {
     pub last_status: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SessionPageDto {
     pub page: u32,
     pub page_size: u32,
     pub items: Vec<SessionItemDto>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRoleDto {
     User,
@@ -541,7 +550,7 @@ pub enum MessageRoleDto {
     RunSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RestoredMessageDto {
     pub id: String,
     pub role: MessageRoleDto,
@@ -556,7 +565,7 @@ pub struct RestoredMessageDto {
     pub media_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ProfileOptionDto {
     pub name: String,
     pub model: String,
@@ -566,7 +575,7 @@ pub struct ProfileOptionDto {
     pub thinking_effort: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ActiveSessionDto {
     pub id: String,
     pub title: String,
@@ -580,7 +589,7 @@ pub struct ActiveSessionDto {
     pub last_usage: Option<UsageDto>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct BootstrapStateDto {
     pub version: String,
     pub config_ready: bool,
@@ -606,21 +615,21 @@ pub struct BootstrapStateDto {
     pub active_run_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SubmitPromptResultDto {
     pub action: String,
     pub session_id: String,
     pub run_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ModeStateDto {
     pub current: WorkModeDto,
     pub pending: Option<WorkModeDto>,
     pub active_run: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ResumeSessionResultDto {
     pub bootstrap: BootstrapStateDto,
     pub recovered_runs: u32,
@@ -636,7 +645,7 @@ pub enum SandboxBackendDto {
     Host,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ExtensionItemDto {
     pub kind: String,
     pub id: String,
@@ -647,7 +656,7 @@ pub struct ExtensionItemDto {
     pub active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct BackgroundJobDto {
     pub job_id: String,
     pub run_id: String,
@@ -658,7 +667,7 @@ pub struct BackgroundJobDto {
     pub summary: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ModuleStatusDto {
     pub module: String,
     pub description: String,
@@ -670,7 +679,7 @@ pub struct ModuleStatusDto {
     pub issue: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct McpServerDto {
     pub name: String,
     pub transport: String,
@@ -680,7 +689,7 @@ pub struct McpServerDto {
     pub credential_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CredentialRecordDto {
     pub reference: String,
     pub server: String,
@@ -693,7 +702,7 @@ pub struct CredentialRecordDto {
     pub oauth_resource: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MemoryQueryResultDto {
     #[specta(type = Unknown)]
     pub settings: Value,
@@ -701,7 +710,7 @@ pub struct MemoryQueryResultDto {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct PreparedMemoryReviewDto {
     pub action_id: String,
     pub operation_id: String,
@@ -710,7 +719,7 @@ pub struct PreparedMemoryReviewDto {
     pub review: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MemoryConfirmResultDto {
     #[specta(type = Unknown)]
     pub result: Value,
@@ -730,7 +739,7 @@ pub enum ExportScopeDto {
     Full,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ExportResultDto {
     pub path: String,
     pub format: ExportFormatDto,
@@ -741,7 +750,7 @@ pub struct ExportResultDto {
     pub receipt: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct StagedAttachmentDto {
     pub id: String,
     pub token: String,
@@ -761,7 +770,7 @@ pub struct DesktopPrefsDto {
     pub avatar_data: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct GlobalPromptDto {
     /// Editable content of the user-scope instructions file.
     pub content: String,

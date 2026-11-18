@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/soyo-ipc",
+    "crates/soyo-host",
     "crates/soyo-contract",
     "crates/soyo-fs",
     "crates/soyo-core",
@@ -9,6 +11,8 @@ members = [
     "desktop/src-tauri",
 ]
 default-members = [
+    "crates/soyo-ipc",
+    "crates/soyo-host",
     "crates/soyo-contract",
     "crates/soyo-fs",
     "crates/soyo-core",
