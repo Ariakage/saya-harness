@@ -58,6 +58,7 @@ import {
 } from "./lib/sanitize";
 import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
+import { SetupWizard } from "./components/SetupWizard";
 import { ThinkingCardView } from "./components/ThinkingCardView";
 import { ToolCardView } from "./components/ToolCardView";
 import { UpdaterBanner } from "./components/UpdaterBanner";
@@ -180,6 +181,7 @@ export function App() {
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupDismissed, setSetupDismissed] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [languageOpen, setLanguageOpen] = useState(false);
   const [mcpCredsOpen, setMcpCredsOpen] = useState(false);
@@ -302,6 +304,9 @@ export function App() {
     }
   };
 
+  const needsSetup =
+    bootstrap !== null &&
+    (!bootstrap.config_ready || bootstrap.profiles.length === 0);
   const isHomeEmpty =
     forceHome ||
     (!loading &&
@@ -1818,6 +1823,14 @@ export function App() {
         onSelectLocale={setLocale}
         onClose={() => setLanguageOpen(false)}
       />
+      {needsSetup && !setupDismissed && bootstrap && (
+        <SetupWizard
+          bootstrap={bootstrap}
+          onFinish={() => setSetupDismissed(true)}
+          onSkip={() => setSetupDismissed(true)}
+          onBootstrapUpdated={applyBootstrap}
+        />
+      )}
     </div>
   );
 }

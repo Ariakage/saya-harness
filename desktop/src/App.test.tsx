@@ -1457,4 +1457,139 @@ describe("App Stage 3 runtime integration", () => {
       expect(useAppStore.getState().workMode).toBe("code");
     });
   });
+
+  it("gates first-run setup behind the wizard and applies the returned bootstrap", async () => {
+    isTauriMock.mockReturnValue(true);
+    const incomplete = {
+      ...sampleBootstrap(),
+      config_ready: false,
+      config_error: "cannot read selected configuration file",
+      profiles: [],
+    };
+    const ready = sampleBootstrap();
+    let setupParams: Record<string, unknown> | null = null;
+    invokeMock.mockImplementation(
+      async (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === "get_bootstrap_state") return incomplete;
+        if (cmd === "get_user_name") return "ariakage";
+        if (cmd === "get_desktop_prefs")
+          return { nickname: null, avatar_data: null };
+        if (cmd === "get_global_prompt")
+          return { content: "", path: "/tmp/AGENTS.md", source_path: null };
+        if (cmd === "list_sessions") return samplePage();
+        if (cmd === "setup_environment") {
+          setupParams = args?.params as Record<string, unknown>;
+          return ready;
+        }
+        return null;
+      }
+    );
+
+    render(<App />);
+    const wizard = await screen.findByTestId("setup-wizard");
+    // The config error that triggered first-run setup is surfaced up front.
+    expect(wizard.textContent).toContain(
+      "cannot read selected configuration file"
+    );
+
+    // Step 1: language — continue with the default.
+    fireEvent.click(screen.getByText("Continue"));
+    // Step 2: workspace — prefilled from bootstrap.workspace.
+    await screen.findByTestId("setup-step-workspace");
+    expect(
+      (screen.getByLabelText("Workspace directory") as HTMLInputElement).value
+    ).toBe("/workspace/demo");
+    fireEvent.click(screen.getByText("Continue"));
+
+    // Step 3: model — fill the required model + API key fields.
+    await screen.findByTestId("setup-step-model");
+    fireEvent.change(
+      screen.getByPlaceholderText("gpt-5 / claude-sonnet-4-5 / …"),
+      { target: { value: "gpt-5-mini" } }
+    );
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-wizard-1" },
+    });
+    fireEvent.click(screen.getByText("Continue"));
+
+    // Step 4: permissions — finish with the default auto mode.
+    await screen.findByTestId("setup-step-permissions");
+    fireEvent.click(screen.getByText("Finish setup"));
+
+    await waitFor(() => {
+      expect(setupParams).not.toBeNull();
+    });
+    expect(setupParams).toMatchObject({
+      profile_name: "openai",
+      protocol: "openai-responses",
+      base_url: "https://api.openai.com/v1",
+      model: "gpt-5-mini",
+      auth: "bearer",
+      api_key_env: "OPENAI_API_KEY",
+      api_key: "sk-wizard-1",
+      context_window_tokens: 128000,
+      workspace: "/workspace/demo",
+      permission_mode: "auto",
+    });
+
+    // Returned bootstrap is applied: the wizard closes into the normal app.
+    await waitFor(() => {
+      expect(screen.queryByTestId("setup-wizard")).toBeNull();
+      expect(useAppStore.getState().bootstrap?.config_ready).toBe(true);
+    });
+  });
+
+  it("surfaces setup backend errors and can skip to the config warning", async () => {
+    isTauriMock.mockReturnValue(true);
+    const incomplete = {
+      ...sampleBootstrap(),
+      config_ready: false,
+      config_error: null,
+      profiles: [],
+    };
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return incomplete;
+      if (cmd === "get_user_name") return "ariakage";
+      if (cmd === "get_desktop_prefs")
+        return { nickname: null, avatar_data: null };
+      if (cmd === "get_global_prompt")
+        return { content: "", path: "/tmp/AGENTS.md", source_path: null };
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "setup_environment")
+        throw { code: "config_io", message: "API base URL requires HTTPS" };
+      return null;
+    });
+
+    render(<App />);
+    await screen.findByTestId("setup-wizard");
+    fireEvent.click(screen.getByText("Continue")); // workspace
+    await screen.findByTestId("setup-step-workspace");
+    fireEvent.click(screen.getByText("Continue"));
+    await screen.findByTestId("setup-step-model");
+    fireEvent.change(
+      screen.getByPlaceholderText("gpt-5 / claude-sonnet-4-5 / …"),
+      { target: { value: "gpt-5-mini" } }
+    );
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-x" },
+    });
+    fireEvent.click(screen.getByText("Continue"));
+    await screen.findByTestId("setup-step-permissions");
+    fireEvent.click(screen.getByText("Finish setup"));
+
+    // The backend error is shown and the wizard stays open.
+    await waitFor(() => {
+      expect(screen.getByTestId("setup-wizard").textContent).toContain(
+        "config_io: API base URL requires HTTPS"
+      );
+    });
+
+    // Skipping dismisses the wizard but leaves the config warning visible.
+    fireEvent.click(screen.getByText("Set up later"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("setup-wizard")).toBeNull();
+    });
+    const t = getMessages("en-US");
+    expect(document.body.textContent).toContain(t.home.configIncomplete);
+  });
 });

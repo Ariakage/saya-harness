@@ -12,6 +12,7 @@ export const commands = {
 	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
 	getRunState: () => typedError<RunStateDto_Serialize, DesktopError>(__TAURI_INVOKE("get_run_state")),
 	getUsageStats: (days: number) => typedError<UsageStatsDto, DesktopError>(__TAURI_INVOKE("get_usage_stats", { days })),
+	setupEnvironment: (params: SetupEnvironmentParams_Deserialize) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("setup_environment", { params })),
 	replyApproval: (approvalId: string, callId: string, approved: boolean) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_approval", { approvalId, callId, approved })),
 	replyInput: (inputId: string, answer: string) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_input", { inputId, answer })),
 	setWorkMode: (mode: WorkModeDto) => typedError<ModeStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_work_mode", { mode })),
@@ -767,6 +768,94 @@ export type SessionPageDto_Serialize = {
 	page: number,
 	page_size: number,
 	items: SessionItemDto_Serialize[],
+};
+
+/**
+ *  First-run setup parameters collected by the desktop wizard. `api_key` is a
+ *  secret value — it is only ever written to the helper-private env overlay
+ *  (`<helper_dir>/env`); `config.toml` stores `api_key_env` by name per the
+ *  credential baseline.
+ */
+export type SetupEnvironmentParams = SetupEnvironmentParams_Serialize | SetupEnvironmentParams_Deserialize;
+
+/**
+ *  First-run setup parameters collected by the desktop wizard. `api_key` is a
+ *  secret value — it is only ever written to the helper-private env overlay
+ *  (`<helper_dir>/env`); `config.toml` stores `api_key_env` by name per the
+ *  credential baseline.
+ */
+export type SetupEnvironmentParams_Deserialize = {
+	/**  TOML-safe profile key: `[A-Za-z0-9_-]+`. */
+	profile_name: string,
+	/**  `openai-responses`, `openai-chat-completions` or `anthropic-messages`. */
+	protocol: string,
+	base_url: string,
+	model: string,
+	/**  `bearer`, `x-api-key` or `none` (default `bearer`). */
+	auth?: string | null,
+	/**
+	 *  Environment variable name the profile references (`api_key_env`).
+	 *  Required unless `auth == "none"`.
+	 */
+	api_key_env?: string | null,
+	/**
+	 *  Secret key value written to the helper env overlay under `api_key_env`.
+	 *  Omit to reference an already-exported variable instead.
+	 */
+	api_key?: string | null,
+	context_window_tokens?: number | null,
+	max_output_tokens?: number | null,
+	/**
+	 *  Optional workspace directory applied via `set_workspace` semantics
+	 *  after the configuration reloads.
+	 */
+	workspace?: string | null,
+	/**
+	 *  Defaults persisted into `[defaults]` — `permissions` and `mode` are
+	 *  only written when provided.
+	 */
+	permission_mode?: PermissionModeDto | null,
+	work_mode?: WorkModeDto | null,
+};
+
+/**
+ *  First-run setup parameters collected by the desktop wizard. `api_key` is a
+ *  secret value — it is only ever written to the helper-private env overlay
+ *  (`<helper_dir>/env`); `config.toml` stores `api_key_env` by name per the
+ *  credential baseline.
+ */
+export type SetupEnvironmentParams_Serialize = {
+	/**  TOML-safe profile key: `[A-Za-z0-9_-]+`. */
+	profile_name: string,
+	/**  `openai-responses`, `openai-chat-completions` or `anthropic-messages`. */
+	protocol: string,
+	base_url: string,
+	model: string,
+	/**  `bearer`, `x-api-key` or `none` (default `bearer`). */
+	auth: string | null,
+	/**
+	 *  Environment variable name the profile references (`api_key_env`).
+	 *  Required unless `auth == "none"`.
+	 */
+	api_key_env: string | null,
+	/**
+	 *  Secret key value written to the helper env overlay under `api_key_env`.
+	 *  Omit to reference an already-exported variable instead.
+	 */
+	api_key: string | null,
+	context_window_tokens: number | null,
+	max_output_tokens: number | null,
+	/**
+	 *  Optional workspace directory applied via `set_workspace` semantics
+	 *  after the configuration reloads.
+	 */
+	workspace: string | null,
+	/**
+	 *  Defaults persisted into `[defaults]` — `permissions` and `mode` are
+	 *  only written when provided.
+	 */
+	permission_mode: PermissionModeDto | null,
+	work_mode: WorkModeDto | null,
 };
 
 export type StagedAttachmentDto = {

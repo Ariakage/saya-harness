@@ -9,8 +9,8 @@ use crate::types::{
     ExportFormatDto, ExportResultDto, ExportScopeDto, ExtensionItemDto, GlobalPromptDto,
     McpServerDto, MemoryConfirmResultDto, MemoryQueryResultDto, ModeStateDto, ModuleStatusDto,
     PermissionModeDto, PreparedMemoryReviewDto, ResumeSessionResultDto, RunStateDto,
-    SandboxBackendDto, SessionPageDto, StagedAttachmentDto, SubmitPromptResultDto, UsageStatsDto,
-    WorkModeDto,
+    SandboxBackendDto, SessionPageDto, SetupEnvironmentParams, StagedAttachmentDto,
+    SubmitPromptResultDto, UsageStatsDto, WorkModeDto,
 };
 use serde_json::json;
 use soyo_ipc::HelperClient;
@@ -145,6 +145,16 @@ impl DesktopState {
         self.client()
             .await?
             .call_typed("usage_stats", &json!({ "days": days }))
+            .await
+    }
+
+    pub async fn setup_environment(
+        &self,
+        params: SetupEnvironmentParams,
+    ) -> Result<BootstrapStateDto, DesktopError> {
+        self.client()
+            .await?
+            .call_typed("setup_environment", &json!(params))
             .await
     }
 

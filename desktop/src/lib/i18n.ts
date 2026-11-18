@@ -227,6 +227,44 @@ export interface UiMessages {
     allowBypassTitle: string;
     allowBypassDesc: string;
   };
+  setup: {
+    welcome: string;
+    welcomeSubtitle: string;
+    skipLabel: string;
+    stepOf: (n: number, total: number) => string;
+    stepLanguage: string;
+    stepWorkspace: string;
+    stepModel: string;
+    stepPermissions: string;
+    workspaceHint: string;
+    browse: string;
+    presets: {
+      openai: string;
+      anthropic: string;
+      compatible: string;
+      local: string;
+    };
+    profileName: string;
+    contextWindow: string;
+    baseUrl: string;
+    modelName: string;
+    apiKeyLabel: string;
+    pasteKeyLabel: string;
+    useEnvVarLabel: string;
+    envVarNameLabel: string;
+    apiKeyHint: string;
+    noKeyNeeded: string;
+    permAuto: string;
+    permAutoHint: string;
+    permManual: string;
+    permManualHint: string;
+    permBypass: string;
+    permBypassHint: string;
+    backLabel: string;
+    continueLabel: string;
+    finishLabel: string;
+    applyingLabel: string;
+  };
   sessionBrowser: {
     title: string;
     configChangedPrefix: string;
@@ -610,6 +648,46 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       allowBypassTitle: "Allow bypass permissions mode",
       allowBypassDesc:
         "Bypass skips path checks, model review, and human confirmation. PLAN, explicit deny and hard backend limits still apply.",
+    },
+    setup: {
+      welcome: "Welcome to Soyo",
+      welcomeSubtitle: "Set up the essentials to get started",
+      skipLabel: "Set up later",
+      stepOf: (n, total) => `Step ${n} of ${total}`,
+      stepLanguage: "Choose your language",
+      stepWorkspace: "Pick a workspace directory",
+      stepModel: "Connect a model provider",
+      stepPermissions: "Choose a permission mode",
+      workspaceHint: "Sessions and artifacts live under this directory.",
+      browse: "Browse…",
+      presets: {
+        openai: "OpenAI",
+        anthropic: "Anthropic",
+        compatible: "Compatible",
+        local: "Local",
+      },
+      profileName: "Profile name",
+      contextWindow: "Context window",
+      baseUrl: "API base URL",
+      modelName: "Model",
+      apiKeyLabel: "API key",
+      pasteKeyLabel: "Paste key",
+      useEnvVarLabel: "Use existing env var",
+      envVarNameLabel: "Variable name",
+      apiKeyHint:
+        "Stored in the private helper env file (~/.soyo/env); config.toml only keeps the variable name.",
+      noKeyNeeded:
+        "This endpoint needs no API key — requests are sent without authentication.",
+      permAuto: "Auto",
+      permAutoHint: "Recommended — built-in checks still apply",
+      permManual: "Manual approval",
+      permManualHint: "Approve every tool call before it runs",
+      permBypass: "Bypass permissions",
+      permBypassHint: "No prompts — only hard backend limits apply",
+      backLabel: "Back",
+      continueLabel: "Continue",
+      finishLabel: "Finish setup",
+      applyingLabel: "Applying…",
     },
     sessionBrowser: {
       title: "Sessions & Project History",
@@ -1018,6 +1096,45 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       allowBypassDesc:
         "开启后将跳过路径检查、模型复核与人工确认；PLAN 只读限制、显式拒绝规则与底层硬隔离约束仍生效。",
     },
+    setup: {
+      welcome: "欢迎使用 Soyo",
+      welcomeSubtitle: "完成基础设置后即可开始使用",
+      skipLabel: "稍后设置",
+      stepOf: (n, total) => `第 ${n} / ${total} 步`,
+      stepLanguage: "选择界面语言",
+      stepWorkspace: "选择工作区目录",
+      stepModel: "连接模型提供商",
+      stepPermissions: "选择权限模式",
+      workspaceHint: "会话与产物将保存在此目录下。",
+      browse: "浏览…",
+      presets: {
+        openai: "OpenAI",
+        anthropic: "Anthropic",
+        compatible: "兼容接口",
+        local: "本地服务",
+      },
+      profileName: "配置名称",
+      contextWindow: "上下文窗口",
+      baseUrl: "API 基础地址",
+      modelName: "模型",
+      apiKeyLabel: "API 密钥",
+      pasteKeyLabel: "粘贴密钥",
+      useEnvVarLabel: "引用已有环境变量",
+      envVarNameLabel: "变量名",
+      apiKeyHint:
+        "密钥保存在 helper 私有环境文件（~/.soyo/env）中，config.toml 只记录变量名。",
+      noKeyNeeded: "该端点无需 API 密钥——请求将不携带认证信息。",
+      permAuto: "自动",
+      permAutoHint: "推荐——内置检查仍然生效",
+      permManual: "手动批准",
+      permManualHint: "每次工具调用执行前都需要批准",
+      permBypass: "跳过权限确认",
+      permBypassHint: "不再提示——仅底层硬性限制生效",
+      backLabel: "上一步",
+      continueLabel: "继续",
+      finishLabel: "完成设置",
+      applyingLabel: "应用中…",
+    },
     sessionBrowser: {
       title: "会话与项目历史",
       configChangedPrefix: "自会话",
@@ -1421,6 +1538,45 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       allowBypassTitle: "允許略過權限確認（bypass）",
       allowBypassDesc:
         "啟用後將略過路徑檢查、模型複核與人工確認；PLAN 唯讀限制、明確拒絕規則與底層硬隔離約束依然有效。",
+    },
+    setup: {
+      welcome: "歡迎使用 Soyo",
+      welcomeSubtitle: "完成基礎設定後即可開始使用",
+      skipLabel: "稍後設定",
+      stepOf: (n, total) => `第 ${n} / ${total} 步`,
+      stepLanguage: "選擇介面語言",
+      stepWorkspace: "選擇工作區目錄",
+      stepModel: "連線模型供應商",
+      stepPermissions: "選擇權限模式",
+      workspaceHint: "工作階段與產出物將儲存在此目錄下。",
+      browse: "瀏覽…",
+      presets: {
+        openai: "OpenAI",
+        anthropic: "Anthropic",
+        compatible: "相容介面",
+        local: "本機服務",
+      },
+      profileName: "設定檔名稱",
+      contextWindow: "上下文視窗",
+      baseUrl: "API 基礎位址",
+      modelName: "模型",
+      apiKeyLabel: "API 金鑰",
+      pasteKeyLabel: "貼上金鑰",
+      useEnvVarLabel: "引用既有環境變數",
+      envVarNameLabel: "變數名稱",
+      apiKeyHint:
+        "金鑰儲存在 helper 私有環境檔案（~/.soyo/env）中，config.toml 只記錄變數名稱。",
+      noKeyNeeded: "此端點無需 API 金鑰——請求將不攜帶認證資訊。",
+      permAuto: "自動",
+      permAutoHint: "建議——內建檢查依然生效",
+      permManual: "手動核准",
+      permManualHint: "每次工具呼叫執行前都需要核准",
+      permBypass: "略過權限確認",
+      permBypassHint: "不再提示——僅底層硬性限制生效",
+      backLabel: "上一步",
+      continueLabel: "繼續",
+      finishLabel: "完成設定",
+      applyingLabel: "套用中…",
     },
     sessionBrowser: {
       title: "工作階段與專案歷史",

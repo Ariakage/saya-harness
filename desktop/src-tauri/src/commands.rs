@@ -5,7 +5,8 @@ use crate::{
     types::{
         ActiveSessionDto, AttachmentTokenDto, BootstrapStateDto, DesktopError,
         DesktopStreamEnvelope, ModeStateDto, PermissionModeDto, ResumeSessionResultDto,
-        RunStateDto, SessionPageDto, SubmitPromptResultDto, UsageStatsDto, WorkModeDto,
+        RunStateDto, SessionPageDto, SetupEnvironmentParams, SubmitPromptResultDto, UsageStatsDto,
+        WorkModeDto,
     },
 };
 use tauri::{State, ipc::Channel};
@@ -74,6 +75,15 @@ pub async fn get_usage_stats(
     days: u32,
 ) -> Result<UsageStatsDto, DesktopError> {
     state.usage_stats(days).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn setup_environment(
+    state: State<'_, DesktopState>,
+    params: SetupEnvironmentParams,
+) -> Result<BootstrapStateDto, DesktopError> {
+    state.setup_environment(params).await
 }
 
 #[tauri::command]
