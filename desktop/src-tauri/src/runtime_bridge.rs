@@ -5,9 +5,10 @@ use crate::{
     types::{
         ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
         ContextEntryDto, DesktopError, DesktopStreamEnvelope, InputRequestDto, McpStatusBadgeDto,
-        MessageRoleDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto, RunResultDto,
-        SchemaEnvelopeDto, SchemaEventDto, SessionItemDto, SessionPageDto, SubmitPromptResultDto,
-        ThinkingSnapshotDto, TodoItemDto, ToolResultDto, WorkModeDto,
+        MessageRoleDto, ModeStateDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto,
+        ResumeSessionResultDto, RunResultDto, SchemaEnvelopeDto, SchemaEventDto, SessionItemDto,
+        SessionPageDto, SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto,
+        WorkModeDto,
     },
 };
 use serde_json::Value;
@@ -21,11 +22,11 @@ use soyo_app::{
 };
 use soyo_core::{
     approvals::Preauthorizations,
-    boundary::{Cancellation, Model, Operation, Store},
+    boundary::{Cancellation, Model, Operation, Store, StoreChange},
     config::{self, Config, Environment, Overrides},
     contract::{
-        BoundaryError, Event, EventPayload, HistoryItem, ModelPurpose, RunId, RunResult, Session,
-        Usage, WorkMode,
+        BoundaryError, ErrorInfo, Event, EventPayload, HistoryItem, ModelPurpose, RunId, RunResult,
+        Session, Usage, WorkMode,
     },
     credentials::SecretRegistry,
     execution::BackendKind,
@@ -799,6 +800,390 @@ impl DesktopState {
         control.pending = None;
         let _ = control.cancel.cancel();
         true
+    }
+
+    pub fn reply_approval(
+        &self,
+        approval_id: &str,
+        call_id: &str,
+        approved: bool,
+    ) -> Result<(), DesktopError> {
+        let mut guard = self
+            .active_control
+            .lock()
+            .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+        let Some(control) = guard.as_mut() else {
+            return Err(DesktopError::new(
+                "stale_approval",
+                "No active run owns this approval request",
+            ));
+        };
+        let Some(pending) = control.pending.take() else {
+            return Err(DesktopError::new(
+                "stale_approval",
+                "No pending approval request is awaiting reply",
+            ));
+        };
+        match pending {
+            PendingInteraction::Approval {
+                approval_id: cur_approval_id,
+                call_id: cur_call_id,
+                request,
+            } => {
+                if cur_approval_id != approval_id || cur_call_id != call_id {
+                    control.pending = Some(PendingInteraction::Approval {
+                        approval_id: cur_approval_id,
+                        call_id: cur_call_id,
+                        request,
+                    });
+                    return Err(DesktopError::new(
+                        "stale_approval",
+                        "Approval request does not match the active confirmation",
+                    ));
+                }
+                match request {
+                    Request::Approval(_, reply) => {
+                        if reply.is_closed() {
+                            return Err(DesktopError::new(
+                                "stale_approval",
+                                "Approval request expired or was cancelled",
+                            ));
+                        }
+                        if reply.send(Ok(Some(approved))).is_err() {
+                            return Err(DesktopError::new(
+                                "stale_approval",
+                                "Approval receiver closed before reply delivery",
+                            ));
+                        }
+                        Ok(())
+                    }
+                    other => {
+                        control.pending = Some(PendingInteraction::Input {
+                            input_id: String::new(),
+                            request: other,
+                        });
+                        Err(DesktopError::new(
+                            "stale_approval",
+                            "Pending interaction is not an approval request",
+                        ))
+                    }
+                }
+            }
+            other => {
+                control.pending = Some(other);
+                Err(DesktopError::new(
+                    "stale_approval",
+                    "Pending interaction is an input prompt, not an approval request",
+                ))
+            }
+        }
+    }
+
+    pub fn reply_input(&self, input_id: &str, answer: String) -> Result<(), DesktopError> {
+        let mut guard = self
+            .active_control
+            .lock()
+            .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+        let Some(control) = guard.as_mut() else {
+            return Err(DesktopError::new(
+                "stale_input",
+                "No active run owns this input request",
+            ));
+        };
+        let Some(pending) = control.pending.take() else {
+            return Err(DesktopError::new(
+                "stale_input",
+                "No pending input request is awaiting reply",
+            ));
+        };
+        match pending {
+            PendingInteraction::Input {
+                input_id: cur_input_id,
+                request,
+            } => {
+                if cur_input_id != input_id {
+                    control.pending = Some(PendingInteraction::Input {
+                        input_id: cur_input_id,
+                        request,
+                    });
+                    return Err(DesktopError::new(
+                        "stale_input",
+                        "Input request does not match the active clarification prompt",
+                    ));
+                }
+                match request {
+                    Request::Input(_, reply) => {
+                        if reply.is_closed() {
+                            return Err(DesktopError::new(
+                                "stale_input",
+                                "Input request expired or was cancelled",
+                            ));
+                        }
+                        if reply.send(Ok(Some(answer))).is_err() {
+                            return Err(DesktopError::new(
+                                "stale_input",
+                                "Input receiver closed before answer delivery",
+                            ));
+                        }
+                        Ok(())
+                    }
+                    other => {
+                        control.pending = Some(PendingInteraction::Approval {
+                            approval_id: String::new(),
+                            call_id: String::new(),
+                            request: other,
+                        });
+                        Err(DesktopError::new(
+                            "stale_input",
+                            "Pending interaction is not an input request",
+                        ))
+                    }
+                }
+            }
+            other => {
+                control.pending = Some(other);
+                Err(DesktopError::new(
+                    "stale_input",
+                    "Pending interaction is an approval request, not an input prompt",
+                ))
+            }
+        }
+    }
+
+    pub async fn set_work_mode(&self, mode: WorkModeDto) -> Result<ModeStateDto, DesktopError> {
+        let target: WorkMode = mode.into();
+        let secrets = self.current_secrets();
+        let (cfg, workspace) = {
+            let guard = self.inner.lock().await;
+            let cfg = guard.config.clone().ok_or_else(|| {
+                DesktopError::new(
+                    "invalid_config",
+                    guard
+                        .config_error
+                        .as_deref()
+                        .unwrap_or("Configuration is not loaded"),
+                )
+            })?;
+            let workspace = guard
+                .prepared
+                .as_ref()
+                .map(|p| p.session.workspace.clone())
+                .unwrap_or_else(|| cfg.cwd.clone());
+            (cfg, workspace)
+        };
+
+        offload_boundary(move || {
+            session::check_roots(&cfg, &workspace, target)
+                .map_err(|err| BoundaryError::new("invalid_mode_roots", err.to_string()))
+        })
+        .await
+        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+
+        {
+            let mut control_guard = self
+                .active_control
+                .lock()
+                .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+            if let Some(control) = control_guard.as_mut() {
+                let handle = control.handle.as_ref().ok_or_else(|| {
+                    DesktopError::new("run_starting", "Run is still initializing")
+                })?;
+                handle
+                    .request_mode(target)
+                    .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+
+                if matches!(control.pending, Some(PendingInteraction::Approval { .. }))
+                    && let Some(PendingInteraction::Approval {
+                        request: Request::Approval(_, reply),
+                        ..
+                    }) = control.pending.take()
+                {
+                    let _ = reply.send(Err(BoundaryError(
+                        ErrorInfo {
+                            code: "stale_approval".into(),
+                            message: "Work mode changed before approval resolved".into(),
+                        },
+                        None,
+                        None,
+                    )));
+                }
+
+                let snapshot = handle
+                    .mode()
+                    .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+                return Ok(ModeStateDto {
+                    current: snapshot.current.into(),
+                    pending: snapshot.pending.map(Into::into),
+                    active_run: true,
+                });
+            }
+        }
+
+        let mut guard = self.inner.lock().await;
+        if guard.active_run_id.is_some() {
+            return Err(DesktopError::new(
+                "run_active",
+                "Run became active while switching mode; retry",
+            ));
+        }
+        if let Some(prepared) = &mut guard.prepared {
+            let mut updated = prepared.session.clone();
+            updated.work_mode = target;
+            prepared
+                .store
+                .commit(&[StoreChange::Session(updated.clone())])
+                .await
+                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+            prepared.session = updated;
+        }
+        if let Some(cfg) = &mut guard.config {
+            cfg.mode = target;
+        }
+        Ok(ModeStateDto {
+            current: target.into(),
+            pending: None,
+            active_run: false,
+        })
+    }
+
+    pub async fn set_permission_mode(
+        &self,
+        permissions: PermissionModeDto,
+    ) -> Result<PermissionModeDto, DesktopError> {
+        {
+            let control = self
+                .active_control
+                .lock()
+                .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+            if let Some(active) = control.as_ref() {
+                if active.pending.is_some() {
+                    return Err(DesktopError::new(
+                        "pending_request",
+                        "Resolve pending approval or input before changing permission mode",
+                    ));
+                }
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Permission mode can only be changed while idle",
+                ));
+            }
+        }
+        let mut guard = self.inner.lock().await;
+        if guard.active_run_id.is_some() {
+            return Err(DesktopError::new(
+                "run_active",
+                "Permission mode can only be changed while idle",
+            ));
+        }
+        let config_err = guard
+            .config_error
+            .clone()
+            .unwrap_or_else(|| "Configuration is not loaded".into());
+        let cfg = guard
+            .config
+            .as_mut()
+            .ok_or_else(|| DesktopError::new("invalid_config", config_err))?;
+        cfg.permissions_mode = permissions.into();
+        Ok(permissions)
+    }
+
+    pub async fn resume_session(
+        &self,
+        session_id: &str,
+        accept_config_change: bool,
+    ) -> Result<ResumeSessionResultDto, DesktopError> {
+        let secrets = self.current_secrets();
+        let parsed_id = session::parse_id(session_id).map_err(|err| {
+            DesktopError::new(
+                "invalid_session_id",
+                redaction::redact_str(&err.to_string(), &secrets),
+            )
+        })?;
+
+        let (cfg, already_loaded) = {
+            let mut guard = self.inner.lock().await;
+            if guard.active_run_id.is_some() {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Cancel or wait for the active run before switching sessions",
+                ));
+            }
+            let already = guard
+                .prepared
+                .as_ref()
+                .is_some_and(|p| p.session.id == parsed_id);
+            if already && let Some(prepared) = &guard.prepared {
+                let sess_mode = prepared.session.work_mode;
+                let sess_ws = prepared.session.workspace.clone();
+                let sess_profile = prepared.session.profile.clone();
+                if let Some(cfg) = &mut guard.config {
+                    cfg.mode = sess_mode;
+                    cfg.cwd = sess_ws;
+                    cfg.profile = Some(sess_profile);
+                }
+                drop(guard);
+                let bootstrap = self.get_bootstrap_state().await;
+                return Ok(ResumeSessionResultDto {
+                    bootstrap,
+                    recovered_runs: 0,
+                    recovered_tools: 0,
+                });
+            }
+            let cfg = guard.config.clone().ok_or_else(|| {
+                DesktopError::new(
+                    "invalid_config",
+                    guard
+                        .config_error
+                        .as_deref()
+                        .unwrap_or("Configuration is not loaded"),
+                )
+            })?;
+            (cfg, already)
+        };
+        let _ = already_loaded;
+
+        let prepared = session::resume(
+            &cfg,
+            session_id,
+            session::ResumeOptions {
+                accept_config_change,
+                cwd_explicit: false,
+                profile_explicit: false,
+                mode_override: None,
+            },
+        )
+        .await
+        .map_err(|err| {
+            let msg = redaction::redact_str(&err.to_string(), &secrets);
+            let code = if msg.contains("configuration changed") {
+                "config_change_requires_confirmation"
+            } else {
+                "resume_failed"
+            };
+            DesktopError::new(code, msg)
+        })?;
+
+        let recovered_runs = prepared.recovery.interrupted_runs as u32;
+        let recovered_tools =
+            (prepared.recovery.unknown_tools + prepared.recovery.closed_calls) as u32;
+
+        {
+            let mut guard = self.inner.lock().await;
+            if let Some(cfg) = &mut guard.config {
+                cfg.cwd = prepared.session.workspace.clone();
+                cfg.mode = prepared.session.work_mode;
+                cfg.profile = Some(prepared.session.profile.clone());
+            }
+            guard.last_usage = None;
+            guard.prepared = Some(prepared);
+        }
+
+        let bootstrap = self.get_bootstrap_state().await;
+        Ok(ResumeSessionResultDto {
+            bootstrap,
+            recovered_runs,
+            recovered_tools,
+        })
     }
 
     pub async fn shutdown(&self) {

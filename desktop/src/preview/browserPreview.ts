@@ -2,12 +2,20 @@ import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ActiveSessionDto_Serialize,
+  ApprovalRequestDto_Deserialize,
   BootstrapStateDto_Serialize,
   DesktopStreamEnvelope_Deserialize,
+  InputRequestDto,
+  PermissionModeDto,
   SessionPageDto_Serialize,
+  WorkModeDto,
 } from "../bindings";
 
-export type PreviewScene = "conversation" | "markdown";
+export type PreviewScene =
+  | "conversation"
+  | "markdown"
+  | "approval"
+  | "clarification";
 
 let installed = false;
 let currentScene: PreviewScene = "conversation";
@@ -178,10 +186,34 @@ export function isBrowserPreview(): boolean {
   );
 }
 
+export const PREVIEW_APPROVAL_REQUEST: ApprovalRequestDto_Deserialize = {
+  approval_id: "appr_preview_01",
+  call_id: "call_exec_preview_01",
+  run_id: "preview-run",
+  tool: "exec",
+  operation_summary: "Run workspace verification tests with cargo",
+  arguments: { command: "cargo test -p soyo-core --locked" },
+  formatted_call: "exec $ cargo test -p soyo-core --locked",
+  action: "shell.exec",
+  cwd: "/workspace/soyo-harness",
+  work_mode: "code",
+};
+
+export const PREVIEW_INPUT_REQUEST: InputRequestDto = {
+  input_id: "input_preview_01",
+  question: "Which target bundle format should we inspect first?",
+  options: ["macOS (.dmg / .app.tar.gz)", "Windows (NSIS setup)", "Linux (AppImage)"],
+};
+
 export function getPreviewScene(): PreviewScene {
   if (typeof window !== "undefined") {
     const param = new URLSearchParams(window.location.search).get("scene");
-    if (param === "markdown" || param === "conversation") {
+    if (
+      param === "markdown" ||
+      param === "conversation" ||
+      param === "approval" ||
+      param === "clarification"
+    ) {
       currentScene = param;
     }
   }
@@ -579,6 +611,39 @@ export function installBrowserPreviewMock(): boolean {
           action: "compacting",
           session_id: CONVERSATION_SESSION.id,
           run_id: `compact_${Date.now()}`,
+        };
+      }
+      case "reply_approval":
+        return null;
+      case "reply_input":
+        return null;
+      case "set_work_mode": {
+        const mode = (args as { mode: WorkModeDto }).mode;
+        return {
+          current: activeAbort ? CONVERSATION_SESSION.work_mode : mode,
+          pending: activeAbort ? mode : null,
+          active_run: Boolean(activeAbort),
+        };
+      }
+      case "set_permission_mode":
+        return (args as { permissions: PermissionModeDto }).permissions;
+      case "resume_session": {
+        const req = args as { sessionId: string; acceptConfigChange?: boolean };
+        const chosen =
+          req.sessionId === MARKDOWN_SHOWCASE_SESSION.id
+            ? MARKDOWN_SHOWCASE_SESSION
+            : CONVERSATION_SESSION;
+        return {
+          bootstrap: {
+            ...buildBootstrap(
+              req.sessionId === MARKDOWN_SHOWCASE_SESSION.id
+                ? "markdown"
+                : "conversation"
+            ),
+            session: chosen,
+          },
+          recovered_runs: 0,
+          recovered_tools: 0,
         };
       }
       default:

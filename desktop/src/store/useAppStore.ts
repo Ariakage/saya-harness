@@ -70,6 +70,8 @@ export interface AppState {
   markdownMode: MarkdownDisplayMode;
   pendingApproval: ApprovalRequestDto_Deserialize | null;
   pendingInput: InputRequestDto | null;
+  configChangeSessionId: string | null;
+  recoveryBanner: string | null;
   error: DesktopError | null;
 
   initApp: () => Promise<void>;
@@ -81,6 +83,16 @@ export interface AppState {
   ) => Promise<boolean>;
   cancelActiveRun: () => Promise<void>;
   compactCurrentSession: () => Promise<boolean>;
+  replyApproval: (approved: boolean) => Promise<boolean>;
+  replyInput: (answer: string) => Promise<boolean>;
+  setWorkMode: (mode: WorkModeDto) => Promise<boolean>;
+  cycleWorkMode: () => Promise<boolean>;
+  setPermissionMode: (permissions: PermissionModeDto) => Promise<boolean>;
+  resumeSession: (
+    sessionId: string,
+    acceptConfigChange?: boolean
+  ) => Promise<"ok" | "needs_confirm" | "error">;
+  clearConfigChangePrompt: () => void;
   setMarkdownMode: (mode: MarkdownDisplayMode) => void;
   toggleMarkdownMode: () => void;
   clearError: () => void;
@@ -388,6 +400,8 @@ export const useAppStore = create<AppState>((set, get) => {
     markdownMode: "render",
     pendingApproval: null,
     pendingInput: null,
+    configChangeSessionId: null,
+    recoveryBanner: null,
     error: null,
 
     initApp: async () => {
@@ -532,6 +546,143 @@ export const useAppStore = create<AppState>((set, get) => {
         return false;
       }
     },
+
+    replyApproval: async (approved) => {
+      const pending = get().pendingApproval;
+      if (!pending) {
+        return false;
+      }
+      try {
+        const res = await commands.replyApproval(
+          pending.approval_id,
+          pending.call_id,
+          approved
+        );
+        set({ pendingApproval: null });
+        if (res.status !== "ok") {
+          set({ error: res.error });
+          return false;
+        }
+        return true;
+      } catch (err) {
+        set({ pendingApproval: null, error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    replyInput: async (answer) => {
+      const pending = get().pendingInput;
+      if (!pending) {
+        return false;
+      }
+      const trimmed = answer.trim();
+      if (!trimmed) {
+        return false;
+      }
+      try {
+        const res = await commands.replyInput(pending.input_id, trimmed);
+        set({ pendingInput: null });
+        if (res.status !== "ok") {
+          set({ error: res.error });
+          return false;
+        }
+        return true;
+      } catch (err) {
+        set({ pendingInput: null, error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    setWorkMode: async (mode) => {
+      try {
+        const res = await commands.setWorkMode(mode);
+        if (res.status !== "ok") {
+          set({ error: res.error });
+          return false;
+        }
+        set((state) => ({
+          workMode: res.data.current,
+          pendingMode: res.data.pending,
+          pendingApproval: res.data.active_run ? null : state.pendingApproval,
+          error: null,
+        }));
+        return true;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    cycleWorkMode: async () => {
+      const order: WorkModeDto[] = ["work", "code", "plan", "build"];
+      const current = get().pendingMode ?? get().workMode;
+      const next = order[(order.indexOf(current) + 1) % order.length];
+      return get().setWorkMode(next);
+    },
+
+    setPermissionMode: async (permissions) => {
+      try {
+        const res = await commands.setPermissionMode(permissions);
+        if (res.status !== "ok") {
+          set({ error: res.error });
+          return false;
+        }
+        set({ permissionMode: res.data, error: null });
+        return true;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    resumeSession: async (sessionId, acceptConfigChange = false) => {
+      try {
+        const res = await commands.resumeSession(sessionId, acceptConfigChange);
+        if (res.status !== "ok") {
+          if (res.error.code === "config_change_requires_confirmation") {
+            set({ configChangeSessionId: sessionId });
+            return "needs_confirm";
+          }
+          set({ error: res.error, configChangeSessionId: null });
+          return "error";
+        }
+        const boot = res.data.bootstrap;
+        const recoveryParts: string[] = [];
+        if (res.data.recovered_runs > 0) {
+          recoveryParts.push(`${res.data.recovered_runs} interrupted run(s)`);
+        }
+        if (res.data.recovered_tools > 0) {
+          recoveryParts.push(`${res.data.recovered_tools} closed tool call(s)`);
+        }
+        set({
+          bootstrap: boot,
+          workMode: boot.work_mode,
+          pendingMode: boot.pending_mode,
+          permissionMode: boot.permission_mode,
+          runActive: boot.run_active,
+          activeRunId: boot.active_run_id,
+          ...applySessionDto(boot.session),
+          thinkingEntries: [],
+          contextEntries: [],
+          summaryLine: null,
+          pendingApproval: null,
+          pendingInput: null,
+          configChangeSessionId: null,
+          recoveryBanner:
+            recoveryParts.length > 0
+              ? `Recovered ${recoveryParts.join(", ")}.`
+              : null,
+          error: null,
+        });
+        await get().refreshSessions(1);
+        return "ok";
+      } catch (err) {
+        set({ error: normalizeError(err), configChangeSessionId: null });
+        return "error";
+      }
+    },
+
+    clearConfigChangePrompt: () => set({ configChangeSessionId: null }),
 
     setMarkdownMode: (mode) => set({ markdownMode: mode }),
 

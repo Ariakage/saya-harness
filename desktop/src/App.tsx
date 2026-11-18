@@ -1,12 +1,18 @@
-import { Code2, Eye, Plus, Shield, Sparkles, X } from "lucide-react";
+import { Code2, Eye, History, Plus, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ApprovalDialog } from "./components/ApprovalDialog";
+import { ClarificationDialog } from "./components/ClarificationDialog";
 import { Composer } from "./components/Composer";
 import { ContextSidebar } from "./components/ContextSidebar";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import { ModeAndPermissionBar } from "./components/ModeAndPermissionBar";
+import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
 import { ThinkingCardView } from "./components/ThinkingCardView";
 import { ToolCardView } from "./components/ToolCardView";
-import { PERMISSION_MODE_LABELS, WORK_MODE_STYLES } from "./lib/sanitize";
+import { WORK_MODE_STYLES } from "./lib/sanitize";
 import {
+  PREVIEW_APPROVAL_REQUEST,
+  PREVIEW_INPUT_REQUEST,
   type PreviewScene,
   getPreviewScene,
   isBrowserPreview,
@@ -35,6 +41,10 @@ export function App() {
   const cancelling = useAppStore((s) => s.cancelling);
   const summaryLine = useAppStore((s) => s.summaryLine);
   const markdownMode = useAppStore((s) => s.markdownMode);
+  const pendingApproval = useAppStore((s) => s.pendingApproval);
+  const pendingInput = useAppStore((s) => s.pendingInput);
+  const configChangeSessionId = useAppStore((s) => s.configChangeSessionId);
+  const recoveryBanner = useAppStore((s) => s.recoveryBanner);
   const error = useAppStore((s) => s.error);
 
   const initApp = useAppStore((s) => s.initApp);
@@ -42,15 +52,36 @@ export function App() {
   const submitPrompt = useAppStore((s) => s.submitPrompt);
   const cancelActiveRun = useAppStore((s) => s.cancelActiveRun);
   const compactCurrentSession = useAppStore((s) => s.compactCurrentSession);
+  const replyApproval = useAppStore((s) => s.replyApproval);
+  const replyInput = useAppStore((s) => s.replyInput);
+  const setWorkMode = useAppStore((s) => s.setWorkMode);
+  const cycleWorkMode = useAppStore((s) => s.cycleWorkMode);
+  const setPermissionMode = useAppStore((s) => s.setPermissionMode);
+  const resumeSession = useAppStore((s) => s.resumeSession);
+  const clearConfigChangePrompt = useAppStore((s) => s.clearConfigChangePrompt);
   const toggleMarkdownMode = useAppStore((s) => s.toggleMarkdownMode);
   const clearError = useAppStore((s) => s.clearError);
 
   const previewMode = isBrowserPreview();
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  const applyPreviewOverlay = (targetScene: PreviewScene) => {
+    if (!previewMode) return;
+    useAppStore.setState({
+      pendingApproval:
+        targetScene === "approval" ? PREVIEW_APPROVAL_REQUEST : null,
+      pendingInput:
+        targetScene === "clarification" ? PREVIEW_INPUT_REQUEST : null,
+    });
+  };
+
   useEffect(() => {
-    void initApp();
+    void initApp().then(() => {
+      applyPreviewOverlay(getPreviewScene());
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initApp]);
 
   useEffect(() => {
@@ -63,36 +94,33 @@ export function App() {
   const handleSceneChange = (nextScene: PreviewScene) => {
     setPreviewScene(nextScene);
     setScene(nextScene);
-    void initApp();
+    void initApp().then(() => {
+      applyPreviewOverlay(nextScene);
+    });
   };
 
   const modeStyle = WORK_MODE_STYLES[workMode];
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[#09090B] text-[#D4D4D8]">
-      <header className="flex items-center justify-between gap-3 border-b border-[#303038] bg-[#141416] px-4 py-2">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#303038] bg-[#141416] px-4 py-2">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: modeStyle.color }}
+          <img
+            src="/app-icon.png"
+            alt="Soyo"
+            className="h-6 w-6 shrink-0 rounded-full border border-[#303038] object-cover"
           />
           <h1 className="shrink-0 text-sm font-semibold tracking-tight text-[#E8E8ED]">
             Soyo Harness
           </h1>
-          <span
-            className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${modeStyle.badgeClass}`}
-          >
-            {modeStyle.label}
-          </span>
-          {pendingMode && (
-            <span className="shrink-0 rounded border border-[#303038] bg-[#202024] px-1.5 py-0.5 text-[10px] text-[#81818B]">
-              → {WORK_MODE_STYLES[pendingMode].label} (next turn)
-            </span>
-          )}
-          <span className="hidden items-center gap-1 rounded border border-[#303038] bg-[#09090B] px-1.5 py-0.5 text-[10px] text-[#81818B] sm:inline-flex">
-            <Shield className="h-3 w-3" />
-            {PERMISSION_MODE_LABELS[permissionMode]}
-          </span>
+          <ModeAndPermissionBar
+            workMode={workMode}
+            pendingMode={pendingMode}
+            permissionMode={permissionMode}
+            runActive={runActive}
+            onSelectMode={setWorkMode}
+            onSelectPermission={setPermissionMode}
+          />
           <span className="truncate text-xs text-[#81818B]">{sessionTitle}</span>
         </div>
 
@@ -101,22 +129,33 @@ export function App() {
             <div className="flex items-center gap-1 rounded-md border border-[#58A6FF]/40 bg-[#58A6FF]/10 px-2 py-1 text-[11px]">
               <Sparkles className="h-3 w-3 text-[#58A6FF]" />
               <span className="mr-1 text-[#58A6FF]">Preview</span>
-              {(["conversation", "markdown"] as const).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => handleSceneChange(item)}
-                  className={`rounded px-1.5 py-0.5 text-[10px] ${
-                    scene === item
-                      ? "bg-[#58A6FF] font-semibold text-[#09090B]"
-                      : "text-[#D4D4D8] hover:bg-[#202024]"
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
+              {(["conversation", "markdown", "approval", "clarification"] as const).map(
+                (item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => handleSceneChange(item)}
+                    className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      scene === item
+                        ? "bg-[#58A6FF] font-semibold text-[#09090B]"
+                        : "text-[#D4D4D8] hover:bg-[#202024]"
+                    }`}
+                  >
+                    {item}
+                  </button>
+                )
+              )}
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => setSessionsOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+          >
+            <History className="h-3 w-3" />
+            Sessions
+          </button>
 
           <button
             type="button"
@@ -171,6 +210,12 @@ export function App() {
             <div className="border-b border-[#F6AD55]/40 bg-[#F6AD55]/10 px-4 py-2 text-xs text-[#F6AD55]">
               Configuration incomplete ({bootstrap.config_path}):{" "}
               {bootstrap.config_error ?? "Select or configure a profile first."}
+            </div>
+          )}
+
+          {recoveryBanner && (
+            <div className="border-b border-[#58A6FF]/40 bg-[#58A6FF]/10 px-4 py-1.5 text-xs text-[#58A6FF]">
+              {recoveryBanner}
             </div>
           )}
 
@@ -288,6 +333,7 @@ export function App() {
             onSubmit={(prompt) => submitPrompt(prompt)}
             onCancel={cancelActiveRun}
             onCompact={compactCurrentSession}
+            onCycleMode={cycleWorkMode}
           />
         </div>
 
@@ -303,6 +349,22 @@ export function App() {
           activeSessionId={sessionId}
         />
       </div>
+
+      {pendingApproval && (
+        <ApprovalDialog request={pendingApproval} onReply={replyApproval} />
+      )}
+      {!pendingApproval && pendingInput && (
+        <ClarificationDialog request={pendingInput} onReply={replyInput} />
+      )}
+      <SessionBrowserDialog
+        open={sessionsOpen}
+        activeSessionId={sessionId}
+        runActive={runActive}
+        configChangeSessionId={configChangeSessionId}
+        onClose={() => setSessionsOpen(false)}
+        onResume={resumeSession}
+        onClearConfigChange={clearConfigChangePrompt}
+      />
     </div>
   );
 }

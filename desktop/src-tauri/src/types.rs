@@ -612,3 +612,17 @@ pub struct SubmitPromptResultDto {
     pub session_id: String,
     pub run_id: String,
 }
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ModeStateDto {
+    pub current: WorkModeDto,
+    pub pending: Option<WorkModeDto>,
+    pub active_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ResumeSessionResultDto {
+    pub bootstrap: BootstrapStateDto,
+    pub recovered_runs: u32,
+    pub recovered_tools: u32,
+}

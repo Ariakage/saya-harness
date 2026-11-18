@@ -9,6 +9,7 @@ export interface ComposerProps {
   onSubmit: (prompt: string) => Promise<boolean>;
   onCancel: () => Promise<void>;
   onCompact: () => Promise<boolean>;
+  onCycleMode?: () => Promise<boolean>;
 }
 
 export function Composer({
@@ -19,6 +20,7 @@ export function Composer({
   onSubmit,
   onCancel,
   onCompact,
+  onCycleMode,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -40,6 +42,11 @@ export function Composer({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Tab" && draft.length === 0 && onCycleMode) {
+      event.preventDefault();
+      void onCycleMode();
+      return;
+    }
     if (event.key === "Escape" && runActive) {
       event.preventDefault();
       void onCancel();
@@ -110,7 +117,9 @@ export function Composer({
           </div>
         </div>
         <div className="flex items-center justify-between px-1 text-[11px] text-[#81818B]">
-          <span>Enter send · Shift+Enter newline · Esc cancel active run</span>
+          <span>
+            Enter send · Shift+Enter newline · Empty Tab cycle mode · Esc cancel
+          </span>
           <span>Schema v1 in-process runtime</span>
         </div>
       </div>

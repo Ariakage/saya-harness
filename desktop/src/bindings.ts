@@ -10,6 +10,11 @@ export const commands = {
 	submitPrompt: (prompt: string, attachments: AttachmentTokenDto[], onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto, DesktopError>(__TAURI_INVOKE("submit_prompt", { prompt, attachments, onEvent })),
 	cancelRun: () => typedError<boolean, DesktopError>(__TAURI_INVOKE("cancel_run")),
 	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
+	replyApproval: (approvalId: string, callId: string, approved: boolean) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_approval", { approvalId, callId, approved })),
+	replyInput: (inputId: string, answer: string) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_input", { inputId, answer })),
+	setWorkMode: (mode: WorkModeDto) => typedError<ModeStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_work_mode", { mode })),
+	setPermissionMode: (permissions: PermissionModeDto) => typedError<PermissionModeDto, DesktopError>(__TAURI_INVOKE("set_permission_mode", { permissions })),
+	resumeSession: (sessionId: string, acceptConfigChange: boolean) => typedError<ResumeSessionResultDto_Serialize, DesktopError>(__TAURI_INVOKE("resume_session", { sessionId, acceptConfigChange })),
 };
 
 /* Types */
@@ -189,6 +194,20 @@ export type McpStatusBadgeDto = {
 
 export type MessageRoleDto = "user" | "assistant" | "thinking" | "tool" | "system" | "run_summary";
 
+export type ModeStateDto = ModeStateDto_Serialize | ModeStateDto_Deserialize;
+
+export type ModeStateDto_Deserialize = {
+	current: WorkModeDto,
+	pending?: WorkModeDto | null,
+	active_run: boolean,
+};
+
+export type ModeStateDto_Serialize = {
+	current: WorkModeDto,
+	pending: WorkModeDto | null,
+	active_run: boolean,
+};
+
 export type ModelPurposeDto = "execution" | "review" | "compaction";
 
 export type PermissionModeDto = "auto" | "bypass" | "manual";
@@ -239,6 +258,20 @@ export type RestoredMessageDto_Serialize = {
 	tool_summary: string | null,
 	tool_ok: boolean | null,
 	media_refs: string[],
+};
+
+export type ResumeSessionResultDto = ResumeSessionResultDto_Serialize | ResumeSessionResultDto_Deserialize;
+
+export type ResumeSessionResultDto_Deserialize = {
+	bootstrap: BootstrapStateDto_Deserialize,
+	recovered_runs: number,
+	recovered_tools: number,
+};
+
+export type ResumeSessionResultDto_Serialize = {
+	bootstrap: BootstrapStateDto_Serialize,
+	recovered_runs: number,
+	recovered_tools: number,
 };
 
 export type ReviewSourceDto = "rule" | "model";

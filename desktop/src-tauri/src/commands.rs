@@ -4,7 +4,8 @@ use crate::{
     runtime_bridge::{DesktopState, StreamSink},
     types::{
         ActiveSessionDto, AttachmentTokenDto, BootstrapStateDto, DesktopError,
-        DesktopStreamEnvelope, SessionPageDto, SubmitPromptResultDto,
+        DesktopStreamEnvelope, ModeStateDto, PermissionModeDto, ResumeSessionResultDto,
+        SessionPageDto, SubmitPromptResultDto, WorkModeDto,
     },
 };
 use tauri::{State, ipc::Channel};
@@ -58,4 +59,55 @@ pub async fn compact_session(
     on_event: Channel<DesktopStreamEnvelope>,
 ) -> Result<SubmitPromptResultDto, DesktopError> {
     state.compact_session(StreamSink::Tauri(on_event)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn reply_approval(
+    state: State<'_, DesktopState>,
+    approval_id: String,
+    call_id: String,
+    approved: bool,
+) -> Result<(), DesktopError> {
+    state.reply_approval(&approval_id, &call_id, approved)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn reply_input(
+    state: State<'_, DesktopState>,
+    input_id: String,
+    answer: String,
+) -> Result<(), DesktopError> {
+    state.reply_input(&input_id, answer)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_work_mode(
+    state: State<'_, DesktopState>,
+    mode: WorkModeDto,
+) -> Result<ModeStateDto, DesktopError> {
+    state.set_work_mode(mode).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_permission_mode(
+    state: State<'_, DesktopState>,
+    permissions: PermissionModeDto,
+) -> Result<PermissionModeDto, DesktopError> {
+    state.set_permission_mode(permissions).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn resume_session(
+    state: State<'_, DesktopState>,
+    session_id: String,
+    accept_config_change: bool,
+) -> Result<ResumeSessionResultDto, DesktopError> {
+    state
+        .resume_session(&session_id, accept_config_change)
+        .await
 }
