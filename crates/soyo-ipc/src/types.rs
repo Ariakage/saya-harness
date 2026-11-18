@@ -521,6 +521,10 @@ pub enum DesktopStreamEnvelope {
         /// mirrors the CLI's session-history lookup for text output.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         needs_input_question: Option<String>,
+        /// Whether a compaction request was still pending when the run ended.
+        /// Interactive clients (TUI) use it to queue a follow-up compact run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compaction_pending: Option<bool>,
     },
 }
 

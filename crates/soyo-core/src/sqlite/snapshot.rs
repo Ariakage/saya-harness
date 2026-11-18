@@ -39,7 +39,7 @@ impl Default for SnapshotLimits {
 }
 /// A normalized committed view. Provider-owned history remains internal to this
 /// object and must be projected through the export service before publication.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct SessionSnapshot {
     pub created_at: String,
     pub source_database_schema: i64,

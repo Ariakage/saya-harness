@@ -802,6 +802,7 @@ impl HostService {
 
     pub async fn compact_session(
         &self,
+        raw_events: bool,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
         if let Ok(control_guard) = self.active_control.lock()
@@ -836,17 +837,9 @@ impl HostService {
             });
         }
 
-        self.start_run(None, RunKind::Compaction, sink).await
-    }
-
-    async fn start_run(
-        &self,
-        expanded_prompt: Option<String>,
-        kind: RunKind,
-        sink: StreamSink,
-    ) -> Result<SubmitPromptResultDto, DesktopError> {
-        self.start_run_ex(StartRunRequest::desktop(expanded_prompt, kind), sink)
-            .await
+        let mut req = StartRunRequest::desktop(None, RunKind::Compaction);
+        req.raw_events = raw_events;
+        self.start_run_ex(req, sink).await
     }
 
     async fn start_run_ex(
@@ -1564,6 +1557,23 @@ impl HostService {
         })
     }
 
+    /// Drop the prepared session handle (`release_session`). Interactive
+    /// clients call this when their UI drops a session without replacing it —
+    /// dropping `Prepared` releases the session lock the helper holds.
+    /// No-op while a run is active.
+    pub async fn release_session(&self) -> Result<(), DesktopError> {
+        let mut guard = self.inner.lock().await;
+        if guard.active_run_id.is_some() {
+            return Err(DesktopError::new(
+                "run_active",
+                "Cancel or wait for the active run before closing the session",
+            ));
+        }
+        guard.prepared = None;
+        self.sync_attachment_scope(None);
+        Ok(())
+    }
+
     /// Live mode/compaction state for interactive clients. When a run is
     /// active the answer comes from the runtime handle (real mode
     /// revision); otherwise it reflects the prepared session's stored mode.
@@ -1994,7 +2004,12 @@ async fn drive_active_run(mut params: DriverParams) {
         }
     };
 
+    let mut compaction_pending = None;
     if let Ok(mut control) = params.active_control.lock() {
+        compaction_pending = control
+            .as_ref()
+            .and_then(|control| control.handle.as_ref())
+            .map(|handle| handle.compaction_pending());
         *control = None;
     }
 
@@ -2018,6 +2033,7 @@ async fn drive_active_run(mut params: DriverParams) {
             todos,
             error: final_error,
             needs_input_question,
+            compaction_pending,
         });
     }
 }

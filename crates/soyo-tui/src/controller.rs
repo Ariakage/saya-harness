@@ -1,4 +1,5 @@
 //! Interface orchestration using shared application services and durable events.
+mod backend;
 #[cfg(test)]
 mod compact_tests;
 #[cfg(test)]
@@ -28,6 +29,7 @@ use crate::{
     terminal::TerminalGuard,
     view::{self, Role, State},
 };
+use backend::{ActiveHandle, SessionBackend};
 use crossterm::event::{
     Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
 };
@@ -37,7 +39,7 @@ use soyo_app::{
     context::{ContextModel, ContextSnapshot, ContextSources},
     events::{EventModel, EventStore, EventWriter},
     interaction::{Request, RunCancellation, input_channel},
-    session::{self, Prepared},
+    session::{self},
     thinking::{ThinkingLog, ThinkingModel},
 };
 use soyo_core::{
@@ -48,8 +50,9 @@ use soyo_core::{
         BoundaryError, Event, EventPayload, HistoryItem, ModelPurpose, RunId, RunResult, Session,
         Usage, WorkMode,
     },
-    runtime::{PersonalContext, RuntimeHandle},
+    runtime::PersonalContext,
 };
+use soyo_ipc::client::HelperClient;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
     sync::{mpsc, watch},
@@ -70,6 +73,10 @@ pub struct Options {
     pub cwd_explicit: bool,
     pub profile_explicit: bool,
     pub mode_override: Option<WorkMode>,
+    /// Attempt to run through the shared `soyo helper` daemon. Explicit
+    /// `--config`/`--data-dir` selections stay on the in-process backend
+    /// because a running helper owns its own resolved configuration.
+    pub use_helper: bool,
 }
 struct Active {
     kind: RunKind,
@@ -83,7 +90,7 @@ struct Active {
     execution_request: Option<String>,
     assistant_id: Option<u64>,
     tool_cards: HashMap<String, messages::ToolCard>,
-    handle: RuntimeHandle,
+    handle: ActiveHandle,
     requests: mpsc::Receiver<Request>,
     requests_open: bool,
     summary: turn_summary::TurnSummary,
@@ -91,6 +98,7 @@ struct Active {
 impl Drop for Active {
     fn drop(&mut self) {
         self.cancel.cancel();
+        self.handle.cancel_run();
     }
 }
 struct App {
@@ -98,7 +106,8 @@ struct App {
     options: Options,
     secrets: Vec<String>,
     secret_registry: Arc<soyo_core::credentials::SecretRegistry>,
-    prepared: Option<Prepared>,
+    helper: Option<Arc<HelperClient>>,
+    prepared: Option<SessionBackend>,
     active: Option<Active>,
     state: State,
     exit_after_run: Option<u8>,
@@ -109,13 +118,17 @@ struct App {
     queued_attachments: Vec<attachments::Attachment>,
     draft_attachments: Vec<attachments::Attachment>,
     queued_compaction: bool,
-    memory_pending: Option<soyo_app::memory_admin::PreparedMemoryAction>,
+    memory_pending: Option<memory::MemoryPending>,
     memory_next: Option<String>,
     memory_last_operation: Option<String>,
     copy_notice_until: Option<Instant>,
 }
 impl App {
-    fn new(mut config: Config, options: Options) -> Result<Self> {
+    fn new(
+        mut config: Config,
+        options: Options,
+        helper: Option<Arc<HelperClient>>,
+    ) -> Result<Self> {
         if config.profile.is_none() && config.profiles.len() == 1 {
             config.profile = config.profiles.keys().next().cloned();
         }
@@ -137,6 +150,7 @@ impl App {
             options,
             secrets,
             secret_registry,
+            helper,
             prepared: None,
             active: None,
             state: State::default(),
@@ -304,10 +318,14 @@ impl App {
             .prepared
             .as_ref()
             .and_then(|prepared| {
-                prepared.session.history.iter().find_map(|item| match item {
-                    HistoryItem::UserText(text) => Some(text.as_str()),
-                    _ => None,
-                })
+                prepared
+                    .session()
+                    .history
+                    .iter()
+                    .find_map(|item| match item {
+                        HistoryItem::UserText(text) => Some(text.as_str()),
+                        _ => None,
+                    })
             })
             .map(attachments::display)
             .map(|text| self.safe_title(&text).chars().take(80).collect::<String>())
@@ -394,7 +412,7 @@ impl App {
                 self.notice(text::COMPACT_RUNNING);
                 return Ok(());
             }
-            active.handle.request_compaction()?;
+            active.handle.request_compaction().await?;
             self.notice(text::COMPACT_REQUESTED);
             return Ok(());
         }
@@ -440,6 +458,64 @@ impl App {
         let display = self.safe(&display);
         self.reset_mcp_statuses();
         let prepared = self.prepared.as_mut().ok_or(text::SESSION_UNAVAILABLE)?;
+        if let SessionBackend::Remote(remote) = prepared {
+            let mut summary = turn_summary::TurnSummary::new(self.state.model.clone());
+            let (sender, events) = mpsc::channel(256);
+            let sink = summary.sink(sender);
+            let params = soyo_ipc::types::SubmitPromptParams {
+                prompt: text,
+                attachments: Vec::new(),
+                raw_events: true,
+                capture_media: kind == RunKind::Execution,
+                session_id: Some(remote.session.id.0.to_string()),
+                personal_context: backend::personal_context_dto(&self.options.personal_context),
+                anthropic_prompt_cache: self.options.anthropic_prompt_cache,
+            };
+            let remote_run = backend::spawn_remote_run(
+                remote.client.clone(),
+                remote.session.id.0.to_string(),
+                params,
+                kind == RunKind::Compaction,
+                sink,
+                remote.session.work_mode,
+                remote.session.clone(),
+            );
+            self.refresh_header();
+            if kind == RunKind::Execution {
+                self.reset_context();
+                self.state.push_message(Role::User, ui_text::YOU, display);
+            }
+            summary.start(Instant::now());
+            self.active = Some(Active {
+                kind,
+                cancel: Arc::new(RunCancellation::new()),
+                join: remote_run.join,
+                events,
+                events_open: true,
+                context: remote_run.context,
+                thinking: remote_run.thinking,
+                thinking_ids: HashMap::new(),
+                execution_request: None,
+                assistant_id: None,
+                tool_cards: HashMap::new(),
+                handle: ActiveHandle::Remote(remote_run.handle),
+                requests: remote_run.requests,
+                requests_open: true,
+                summary,
+            });
+            self.state.status = if kind == RunKind::Compaction {
+                common::COMPACTING
+            } else {
+                common::RUNNING
+            }
+            .into();
+            self.refresh_activity(Instant::now());
+            self.state.scroll_to_bottom();
+            return Ok(());
+        }
+        let SessionBackend::Local(prepared) = prepared else {
+            return Err(text::SESSION_UNAVAILABLE.into());
+        };
         let run_id = RunId::new();
         let (sender, events) = mpsc::channel(256);
         let (context_sender, context) = watch::channel(None);
@@ -554,7 +630,7 @@ impl App {
             execution_request: None,
             assistant_id: None,
             tool_cards: HashMap::new(),
-            handle,
+            handle: ActiveHandle::Local(handle),
             requests,
             requests_open: true,
             summary,
@@ -625,6 +701,7 @@ impl App {
         self.state.command_palette = None;
         if let Some(active) = &self.active {
             active.cancel.cancel();
+            active.handle.cancel_run();
             self.state.status = common::CANCELLING.into();
         } else if self.ui_job.is_none() && !restored_prompt {
             self.clear_editor();
@@ -633,6 +710,7 @@ impl App {
     async fn shutdown(&mut self) -> Result<()> {
         let cleanup = if let Some(mut active) = self.active.take() {
             active.cancel.cancel();
+            active.handle.cancel_run();
             active.events.close();
             active.requests.close();
             let _ = (&mut active.join).await;
@@ -688,7 +766,7 @@ impl App {
                 self.config.mode = session.work_mode;
                 self.install_todos(soyo_core::tools::todo::current_todos(&session.history));
                 if let Some(prepared) = &mut self.prepared {
-                    prepared.session = session;
+                    prepared.set_session(session);
                 }
                 match outcome {
                     Ok(result) => {
@@ -725,6 +803,7 @@ impl App {
             Err(_) => {
                 let mut active = self.active.take().ok_or(text::RUN_UNAVAILABLE)?;
                 active.cancel.cancel();
+                active.handle.cancel_run();
                 active.events.close();
                 active.requests.close();
                 let cleanup = active.handle.shutdown_background().await;
@@ -1059,11 +1138,19 @@ impl App {
 }
 /// Run the terminal frontend. The executable validates TTY and output routing.
 /// Cancellation completes owned runs before the terminal guard is released.
+/// Unless `Options::use_helper` is off, the controller runs through the shared
+/// `soyo helper` daemon; when the helper is unreachable it falls back to the
+/// in-process backend.
 pub async fn run(config: Config, options: Options) -> Result<u8> {
     if config.output != soyo_core::config::Output::Text {
         return Err(text::TUI_TEXT_OUTPUT.into());
     }
-    let mut app = App::new(config, options)?;
+    let helper = if options.use_helper {
+        HelperClient::connect_or_spawn().await.ok()
+    } else {
+        None
+    };
+    let mut app = App::new(config, options, helper)?;
     let mut terminal = TerminalGuard::enter()?;
     let outcome = run_loop(&mut app, &mut terminal).await;
     let cleanup = app.shutdown().await;
@@ -1270,7 +1357,9 @@ mod tests {
                 cwd_explicit: false,
                 profile_explicit: false,
                 mode_override: None,
+                use_helper: false,
             },
+            None,
         )
         .unwrap();
         app.state.editor.set_text("draft 🌸");

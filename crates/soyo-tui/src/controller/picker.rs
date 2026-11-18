@@ -330,7 +330,7 @@ impl App {
                 if self
                     .prepared
                     .as_ref()
-                    .is_some_and(|prepared| prepared.session.id.0.to_string() == item.id)
+                    .is_some_and(|prepared| prepared.session().id.0.to_string() == item.id)
                 {
                     self.notice(service_text::SESSION_ALREADY_OPEN);
                 } else {

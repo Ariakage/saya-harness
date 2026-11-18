@@ -288,6 +288,7 @@ async fn dispatch(
             };
             r.await.and_then(ok)
         }
+        "release_session" => service.release_session().await.and_then(ok),
         "get_run_state" => service.get_run_state().await.and_then(ok),
         "get_job" => {
             let r = async {
@@ -377,6 +378,14 @@ async fn dispatch(
             let r = async {
                 let backend = param_deser(&params, "backend")?;
                 service.set_sandbox_backend(backend).await
+            };
+            r.await.and_then(ok)
+        }
+        "set_memory_setting" => {
+            let r = async {
+                let setting = param_string(&params, "setting")?.to_owned();
+                let enabled = param_bool(&params, "enabled")?;
+                service.set_memory_setting(&setting, enabled).await
             };
             r.await.and_then(ok)
         }
@@ -563,7 +572,11 @@ async fn dispatch_streaming(
                 })?;
             service.run_prompt(run_params, sink).await
         }
-        _ => service.compact_session(sink).await,
+        _ => {
+            service
+                .compact_session(param_bool(&params, "raw_events").unwrap_or(false), sink)
+                .await
+        }
     };
     let _ = forwarder.await;
     result.and_then(ok)

@@ -5126,6 +5126,7 @@ dependencies = [
  "serde_json",
  "soyo-app",
  "soyo-core",
+ "soyo-ipc",
  "syntect",
  "tempfile",
  "tokio",

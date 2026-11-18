@@ -10,13 +10,13 @@ use soyo_core::{
     boundary::Cancellation,
     contract::ErrorInfo,
     export::{ExportOptions, ExportScope, SessionExport},
-    sqlite::{SnapshotLimits, SqliteStore},
+    sqlite::{SessionSnapshot, SnapshotLimits, SqliteStore},
 };
 
 pub(super) enum UiResult {
     Details(Details),
     Session {
-        prepared: Prepared,
+        prepared: SessionBackend,
         resumed: bool,
         usage: Option<soyo_core::contract::Usage>,
     },
@@ -48,6 +48,103 @@ fn error(error: Box<dyn std::error::Error>) -> BoundaryError {
         Ok(error) => *error,
         Err(error) => failure("session_error", error.to_string()),
     }
+}
+/// `/sessions` row projection shared by the local store and helper paths so
+/// both render identical picker entries.
+enum PickerSession {
+    Local(soyo_core::sqlite::SessionSummary),
+    Remote(soyo_ipc::types::SessionItemDto),
+}
+impl PickerSession {
+    fn from_dto(dto: soyo_ipc::types::SessionItemDto) -> Self {
+        Self::Remote(dto)
+    }
+    fn id(&self) -> String {
+        match self {
+            Self::Local(session) => session.id.0.to_string(),
+            Self::Remote(session) => session.id.clone(),
+        }
+    }
+    fn title(&self) -> String {
+        match self {
+            Self::Local(session) => session.title.clone(),
+            Self::Remote(session) => session.title.clone(),
+        }
+        .unwrap_or_else(|| text::UNTITLED_SESSION.into())
+    }
+    fn status(&self) -> String {
+        match self {
+            Self::Local(session) => session.last_status.map(|status| format!("{status:?}")),
+            Self::Remote(session) => session.last_status.clone(),
+        }
+        .unwrap_or_else(|| text::NO_COMPLETED_RUN.into())
+    }
+    fn work_mode(&self) -> String {
+        match self {
+            Self::Local(session) => format!("{:?}", session.work_mode),
+            Self::Remote(session) => {
+                format!(
+                    "{:?}",
+                    soyo_core::contract::WorkMode::from(session.work_mode)
+                )
+            }
+        }
+    }
+    fn profile(&self) -> &str {
+        match self {
+            Self::Local(session) => &session.profile,
+            Self::Remote(session) => &session.profile,
+        }
+    }
+    fn workspace(&self) -> String {
+        match self {
+            Self::Local(session) => session.workspace.display().to_string(),
+            Self::Remote(session) => session.workspace.clone(),
+        }
+    }
+    fn updated_at(&self) -> i64 {
+        match self {
+            Self::Local(session) => session.updated_at,
+            Self::Remote(session) => session.updated_at,
+        }
+    }
+}
+fn session_picker_items(
+    sessions: Vec<PickerSession>,
+    current_session: &Option<String>,
+) -> Vec<crate::view::PickerItem> {
+    sessions
+        .into_iter()
+        .map(|session| {
+            let id = session.id();
+            let title = session.title();
+            let status = session.status();
+            let work_mode = session.work_mode();
+            let profile = session.profile().to_owned();
+            let workspace = session.workspace();
+            let updated_at = session.updated_at();
+            let current = current_session.as_deref() == Some(id.as_str());
+            crate::view::PickerItem {
+                id: id.clone(),
+                label: title,
+                description: format!("{id} · {work_mode} · {profile} · {status}"),
+                details: vec![
+                    format!("{} {}", text::SESSION_LABEL, id),
+                    format!("{} {}", text::WORKSPACE_LABEL, workspace),
+                    format!("{} {}", ui_text::MODE, work_mode),
+                    format!("{} {}", ui_text::PROFILE, profile),
+                    format!("{} {status}", text::LAST_STATUS_LABEL),
+                    format!("{} {}", text::UPDATED_AT_LABEL, updated_at),
+                    if current {
+                        picker_text::SESSION_CURRENT.into()
+                    } else {
+                        picker_text::SESSION_RESUME.into()
+                    },
+                ],
+                active: current,
+            }
+        })
+        .collect()
 }
 fn display_details(
     mut details: Details,
@@ -128,8 +225,35 @@ impl App {
         match name {
             "/new" => {
                 self.require_idle()?;
-                let config = self.config.clone();
                 let cancel = Arc::new(RunCancellation::new());
+                if let Some(client) = self.helper.clone() {
+                    let checking = cancel.clone();
+                    let cwd = self.config.cwd.to_string_lossy().into_owned();
+                    let profile = self.config.profile.clone();
+                    let join = tokio::spawn(async move {
+                        let dto: soyo_ipc::types::ActiveSessionDto = client
+                            .call_typed(
+                                "new_session",
+                                &serde_json::json!({"cwd": cwd, "profile": profile}),
+                            )
+                            .await
+                            .map_err(|err| failure(&err.code, err.message.clone()))?;
+                        let remote = backend::RemotePrepared::load(client, &dto.id)
+                            .await
+                            .map_err(error)?;
+                        if checking.is_cancelled() {
+                            return Err(failure("cancelled", text::SESSION_PREPARED_CANCELLED));
+                        }
+                        Ok(UiResult::Session {
+                            prepared: SessionBackend::Remote(remote),
+                            resumed: false,
+                            usage: None,
+                        })
+                    });
+                    self.begin_ui(cancel, join);
+                    return Ok(());
+                }
+                let config = self.config.clone();
                 let checking = cancel.clone();
                 let runtime = tokio::runtime::Handle::current();
                 let join = tokio::task::spawn_blocking(move || {
@@ -148,7 +272,7 @@ impl App {
                             return Err(failure("cancelled", text::SESSION_PREPARED_CANCELLED));
                         }
                         Ok(UiResult::Session {
-                            prepared,
+                            prepared: SessionBackend::Local(prepared),
                             resumed: false,
                             usage,
                         })
@@ -178,6 +302,14 @@ impl App {
                 self.require_idle()?;
                 if !self.config.profiles.contains_key(argument) {
                     return Err(text::UNKNOWN_PROFILE.into());
+                }
+                if let Some(client) = &self.helper {
+                    client
+                        .call("release_session", serde_json::json!({}))
+                        .await
+                        .map_err(|err| -> Box<dyn std::error::Error> {
+                            Box::new(failure(&err.code, err.message.clone()))
+                        })?;
                 }
                 self.config.profile = Some(argument.into());
                 self.prepared = None;
@@ -213,9 +345,49 @@ impl App {
                 if self
                     .prepared
                     .as_ref()
-                    .is_some_and(|prepared| prepared.session.id == parsed)
+                    .is_some_and(|prepared| prepared.session().id == parsed)
                 {
                     self.notice(text::SESSION_ALREADY_OPEN);
+                    return Ok(());
+                }
+                if let Some(client) = self.helper.clone() {
+                    let id = argument.to_owned();
+                    let accept = name == "/resume-accept";
+                    let cancel = Arc::new(RunCancellation::new());
+                    let checking = cancel.clone();
+                    let join = tokio::spawn(async move {
+                        let result: soyo_ipc::types::ResumeSessionResultDto = client
+                            .call_typed(
+                                "resume_session",
+                                &soyo_ipc::types::ResumeSessionDto {
+                                    session_id: id.clone(),
+                                    accept_config_change: accept,
+                                    cwd_explicit: false,
+                                    profile_explicit: false,
+                                    mode_override: None,
+                                },
+                            )
+                            .await
+                            .map_err(|err| failure(&err.code, err.message.clone()))?;
+                        let _ = result;
+                        let remote = backend::RemotePrepared::load(client, &id)
+                            .await
+                            .map_err(error)?;
+                        let backend = SessionBackend::Remote(remote);
+                        let usage = backend.last_execution_usage().await.map_err(error)?;
+                        let SessionBackend::Remote(remote) = backend else {
+                            return Err(failure("backend", "unexpected session backend"));
+                        };
+                        if checking.is_cancelled() {
+                            return Err(failure("cancelled", text::SESSION_PREPARED_CANCELLED));
+                        }
+                        Ok(UiResult::Session {
+                            prepared: SessionBackend::Remote(remote),
+                            resumed: true,
+                            usage,
+                        })
+                    });
+                    self.begin_ui(cancel, join);
                     return Ok(());
                 }
                 let config = self.config.clone();
@@ -246,7 +418,7 @@ impl App {
                             return Err(failure("cancelled", text::SESSION_PREPARED_CANCELLED));
                         }
                         Ok(UiResult::Session {
-                            prepared,
+                            prepared: SessionBackend::Local(prepared),
                             resumed: true,
                             usage,
                         })
@@ -261,14 +433,50 @@ impl App {
                 } else {
                     argument.parse::<u64>()?
                 };
+                let current_session = self
+                    .prepared
+                    .as_ref()
+                    .map(|prepared| prepared.session().id.0.to_string());
+                let cancel = Arc::new(RunCancellation::new());
+                let checking = cancel.clone();
+                if let Some(client) = self.helper.clone() {
+                    let join = tokio::spawn(async move {
+                        let page_dto: soyo_ipc::types::SessionPageDto = client
+                            .call_typed(
+                                "list_sessions_page",
+                                &serde_json::json!({"page": page as u32}),
+                            )
+                            .await
+                            .map_err(|err| failure(&err.code, err.message.clone()))?;
+                        if checking.is_cancelled() {
+                            return Err(failure("cancelled", text::SESSION_LIST_CANCELLED));
+                        }
+                        let items = session_picker_items(
+                            page_dto
+                                .items
+                                .into_iter()
+                                .map(PickerSession::from_dto)
+                                .collect(),
+                            &current_session,
+                        );
+                        Ok(UiResult::Picker(crate::view::PickerPanel {
+                            kind: crate::view::PickerKind::Sessions,
+                            title: text::sessions_title(page),
+                            items,
+                            selected: 0,
+                            scroll: 0,
+                            page_rows: 0,
+                            hint: picker_text::SESSION_EMPTY.into(),
+                        }))
+                    });
+                    self.begin_ui(cancel, join);
+                    return Ok(());
+                }
                 let offset = page
                     .checked_sub(1)
                     .and_then(|page| page.checked_mul(20))
                     .ok_or(text::SESSION_PAGE_POSITIVE)?;
                 let config = self.config.clone();
-                let current_session = self.prepared.as_ref().map(|prepared| prepared.session.id);
-                let cancel = Arc::new(RunCancellation::new());
-                let checking = cancel.clone();
                 let join = tokio::spawn(async move {
                     let store =
                         tokio::task::spawn_blocking(move || session::open(&config).map_err(error))
@@ -280,45 +488,10 @@ impl App {
                     if checking.is_cancelled() {
                         return Err(failure("cancelled", text::SESSION_LIST_CANCELLED));
                     }
-                    let items = sessions
-                        .into_iter()
-                        .map(|session| {
-                            let title = session
-                                .title
-                                .unwrap_or_else(|| text::UNTITLED_SESSION.into());
-                            let status = session
-                                .last_status
-                                .map(|status| format!("{status:?}"))
-                                .unwrap_or_else(|| text::NO_COMPLETED_RUN.into());
-                            let current = current_session == Some(session.id);
-                            crate::view::PickerItem {
-                                id: session.id.0.to_string(),
-                                label: title,
-                                description: format!(
-                                    "{} · {:?} · {} · {}",
-                                    session.id.0, session.work_mode, session.profile, status
-                                ),
-                                details: vec![
-                                    format!("{} {}", text::SESSION_LABEL, session.id.0),
-                                    format!(
-                                        "{} {}",
-                                        text::WORKSPACE_LABEL,
-                                        session.workspace.display()
-                                    ),
-                                    format!("{} {:?}", ui_text::MODE, session.work_mode),
-                                    format!("{} {}", ui_text::PROFILE, session.profile),
-                                    format!("{} {status}", text::LAST_STATUS_LABEL),
-                                    format!("{} {}", text::UPDATED_AT_LABEL, session.updated_at),
-                                    if current {
-                                        picker_text::SESSION_CURRENT.into()
-                                    } else {
-                                        picker_text::SESSION_RESUME.into()
-                                    },
-                                ],
-                                active: current,
-                            }
-                        })
-                        .collect::<Vec<_>>();
+                    let items = session_picker_items(
+                        sessions.into_iter().map(PickerSession::Local).collect(),
+                        &current_session,
+                    );
                     Ok(UiResult::Picker(crate::view::PickerPanel {
                         kind: crate::view::PickerKind::Sessions,
                         title: text::sessions_title(page),
@@ -361,22 +534,37 @@ impl App {
                     None
                 };
                 let prepared = self.prepared.as_ref().ok_or(text::SESSION_REQUIRED)?;
-                let id = prepared.session.id;
+                let id = prepared.session().id;
+                let remote = match prepared {
+                    SessionBackend::Remote(remote) => {
+                        Some((remote.client.clone(), remote.session.id.0.to_string()))
+                    }
+                    SessionBackend::Local(_) => None,
+                };
                 let root = self.config.data_dir.clone();
                 let secrets = self.secrets.clone();
-                let workspace = prepared.session.workspace.clone();
+                let workspace = prepared.session().workspace.clone();
                 let mode = self.current_mode()?;
                 let operation = name.to_owned();
                 let cancel = Arc::new(RunCancellation::new());
                 let checking = cancel.clone();
                 let join = tokio::spawn(async move {
-                    let snapshot = SqliteStore::read_snapshot(
-                        &root,
-                        id,
-                        SnapshotLimits::default(),
-                        checking.clone(),
-                    )
-                    .await?;
+                    let snapshot: SessionSnapshot = match &remote {
+                        Some((client, session_id)) => {
+                            backend::remote_session_snapshot(client, session_id, checking.clone())
+                                .await
+                                .map_err(|err| failure("helper_protocol", err.to_string()))?
+                        }
+                        None => {
+                            SqliteStore::read_snapshot(
+                                &root,
+                                id,
+                                SnapshotLimits::default(),
+                                checking.clone(),
+                            )
+                            .await?
+                        }
+                    };
                     if operation == "/tools" || operation == "/jobs" {
                         return tokio::task::spawn_blocking(move || {
                             let records = if operation == "/tools" {
@@ -470,7 +658,7 @@ impl App {
             }
             "/cancel-job" => {
                 let active = self.active.as_ref().ok_or(text::NO_ACTIVE_BACKGROUND)?;
-                let cancelled = active.handle.cancel_background(argument)?;
+                let cancelled = active.handle.cancel_background(argument).await?;
                 self.notice(if cancelled {
                     text::BACKGROUND_CANCEL_REQUESTED
                 } else {
@@ -524,9 +712,9 @@ impl App {
                 resumed,
                 usage,
             }) => {
-                self.config.cwd = prepared.session.workspace.clone();
-                self.config.profile = Some(prepared.session.profile.clone());
-                self.config.mode = prepared.session.work_mode;
+                self.config.cwd = prepared.session().workspace.clone();
+                self.config.profile = Some(prepared.session().profile.clone());
+                self.config.mode = prepared.session().work_mode;
                 self.state.clear_messages();
                 self.state.usage.clear();
                 self.reset_context();
@@ -544,7 +732,7 @@ impl App {
                 self.state.pending_mode = None;
                 self.prepared = None;
                 self.refresh_header();
-                let history = &prepared.session.history;
+                let history = &prepared.session().history;
                 self.restore_messages(history);
                 if history.len() > 512 {
                     self.notice(text::HISTORY_OMITTED);

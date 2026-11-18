@@ -37,7 +37,7 @@ fn event(app: &mut App, payload: EventPayload) {
             .prepared
             .as_ref()
             .map_or_else(soyo_core::contract::SessionId::new, |prepared| {
-                prepared.session.id
+                prepared.session().id
             }),
         run_id: None,
         seq: 1,
@@ -333,7 +333,7 @@ async fn final_event_drain_installs_tool_results_todos_and_thinking_without_dupl
     app.active.as_mut().unwrap().thinking = thinking;
     let (sender, receiver) = mpsc::channel(8);
     app.active.as_mut().unwrap().events = receiver;
-    let session_id = app.prepared.as_ref().unwrap().session.id;
+    let session_id = app.prepared.as_ref().unwrap().session().id;
     for payload in [
         EventPayload::ModelStarted {
             request_id: "queued".into(),
@@ -790,7 +790,7 @@ async fn restore_uses_current_profile_and_redacts_native_reasoning_before_its_di
     app.config.profiles.get_mut("fixture").unwrap().model = "restored-model".into();
     app.state.model = "stale-model".into();
     app.finish_ui(Ok(services::UiResult::Session {
-        prepared,
+        prepared: backend::SessionBackend::Local(prepared),
         resumed: true,
         usage: None,
     }))

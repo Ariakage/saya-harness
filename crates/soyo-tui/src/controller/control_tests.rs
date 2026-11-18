@@ -54,7 +54,9 @@ stream = false
             cwd_explicit: false,
             profile_explicit: false,
             mode_override: None,
+            use_helper: false,
         },
+        None,
     )
     .unwrap();
     (root, app)
@@ -439,11 +441,11 @@ async fn tab_with_a_draft_or_palette_does_not_cycle_the_work_mode() {
 #[tokio::test]
 async fn empty_tab_persists_an_idle_session_mode_and_keeps_the_permission_selection() {
     let (_root, mut app) = fixture();
-    app.prepared = Some(
+    app.prepared = Some(backend::SessionBackend::Local(
         session::create(&app.config, soyo_app::new_session(&app.config).unwrap())
             .await
             .unwrap(),
-    );
+    ));
     app.command("/permissions manual").await.unwrap();
     app.key(key(KeyCode::Tab, KeyEventKind::Press))
         .await
@@ -452,8 +454,10 @@ async fn empty_tab_persists_an_idle_session_mode_and_keeps_the_permission_select
     assert_eq!(app.config.mode, WorkMode::Code);
     let prepared = app.prepared.as_ref().unwrap();
     let saved = prepared
+        .local()
+        .unwrap()
         .store
-        .load_session(prepared.session.id)
+        .load_session(prepared.session().id)
         .await
         .unwrap()
         .unwrap();
@@ -741,11 +745,11 @@ async fn expired_replies_are_removed_and_closed_arrivals_do_not_replace_current_
 #[tokio::test]
 async fn idle_mode_is_persisted_and_permission_choice_remains_current_invocation_state() {
     let (_root, mut app) = fixture();
-    app.prepared = Some(
+    app.prepared = Some(backend::SessionBackend::Local(
         session::create(&app.config, soyo_app::new_session(&app.config).unwrap())
             .await
             .unwrap(),
-    );
+    ));
     app.command("/permissions manual").await.unwrap();
     app.command("/mode code").await.unwrap();
     assert_eq!(app.config.permissions_mode, PermissionMode::Manual);
@@ -756,8 +760,10 @@ async fn idle_mode_is_persisted_and_permission_choice_remains_current_invocation
     let prepared = app.prepared.as_ref().unwrap();
     assert_eq!(
         prepared
+            .local()
+            .unwrap()
             .store
-            .load_session(prepared.session.id)
+            .load_session(prepared.session().id)
             .await
             .unwrap()
             .unwrap()
@@ -845,12 +851,12 @@ async fn attach_model(app: &mut App, model: Arc<dyn Model>) {
         execution_request: None,
         assistant_id: None,
         tool_cards: HashMap::new(),
-        handle,
+        handle: backend::ActiveHandle::Local(handle),
         requests,
         requests_open: false,
         summary: turn_summary::TurnSummary::new("fixture".into()),
     });
-    app.prepared = Some(prepared);
+    app.prepared = Some(backend::SessionBackend::Local(prepared));
 }
 pub(super) async fn stop_active_call(app: &mut App) {
     app.cancel();
@@ -917,7 +923,7 @@ async fn repeated_empty_tab_uses_the_latest_requested_mode_and_invalidates_old_a
 async fn execution_rounds_follow_their_tool_results_in_the_visible_conversation() {
     let (_root, mut app) = fixture();
     attach_active_call(&mut app).await;
-    let id = app.prepared.as_ref().unwrap().session.id;
+    let id = app.prepared.as_ref().unwrap().session().id;
     let event = |payload| Event {
         schema_version: 1,
         session_id: id,
@@ -1027,7 +1033,7 @@ async fn context_meter_tracks_only_the_latest_execution_request_and_clears_unkno
 async fn final_event_drain_keeps_latest_request_usage_separate_from_run_totals() {
     let (_root, mut app) = fixture();
     attach_active_call(&mut app).await;
-    let session_id = app.prepared.as_ref().unwrap().session.id;
+    let session_id = app.prepared.as_ref().unwrap().session().id;
     let (sender, events) = mpsc::channel(2);
     app.active.as_mut().unwrap().events = events;
     for (purpose, input) in [(ModelPurpose::Execution, 512), (ModelPurpose::Review, 777)] {
@@ -1108,7 +1114,7 @@ async fn run_summaries_close_every_terminal_status_once_with_actual_mode_and_tot
         assert!(summary.text.starts_with("fixture · "));
         assert!(summary.text.ends_with("— tok/s · 600 tokens"));
         assert!(!app.state.activity_active);
-        assert_eq!(app.prepared.as_ref().unwrap().session.history, history);
+        assert_eq!(app.prepared.as_ref().unwrap().session().history, history);
         assert!(app.finish(Ok(repeated)).await.is_err());
         assert_eq!(
             app.state
@@ -1251,7 +1257,7 @@ async fn final_event_drain_clears_old_usage_when_only_the_next_request_start_arr
     sender
         .send(Event {
             schema_version: 1,
-            session_id: app.prepared.as_ref().unwrap().session.id,
+            session_id: app.prepared.as_ref().unwrap().session().id,
             run_id: None,
             seq: 1,
             timestamp: "fixture".into(),

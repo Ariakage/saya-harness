@@ -41,7 +41,9 @@ stream = false
             cwd_explicit: false,
             profile_explicit: false,
             mode_override: None,
+            use_helper: false,
         },
+        None,
     )
     .unwrap();
     (root, app)

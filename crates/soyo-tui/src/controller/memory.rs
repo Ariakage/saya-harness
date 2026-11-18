@@ -7,13 +7,39 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) enum MemoryUiResult {
     View { data: Value, next: Option<String> },
-    Review(PreparedMemoryAction),
+    Review(MemoryPending),
     Publication(Value),
+}
+/// Pending prepared memory action — in-process `PreparedMemoryAction` on the
+/// local backend, helper-tracked review DTO on the remote backend.
+pub(super) enum MemoryPending {
+    Local(PreparedMemoryAction),
+    Remote(soyo_ipc::types::PreparedMemoryReviewDto),
+}
+impl MemoryPending {
+    pub(super) fn review(&self) -> &Value {
+        match self {
+            Self::Local(action) => action.review(),
+            Self::Remote(dto) => &dto.review,
+        }
+    }
+    pub(super) fn operation_id(&self) -> String {
+        match self {
+            Self::Local(action) => action.operation_id().to_owned(),
+            Self::Remote(dto) => dto.operation_id.clone(),
+        }
+    }
+    pub(super) fn expected_revision(&self) -> String {
+        match self {
+            Self::Local(action) => action.expected_revision().to_owned(),
+            Self::Remote(dto) => dto.expected_revision.clone(),
+        }
+    }
 }
 enum Task {
     Query(String),
     Prepare(String),
-    Confirm(PreparedMemoryAction),
+    Confirm(MemoryPending),
 }
 
 fn failure(code: &str, message: &str) -> BoundaryError {
@@ -125,9 +151,53 @@ impl App {
         if self.ui_job.is_some() {
             return Err(text::UI_ACTIVE_CANCEL.into());
         }
+        let cancel = Arc::new(RunCancellation::new());
+        if let Some(client) = self.helper.clone() {
+            let join = tokio::spawn(async move {
+                let result = match task {
+                    Task::Query(command) => {
+                        let dto: soyo_ipc::types::MemoryQueryResultDto = client
+                            .call_typed("query_memory", &json!({"command": command}))
+                            .await
+                            .map_err(|err| failure(&err.code, &err.message))?;
+                        let data = json!({"settings": dto.settings, "data": dto.data});
+                        let next = continuation(&command, &data);
+                        MemoryUiResult::View { data, next }
+                    }
+                    Task::Prepare(command) => {
+                        let dto: soyo_ipc::types::PreparedMemoryReviewDto = client
+                            .call_typed("prepare_memory_action", &json!({"command": command}))
+                            .await
+                            .map_err(|err| failure(&err.code, &err.message))?;
+                        MemoryUiResult::Review(MemoryPending::Remote(dto))
+                    }
+                    Task::Confirm(MemoryPending::Remote(dto)) => {
+                        let dto: soyo_ipc::types::MemoryConfirmResultDto = client
+                            .call_typed(
+                                "confirm_memory_action",
+                                &json!({"action_id": dto.action_id}),
+                            )
+                            .await
+                            .map_err(|err| failure(&err.code, &err.message))?;
+                        MemoryUiResult::Publication(dto.result)
+                    }
+                    Task::Confirm(MemoryPending::Local(_)) => {
+                        return Err(failure(
+                            "backend_mismatch",
+                            "memory review belongs to a different backend",
+                        ));
+                    }
+                };
+                Ok(services::UiResult::Memory(result))
+            });
+            self.begin_ui(cancel, join);
+            if let Some(panel) = &mut self.state.memory_panel {
+                panel.busy = true;
+            }
+            return Ok(());
+        }
         let config = self.config.clone();
         let secrets = self.secret_registry.clone();
-        let cancel = Arc::new(RunCancellation::new());
         let checking = cancel.clone();
         let flag = Arc::new(AtomicBool::new(false));
         let stopping = flag.clone();
@@ -139,9 +209,17 @@ impl App {
                     let next = continuation(&command, &data);
                     MemoryUiResult::View { data, next }
                 }
-                Task::Prepare(command) => MemoryUiResult::Review(admin.prepare(&command, &flag)?),
-                Task::Confirm(prepared) => {
+                Task::Prepare(command) => {
+                    MemoryUiResult::Review(MemoryPending::Local(admin.prepare(&command, &flag)?))
+                }
+                Task::Confirm(MemoryPending::Local(prepared)) => {
                     MemoryUiResult::Publication(admin.confirm(prepared, &flag)?)
+                }
+                Task::Confirm(MemoryPending::Remote(_)) => {
+                    return Err(failure(
+                        "backend_mismatch",
+                        "memory review belongs to a different backend",
+                    ));
                 }
             };
             Ok(services::UiResult::Memory(result))
@@ -196,9 +274,24 @@ impl App {
                     _ => return Err(text::ON_OFF_USAGE.into()),
                 };
                 match setting {
-                    "read" => self.config.memory.read = value,
-                    "inject" => self.config.memory.inject = value,
-                    "write" => self.config.memory.write = value,
+                    "read" | "inject" | "write" => {
+                        if let Some(client) = &self.helper {
+                            client
+                                .call(
+                                    "set_memory_setting",
+                                    json!({"setting": setting, "enabled": value}),
+                                )
+                                .await
+                                .map_err(|err| -> Box<dyn std::error::Error> {
+                                    Box::new(failure(&err.code, &err.message))
+                                })?;
+                        }
+                        match setting {
+                            "read" => self.config.memory.read = value,
+                            "inject" => self.config.memory.inject = value,
+                            _ => self.config.memory.write = value,
+                        };
+                    }
                     _ => return Err(text::SET_USAGE.into()),
                 };
                 self.memory_pending = None;
@@ -240,7 +333,7 @@ impl App {
                 if argument.trim() != expected {
                     return Err(text::CONFIRMATION_MISMATCH.into());
                 }
-                self.memory_last_operation = Some(prepared.operation_id().into());
+                self.memory_last_operation = Some(prepared.operation_id());
                 let prepared = self.memory_pending.take().ok_or(text::REVIEW_EXPIRED)?;
                 if let Some(panel) = &mut self.state.memory_panel {
                     panel.confirmation = None;

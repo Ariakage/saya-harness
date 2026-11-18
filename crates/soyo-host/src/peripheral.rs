@@ -314,6 +314,7 @@ impl HostService {
     ) -> Result<BootstrapStateDto, DesktopError> {
         let _ = require_idle_config_clone(self).await?;
         let parsed = parse_effort(effort.as_deref())?;
+        let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
         if guard.active_run_id.is_some() {
             return Err(DesktopError::new(
@@ -321,21 +322,39 @@ impl HostService {
                 "Cancel or wait for the active run before changing thinking effort",
             ));
         }
-        let cfg = guard
-            .config
-            .as_mut()
-            .ok_or_else(|| DesktopError::new("invalid_config", "Configuration is not loaded"))?;
-        let Some(profile_name) = cfg.profile.clone() else {
-            return Err(DesktopError::new(
-                "invalid_config",
-                "Select a configured profile first",
-            ));
+        let (profile_name, previous, fingerprint) = {
+            let cfg = guard.config.as_mut().ok_or_else(|| {
+                DesktopError::new("invalid_config", "Configuration is not loaded")
+            })?;
+            let Some(profile_name) = cfg.profile.clone() else {
+                return Err(DesktopError::new(
+                    "invalid_config",
+                    "Select a configured profile first",
+                ));
+            };
+            let profile = cfg.profiles.get_mut(&profile_name).ok_or_else(|| {
+                DesktopError::new("invalid_config", "Selected profile is missing")
+            })?;
+            let previous = profile.thinking_effort;
+            profile.thinking_effort = parsed;
+            let fingerprint = profile
+                .fingerprint()
+                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+            (profile_name, previous, fingerprint)
         };
-        let profile = cfg
-            .profiles
-            .get_mut(&profile_name)
-            .ok_or_else(|| DesktopError::new("invalid_config", "Selected profile is missing"))?;
-        profile.thinking_effort = parsed;
+        if let Some(prepared) = &mut guard.prepared
+            && let Err(err) = prepared
+                .store
+                .update_session_config(&prepared.session, &fingerprint)
+                .await
+        {
+            if let Some(cfg) = &mut guard.config
+                && let Some(profile) = cfg.profiles.get_mut(&profile_name)
+            {
+                profile.thinking_effort = previous;
+            }
+            return Err(DesktopError::from_boundary(&err, &secrets));
+        }
         drop(guard);
         Ok(self.get_bootstrap_state().await)
     }
@@ -359,6 +378,41 @@ impl HostService {
         cfg.sandbox.backend = backend_kind_from_dto(&backend);
         drop(guard);
         Ok(self.get_bootstrap_state().await)
+    }
+
+    /// Toggle one managed-memory setting (`set_memory_setting`). The TUI's
+    /// `/memory set` panel applies the same flags locally; this keeps the
+    /// helper's configuration in sync so subsequent queries and prompt-time
+    /// memory injection observe them.
+    pub async fn set_memory_setting(
+        &self,
+        setting: &str,
+        enabled: bool,
+    ) -> Result<(), DesktopError> {
+        let _ = require_idle_config_clone(self).await?;
+        let mut guard = self.inner.lock().await;
+        if guard.active_run_id.is_some() {
+            return Err(DesktopError::new(
+                "run_active",
+                "Cancel or wait for the active run before changing memory settings",
+            ));
+        }
+        let cfg = guard
+            .config
+            .as_mut()
+            .ok_or_else(|| DesktopError::new("invalid_config", "Configuration is not loaded"))?;
+        match setting {
+            "read" => cfg.memory.read = enabled,
+            "inject" => cfg.memory.inject = enabled,
+            "write" => cfg.memory.write = enabled,
+            _ => {
+                return Err(DesktopError::new(
+                    "invalid_args",
+                    "setting must be read, inject or write",
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub async fn set_autocompact(

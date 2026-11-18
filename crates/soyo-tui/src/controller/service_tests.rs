@@ -57,7 +57,9 @@ stream = false
             cwd_explicit: false,
             profile_explicit: false,
             mode_override: None,
+            use_helper: false,
         },
+        None,
     )
     .unwrap();
     (root, app)
@@ -110,7 +112,7 @@ fn transcript(app: &App) -> String {
 async fn snapshot(app: &App) -> soyo_core::sqlite::SessionSnapshot {
     SqliteStore::read_snapshot(
         &app.config.data_dir,
-        app.prepared.as_ref().unwrap().session.id,
+        app.prepared.as_ref().unwrap().session().id,
         SnapshotLimits::default(),
         Arc::new(RunCancellation::new()),
     )
@@ -123,9 +125,9 @@ async fn new_and_resume_wait_for_input_and_hold_only_the_open_session_lock() {
     let (_root, mut app) = fixture();
     create(&mut app).await;
     let mut prepared = app.prepared.take().unwrap();
-    let id = prepared.session.id;
-    let store = prepared.store.clone();
-    session::append(&mut prepared, "saved question".into())
+    let id = prepared.session().id;
+    let store = prepared.local().unwrap().store.clone();
+    session::append(prepared.local_mut().unwrap(), "saved question".into())
         .await
         .unwrap();
     assert_eq!(store.lock_session(id).err().unwrap().0.code, "session_busy");
@@ -137,7 +139,7 @@ async fn new_and_resume_wait_for_input_and_hold_only_the_open_session_lock() {
     assert!(app.active.is_none());
     assert_eq!(app.state.status, "Ready");
     assert_eq!(
-        app.prepared.as_ref().unwrap().session.history,
+        app.prepared.as_ref().unwrap().session().history,
         vec![HistoryItem::UserText("saved question".into())]
     );
     assert!(transcript(&app).contains("saved question"));
@@ -157,8 +159,8 @@ async fn sessions_selector_renders_saved_metadata_and_resumes_the_selected_id() 
     let (_root, mut app) = fixture();
     create(&mut app).await;
     let mut first = app.prepared.take().unwrap();
-    let first_id = first.session.id;
-    session::append(&mut first, "saved selector task".into())
+    let first_id = first.session().id;
+    session::append(first.local_mut().unwrap(), "saved selector task".into())
         .await
         .unwrap();
     drop(first);
@@ -181,7 +183,7 @@ async fn sessions_selector_renders_saved_metadata_and_resumes_the_selected_id() 
         .await
         .unwrap();
     complete(&mut app).await;
-    assert_eq!(app.prepared.as_ref().unwrap().session.id, first_id);
+    assert_eq!(app.prepared.as_ref().unwrap().session().id, first_id);
     assert_eq!(app.state.session_title, "saved selector task");
 }
 
@@ -274,7 +276,7 @@ async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
     let secret = "fixture-sensitive-title";
     app.secrets.push(secret.into());
     let first = format!("  调查\n\t{}{}  完成  ", "项".repeat(72), secret);
-    session::append(app.prepared.as_mut().unwrap(), first)
+    session::append(app.prepared.as_mut().unwrap().local_mut().unwrap(), first)
         .await
         .unwrap();
     app.refresh_header();
@@ -283,9 +285,12 @@ async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
     assert!(title.starts_with("调查 "));
     assert!(!title.contains("fixture"));
     assert!(!title.contains('\n'));
-    session::append(app.prepared.as_mut().unwrap(), "later task".into())
-        .await
-        .unwrap();
+    session::append(
+        app.prepared.as_mut().unwrap().local_mut().unwrap(),
+        "later task".into(),
+    )
+    .await
+    .unwrap();
     app.refresh_header();
     assert_eq!(app.state.session_title, title);
     app.record_context_input(Some(Usage {
@@ -314,9 +319,12 @@ async fn session_title_uses_the_first_task_and_redacts_before_shortening() {
 async fn profile_selection_clears_the_title_and_previous_context_usage() {
     let (_root, mut app) = fixture();
     create(&mut app).await;
-    session::append(app.prepared.as_mut().unwrap(), "old task".into())
-        .await
-        .unwrap();
+    session::append(
+        app.prepared.as_mut().unwrap().local_mut().unwrap(),
+        "old task".into(),
+    )
+    .await
+    .unwrap();
     app.record_context_input(Some(Usage {
         input_tokens: Some(512),
         output_tokens: None,
@@ -358,23 +366,27 @@ async fn workspace_and_effort_changes_are_persisted_with_the_open_session() {
     app.command("/effort max").await.unwrap();
     let prepared = app.prepared.as_ref().unwrap();
     let stored = prepared
+        .local()
+        .unwrap()
         .store
-        .load_session(prepared.session.id)
+        .load_session(prepared.session().id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(stored.workspace, migrated.canonicalize().unwrap());
     assert_eq!(
         prepared
+            .local()
+            .unwrap()
             .store
-            .fingerprint(prepared.session.id)
+            .fingerprint(prepared.session().id)
             .await
             .unwrap(),
         app.config.profiles["fixture"].fingerprint().unwrap()
     );
     assert_eq!(app.state.thinking_effort.as_deref(), Some("max"));
     let data_dir = app.config.data_dir.clone();
-    let session_id = prepared.session.id;
+    let session_id = prepared.session().id;
     drop(app);
     let _lock = SqliteStore::lock_existing(&data_dir, session_id).unwrap();
 }
@@ -384,8 +396,8 @@ async fn configuration_changes_need_explicit_resume_accept_and_failed_resume_rel
     let (_root, mut app) = fixture();
     create(&mut app).await;
     let prepared = app.prepared.take().unwrap();
-    let id = prepared.session.id;
-    let store = prepared.store.clone();
+    let id = prepared.session().id;
+    let store = prepared.local().unwrap().store.clone();
     let original = store.fingerprint(id).await.unwrap();
     drop(prepared);
     app.config
@@ -405,7 +417,7 @@ async fn configuration_changes_need_explicit_resume_accept_and_failed_resume_rel
         .await
         .unwrap();
     complete(&mut app).await;
-    assert_eq!(app.prepared.as_ref().unwrap().session.id, id);
+    assert_eq!(app.prepared.as_ref().unwrap().session().id, id);
     assert!(app.active.is_none());
     assert_eq!(
         store.fingerprint(id).await.unwrap(),
@@ -418,8 +430,8 @@ async fn ui_queries_preserve_unknown_truncation_and_run_call_links_without_agent
     let (_root, mut app) = fixture();
     create(&mut app).await;
     let prepared = app.prepared.as_ref().unwrap();
-    let id = prepared.session.id;
-    let store = prepared.store.clone();
+    let id = prepared.session().id;
+    let store = prepared.local().unwrap().store.clone();
     let mut ids = Vec::new();
     for (index, state) in [ToolState::Unknown, ToolState::Failed]
         .into_iter()
@@ -571,7 +583,7 @@ async fn a_published_export_is_reported_after_cancel_before_the_deferred_mode_is
 async fn cancelled_session_activation_keeps_current_session_and_releases_candidate_lock() {
     let (_root, mut app) = fixture();
     create(&mut app).await;
-    let original = app.prepared.as_ref().unwrap().session.id;
+    let original = app.prepared.as_ref().unwrap().session().id;
     let candidate = session::create(&app.config, soyo_app::new_session(&app.config).unwrap())
         .await
         .unwrap();
@@ -581,14 +593,14 @@ async fn cancelled_session_activation_keeps_current_session_and_releases_candida
     assert!(
         sender
             .send(UiResult::Session {
-                prepared: candidate,
+                prepared: backend::SessionBackend::Local(candidate),
                 resumed: false,
                 usage: None,
             })
             .is_ok()
     );
     complete(&mut app).await;
-    assert_eq!(app.prepared.as_ref().unwrap().session.id, original);
+    assert_eq!(app.prepared.as_ref().unwrap().session().id, original);
     let _released = SqliteStore::lock_existing(&app.config.data_dir, candidate_id).unwrap();
 }
 
@@ -778,7 +790,7 @@ async fn exiting_waits_for_ui_completion_and_retains_the_actual_export_receipt()
 async fn query_metadata_is_redacted_before_entering_the_ui_cache() {
     let (_root, mut app) = fixture();
     create(&mut app).await;
-    let id = app.prepared.as_ref().unwrap().session.id.0.to_string();
+    let id = app.prepared.as_ref().unwrap().session().id.0.to_string();
     app.secrets.push(id.clone());
     for command in ["/tools", "/jobs", "/sessions"] {
         app.service(command, "").await.unwrap();
@@ -815,7 +827,7 @@ async fn restored_tool_ids_use_current_redaction_and_partial_replies_remain_iden
         HistoryItem::AssistantPartial("unfinished reply".into()),
     ];
     app.finish_ui(Ok(UiResult::Session {
-        prepared,
+        prepared: backend::SessionBackend::Local(prepared),
         resumed: true,
         usage: None,
     }))
@@ -915,7 +927,7 @@ async fn failed_prompt_handoff_preserves_a_newer_draft_and_the_unsent_prompt() {
             .any(|message| { message.label == "Unsent draft" && message.text == "earlier task" })
     );
     assert!(app.active.is_none());
-    assert!(app.prepared.as_ref().unwrap().session.history.is_empty());
+    assert!(app.prepared.as_ref().unwrap().session().history.is_empty());
 }
 
 #[tokio::test]
@@ -1021,11 +1033,18 @@ async fn explicit_tui_resume_uses_saved_metadata_after_startup_overrides_and_pro
     app.service("/resume", &id.0.to_string()).await.unwrap();
     complete(&mut app).await;
     let prepared = app.prepared.as_ref().unwrap();
-    assert_eq!(prepared.session.id, id);
-    assert_eq!(prepared.session.workspace, workspace);
-    assert_eq!(prepared.session.work_mode, WorkMode::Plan);
-    assert_eq!(prepared.session.profile, "fixture");
-    let stored = prepared.store.load_session(id).await.unwrap().unwrap();
+    assert_eq!(prepared.session().id, id);
+    assert_eq!(prepared.session().workspace, workspace);
+    assert_eq!(prepared.session().work_mode, WorkMode::Plan);
+    assert_eq!(prepared.session().profile, "fixture");
+    let stored = prepared
+        .local()
+        .unwrap()
+        .store
+        .load_session(id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.workspace, workspace);
     assert_eq!(stored.work_mode, WorkMode::Plan);
     assert_eq!(stored.profile, "fixture");
@@ -1043,7 +1062,13 @@ async fn titles_redact_after_whitespace_and_terminal_character_normalization() {
         ("fixture secret", "fixture \n\t secret"),
     ] {
         app.secrets = vec![secret.into()];
-        app.prepared.as_mut().unwrap().session.history = vec![HistoryItem::UserText(text.into())];
+        app.prepared
+            .as_mut()
+            .unwrap()
+            .local_mut()
+            .unwrap()
+            .session
+            .history = vec![HistoryItem::UserText(text.into())];
         app.refresh_header();
         assert!(!app.state.session_title.contains(secret));
         let title = app.safe_title(&format!("Soyo | {}", app.state.session_title));

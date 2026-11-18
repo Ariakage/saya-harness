@@ -1314,6 +1314,9 @@ async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -
         cwd_explicit: cli.cwd.is_some(),
         profile_explicit: cli.profile.is_some(),
         mode_override: cli.mode.map(Into::into),
+        // Same contract as `soyo run`/chat: explicit config/data-dir bypass
+        // the shared helper because it owns its own resolved configuration.
+        use_helper: cli.config.is_none() && cli.data_dir.is_none(),
     };
     match soyo_tui::run(config, options).await {
         Ok(code) => code,

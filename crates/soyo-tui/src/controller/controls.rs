@@ -5,9 +5,7 @@ use crate::{
     view::{Details, MarkdownDisplay},
 };
 use soyo_app::interaction::Request;
-use soyo_core::{
-    boundary::StoreChange, config::ThinkingEffort, contract::PermissionMode, execution::BackendKind,
-};
+use soyo_core::{config::ThinkingEffort, contract::PermissionMode, execution::BackendKind};
 use std::path::Path;
 
 fn mode(value: &str) -> Option<WorkMode> {
@@ -87,23 +85,16 @@ impl App {
         let previous = self.config.cwd.clone();
         self.config.cwd = workspace.clone();
         if let Some(prepared) = &mut self.prepared {
-            let mut updated = prepared.session.clone();
-            updated.workspace = workspace;
             let fingerprint = self
                 .config
                 .profiles
-                .get(&updated.profile)
+                .get(&prepared.session().profile)
                 .ok_or(text::SESSION_PROFILE_NOT_FOUND)?
                 .fingerprint()?;
-            if let Err(error) = prepared
-                .store
-                .update_session_config(&updated, &fingerprint)
-                .await
-            {
+            if let Err(error) = prepared.set_workspace(&workspace, &fingerprint).await {
                 self.config.cwd = previous;
-                return Err(Box::new(error));
+                return Err(error);
             }
-            prepared.session = updated;
         }
         self.state.details = None;
         self.state.details_scroll = 0;
@@ -142,33 +133,79 @@ impl App {
             profile.fingerprint()?
         };
         if let Some(prepared) = &self.prepared
-            && let Err(error) = prepared
-                .store
-                .update_session_config(&prepared.session, &fingerprint)
+            && let Err(error) = prepared.update_config_fingerprint(&fingerprint).await
+        {
+            if let Some(profile) = self.config.profiles.get_mut(&name) {
+                profile.thinking_effort = previous;
+            }
+            return Err(error);
+        }
+        if let Some(client) = &self.helper
+            && let Err(error) = client
+                .call(
+                    "set_thinking_effort",
+                    serde_json::json!({"effort": selected.map(ThinkingEffort::as_str)}),
+                )
                 .await
         {
             if let Some(profile) = self.config.profiles.get_mut(&name) {
                 profile.thinking_effort = previous;
             }
-            return Err(Box::new(error));
+            return Err(Box::new(BoundaryError(
+                soyo_core::contract::ErrorInfo {
+                    code: error.code.clone(),
+                    message: error.message.clone(),
+                },
+                None,
+                None,
+            )));
         }
         self.refresh_header();
         let value = selected.map_or("default", ThinkingEffort::as_str);
         self.notice(&text::thinking_effort_set(value));
         Ok(())
     }
-    fn set_sandbox(&mut self, argument: &str) -> Result<()> {
+    /// Mirror a local-only `Config` change onto the helper's configuration.
+    /// No-op on the in-process backend.
+    async fn sync_remote_config(&self, method: &str, params: serde_json::Value) -> Result<()> {
+        let Some(client) = &self.helper else {
+            return Ok(());
+        };
+        client.call(method, params).await.map_err(|error| {
+            Box::new(BoundaryError(
+                soyo_core::contract::ErrorInfo {
+                    code: error.code.clone(),
+                    message: error.message.clone(),
+                },
+                None,
+                None,
+            )) as Box<dyn std::error::Error>
+        })?;
+        Ok(())
+    }
+
+    async fn set_sandbox(&mut self, argument: &str) -> Result<()> {
         match argument.to_ascii_lowercase().as_str() {
             "" | "status" => {
                 self.notice(&text::sandbox(sandbox_label(self.config.sandbox.backend)));
             }
             "on" => {
                 self.require_idle_configuration()?;
+                self.sync_remote_config(
+                    "set_sandbox_backend",
+                    serde_json::json!({"backend": "auto"}),
+                )
+                .await?;
                 self.config.sandbox.backend = BackendKind::Auto;
                 self.notice(text::SANDBOX_ON);
             }
             "off" => {
                 self.require_idle_configuration()?;
+                self.sync_remote_config(
+                    "set_sandbox_backend",
+                    serde_json::json!({"backend": "host"}),
+                )
+                .await?;
                 self.config.sandbox.backend = BackendKind::Host;
                 self.notice(text::SANDBOX_OFF);
             }
@@ -176,7 +213,7 @@ impl App {
         }
         Ok(())
     }
-    fn set_autocompact(&mut self, argument: &str) -> Result<()> {
+    async fn set_autocompact(&mut self, argument: &str) -> Result<()> {
         self.require_idle_configuration()?;
         match argument.to_ascii_lowercase().as_str() {
             "" => {
@@ -190,11 +227,18 @@ impl App {
                 self.notice(&text::autocompact(&value));
             }
             "auto" => {
+                self.sync_remote_config(
+                    "set_autocompact",
+                    serde_json::json!({"enabled": true, "trigger_tokens": null}),
+                )
+                .await?;
                 self.config.context.auto_compact = true;
                 self.config.context.trigger_tokens = None;
                 self.notice(&text::autocompact_auto(self.config.context.trigger_percent));
             }
             "off" => {
+                self.sync_remote_config("set_autocompact", serde_json::json!({"enabled": false}))
+                    .await?;
                 self.config.context.auto_compact = false;
                 self.notice(text::AUTOCOMPACT_OFF);
             }
@@ -215,6 +259,11 @@ impl App {
                 if effective <= target {
                     return Err(text::AUTOCOMPACT_TARGET_THRESHOLD.into());
                 }
+                self.sync_remote_config(
+                    "set_autocompact",
+                    serde_json::json!({"enabled": true, "trigger_tokens": effective}),
+                )
+                .await?;
                 self.config.context.auto_compact = true;
                 self.config.context.trigger_tokens = Some(effective);
                 self.notice(&text::autocompact_set(effective));
@@ -244,7 +293,7 @@ impl App {
         let workspace = self
             .prepared
             .as_ref()
-            .map(|prepared| prepared.session.workspace.as_path())
+            .map(|prepared| prepared.session().workspace.as_path())
             .unwrap_or(&self.config.cwd);
         session::check_roots(&self.config, workspace, target)?;
         if let Some(job) = &self.ui_job {
@@ -256,18 +305,34 @@ impl App {
             return Ok(());
         }
         if let Some(active) = &self.active {
-            active.handle.request_mode(target)?;
+            active.handle.request_mode(target).await?;
             self.invalidate_mode_approval();
             self.refresh_mode()?;
         } else {
+            if let Some(client) = &self.helper
+                && self.prepared.is_some()
+            {
+                client
+                    .call(
+                        "set_work_mode",
+                        serde_json::json!({"mode": soyo_ipc::types::WorkModeDto::from(target)}),
+                    )
+                    .await
+                    .map_err(|error| {
+                        Box::new(BoundaryError(
+                            soyo_core::contract::ErrorInfo {
+                                code: error.code.clone(),
+                                message: error.message.clone(),
+                            },
+                            None,
+                            None,
+                        )) as Box<dyn std::error::Error>
+                    })?;
+            }
             if let Some(prepared) = &mut self.prepared {
-                let mut updated = prepared.session.clone();
+                let mut updated = prepared.session().clone();
                 updated.work_mode = target;
-                prepared
-                    .store
-                    .commit(&[StoreChange::Session(updated.clone())])
-                    .await?;
-                prepared.session = updated;
+                prepared.commit_session(updated).await?;
             }
             self.config.mode = target;
             self.state.pending_mode = None;
@@ -471,7 +536,8 @@ impl App {
                                     .as_ref()
                                     .ok_or(text::ACTIVE_RUN_REQUIRED)?
                                     .handle
-                                    .steer(expanded)?;
+                                    .steer(expanded)
+                                    .await?;
                                 self.pending = Some(Request::Approval(request, reply));
                                 self.state.push_message(Role::User, ui_text::YOU, display);
                                 self.notice(text::GUIDANCE_APPROVAL_PENDING);
@@ -502,7 +568,7 @@ impl App {
             if active.kind != RunKind::Execution {
                 return Err(text::GUIDANCE_ACTIVE_ONLY.into());
             }
-            active.handle.steer(expanded)?;
+            active.handle.steer(expanded).await?;
             self.state.push_message(Role::User, ui_text::YOU, display);
             self.notice(text::GUIDANCE_QUEUED);
             self.clear_editor();
@@ -550,15 +616,20 @@ impl App {
                 if self.active.is_some() || self.ui_job.is_some() {
                     return Err(text::PERMISSIONS_IDLE.into());
                 }
-                self.config.permissions_mode =
-                    permission(argument).ok_or(text::PERMISSIONS_USAGE)?;
+                let target = permission(argument).ok_or(text::PERMISSIONS_USAGE)?;
+                self.sync_remote_config(
+                    "set_permission_mode",
+                    serde_json::json!({"mode": soyo_ipc::types::PermissionModeDto::from(target)}),
+                )
+                .await?;
+                self.config.permissions_mode = target;
                 self.refresh_header();
                 self.notice(text::PERMISSIONS_UPDATED);
             }
             "/cd" => self.change_workspace(argument).await?,
-            "/sandbox" => self.set_sandbox(argument)?,
+            "/sandbox" => self.set_sandbox(argument).await?,
             "/effort" | "/thinking" => self.select_effort(argument).await?,
-            "/autocompact" => self.set_autocompact(argument)?,
+            "/autocompact" => self.set_autocompact(argument).await?,
             "/skills" | "/mcps" | "/plugins" => {
                 if !argument.is_empty() {
                     return Err(text::command_without_arguments(name).into());
@@ -596,7 +667,7 @@ impl App {
                 let session = self
                     .prepared
                     .as_ref()
-                    .map(|prepared| prepared.session.id.0.to_string())
+                    .map(|prepared| prepared.session().id.0.to_string())
                     .unwrap_or_else(|| text::NO_SESSION.into());
                 let pending = format!("{:?}", self.state.pending_mode);
                 let autocompact = if !self.config.context.auto_compact {
@@ -637,7 +708,7 @@ impl App {
                 if !argument.is_empty() {
                     return Err(text::command_without_arguments(name).into());
                 }
-                self.show_processes()?;
+                self.show_processes().await?;
             }
             "/new" | "/profile" | "/model" | "/profiles" | "/resume" | "/resume-accept"
             | "/sessions" | "/tools" | "/jobs" | "/export" | "/export-full" | "/cancel-job"
@@ -647,9 +718,14 @@ impl App {
         Ok(false)
     }
 
-    fn show_processes(&mut self) -> Result<()> {
+    async fn show_processes(&mut self) -> Result<()> {
         let lines = if let Some(active) = &self.active {
-            background_lines(&active.handle.background_events()?)
+            match &active.handle {
+                ActiveHandle::Local(handle) => background_lines(&handle.background_events()?),
+                ActiveHandle::Remote(handle) => {
+                    background_lines_remote(&handle.background_jobs().await?)
+                }
+            }
         } else {
             vec![text::NO_ACTIVE_RUN.into()]
         };
@@ -660,6 +736,47 @@ impl App {
         self.state.details_scroll = 0;
         Ok(())
     }
+}
+
+/// `/ps` rendering for helper-reported background jobs; mirrors
+/// `background_lines` output.
+pub(super) fn background_lines_remote(jobs: &[soyo_ipc::types::BackgroundJobDto]) -> Vec<String> {
+    let mut rows: Vec<(String, String, String, String)> = Vec::new();
+    for job in jobs {
+        let state = match job.state.as_str() {
+            "running" | "accepted" => text::BACKGROUND_RUNNING.into(),
+            "cancelling" | "cancel_requested" => text::BACKGROUND_CANCELLING.into(),
+            "succeeded" => text::BACKGROUND_COMPLETED.into(),
+            "cancelled" => text::BACKGROUND_CANCELLED.into(),
+            "failed" => job
+                .summary
+                .as_ref()
+                .map(|code| format!("{} · {code}", text::BACKGROUND_FAILED))
+                .unwrap_or_else(|| text::BACKGROUND_FAILED.into()),
+            other => other.to_owned(),
+        };
+        rows.push((
+            job.job_id.clone(),
+            job.tool.clone().unwrap_or_default(),
+            job.parent_call_id.clone(),
+            state,
+        ));
+    }
+    if rows.is_empty() {
+        return vec![text::NO_BACKGROUND_TASKS.into()];
+    }
+    let running = rows
+        .iter()
+        .filter(|(_, _, _, state)| state == text::BACKGROUND_RUNNING)
+        .count();
+    let mut lines = vec![text::background_summary(running, rows.len())];
+    for (id, tool, call_id, state) in rows {
+        lines.push(String::new());
+        lines.push(id);
+        lines.push(format!("  {tool} · {call_id}"));
+        lines.push(format!("  {state}"));
+    }
+    lines
 }
 
 pub(super) fn background_lines(events: &[soyo_core::background::BackgroundEvent]) -> Vec<String> {

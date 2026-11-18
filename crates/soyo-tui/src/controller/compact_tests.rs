@@ -34,7 +34,9 @@ async fn prepared(app: &mut App) {
         HistoryItem::AssistantText("Earlier repetitive observation. ".repeat(1000)),
         HistoryItem::UserText("Continue with the same requirements".into()),
     ];
-    app.prepared = Some(session::create(&app.config, session).await.unwrap());
+    app.prepared = Some(backend::SessionBackend::Local(
+        session::create(&app.config, session).await.unwrap(),
+    ));
     app.refresh_header();
 }
 async fn finish(app: &mut App) {
@@ -101,7 +103,7 @@ async fn idle_compact_uses_the_real_controller_without_a_user_message_or_executi
         label: "Last request".into(),
         tokens: 42_000,
     }];
-    let raw = app.prepared.as_ref().unwrap().session.history.clone();
+    let raw = app.prepared.as_ref().unwrap().session().history.clone();
     app.state.editor.set_text("/compact");
     app.submit().await.unwrap();
     assert!(app.state.editor.text().is_empty());
@@ -117,11 +119,13 @@ async fn idle_compact_uses_the_real_controller_without_a_user_message_or_executi
     assert!(app.active.is_none());
     assert_eq!(app.state.context_input_tokens, Some(42_000));
     let current = app.prepared.as_ref().unwrap();
-    assert_eq!(current.session.history, raw);
+    assert_eq!(current.session().history, raw);
     assert_eq!(
         current
+            .local()
+            .unwrap()
             .store
-            .load_session(current.session.id)
+            .load_session(current.session().id)
             .await
             .unwrap()
             .unwrap()
@@ -130,8 +134,10 @@ async fn idle_compact_uses_the_real_controller_without_a_user_message_or_executi
     );
     assert!(
         current
+            .local()
+            .unwrap()
             .store
-            .context_checkpoint(current.session.id)
+            .context_checkpoint(current.session().id)
             .await
             .unwrap()
             .is_some()
@@ -175,8 +181,10 @@ async fn idle_compact_leaves_configured_mcp_processes_unstarted() {
         app.prepared
             .as_ref()
             .unwrap()
+            .local()
+            .unwrap()
             .store
-            .context_checkpoint(app.prepared.as_ref().unwrap().session.id)
+            .context_checkpoint(app.prepared.as_ref().unwrap().session().id)
             .await
             .unwrap()
             .is_some()
@@ -209,7 +217,7 @@ async fn queued_compaction_at_the_last_execution_call_runs_after_completion_with
     .unwrap();
     app.config.profiles.get_mut("fixture").unwrap().base_url = url;
     prepared(&mut app).await;
-    let before = app.prepared.as_ref().unwrap().session.history.len();
+    let before = app.prepared.as_ref().unwrap().session().history.len();
     app.start("New current task".into()).await.unwrap();
     signal(&mut app, &ready).await;
     app.command("/compact").await.unwrap();
@@ -221,10 +229,10 @@ async fn queued_compaction_at_the_last_execution_call_runs_after_completion_with
             .as_ref()
             .is_some_and(|active| active.kind == RunKind::Compaction)
     );
-    let raw = app.prepared.as_ref().unwrap().session.history.clone();
+    let raw = app.prepared.as_ref().unwrap().session().history.clone();
     assert_eq!(raw.len(), before + 2);
     finish(&mut app).await;
-    assert_eq!(app.prepared.as_ref().unwrap().session.history, raw);
+    assert_eq!(app.prepared.as_ref().unwrap().session().history, raw);
     let requests = requests.try_iter().collect::<Vec<_>>();
     assert_eq!(requests.len(), 2);
     let tools = requests[0]["tools"].as_array().unwrap();
@@ -256,7 +264,7 @@ async fn failed_or_cancelled_compaction_keeps_history_lock_and_idle_controls_ava
         .unwrap();
         app.config.profiles.get_mut("fixture").unwrap().base_url = url;
         prepared(&mut app).await;
-        let raw = app.prepared.as_ref().unwrap().session.history.clone();
+        let raw = app.prepared.as_ref().unwrap().session().history.clone();
         app.command("/compact").await.unwrap();
         signal(&mut app, &ready).await;
         if cancel {
@@ -265,11 +273,13 @@ async fn failed_or_cancelled_compaction_keeps_history_lock_and_idle_controls_ava
         release.send(()).unwrap();
         finish(&mut app).await;
         let prepared = app.prepared.as_ref().unwrap();
-        assert_eq!(prepared.session.history, raw);
+        assert_eq!(prepared.session().history, raw);
         assert_eq!(
             prepared
+                .local()
+                .unwrap()
                 .store
-                .lock_session(prepared.session.id)
+                .lock_session(prepared.session().id)
                 .err()
                 .unwrap()
                 .0
@@ -278,8 +288,10 @@ async fn failed_or_cancelled_compaction_keeps_history_lock_and_idle_controls_ava
         );
         assert!(
             prepared
+                .local()
+                .unwrap()
                 .store
-                .context_checkpoint(prepared.session.id)
+                .context_checkpoint(prepared.session().id)
                 .await
                 .unwrap()
                 .is_none()
@@ -326,12 +338,14 @@ async fn cancelling_a_ui_job_discards_its_queued_compaction() {
         app.prepared
             .as_ref()
             .unwrap()
+            .local()
+            .unwrap()
             .store
-            .load_session(app.prepared.as_ref().unwrap().session.id)
+            .load_session(app.prepared.as_ref().unwrap().session().id)
             .await
             .unwrap()
             .unwrap()
             .history,
-        app.prepared.as_ref().unwrap().session.history
+        app.prepared.as_ref().unwrap().session().history
     );
 }
