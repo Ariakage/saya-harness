@@ -48,11 +48,11 @@ PATCH_CHAIN = (
     ),
     (
         "scripts/n5/patches/playwright-process-info.patch",
-        "28512f80e0a84cb225bd1431217f0ca98265d5010cf920c2f171e28fc056093a",
+        "8eb7e7d160f87f48ebdd6f8d541363fedbccc5392c81f5cdf4f08836dbb3d641",
     ),
     (
         "scripts/n5/patches/playwright-masked-capture.patch",
-        "de88c9fc365498503fb9a3cf8da5c7a0fc3724f9b409b79928aa169d1859e276",
+        "0adc99616a617b9eb837285039db8a75b39c8ac01738d3fac94a01079003499e",
     ),
 )
 COMMON_STEPS = (
