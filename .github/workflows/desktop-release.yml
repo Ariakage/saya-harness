@@ -4,14 +4,7 @@ on:
   push:
     tags:
       - 'desktop-v*'
-      - 'v*'
   workflow_dispatch:
-    inputs:
-      release_draft:
-        description: Create release as draft when manually triggered
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -36,9 +29,6 @@ jobs:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            bundles: nsis
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -91,22 +81,31 @@ jobs:
           cargo test -p soyo-desktop --locked
           pnpm --dir desktop run check
 
-      - name: Prepare optional updater pubkey config override
+      - name: Build and stage soyo helper sidecar
+        run: |
+          cargo build --locked --release -p soyo-cli --target "${{ matrix.target }}"
+          mkdir -p desktop/src-tauri/binaries
+          cp "target/${{ matrix.target }}/release/soyo" "desktop/src-tauri/binaries/soyo-${{ matrix.target }}"
+          chmod +x "desktop/src-tauri/binaries/soyo-${{ matrix.target }}"
+
+      - name: Prepare updater pubkey config override
         id: build_args
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
         run: |
+          if [ -z "$TAURI_UPDATER_PUBLIC_KEY" ]; then
+            echo "::error::TAURI_UPDATER_PUBLIC_KEY secret must not be empty"
+            exit 1
+          fi
           args="--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
-          if [ -n "$TAURI_UPDATER_PUBLIC_KEY" ]; then
-            cfg_path=$(python3 - <<'PY'
+          cfg_path=$(python3 - <<'PY'
           import json, os, pathlib
           p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "updater-override.json"
           p.write_text(json.dumps({"plugins": {"updater": {"pubkey": os.environ["TAURI_UPDATER_PUBLIC_KEY"]}}}), encoding="utf-8")
           print(p.as_posix())
           PY
           )
-            args="$args --config $cfg_path"
-          fi
+          args="$args --config $cfg_path"
           echo "args=$args" >> "$GITHUB_OUTPUT"
 
       - name: Build, sign, notarize, and publish desktop release artifacts
@@ -127,8 +126,7 @@ jobs:
           args: ${{ steps.build_args.outputs.args }}
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('desktop-v__VERSION__-ci.{0}', github.run_number) }}
           releaseName: 'Soyo Desktop v__VERSION__'
-          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.release_draft || contains(github.ref_name, '-') }}
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' || contains(github.ref_name, '-') }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           uploadUpdaterJson: true
-          updaterJsonPreferNsis: true
           uploadUpdaterSignatures: true

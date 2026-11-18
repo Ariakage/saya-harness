@@ -48,9 +48,17 @@ class DesktopPackagingTest(unittest.TestCase):
                 )
 
     def test_tauri_conf_security_bundle_updater_and_rgba_icons(self):
+        cargo_text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        ver_match = re.search(r'^\s*version\s*=\s*"([^"]+)"', cargo_text, re.MULTILINE)
+        self.assertIsNotNone(ver_match, "Missing workspace.package version in Cargo.toml")
+        workspace_version = ver_match.group(1)
+
         conf = json.loads((TAURI_DIR / "tauri.conf.json").read_text(encoding="utf-8"))
+        pkg = json.loads((DESKTOP / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(conf.get("productName"), "Soyo")
         self.assertEqual(conf.get("identifier"), "com.ariakage.soyo.desktop")
+        self.assertEqual(conf.get("version"), workspace_version)
+        self.assertEqual(pkg.get("version"), workspace_version)
 
         security = conf.get("app", {}).get("security", {})
         self.assertNotIn("assetProtocol", security)
@@ -85,9 +93,14 @@ class DesktopPackagingTest(unittest.TestCase):
         self.assertTrue(bundle.get("active"))
         self.assertTrue(bundle.get("createUpdaterArtifacts"))
         targets = bundle.get("targets", [])
-        self.assertEqual(targets, ["dmg", "app", "nsis", "appimage"])
+        self.assertEqual(targets, ["dmg", "app", "appimage"])
         self.assertNotIn("msi", targets)
+        self.assertNotIn("nsis", targets)
+        self.assertNotIn("windows", bundle)
+        self.assertEqual(bundle.get("externalBin"), ["binaries/soyo"])
         self.assertEqual(bundle.get("macOS", {}).get("minimumSystemVersion"), "15.0")
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("/desktop/src-tauri/binaries/", gitignore)
 
         updater = conf.get("plugins", {}).get("updater", {})
         self.assertEqual(updater.get("pubkey"), "")
@@ -163,7 +176,14 @@ class DesktopPackagingTest(unittest.TestCase):
             if src.name.endswith(".test.ts") or src.name.endswith(".test.tsx"):
                 continue
             text = src.read_text(encoding="utf-8")
-            self.assertNotRegex(text, r"\b(localStorage|sessionStorage|indexedDB)\b")
+            self.assertNotRegex(text, r"\b(sessionStorage|indexedDB)\b")
+            for match in re.finditer(r"\blocalStorage\.[^;\n]+", text):
+                call = match.group(0)
+                self.assertIn(
+                    "soyo.theme",
+                    call,
+                    f"Only 'soyo.theme' early-paint cache may touch localStorage: {src}: {call}",
+                )
             self.assertNotRegex(text, r"<svg\b", f"Inline <svg> forbidden outside lucide-react: {src}")
             self.assertNotRegex(
                 text,
@@ -188,12 +208,19 @@ class DesktopPackagingTest(unittest.TestCase):
         self.assertTrue(workflow_path.is_file(), "Missing .github/workflows/desktop-release.yml")
         wf = workflow_path.read_text(encoding="utf-8")
 
-        for runner in ("macos-15", "macos-15-intel", "ubuntu-22.04", "windows-latest"):
+        for runner in ("macos-15", "macos-15-intel", "ubuntu-22.04"):
             self.assertIn(runner, wf)
+        self.assertNotIn("windows-latest", wf)
+        self.assertNotIn("nsis", wf.lower())
+        self.assertIn("- 'desktop-v*'", wf)
+        self.assertNotIn("- 'v*'", wf)
+        self.assertIn("binaries/soyo-${{ matrix.target }}", wf)
+        self.assertIn("TAURI_UPDATER_PUBLIC_KEY", wf)
+        self.assertIn("exit 1", wf)
+        self.assertIn("github.event_name == 'workflow_dispatch' || contains(github.ref_name, '-')", wf)
         self.assertRegex(wf, r"uses:\s*tauri-apps/tauri-action@[0-9a-f]{40}\b")
         self.assertIn("projectPath: desktop", wf)
         self.assertIn("uploadUpdaterJson: true", wf)
-        self.assertIn("updaterJsonPreferNsis: true", wf)
         self.assertIn("${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}", wf)
         self.assertIn("${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}", wf)
         for marker in ("BEGIN PRIVATE KEY", "BEGIN EC PRIVATE KEY", "untrusted comment: minisign"):
