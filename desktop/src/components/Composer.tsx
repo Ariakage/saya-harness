@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Cpu,
   FileText,
+  FolderOpen,
   Globe,
   Layers,
   List,
@@ -15,6 +16,8 @@ import {
   SlidersHorizontal,
   Square,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type {
   PermissionModeDto,
@@ -106,6 +109,7 @@ export function Composer({
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [sending, setSending] = useState(false);
   const [attachInputOpen, setAttachInputOpen] = useState(false);
   const [attachPath, setAttachPath] = useState("");
@@ -118,6 +122,20 @@ export function Composer({
   useEffect(() => {
     setActivePopover(forcePopover);
   }, [forcePopover]);
+
+  // Close lightweight popovers (attach/commands/effort/model, attach input)
+  // when pressing outside the composer. Settings dialog is unaffected.
+  useEffect(() => {
+    if (!activePopover && !attachInputOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setActivePopover(null);
+        setAttachInputOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [activePopover, attachInputOpen]);
 
   useEffect(() => {
     if (!draftSeed) return;
@@ -233,6 +251,34 @@ export function Composer({
     }
   };
 
+  // Native file/directory picker (Tauri). Outside the desktop shell
+  // (browser dev preview) fall back to the manual path input.
+  const handleBrowse = async (directory: boolean) => {
+    setActivePopover(null);
+    if (!onStageAttachments || disabled) return;
+    if (!isTauri()) {
+      setAttachInputOpen(true);
+      return;
+    }
+    try {
+      const picked = await openDialog(
+        directory
+          ? { directory: true, multiple: false, title: "Attach folder" }
+          : { multiple: true, title: "Attach files" }
+      );
+      const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+      if (paths.length === 0) return;
+      setStaging(true);
+      try {
+        await onStageAttachments(paths);
+      } finally {
+        setStaging(false);
+      }
+    } catch {
+      setAttachInputOpen(true);
+    }
+  };
+
   const handleActionClick = async () => {
     if (isStopState) {
       if (!cancelling) {
@@ -293,7 +339,7 @@ export function Composer({
       : "text-[#8aa8d8]";
 
   const cardInner = (
-    <div className="relative w-full">
+    <div ref={rootRef} className="relative w-full">
       {/* Slash Command Palette (Frame 11) */}
       {slashOpen && (
         <div
@@ -335,15 +381,31 @@ export function Composer({
         >
           <button
             type="button"
+            onClick={() => void handleBrowse(false)}
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+          >
+            <Paperclip className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Add files or photos</span>
+            <span className="ml-auto text-[11px] text-[#6e6e6e]">⌘U</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleBrowse(true)}
+            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
+          >
+            <FolderOpen className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Add folder</span>
+          </button>
+          <button
+            type="button"
             onClick={() => {
               setActivePopover(null);
               setAttachInputOpen(true);
             }}
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] hover:bg-[#262626]"
           >
-            <Paperclip className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Add files or photos</span>
-            <span className="ml-auto text-[11px] text-[#6e6e6e]">⌘U</span>
+            <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Enter path manually</span>
           </button>
           <div className="my-1 h-px bg-[#2a2a2a]" />
           <button
@@ -534,8 +596,8 @@ export function Composer({
           </div>
         )}
 
-        {/* Composer Toolbar */}
-        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+        {/* Composer Toolbar — Frame 01 home keeps a single minimal row (+ · model · send) */}
+        <div className="mt-2.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -553,7 +615,7 @@ export function Composer({
               <Plus className="h-3.5 w-3.5" />
             </button>
 
-            {onStageAttachments && (
+            {variant !== "home" && onStageAttachments && (
               <button
                 type="button"
                 onClick={() => setAttachInputOpen((prev) => !prev)}
@@ -566,6 +628,7 @@ export function Composer({
               </button>
             )}
 
+            {variant !== "home" && (
             <button
               type="button"
               onClick={() => setWebSearchActive((v) => !v)}
@@ -578,7 +641,9 @@ export function Composer({
               <Globe className="h-3 w-3 text-[#8a8a8a]" />
               <span>Web search</span>
             </button>
+            )}
 
+            {variant !== "home" && (
             <button
               type="button"
               aria-label="Slash commands"
@@ -593,8 +658,9 @@ export function Composer({
             >
               <List className="h-3.5 w-3.5" />
             </button>
+            )}
 
-            {hasSession && !runActive && (
+            {variant !== "home" && hasSession && !runActive && (
               <button
                 type="button"
                 onClick={() => void onCompact()}
@@ -608,33 +674,37 @@ export function Composer({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex items-center gap-1">
             {approvalPending && (
               <span className="devin-pill text-[#fac454]">
                 paused · approval required
               </span>
             )}
 
-            <button
-              type="button"
-              onClick={() => void onCycleMode?.()}
-              title="Cycle work mode"
-              className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-2 text-[11.5px] text-[#c9c9c9] hover:bg-[#262626]"
-            >
-              <span
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: modeStyle.color }}
-              />
-              <span>{modeStyle.label}</span>
-            </button>
+            {variant !== "home" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void onCycleMode?.()}
+                  title="Cycle work mode"
+                  className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-2 text-[11.5px] text-[#c9c9c9] hover:bg-[#262626]"
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: modeStyle.color }}
+                  />
+                  <span>{modeStyle.label}</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={() => onOpenSettings?.()}
-              className={`inline-flex h-[26px] items-center rounded-[7px] px-2 text-[11.5px] hover:bg-[#262626] ${permissionTextColor}`}
-            >
-              {PERMISSION_MODE_LABELS[permissionMode]}
-            </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenSettings?.()}
+                  className={`inline-flex h-[26px] items-center rounded-[7px] px-2 text-[11.5px] hover:bg-[#262626] ${permissionTextColor}`}
+                >
+                  {PERMISSION_MODE_LABELS[permissionMode]}
+                </button>
+              </>
+            )}
 
             <button
               type="button"
@@ -645,10 +715,13 @@ export function Composer({
             >
               <span className="max-w-[140px] truncate">
                 {selectedModel ?? "claude-sonnet-4-5"}
+                {variant === "home" && thinkingEffort
+                  ? ` · ${thinkingEffort.charAt(0).toUpperCase()}${thinkingEffort.slice(1)}`
+                  : ""}
               </span>
             </button>
 
-            {onSelectEffort && (
+            {variant !== "home" && onSelectEffort && (
               <EffortPill
                 effort={thinkingEffort}
                 ultracodeEnabled={ultracodeEnabled}

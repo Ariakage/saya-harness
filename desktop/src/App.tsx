@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Bookmark,
   Box,
+  ChevronDown,
   Clock,
   Code2,
   Copy,
@@ -30,11 +31,13 @@ import {
   Search,
   Settings,
   Share2,
+  Shield,
   SlidersHorizontal,
   Sparkles,
   Square,
   X,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { SessionItemDto_Serialize } from "./bindings";
 import { ApprovalDialog } from "./components/ApprovalDialog";
@@ -45,13 +48,16 @@ import { ExportDialog } from "./components/ExportDialog";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { McpCredentialsDialog } from "./components/McpCredentialsDialog";
 import { MemoryDialog } from "./components/MemoryDialog";
-import { ModeAndPermissionBar } from "./components/ModeAndPermissionBar";
+import {
+  PERMISSION_MODE_LABELS,
+  WORK_MODE_STYLES,
+  formatTokenCount,
+} from "./lib/sanitize";
 import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
 import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
 import { ThinkingCardView } from "./components/ThinkingCardView";
 import { ToolCardView } from "./components/ToolCardView";
 import { UpdaterBanner } from "./components/UpdaterBanner";
-import { formatTokenCount } from "./lib/sanitize";
 import {
   PREVIEW_APPROVAL_REQUEST,
   PREVIEW_INPUT_REQUEST,
@@ -61,6 +67,11 @@ import {
   setPreviewScene,
 } from "./preview/browserPreview";
 import { useAppStore } from "./store/useAppStore";
+
+// Overlay titlebar only applies inside the packaged app on macOS.
+// Traffic lights overlay the top-left ~72×28px of the content area.
+const TITLEBAR_OVERLAY =
+  isTauri() && /mac/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "");
 
 function workspaceBase(workspace: string | null | undefined): string {
   if (!workspace) return "workspace";
@@ -163,7 +174,20 @@ export function App() {
     nonce: number;
   } | null>(null);
   const [forceHome, setForceHome] = useState(false);
+  type SidebarPanel =
+    | "nav"
+    | "search"
+    | "sessions"
+    | "memory"
+    | "mcp"
+    | "export"
+    | "customize";
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel | null>(null);
+  const [topMenu, setTopMenu] = useState<"mode" | "perm" | "more" | null>(null);
+  const [sessionQuery, setSessionQuery] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLElement | null>(null);
+  const topbarClusterRef = useRef<HTMLDivElement | null>(null);
 
   const applyPreviewOverlay = (targetScene: PreviewScene) => {
     if (!previewMode) return;
@@ -174,6 +198,7 @@ export function App() {
         targetScene === "clarification" ? PREVIEW_INPUT_REQUEST : null,
     });
     setForceHome(targetScene === "home");
+    setSidebarPanel(null);
     setBrowserPaneOpen(targetScene === "browser");
     if (targetScene === "peripheral") {
       setSettingsTab("general");
@@ -217,6 +242,30 @@ export function App() {
     setUserMenuOpen(false);
   };
 
+  // Close lightweight popovers (topbar menus, rail user menu) on outside press.
+  useEffect(() => {
+    if (!topMenu && !userMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (
+        topMenu &&
+        topbarClusterRef.current &&
+        !topbarClusterRef.current.contains(t)
+      ) {
+        setTopMenu(null);
+      }
+      if (
+        userMenuOpen &&
+        railRef.current &&
+        !railRef.current.contains(t)
+      ) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [topMenu, userMenuOpen]);
+
   const handleCopyMessage = async (id: string, text: string) => {
     try {
       await navigator.clipboard?.writeText(text);
@@ -236,6 +285,21 @@ export function App() {
 
   const currentProject = workspaceBase(bootstrap?.workspace);
   const groupedSessions = groupSessionsByProject(recentSessions);
+  const activePanel: SidebarPanel =
+    sidebarPanel ?? (isHomeEmpty ? "nav" : "sessions");
+  const openPanel = (panel: SidebarPanel) => {
+    setSidebarPanel(panel);
+    if (panel === "nav") setForceHome(true);
+    if (panel === "sessions") setForceHome(false);
+  };
+  const query = sessionQuery.trim().toLowerCase();
+  const filteredSessions = query
+    ? recentSessions.filter(
+        (item) =>
+          (item.title ?? "").toLowerCase().includes(query) ||
+          workspaceBase(item.workspace).toLowerCase().includes(query)
+      )
+    : recentSessions;
   const forceComposerPopover =
     previewMode && scene === "effort" ? "effort" : null;
 
@@ -243,86 +307,63 @@ export function App() {
     <div className="flex h-screen w-screen overflow-hidden bg-[#101010] text-[#e8e8e8]">
       {/* Column 1: Left Icon Rail (48px, #0d0d0d, §2 & Frame 02) */}
       <aside
+        ref={railRef}
         aria-label="Primary rail"
         className="relative flex w-[48px] shrink-0 flex-col items-center gap-0.5 border-r border-[#1f1f1f] bg-[#0d0d0d] py-2.5"
       >
-        <button
-          type="button"
-          onClick={() => setForceHome(true)}
-          title="Home"
-          aria-label="Rail Home"
-          className={`flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors ${
-            isHomeEmpty
-              ? "bg-[#1e1e1e] text-[#e8e8e8]"
-              : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          }`}
-        >
-          <Home className="h-4 w-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setForceHome(false)}
-          title="Conversation"
-          aria-label="Rail Chat"
-          className={`flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors ${
-            !isHomeEmpty
-              ? "bg-[#1e1e1e] text-[#e8e8e8]"
-              : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          }`}
-        >
-          <MessageSquare className="h-4 w-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setSessionsOpen(true)}
-          title="Browse Sessions"
-          aria-label="Rail Sessions"
-          className="flex h-9 w-9 items-center justify-center rounded-[9px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-        >
-          <Search className="h-4 w-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setMemoryOpen(true)}
-          title="Global Memory"
-          aria-label="Rail Memory"
-          className="flex h-9 w-9 items-center justify-center rounded-[9px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-        >
-          <Database className="h-4 w-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setMcpCredsOpen(true)}
-          title="MCP & Credentials"
-          aria-label="Rail MCP Credentials"
-          className="flex h-9 w-9 items-center justify-center rounded-[9px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-        >
-          <KeyRound className="h-4 w-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setExportOpen(true)}
-          title="Export Session"
-          aria-label="Rail Export"
-          className="flex h-9 w-9 items-center justify-center rounded-[9px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-        >
-          <Download className="h-4 w-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleOpenSettings("general")}
-          title="Preferences"
-          aria-label="Rail Settings"
-          className="flex h-9 w-9 items-center justify-center rounded-[9px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
+        {/* Traffic-light clearance + window drag area (overlay titlebar) */}
+        {TITLEBAR_OVERLAY && (
+          <div
+            data-tauri-drag-region
+            className="h-[26px] w-full shrink-0"
+            aria-hidden="true"
+          />
+        )}
+        {(
+          [
+            { panel: "nav", title: "Home", icon: <Home className="h-4 w-4" /> },
+            {
+              panel: "sessions",
+              title: "Sessions",
+              icon: <MessageSquare className="h-4 w-4" />,
+            },
+            {
+              panel: "search",
+              title: "Search",
+              icon: <Search className="h-4 w-4" />,
+            },
+            {
+              panel: "memory",
+              title: "Memory",
+              icon: <Database className="h-4 w-4" />,
+            },
+            {
+              panel: "mcp",
+              title: "MCP & Credentials",
+              icon: <Shield className="h-4 w-4" />,
+            },
+            {
+              panel: "customize",
+              title: "Customize",
+              icon: <Settings className="h-4 w-4" />,
+            },
+          ] as const
+        ).map(({ panel, title, icon }) => (
+          <button
+            key={panel}
+            type="button"
+            onClick={() => openPanel(panel)}
+            title={title}
+            aria-label={`Rail ${title}`}
+            className={`flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors ${
+              activePanel === panel
+                ? "bg-[#1e1e1e] text-[#e8e8e8]"
+                : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+            }`}
+          >
+            {icon}
+          </button>
+        ))}
 
         <div className="mt-auto flex flex-col items-center gap-1">
           <button
@@ -399,141 +440,377 @@ export function App() {
         )}
       </aside>
 
-      {/* Column 2: Sessions Sidebar (~248px, #0f0f0f, §2 & Frames 01/02) */}
-      <aside className="flex w-[248px] shrink-0 flex-col border-r border-[#1f1f1f] bg-[#0f0f0f] p-2.5 text-xs">
-        <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
-          <span className="text-[14px] font-semibold text-[#e8e8e8]">
-            Sessions
-          </span>
-          <button
-            type="button"
-            onClick={() => setSessionsOpen(true)}
-            aria-label="More session actions"
-            className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          >
-            <MoreHorizontal className="h-4 w-4" />
-          </button>
-        </div>
+      {/* Column 2: Sidebar Panel (~248px, #0f0f0f, §2 & Frames 01/02) */}
+      <aside
+        data-tauri-drag-region
+        className="flex w-[248px] shrink-0 flex-col border-r border-[#1f1f1f] bg-[#0f0f0f] p-2.5 text-xs"
+      >
+        {/* Traffic lights extend ~24px into this column on overlay titlebar */}
+        {TITLEBAR_OVERLAY && (
+          <div
+            data-tauri-drag-region
+            className="h-[24px] shrink-0"
+            aria-hidden="true"
+          />
+        )}
+        {activePanel === "nav" && (
+          <>
+            {/* Nav list — Frame 01 (.nav): items switch panels, no dialogs */}
+            <nav className="grid grid-cols-1 gap-0.5 text-[12.5px]">
+              <button
+                type="button"
+                disabled={runActive}
+                onClick={() => {
+                  setForceHome(false);
+                  setSidebarPanel("sessions");
+                  void startNewSession();
+                }}
+                className="flex items-center gap-2 rounded-[7px] bg-[#1c1c1c] px-2 py-1.5 text-left font-medium text-[#e8e8e8] hover:bg-[#222222] disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5 text-[#d9a08e]" />
+                <span>New</span>
+              </button>
+              {(
+                [
+                  ["search", "Search", <Search key="i" className="h-3.5 w-3.5 text-[#8a8a8a]" />],
+                  ["sessions", "Sessions", <MessageSquare key="i" className="h-3.5 w-3.5 text-[#8a8a8a]" />],
+                  ["memory", "Memory", <Database key="i" className="h-3.5 w-3.5 text-[#8a8a8a]" />],
+                  ["mcp", "MCP & Creds", <Shield key="i" className="h-3.5 w-3.5 text-[#8a8a8a]" />],
+                  ["export", "Export", <Download key="i" className="h-3.5 w-3.5 text-[#8a8a8a]" />],
+                  ["customize", "Customize", <Settings key="i" className="h-3.5 w-3.5 text-[#8a8a8a]" />],
+                ] as const
+              ).map(([panel, label, icon]) => (
+                <button
+                  key={panel}
+                  type="button"
+                  onClick={() => openPanel(panel)}
+                  className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                >
+                  {icon}
+                  <span>{label}</span>
+                </button>
+              ))}
+            </nav>
 
-        {/* + New session accent link (§3.2) */}
-        <button
-          type="button"
-          disabled={runActive}
-          onClick={() => {
-            setForceHome(false);
-            void startNewSession();
-          }}
-          className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a] disabled:opacity-40"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>New session</span>
-        </button>
-
-        {/* Peripheral Action Buttons (preserving canonical test button labels) */}
-        <nav className="mt-1.5 grid grid-cols-1 gap-0.5 border-b border-[#1f1f1f] pb-2 text-[12.5px]">
-          <button
-            type="button"
-            onClick={() => setSessionsOpen(true)}
-            className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          >
-            <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Sessions</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMemoryOpen(true)}
-            className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          >
-            <Database className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Memory</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMcpCredsOpen(true)}
-            className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          >
-            <KeyRound className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>MCP & Creds</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setExportOpen(true)}
-            className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          >
-            <Download className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Export</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleOpenSettings("general")}
-            className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-          >
-            <Settings className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Settings</span>
-          </button>
-        </nav>
-
-        {/* Pinned & Project-Grouped Recent Sessions (§2 & Frame 02) */}
-        <div className="mt-2 flex-1 space-y-2.5 overflow-y-auto pr-0.5">
-          <div>
-            <div className="px-2 py-1 text-[11px] text-[#6b6b6b]">
-              Pinned 1
+            {/* Recents — flat list per Frame 01 */}
+            <div className="mt-3 flex items-center justify-between px-2 py-1 text-[11px] text-[#6b6b6b]">
+              <span>Recents</span>
+              <ChevronDown className="h-3 w-3" />
             </div>
-            <div className="rounded-[8px] px-2.5 py-1.5 hover:bg-[#1a1a1a]">
-              <div className="flex items-center gap-1.5 text-[12.5px] text-[#d9d9d9]">
-                <Pin className="h-3 w-3 shrink-0 text-[#8a8a8a]" />
-                <span className="truncate">Hi, I&apos;m Soyo…</span>
-              </div>
-              <div className="mt-0.5 pl-[18px] text-[11px] text-[#d9a08e]">
-                Answer questions
-              </div>
-            </div>
-          </div>
-
-          {groupedSessions.length === 0 ? (
-            <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
-              No recent sessions yet.
-            </div>
-          ) : (
-            groupedSessions.map(([proj, items]) => (
-              <div key={proj} className="space-y-0.5">
-                <div className="flex items-center justify-between px-2 py-1 text-[11px] text-[#6b6b6b]">
-                  <span className="inline-flex items-center gap-1.5 truncate">
-                    <Folder className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{proj}</span>
-                  </span>
-                  <span>{items.length}</span>
+            <div className="flex-1 space-y-0.5 overflow-y-auto pr-0.5">
+              {recentSessions.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
+                  No recent sessions yet.
                 </div>
-                {items.map((item) => {
-                  const isCurrent = item.id === sessionId;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      disabled={runActive}
-                      onClick={() => {
-                        setForceHome(false);
-                        void resumeSession(item.id, false);
-                      }}
-                      className={`flex w-full flex-col gap-0.5 rounded-[8px] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
-                        isCurrent
-                          ? "bg-[#1c1c1c] text-[#e8e8e8]"
-                          : "text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#d9d9d9]"
-                      }`}
-                    >
-                      <span className="truncate text-[12.5px] font-medium">
-                        {item.title ?? "Untitled session"}
-                      </span>
-                      <span className="truncate text-[11px] text-[#6e6e6e]">
-                        {item.work_mode} · {item.last_status ?? "saved"}
-                      </span>
-                    </button>
-                  );
-                })}
+              ) : (
+                recentSessions.slice(0, 8).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    disabled={runActive}
+                    onClick={() => {
+                      setForceHome(false);
+                      void resumeSession(item.id, false);
+                    }}
+                    className={`flex w-full flex-col gap-0.5 rounded-[8px] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
+                      item.id === sessionId
+                        ? "bg-[#1c1c1c] text-[#e8e8e8]"
+                        : "text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#d9d9d9]"
+                    }`}
+                  >
+                    <span className="truncate text-[12.5px]">
+                      {item.title ?? "Untitled session"}
+                    </span>
+                    <span className="truncate text-[10.5px] text-[#6b6b6b]">
+                      {item.work_mode} · {item.last_status ?? "saved"}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => openPanel("sessions")}
+              className="px-2.5 py-1.5 text-left text-[12px] text-[#6e6e6e] hover:text-[#a3a3a3]"
+            >
+              View all
+            </button>
+          </>
+        )}
+
+        {activePanel === "search" && (
+          <>
+            <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
+              <span className="text-[14px] font-semibold text-[#e8e8e8]">
+                Search
+              </span>
+            </div>
+            <div className="flex items-center gap-2 rounded-[8px] border border-[#2b2b2b] bg-[#161616] px-2.5 py-1.5">
+              <Search className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
+              <input
+                value={sessionQuery}
+                onChange={(e) => setSessionQuery(e.target.value)}
+                placeholder="Search sessions…"
+                aria-label="Search sessions"
+                className="w-full bg-transparent text-[12.5px] text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:outline-none"
+              />
+            </div>
+            <div className="mt-2 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
+              {filteredSessions.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
+                  No matching sessions.
+                </div>
+              ) : (
+                filteredSessions.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    disabled={runActive}
+                    onClick={() => {
+                      setForceHome(false);
+                      void resumeSession(item.id, false);
+                    }}
+                    className={`flex w-full flex-col gap-0.5 rounded-[8px] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
+                      item.id === sessionId
+                        ? "bg-[#1c1c1c] text-[#e8e8e8]"
+                        : "text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#d9d9d9]"
+                    }`}
+                  >
+                    <span className="truncate text-[12.5px] font-medium">
+                      {item.title ?? "Untitled session"}
+                    </span>
+                    <span className="truncate text-[11px] text-[#6e6e6e]">
+                      {workspaceBase(item.workspace)} · {item.work_mode} ·{" "}
+                      {item.last_status ?? "saved"}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSessionsOpen(true)}
+              className="px-2.5 py-1.5 text-left text-[12px] text-[#6e6e6e] hover:text-[#a3a3a3]"
+            >
+              Browse all sessions…
+            </button>
+          </>
+        )}
+
+        {activePanel === "sessions" && (
+          <>
+            <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
+              <span className="text-[14px] font-semibold text-[#e8e8e8]">
+                Sessions
+              </span>
+              <button
+                type="button"
+                onClick={() => setSessionsOpen(true)}
+                aria-label="More session actions"
+                className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* + New session accent link (§3.2) */}
+            <button
+              type="button"
+              disabled={runActive}
+              onClick={() => {
+                setForceHome(false);
+                void startNewSession();
+              }}
+              className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a] disabled:opacity-40"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>New session</span>
+            </button>
+
+            {/* Pinned & Project-Grouped Recent Sessions (§2 & Frame 02) */}
+            <div className="mt-2 flex-1 space-y-2.5 overflow-y-auto pr-0.5">
+              <div>
+                <div className="px-2 py-1 text-[11px] text-[#6b6b6b]">
+                  Pinned 1
+                </div>
+                <div className="rounded-[8px] px-2.5 py-1.5 hover:bg-[#1a1a1a]">
+                  <div className="flex items-center gap-1.5 text-[12.5px] text-[#d9d9d9]">
+                    <Pin className="h-3 w-3 shrink-0 text-[#8a8a8a]" />
+                    <span className="truncate">Hi, I&apos;m Soyo…</span>
+                  </div>
+                  <div className="mt-0.5 pl-[18px] text-[11px] text-[#d9a08e]">
+                    Answer questions
+                  </div>
+                </div>
               </div>
-            ))
-          )}
-        </div>
+
+              {groupedSessions.length === 0 ? (
+                <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
+                  No recent sessions yet.
+                </div>
+              ) : (
+                groupedSessions.map(([proj, items]) => (
+                  <div key={proj} className="space-y-0.5">
+                    <div className="flex items-center justify-between px-2 py-1 text-[11px] text-[#6b6b6b]">
+                      <span className="inline-flex items-center gap-1.5 truncate">
+                        <Folder className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{proj}</span>
+                      </span>
+                      <span>{items.length}</span>
+                    </div>
+                    {items.map((item) => {
+                      const isCurrent = item.id === sessionId;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          disabled={runActive}
+                          onClick={() => {
+                            setForceHome(false);
+                            void resumeSession(item.id, false);
+                          }}
+                          className={`flex w-full flex-col gap-0.5 rounded-[8px] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
+                            isCurrent
+                              ? "bg-[#1c1c1c] text-[#e8e8e8]"
+                              : "text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#d9d9d9]"
+                          }`}
+                        >
+                          <span className="truncate text-[12.5px] font-medium">
+                            {item.title ?? "Untitled session"}
+                          </span>
+                          <span className="truncate text-[11px] text-[#6e6e6e]">
+                            {item.work_mode} · {item.last_status ?? "saved"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        {activePanel === "memory" && (
+          <>
+            <div className="px-1 pb-2 pt-0.5">
+              <span className="text-[14px] font-semibold text-[#e8e8e8]">
+                Memory
+              </span>
+            </div>
+            <p className="px-2 py-1 text-[11.5px] leading-relaxed text-[#8a8a8a]">
+              Global memory entries persist across sessions and are injected
+              into the system context.
+            </p>
+            <button
+              type="button"
+              onClick={() => setMemoryOpen(true)}
+              className="mt-1 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] hover:bg-[#1a1a1a]"
+            >
+              <Database className="h-3.5 w-3.5" />
+              <span>Open memory</span>
+            </button>
+            <div className="flex-1" />
+          </>
+        )}
+
+        {activePanel === "mcp" && (
+          <>
+            <div className="px-1 pb-2 pt-0.5">
+              <span className="text-[14px] font-semibold text-[#e8e8e8]">
+                MCP & Creds
+              </span>
+            </div>
+            <p className="px-2 py-1 text-[11.5px] leading-relaxed text-[#8a8a8a]">
+              {mcpServers.length === 0
+                ? "No MCP servers configured for this workspace."
+                : `${mcpServers.length} MCP server${mcpServers.length > 1 ? "s" : ""} configured.`}
+            </p>
+            {mcpServers.slice(0, 4).map((server) => (
+              <div
+                key={server.server}
+                className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12.5px] text-[#c9c9c9]"
+              >
+                <Shield className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
+                <span className="truncate">{server.server}</span>
+                <span className="ml-auto shrink-0 text-[10.5px] text-[#6e6e6e]">
+                  {server.state}
+                </span>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setMcpCredsOpen(true)}
+              className="mt-1 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] hover:bg-[#1a1a1a]"
+            >
+              <KeyRound className="h-3.5 w-3.5" />
+              <span>Manage servers & credentials</span>
+            </button>
+            <div className="flex-1" />
+          </>
+        )}
+
+        {activePanel === "export" && (
+          <>
+            <div className="px-1 pb-2 pt-0.5">
+              <span className="text-[14px] font-semibold text-[#e8e8e8]">
+                Export
+              </span>
+            </div>
+            <p className="px-2 py-1 text-[11.5px] leading-relaxed text-[#8a8a8a]">
+              Export the current session as a handoff document or archive.
+            </p>
+            <button
+              type="button"
+              onClick={() => setExportOpen(true)}
+              className="mt-1 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] hover:bg-[#1a1a1a]"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Export session…</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSessionsOpen(true)}
+              className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+            >
+              <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
+              <span>Browse sessions to export</span>
+            </button>
+            <div className="flex-1" />
+          </>
+        )}
+
+        {activePanel === "customize" && (
+          <>
+            <div className="px-1 pb-2 pt-0.5">
+              <span className="text-[14px] font-semibold text-[#e8e8e8]">
+                Customize
+              </span>
+            </div>
+            <nav className="grid grid-cols-1 gap-0.5 text-[12.5px]">
+              {(
+                [
+                  ["general", "General & preferences"],
+                  ["profiles", "Model providers & profiles"],
+                  ["permissions", "Permissions & sandbox"],
+                  ["modules", "Modules & skills"],
+                  ["usage", "Usage & tokens"],
+                ] as const
+              ).map(([tab, label]) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => handleOpenSettings(tab)}
+                  className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[#c9c9c9] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </nav>
+            <div className="flex-1" />
+          </>
+        )}
 
         {/* Bottom User Chip (Frame 01 / 05) */}
         <button
@@ -555,7 +832,12 @@ export function App() {
       {/* Column 3: Main Surface (#141414) */}
       <div className="flex min-w-0 flex-1 flex-col bg-[#141414]">
         {/* Topbar (44px, §2 & Frame 02/09) */}
-        <header className="flex min-h-[44px] flex-wrap items-center justify-between gap-2 border-b border-[#1f1f1f] px-3.5 py-1.5 text-[12.5px] text-[#a3a3a3]">
+        {/* Frame 01 has no topbar on Home */}
+        {!isHomeEmpty && (
+        <header
+          data-tauri-drag-region
+          className="flex min-h-[44px] flex-wrap items-center justify-between gap-2 border-b border-[#1f1f1f] px-3.5 py-1.5 text-[12.5px] text-[#a3a3a3]"
+        >
           <div className="flex min-w-0 items-center gap-2">
             <img
               src="/app-icon.png"
@@ -568,7 +850,15 @@ export function App() {
             <span className="shrink-0 text-[#6b6b6b]">· {currentProject}</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div
+            ref={topbarClusterRef}
+            className="relative flex flex-wrap items-center gap-1.5"
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setTopMenu(null);
+              }
+            }}
+          >
             {previewMode && (
               <div className="flex flex-wrap items-center gap-1 rounded-[8px] border border-[#2e2e2e] bg-[#1a1a1a] px-2 py-0.5 text-[10.5px]">
                 <Sparkles className="h-3 w-3 text-[#d9a08e]" />
@@ -619,72 +909,212 @@ export function App() {
               </div>
             )}
 
-            <ModeAndPermissionBar
-              workMode={workMode}
-              pendingMode={pendingMode}
-              permissionMode={permissionMode}
-              runActive={runActive}
-              onSelectMode={setWorkMode}
-              onSelectPermission={setPermissionMode}
-            />
-
-            <button
-              type="button"
-              onClick={toggleMarkdownMode}
-              title="Toggle global Markdown Render / Source mode"
-              className="devin-pill-btn py-1 text-[11px] text-[#c9c9c9]"
-            >
-              {markdownMode === "render" ? (
-                <>
-                  <Code2 className="h-3 w-3 text-[#8a8a8a]" />
-                  Source
-                </>
-              ) : (
-                <>
-                  <Eye className="h-3 w-3 text-[#8a8a8a]" />
-                  Render
-                </>
+            {/* Mode pill — design topbar badge; opens mode picker (§2 topbar) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setTopMenu(topMenu === "mode" ? null : "mode")}
+                className="devin-pill text-[12px]"
+                title="Work mode"
+                aria-haspopup="menu"
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: WORK_MODE_STYLES[workMode].color }}
+                />
+                <span style={{ color: WORK_MODE_STYLES[workMode].color }}>
+                  {WORK_MODE_STYLES[workMode].label}
+                </span>
+                {pendingMode && pendingMode !== workMode && (
+                  <span className="text-[#8a8a8a]">
+                    → {WORK_MODE_STYLES[pendingMode].label}
+                  </span>
+                )}
+                <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
+              </button>
+              {topMenu === "mode" && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                >
+                  {(Object.keys(WORK_MODE_STYLES) as Array<keyof typeof WORK_MODE_STYLES>).map(
+                    (mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => {
+                          void setWorkMode(mode);
+                          setTopMenu(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                      >
+                        <span
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: WORK_MODE_STYLES[mode].color }}
+                        />
+                        <span>{WORK_MODE_STYLES[mode].label}</span>
+                        {mode === workMode && (
+                          <span className="ml-auto text-[#4ade80]">✓</span>
+                        )}
+                        {pendingMode === mode && pendingMode !== workMode && (
+                          <span className="ml-auto text-[#fac454]">next</span>
+                        )}
+                      </button>
+                    )
+                  )}
+                </div>
               )}
-            </button>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setBrowserPaneOpen((v) => !v)}
-              title="Toggle split Browser preview pane"
-              aria-label="Toggle browser preview"
-              className={`devin-pill-btn py-1 text-[11px] ${
-                browserPaneOpen ? "text-[#d9a08e]" : "text-[#a3a3a3]"
-              }`}
-            >
-              <Globe className="h-3 w-3" />
-            </button>
+            {/* Permission pill — plain badge per design */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
+                className="devin-pill text-[12px] text-[#a3a3a3]"
+                title="Permission mode"
+                aria-haspopup="menu"
+              >
+                <span className={permissionMode === "manual" ? "text-[#fac454]" : "text-[#8aa8d8]"}>
+                  {PERMISSION_MODE_LABELS[permissionMode]}
+                </span>
+                <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
+              </button>
+              {topMenu === "perm" && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                >
+                  {(
+                    ["auto", "bypass", "manual"] as Array<
+                      keyof typeof PERMISSION_MODE_LABELS
+                    >
+                  ).map((perm) => (
+                    <button
+                      key={perm}
+                      type="button"
+                      disabled={runActive}
+                      onClick={() => {
+                        void setPermissionMode(perm);
+                        setTopMenu(null);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626] disabled:opacity-40"
+                    >
+                      <span>{PERMISSION_MODE_LABELS[perm]}</span>
+                      {perm === permissionMode && (
+                        <span className="ml-auto text-[#4ade80]">✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setInspectorOpen((v) => !v)}
-              title="Toggle Runtime & Context inspector"
-              aria-label="Toggle inspector"
-              className={`devin-pill-btn py-1 text-[11px] ${
-                inspectorOpen ? "text-[#e8e8e8]" : "text-[#8a8a8a]"
-              }`}
-            >
-              <PanelRight className="h-3 w-3" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setForceHome(false);
-                void startNewSession();
-              }}
-              disabled={runActive}
-              className="devin-pill-btn py-1 text-[11px] text-[#d9a08e] disabled:opacity-40"
-            >
-              <Plus className="h-3 w-3" />
-              New Session
-            </button>
+            {/* ⋯ overflow menu — design's single trailing chip */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setTopMenu(topMenu === "more" ? null : "more")}
+                aria-label="More actions"
+                aria-haspopup="menu"
+                className="devin-pill-btn text-[#a3a3a3]"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+              {topMenu === "more" && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                >
+                  <button
+                    type="button"
+                    disabled={runActive}
+                    onClick={() => {
+                      setTopMenu(null);
+                      setForceHome(false);
+                      void startNewSession();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#d9a08e] hover:bg-[#262626] disabled:opacity-40"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>New session</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggleMarkdownMode();
+                      setTopMenu(null);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                  >
+                    {markdownMode === "render" ? (
+                      <Code2 className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    )}
+                    <span>
+                      {markdownMode === "render"
+                        ? "Show markdown source"
+                        : "Render markdown"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBrowserPaneOpen((v) => !v);
+                      setTopMenu(null);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                  >
+                    <Globe className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <span>Browser preview</span>
+                    {browserPaneOpen && (
+                      <span className="ml-auto text-[#4ade80]">✓</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInspectorOpen((v) => !v);
+                      setTopMenu(null);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                  >
+                    <PanelRight className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <span>Inspector</span>
+                    {inspectorOpen && (
+                      <span className="ml-auto text-[#4ade80]">✓</span>
+                    )}
+                  </button>
+                  <div className="my-1 h-px bg-[#2a2a2a]" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTopMenu(null);
+                      setExportOpen(true);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                  >
+                    <Download className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <span>Export session…</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTopMenu(null);
+                      setSessionsOpen(true);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                  >
+                    <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <span>Browse sessions…</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
+        )}
 
         <UpdaterBanner />
 
@@ -724,6 +1154,7 @@ export function App() {
               /* Frame 01: Home Empty State */
               <div
                 data-testid="home-empty-state"
+                data-tauri-drag-region
                 className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 pb-10"
               >
                 <div className="mb-8 flex items-center gap-3 font-serif text-[30px] tracking-tight text-[#e8e8e8]">

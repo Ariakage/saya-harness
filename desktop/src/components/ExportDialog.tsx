@@ -1,3 +1,5 @@
+import { isTauri } from "@tauri-apps/api/core";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Download, X } from "lucide-react";
 import { useState } from "react";
 import {
@@ -105,13 +107,37 @@ export function ExportDialog({
               Output File Path (relative to {workspace || "workspace"} or
               absolute)
             </label>
-            <input
-              id="export-target-path"
-              type="text"
-              value={targetPath}
-              onChange={(e) => setTargetPath(e.target.value)}
-              className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8]"
-            />
+            <div className="flex gap-2">
+              <input
+                id="export-target-path"
+                type="text"
+                value={targetPath}
+                onChange={(e) => setTargetPath(e.target.value)}
+                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8]"
+              />
+              {isTauri() && (
+                <button
+                  type="button"
+                  title="Choose output location"
+                  onClick={() => {
+                    void saveDialog({
+                      defaultPath: targetPath || undefined,
+                      title: "Export session transcript",
+                      filters: [
+                        format === "json"
+                          ? { name: "JSON", extensions: ["json"] }
+                          : { name: "Markdown", extensions: ["md"] },
+                      ],
+                    }).then((picked) => {
+                      if (picked) setTargetPath(picked);
+                    });
+                  }}
+                  className="devin-pill-btn shrink-0 font-medium text-[#c9c9c9]"
+                >
+                  Browse…
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

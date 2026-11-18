@@ -59,6 +59,7 @@ pub fn run() {
     app_builder
         .manage(desktop_state)
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

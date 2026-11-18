@@ -11,6 +11,8 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import {
   commands,
@@ -427,16 +429,45 @@ export function SettingsDialog({
                     </div>
                   </div>
 
-                  {/* Stacked bar chart with pixel heights <= 88px (§4.7) */}
-                  <div className="mt-2 flex h-[96px] items-end gap-1 overflow-hidden pt-2">
+                  {/* Stacked bar chart with pixel heights <= 88px (§4.7); hover shows per-day breakdown */}
+                  <div className="mt-2 flex h-[96px] items-end gap-1 pt-2">
                     {bars.map(([inp, outp, cache], idx) => (
                       <div
                         key={idx}
-                        className="flex min-w-[4px] flex-1 flex-col overflow-hidden rounded-[2px]"
+                        className="group relative flex min-w-[4px] flex-1 flex-col rounded-[2px]"
                         style={{
                           height: `${Math.round((inp + outp + cache) * scalePx)}px`,
                         }}
                       >
+                        <div className="pointer-events-none absolute bottom-full left-1/2 z-40 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-[7px] border border-[#2b2b2b] bg-[#1c1c1c] px-2 py-1.5 text-left text-[10.5px] shadow-[0_8px_24px_rgba(0,0,0,0.5)] group-hover:block">
+                          <div className="mb-0.5 font-medium text-[#e8e8e8]">
+                            {idx === bars.length - 1 ? "Today" : `Day ${idx + 1}`}
+                            <span className="ml-1.5 text-[#6e6e6e]">
+                              {inp + outp + cache}k total
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                            <span
+                              className="h-1.5 w-1.5 rounded-[1px]"
+                              style={{ backgroundColor: "#d9a08e" }}
+                            />
+                            input {inp}k
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                            <span
+                              className="h-1.5 w-1.5 rounded-[1px]"
+                              style={{ backgroundColor: "#8aa8d8" }}
+                            />
+                            output {outp}k
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[#c9c9c9]">
+                            <span
+                              className="h-1.5 w-1.5 rounded-[1px]"
+                              style={{ backgroundColor: "#6b6b6b" }}
+                            />
+                            cache read {cache}k
+                          </div>
+                        </div>
                         {cache > 0 && (
                           <div
                             style={{
@@ -499,6 +530,29 @@ export function SettingsDialog({
                       onChange={(e) => setWorkspaceInput(e.target.value)}
                       className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9] focus:border-[#d9a08e] focus:outline-none disabled:opacity-50"
                     />
+                    <button
+                      type="button"
+                      disabled={runActive || saving}
+                      title="Choose a directory"
+                      onClick={() => {
+                        if (!isTauri()) return;
+                        void openDialog({
+                          directory: true,
+                          defaultPath: workspaceInput || undefined,
+                          title: "Choose workspace directory",
+                        }).then((picked) => {
+                          const path = Array.isArray(picked)
+                            ? picked[0]
+                            : picked;
+                          if (!path) return;
+                          setWorkspaceInput(path);
+                          void runUpdate(() => commands.setWorkspace(path));
+                        });
+                      }}
+                      className="devin-pill-btn font-medium text-[#c9c9c9] disabled:opacity-40"
+                    >
+                      Browse…
+                    </button>
                     <button
                       type="button"
                       disabled={runActive || saving || !workspaceInput.trim()}

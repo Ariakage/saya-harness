@@ -21,6 +21,7 @@ const { invokeMock, MockChannel, checkUpdateMock } = vi.hoisted(() => {
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
   Channel: MockChannel,
+  isTauri: () => false,
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
@@ -271,9 +272,11 @@ describe("App Stage 3 runtime integration", () => {
       ).toBeGreaterThan(0);
     });
 
-    // Global Markdown Source / Render toggle switches all assistant markdown cards.
-    const sourceToggle = screen.getByRole("button", { name: "Source" });
-    fireEvent.click(sourceToggle);
+    // Global Markdown Source / Render toggle lives in the topbar overflow menu.
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show markdown source" })
+    );
     expect(screen.getAllByTestId("markdown-source-view").length).toBeGreaterThan(0);
   });
 
@@ -410,7 +413,7 @@ describe("App Stage 3 runtime integration", () => {
 
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByTestId("mode-permission-bar")).toBeTruthy();
+      expect(screen.getByTitle("Work mode")).toBeTruthy();
     });
 
     // Empty composer Tab cycles WORK -> CODE
@@ -420,9 +423,11 @@ describe("App Stage 3 runtime integration", () => {
       expect(invokeMock).toHaveBeenCalledWith("set_work_mode", { mode: "code" });
     });
 
-    // Switch permission mode to manual
-    const permSelect = screen.getByLabelText("Permission mode");
-    fireEvent.change(permSelect, { target: { value: "manual" } });
+    // Switch permission mode to manual via the topbar permission pill menu
+    fireEvent.click(screen.getByTitle("Permission mode"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manual Approval" })
+    );
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_permission_mode", {
         permissions: "manual",
@@ -430,7 +435,9 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Open session browser and resume with config change confirmation
-    fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "More session actions" })
+    );
     await waitFor(() => {
       expect(screen.getByTestId("session-browser-dialog")).toBeTruthy();
     });
@@ -564,7 +571,10 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Settings + Modules
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "General & preferences" })
+    );
     await waitFor(() => {
       expect(screen.getByTestId("settings-dialog")).toBeTruthy();
       expect(screen.getByTestId("modules-panel")).toBeTruthy();
@@ -589,7 +599,12 @@ describe("App Stage 3 runtime integration", () => {
     fireEvent.click(screen.getByLabelText("Close settings"));
 
     // MCP & Credentials
-    fireEvent.click(screen.getByRole("button", { name: "MCP & Creds" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rail MCP & Credentials" })
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage servers & credentials" })
+    );
     await waitFor(() => {
       expect(screen.getByTestId("mcp-credentials-dialog")).toBeTruthy();
       expect(screen.getByText(/docs-http \(bearer_env\)/)).toBeTruthy();
@@ -618,7 +633,8 @@ describe("App Stage 3 runtime integration", () => {
     fireEvent.click(screen.getByLabelText("Close MCP and credentials dialog"));
 
     // Memory two-phase review/confirm
-    fireEvent.click(screen.getByRole("button", { name: "Memory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rail Memory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
     await waitFor(() => {
       expect(screen.getByTestId("memory-dialog")).toBeTruthy();
       expect(invokeMock).toHaveBeenCalledWith("query_memory", { command: "list" });
@@ -710,7 +726,10 @@ describe("App Stage 3 runtime integration", () => {
     );
 
     // Export session
-    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Export session…" })
+    );
     await waitFor(() => {
       expect(screen.getByTestId("export-dialog")).toBeTruthy();
     });
@@ -863,7 +882,10 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Settings Usage tab
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Usage & tokens" })
+    );
     await waitFor(() => {
       expect(screen.getByTestId("settings-dialog")).toBeTruthy();
     });
