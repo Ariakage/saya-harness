@@ -1,26 +1,39 @@
-//! NDJSON socket server: accepts local-socket clients, multiplexes requests onto
-//! `HostService`, and streams `DesktopStreamEnvelope` events back per request id.
+//! NDJSON socket server: accepts verified local-socket clients, multiplexes
+//! requests onto `HostService` with connection/request ownership tracking, and
+//! streams `DesktopStreamEnvelope` events back per request id.
 
-use interprocess::local_socket::{
-    ListenerOptions,
-    tokio::{Stream as LocalStream, prelude::*},
-};
 use serde::Serialize;
 use serde_json::Value;
 use soyo_ipc::{
     framing::{FrameWriter, read_client_frame, split, write_frame},
     protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame},
-    socket::{HelperEndpoint, helper_pid_path},
+    socket::{
+        HelperPidRecord, HelperTarget, process_exe_path, process_started_id, verify_peer_euid,
+    },
     types::{DesktopError, DesktopStreamEnvelope},
 };
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, mpsc};
+use std::{
+    fs::{self, OpenOptions},
+    io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+use tokio::{
+    net::{UnixListener, UnixStream},
+    sync::{Mutex, mpsc},
+};
 
 use crate::{
     attachment, prefs,
-    service::{HostService, StreamSink},
+    service::{ClientOwner, HostService, StreamSink},
 };
+
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct ServerConfig {
     /// Whether to write/remove the pid file alongside the socket.
@@ -54,37 +67,90 @@ impl HelperServer {
 
     /// Serve until `ClientFrame::Shutdown`, `service.shutdown()`, or listener error.
     pub async fn run(&self) -> Result<(), DesktopError> {
-        let name = HelperEndpoint::name();
-        // Remove a stale socket file so bind does not fail after a crash.
-        if let Some(path) = HelperEndpoint::socket_path() {
-            let _ = std::fs::remove_file(&path);
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+        let target = self.service.helper_target().await;
+        crate::envfile::migrate_legacy_env(&target.state_dir);
+
+        if !HelperTarget::uses_env_helper_dir() {
+            soyo_fs::ensure_root_dir(&target.state_dir, "helper_bind", "state")
+                .map_err(|err| DesktopError::new("helper_bind", err.message().to_owned()))?;
+        }
+        let helper_dir = target.helper_dir();
+        soyo_fs::ensure_private_dir(&helper_dir, "helper_bind", "helper")
+            .map_err(|err| DesktopError::new("helper_bind", err.message().to_owned()))?;
+
+        // Coordinate bind/reclaim across racing helper launches via an exclusive flock.
+        let lock_path = target.lock_path();
+        let _lock = soyo_fs::acquire_flock(
+            &lock_path,
+            Duration::from_secs(2),
+            "helper_already_running",
+            "helper_bind",
+            "helper",
+        )
+        .map_err(|err| DesktopError::new(err.code(), err.message().to_owned()))?;
+
+        let socket_path = target.socket_path();
+        match fs::symlink_metadata(&socket_path) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err(DesktopError::new(
+                        "helper_bind",
+                        "Refusing symlink at helper socket path",
+                    ));
+                }
+                // Check whether a live helper is already serving on this socket before unlinking.
+                if let Ok(Ok(stream)) = tokio::time::timeout(
+                    Duration::from_millis(200),
+                    UnixStream::connect(&socket_path),
+                )
+                .await
+                    && verify_peer_euid(&stream).is_ok()
+                {
+                    return Err(DesktopError::new(
+                        "helper_already_running",
+                        "Another helper for this configuration is already running",
+                    ));
+                }
+                let _ = fs::remove_file(&socket_path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(DesktopError::new(
+                    "helper_bind",
+                    format!("Cannot inspect helper socket path: {err}"),
+                ));
             }
         }
-        let listener = ListenerOptions::new()
-            .name(name)
-            .create_tokio()
-            .map_err(|err| {
-                DesktopError::new("helper_bind", format!("Cannot bind helper socket: {err}"))
-            })?;
 
-        if self.manage_pid() {
-            write_pid_file();
-        }
+        let listener = UnixListener::bind(&socket_path).map_err(|err| {
+            DesktopError::new("helper_bind", format!("Cannot bind helper socket: {err}"))
+        })?;
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600)).map_err(|err| {
+            let _ = fs::remove_file(&socket_path);
+            DesktopError::new(
+                "helper_bind",
+                format!("Cannot set 0600 permissions on helper socket: {err}"),
+            )
+        })?;
+
+        let pid_record = if self.manage_pid() {
+            write_pid_file(&target)
+        } else {
+            None
+        };
 
         // Watchdog: the bound socket lives at a filesystem path; if that path
         // is unlinked (tempdir cleanup, `soyo kill` racing a stale bind) or
         // rebound by another helper, this instance can never be reached again
         // and must exit instead of leaking as an orphan.
-        if let Some(path) = HelperEndpoint::socket_path()
-            && let Some(bound) = socket_file_identity(&path)
-        {
+        let bound_identity = socket_file_identity(&socket_path);
+        if let Some(bound) = bound_identity {
+            let watch_path = socket_path.clone();
             let shutdown = Arc::clone(&self.shutdown);
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(SOCKET_WATCHDOG_INTERVAL).await;
-                    if socket_file_identity(&path) != Some(bound) {
+                    if socket_file_identity(&watch_path) != Some(bound) {
                         shutdown.store(true, Ordering::Relaxed);
                         return;
                     }
@@ -96,14 +162,20 @@ impl HelperServer {
         while !self.shutdown.load(Ordering::Relaxed) {
             let accept = tokio::select! {
                 accept = listener.accept() => accept,
-                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => continue,
+                _ = tokio::time::sleep(Duration::from_millis(200)) => continue,
             };
             match accept {
-                Ok(stream) => {
+                Ok((stream, _addr)) => {
+                    if let Err(err) = verify_peer_euid(&stream) {
+                        eprintln!("soyo helper: rejected client: {}", err.message);
+                        continue;
+                    }
+                    let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
                     let svc = Arc::clone(&service);
                     let shutdown = Arc::clone(&self.shutdown);
+                    svc.active_clients.fetch_add(1, Ordering::AcqRel);
                     tokio::spawn(async move {
-                        handle_client(stream, svc, shutdown).await;
+                        handle_client(conn_id, stream, svc, shutdown).await;
                     });
                 }
                 Err(err) => {
@@ -116,43 +188,89 @@ impl HelperServer {
         }
 
         self.service.shutdown().await;
-        if self.manage_pid() {
-            let _ = std::fs::remove_file(helper_pid_path());
+        if let Some(record) = pid_record {
+            remove_pid_file_if_owned(&target.pid_path(), &record);
+        }
+        if bound_identity.is_some() && socket_file_identity(&socket_path) == bound_identity {
+            let _ = fs::remove_file(&socket_path);
         }
         Ok(())
     }
 
     fn manage_pid(&self) -> bool {
-        // Pid file is advisory; keep it for `soyo kill` diagnostics.
         true
     }
 }
 
-fn write_pid_file() {
-    let path = helper_pid_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+fn current_pid_record(target: &HelperTarget) -> HelperPidRecord {
+    let pid = std::process::id();
+    let started_at_id = process_started_id(pid).unwrap_or(0);
+    let exe_path = process_exe_path(pid)
+        .or_else(|| std::env::current_exe().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    HelperPidRecord {
+        pid,
+        started_at_id,
+        exe_path,
+        fingerprint: target.fingerprint.clone(),
     }
-    let _ = std::fs::write(&path, format!("{}\n", std::process::id()));
 }
 
-const SOCKET_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+fn write_pid_file(target: &HelperTarget) -> Option<HelperPidRecord> {
+    let path = target.pid_path();
+    let record = current_pid_record(target);
+    let encoded = serde_json::to_vec(&record).ok()?;
+    let tmp = path.with_file_name(format!("{}.{}.pid.tmp", target.fingerprint, record.pid));
+    let _ = fs::remove_file(&tmp);
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(&tmp).ok()?;
+    file.write_all(&encoded).ok()?;
+    drop(file);
+    fs::rename(&tmp, &path).ok()?;
+    Some(record)
+}
 
-/// Identity of the bound socket file: `(dev, ino)` on Unix, existence-only
-/// elsewhere. `None` when the path is gone — treated as "socket removed".
-#[cfg(unix)]
-fn socket_file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path).ok()?;
+fn remove_pid_file_if_owned(pid_path: &Path, expected: &HelperPidRecord) {
+    let Ok(Some((file, _))) =
+        soyo_fs::open_existing_private_file_read(pid_path, "helper_pid", "helper pid")
+    else {
+        return;
+    };
+    let mut raw = String::new();
+    if file.take(16 * 1024).read_to_string(&mut raw).is_err() {
+        return;
+    }
+    if let Ok(found) = serde_json::from_str::<HelperPidRecord>(&raw)
+        && found.pid == expected.pid
+        && found.started_at_id == expected.started_at_id
+        && found.fingerprint == expected.fingerprint
+    {
+        let _ = fs::remove_file(pid_path);
+    }
+}
+
+const SOCKET_WATCHDOG_INTERVAL: Duration = Duration::from_secs(1);
+
+fn socket_file_identity(path: &Path) -> Option<(u64, u64)> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() {
+        return None;
+    }
     Some((meta.dev(), meta.ino()))
 }
 
-#[cfg(not(unix))]
-fn socket_file_identity(path: &std::path::Path) -> Option<()> {
-    std::fs::metadata(path).ok().map(|_| ())
-}
-
-async fn handle_client(stream: LocalStream, service: Arc<HostService>, shutdown: Arc<AtomicBool>) {
+async fn handle_client(
+    conn_id: u64,
+    stream: UnixStream,
+    service: Arc<HostService>,
+    shutdown: Arc<AtomicBool>,
+) {
     let (mut reader, writer) = split(stream);
     let writer = Arc::new(Mutex::new(writer));
     let hello = ServerFrame::Hello {
@@ -162,10 +280,10 @@ async fn handle_client(stream: LocalStream, service: Arc<HostService>, shutdown:
     {
         let mut w = writer.lock().await;
         if write_frame(&mut w, &hello).await.is_err() {
+            service.active_clients.fetch_sub(1, Ordering::AcqRel);
             return;
         }
     }
-    let mut streaming_ids: Vec<u64> = Vec::new();
     loop {
         if shutdown.load(Ordering::Relaxed) {
             let mut w = writer.lock().await;
@@ -175,18 +293,15 @@ async fn handle_client(stream: LocalStream, service: Arc<HostService>, shutdown:
         match read_client_frame(&mut reader).await {
             Ok(Some(frame)) => match frame {
                 ClientFrame::Request { id, method, params } => {
-                    streaming_ids.push(id);
                     let svc = Arc::clone(&service);
                     let w = Arc::clone(&writer);
                     let sd = Arc::clone(&shutdown);
                     tokio::spawn(async move {
-                        dispatch(id, method, params, svc, w, sd).await;
+                        dispatch(conn_id, id, method, params, svc, w, sd).await;
                     });
                 }
                 ClientFrame::CancelRequest { id } => {
-                    // Streaming cancel maps onto run cancellation.
-                    service.cancel_run();
-                    let _ = id;
+                    service.cancel_request(conn_id, id);
                 }
                 ClientFrame::Shutdown => {
                     shutdown.store(true, Ordering::Relaxed);
@@ -199,7 +314,8 @@ async fn handle_client(stream: LocalStream, service: Arc<HostService>, shutdown:
             Ok(None) | Err(_) => break,
         }
     }
-    let _ = streaming_ids;
+    service.active_clients.fetch_sub(1, Ordering::AcqRel);
+    service.on_client_disconnected(conn_id).await;
 }
 
 fn err_frame(id: u64, err: DesktopError) -> ServerFrame {
@@ -223,6 +339,10 @@ fn param<'a>(params: &'a Value, key: &str) -> Result<&'a Value, DesktopError> {
 
 fn param_opt<'a>(params: &'a Value, key: &str) -> Option<&'a Value> {
     params.get(key).filter(|v| !v.is_null())
+}
+
+fn param_opt_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
+    param_opt(params, key).and_then(Value::as_str)
 }
 
 fn param_string<'a>(params: &'a Value, key: &str) -> Result<&'a str, DesktopError> {
@@ -251,6 +371,7 @@ fn ok(value: impl Serialize) -> Result<Value, DesktopError> {
 }
 
 async fn dispatch(
+    conn_id: u64,
     id: u64,
     method: String,
     params: Value,
@@ -258,8 +379,15 @@ async fn dispatch(
     writer: Arc<Mutex<FrameWriter>>,
     _shutdown: Arc<AtomicBool>,
 ) {
+    let owner = ClientOwner {
+        conn_id,
+        request_id: id,
+    };
     let result = match method.as_str() {
-        "get_bootstrap_state" => ok(service.get_bootstrap_state().await),
+        "get_bootstrap_state" => {
+            let sid = param_opt_str(&params, "session_id");
+            ok(service.get_bootstrap_state_for(conn_id, sid).await)
+        }
         "helper_info" => ok(service.helper_info().await),
         "list_sessions_page" => {
             let page = param_opt(&params, "page")
@@ -271,17 +399,16 @@ async fn dispatch(
             let days = param_opt(&params, "days")
                 .and_then(Value::as_u64)
                 .map(|v| v as u32);
-            service.usage_stats(days).await.and_then(ok)
+            let utc_offset = param_opt(&params, "utc_offset_minutes")
+                .and_then(Value::as_i64)
+                .and_then(|v| i32::try_from(v).ok());
+            service.usage_stats(days, utc_offset).await.and_then(ok)
         }
         "new_session" => {
             let r = async {
-                let cwd = param_opt(&params, "cwd")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let profile = param_opt(&params, "profile")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                service.new_session(cwd, profile).await
+                let cwd = param_opt_str(&params, "cwd").map(str::to_owned);
+                let profile = param_opt_str(&params, "profile").map(str::to_owned);
+                service.new_session_for(conn_id, cwd, profile).await
             };
             r.await.and_then(ok)
         }
@@ -291,16 +418,23 @@ async fn dispatch(
                     .map_err(|err| {
                         DesktopError::new("invalid_params", format!("resume_session params: {err}"))
                     })?;
-                service.resume_session(&resume).await
+                service.resume_session_for(conn_id, &resume).await
             };
             r.await.and_then(ok)
         }
-        "release_session" => service.release_session().await.and_then(ok),
-        "get_run_state" => service.get_run_state().await.and_then(ok),
+        "release_session" => {
+            let sid = param_opt_str(&params, "session_id");
+            service.release_session_for(conn_id, sid).await.and_then(ok)
+        }
+        "get_run_state" => {
+            let sid = param_opt_str(&params, "session_id");
+            service.get_run_state_for(conn_id, sid).await.and_then(ok)
+        }
         "get_job" => {
             let r = async {
                 let job_id = param_string(&params, "job_id")?;
-                service.get_job(job_id).await
+                let sid = param_opt_str(&params, "session_id");
+                service.get_job_for(conn_id, sid, job_id).await
             };
             r.await.and_then(ok)
         }
@@ -321,14 +455,18 @@ async fn dispatch(
         "cancel_job" => {
             let r = async {
                 let job_id = param_string(&params, "job_id")?;
-                service.cancel_job(job_id).await
+                service.cancel_job_for(conn_id, job_id).await
             };
             r.await.and_then(ok)
         }
-        "cancel_run" => ok(service.cancel_run()),
+        "cancel_run" => {
+            let run_id = param_opt_str(&params, "run_id");
+            ok(service.cancel_run_for(conn_id, run_id))
+        }
         "reply_approval" => {
             let r = (|| {
-                service.reply_approval(
+                service.reply_approval_for(
+                    conn_id,
                     param_string(&params, "approval_id")?,
                     param_string(&params, "call_id")?,
                     param_bool(&params, "approved")?,
@@ -338,11 +476,10 @@ async fn dispatch(
         }
         "reply_input" => {
             let r = (|| {
-                service.reply_input(
+                service.reply_input_for(
+                    conn_id,
                     param_string(&params, "input_id")?,
-                    param_opt(&params, "answer")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
+                    param_opt_str(&params, "answer").map(str::to_owned),
                 )
             })();
             r.and_then(|_| ok(Value::Null))
@@ -350,21 +487,26 @@ async fn dispatch(
         "set_work_mode" => {
             let r = async {
                 let mode = param_deser(&params, "mode")?;
-                service.set_work_mode(mode).await
+                let sid = param_opt_str(&params, "session_id");
+                service.set_work_mode_for(conn_id, sid, mode).await
             };
             r.await.and_then(ok)
         }
         "set_permission_mode" => {
             let r = async {
                 let permissions = param_deser(&params, "permissions")?;
-                service.set_permission_mode(permissions).await
+                let sid = param_opt_str(&params, "session_id");
+                service
+                    .set_permission_mode_for(conn_id, sid, permissions)
+                    .await
             };
             r.await.and_then(ok)
         }
         "set_workspace" => {
             let r = async {
                 let path = param_string(&params, "path")?.to_owned();
-                service.set_workspace(&path).await
+                let sid = param_opt_str(&params, "session_id");
+                service.set_workspace_for(conn_id, sid, &path).await
             };
             r.await.and_then(ok)
         }
@@ -377,22 +519,25 @@ async fn dispatch(
                             format!("setup_environment params: {err}"),
                         )
                     })?;
-                service.setup_environment(setup).await
+                service.setup_environment_for(conn_id, setup).await
             };
             r.await.and_then(ok)
         }
         "select_profile" => {
             let r = async {
                 let profile = param_string(&params, "profile")?.to_owned();
-                service.select_profile(&profile).await
+                let sid = param_opt_str(&params, "session_id");
+                service.select_profile_for(conn_id, sid, &profile).await
             };
             r.await.and_then(ok)
         }
         "set_thinking_effort" => {
-            let effort = param_opt(&params, "effort")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            service.set_thinking_effort(effort).await.and_then(ok)
+            let effort = param_opt_str(&params, "effort").map(str::to_owned);
+            let sid = param_opt_str(&params, "session_id");
+            service
+                .set_thinking_effort_for(conn_id, sid, effort)
+                .await
+                .and_then(ok)
         }
         "set_sandbox_backend" => {
             let r = async {
@@ -418,9 +563,13 @@ async fn dispatch(
             r.await.and_then(ok)
         }
         "list_extensions" => service.list_extensions().await.and_then(ok),
-        "list_jobs" => service.list_jobs().await.and_then(ok),
+        "list_jobs" => {
+            let sid = param_opt_str(&params, "session_id");
+            service.list_jobs_for(conn_id, sid).await.and_then(ok)
+        }
         "cancel_background_job" => {
-            let r = (|| service.cancel_background_job(param_string(&params, "job_id")?))();
+            let r =
+                (|| service.cancel_background_job_for(conn_id, param_string(&params, "job_id")?))();
             r.and_then(ok)
         }
         "list_modules" => service.list_modules().await.and_then(ok),
@@ -484,15 +633,20 @@ async fn dispatch(
         }
         "export_session" => {
             let r = async {
-                let session_id = param_opt(&params, "session_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+                let session_id = param_opt_str(&params, "session_id").map(str::to_owned);
                 let target_path = param_string(&params, "target_path")?.to_owned();
                 let format = param_deser(&params, "format")?;
                 let scope = param_deser(&params, "scope")?;
                 let include_tools = param_bool(&params, "include_tools")?;
                 service
-                    .export_session(session_id, &target_path, format, scope, include_tools)
+                    .export_session_for(
+                        conn_id,
+                        session_id,
+                        &target_path,
+                        format,
+                        scope,
+                        include_tools,
+                    )
                     .await
             };
             r.await.and_then(ok)
@@ -506,16 +660,30 @@ async fn dispatch(
         }
         "get_desktop_prefs" => prefs::get_desktop_prefs().await.and_then(ok),
         "set_nickname" => {
-            let nickname = param_opt(&params, "nickname")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let nickname = param_opt_str(&params, "nickname").map(str::to_owned);
             prefs::set_nickname(nickname).await.and_then(ok)
         }
         "set_avatar" => {
-            let source = param_opt(&params, "source_path")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let source = param_opt_str(&params, "source_path").map(str::to_owned);
             prefs::set_avatar(source).await.and_then(ok)
+        }
+        "update_desktop_prefs" => {
+            let theme = param_opt_str(&params, "theme").map(str::to_owned);
+            let font_size = param_opt(&params, "font_size")
+                .and_then(Value::as_u64)
+                .and_then(|v| u16::try_from(v).ok());
+            let conversation_font = param_opt_str(&params, "conversation_font").map(str::to_owned);
+            let reduce_motion = param_opt(&params, "reduce_motion").and_then(Value::as_bool);
+            let inspector_open = param_opt(&params, "inspector_open").and_then(Value::as_bool);
+            prefs::update_desktop_prefs(
+                theme,
+                font_size,
+                conversation_font,
+                reduce_motion,
+                inspector_open,
+            )
+            .await
+            .and_then(ok)
         }
         "get_user_name" => prefs::get_user_name().await.and_then(ok),
         "get_global_prompt" => prefs::get_global_prompt().await.and_then(ok),
@@ -526,24 +694,33 @@ async fn dispatch(
             };
             r.await.and_then(ok)
         }
-        "fetch_attachment" => (|| {
-            let method = param_string(&params, "method")?;
-            let uri = param_string(&params, "uri")?;
-            let payload = attachment::resolve_attachment_request(
-                service.attachment_scope.as_ref(),
-                &service.staged_drafts,
-                method,
-                uri,
-            );
-            use base64::{Engine, engine::general_purpose::STANDARD};
-            ok(soyo_ipc::types::AttachmentPayloadDto {
-                status: payload.status,
-                content_type: payload.content_type.to_owned(),
-                body_b64: STANDARD.encode(&payload.body),
-            })
-        })(),
+        "fetch_attachment" => {
+            let r = async {
+                let method_str = param_string(&params, "method")?.to_owned();
+                let uri = param_string(&params, "uri")?.to_owned();
+                let scope = Arc::clone(&service.attachment_scope);
+                let drafts = Arc::clone(&service.staged_drafts);
+                tokio::task::spawn_blocking(move || {
+                    let payload = attachment::resolve_attachment_request(
+                        scope.as_ref(),
+                        &drafts,
+                        &method_str,
+                        &uri,
+                    );
+                    use base64::{Engine, engine::general_purpose::STANDARD};
+                    soyo_ipc::types::AttachmentPayloadDto {
+                        status: payload.status,
+                        content_type: payload.content_type.to_owned(),
+                        body_b64: STANDARD.encode(&payload.body),
+                    }
+                })
+                .await
+                .map_err(|_| DesktopError::new("io_error", "Attachment fetch worker failed"))
+            };
+            r.await.and_then(ok)
+        }
         "submit_prompt" | "compact_session" | "run_prompt" => {
-            dispatch_streaming(id, &method, params, &service, &writer).await
+            dispatch_streaming(owner, &method, params, &service, &writer).await
         }
         _ => Err(DesktopError::new(
             "unknown_method",
@@ -559,7 +736,7 @@ async fn dispatch(
 }
 
 async fn dispatch_streaming(
-    id: u64,
+    owner: ClientOwner,
     method: &str,
     params: Value,
     service: &Arc<HostService>,
@@ -570,7 +747,7 @@ async fn dispatch_streaming(
     let forwarder = tokio::spawn(async move {
         while let Some(env) = events_rx.recv().await {
             let frame = ServerFrame::Event {
-                id,
+                id: owner.request_id,
                 data: serde_json::to_value(&env).unwrap_or(Value::Null),
             };
             send_frame(&writer_for_events, &frame).await;
@@ -583,18 +760,20 @@ async fn dispatch_streaming(
                 .map_err(|err| {
                     DesktopError::new("invalid_params", format!("submit_prompt params: {err}"))
                 })?;
-            service.submit_prompt(prompt_params, sink).await
+            service.submit_prompt_for(owner, prompt_params, sink).await
         }
         "run_prompt" => {
             let run_params: soyo_ipc::types::RunPromptParams = serde_json::from_value(params)
                 .map_err(|err| {
                     DesktopError::new("invalid_params", format!("run_prompt params: {err}"))
                 })?;
-            service.run_prompt(run_params, sink).await
+            service.run_prompt_for(owner, run_params, sink).await
         }
         _ => {
+            let raw_events = param_bool(&params, "raw_events").unwrap_or(false);
+            let sid = param_opt_str(&params, "session_id");
             service
-                .compact_session(param_bool(&params, "raw_events").unwrap_or(false), sink)
+                .compact_session_for(owner, sid, raw_events, sink)
                 .await
         }
     };

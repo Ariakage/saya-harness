@@ -23,11 +23,7 @@ pub const MAX_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_STAGED_DRAFTS: usize = 16;
 const MAX_STAGED_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 
-#[derive(Clone)]
-pub struct ActiveAttachmentScope {
-    pub session_id: SessionId,
-    pub media: Arc<OutputStore>,
-}
+pub type ActiveAttachmentScope = HashMap<SessionId, Arc<OutputStore>>;
 
 #[derive(Clone)]
 pub struct StagedDraft {
@@ -217,7 +213,10 @@ pub fn stage_attachment_files(
         existing_bytes = existing_bytes.saturating_add(item.bytes.len());
     }
     if existing_bytes > MAX_STAGED_TOTAL_BYTES || guard.len() + prepared_items.len() > 64 {
-        guard.clear();
+        return Err(DesktopError::new(
+            "attachment_limit_exceeded",
+            "Staged attachments exceed the total count or size limit",
+        ));
     }
 
     let mut out = Vec::with_capacity(prepared_items.len());
@@ -237,7 +236,7 @@ fn percent_decode(input: &str) -> Result<String, ()> {
             if i + 2 >= bytes.len() {
                 return Err(());
             }
-            let hi = (bytes[i + 2] as char).to_digit(16).ok_or(())?;
+            let hi = (bytes[i + 1] as char).to_digit(16).ok_or(())?;
             let lo = (bytes[i + 2] as char).to_digit(16).ok_or(())?;
             out.push(((hi << 4) | lo) as u8);
             i += 3;
@@ -250,21 +249,20 @@ fn percent_decode(input: &str) -> Result<String, ()> {
 }
 
 /// Minimal URI split: `scheme://host/path?query`.
-fn split_uri(raw: &str) -> Option<(&str, &str, &str, &str)> {
+fn split_uri(raw: &str) -> Option<(&str, &str, String, &str)> {
     let (scheme, rest) = raw.split_once("://")?;
     let (authority, path_and_query) = rest.split_once('/')?;
     let (path, query) = match path_and_query.split_once('?') {
         Some((p, q)) => (format!("/{p}"), q),
         None => (format!("/{path_and_query}"), ""),
     };
-    let leaked: &'static str = Box::leak(path.to_string().into_boxed_str());
-    Some((scheme, authority, leaked, query))
+    Some((scheme, authority, path, query))
 }
 
 /// Resolve a `soyo-attachment://` (or legacy alias / localhost http alias) request
-/// against staged drafts and the active session's OutputStore.
+/// against staged drafts and the open/active sessions' OutputStores.
 pub fn resolve_attachment_request(
-    scope: &StdMutex<Option<ActiveAttachmentScope>>,
+    scope: &StdMutex<ActiveAttachmentScope>,
     drafts: &StdMutex<HashMap<String, StagedDraft>>,
     method: &str,
     raw_uri: &str,
@@ -328,21 +326,15 @@ pub fn resolve_attachment_request(
             return AttachmentPayload::error(400, "Invalid encoded media reference");
         };
 
-        let active_scope = match scope.lock() {
-            Ok(guard) => guard.clone(),
+        let media = match scope.lock() {
+            Ok(guard) => guard.get(&requested_session).cloned(),
             Err(_) => return AttachmentPayload::error(500, "Attachment scope lock failed"),
         };
-        let Some(active) = active_scope else {
-            return AttachmentPayload::error(403, "No active session for attachment access");
+        let Some(media) = media else {
+            return AttachmentPayload::error(403, "Attachment does not belong to an open session");
         };
-        if active.session_id != requested_session {
-            return AttachmentPayload::error(
-                403,
-                "Attachment does not belong to the active session",
-            );
-        }
 
-        let loaded = match active.media.load_media(requested_session, &reference) {
+        let loaded = match media.load_media(requested_session, &reference) {
             Ok(loaded) => loaded,
             Err(_) => {
                 return AttachmentPayload::error(404, "Session media artifact not found");
@@ -362,4 +354,47 @@ pub fn resolve_attachment_request(
     }
 
     AttachmentPayload::error(404, "Unknown attachment route")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_handles_scheme_colons_slashes_and_utf8() {
+        assert_eq!(
+            percent_decode("soyo-media%3A%2F%2Fobj%2F%E4%B8%AD%E6%96%87").unwrap(),
+            "soyo-media://obj/中文"
+        );
+        assert!(percent_decode("bad%2").is_err());
+        assert!(percent_decode("bad%zz").is_err());
+    }
+
+    #[test]
+    fn staging_limit_exceeded_preserves_existing_drafts() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, b"hello").unwrap();
+        let drafts = StdMutex::new(HashMap::new());
+        let first =
+            stage_attachment_files(&[file.to_string_lossy().into_owned()], &drafts, &[]).unwrap();
+        assert_eq!(first.len(), 1);
+
+        // Fill drafts to hit the 64-entry ceiling, then try one more batch.
+        for i in 0..63 {
+            let mut dto = first[0].clone();
+            dto.id = format!("extra_{i}");
+            drafts.lock().unwrap().insert(
+                dto.id.clone(),
+                StagedDraft {
+                    dto,
+                    bytes: vec![1],
+                },
+            );
+        }
+        let err = stage_attachment_files(&[file.to_string_lossy().into_owned()], &drafts, &[])
+            .unwrap_err();
+        assert_eq!(err.code, "attachment_limit_exceeded");
+        assert_eq!(drafts.lock().unwrap().len(), 64);
+    }
 }

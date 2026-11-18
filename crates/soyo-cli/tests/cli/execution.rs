@@ -782,8 +782,35 @@ fn crashed_background_command_is_reported_unknown_and_never_replayed() {
         .unwrap();
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let id = list["data"][0]["id"].as_str().unwrap();
+    let helper_pid = soyo_ipc::HelperTarget::from_paths(
+        cfg.clone(),
+        home.path().join(".local/share/soyo"),
+        home.path().join(".local/state/soyo"),
+    )
+    .pid_path();
+    let helper_pid_val = fs::read_to_string(&helper_pid)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("pid").and_then(|p| p.as_i64()));
     child.kill().unwrap();
     child.wait().unwrap();
+    if let Some(pid) = helper_pid_val {
+        let pid_str = pid.to_string();
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-9", &pid_str])
+            .status();
+        let wait_dead = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < wait_dead
+            && std::process::Command::new("/bin/kill")
+                .args(["-0", &pid_str])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     release_tx.send(()).unwrap();
     let resumed = command(temp.path(), home.path())
         .arg("--config")

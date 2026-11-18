@@ -1,7 +1,6 @@
 //! Client for the `soyo helper` daemon: connect (auto-spawning if needed),
 //! multiplexed request/response, streaming subscriptions, and shutdown.
 
-use interprocess::local_socket::tokio::{Stream, prelude::*};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -10,16 +9,19 @@ use std::{
     process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::{
+    net::UnixStream,
+    sync::{Mutex, mpsc, oneshot},
+};
 
 use crate::{
     framing::{FrameWriter, read_server_frame, split, write_frame},
-    protocol::{ClientFrame, ServerFrame},
-    socket::HelperEndpoint,
+    protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame},
+    socket::{HelperTarget, verify_peer_euid},
     types::{DesktopError, DesktopStreamEnvelope, HelperInfoDto},
 };
 
@@ -39,11 +41,12 @@ struct PendingMap {
 }
 
 /// Result of [`HelperClient::helper_compat`]: whether the running helper is
-/// stale relative to this client, whether a run keeps it busy, and a short
-/// human-readable summary for prompts and logs.
+/// incompatible relative to this client's version/protocol, whether runs or
+/// other active clients keep it busy, and a short summary for prompts/logs.
 pub struct HelperCompat {
     pub mismatch: bool,
     pub run_active: bool,
+    pub busy: bool,
     pub detail: String,
 }
 
@@ -52,18 +55,27 @@ pub struct HelperClient {
     writer: Mutex<FrameWriter>,
     next_id: AtomicU64,
     pending: Mutex<PendingMap>,
+    closed: AtomicBool,
+    target: Option<HelperTarget>,
 }
 
 impl HelperClient {
-    /// Connect to a running helper, spawning `soyo helper` if none is listening.
+    /// Connect to the default environment's helper, spawning `soyo helper` if needed.
     pub async fn connect_or_spawn() -> Result<Arc<Self>, DesktopError> {
-        match Self::connect().await {
+        let target = HelperTarget::from_environment()
+            .map_err(|err| DesktopError::new("invalid_config", err.message().to_owned()))?;
+        Self::connect_or_spawn_for(&target).await
+    }
+
+    /// Connect to the helper matching `target`, spawning `soyo helper` if needed.
+    pub async fn connect_or_spawn_for(target: &HelperTarget) -> Result<Arc<Self>, DesktopError> {
+        match Self::connect_for(target).await {
             Ok(client) => Ok(client),
             Err(first_err) => {
-                spawn_helper_process()?;
+                spawn_helper_process(target)?;
                 // Wait briefly for the daemon to bind its socket.
                 for _ in 0..50 {
-                    match Self::connect().await {
+                    match Self::connect_for(target).await {
                         Ok(client) => return Ok(client),
                         Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
                     }
@@ -73,31 +85,55 @@ impl HelperClient {
         }
     }
 
-    /// Connect once; does not spawn anything.
+    /// Connect once to the default environment's helper; does not spawn anything.
     pub async fn connect() -> Result<Arc<Self>, DesktopError> {
-        let stream = Stream::connect(HelperEndpoint::name())
-            .await
-            .map_err(|err| {
-                DesktopError::new(
-                    "helper_unavailable",
-                    format!("Cannot connect to soyo helper: {err}"),
-                )
-            })?;
-        Self::from_stream(stream).await
+        let target = HelperTarget::from_environment()
+            .map_err(|err| DesktopError::new("invalid_config", err.message().to_owned()))?;
+        Self::connect_for(&target).await
+    }
+
+    /// Connect once to the helper matching `target`; verifies private directory and peer UID.
+    pub async fn connect_for(target: &HelperTarget) -> Result<Arc<Self>, DesktopError> {
+        let helper_dir = target.helper_dir();
+        if helper_dir.exists() {
+            soyo_fs::open_existing_private_dir(&helper_dir, "helper_unauthorized", "helper")
+                .map_err(|err| {
+                    DesktopError::new("helper_unauthorized", err.message().to_owned())
+                })?;
+        }
+        let socket_path = target.socket_path();
+        let stream = UnixStream::connect(&socket_path).await.map_err(|err| {
+            DesktopError::new(
+                "helper_unavailable",
+                format!("Cannot connect to soyo helper: {err}"),
+            )
+        })?;
+        verify_peer_euid(&stream)?;
+        Self::from_stream_with_target(stream, Some(target.clone())).await
     }
 
     /// Build a client over an already-connected stream (used by tests).
-    pub async fn from_stream(stream: Stream) -> Result<Arc<Self>, DesktopError> {
+    pub async fn from_stream(stream: UnixStream) -> Result<Arc<Self>, DesktopError> {
+        Self::from_stream_with_target(stream, None).await
+    }
+
+    async fn from_stream_with_target(
+        stream: UnixStream,
+        target: Option<HelperTarget>,
+    ) -> Result<Arc<Self>, DesktopError> {
         let (mut reader, writer) = split(stream);
         let client = Arc::new(Self {
             writer: Mutex::new(writer),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(PendingMap::default()),
+            closed: AtomicBool::new(false),
+            target,
         });
         // Handshake: first frame must be Hello.
         match read_server_frame(&mut reader).await.map_err(io_err)? {
             Some(ServerFrame::Hello { .. }) => {}
             other => {
+                client.closed.store(true, Ordering::Release);
                 return Err(DesktopError::new(
                     "helper_protocol",
                     format!("Expected hello frame, got {other:?}"),
@@ -111,10 +147,21 @@ impl HelperClient {
         Ok(client)
     }
 
+    /// Whether this connection has closed, shut down, or been detached.
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// Target configuration coordinates this client connected to, if known.
+    pub fn target(&self) -> Option<&HelperTarget> {
+        self.target.as_ref()
+    }
+
     async fn reader_loop(&self, mut reader: crate::framing::FrameReader) {
         while let Ok(Some(frame)) = read_server_frame(&mut reader).await {
             self.dispatch(frame).await;
         }
+        self.closed.store(true, Ordering::Release);
         self.fail_all_pending("helper_disconnected", "soyo helper disconnected")
             .await;
     }
@@ -143,6 +190,7 @@ impl HelperClient {
                     .await;
             }
             ServerFrame::Bye => {
+                self.closed.store(true, Ordering::Release);
                 self.fail_all_pending("helper_shutdown", "soyo helper shut down")
                     .await;
             }
@@ -176,10 +224,24 @@ impl HelperClient {
     }
 
     async fn send_frame(&self, frame: &ClientFrame) -> Result<(), DesktopError> {
+        if self.is_closed() {
+            return Err(DesktopError::new(
+                "helper_disconnected",
+                "soyo helper connection is closed",
+            ));
+        }
         let mut writer = self.writer.lock().await;
-        write_frame(&mut writer, frame)
-            .await
-            .map_err(|err| DesktopError::new("helper_io", format!("helper write failed: {err}")))
+        if let Err(err) = write_frame(&mut writer, frame).await {
+            self.closed.store(true, Ordering::Release);
+            drop(writer);
+            self.fail_all_pending("helper_disconnected", "soyo helper write failed")
+                .await;
+            return Err(DesktopError::new(
+                "helper_io",
+                format!("helper write failed: {err}"),
+            ));
+        }
+        Ok(())
     }
 
     fn register_pending(
@@ -201,12 +263,17 @@ impl HelperClient {
             let mut pending = self.pending.lock().await;
             pending.entries.insert(id, PendingEntry::OneShot(tx));
         }
-        self.send_frame(&ClientFrame::Request {
-            id,
-            method: method.to_owned(),
-            params,
-        })
-        .await?;
+        if let Err(err) = self
+            .send_frame(&ClientFrame::Request {
+                id,
+                method: method.to_owned(),
+                params,
+            })
+            .await
+        {
+            self.pending.lock().await.entries.remove(&id);
+            return Err(err);
+        }
         rx.await.unwrap_or_else(|_| {
             Err(DesktopError::new(
                 "helper_disconnected",
@@ -243,14 +310,19 @@ impl HelperClient {
                 .entries
                 .insert(id, PendingEntry::Stream { result: tx, events });
         }
-        self.send_frame(&ClientFrame::Request {
-            id,
-            method: method.to_owned(),
-            params: serde_json::to_value(params).map_err(|err| {
-                DesktopError::new("helper_protocol", format!("encode params: {err}"))
-            })?,
-        })
-        .await?;
+        let encoded = serde_json::to_value(params)
+            .map_err(|err| DesktopError::new("helper_protocol", format!("encode params: {err}")))?;
+        if let Err(err) = self
+            .send_frame(&ClientFrame::Request {
+                id,
+                method: method.to_owned(),
+                params: encoded,
+            })
+            .await
+        {
+            self.pending.lock().await.entries.remove(&id);
+            return Err(err);
+        }
         let result = rx.await.unwrap_or_else(|_| {
             Err(DesktopError::new(
                 "helper_disconnected",
@@ -261,7 +333,7 @@ impl HelperClient {
             .map_err(|err| DesktopError::new("helper_protocol", format!("decode result: {err}")))
     }
 
-    /// Best-effort cancel of an in-flight request.
+    /// Best-effort cancel of an in-flight request on this connection.
     pub async fn cancel_request(&self, id: u64) {
         let _ = self.send_frame(&ClientFrame::CancelRequest { id }).await;
     }
@@ -271,40 +343,33 @@ impl HelperClient {
         let _ = self.send_frame(&ClientFrame::Shutdown).await;
     }
 
-    /// Identity of the connected helper (version, exe, pid, run state).
-    /// Helpers built before this op existed return a dispatch error.
+    /// Identity of the connected helper (version, protocol_version, pid, run/client counts).
     pub async fn helper_info(&self) -> Result<HelperInfoDto, DesktopError> {
         self.call_typed("helper_info", &serde_json::json!({})).await
     }
 
-    /// Compare the running helper against the binary this client would spawn.
-    /// `mismatch` is true when the helper predates `helper_info`, reports a
-    /// different version, or runs from a different executable; `run_active`
-    /// comes from `helper_info`, or `get_bootstrap_state` on older helpers, so
-    /// callers can avoid killing someone else's in-flight run.
+    /// Compare the running helper strictly by `version` and `protocol_version` (never
+    /// by `exe_path`), and report whether active runs or other connected clients
+    /// keep it busy.
     pub async fn helper_compat(&self) -> HelperCompat {
         match self.helper_info().await {
             Ok(info) => {
-                let expected_exe = helper_bin();
-                let exe_differs = match (
-                    std::fs::canonicalize(&info.exe_path),
-                    std::fs::canonicalize(&expected_exe),
-                ) {
-                    (Ok(running), Ok(expected)) => running != expected,
-                    // Expected binary unresolvable (bare `soyo` fallback with
-                    // no PATH hit): cannot compare — version is the only signal.
-                    _ => false,
-                };
                 let version_differs = info.version != env!("CARGO_PKG_VERSION");
+                let protocol_differs = info.protocol_version != PROTOCOL_VERSION;
+                let run_active = info.run_active || info.active_runs > 0;
+                let other_clients = info.active_clients > 1;
                 HelperCompat {
-                    mismatch: exe_differs || version_differs,
-                    run_active: info.run_active,
+                    mismatch: version_differs || protocol_differs,
+                    run_active,
+                    busy: run_active || other_clients,
                     detail: format!(
-                        "running v{} ({}), expected v{} ({})",
+                        "running v{} (proto {}), expected v{} (proto {}), runs={}, clients={}",
                         info.version,
-                        info.exe_path,
+                        info.protocol_version,
                         env!("CARGO_PKG_VERSION"),
-                        expected_exe.display()
+                        PROTOCOL_VERSION,
+                        info.active_runs,
+                        info.active_clients,
                     ),
                 }
             }
@@ -323,23 +388,27 @@ impl HelperClient {
                 HelperCompat {
                     mismatch: true,
                     run_active,
+                    busy: run_active,
                     detail: "helper predates helper_info (stale daemon)".into(),
                 }
             }
         }
     }
 
-    /// Shut down the connected helper and establish a fresh connection,
-    /// respawning via [`helper_bin`] so the replacement matches this client's
-    /// build. Fails if the daemon does not exit or the respawn cannot serve.
+    /// Shut down the connected helper and establish a fresh connection for the
+    /// same configuration target. Fails if the daemon does not exit or cannot serve.
     pub async fn restart(&self) -> Result<Arc<Self>, DesktopError> {
+        let target = match &self.target {
+            Some(target) => target.clone(),
+            None => HelperTarget::from_environment()
+                .map_err(|err| DesktopError::new("invalid_config", err.message().to_owned()))?,
+        };
         self.shutdown_daemon().await;
         for _ in 0..50 {
-            match Self::connect().await {
-                Ok(_) => tokio::time::sleep(Duration::from_millis(100)).await,
-                // Socket is gone: respawn and hand back the fresh client.
-                Err(_) => return Self::connect_or_spawn().await,
+            if UnixStream::connect(target.socket_path()).await.is_err() {
+                return Self::connect_or_spawn_for(&target).await;
             }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
         Err(DesktopError::new(
             "helper_restart",
@@ -350,6 +419,7 @@ impl HelperClient {
     /// Close the client half of the connection. Pending requests fail fast
     /// instead of hanging on the reader task.
     pub async fn detach(&self) {
+        self.closed.store(true, Ordering::Release);
         self.fail_all_pending("client_detached", "client detached from helper")
             .await;
     }
@@ -381,22 +451,58 @@ fn helper_bin() -> PathBuf {
     PathBuf::from("soyo")
 }
 
-fn spawn_helper_process() -> Result<(), DesktopError> {
+fn spawn_helper_process(target: &HelperTarget) -> Result<(), DesktopError> {
     let mut cmd = std::process::Command::new(helper_bin());
-    cmd.arg("helper")
+    cmd.arg("--config")
+        .arg(&target.config_path)
+        .arg("--data-dir")
+        .arg(&target.data_dir)
+        .arg("helper")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
+    // SAFETY: `pre_exec` runs between `fork` and `exec` using only async-signal-safe
+    // POSIX calls (`setsid`, `getrlimit`, `fcntl`) to detach from any caller PTY
+    // and mark extra inherited FDs `FD_CLOEXEC` (leaving stdio and Rust's exec
+    // error pipe intact until `execvp` replaces the process image).
+    unsafe {
         use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            let max_fd = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0
+                && limit.rlim_cur != libc::RLIM_INFINITY
+            {
+                limit.rlim_cur.min(10_240) as libc::c_int
+            } else {
+                4096
+            };
+            for fd in 3..max_fd {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags >= 0 && (flags & libc::FD_CLOEXEC) == 0 {
+                    let _ = libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
     }
-    cmd.spawn().map_err(|err| {
+    let mut child = cmd.spawn().map_err(|err| {
         DesktopError::new(
             "helper_spawn",
             format!("Failed to start `soyo helper` ({err}); is `soyo` on PATH?"),
         )
     })?;
+    // Wait in a dedicated daemon-reaper thread so long-lived desktop apps never
+    // accumulate exited helper zombie processes.
+    let _ = std::thread::Builder::new()
+        .name("soyo-helper-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
     Ok(())
 }

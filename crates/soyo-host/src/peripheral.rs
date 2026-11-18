@@ -61,30 +61,33 @@ async fn require_config_clone(state: &HostService) -> Result<Config, DesktopErro
         .ok_or_else(|| DesktopError::new("invalid_config", err_msg))
 }
 
-async fn require_idle_config_clone(state: &HostService) -> Result<Config, DesktopError> {
-    {
-        let control = state
-            .active_control
-            .lock()
-            .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-        if let Some(active) = control.as_ref() {
-            if active.pending.is_some() {
-                return Err(DesktopError::new(
-                    "pending_request",
-                    "Resolve pending approval or input first",
-                ));
-            }
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run first",
-            ));
-        }
+async fn require_idle_controls(state: &HostService) -> Result<(), DesktopError> {
+    let controls = state
+        .active_controls
+        .lock()
+        .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+    if controls.values().any(|active| active.pending.is_some()) {
+        return Err(DesktopError::new(
+            "pending_request",
+            "Resolve pending approval or input first",
+        ));
     }
-    let guard = state.inner.lock().await;
-    if guard.active_run_id.is_some() {
+    if !controls.is_empty() {
         return Err(DesktopError::new(
             "run_active",
-            "Cancel or wait for the active run first",
+            "Cancel or wait for active runs first",
+        ));
+    }
+    Ok(())
+}
+
+async fn require_idle_config_clone(state: &HostService) -> Result<Config, DesktopError> {
+    require_idle_controls(state).await?;
+    let guard = state.inner.lock().await;
+    if guard.sessions.values().any(|s| s.active_run_id.is_some()) {
+        return Err(DesktopError::new(
+            "run_active",
+            "Cancel or wait for active runs first",
         ));
     }
     let err_msg = guard
@@ -200,7 +203,16 @@ async fn open_credential_store(
 
 impl HostService {
     pub async fn set_workspace(&self, path: &str) -> Result<BootstrapStateDto, DesktopError> {
-        let cfg = require_idle_config_clone(self).await?;
+        self.set_workspace_for(0, None, path).await
+    }
+
+    pub async fn set_workspace_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+        path: &str,
+    ) -> Result<BootstrapStateDto, DesktopError> {
+        let cfg = require_config_clone(self).await?;
         let secrets = self.current_secrets();
         let trimmed = path.trim();
         if trimmed.is_empty() {
@@ -237,65 +249,84 @@ impl HostService {
 
         {
             let mut guard = self.inner.lock().await;
-            if guard.active_run_id.is_some() {
-                return Err(DesktopError::new(
-                    "run_active",
-                    "Cancel or wait for the active run before changing workspace",
-                ));
-            }
-            let profile_lookup = guard
-                .config
-                .as_ref()
-                .and_then(|c| {
-                    guard
-                        .prepared
-                        .as_ref()
-                        .and_then(|p| c.profiles.get(&p.session.profile))
-                })
+            let target_sid = guard.resolve_session_id(session_id, conn_id);
+            if let Some(sid) = target_sid {
+                let profile_lookup = {
+                    let slot = guard.sessions.get(&sid);
+                    guard.config.as_ref().and_then(|c| {
+                        slot.and_then(|s| c.profiles.get(&s.prepared.session.profile))
+                    })
+                }
                 .cloned();
-            if let Some(prepared) = &mut guard.prepared {
-                let Some(profile) = profile_lookup else {
-                    return Err(DesktopError::new(
-                        "invalid_config",
-                        "Session profile not found in configuration",
-                    ));
-                };
-                let fingerprint = profile
-                    .fingerprint()
-                    .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-                let mut updated = prepared.session.clone();
-                updated.workspace = workspace.clone();
-                prepared
-                    .store
-                    .update_session_config(&updated, &fingerprint)
-                    .await
-                    .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-                prepared.session = updated;
+                if let Some(slot) = guard.sessions.get_mut(&sid) {
+                    if slot.active_run_id.is_some() {
+                        return Err(DesktopError::new(
+                            "run_active",
+                            "Cancel or wait for the active run before changing workspace",
+                        ));
+                    }
+                    if slot.owner_conn_id.is_some_and(|o| o != conn_id) {
+                        return Err(DesktopError::new(
+                            "unauthorized_client",
+                            "Session belongs to another client connection",
+                        ));
+                    }
+                    let Some(profile) = profile_lookup else {
+                        return Err(DesktopError::new(
+                            "invalid_config",
+                            "Session profile not found in configuration",
+                        ));
+                    };
+                    let fingerprint = profile
+                        .fingerprint()
+                        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+                    let mut updated = slot.prepared.session.clone();
+                    updated.workspace = workspace;
+                    slot.prepared
+                        .store
+                        .update_session_config(&updated, &fingerprint)
+                        .await
+                        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+                    slot.prepared.session = updated;
+                    drop(guard);
+                    return Ok(self.get_bootstrap_state_for(conn_id, session_id).await);
+                }
             }
             if let Some(cfg_mut) = &mut guard.config {
                 cfg_mut.cwd = workspace;
             }
         }
 
-        Ok(self.get_bootstrap_state().await)
+        Ok(self.get_bootstrap_state_for(conn_id, session_id).await)
     }
 
     pub async fn select_profile(&self, profile: &str) -> Result<BootstrapStateDto, DesktopError> {
-        let _ = require_idle_config_clone(self).await?;
+        self.select_profile_for(0, None, profile).await
+    }
+
+    pub async fn select_profile_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+        profile: &str,
+    ) -> Result<BootstrapStateDto, DesktopError> {
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before changing profile",
-            ));
-        }
-        if let Some(prepared) = &guard.prepared
-            && prepared.session.profile != profile
+        let target_sid = guard.resolve_session_id(session_id, conn_id);
+        if let Some(sid) = target_sid
+            && let Some(slot) = guard.sessions.get(&sid)
         {
-            return Err(DesktopError::new(
-                "session_profile_locked",
-                "Start a new session before switching to a different model profile",
-            ));
+            if slot.active_run_id.is_some() {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Cancel or wait for the active run before changing profile",
+                ));
+            }
+            if slot.prepared.session.profile != profile {
+                return Err(DesktopError::new(
+                    "session_profile_locked",
+                    "Start a new session before switching to a different model profile",
+                ));
+            }
         }
         let cfg = guard
             .config
@@ -309,31 +340,36 @@ impl HostService {
         }
         cfg.profile = Some(profile.to_owned());
         drop(guard);
-        Ok(self.get_bootstrap_state().await)
+        Ok(self.get_bootstrap_state_for(conn_id, session_id).await)
     }
 
-    /// First-run setup: validate inputs, store the API key value in the
-    /// helper-private env overlay, merge the profile into `config.toml`
-    /// (preserving an existing valid document), reload configuration, then
-    /// apply the optional workspace. `config.toml` only ever records the
-    /// `api_key_env` *name*; the value lives in `<helper_dir>/env`.
-    ///
-    /// On a failed reload the previous config file is restored so a bad form
-    /// cannot leave the installation broken.
+    /// First-run setup: validate inputs, store the API key value in
+    /// `<state_dir>/secrets/env` (`0700`/`0600`), merge the profile into `config.toml`,
+    /// reload configuration, then apply the optional workspace.
     pub async fn setup_environment(
         &self,
         params: SetupEnvironmentParams,
     ) -> Result<BootstrapStateDto, DesktopError> {
+        self.setup_environment_for(0, params).await
+    }
+
+    pub async fn setup_environment_for(
+        &self,
+        conn_id: u64,
+        params: SetupEnvironmentParams,
+    ) -> Result<BootstrapStateDto, DesktopError> {
         let secrets = self.current_secrets();
-        {
+        require_idle_controls(self).await?;
+        let target = {
             let guard = self.inner.lock().await;
-            if guard.active_run_id.is_some() {
+            if guard.sessions.values().any(|s| s.active_run_id.is_some()) {
                 return Err(DesktopError::new(
                     "run_active",
-                    "Cancel or wait for the active run before running setup",
+                    "Cancel or wait for active runs before running setup",
                 ));
             }
-        }
+            guard.target.clone()
+        };
 
         let name = params.profile_name.trim();
         if name.is_empty()
@@ -405,11 +441,14 @@ impl HostService {
         }
 
         if let (Some(env_name), Some(value)) = (key_env, key_value.as_ref()) {
+            let state_dir = target.state_dir.clone();
             let env_name = env_name.to_owned();
             let value_owned = value.clone();
-            offload_boundary(move || envfile::upsert_env_pair(&env_name, &value_owned))
-                .await
-                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+            offload_boundary(move || {
+                envfile::upsert_env_pair_for(&state_dir, &env_name, &value_owned)
+            })
+            .await
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
             let _ = self.secrets.register(std::slice::from_ref(value));
         }
 
@@ -425,13 +464,23 @@ impl HostService {
             permissions: params.permission_mode.map(permission_label),
             mode: params.work_mode.map(work_mode_label),
         };
-        let (config_path, backup_path) = offload_boundary(move || merge_setup_config(&merge))
-            .await
-            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+        let target_cfg_path = target.config_path.clone();
+        let (config_path, backup_path) =
+            offload_boundary(move || merge_setup_config(&target_cfg_path, &merge))
+                .await
+                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
 
-        let env = Environment::capture_with(envfile::load_env_pairs());
+        let overlay_pairs = envfile::load_env_pairs_for(&target.state_dir);
+        let overlay_values = envfile::load_env_secret_values_for(&target.state_dir);
+        let _ = self.secrets.register(&overlay_values);
+        let env = Environment::capture_with(overlay_pairs);
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        let reload = offload_boundary(move || config::load(Overrides::default(), env, &cwd))
+        let reload_overrides = Overrides {
+            config: Some(target.config_path.clone()),
+            data_dir: Some(target.data_dir.clone()),
+            ..Default::default()
+        };
+        let reload = offload_boundary(move || config::load(reload_overrides, env, &cwd))
             .await
             .map_err(|err| DesktopError::from_boundary(&err, &secrets));
         let cfg = match reload {
@@ -443,6 +492,7 @@ impl HostService {
         };
         {
             let mut guard = self.inner.lock().await;
+            guard.target = soyo_ipc::socket::HelperTarget::from_config(&cfg);
             guard.config = Some(cfg.clone());
             guard.config_error = None;
             register_config_secrets(&cfg, &self.secrets);
@@ -477,30 +527,39 @@ impl HostService {
             })
             .await
             .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-            return self.set_workspace(&resolved.to_string_lossy()).await;
+            return self
+                .set_workspace_for(conn_id, None, &resolved.to_string_lossy())
+                .await;
         }
-        Ok(self.get_bootstrap_state().await)
+        Ok(self.get_bootstrap_state_for(conn_id, None).await)
     }
 
     pub async fn set_thinking_effort(
         &self,
         effort: Option<String>,
     ) -> Result<BootstrapStateDto, DesktopError> {
+        self.set_thinking_effort_for(0, None, effort).await
+    }
+
+    pub async fn set_thinking_effort_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+        effort: Option<String>,
+    ) -> Result<BootstrapStateDto, DesktopError> {
         let _ = require_idle_config_clone(self).await?;
         let parsed = parse_effort(effort.as_deref())?;
         let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before changing thinking effort",
-            ));
-        }
+        let target_sid = guard.resolve_session_id(session_id, conn_id);
+        let session_profile = target_sid
+            .and_then(|sid| guard.sessions.get(&sid))
+            .map(|s| s.prepared.session.profile.clone());
         let (profile_name, previous, fingerprint) = {
             let cfg = guard.config.as_mut().ok_or_else(|| {
                 DesktopError::new("invalid_config", "Configuration is not loaded")
             })?;
-            let Some(profile_name) = cfg.profile.clone() else {
+            let Some(profile_name) = session_profile.or_else(|| cfg.profile.clone()) else {
                 return Err(DesktopError::new(
                     "invalid_config",
                     "Select a configured profile first",
@@ -516,10 +575,12 @@ impl HostService {
                 .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
             (profile_name, previous, fingerprint)
         };
-        if let Some(prepared) = &mut guard.prepared
-            && let Err(err) = prepared
+        if let Some(sid) = target_sid
+            && let Some(slot) = guard.sessions.get_mut(&sid)
+            && let Err(err) = slot
+                .prepared
                 .store
-                .update_session_config(&prepared.session, &fingerprint)
+                .update_session_config(&slot.prepared.session, &fingerprint)
                 .await
         {
             if let Some(cfg) = &mut guard.config
@@ -530,7 +591,7 @@ impl HostService {
             return Err(DesktopError::from_boundary(&err, &secrets));
         }
         drop(guard);
-        Ok(self.get_bootstrap_state().await)
+        Ok(self.get_bootstrap_state_for(conn_id, session_id).await)
     }
 
     pub async fn set_sandbox_backend(
@@ -539,12 +600,6 @@ impl HostService {
     ) -> Result<BootstrapStateDto, DesktopError> {
         let _ = require_idle_config_clone(self).await?;
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before changing sandbox backend",
-            ));
-        }
         let cfg = guard
             .config
             .as_mut()
@@ -554,10 +609,7 @@ impl HostService {
         Ok(self.get_bootstrap_state().await)
     }
 
-    /// Toggle one managed-memory setting (`set_memory_setting`). The TUI's
-    /// `/memory set` panel applies the same flags locally; this keeps the
-    /// helper's configuration in sync so subsequent queries and prompt-time
-    /// memory injection observe them.
+    /// Toggle one managed-memory setting (`set_memory_setting`).
     pub async fn set_memory_setting(
         &self,
         setting: &str,
@@ -565,12 +617,6 @@ impl HostService {
     ) -> Result<(), DesktopError> {
         let _ = require_idle_config_clone(self).await?;
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before changing memory settings",
-            ));
-        }
         let cfg = guard
             .config
             .as_mut()
@@ -597,12 +643,6 @@ impl HostService {
         let _ = require_idle_config_clone(self).await?;
         let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before changing compaction settings",
-            ));
-        }
         let cfg = guard
             .config
             .as_mut()
@@ -729,23 +769,35 @@ impl HostService {
     }
 
     pub async fn list_jobs(&self) -> Result<Vec<BackgroundJobDto>, DesktopError> {
+        self.list_jobs_for(0, None).await
+    }
+
+    pub async fn list_jobs_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+    ) -> Result<Vec<BackgroundJobDto>, DesktopError> {
         let secrets = self.current_secrets();
-        let (store, session_id) = {
+        let (store, sid, active_run) = {
             let guard = self.inner.lock().await;
-            let Some(prepared) = &guard.prepared else {
+            let Some(sid) = guard.resolve_session_id(session_id, conn_id) else {
                 return Ok(Vec::new());
             };
-            (prepared.store.clone(), prepared.session.id)
+            let Some(slot) = guard.sessions.get(&sid) else {
+                return Ok(Vec::new());
+            };
+            (slot.prepared.store.clone(), sid, slot.active_run_id)
         };
         let jobs = store
-            .background_jobs(session_id)
+            .background_jobs(sid)
             .await
             .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-        let active_handle = self
-            .active_control
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().and_then(|c| c.handle.clone()));
+        let active_handle = active_run.and_then(|run_id| {
+            self.active_controls
+                .lock()
+                .ok()
+                .and_then(|controls| controls.get(&run_id).and_then(|c| c.handle.clone()))
+        });
 
         Ok(jobs
             .into_iter()
@@ -790,58 +842,97 @@ impl HostService {
             .collect())
     }
 
-    /// Single background job by id (`get_job`), with the same live-status
-    /// overlay as `list_jobs`. `None` when the session has no such job.
+    /// Single background job by id (`get_job`), with live-status overlay.
     pub async fn get_job(&self, job_id: &str) -> Result<Option<BackgroundJobDto>, DesktopError> {
-        let jobs = self.list_jobs().await?;
+        self.get_job_for(0, None, job_id).await
+    }
+
+    pub async fn get_job_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+        job_id: &str,
+    ) -> Result<Option<BackgroundJobDto>, DesktopError> {
+        let jobs = self.list_jobs_for(conn_id, session_id).await?;
         Ok(jobs.into_iter().find(|job| job.job_id == job_id))
     }
 
     /// Request cancellation of a still-running background job (`cancel_job`).
-    /// Returns `false` when there is no active run or the job is not running.
     pub async fn cancel_job(&self, job_id: &str) -> Result<bool, DesktopError> {
+        self.cancel_job_for(0, job_id).await
+    }
+
+    pub async fn cancel_job_for(&self, conn_id: u64, job_id: &str) -> Result<bool, DesktopError> {
         let secrets = self.current_secrets();
-        let handle = self
-            .active_control
+        let handles: Vec<_> = self
+            .active_controls
             .lock()
             .ok()
-            .and_then(|g| g.as_ref().and_then(|c| c.handle.clone()));
-        let Some(handle) = handle else {
-            return Ok(false);
-        };
-        match handle
-            .background_status(job_id)
-            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?
-        {
-            Some(soyo_core::background::JobStatus::Running) => {
+            .map(|controls| {
+                controls
+                    .values()
+                    .filter(|c| c.owner_conn_id == conn_id)
+                    .filter_map(|c| c.handle.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for handle in handles {
+            if let Some(JobStatus::Running) = handle
+                .background_status(job_id)
+                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?
+            {
                 handle
                     .cancel_background(job_id)
                     .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-                Ok(true)
+                return Ok(true);
             }
-            _ => Ok(false),
         }
+        Ok(false)
     }
 
     pub fn cancel_background_job(&self, job_id: &str) -> Result<bool, DesktopError> {
+        self.cancel_background_job_for(0, job_id)
+    }
+
+    pub fn cancel_background_job_for(
+        &self,
+        conn_id: u64,
+        job_id: &str,
+    ) -> Result<bool, DesktopError> {
         let secrets = self.current_secrets();
-        let control_guard = self
-            .active_control
+        let controls = self
+            .active_controls
             .lock()
             .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-        let Some(control) = control_guard.as_ref() else {
+        let owned: Vec<_> = controls
+            .values()
+            .filter(|c| c.owner_conn_id == conn_id)
+            .collect();
+        if owned.is_empty() {
             return Err(DesktopError::new(
                 "no_active_run",
                 "Background job cancellation requires an active run",
             ));
-        };
-        let handle = control
-            .handle
-            .as_ref()
-            .ok_or_else(|| DesktopError::new("run_starting", "Run is still initializing"))?;
-        handle
-            .cancel_background(job_id)
-            .map_err(|err| DesktopError::from_boundary(&err, &secrets))
+        }
+        let mut last_err = None;
+        for control in owned {
+            let Some(handle) = control.handle.as_ref() else {
+                continue;
+            };
+            match handle.background_status(job_id) {
+                Ok(Some(_)) => {
+                    return handle
+                        .cancel_background(job_id)
+                        .map_err(|err| DesktopError::from_boundary(&err, &secrets));
+                }
+                Ok(None) => {}
+                Err(err) => last_err = Some(err),
+            }
+        }
+        if let Some(err) = last_err {
+            return Err(DesktopError::from_boundary(&err, &secrets));
+        }
+        Ok(false)
     }
 
     pub async fn list_modules(&self) -> Result<Vec<ModuleStatusDto>, DesktopError> {
@@ -892,12 +983,6 @@ impl HostService {
         let _ = require_idle_config_clone(self).await?;
         let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before toggling MCP servers",
-            ));
-        }
         let cfg = guard
             .config
             .as_mut()
@@ -1112,6 +1197,19 @@ impl HostService {
         scope: ExportScopeDto,
         include_tools: bool,
     ) -> Result<ExportResultDto, DesktopError> {
+        self.export_session_for(0, session_id, target_path, format, scope, include_tools)
+            .await
+    }
+
+    pub async fn export_session_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<String>,
+        target_path: &str,
+        format: ExportFormatDto,
+        scope: ExportScopeDto,
+        include_tools: bool,
+    ) -> Result<ExportResultDto, DesktopError> {
         let cfg = require_config_clone(self).await?;
         let secrets = self.current_secrets();
         let trimmed_target = target_path.trim();
@@ -1131,13 +1229,9 @@ impl HostService {
             })?
         } else {
             let guard = self.inner.lock().await;
-            guard
-                .prepared
-                .as_ref()
-                .map(|p| p.session.id)
-                .ok_or_else(|| {
-                    DesktopError::new("session_required", "Select or create a session to export")
-                })?
+            guard.resolve_session_id(None, conn_id).ok_or_else(|| {
+                DesktopError::new("session_required", "Select or create a session to export")
+            })?
         };
 
         let cancel = Arc::new(RunCancellation::new());
@@ -1251,13 +1345,15 @@ fn work_mode_label(mode: WorkModeDto) -> &'static str {
     }
 }
 
-/// Merge the setup profile into `config.toml`, preserving an existing valid
+/// Merge the setup profile into `config_path`, preserving an existing valid
 /// document (comments and unrelated sections) via `toml_edit`. Returns the
 /// config path and an optional backup of the previous file so a failed
 /// reload can restore it.
-fn merge_setup_config(setup: &MergeSetup) -> Result<(PathBuf, Option<PathBuf>), BoundaryError> {
-    let env = Environment::capture_with(envfile::load_env_pairs());
-    let path = config::config_path(&Overrides::default(), &env)?;
+fn merge_setup_config(
+    config_path: &Path,
+    setup: &MergeSetup,
+) -> Result<(PathBuf, Option<PathBuf>), BoundaryError> {
+    let path = config_path.to_path_buf();
     let text = fs::read_to_string(&path).unwrap_or_default();
     let had_file = !text.trim().is_empty();
     let backup = if had_file {

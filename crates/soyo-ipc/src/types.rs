@@ -11,14 +11,30 @@ use soyo_core::{
 };
 use specta::Type;
 use specta_typescript::{Number, Unknown};
+use std::collections::BTreeMap;
 
 use crate::redaction;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 /// Structured IPC error returned to the frontend; sensitive values are redacted.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct DesktopError {
     pub code: String,
     pub message: String,
+    /// Marks runtime boundary errors (`Err(BoundaryError)`) distinct from
+    /// non-zero `Ok(RunResult)` endings (such as `needs_confirmation` or
+    /// `cancelled`) so CLI clients preserve exit codes and reporting semantics.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[specta(skip)]
+    pub boundary_error: bool,
+    /// Redacted observed tool result carried across persistence boundary errors
+    /// for interactive CLI/TUI error reporting without expanding TS bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub observed_result: Option<Box<ToolResult>>,
 }
 
 impl DesktopError {
@@ -26,13 +42,31 @@ impl DesktopError {
         Self {
             code: code.into(),
             message: message.into(),
+            boundary_error: false,
+            observed_result: None,
         }
     }
 
     pub fn from_boundary(error: &BoundaryError, secrets: &[String]) -> Self {
+        let observed_result = error.2.as_ref().map(|result| {
+            let cleaned = result.model_view();
+            let serialized = serde_json::to_value(&cleaned).unwrap_or(Value::Null);
+            let redacted = redaction::redact_value(&serialized, secrets);
+            let safe_result =
+                serde_json::from_value::<ToolResult>(redacted).unwrap_or_else(|_| ToolResult {
+                    ok: cleaned.ok,
+                    data: Some(Value::String("sensitive details withheld".into())),
+                    error: None,
+                    truncated: cleaned.truncated,
+                    media_refs: Vec::new(),
+                });
+            Box::new(safe_result)
+        });
         Self {
             code: error.code().to_owned(),
             message: redaction::redact_str(error.message(), secrets),
+            boundary_error: true,
+            observed_result,
         }
     }
 }
@@ -562,6 +596,10 @@ pub struct SubmitPromptParams {
     pub personal_context: Option<PersonalContextDto>,
     #[serde(default)]
     pub anthropic_prompt_cache: bool,
+    /// Caller environment snapshot for per-run isolation (CLI/TUI only; desktop leaves `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub env: Option<BTreeMap<String, String>>,
 }
 
 /// Live run/session control state for interactive clients (`/status`, mode
@@ -721,12 +759,24 @@ pub struct ActiveSessionDto {
 pub struct HelperInfoDto {
     /// `CARGO_PKG_VERSION` of the running helper binary.
     pub version: String,
+    /// Wire `PROTOCOL_VERSION` supported by this helper.
+    #[serde(default)]
+    pub protocol_version: u32,
     /// Executable path the helper was launched from.
     pub exe_path: String,
     /// OS process id.
     pub pid: u32,
-    /// A run is in flight — recycling the helper would destroy it.
+    /// True if any session currently has a run in flight.
     pub run_active: bool,
+    /// Total number of active concurrent runs across sessions.
+    #[serde(default)]
+    pub active_runs: u32,
+    /// Total number of connected IPC clients.
+    #[serde(default)]
+    pub active_clients: u32,
+    /// Configuration fingerprint served by this helper instance.
+    #[serde(default)]
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -808,6 +858,20 @@ pub struct RunPromptParams {
     pub personal_context: Option<PersonalContextDto>,
     #[serde(default)]
     pub attachments: Vec<AttachmentTokenDto>,
+    /// Caller environment snapshot captured in the CLI process for standalone parity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub env: Option<BTreeMap<String, String>>,
+    /// Emit missing suffix / reordered completion `TextDelta`s before `Finished`
+    /// (`PrintStream` parity for `--output text`). Desktop and JSON/JSONL leave off.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[specta(skip)]
+    pub reconcile_stream_text: bool,
+    /// Per-invocation diagnostic log threshold resolved in the CLI (`--log-level` /
+    /// `SOYO_LOG_LEVEL` / `"warn"`). Scopes helper tracing per invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub log_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -951,11 +1015,26 @@ pub struct StagedAttachmentDto {
     pub preview_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 pub struct DesktopPrefsDto {
     pub nickname: Option<String>,
     /// Data URL (`data:image/...;base64,...`) for the configured avatar, if any.
     pub avatar_data: Option<String>,
+    /// Preferred UI theme (`"system"` | `"light"` | `"dark"`).
+    #[serde(default)]
+    pub theme: Option<String>,
+    /// Message body font size (`13` | `14` | `16`).
+    #[serde(default)]
+    pub font_size: Option<u16>,
+    /// Conversation body font (`"default"` | `"serif"` | `"system"`).
+    #[serde(default)]
+    pub conversation_font: Option<String>,
+    /// Whether motion effects (including shader canvas) are disabled.
+    #[serde(default)]
+    pub reduce_motion: Option<bool>,
+    /// Docked inspector state on wide viewports (`>= 1280px`).
+    #[serde(default)]
+    pub inspector_open: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

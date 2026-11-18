@@ -599,19 +599,16 @@ async fn compact_session(
         Output::Text => Ok(report_result(&result, &prepared.session, false, config)),
     }
 }
-/// `soyo compact` through the shared helper, keeping the same output contract
-/// as the in-process path. Explicit `--config`/`--data-dir` and helper
-/// failures fall back to `compact_session`.
+/// `soyo compact` through the shared helper matching the resolved config/data-dir;
+/// falls back to in-process `compact_session` only when the helper cannot be reached.
 async fn compact_via_helper(
     cli: &Cli,
     config: &Config,
     session_id: &str,
     accept_config_change: bool,
 ) -> Result<u8, Box<dyn std::error::Error>> {
-    if cli.config.is_some() || cli.data_dir.is_some() {
-        return compact_session(cli, config, session_id, accept_config_change).await;
-    }
-    match helper_commands::connect_checked(false).await {
+    let target = soyo_ipc::HelperTarget::from_config(config);
+    match helper_commands::connect_checked_for(&target, false).await {
         Ok(client) => {
             match compact_over_socket(&client, cli, config, session_id, accept_config_change).await
             {
@@ -1100,18 +1097,8 @@ async fn run_via_helper(
     args: &RunArgs,
     payload: RunPayload,
 ) -> Result<u8, Box<dyn std::error::Error>> {
-    if cli.config.is_some() || cli.data_dir.is_some() {
-        return run(
-            config,
-            args,
-            payload.text,
-            payload.personal_context,
-            payload.anthropic_prompt_cache,
-            payload.resume_options,
-        )
-        .await;
-    }
-    match helper_commands::connect_checked(false).await {
+    let target = soyo_ipc::HelperTarget::from_config(config);
+    match helper_commands::connect_checked_for(&target, false).await {
         Ok(client) => match run_over_socket(&client, config, cli, args, payload).await {
             Ok(code) => Ok(code),
             Err(err) => {
@@ -1155,7 +1142,7 @@ fn helper_boundary_error(err: &DesktopError) -> BoundaryError {
             message: err.message.clone(),
         },
         None,
-        None,
+        err.observed_result.clone(),
     )
 }
 async fn run_over_socket(
@@ -1214,6 +1201,12 @@ async fn run_over_socket(
             memory: personal_context.memory.clone(),
         }),
         attachments: Vec::new(),
+        env: Some(config.environment().export_pairs()),
+        reconcile_stream_text: config.output == Output::Text,
+        log_level: LOG_LEVEL
+            .get()
+            .copied()
+            .map(|level| level.as_str().to_owned()),
     };
 
     // `params` moves into the streaming call; keep the fields the in-process
@@ -1327,11 +1320,15 @@ async fn run_over_socket(
     let started = match call.await {
         Ok(Ok(dto)) => dto,
         Ok(Err(err)) => {
-            if !saw_event {
-                // The run never started inside the helper; the in-process path
-                // preserves the standalone `soyo run` semantics.
+            if !saw_event
+                && matches!(
+                    err.code.as_str(),
+                    "helper_unavailable" | "helper_spawn" | "helper_disconnected" | "helper_io"
+                )
+            {
+                // The helper dropped before starting the run; fall back in-process.
                 eprintln!(
-                    "soyo: helper run rejected ({}: {}); using in-process runtime",
+                    "soyo: helper run unavailable ({}: {}); using in-process runtime",
                     err.code,
                     safe_output(&err.message, config)
                 );
@@ -1360,7 +1357,9 @@ async fn run_over_socket(
 
     match (finished, completed_error) {
         (Some(result), error) => {
-            if let Some(err) = error {
+            if let Some(err) = error
+                && err.boundary_error
+            {
                 // Boundary/runtime failure after events started; mirror the
                 // in-process Err arm: emit_failure already printed (JSONL),
                 // JSON re-reports the result, text reports the error.
@@ -1509,9 +1508,7 @@ async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -
         cwd_explicit: cli.cwd.is_some(),
         profile_explicit: cli.profile.is_some(),
         mode_override: cli.mode.map(Into::into),
-        // Same contract as `soyo run`/chat: explicit config/data-dir bypass
-        // the shared helper because it owns its own resolved configuration.
-        use_helper: cli.config.is_none() && cli.data_dir.is_none(),
+        use_helper: true,
     };
     match soyo_tui::run(config, options).await {
         Ok(code) => code,
@@ -1527,46 +1524,29 @@ async fn run_chat_session(cli: &Cli, config: Config, resume: Option<chat::Remote
     let Ok(secrets) = config_secrets(&config) else {
         return fail("sensitive details unavailable");
     };
-    if cli.config.is_some() || cli.data_dir.is_some() {
-        // Explicit config/data-dir overrides bypass the shared helper — the
-        // same contract `soyo run` uses, since the daemon cannot honor
-        // per-invocation storage paths.
-        let prepared = match resume {
-            Some(resume) => match session::resume(
-                &config,
-                &resume.session_id,
-                session::ResumeOptions {
-                    accept_config_change: resume.accept_config_change,
-                    cwd_explicit: resume.cwd_explicit,
-                    profile_explicit: resume.profile_explicit,
-                    mode_override: resume.mode_override,
-                },
-            )
-            .await
-            {
-                Ok(prepared) => Some(prepared),
-                Err(e) => return fail(safe_output(&e.to_string(), &config)),
-            },
-            None => None,
-        };
-        return match chat::chat(config, personal, cli.anthropic_prompt_cache, prepared).await {
-            Ok(code) => code,
-            Err(e) => fail(redacted_text(&e.to_string(), &secrets)),
-        };
-    }
     match chat::chat_via_helper(config, personal, cli.anthropic_prompt_cache, resume).await {
         Ok(code) => code,
         Err(e) => fail(redacted_text(&e.to_string(), &secrets)),
     }
 }
 
-/// Start the shared helper if it is not running yet. Interactive entry points
-/// (TUI, chat, resume) call this before doing their own runtime work; failure
-/// is a warning, not fatal — the CLI still runs its own embedded runtime.
-async fn ensure_helper_started() {
-    if let Err(err) = helper_commands::ensure_helper().await {
+/// Start the shared helper matching `target` if not running yet. Failure
+/// is a warning — the CLI still runs its own embedded runtime if helper fails.
+async fn ensure_helper_started_for(target: &soyo_ipc::HelperTarget) {
+    if let Err(err) = helper_commands::ensure_helper_for(target).await {
         eprintln!("soyo: cannot start helper daemon ({err}); continuing without shared backend");
     }
+}
+
+fn cli_helper_target(cli: &Cli, env: &Environment) -> Option<soyo_ipc::HelperTarget> {
+    let cwd = std::env::current_dir().ok()?;
+    soyo_ipc::HelperTarget::from_overrides(
+        cli.config.as_deref(),
+        cli.data_dir.as_deref(),
+        env,
+        &cwd,
+    )
+    .ok()
 }
 
 async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> u8 {
@@ -1575,7 +1555,9 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
         #[cfg(debug_assertions)]
         Some(Command::TuiPreview { .. }) => fail("TUI preview dispatch is unavailable"),
         None => {
-            ensure_helper_started().await;
+            if let Some(target) = cli_helper_target(cli, &env) {
+                ensure_helper_started_for(&target).await;
+            }
             launch_tui(cli, overrides, env).await
         }
         Some(Command::Logs { action }) => match load_config(overrides, env) {
@@ -1647,8 +1629,12 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
                 }
             }
         },
-        Some(Command::Helper) => helper_commands::run_helper().await,
-        Some(Command::Kill) => helper_commands::kill_helper().await,
+        Some(Command::Helper) => {
+            helper_commands::run_helper(cli.config.as_deref(), cli.data_dir.as_deref()).await
+        }
+        Some(Command::Kill) => {
+            helper_commands::kill_helper(cli.config.as_deref(), cli.data_dir.as_deref()).await
+        }
         Some(Command::Config {
             action: ConfigAction::Init,
         }) => match init(&overrides, &env) {
@@ -1689,7 +1675,8 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
         Some(Command::Chat) => match load_config(overrides, env) {
             Err(e) => fail(e),
             Ok(config) => {
-                ensure_helper_started().await;
+                let target = soyo_ipc::HelperTarget::from_config(&config);
+                ensure_helper_started_for(&target).await;
                 run_chat_session(cli, config, None).await
             }
         },
@@ -1709,7 +1696,8 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
         }) => match load_config(overrides, env) {
             Err(e) => fail(e),
             Ok(config) => {
-                ensure_helper_started().await;
+                let target = soyo_ipc::HelperTarget::from_config(&config);
+                ensure_helper_started_for(&target).await;
                 run_chat_session(
                     cli,
                     config,
@@ -1756,6 +1744,11 @@ async fn dispatch_run_command(
         }
     };
     let output = config.output;
+    if args.session.is_none()
+        && let Err(e) = session::check_roots(&config, &config.cwd, config.mode)
+    {
+        return output_error(boxed_error(&*e, "invalid_input", &config), Some(output));
+    }
     match run_via_helper(
         &config,
         cli,

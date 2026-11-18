@@ -13,21 +13,28 @@ use soyo_app::{
 };
 use soyo_core::{
     approvals::Preauthorizations,
-    boundary::{Cancellation, Model, Operation, Store, StoreChange},
-    config::{self, Config, Environment, Overrides},
+    boundary::{
+        Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store, StoreChange,
+    },
+    config::{self, Config, Environment, Output, Overrides},
     contract::{
-        BoundaryError, ErrorInfo, Event, EventPayload, HistoryItem, ModelPurpose, Persistence,
-        RunId, RunResult, RunStatus, SCHEMA_VERSION, Session, SessionId, Usage, WorkMode,
+        BoundaryError, ErrorInfo, Event, EventPayload, HistoryItem, ModelPurpose, PermissionMode,
+        Persistence, RunId, RunResult, RunStatus, SCHEMA_VERSION, Session, SessionId, Usage,
+        WorkMode,
     },
     credentials::SecretRegistry,
     execution::BackendKind,
+    logging::{JsonLog, LogLevel, diagnostics::Diagnostics},
     media,
     runtime::{PersonalContext, RuntimeHandle},
     sqlite::SessionSummary,
     tools::todo::{current_todos, result_todos},
 };
 use soyo_ipc::{
-    redaction, tool_format,
+    protocol::PROTOCOL_VERSION,
+    redaction,
+    socket::HelperTarget,
+    tool_format,
     types::{
         ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
         ContextEntryDto, DesktopError, DesktopStreamEnvelope, InputRequestDto, McpStatusBadgeDto,
@@ -39,15 +46,21 @@ use soyo_ipc::{
     },
 };
 use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{Arc, Mutex as StdMutex},
+    collections::{BTreeMap, HashMap},
+    ffi::OsString,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 
 const SESSIONS_PAGE_SIZE: u64 = 20;
 const MAX_RESTORED_HISTORY: usize = 512;
+pub const MAX_CONCURRENT_RUNS: usize = 4;
+const MAX_IDLE_SESSION_SLOTS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunKind {
@@ -81,6 +94,11 @@ pub struct StartRunRequest {
     /// Whether the prepared session came from a resume (`session.resumed`
     /// vs `session.created` for `emit_session_event`).
     pub resumed: bool,
+    /// Reconcile unstreamed suffix / reordered text before `Finished`
+    /// (`PrintStream` parity for `--output text`).
+    pub reconcile_stream_text: bool,
+    /// Optional per-run diagnostic log threshold (`run_prompt` CLI parity).
+    pub log_level: Option<LogLevel>,
 }
 
 impl StartRunRequest {
@@ -97,6 +115,8 @@ impl StartRunRequest {
             emit_session_event: false,
             config: None,
             resumed: false,
+            reconcile_stream_text: false,
+            log_level: None,
         }
     }
 }
@@ -121,8 +141,18 @@ impl StreamSink {
 
 pub type TestModelFactory = Arc<dyn Fn() -> Arc<dyn Model> + Send + Sync>;
 
+/// Connection and frame identity of the client owning an interactive run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClientOwner {
+    pub conn_id: u64,
+    pub request_id: u64,
+}
+
 pub struct ActiveControl {
     pub run_id: RunId,
+    pub session_id: SessionId,
+    pub owner_conn_id: u64,
+    pub owner_request_id: u64,
     pub kind: RunKind,
     pub cancel: Arc<RunCancellation>,
     pub handle: Option<RuntimeHandle>,
@@ -141,18 +171,77 @@ pub enum PendingInteraction {
     },
 }
 
+pub struct SessionSlot {
+    pub prepared: Prepared,
+    pub active_run_id: Option<RunId>,
+    pub last_usage: Option<Usage>,
+    pub owner_conn_id: Option<u64>,
+    pub permissions_mode: PermissionMode,
+    /// Ephemeral one-shot slots (`run_prompt` / `soyo run`) drop their prepared
+    /// SQLite handle and lock as soon as the run finishes so CLI resume / crash
+    /// recovery commands don't observe `session_busy`.
+    pub release_after_run: bool,
+}
+
 pub struct DesktopInner {
     pub config: Option<Config>,
     pub config_error: Option<String>,
-    pub prepared: Option<Prepared>,
-    pub active_run_id: Option<RunId>,
-    pub last_usage: Option<Usage>,
+    pub target: HelperTarget,
+    pub sessions: HashMap<SessionId, SessionSlot>,
+    pub connection_sessions: HashMap<u64, SessionId>,
+}
+
+impl DesktopInner {
+    pub fn release_ephemeral_slot(&mut self, sid: SessionId) {
+        if self
+            .sessions
+            .get(&sid)
+            .is_some_and(|slot| slot.release_after_run && slot.active_run_id.is_none())
+        {
+            self.sessions.remove(&sid);
+            self.connection_sessions
+                .retain(|_, &mut bound| bound != sid);
+        }
+    }
+    pub fn resolve_session_id(&self, explicit: Option<&str>, conn_id: u64) -> Option<SessionId> {
+        if let Some(raw) = explicit {
+            return session::parse_id(raw).ok();
+        }
+        if let Some(&sid) = self.connection_sessions.get(&conn_id)
+            && self.sessions.contains_key(&sid)
+        {
+            return Some(sid);
+        }
+        if conn_id == 0 && self.sessions.len() == 1 {
+            return self.sessions.keys().next().copied();
+        }
+        None
+    }
+
+    pub fn evict_idle_sessions(&mut self) {
+        if self.sessions.len() <= MAX_IDLE_SESSION_SLOTS {
+            return;
+        }
+        let pinned: std::collections::HashSet<SessionId> =
+            self.connection_sessions.values().copied().collect();
+        let evict_ids: Vec<SessionId> = self
+            .sessions
+            .iter()
+            .filter(|(sid, slot)| slot.active_run_id.is_none() && !pinned.contains(sid))
+            .map(|(sid, _)| *sid)
+            .take(self.sessions.len() - MAX_IDLE_SESSION_SLOTS)
+            .collect();
+        for sid in evict_ids {
+            self.sessions.remove(&sid);
+        }
+    }
 }
 
 pub struct HostService {
     pub inner: Arc<AsyncMutex<DesktopInner>>,
-    pub active_control: Arc<StdMutex<Option<ActiveControl>>>,
-    pub attachment_scope: Arc<StdMutex<Option<ActiveAttachmentScope>>>,
+    pub active_controls: Arc<StdMutex<HashMap<RunId, ActiveControl>>>,
+    pub active_clients: Arc<AtomicUsize>,
+    pub attachment_scope: Arc<StdMutex<ActiveAttachmentScope>>,
     pub staged_drafts: Arc<StdMutex<HashMap<String, StagedDraft>>>,
     pub pending_memory_actions: Arc<StdMutex<HashMap<String, PreparedMemoryAction>>>,
     pub secrets: Arc<SecretRegistry>,
@@ -300,32 +389,64 @@ impl EventSink for SummarySink {
 
 impl HostService {
     pub fn from_environment() -> Self {
-        let env = Environment::capture_with(crate::envfile::load_env_pairs());
+        Self::from_overrides(None, None)
+    }
+
+    pub fn from_overrides(config_path: Option<&Path>, data_dir: Option<&Path>) -> Self {
+        let raw_env = Environment::capture();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        let config_path = config::config_path(&Overrides::default(), &env)
+        let target = HelperTarget::from_overrides(config_path, data_dir, &raw_env, &cwd)
+            .unwrap_or_else(|_| {
+                HelperTarget::from_paths(
+                    PathBuf::from("config.toml"),
+                    PathBuf::from("data"),
+                    PathBuf::from("state"),
+                )
+            });
+        crate::envfile::migrate_legacy_env(&target.state_dir);
+        let overlay = crate::envfile::load_env_pairs_for(&target.state_dir);
+        let secret_values = crate::envfile::load_env_secret_values_for(&target.state_dir);
+        let env = Environment::capture_with(overlay);
+        let overrides = Overrides {
+            config: config_path.map(Path::to_path_buf),
+            data_dir: data_dir.map(Path::to_path_buf),
+            ..Default::default()
+        };
+        let resolved_config_path = config::config_path(&overrides, &env)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
-        match config::load(Overrides::default(), env, &cwd) {
-            Ok(cfg) => Self::with_config(cfg),
-            Err(err) => Self {
-                inner: Arc::new(AsyncMutex::new(DesktopInner {
-                    config: None,
-                    config_error: Some(format!(
-                        "{}{}",
-                        err.message(),
-                        config_path.map(|p| format!(" ({p})")).unwrap_or_default()
-                    )),
-                    prepared: None,
-                    active_run_id: None,
-                    last_usage: None,
-                })),
-                active_control: Arc::new(StdMutex::new(None)),
-                attachment_scope: Arc::new(StdMutex::new(None)),
-                staged_drafts: Arc::new(StdMutex::new(HashMap::new())),
-                pending_memory_actions: Arc::new(StdMutex::new(HashMap::new())),
-                secrets: Arc::new(SecretRegistry::default()),
-                test_model_factory: None,
-            },
+        match config::load(overrides, env, &cwd) {
+            Ok(cfg) => {
+                let svc = Self::with_config(cfg);
+                let _ = svc.secrets.register(&secret_values);
+                svc
+            }
+            Err(err) => {
+                let secrets = Arc::new(SecretRegistry::default());
+                let _ = secrets.register(&secret_values);
+                Self {
+                    inner: Arc::new(AsyncMutex::new(DesktopInner {
+                        config: None,
+                        config_error: Some(format!(
+                            "{}{}",
+                            err.message(),
+                            resolved_config_path
+                                .map(|p| format!(" ({p})"))
+                                .unwrap_or_default()
+                        )),
+                        target,
+                        sessions: HashMap::new(),
+                        connection_sessions: HashMap::new(),
+                    })),
+                    active_controls: Arc::new(StdMutex::new(HashMap::new())),
+                    active_clients: Arc::new(AtomicUsize::new(0)),
+                    attachment_scope: Arc::new(StdMutex::new(HashMap::new())),
+                    staged_drafts: Arc::new(StdMutex::new(HashMap::new())),
+                    pending_memory_actions: Arc::new(StdMutex::new(HashMap::new())),
+                    secrets,
+                    test_model_factory: None,
+                }
+            }
         }
     }
 
@@ -333,18 +454,21 @@ impl HostService {
         if cfg.profile.is_none() && cfg.profiles.len() == 1 {
             cfg.profile = cfg.profiles.keys().next().cloned();
         }
+        let target = HelperTarget::from_config(&cfg);
         let registry = Arc::new(SecretRegistry::default());
+        let _ = registry.register(&crate::envfile::load_env_secret_values_for(&cfg.state_dir));
         register_config_secrets(&cfg, &registry);
         Self {
             inner: Arc::new(AsyncMutex::new(DesktopInner {
                 config: Some(cfg),
                 config_error: None,
-                prepared: None,
-                active_run_id: None,
-                last_usage: None,
+                target,
+                sessions: HashMap::new(),
+                connection_sessions: HashMap::new(),
             })),
-            active_control: Arc::new(StdMutex::new(None)),
-            attachment_scope: Arc::new(StdMutex::new(None)),
+            active_controls: Arc::new(StdMutex::new(HashMap::new())),
+            active_clients: Arc::new(AtomicUsize::new(0)),
+            attachment_scope: Arc::new(StdMutex::new(HashMap::new())),
             staged_drafts: Arc::new(StdMutex::new(HashMap::new())),
             pending_memory_actions: Arc::new(StdMutex::new(HashMap::new())),
             secrets: registry,
@@ -353,12 +477,21 @@ impl HostService {
     }
 
     pub fn sync_attachment_scope(&self, prepared: Option<&Prepared>) {
-        if let Ok(mut scope) = self.attachment_scope.lock() {
-            *scope = prepared.map(|p| ActiveAttachmentScope {
-                session_id: p.session.id,
-                media: p.media.clone(),
-            });
+        if let Some(p) = prepared
+            && let Ok(mut scope) = self.attachment_scope.lock()
+        {
+            scope.insert(p.session.id, p.media.clone());
         }
+    }
+
+    pub fn remove_attachment_scope(&self, session_id: SessionId) {
+        if let Ok(mut scope) = self.attachment_scope.lock() {
+            scope.remove(&session_id);
+        }
+    }
+
+    pub async fn helper_target(&self) -> HelperTarget {
+        self.inner.lock().await.target.clone()
     }
 
     pub fn with_test_model(mut self, factory: TestModelFactory) -> Self {
@@ -370,26 +503,45 @@ impl HostService {
         self.secrets.snapshot().unwrap_or_default()
     }
 
-    /// Identity of this helper process for client-side compatibility checks:
-    /// version + executable let callers detect a stale daemon built from a
-    /// different binary, `run_active` keeps a busy helper from being recycled.
+    /// Identity and compatibility metadata for the running helper daemon.
     pub async fn helper_info(&self) -> soyo_ipc::types::HelperInfoDto {
-        let run_active = self.inner.lock().await.active_run_id.is_some();
+        let active_runs = self
+            .active_controls
+            .lock()
+            .map(|controls| controls.len())
+            .unwrap_or(0);
+        let active_clients = self.active_clients.load(Ordering::Acquire);
+        let fingerprint = self.inner.lock().await.target.fingerprint.clone();
         soyo_ipc::types::HelperInfoDto {
             version: env!("CARGO_PKG_VERSION").into(),
+            protocol_version: PROTOCOL_VERSION,
             exe_path: std::env::current_exe()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             pid: std::process::id(),
-            run_active,
+            run_active: active_runs > 0,
+            active_runs: active_runs as u32,
+            active_clients: active_clients as u32,
+            fingerprint,
         }
     }
 
     pub async fn get_bootstrap_state(&self) -> BootstrapStateDto {
+        self.get_bootstrap_state_for(0, None).await
+    }
+
+    pub async fn get_bootstrap_state_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+    ) -> BootstrapStateDto {
         let guard = self.inner.lock().await;
         let secrets = self.current_secrets();
-        let active_run_id = guard.active_run_id.map(|id| id.0.to_string());
-        let (current_mode, pending_mode) = self.active_mode_snapshot();
+        let target_sid = guard.resolve_session_id(session_id, conn_id);
+        let slot = target_sid.and_then(|sid| guard.sessions.get(&sid));
+        let active_run = slot.and_then(|s| s.active_run_id);
+        let active_run_id = active_run.map(|id| id.0.to_string());
+        let (current_mode, pending_mode) = self.active_mode_snapshot_for(active_run);
 
         let Some(cfg) = &guard.config else {
             return BootstrapStateDto {
@@ -422,7 +574,19 @@ impl HostService {
             };
         };
 
-        let selected = cfg.profile.as_ref().and_then(|name| cfg.profiles.get(name));
+        let effective_profile = slot
+            .map(|s| s.prepared.session.profile.clone())
+            .or_else(|| cfg.profile.clone());
+        let effective_workspace = slot
+            .map(|s| s.prepared.session.workspace.clone())
+            .unwrap_or_else(|| cfg.cwd.clone());
+        let effective_perm = slot
+            .map(|s| s.permissions_mode)
+            .unwrap_or(cfg.permissions_mode);
+
+        let selected = effective_profile
+            .as_ref()
+            .and_then(|name| cfg.profiles.get(name));
         let profiles = cfg
             .profiles
             .iter()
@@ -435,20 +599,21 @@ impl HostService {
             })
             .collect();
 
-        let session = guard.prepared.as_ref().map(|prepared| {
-            build_active_session_dto(&prepared.session, guard.last_usage.clone(), &secrets)
-        });
+        let session = slot
+            .map(|s| build_active_session_dto(&s.prepared.session, s.last_usage.clone(), &secrets));
 
-        let work_mode = current_mode.unwrap_or(cfg.mode).into();
+        let work_mode = current_mode
+            .or_else(|| slot.map(|s| s.prepared.session.work_mode))
+            .unwrap_or(cfg.mode)
+            .into();
 
         BootstrapStateDto {
             version: env!("CARGO_PKG_VERSION").into(),
             config_ready: true,
             config_path: redaction::redact_str(&cfg.config_path.to_string_lossy(), &secrets),
             config_error: None,
-            workspace: redaction::redact_str(&cfg.cwd.to_string_lossy(), &secrets),
-            selected_profile: cfg
-                .profile
+            workspace: redaction::redact_str(&effective_workspace.to_string_lossy(), &secrets),
+            selected_profile: effective_profile
                 .as_deref()
                 .map(|p| redaction::redact_str(p, &secrets)),
             selected_model: selected.map(|p| redaction::redact_str(&p.model, &secrets)),
@@ -458,7 +623,7 @@ impl HostService {
                 .map(|e| e.as_str().to_owned()),
             work_mode,
             pending_mode,
-            permission_mode: cfg.permissions_mode.into(),
+            permission_mode: effective_perm.into(),
             sandbox_backend: sandbox_label(cfg.sandbox.backend).into(),
             auto_compact: cfg.context.auto_compact,
             auto_compact_trigger_tokens: cfg.context.trigger_tokens,
@@ -470,11 +635,17 @@ impl HostService {
         }
     }
 
-    fn active_mode_snapshot(&self) -> (Option<WorkMode>, Option<WorkModeDto>) {
-        let Ok(guard) = self.active_control.lock() else {
+    fn active_mode_snapshot_for(
+        &self,
+        run_id: Option<RunId>,
+    ) -> (Option<WorkMode>, Option<WorkModeDto>) {
+        let Some(run_id) = run_id else {
             return (None, None);
         };
-        let Some(control) = guard.as_ref() else {
+        let Ok(guard) = self.active_controls.lock() else {
+            return (None, None);
+        };
+        let Some(control) = guard.get(&run_id) else {
             return (None, None);
         };
         let Some(handle) = &control.handle else {
@@ -514,11 +685,16 @@ impl HostService {
         })
     }
 
-    /// Cross-session token usage aggregated over `days` UTC days. Data-plane
-    /// query — reads persisted `run_metrics` from the shared store; it does
-    /// not touch any prepared or active session.
-    pub async fn usage_stats(&self, days: Option<u32>) -> Result<UsageStatsDto, DesktopError> {
+    /// Cross-session token usage aggregated over `days` local-timezone days.
+    /// `utc_offset_minutes` is positive east of UTC (e.g. `+480` for UTC+8, matching
+    /// `-new Date().getTimezoneOffset()` in JavaScript). Defaults to `0` (UTC) when omitted.
+    pub async fn usage_stats(
+        &self,
+        days: Option<u32>,
+        utc_offset_minutes: Option<i32>,
+    ) -> Result<UsageStatsDto, DesktopError> {
         let range_days = days.unwrap_or(30).clamp(1, 365);
+        let offset_secs = i64::from(utc_offset_minutes.unwrap_or(0).clamp(-840, 840)) * 60;
         let cfg = self.require_config().await?;
         let secrets = self.current_secrets();
         let store = offload_boundary(move || {
@@ -530,7 +706,13 @@ impl HostService {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let since = now - i64::from(range_days) * 86_400;
+        const DAY: i64 = 86_400;
+        let local_day_start = |ts: i64| -> i64 {
+            let shifted = ts.saturating_add(offset_secs);
+            (shifted - shifted.rem_euclid(DAY)) - offset_secs
+        };
+        let today_start = local_day_start(now);
+        let since = today_start - i64::from(range_days.saturating_sub(1)) * DAY;
         let records = store
             .usage_metrics_since(since)
             .await
@@ -544,7 +726,6 @@ impl HostService {
         ];
         let mut days: std::collections::BTreeMap<i64, UsageDayDto> =
             std::collections::BTreeMap::new();
-        const DAY: i64 = 86_400;
 
         for record in records {
             totals.runs = totals.runs.saturating_add(1);
@@ -555,6 +736,7 @@ impl HostService {
                     .saturating_add(record.metrics.review_requests)
                     .saturating_add(record.metrics.compaction_requests),
             );
+            let day_key = local_day_start(record.started_at);
             let usages = [
                 (
                     0usize,
@@ -580,15 +762,13 @@ impl HostService {
                 let Some(usage) = usage else { continue };
                 fold_usage(&mut purposes[idx].1, usage);
                 fold_usage(&mut totals, usage);
-                let day = days
-                    .entry(record.started_at - record.started_at.rem_euclid(DAY))
-                    .or_insert(UsageDayDto {
-                        day_start: record.started_at - record.started_at.rem_euclid(DAY),
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cached_input_tokens: 0,
-                        estimated: false,
-                    });
+                let day = days.entry(day_key).or_insert(UsageDayDto {
+                    day_start: day_key,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cached_input_tokens: 0,
+                    estimated: false,
+                });
                 day.input_tokens = day
                     .input_tokens
                     .saturating_add(usage.input_tokens.unwrap_or(0));
@@ -626,54 +806,117 @@ impl HostService {
         cwd: Option<String>,
         profile: Option<String>,
     ) -> Result<ActiveSessionDto, DesktopError> {
+        self.new_session_for(0, cwd, profile).await
+    }
+
+    pub async fn new_session_for(
+        &self,
+        conn_id: u64,
+        cwd: Option<String>,
+        profile: Option<String>,
+    ) -> Result<ActiveSessionDto, DesktopError> {
         let secrets = self.current_secrets();
-        let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before creating a new session",
-            ));
+        let base_cfg = self.require_config().await?;
+        let mut session_cfg = base_cfg.clone();
+        // Per-session overrides must never overwrite the daemon default config.
+        if let Some(cwd) = cwd {
+            session_cfg.cwd = PathBuf::from(cwd);
         }
-        if let Some(cwd) = cwd
-            && let Some(cfg) = &mut guard.config
-        {
-            cfg.cwd = PathBuf::from(cwd);
+        if let Some(profile) = profile {
+            session_cfg.profile = Some(profile);
         }
-        if let Some(profile) = profile
-            && let Some(cfg) = &mut guard.config
-        {
-            cfg.profile = Some(profile);
-        }
-        let cfg = guard.config.clone().ok_or_else(|| {
-            DesktopError::new(
-                "invalid_config",
-                guard
-                    .config_error
-                    .as_deref()
-                    .unwrap_or("Configuration is not loaded"),
-            )
-        })?;
-        let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
+        let new_sess = soyo_app::new_session(&session_cfg).map_err(|err| {
             DesktopError::new(
                 "invalid_config",
                 redaction::redact_str(&err.to_string(), &secrets),
             )
         })?;
-        let prepared = session::create(&cfg, new_sess).await.map_err(|err| {
-            DesktopError::new(
-                "storage_error",
-                redaction::redact_str(&err.to_string(), &secrets),
-            )
-        })?;
+        let prepared = session::create(&session_cfg, new_sess)
+            .await
+            .map_err(|err| {
+                DesktopError::new(
+                    "storage_error",
+                    redaction::redact_str(&err.to_string(), &secrets),
+                )
+            })?;
+        let sid = prepared.session.id;
         let dto = build_active_session_dto(&prepared.session, None, &secrets);
         self.sync_attachment_scope(Some(&prepared));
-        guard.last_usage = None;
-        guard.prepared = Some(prepared);
+        let mut guard = self.inner.lock().await;
+        guard.sessions.insert(
+            sid,
+            SessionSlot {
+                prepared,
+                active_run_id: None,
+                last_usage: None,
+                owner_conn_id: Some(conn_id),
+                permissions_mode: session_cfg.permissions_mode,
+                release_after_run: false,
+            },
+        );
+        guard.connection_sessions.insert(conn_id, sid);
+        guard.evict_idle_sessions();
         Ok(dto)
+    }
+
+    fn resolve_run_config(
+        &self,
+        base_cfg: &Config,
+        caller_env: Option<BTreeMap<String, String>>,
+    ) -> Result<Config, DesktopError> {
+        let secrets = self.current_secrets();
+        let Some(env_map) = caller_env else {
+            return Ok(base_cfg.clone());
+        };
+        let mut env = Environment::from_pairs(
+            env_map
+                .into_iter()
+                .map(|(k, v)| (OsString::from(k), OsString::from(v))),
+        );
+        let overlay = crate::envfile::load_env_pairs_for(&base_cfg.state_dir);
+        let overlay_secrets = crate::envfile::load_env_secret_values_for(&base_cfg.state_dir);
+        let _ = self.secrets.register(&overlay_secrets);
+        env.merge_missing(overlay);
+        let overrides = Overrides {
+            config: Some(base_cfg.config_path.clone()),
+            data_dir: Some(base_cfg.data_dir.clone()),
+            profile: base_cfg.profile.clone(),
+            mode: Some(base_cfg.mode),
+            permissions: Some(base_cfg.permissions_mode),
+            output: Some(base_cfg.output),
+            cwd: Some(base_cfg.cwd.clone()),
+        };
+        let mut cfg = config::load(overrides, env, &base_cfg.cwd).map_err(|err| {
+            DesktopError::new(
+                "invalid_config",
+                redaction::redact_str(err.message(), &secrets),
+            )
+        })?;
+        cfg.sandbox.backend = base_cfg.sandbox.backend;
+        cfg.memory = base_cfg.memory.clone();
+        cfg.context.auto_compact = base_cfg.context.auto_compact;
+        cfg.context.trigger_tokens = base_cfg.context.trigger_tokens;
+        for (name, server) in &base_cfg.mcp.servers {
+            if let Some(target) = cfg.mcp.servers.get_mut(name) {
+                target.enabled = server.enabled;
+            }
+        }
+        register_config_secrets(&cfg, &self.secrets);
+        Ok(cfg)
     }
 
     pub async fn submit_prompt(
         &self,
+        params: SubmitPromptParams,
+        sink: StreamSink,
+    ) -> Result<SubmitPromptResultDto, DesktopError> {
+        self.submit_prompt_for(ClientOwner::default(), params, sink)
+            .await
+    }
+
+    pub async fn submit_prompt_for(
+        &self,
+        owner: ClientOwner,
         params: SubmitPromptParams,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
@@ -682,104 +925,159 @@ impl HostService {
             return Err(DesktopError::new("invalid_input", "Prompt cannot be empty"));
         }
         let expanded = expand_attachments(&params.prompt, &params.attachments);
+        let secrets = self.current_secrets();
 
-        // Session pinning: interactive clients (chat/TUI) pass the session id
-        // they opened. With no prepared session the helper resumes it; a
-        // different prepared session is contention — fail instead of writing
-        // the prompt into the wrong session.
-        if let Some(wanted) = &params.session_id {
-            let secrets = self.current_secrets();
+        let target_sid: Option<SessionId>;
+        let run_cfg: Option<Config>;
+        {
             let mut guard = self.inner.lock().await;
-            if guard.active_run_id.is_none() {
-                match &guard.prepared {
-                    Some(prepared) if prepared.session.id.0.to_string() == *wanted => {}
-                    Some(_) => {
-                        return Err(DesktopError::new(
-                            "session_changed",
-                            "Another session became active; reopen yours and retry",
-                        ));
-                    }
-                    None => {
-                        let cfg = guard.config.clone().ok_or_else(|| {
-                            DesktopError::new(
-                                "invalid_config",
-                                guard
-                                    .config_error
-                                    .as_deref()
-                                    .unwrap_or("Configuration is not loaded"),
-                            )
-                        })?;
-                        let prepared = session::resume(
-                            &cfg,
-                            wanted,
-                            session::ResumeOptions {
-                                accept_config_change: false,
-                                cwd_explicit: false,
-                                profile_explicit: false,
-                                mode_override: None,
-                            },
-                        )
-                        .await
-                        .map_err(|err| {
-                            DesktopError::new(
-                                "resume_failed",
-                                redaction::redact_str(&err.to_string(), &secrets),
-                            )
-                        })?;
-                        self.sync_attachment_scope(Some(&prepared));
-                        guard.prepared = Some(prepared);
-                    }
-                }
-            }
-        }
+            let bound_sid = guard.connection_sessions.get(&owner.conn_id).copied();
 
-        // Fast-path: if a run is currently active, steer it at the next model boundary.
-        let steered_run_id = {
-            let control_guard = self.active_control.lock().ok();
-            if let Some(control) = control_guard.as_ref().and_then(|g| g.as_ref()) {
-                if control.kind == RunKind::Compaction {
-                    return Err(DesktopError::new(
-                        "compaction_active",
-                        "Compaction is currently running; wait or cancel before steering",
-                    ));
-                }
-                let handle = control.handle.as_ref().ok_or_else(|| {
+            if let Some(wanted_raw) = &params.session_id {
+                let wanted_sid = session::parse_id(wanted_raw).map_err(|err| {
                     DesktopError::new(
-                        "run_starting",
-                        "Run is still initializing; please retry in a moment",
+                        "invalid_session_id",
+                        redaction::redact_str(&err.to_string(), &secrets),
                     )
                 })?;
-                let secrets = self.current_secrets();
-                handle
-                    .steer(expanded.clone())
-                    .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-                Some(control.run_id.0.to_string())
+
+                // Check whether another connection already owns an active run for this session.
+                if let Some(slot) = guard.sessions.get(&wanted_sid)
+                    && let Some(active_run) = slot.active_run_id
+                {
+                    let control_owner = self
+                        .active_controls
+                        .lock()
+                        .ok()
+                        .and_then(|c| c.get(&active_run).map(|a| a.owner_conn_id));
+                    if control_owner != Some(owner.conn_id) {
+                        return Err(DesktopError::new(
+                            "session_changed",
+                            "Target session has an active run owned by another client",
+                        ));
+                    }
+                }
+
+                // If this connection is already bound to a different session, fail closed
+                // with `session_changed` instead of silently cross-steering or jumping.
+                if let Some(bound) = bound_sid
+                    && bound != wanted_sid
+                    && guard.sessions.contains_key(&bound)
+                {
+                    return Err(DesktopError::new(
+                        "session_changed",
+                        "Another session is active on this connection; reopen yours and retry",
+                    ));
+                }
+
+                if !guard.sessions.contains_key(&wanted_sid) {
+                    let cfg = guard.config.clone().ok_or_else(|| {
+                        DesktopError::new(
+                            "invalid_config",
+                            guard
+                                .config_error
+                                .as_deref()
+                                .unwrap_or("Configuration is not loaded"),
+                        )
+                    })?;
+                    let prepared = session::resume(
+                        &cfg,
+                        wanted_raw,
+                        session::ResumeOptions {
+                            accept_config_change: false,
+                            cwd_explicit: false,
+                            profile_explicit: false,
+                            mode_override: None,
+                        },
+                    )
+                    .await
+                    .map_err(|err| {
+                        DesktopError::new(
+                            "resume_failed",
+                            redaction::redact_str(&err.to_string(), &secrets),
+                        )
+                    })?;
+                    self.sync_attachment_scope(Some(&prepared));
+                    guard.sessions.insert(
+                        wanted_sid,
+                        SessionSlot {
+                            prepared,
+                            active_run_id: None,
+                            last_usage: None,
+                            owner_conn_id: Some(owner.conn_id),
+                            permissions_mode: cfg.permissions_mode,
+                            release_after_run: false,
+                        },
+                    );
+                }
+                guard.connection_sessions.insert(owner.conn_id, wanted_sid);
+                target_sid = Some(wanted_sid);
+            } else {
+                target_sid = guard.resolve_session_id(None, owner.conn_id);
+            }
+
+            // Fast-path: steer only the active run of `target_sid` owned by `owner.conn_id`.
+            if let Some(sid) = target_sid
+                && let Some(slot) = guard.sessions.get(&sid)
+                && let Some(run_id) = slot.active_run_id
+            {
+                let control_guard = self
+                    .active_controls
+                    .lock()
+                    .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+                if let Some(control) = control_guard.get(&run_id) {
+                    if control.owner_conn_id != owner.conn_id {
+                        return Err(DesktopError::new(
+                            "session_changed",
+                            "Cannot steer a run owned by another client connection",
+                        ));
+                    }
+                    if control.kind == RunKind::Compaction {
+                        return Err(DesktopError::new(
+                            "compaction_active",
+                            "Compaction is currently running; wait or cancel before steering",
+                        ));
+                    }
+                    let handle = control.handle.as_ref().ok_or_else(|| {
+                        DesktopError::new(
+                            "run_starting",
+                            "Run is still initializing; please retry in a moment",
+                        )
+                    })?;
+                    handle
+                        .steer(expanded.clone())
+                        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+                    return Ok(SubmitPromptResultDto {
+                        action: "steered".into(),
+                        session_id: sid.0.to_string(),
+                        run_id: control.run_id.0.to_string(),
+                        recovered_runs: None,
+                        recovered_tools: None,
+                    });
+                }
+            }
+
+            run_cfg = if let Some(env_snapshot) = params.env {
+                let base_cfg = guard.config.clone().ok_or_else(|| {
+                    DesktopError::new(
+                        "invalid_config",
+                        guard
+                            .config_error
+                            .as_deref()
+                            .unwrap_or("Configuration is not loaded"),
+                    )
+                })?;
+                Some(self.resolve_run_config(&base_cfg, Some(env_snapshot))?)
             } else {
                 None
-            }
-        };
-        if let Some(run_id) = steered_run_id {
-            let session_id = {
-                let guard = self.inner.lock().await;
-                guard
-                    .prepared
-                    .as_ref()
-                    .map(|p| p.session.id.0.to_string())
-                    .unwrap_or_default()
             };
-            return Ok(SubmitPromptResultDto {
-                action: "steered".into(),
-                session_id,
-                run_id,
-                recovered_runs: None,
-                recovered_tools: None,
-            });
         }
 
         let mut req = StartRunRequest::desktop(Some(expanded), RunKind::Execution);
         req.raw_events = params.raw_events;
         req.capture_media = params.capture_media;
         req.anthropic_prompt_cache = params.anthropic_prompt_cache;
+        req.config = run_cfg;
         req.personal_context = params
             .personal_context
             .map(|p| PersonalContext {
@@ -787,14 +1085,24 @@ impl HostService {
                 memory: p.memory,
             })
             .unwrap_or_default();
-        self.start_run_ex(req, sink).await
+        self.start_run_ex(owner, target_sid, req, sink).await
     }
 
     /// Socket-backed `soyo run`: headless-or-interactive execution that keeps
     /// the CLI's session prep, resume options, approval files, personal
-    /// context, and raw schema-event output on the shared runtime.
+    /// context, caller environment, and raw schema-event output on the shared runtime.
     pub async fn run_prompt(
         &self,
+        params: RunPromptParams,
+        sink: StreamSink,
+    ) -> Result<SubmitPromptResultDto, DesktopError> {
+        self.run_prompt_for(ClientOwner::default(), params, sink)
+            .await
+    }
+
+    pub async fn run_prompt_for(
+        &self,
+        owner: ClientOwner,
         params: RunPromptParams,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
@@ -802,104 +1110,139 @@ impl HostService {
         if params.prompt.trim().is_empty() {
             return Err(DesktopError::new("invalid_input", "Prompt cannot be empty"));
         }
+        let log_level = match params.log_level.as_deref() {
+            Some(raw) => Some(raw.parse::<LogLevel>().map_err(|_| {
+                DesktopError::new("invalid_params", format!("Invalid log_level: {raw}"))
+            })?),
+            None => None,
+        };
         let expanded = expand_attachments(&params.prompt, &params.attachments);
 
-        let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Another run is already active",
-            ));
-        }
-        let mut cfg = guard.config.clone().ok_or_else(|| {
-            DesktopError::new(
-                "invalid_config",
-                guard
-                    .config_error
-                    .as_deref()
-                    .unwrap_or("Configuration is not loaded"),
-            )
-        })?;
-        if cfg.profile.is_none() && params.profile.is_none() {
-            return Err(DesktopError::new(
-                "invalid_config",
-                "Select a configured model profile first",
-            ));
-        }
-        // Client overrides apply to this run only; the shared daemon config
-        // (and other clients' sessions) stay untouched.
-        if let Some(cwd) = &params.cwd {
-            cfg.cwd = PathBuf::from(cwd);
-        }
-        if let Some(profile) = &params.profile {
-            cfg.profile = Some(profile.clone());
-        }
-        if let Some(mode) = params.mode {
-            cfg.mode = mode.into();
-        }
-        if let Some(permissions) = params.permissions {
-            cfg.permissions_mode = permissions.into();
-        }
-        if cfg.profile.is_none() {
-            return Err(DesktopError::new(
-                "invalid_config",
-                "Select a configured model profile first",
-            ));
-        }
-
-        let prepared = if let Some(session_id) = &params.session_id {
-            // A helper-held prepared session still owns the session lock;
-            // release it before re-resuming the same id or sequential
-            // `soyo run --session` calls deadlock on our own lock.
-            if guard
-                .prepared
-                .as_ref()
-                .is_some_and(|p| p.session.id.0.to_string() == *session_id)
-            {
-                guard.prepared = None;
+        let (cfg, workspace, sid, recovered_runs, recovered_tools) = {
+            let active_count = self.active_controls.lock().map(|c| c.len()).unwrap_or(0);
+            if active_count >= MAX_CONCURRENT_RUNS {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Maximum concurrent run limit (4) reached",
+                ));
             }
-            session::resume(
-                &cfg,
-                session_id,
-                session::ResumeOptions {
-                    accept_config_change: params.accept_config_change,
-                    cwd_explicit: params.cwd.is_some(),
-                    profile_explicit: params.profile.is_some(),
-                    mode_override: params.mode.map(Into::into),
-                },
-            )
-            .await
-            .map_err(|err| {
-                let msg = redaction::redact_str(&err.to_string(), &secrets);
-                let code = if msg.contains("configuration changed") {
-                    "config_change_requires_confirmation"
-                } else {
-                    "resume_failed"
-                };
-                DesktopError::new(code, msg)
-            })?
-        } else {
-            let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
+            let mut guard = self.inner.lock().await;
+            let base_cfg = guard.config.clone().ok_or_else(|| {
                 DesktopError::new(
                     "invalid_config",
-                    redaction::redact_str(&err.to_string(), &secrets),
+                    guard
+                        .config_error
+                        .as_deref()
+                        .unwrap_or("Configuration is not loaded"),
                 )
             })?;
-            session::create(&cfg, new_sess).await.map_err(|err| {
-                DesktopError::new(
-                    "storage_error",
-                    redaction::redact_str(&err.to_string(), &secrets),
+            let mut cfg = self.resolve_run_config(&base_cfg, params.env)?;
+            if cfg.profile.is_none() && params.profile.is_none() {
+                return Err(DesktopError::new(
+                    "invalid_config",
+                    "Select a configured model profile first",
+                ));
+            }
+            if let Some(cwd) = &params.cwd {
+                cfg.cwd = PathBuf::from(cwd);
+            }
+            if let Some(profile) = &params.profile {
+                cfg.profile = Some(profile.clone());
+            }
+            if let Some(mode) = params.mode {
+                cfg.mode = mode.into();
+            }
+            if let Some(permissions) = params.permissions {
+                cfg.permissions_mode = permissions.into();
+            }
+            if params.reconcile_stream_text {
+                cfg.output = Output::Text;
+            }
+            if cfg.profile.is_none() {
+                return Err(DesktopError::new(
+                    "invalid_config",
+                    "Select a configured model profile first",
+                ));
+            }
+
+            let prepared = if let Some(session_id) = &params.session_id {
+                let parsed_id = session::parse_id(session_id).map_err(|err| {
+                    DesktopError::new(
+                        "invalid_session_id",
+                        redaction::redact_str(&err.to_string(), &secrets),
+                    )
+                })?;
+                if guard
+                    .sessions
+                    .get(&parsed_id)
+                    .is_some_and(|slot| slot.active_run_id.is_some())
+                {
+                    return Err(DesktopError::new(
+                        "run_active",
+                        "This session already has an active run",
+                    ));
+                }
+                // Release an idle prepared slot for this same session so
+                // `session::resume` can acquire its SQLite session lock cleanly.
+                guard.sessions.remove(&parsed_id);
+                session::resume(
+                    &cfg,
+                    session_id,
+                    session::ResumeOptions {
+                        accept_config_change: params.accept_config_change,
+                        cwd_explicit: params.cwd.is_some(),
+                        profile_explicit: params.profile.is_some(),
+                        mode_override: params.mode.map(Into::into),
+                    },
                 )
-            })?
+                .await
+                .map_err(|err| {
+                    if let Some(boundary) = err.downcast_ref::<BoundaryError>() {
+                        DesktopError::from_boundary(boundary, &secrets)
+                    } else {
+                        let msg = redaction::redact_str(&err.to_string(), &secrets);
+                        let code = if msg.contains("configuration changed") {
+                            "config_change_requires_confirmation"
+                        } else {
+                            "resume_failed"
+                        };
+                        DesktopError::new(code, msg)
+                    }
+                })?
+            } else {
+                let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
+                    DesktopError::new(
+                        "invalid_config",
+                        redaction::redact_str(&err.to_string(), &secrets),
+                    )
+                })?;
+                session::create(&cfg, new_sess).await.map_err(|err| {
+                    DesktopError::new(
+                        "storage_error",
+                        redaction::redact_str(&err.to_string(), &secrets),
+                    )
+                })?
+            };
+            let recovered_runs = prepared.recovery.interrupted_runs as u32;
+            let recovered_tools = prepared.recovery.unknown_tools as u32;
+            let workspace = prepared.session.workspace.clone();
+            let sid = prepared.session.id;
+            self.sync_attachment_scope(Some(&prepared));
+            guard.sessions.insert(
+                sid,
+                SessionSlot {
+                    prepared,
+                    active_run_id: None,
+                    last_usage: None,
+                    owner_conn_id: Some(owner.conn_id),
+                    permissions_mode: cfg.permissions_mode,
+                    release_after_run: true,
+                },
+            );
+            guard.connection_sessions.insert(owner.conn_id, sid);
+            guard.evict_idle_sessions();
+            (cfg, workspace, sid, recovered_runs, recovered_tools)
         };
-        let recovered_runs = prepared.recovery.interrupted_runs as u32;
-        let recovered_tools =
-            (prepared.recovery.unknown_tools + prepared.recovery.closed_calls) as u32;
-        let workspace = prepared.session.workspace.clone();
-        self.sync_attachment_scope(Some(&prepared));
-        guard.last_usage = None;
-        guard.prepared = Some(prepared);
-        drop(guard);
 
         let approvals = if let Some(path) = &params.approval_file {
             Preauthorizations::from_file(std::path::Path::new(path), &workspace).map_err(|err| {
@@ -913,6 +1256,8 @@ impl HostService {
         };
 
         self.start_run_ex(
+            owner,
+            Some(sid),
             StartRunRequest {
                 expanded_prompt: Some(expanded),
                 kind: RunKind::Execution,
@@ -931,6 +1276,8 @@ impl HostService {
                 emit_session_event: true,
                 config: Some(cfg),
                 resumed: params.session_id.is_some(),
+                reconcile_stream_text: params.reconcile_stream_text,
+                log_level,
             },
             sink,
         )
@@ -947,45 +1294,75 @@ impl HostService {
         raw_events: bool,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
-        if let Ok(control_guard) = self.active_control.lock()
-            && let Some(control) = control_guard.as_ref()
-        {
-            if control.cancel.is_cancelled() {
-                return Err(DesktopError::new(
-                    "cancelling",
-                    "Run is cancelling; wait for cleanup before compacting",
-                ));
+        self.compact_session_for(ClientOwner::default(), None, raw_events, sink)
+            .await
+    }
+
+    pub async fn compact_session_for(
+        &self,
+        owner: ClientOwner,
+        session_id: Option<&str>,
+        raw_events: bool,
+        sink: StreamSink,
+    ) -> Result<SubmitPromptResultDto, DesktopError> {
+        let target_sid = {
+            let guard = self.inner.lock().await;
+            let resolved = guard.resolve_session_id(session_id, owner.conn_id);
+            if let Some(sid) = resolved
+                && let Some(slot) = guard.sessions.get(&sid)
+                && let Some(active_run) = slot.active_run_id
+            {
+                let control_guard = self
+                    .active_controls
+                    .lock()
+                    .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
+                if let Some(control) = control_guard.get(&active_run) {
+                    if control.owner_conn_id != owner.conn_id {
+                        return Err(DesktopError::new(
+                            "run_active",
+                            "Session run is owned by another client connection",
+                        ));
+                    }
+                    if control.cancel.is_cancelled() {
+                        return Err(DesktopError::new(
+                            "cancelling",
+                            "Run is cancelling; wait for cleanup before compacting",
+                        ));
+                    }
+                    if control.kind == RunKind::Compaction {
+                        return Err(DesktopError::new(
+                            "compaction_active",
+                            "Compaction is already running",
+                        ));
+                    }
+                    let handle = control.handle.as_ref().ok_or_else(|| {
+                        DesktopError::new("run_starting", "Run is still initializing")
+                    })?;
+                    let secrets = self.current_secrets();
+                    handle
+                        .request_compaction()
+                        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+                    return Ok(SubmitPromptResultDto {
+                        action: "compaction_queued".into(),
+                        session_id: sid.0.to_string(),
+                        run_id: control.run_id.0.to_string(),
+                        recovered_runs: None,
+                        recovered_tools: None,
+                    });
+                }
             }
-            if control.kind == RunKind::Compaction {
-                return Err(DesktopError::new(
-                    "compaction_active",
-                    "Compaction is already running",
-                ));
-            }
-            let handle = control
-                .handle
-                .as_ref()
-                .ok_or_else(|| DesktopError::new("run_starting", "Run is still initializing"))?;
-            let secrets = self.current_secrets();
-            handle
-                .request_compaction()
-                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-            return Ok(SubmitPromptResultDto {
-                action: "compaction_queued".into(),
-                session_id: String::new(),
-                run_id: control.run_id.0.to_string(),
-                recovered_runs: None,
-                recovered_tools: None,
-            });
-        }
+            resolved
+        };
 
         let mut req = StartRunRequest::desktop(None, RunKind::Compaction);
         req.raw_events = raw_events;
-        self.start_run_ex(req, sink).await
+        self.start_run_ex(owner, target_sid, req, sink).await
     }
 
     async fn start_run_ex(
         &self,
+        owner: ClientOwner,
+        target_sid: Option<SessionId>,
         req: StartRunRequest,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
@@ -1001,16 +1378,12 @@ impl HostService {
             emit_session_event,
             config: config_override,
             resumed,
+            reconcile_stream_text,
+            log_level,
         } = req;
         let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Another run is already active",
-            ));
-        }
-        let cfg = config_override
+        let mut cfg = config_override
             .or_else(|| guard.config.clone())
             .ok_or_else(|| {
                 DesktopError::new(
@@ -1028,51 +1401,137 @@ impl HostService {
             ));
         }
 
-        if guard.prepared.is_none() {
-            if kind == RunKind::Compaction {
-                return Err(DesktopError::new(
-                    "session_required",
-                    "Start or resume a session before compacting",
-                ));
+        let session_id = match target_sid {
+            Some(sid) => {
+                if !guard.sessions.contains_key(&sid) {
+                    if kind == RunKind::Compaction {
+                        return Err(DesktopError::new(
+                            "session_required",
+                            "Start or resume a session before compacting",
+                        ));
+                    }
+                    let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
+                        DesktopError::new(
+                            "invalid_config",
+                            redaction::redact_str(&err.to_string(), &secrets),
+                        )
+                    })?;
+                    let prepared = session::create(&cfg, new_sess).await.map_err(|err| {
+                        DesktopError::new(
+                            "storage_error",
+                            redaction::redact_str(&err.to_string(), &secrets),
+                        )
+                    })?;
+                    let new_sid = prepared.session.id;
+                    self.sync_attachment_scope(Some(&prepared));
+                    guard.sessions.insert(
+                        new_sid,
+                        SessionSlot {
+                            prepared,
+                            active_run_id: None,
+                            last_usage: None,
+                            owner_conn_id: Some(owner.conn_id),
+                            permissions_mode: cfg.permissions_mode,
+                            release_after_run: false,
+                        },
+                    );
+                    guard.connection_sessions.insert(owner.conn_id, new_sid);
+                    new_sid
+                } else {
+                    sid
+                }
             }
-            let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
-                DesktopError::new(
-                    "invalid_config",
-                    redaction::redact_str(&err.to_string(), &secrets),
-                )
-            })?;
-            let prepared = session::create(&cfg, new_sess).await.map_err(|err| {
-                DesktopError::new(
-                    "storage_error",
-                    redaction::redact_str(&err.to_string(), &secrets),
-                )
-            })?;
-            self.sync_attachment_scope(Some(&prepared));
-            guard.prepared = Some(prepared);
+            None => {
+                if kind == RunKind::Compaction {
+                    return Err(DesktopError::new(
+                        "session_required",
+                        "Start or resume a session before compacting",
+                    ));
+                }
+                let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
+                    DesktopError::new(
+                        "invalid_config",
+                        redaction::redact_str(&err.to_string(), &secrets),
+                    )
+                })?;
+                let prepared = session::create(&cfg, new_sess).await.map_err(|err| {
+                    DesktopError::new(
+                        "storage_error",
+                        redaction::redact_str(&err.to_string(), &secrets),
+                    )
+                })?;
+                let new_sid = prepared.session.id;
+                self.sync_attachment_scope(Some(&prepared));
+                guard.sessions.insert(
+                    new_sid,
+                    SessionSlot {
+                        prepared,
+                        active_run_id: None,
+                        last_usage: None,
+                        owner_conn_id: Some(owner.conn_id),
+                        permissions_mode: cfg.permissions_mode,
+                        release_after_run: false,
+                    },
+                );
+                guard.connection_sessions.insert(owner.conn_id, new_sid);
+                new_sid
+            }
+        };
+
+        if guard
+            .sessions
+            .get(&session_id)
+            .is_some_and(|slot| slot.active_run_id.is_some())
+        {
+            return Err(DesktopError::new(
+                "run_active",
+                "Another run is already active in this session",
+            ));
+        }
+
+        let effective_permissions = guard
+            .sessions
+            .get(&session_id)
+            .map(|slot| slot.permissions_mode)
+            .unwrap_or(cfg.permissions_mode);
+        if cfg.permissions_mode != effective_permissions {
+            cfg.permissions_mode = effective_permissions;
         }
 
         let run_id = RunId::new();
         let cancel = Arc::new(RunCancellation::new());
         {
-            let mut control = self
-                .active_control
+            let mut controls = self
+                .active_controls
                 .lock()
                 .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-            *control = Some(ActiveControl {
+            if controls.len() >= MAX_CONCURRENT_RUNS {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Maximum concurrent run limit (4) reached",
+                ));
+            }
+            controls.insert(
                 run_id,
-                kind,
-                cancel: cancel.clone(),
-                handle: None,
-                pending: None,
-            });
+                ActiveControl {
+                    run_id,
+                    session_id,
+                    owner_conn_id: owner.conn_id,
+                    owner_request_id: owner.request_id,
+                    kind,
+                    cancel: cancel.clone(),
+                    handle: None,
+                    pending: None,
+                },
+            );
         }
-        guard.active_run_id = Some(run_id);
-
-        let prepared = guard.prepared.as_mut().ok_or_else(|| {
+        let prepared = guard.sessions.get_mut(&session_id).ok_or_else(|| {
             DesktopError::new("session_unavailable", "Prepared session is unavailable")
         })?;
+        prepared.active_run_id = Some(run_id);
+        prepared.owner_conn_id = Some(owner.conn_id);
+        let prepared = &mut prepared.prepared;
         let session_snapshot = prepared.session.clone();
-        let session_id = session_snapshot.id;
         let model_name = cfg
             .profiles
             .get(&session_snapshot.profile)
@@ -1141,11 +1600,14 @@ impl HostService {
                 run_id: Some(run_id),
                 secret_registry: Some(self.secrets.clone()),
             },
-            move |model, _| {
-                let inner_model = match &test_model_factory {
+            move |model, streamed| {
+                let mut inner_model = match &test_model_factory {
                     Some(factory) => factory(),
                     None => model,
                 };
+                if streamed && reconcile_stream_text {
+                    inner_model = Arc::new(ReconcileTextModel(inner_model));
+                }
                 let thinking = ThinkingModel::new(inner_model, thinking_tx, thinking_secrets);
                 let thinking = match thinking_registry {
                     Some(registry) => thinking.with_secret_registry(registry),
@@ -1166,7 +1628,7 @@ impl HostService {
         let (mut runtime, _) = match build_result {
             Ok(built) => built,
             Err(err) => {
-                self.clear_active_state(&mut guard);
+                self.clear_active_run(&mut guard, session_id, run_id);
                 return Err(DesktopError::new(
                     "runtime_build_failed",
                     redaction::redact_str(&err.to_string(), &secrets),
@@ -1189,7 +1651,7 @@ impl HostService {
                 ) {
                     Ok(capture) => capture.text,
                     Err(err) => {
-                        self.clear_active_state(&mut guard);
+                        self.clear_active_run(&mut guard, session_id, run_id);
                         return Err(DesktopError::from_boundary(&err, &secrets));
                     }
                 }
@@ -1197,7 +1659,7 @@ impl HostService {
                 text.clone()
             };
             if let Err(err) = session::append(prepared, append_text).await {
-                self.clear_active_state(&mut guard);
+                self.clear_active_run(&mut guard, session_id, run_id);
                 return Err(DesktopError::new(
                     "storage_error",
                     redaction::redact_str(&err.to_string(), &secrets),
@@ -1229,30 +1691,54 @@ impl HostService {
                 }
             };
             if let Err(err) = event_writer.emit(payload, None, true).await {
-                self.clear_active_state(&mut guard);
+                self.clear_active_run(&mut guard, session_id, run_id);
                 return Err(DesktopError::from_boundary(&err, &secrets));
             }
         }
 
+        let diagnostics = if let Some(level) = log_level {
+            let mut diag_secrets = Vec::new();
+            for name in cfg.secret_env_names() {
+                if let Ok(value) = cfg.secret(&name)
+                    && !value.is_empty()
+                {
+                    diag_secrets.push(value.to_owned());
+                }
+            }
+            match Diagnostics::start(JsonLog::new(&cfg.state_dir, diag_secrets).with_level(level)) {
+                Ok(diag) => Some(diag),
+                Err(err) => {
+                    self.clear_active_run(&mut guard, session_id, run_id);
+                    return Err(DesktopError::from_boundary(&err, &secrets));
+                }
+            }
+        } else {
+            None
+        };
+
         let mut current = prepared.session.clone();
         let handle = runtime.handle();
-        if let Ok(mut control) = self.active_control.lock()
-            && let Some(active) = control.as_mut()
+        if let Ok(mut controls) = self.active_controls.lock()
+            && let Some(active) = controls.get_mut(&run_id)
         {
             active.handle = Some(handle.clone());
         }
 
         let started_at = Instant::now();
-        let runtime_join = tokio::spawn(async move {
+        let runtime_fut = async move {
             let outcome = match kind {
                 RunKind::Execution => runtime.run(&mut current).await,
                 RunKind::Compaction => runtime.compact(&mut current).await,
             };
             (outcome, current)
-        });
+        };
+        let runtime_join = match &diagnostics {
+            Some(diag) => tokio::spawn(diag.instrument(runtime_fut)),
+            None => tokio::spawn(runtime_fut),
+        };
 
         let inner_arc = self.inner.clone();
-        let active_control = self.active_control.clone();
+        let active_controls = self.active_controls.clone();
         let registry = self.secrets.clone();
         let model_display = redaction::redact_str(&model_name, &secrets);
 
@@ -1272,10 +1758,11 @@ impl HostService {
                 request_rx,
                 measurements,
                 inner: inner_arc,
-                active_control,
+                active_controls,
                 secrets: registry,
                 event_writer,
                 raw_events,
+                diagnostics,
             })
             .await;
         });
@@ -1293,23 +1780,84 @@ impl HostService {
         })
     }
 
-    fn clear_active_state(&self, guard: &mut DesktopInner) {
-        guard.active_run_id = None;
-        if let Ok(mut control) = self.active_control.lock() {
-            *control = None;
+    fn clear_active_run(&self, guard: &mut DesktopInner, session_id: SessionId, run_id: RunId) {
+        if let Some(slot) = guard.sessions.get_mut(&session_id)
+            && slot.active_run_id == Some(run_id)
+        {
+            slot.active_run_id = None;
+        }
+        guard.release_ephemeral_slot(session_id);
+        if let Ok(mut controls) = self.active_controls.lock()
+            && let Some(removed) = controls.remove(&run_id)
+        {
+            reject_pending_interaction(removed.pending);
         }
     }
 
-    pub fn cancel_run(&self) -> bool {
-        let Ok(mut guard) = self.active_control.lock() else {
-            return false;
-        };
-        let Some(control) = guard.as_mut() else {
-            return false;
-        };
-        control.pending = None;
+    /// Close a pending interaction when a connection drops or a run cancels:
+    /// cancel first so biased handlers observe cancellation rather than an
+    /// explicit user denial, then drop any pending reply sender.
+    pub(crate) fn close_pending_control(control: &mut ActiveControl) {
         let _ = control.cancel.cancel();
+        drop(control.pending.take());
+    }
+
+    pub fn cancel_run(&self) -> bool {
+        self.cancel_run_for(0, None)
+    }
+
+    pub fn cancel_run_for(&self, conn_id: u64, explicit_run_id: Option<&str>) -> bool {
+        let Ok(mut controls) = self.active_controls.lock() else {
+            return false;
+        };
+        if let Some(rid_raw) = explicit_run_id {
+            let Some(control) = controls
+                .values_mut()
+                .find(|control| control.run_id.0.to_string() == rid_raw)
+            else {
+                return false;
+            };
+            Self::close_pending_control(control);
+            return true;
+        }
+        let mut matched = false;
+        for control in controls.values_mut() {
+            if control.owner_conn_id == conn_id {
+                Self::close_pending_control(control);
+                matched = true;
+            }
+        }
+        matched
+    }
+
+    pub fn cancel_request(&self, conn_id: u64, request_id: u64) -> bool {
+        let Ok(mut controls) = self.active_controls.lock() else {
+            return false;
+        };
+        let Some(control) = controls.values_mut().find(|control| {
+            control.owner_conn_id == conn_id && control.owner_request_id == request_id
+        }) else {
+            return false;
+        };
+        Self::close_pending_control(control);
         true
+    }
+
+    pub async fn on_client_disconnected(&self, conn_id: u64) {
+        if let Ok(mut controls) = self.active_controls.lock() {
+            for control in controls.values_mut() {
+                if control.owner_conn_id == conn_id {
+                    Self::close_pending_control(control);
+                }
+            }
+        }
+        let mut guard = self.inner.lock().await;
+        guard.connection_sessions.remove(&conn_id);
+        for slot in guard.sessions.values_mut() {
+            if slot.owner_conn_id == Some(conn_id) && slot.active_run_id.is_none() {
+                slot.owner_conn_id = None;
+            }
+        }
     }
 
     pub fn reply_approval(
@@ -1318,16 +1866,62 @@ impl HostService {
         call_id: &str,
         approved: bool,
     ) -> Result<(), DesktopError> {
-        let mut guard = self
-            .active_control
+        self.reply_approval_for(0, approval_id, call_id, approved)
+    }
+
+    pub fn reply_approval_for(
+        &self,
+        conn_id: u64,
+        approval_id: &str,
+        call_id: &str,
+        approved: bool,
+    ) -> Result<(), DesktopError> {
+        let mut controls = self
+            .active_controls
             .lock()
             .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-        let Some(control) = guard.as_mut() else {
-            return Err(DesktopError::new(
-                "stale_approval",
-                "No active run owns this approval request",
-            ));
+        // Find matching approval across active controls first so we enforce ownership explicitly.
+        let matching_run = controls
+            .iter()
+            .find_map(|(rid, control)| match &control.pending {
+                Some(PendingInteraction::Approval {
+                    approval_id: cur_id,
+                    call_id: cur_call,
+                    ..
+                }) if cur_id == approval_id && cur_call == call_id => Some(*rid),
+                _ => None,
+            });
+        let target_run = match matching_run {
+            Some(rid) => rid,
+            None => {
+                // Fall back to connection's own pending run so mismatch errors remain informative.
+                if let Some((&rid, _)) = controls.iter().find(|(_, control)| {
+                    control.owner_conn_id == conn_id && control.pending.is_some()
+                }) {
+                    rid
+                } else if controls.values().any(|c| c.owner_conn_id == conn_id) {
+                    return Err(DesktopError::new(
+                        "stale_approval",
+                        "No pending approval request is awaiting reply",
+                    ));
+                } else {
+                    return Err(DesktopError::new(
+                        "stale_approval",
+                        "No active run owns this approval request",
+                    ));
+                }
+            }
         };
+
+        let control = controls.get_mut(&target_run).ok_or_else(|| {
+            DesktopError::new("stale_approval", "No active run owns this approval request")
+        })?;
+        if control.owner_conn_id != conn_id {
+            return Err(DesktopError::new(
+                "unauthorized_client",
+                "Approval request belongs to another client connection",
+            ));
+        }
         let Some(pending) = control.pending.take() else {
             return Err(DesktopError::new(
                 "stale_approval",
@@ -1392,16 +1986,57 @@ impl HostService {
     /// `answer: None` declines the prompt — the runtime sees the same `Ok(None)`
     /// the in-process handler produces when a user dismisses the question.
     pub fn reply_input(&self, input_id: &str, answer: Option<String>) -> Result<(), DesktopError> {
-        let mut guard = self
-            .active_control
+        self.reply_input_for(0, input_id, answer)
+    }
+
+    pub fn reply_input_for(
+        &self,
+        conn_id: u64,
+        input_id: &str,
+        answer: Option<String>,
+    ) -> Result<(), DesktopError> {
+        let mut controls = self
+            .active_controls
             .lock()
             .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-        let Some(control) = guard.as_mut() else {
-            return Err(DesktopError::new(
-                "stale_input",
-                "No active run owns this input request",
-            ));
+        let matching_run = controls
+            .iter()
+            .find_map(|(rid, control)| match &control.pending {
+                Some(PendingInteraction::Input {
+                    input_id: cur_id, ..
+                }) if cur_id == input_id => Some(*rid),
+                _ => None,
+            });
+        let target_run = match matching_run {
+            Some(rid) => rid,
+            None => {
+                if let Some((&rid, _)) = controls.iter().find(|(_, control)| {
+                    control.owner_conn_id == conn_id && control.pending.is_some()
+                }) {
+                    rid
+                } else if controls.values().any(|c| c.owner_conn_id == conn_id) {
+                    return Err(DesktopError::new(
+                        "stale_input",
+                        "No pending input request is awaiting reply",
+                    ));
+                } else {
+                    return Err(DesktopError::new(
+                        "stale_input",
+                        "No active run owns this input request",
+                    ));
+                }
+            }
         };
+
+        let control = controls.get_mut(&target_run).ok_or_else(|| {
+            DesktopError::new("stale_input", "No active run owns this input request")
+        })?;
+        if control.owner_conn_id != conn_id {
+            return Err(DesktopError::new(
+                "unauthorized_client",
+                "Input request belongs to another client connection",
+            ));
+        }
         let Some(pending) = control.pending.take() else {
             return Err(DesktopError::new(
                 "stale_input",
@@ -1463,9 +2098,18 @@ impl HostService {
     }
 
     pub async fn set_work_mode(&self, mode: WorkModeDto) -> Result<ModeStateDto, DesktopError> {
+        self.set_work_mode_for(0, None, mode).await
+    }
+
+    pub async fn set_work_mode_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+        mode: WorkModeDto,
+    ) -> Result<ModeStateDto, DesktopError> {
         let target: WorkMode = mode.into();
         let secrets = self.current_secrets();
-        let (cfg, workspace) = {
+        let (cfg, target_sid, workspace, active_run) = {
             let guard = self.inner.lock().await;
             let cfg = guard.config.clone().ok_or_else(|| {
                 DesktopError::new(
@@ -1476,12 +2120,13 @@ impl HostService {
                         .unwrap_or("Configuration is not loaded"),
                 )
             })?;
-            let workspace = guard
-                .prepared
-                .as_ref()
-                .map(|p| p.session.workspace.clone())
+            let sid = guard.resolve_session_id(session_id, conn_id);
+            let slot = sid.and_then(|id| guard.sessions.get(&id));
+            let workspace = slot
+                .map(|s| s.prepared.session.workspace.clone())
                 .unwrap_or_else(|| cfg.cwd.clone());
-            (cfg, workspace)
+            let active_run = slot.and_then(|s| s.active_run_id);
+            (cfg, sid, workspace, active_run)
         };
 
         offload_boundary(move || {
@@ -1491,12 +2136,18 @@ impl HostService {
         .await
         .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
 
-        {
-            let mut control_guard = self
-                .active_control
+        if let Some(run_id) = active_run {
+            let mut controls = self
+                .active_controls
                 .lock()
                 .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-            if let Some(control) = control_guard.as_mut() {
+            if let Some(control) = controls.get_mut(&run_id) {
+                if control.owner_conn_id != conn_id {
+                    return Err(DesktopError::new(
+                        "unauthorized_client",
+                        "Session run belongs to another client connection",
+                    ));
+                }
                 let handle = control.handle.as_ref().ok_or_else(|| {
                     DesktopError::new("run_starting", "Run is still initializing")
                 })?;
@@ -1532,23 +2183,24 @@ impl HostService {
         }
 
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Run became active while switching mode; retry",
-            ));
-        }
-        if let Some(prepared) = &mut guard.prepared {
-            let mut updated = prepared.session.clone();
+        if let Some(sid) = target_sid
+            && let Some(slot) = guard.sessions.get_mut(&sid)
+        {
+            if slot.active_run_id.is_some() {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Run became active while switching mode; retry",
+                ));
+            }
+            let mut updated = slot.prepared.session.clone();
             updated.work_mode = target;
-            prepared
+            slot.prepared
                 .store
                 .commit(&[StoreChange::Session(updated.clone())])
                 .await
                 .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-            prepared.session = updated;
-        }
-        if let Some(cfg) = &mut guard.config {
+            slot.prepared.session = updated;
+        } else if let Some(cfg) = &mut guard.config {
             cfg.mode = target;
         }
         Ok(ModeStateDto {
@@ -1562,12 +2214,26 @@ impl HostService {
         &self,
         permissions: PermissionModeDto,
     ) -> Result<PermissionModeDto, DesktopError> {
-        {
-            let control = self
-                .active_control
+        self.set_permission_mode_for(0, None, permissions).await
+    }
+
+    pub async fn set_permission_mode_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+        permissions: PermissionModeDto,
+    ) -> Result<PermissionModeDto, DesktopError> {
+        let mut guard = self.inner.lock().await;
+        let target_sid = guard.resolve_session_id(session_id, conn_id);
+        let active_run = target_sid
+            .and_then(|sid| guard.sessions.get(&sid))
+            .and_then(|slot| slot.active_run_id);
+        if let Some(run_id) = active_run {
+            let controls = self
+                .active_controls
                 .lock()
                 .map_err(|_| DesktopError::new("state_lock", "active control lock failed"))?;
-            if let Some(active) = control.as_ref() {
+            if let Some(active) = controls.get(&run_id) {
                 if active.pending.is_some() {
                     return Err(DesktopError::new(
                         "pending_request",
@@ -1580,12 +2246,29 @@ impl HostService {
                 ));
             }
         }
-        let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Permission mode can only be changed while idle",
-            ));
+        if let Some(sid) = target_sid
+            && let Some(slot) = guard.sessions.get_mut(&sid)
+        {
+            if slot.active_run_id.is_some() {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Permission mode can only be changed while idle",
+                ));
+            }
+            if slot.owner_conn_id.is_some_and(|o| o != conn_id) {
+                return Err(DesktopError::new(
+                    "unauthorized_client",
+                    "Session belongs to another client connection",
+                ));
+            }
+            slot.permissions_mode = permissions.into();
+            if conn_id == 0
+                && guard.sessions.len() <= 1
+                && let Some(cfg) = &mut guard.config
+            {
+                cfg.permissions_mode = permissions.into();
+            }
+            return Ok(permissions);
         }
         let config_err = guard
             .config_error
@@ -1603,6 +2286,14 @@ impl HostService {
         &self,
         params: &ResumeSessionDto,
     ) -> Result<ResumeSessionResultDto, DesktopError> {
+        self.resume_session_for(0, params).await
+    }
+
+    pub async fn resume_session_for(
+        &self,
+        conn_id: u64,
+        params: &ResumeSessionDto,
+    ) -> Result<ResumeSessionResultDto, DesktopError> {
         let secrets = self.current_secrets();
         let session_id = params.session_id.as_str();
         let parsed_id = session::parse_id(session_id).map_err(|err| {
@@ -1612,36 +2303,47 @@ impl HostService {
             )
         })?;
 
-        let (cfg, already_loaded) = {
+        let cfg = {
             let mut guard = self.inner.lock().await;
-            if guard.active_run_id.is_some() {
-                return Err(DesktopError::new(
-                    "run_active",
-                    "Cancel or wait for the active run before switching sessions",
-                ));
-            }
-            let already = guard
-                .prepared
-                .as_ref()
-                .is_some_and(|p| p.session.id == parsed_id);
-            if already && let Some(prepared) = &guard.prepared {
-                let sess_mode = prepared.session.work_mode;
-                let sess_ws = prepared.session.workspace.clone();
-                let sess_profile = prepared.session.profile.clone();
-                if let Some(cfg) = &mut guard.config {
-                    cfg.mode = sess_mode;
-                    cfg.cwd = sess_ws;
-                    cfg.profile = Some(sess_profile);
+            if let Some(slot) = guard.sessions.get(&parsed_id) {
+                if slot.active_run_id.is_some() {
+                    if slot.owner_conn_id != Some(conn_id) {
+                        return Err(DesktopError::new(
+                            "run_active",
+                            "Target session has an active run owned by another client",
+                        ));
+                    }
+                    guard.connection_sessions.insert(conn_id, parsed_id);
+                    drop(guard);
+                    let bootstrap = self
+                        .get_bootstrap_state_for(conn_id, Some(session_id))
+                        .await;
+                    return Ok(ResumeSessionResultDto {
+                        bootstrap,
+                        recovered_runs: 0,
+                        recovered_tools: 0,
+                    });
                 }
-                drop(guard);
-                let bootstrap = self.get_bootstrap_state().await;
-                return Ok(ResumeSessionResultDto {
-                    bootstrap,
-                    recovered_runs: 0,
-                    recovered_tools: 0,
-                });
+                if !params.accept_config_change
+                    && !params.cwd_explicit
+                    && !params.profile_explicit
+                    && params.mode_override.is_none()
+                {
+                    guard.connection_sessions.insert(conn_id, parsed_id);
+                    drop(guard);
+                    let bootstrap = self
+                        .get_bootstrap_state_for(conn_id, Some(session_id))
+                        .await;
+                    return Ok(ResumeSessionResultDto {
+                        bootstrap,
+                        recovered_runs: 0,
+                        recovered_tools: 0,
+                    });
+                }
+                // Release idle slot before re-resuming with explicit overrides so SQLite lock is free.
+                guard.sessions.remove(&parsed_id);
             }
-            let cfg = guard.config.clone().ok_or_else(|| {
+            guard.config.clone().ok_or_else(|| {
                 DesktopError::new(
                     "invalid_config",
                     guard
@@ -1649,10 +2351,8 @@ impl HostService {
                         .as_deref()
                         .unwrap_or("Configuration is not loaded"),
                 )
-            })?;
-            (cfg, already)
+            })?
         };
-        let _ = already_loaded;
 
         let prepared = session::resume(
             &cfg,
@@ -1681,17 +2381,26 @@ impl HostService {
 
         {
             let mut guard = self.inner.lock().await;
-            if let Some(cfg) = &mut guard.config {
-                cfg.cwd = prepared.session.workspace.clone();
-                cfg.mode = prepared.session.work_mode;
-                cfg.profile = Some(prepared.session.profile.clone());
-            }
-            guard.last_usage = None;
             self.sync_attachment_scope(Some(&prepared));
-            guard.prepared = Some(prepared);
+            let sid = prepared.session.id;
+            guard.sessions.insert(
+                sid,
+                SessionSlot {
+                    prepared,
+                    active_run_id: None,
+                    last_usage: None,
+                    owner_conn_id: Some(conn_id),
+                    permissions_mode: cfg.permissions_mode,
+                    release_after_run: false,
+                },
+            );
+            guard.connection_sessions.insert(conn_id, sid);
+            guard.evict_idle_sessions();
         }
 
-        let bootstrap = self.get_bootstrap_state().await;
+        let bootstrap = self
+            .get_bootstrap_state_for(conn_id, Some(session_id))
+            .await;
         Ok(ResumeSessionResultDto {
             bootstrap,
             recovered_runs,
@@ -1699,30 +2408,61 @@ impl HostService {
         })
     }
 
-    /// Drop the prepared session handle (`release_session`). Interactive
-    /// clients call this when their UI drops a session without replacing it —
-    /// dropping `Prepared` releases the session lock the helper holds.
-    /// No-op while a run is active.
+    /// Drop this connection's prepared session handle (`release_session`).
+    /// Never fails when another session is running.
     pub async fn release_session(&self) -> Result<(), DesktopError> {
+        self.release_session_for(0, None).await
+    }
+
+    pub async fn release_session_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+    ) -> Result<(), DesktopError> {
         let mut guard = self.inner.lock().await;
-        if guard.active_run_id.is_some() {
-            return Err(DesktopError::new(
-                "run_active",
-                "Cancel or wait for the active run before closing the session",
-            ));
+        let Some(sid) = guard.resolve_session_id(session_id, conn_id) else {
+            guard.connection_sessions.remove(&conn_id);
+            return Ok(());
+        };
+        if let Some(slot) = guard.sessions.get(&sid)
+            && slot.active_run_id.is_some()
+        {
+            if slot.owner_conn_id == Some(conn_id) {
+                return Err(DesktopError::new(
+                    "run_active",
+                    "Cancel or wait for the active run before closing the session",
+                ));
+            }
+            guard.connection_sessions.remove(&conn_id);
+            return Ok(());
         }
-        guard.prepared = None;
-        self.sync_attachment_scope(None);
+        guard.connection_sessions.remove(&conn_id);
+        let still_referenced = guard.connection_sessions.values().any(|&id| id == sid);
+        if !still_referenced {
+            guard.sessions.remove(&sid);
+            self.remove_attachment_scope(sid);
+        }
         Ok(())
     }
 
-    /// Live mode/compaction state for interactive clients. When a run is
-    /// active the answer comes from the runtime handle (real mode
-    /// revision); otherwise it reflects the prepared session's stored mode.
+    /// Live mode/compaction state for interactive clients.
     pub async fn get_run_state(&self) -> Result<RunStateDto, DesktopError> {
+        self.get_run_state_for(0, None).await
+    }
+
+    pub async fn get_run_state_for(
+        &self,
+        conn_id: u64,
+        session_id: Option<&str>,
+    ) -> Result<RunStateDto, DesktopError> {
         let secrets = self.current_secrets();
-        if let Ok(guard) = self.active_control.lock()
-            && let Some(control) = guard.as_ref()
+        let guard = self.inner.lock().await;
+        let target_sid = guard.resolve_session_id(session_id, conn_id);
+        let slot = target_sid.and_then(|sid| guard.sessions.get(&sid));
+        let active_run = slot.and_then(|s| s.active_run_id);
+        if let Some(run_id) = active_run
+            && let Ok(controls) = self.active_controls.lock()
+            && let Some(control) = controls.get(&run_id)
             && let Some(handle) = &control.handle
         {
             let snapshot = handle
@@ -1736,11 +2476,8 @@ impl HostService {
                 revision: snapshot.revision,
             });
         }
-        let guard = self.inner.lock().await;
-        let current = guard
-            .prepared
-            .as_ref()
-            .map(|prepared| prepared.session.work_mode)
+        let current = slot
+            .map(|s| s.prepared.session.work_mode)
             .or_else(|| guard.config.as_ref().map(|cfg| cfg.mode))
             .ok_or_else(|| {
                 DesktopError::new(
@@ -1820,12 +2557,16 @@ impl HostService {
     }
 
     pub async fn shutdown(&self) {
-        let _ = self.cancel_run();
+        if let Ok(mut controls) = self.active_controls.lock() {
+            for control in controls.values_mut() {
+                Self::close_pending_control(control);
+            }
+        }
         for _ in 0..50 {
             let is_active = self
-                .active_control
+                .active_controls
                 .lock()
-                .map(|g| g.is_some())
+                .map(|controls| !controls.is_empty())
                 .unwrap_or(false);
             if !is_active {
                 break;
@@ -1848,6 +2589,24 @@ impl HostService {
     }
 }
 
+fn reject_pending_interaction(pending: Option<PendingInteraction>) {
+    match pending {
+        Some(PendingInteraction::Approval {
+            request: Request::Approval(_, reply),
+            ..
+        }) => {
+            let _ = reply.send(Ok(Some(false)));
+        }
+        Some(PendingInteraction::Input {
+            request: Request::Input(_, reply),
+            ..
+        }) => {
+            let _ = reply.send(Ok(None));
+        }
+        Some(_) | None => {}
+    }
+}
+
 struct DriverParams {
     run_id: RunId,
     session_id: SessionId,
@@ -1863,11 +2622,12 @@ struct DriverParams {
     request_rx: mpsc::Receiver<Request>,
     measurements: Arc<StdMutex<Measurements>>,
     inner: Arc<AsyncMutex<DesktopInner>>,
-    active_control: Arc<StdMutex<Option<ActiveControl>>>,
+    active_controls: Arc<StdMutex<HashMap<RunId, ActiveControl>>>,
     secrets: Arc<SecretRegistry>,
     event_writer: Arc<EventWriter>,
     /// `run_prompt` consumers get raw schema-v1 envelopes instead of DTOs.
     raw_events: bool,
+    diagnostics: Option<Diagnostics>,
 }
 
 async fn drive_active_run(mut params: DriverParams) {
@@ -1920,8 +2680,8 @@ async fn drive_active_run(mut params: DriverParams) {
                                 })
                             }
                         };
-                        if let Ok(mut control) = params.active_control.lock()
-                            && let Some(active) = control.as_mut()
+                        if let Ok(mut controls) = params.active_controls.lock()
+                            && let Some(active) = controls.get_mut(&params.run_id)
                         {
                             active.pending = Some(match &envelope {
                                 DesktopStreamEnvelope::ApprovalNeeded(dto) => PendingInteraction::Approval {
@@ -2068,9 +2828,10 @@ async fn drive_active_run(mut params: DriverParams) {
                 .into_iter()
                 .map(|item| TodoItemDto::from_redacted(item, &secrets))
                 .collect::<Vec<_>>();
-            let (status_str, usage_opt, mut final_error) = match outcome {
+            let (status_str, is_needs_input, usage_opt, mut final_error) = match outcome {
                 Ok(res) => (
                     format!("{:?}", res.status).to_lowercase(),
+                    res.status == RunStatus::NeedsInput,
                     res.usage.clone(),
                     res.error.as_ref().map(|e| {
                         DesktopError::new(&e.code, redaction::redact_str(&e.message, &secrets))
@@ -2078,6 +2839,7 @@ async fn drive_active_run(mut params: DriverParams) {
                 ),
                 Err(err) => (
                     "failed".into(),
+                    false,
                     None,
                     Some(DesktopError::from_boundary(&err, &secrets)),
                 ),
@@ -2089,7 +2851,7 @@ async fn drive_active_run(mut params: DriverParams) {
             }
             // Same clarification lookup the CLI's report_result performs on
             // session history for `needs_input` text output.
-            let needs_input_question = if status_str == "needs_input" {
+            let needs_input_question = if is_needs_input {
                 updated_session
                     .history
                     .iter()
@@ -2112,16 +2874,16 @@ async fn drive_active_run(mut params: DriverParams) {
                 None
             };
             let mut inner = params.inner.lock().await;
-            if let Some(cfg) = &mut inner.config {
-                cfg.mode = updated_session.work_mode;
+            if let Some(slot) = inner.sessions.get_mut(&params.session_id) {
+                slot.prepared.session = updated_session;
+                if let Some(usage) = &usage_opt {
+                    slot.last_usage = Some(usage.clone());
+                }
+                if slot.active_run_id == Some(params.run_id) {
+                    slot.active_run_id = None;
+                }
             }
-            if let Some(prepared) = &mut inner.prepared {
-                prepared.session = updated_session;
-            }
-            if let Some(usage) = &usage_opt {
-                inner.last_usage = Some(usage.clone());
-            }
-            inner.active_run_id = None;
+            inner.release_ephemeral_slot(params.session_id);
             (
                 status_str,
                 usage_opt,
@@ -2132,7 +2894,12 @@ async fn drive_active_run(mut params: DriverParams) {
         }
         Err(_) => {
             let mut inner = params.inner.lock().await;
-            inner.active_run_id = None;
+            if let Some(slot) = inner.sessions.get_mut(&params.session_id)
+                && slot.active_run_id == Some(params.run_id)
+            {
+                slot.active_run_id = None;
+            }
+            inner.release_ephemeral_slot(params.session_id);
             (
                 "failed".into(),
                 None,
@@ -2146,13 +2913,19 @@ async fn drive_active_run(mut params: DriverParams) {
         }
     };
 
+    if let Some(diag) = params.diagnostics.take() {
+        let _ = run_blocking_boundary(move || diag.flush(Duration::from_secs(2))).await;
+    }
+
     let mut compaction_pending = None;
-    if let Ok(mut control) = params.active_control.lock() {
-        compaction_pending = control
+    if let Ok(mut controls) = params.active_controls.lock()
+        && let Some(removed) = controls.remove(&params.run_id)
+    {
+        compaction_pending = removed
+            .handle
             .as_ref()
-            .and_then(|control| control.handle.as_ref())
             .map(|handle| handle.compaction_pending());
-        *control = None;
+        reject_pending_interaction(removed.pending);
     }
 
     if !consumer_disconnected {
@@ -2740,4 +3513,88 @@ where
     T: Send + 'static,
 {
     offload(f).await
+}
+
+/// Reconciles execution text deltas against the finalized `AssistantText` items
+/// on `Finished` / `OutputLimitTruncated`, matching `PrintStream` in the CLI.
+struct ReconcileTextModel(Arc<dyn Model>);
+
+struct ReconcileTextStream {
+    inner: Box<dyn ModelStream>,
+    displayed: String,
+    pending_finished: Option<ModelUpdate>,
+}
+
+impl ModelStream for ReconcileTextStream {
+    fn next<'a>(&'a mut self, cancel: &'a dyn Cancellation) -> Operation<'a, Option<ModelUpdate>> {
+        Box::pin(async move {
+            if let Some(finished) = self.pending_finished.take() {
+                return Ok(Some(finished));
+            }
+            let item = self.inner.next(cancel).await?;
+            match &item {
+                Some(ModelUpdate::TextDelta(text)) => {
+                    self.displayed.push_str(text);
+                }
+                Some(
+                    ModelUpdate::Finished { items, .. }
+                    | ModelUpdate::OutputLimitTruncated { items, .. },
+                ) => {
+                    let completed: String = items
+                        .iter()
+                        .filter_map(|item| match item {
+                            HistoryItem::AssistantText(text) => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    let extra = if let Some(suffix) = completed.strip_prefix(&self.displayed) {
+                        (!suffix.is_empty()).then(|| suffix.to_owned())
+                    } else if !completed.is_empty() {
+                        Some(format!("\n{completed}"))
+                    } else {
+                        None
+                    };
+                    if let Some(delta) = extra {
+                        self.pending_finished = item;
+                        return Ok(Some(ModelUpdate::TextDelta(delta)));
+                    }
+                }
+                _ => {}
+            }
+            Ok(item)
+        })
+    }
+}
+
+impl Model for ReconcileTextModel {
+    fn check_start(&self, request: &ModelRequest) -> Result<(), BoundaryError> {
+        self.0.check_start(request)
+    }
+
+    fn request_counter(&self) -> Option<&dyn soyo_core::context_builder::RequestCounter> {
+        self.0.request_counter()
+    }
+
+    fn validate_session(&self, session: &Session) -> Result<(), BoundaryError> {
+        self.0.validate_session(session)
+    }
+
+    fn start<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        cancel: &'a dyn Cancellation,
+    ) -> Operation<'a, Box<dyn ModelStream>> {
+        Box::pin(async move {
+            let stream = self.0.start(request, cancel).await?;
+            if request.purpose == ModelPurpose::Execution {
+                Ok(Box::new(ReconcileTextStream {
+                    inner: stream,
+                    displayed: String::new(),
+                    pending_finished: None,
+                }) as Box<dyn ModelStream>)
+            } else {
+                Ok(stream)
+            }
+        })
+    }
 }

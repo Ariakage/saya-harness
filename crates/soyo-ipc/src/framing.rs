@@ -1,50 +1,76 @@
-//! Newline-delimited JSON frame IO.
+//! Newline-delimited JSON frame IO with strict bounded line buffering.
 
-use interprocess::local_socket::tokio::Stream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf},
+    net::UnixStream,
+};
 
 use crate::protocol::{ClientFrame, ServerFrame};
 
-pub type FrameReader = BufReader<ReadHalf<Stream>>;
-pub type FrameWriter = BufWriter<WriteHalf<Stream>>;
+pub type FrameReader = BufReader<ReadHalf<UnixStream>>;
+pub type FrameWriter = BufWriter<WriteHalf<UnixStream>>;
 
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
-pub fn split(stream: Stream) -> (FrameReader, FrameWriter) {
+pub fn split(stream: UnixStream) -> (FrameReader, FrameWriter) {
     let (read, write) = tokio::io::split(stream);
     (BufReader::new(read), BufWriter::new(write))
 }
 
+async fn read_bounded_line(
+    reader: &mut FrameReader,
+    max_bytes: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            if line.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(line));
+        }
+        if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let take = pos + 1;
+            if line.len().saturating_add(take) > max_bytes {
+                reader.consume(take);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "frame exceeds size limit",
+                ));
+            }
+            line.extend_from_slice(&buf[..take]);
+            reader.consume(take);
+            return Ok(Some(line));
+        }
+        if line.len().saturating_add(buf.len()) > max_bytes {
+            let len = buf.len();
+            reader.consume(len);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame exceeds size limit",
+            ));
+        }
+        let len = buf.len();
+        line.extend_from_slice(buf);
+        reader.consume(len);
+    }
+}
+
 pub async fn read_server_frame(reader: &mut FrameReader) -> std::io::Result<Option<ServerFrame>> {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
+    let Some(line) = read_bounded_line(reader, MAX_FRAME_BYTES).await? else {
         return Ok(None);
-    }
-    if line.len() > MAX_FRAME_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "frame exceeds size limit",
-        ));
-    }
-    serde_json::from_str::<ServerFrame>(&line)
+    };
+    serde_json::from_slice::<ServerFrame>(&line)
         .map(Some)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
 }
 
 pub async fn read_client_frame(reader: &mut FrameReader) -> std::io::Result<Option<ClientFrame>> {
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
+    let Some(line) = read_bounded_line(reader, MAX_FRAME_BYTES).await? else {
         return Ok(None);
-    }
-    if line.len() > MAX_FRAME_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "frame exceeds size limit",
-        ));
-    }
-    serde_json::from_str::<ClientFrame>(&line)
+    };
+    serde_json::from_slice::<ClientFrame>(&line)
         .map(Some)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
 }
@@ -63,33 +89,30 @@ pub async fn write_frame<T: serde::Serialize>(
 mod tests {
     use super::*;
     use crate::protocol::{ClientFrame, ServerFrame};
-    use interprocess::local_socket::{
-        ListenerOptions,
-        tokio::Stream,
-        traits::tokio::{Listener as _, Stream as _},
-    };
     use serde_json::json;
+    use tokio::net::UnixListener;
 
-    async fn connected_pair() -> (FrameReader, FrameWriter, FrameReader, FrameWriter) {
+    async fn connected_pair() -> (
+        tempfile::TempDir,
+        FrameReader,
+        FrameWriter,
+        FrameReader,
+        FrameWriter,
+    ) {
         let dir = tempfile::tempdir().unwrap();
-        let name = crate::socket::helper_socket_name_at(dir.path().join("t.sock"));
-        let listener = ListenerOptions::new()
-            .name(name.clone())
-            .create_tokio()
-            .unwrap();
-        let accept = tokio::spawn(async move { listener.accept().await.unwrap() });
-        let client = Stream::connect(name).await.unwrap();
+        let path = dir.path().join("t.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+        let client = UnixStream::connect(&path).await.unwrap();
         let server = accept.await.unwrap();
         let (cr, cw) = split(client);
         let (sr, sw) = split(server);
-        // keep dir alive for the duration of the test
-        std::mem::forget(dir);
-        (cr, cw, sr, sw)
+        (dir, cr, cw, sr, sw)
     }
 
     #[tokio::test]
     async fn client_frame_round_trip() {
-        let (_cr, mut cw, mut sr, _sw) = connected_pair().await;
+        let (_dir, _cr, mut cw, mut sr, _sw) = connected_pair().await;
         write_frame(
             &mut cw,
             &ClientFrame::Request {
@@ -112,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn server_frame_round_trip_and_malformed() {
-        let (mut cr, _cw, _sr, mut sw) = connected_pair().await;
+        let (_dir, mut cr, _cw, _sr, mut sw) = connected_pair().await;
         write_frame(
             &mut sw,
             &ServerFrame::Hello {
@@ -144,8 +167,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oversized_unterminated_frame_rejects_without_unbounded_buffering() {
+        let (_dir, mut cr, _cw, _sr, mut sw) = connected_pair().await;
+        let writer = tokio::spawn(async move {
+            let chunk = vec![b'a'; 64 * 1024];
+            let mut written = 0usize;
+            while written <= MAX_FRAME_BYTES + 128 * 1024 {
+                if sw.write_all(&chunk).await.is_err() {
+                    break;
+                }
+                written += chunk.len();
+            }
+            let _ = sw.flush().await;
+        });
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            read_server_frame(&mut cr),
+        )
+        .await
+        .expect("must not hang waiting for newline");
+        let err = res.expect_err("oversized stream must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        drop(_cw);
+        drop(cr);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
     async fn clean_close_yields_none() {
-        let (mut cr, _cw, sr, sw) = connected_pair().await;
+        let (_dir, mut cr, _cw, sr, sw) = connected_pair().await;
         // tokio::io::split keeps the socket open until BOTH halves drop.
         drop(sw);
         drop(sr);

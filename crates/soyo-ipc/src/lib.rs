@@ -10,4 +10,7 @@ pub mod types;
 
 pub use client::{HelperClient, HelperCompat};
 pub use protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame};
-pub use socket::{HelperEndpoint, helper_pid_path, helper_socket_name};
+pub use socket::{
+    HelperEndpoint, HelperPidRecord, HelperTarget, helper_pid_path, process_exe_path,
+    process_started_id, verify_peer_euid,
+};

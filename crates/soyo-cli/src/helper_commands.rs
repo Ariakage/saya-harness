@@ -1,12 +1,29 @@
 //! `soyo helper` (run the shared backend daemon) and `soyo kill` (stop it).
 
+use soyo_core::config::Environment;
 use soyo_host::{HelperServer, HostService};
-use soyo_ipc::{HelperClient, helper_pid_path};
-use std::sync::Arc;
+use soyo_ipc::{HelperClient, HelperPidRecord, HelperTarget, process_exe_path, process_started_id};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+fn resolve_target(config: Option<&Path>, data_dir: Option<&Path>) -> HelperTarget {
+    let env = Environment::capture();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    HelperTarget::from_overrides(config, data_dir, &env, &cwd).unwrap_or_else(|_| {
+        HelperTarget::from_paths(
+            PathBuf::from("config.toml"),
+            PathBuf::from("data"),
+            PathBuf::from("state"),
+        )
+    })
+}
 
 /// Run the helper daemon in the foreground (clients spawn it detached).
-pub async fn run_helper() -> u8 {
-    let service = HostService::from_environment();
+pub async fn run_helper(config: Option<&Path>, data_dir: Option<&Path>) -> u8 {
+    let service = HostService::from_overrides(config, data_dir);
     let server = HelperServer::new(service);
     match server.run().await {
         Ok(()) => 0,
@@ -17,15 +34,16 @@ pub async fn run_helper() -> u8 {
     }
 }
 
-/// Ask the helper to shut down; falls back to the pid file when the socket is
-/// unreachable (stale daemon after a crash).
-pub async fn kill_helper() -> u8 {
-    match HelperClient::connect().await {
+/// Ask the helper matching `(config, data_dir)` to shut down; falls back to the
+/// pid file only after verifying live process identity (`pid`, start timestamp,
+/// exe path, and configuration fingerprint).
+pub async fn kill_helper(config: Option<&Path>, data_dir: Option<&Path>) -> u8 {
+    let target = resolve_target(config, data_dir);
+    match HelperClient::connect_for(&target).await {
         Ok(client) => {
             client.shutdown_daemon().await;
-            // Give the daemon a moment to exit before reporting.
             for _ in 0..20 {
-                if HelperClient::connect().await.is_err() {
+                if HelperClient::connect_for(&target).await.is_err() {
                     println!("soyo helper stopped.");
                     return 0;
                 }
@@ -35,21 +53,32 @@ pub async fn kill_helper() -> u8 {
             1
         }
         Err(_) => {
-            // Socket is gone — check whether the pid file still names a live pid.
-            let pid = std::fs::read_to_string(helper_pid_path())
-                .ok()
-                .and_then(|raw| raw.trim().parse::<u32>().ok());
-            match pid {
-                Some(pid) if pid_is_alive(pid) => {
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
+            let pid_path = target.pid_path();
+            let record = match soyo_fs::open_existing_private_file_read(
+                &pid_path,
+                "helper_pid",
+                "helper pid",
+            ) {
+                Ok(Some((file, _))) => {
+                    let mut raw = String::new();
+                    if file.take(16 * 1024).read_to_string(&mut raw).is_ok() {
+                        serde_json::from_str::<HelperPidRecord>(&raw).ok()
+                    } else {
+                        None
                     }
-                    println!("soyo helper terminated (pid {pid}).");
+                }
+                _ => None,
+            };
+            match record {
+                Some(rec) if verified_helper_process(&rec, &target) => {
+                    unsafe {
+                        libc::kill(rec.pid as i32, libc::SIGTERM);
+                    }
+                    println!("soyo helper terminated (pid {}).", rec.pid);
                     0
                 }
                 _ => {
-                    let _ = std::fs::remove_file(helper_pid_path());
+                    let _ = std::fs::remove_file(&pid_path);
                     eprintln!("soyo helper is not running.");
                     1
                 }
@@ -58,22 +87,31 @@ pub async fn kill_helper() -> u8 {
     }
 }
 
-#[cfg(unix)]
-fn pid_is_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+fn verified_helper_process(rec: &HelperPidRecord, target: &HelperTarget) -> bool {
+    if rec.pid <= 1 || rec.fingerprint != target.fingerprint || rec.exe_path.trim().is_empty() {
+        return false;
+    }
+    if unsafe { libc::kill(rec.pid as i32, 0) } != 0 {
+        return false;
+    }
+    if process_started_id(rec.pid) != Some(rec.started_at_id) {
+        return false;
+    }
+    let Some(live_exe) = process_exe_path(rec.pid) else {
+        return false;
+    };
+    match (
+        std::fs::canonicalize(&live_exe),
+        std::fs::canonicalize(&rec.exe_path),
+    ) {
+        (Ok(live), Ok(recorded)) => live == recorded,
+        _ => live_exe == Path::new(&rec.exe_path),
+    }
 }
 
-#[cfg(not(unix))]
-fn pid_is_alive(pid: u32) -> bool {
-    // Best-effort: assume alive; the socket check above already failed.
-    let _ = pid;
-    true
-}
-
-/// Ensure a helper is running (spawn if necessary). Used by interactive entry
-/// points before they do their first runtime work.
-pub async fn ensure_helper() -> Result<(), String> {
-    match connect_checked(true).await {
+/// Ensure a helper matching `target` is running (spawn if necessary).
+pub async fn ensure_helper_for(target: &HelperTarget) -> Result<(), String> {
+    match connect_checked_for(target, true).await {
         Ok(client) => {
             client.detach().await;
             Ok(())
@@ -82,23 +120,20 @@ pub async fn ensure_helper() -> Result<(), String> {
     }
 }
 
-/// Connect to the helper, reconciling a stale daemon first.
-///
-/// When the running helper is a different version or binary than this client
-/// would spawn, an idle helper is recycled: interactive callers (`prompt`)
-/// confirm first, non-interactive callers recycle silently. A busy helper is
-/// never killed — the client proceeds against it so in-flight runs survive.
-pub async fn connect_checked(
+/// Connect to the helper for `target`, reconciling an incompatible daemon only
+/// when neither active runs nor other connected clients are present.
+pub async fn connect_checked_for(
+    target: &HelperTarget,
     prompt: bool,
 ) -> Result<Arc<HelperClient>, soyo_ipc::types::DesktopError> {
-    let client = HelperClient::connect_or_spawn().await?;
+    let client = HelperClient::connect_or_spawn_for(target).await?;
     let compat = client.helper_compat().await;
     if !compat.mismatch {
         return Ok(client);
     }
-    if compat.run_active {
+    if compat.busy {
         eprintln!(
-            "soyo: helper version mismatch ({}); leaving it running",
+            "soyo: helper version/protocol mismatch ({}); leaving busy daemon running",
             compat.detail
         );
         return Ok(client);

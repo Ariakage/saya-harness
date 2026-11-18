@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::service::{HostService, StreamSink};
+    use crate::service::{ClientOwner, HostService, MAX_CONCURRENT_RUNS, StreamSink};
     use soyo_core::{
         boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
         config::{self, Environment, Overrides},
@@ -1035,5 +1035,409 @@ scopes = ["docs:read"]
             }
         }
         assert_eq!(completed_status.as_deref(), Some("completed"));
+    }
+
+    struct GateModel {
+        entered: mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
+    }
+
+    struct GateStream {
+        release: Option<tokio::sync::oneshot::Receiver<()>>,
+        done: bool,
+    }
+
+    impl Model for GateModel {
+        fn start<'a>(
+            &'a self,
+            _request: &'a ModelRequest,
+            _cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn ModelStream>> {
+            let entered = self.entered.clone();
+            Box::pin(async move {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _ = entered.send(tx);
+                Ok(Box::new(GateStream {
+                    release: Some(rx),
+                    done: false,
+                }) as Box<dyn ModelStream>)
+            })
+        }
+    }
+
+    impl ModelStream for GateStream {
+        fn next<'a>(
+            &'a mut self,
+            cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Option<ModelUpdate>> {
+            Box::pin(async move {
+                if self.done {
+                    return Ok(None);
+                }
+                if let Some(rx) = self.release.take() {
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {
+                            return Err(BoundaryError::new("cancelled", "model stream cancelled"));
+                        }
+                        _ = rx => {}
+                    }
+                }
+                self.done = true;
+                Ok(Some(ModelUpdate::Finished {
+                    items: vec![HistoryItem::AssistantText("unblocked".into())],
+                    usage: None,
+                }))
+            })
+        }
+    }
+
+    async fn wait_completed(rx: &mut mpsc::UnboundedReceiver<DesktopStreamEnvelope>) -> String {
+        while let Some(env) = rx.recv().await {
+            if let DesktopStreamEnvelope::RunCompleted { status, .. } = env {
+                return status;
+            }
+        }
+        panic!("stream ended without RunCompleted");
+    }
+
+    #[tokio::test]
+    async fn multi_client_runs_isolate_ownership_and_enforce_cap() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "auto");
+        let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(move || {
+            Arc::new(GateModel {
+                entered: entered_tx.clone(),
+            })
+        }));
+
+        // Creating a session on conn 2 must not disturb conn 1's active binding (R-15).
+        let s1 = state.new_session_for(1, None, None).await.unwrap();
+        let _s2_unused = state.new_session_for(2, None, None).await.unwrap();
+        let s1_state = state.get_run_state_for(1, None).await.unwrap();
+        assert!(!s1_state.active_run);
+
+        let mut sessions = vec![s1.id.clone()];
+        for conn in 2..=MAX_CONCURRENT_RUNS + 1 {
+            let s = state
+                .new_session_for(conn as u64, None, None)
+                .await
+                .unwrap();
+            sessions.push(s.id);
+        }
+
+        let mut streams = Vec::new();
+        let mut releases = Vec::new();
+        for (idx, sid) in sessions.iter().take(MAX_CONCURRENT_RUNS).enumerate() {
+            let conn_id = (idx + 1) as u64;
+            let (tx, rx) = mpsc::unbounded_channel();
+            state
+                .submit_prompt_for(
+                    ClientOwner {
+                        conn_id,
+                        request_id: (idx + 10) as u64,
+                    },
+                    SubmitPromptParams {
+                        prompt: format!("run {conn_id}"),
+                        session_id: Some(sid.clone()),
+                        ..SubmitPromptParams::default()
+                    },
+                    StreamSink::Mpsc(tx),
+                )
+                .await
+                .unwrap();
+            streams.push(rx);
+            releases.push(entered_rx.recv().await.unwrap());
+        }
+
+        // Cross-connection steer and compaction against conn 1's active session are denied.
+        let steer_err = state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: 2,
+                    request_id: 99,
+                },
+                SubmitPromptParams {
+                    prompt: "hijack".into(),
+                    session_id: Some(sessions[0].clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(mpsc::unbounded_channel().0),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(steer_err.code, "session_changed");
+
+        let compact_err = state
+            .compact_session_for(
+                ClientOwner {
+                    conn_id: 2,
+                    request_id: 100,
+                },
+                Some(&sessions[0]),
+                false,
+                StreamSink::Mpsc(mpsc::unbounded_channel().0),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(compact_err.code, "run_active");
+
+        // 5th concurrent run exceeds MAX_CONCURRENT_RUNS (4).
+        let cap_err = state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: (MAX_CONCURRENT_RUNS + 1) as u64,
+                    request_id: 101,
+                },
+                SubmitPromptParams {
+                    prompt: "fifth".into(),
+                    session_id: Some(sessions[MAX_CONCURRENT_RUNS].clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(mpsc::unbounded_channel().0),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(cap_err.code, "run_active");
+
+        for rel in releases {
+            let _ = rel.send(());
+        }
+        for mut rx in streams {
+            assert_eq!(wait_completed(&mut rx).await, "completed");
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_connection_cannot_reply_to_other_clients_approval_or_input() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "manual");
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(QueueModel::new(vec![
+                vec![ModelUpdate::Finished {
+                    items: vec![HistoryItem::ToolCall(ToolCall {
+                        call_id: "call_todo".into(),
+                        name: "todo_write".into(),
+                        arguments:
+                            r#"{"todos":[{"id":"1","content":"Check","status":"completed"}]}"#
+                                .into(),
+                    })],
+                    usage: None,
+                }],
+                vec![ModelUpdate::Finished {
+                    items: vec![HistoryItem::ToolCall(ToolCall {
+                        call_id: "call_ask".into(),
+                        name: "ask_user".into(),
+                        arguments: r#"{"question":"Pick one"}"#.into(),
+                    })],
+                    usage: None,
+                }],
+                vec![
+                    ModelUpdate::TextDelta("Done".into()),
+                    ModelUpdate::Finished {
+                        items: vec![HistoryItem::AssistantText("Done".into())],
+                        usage: None,
+                    },
+                ],
+            ]))
+        }));
+
+        let s1 = state.new_session_for(1, None, None).await.unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: 1,
+                    request_id: 1,
+                },
+                SubmitPromptParams {
+                    prompt: "run".into(),
+                    session_id: Some(s1.id.clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(tx),
+            )
+            .await
+            .unwrap();
+
+        let approval = loop {
+            match rx.recv().await.unwrap() {
+                DesktopStreamEnvelope::ApprovalNeeded(req) => break req,
+                DesktopStreamEnvelope::RunCompleted { status, error, .. } => {
+                    panic!("unexpected early completion {status}: {error:?}");
+                }
+                _ => {}
+            }
+        };
+        let err = state
+            .reply_approval_for(2, &approval.approval_id, &approval.call_id, true)
+            .unwrap_err();
+        assert_eq!(err.code, "unauthorized_client");
+        state
+            .reply_approval_for(1, &approval.approval_id, &approval.call_id, true)
+            .unwrap();
+
+        let input = loop {
+            match rx.recv().await.unwrap() {
+                DesktopStreamEnvelope::ApprovalNeeded(req) => {
+                    state
+                        .reply_approval_for(1, &req.approval_id, &req.call_id, true)
+                        .unwrap();
+                }
+                DesktopStreamEnvelope::InputNeeded(req) => break req,
+                DesktopStreamEnvelope::RunCompleted { status, error, .. } => {
+                    panic!("unexpected early completion {status}: {error:?}");
+                }
+                _ => {}
+            }
+        };
+        let err = state
+            .reply_input_for(2, &input.input_id, Some("answer".into()))
+            .unwrap_err();
+        assert_eq!(err.code, "unauthorized_client");
+        state
+            .reply_input_for(1, &input.input_id, Some("answer".into()))
+            .unwrap();
+        assert_eq!(wait_completed(&mut rx).await, "completed");
+    }
+
+    #[tokio::test]
+    async fn scoped_cancel_and_disconnect_only_affect_owned_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "auto");
+        let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(move || {
+            Arc::new(GateModel {
+                entered: entered_tx.clone(),
+            })
+        }));
+
+        let s1 = state.new_session_for(1, None, None).await.unwrap();
+        let s2 = state.new_session_for(2, None, None).await.unwrap();
+
+        let (tx1, mut rx1) = mpsc::unbounded_channel();
+        let r1 = state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: 1,
+                    request_id: 11,
+                },
+                SubmitPromptParams {
+                    prompt: "first".into(),
+                    session_id: Some(s1.id.clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(tx1),
+            )
+            .await
+            .unwrap();
+        let _rel1 = entered_rx.recv().await.unwrap();
+
+        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        let _r2 = state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: 2,
+                    request_id: 22,
+                },
+                SubmitPromptParams {
+                    prompt: "second".into(),
+                    session_id: Some(s2.id.clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(tx2),
+            )
+            .await
+            .unwrap();
+        let rel2 = entered_rx.recv().await.unwrap();
+
+        assert!(!state.cancel_request(2, 11));
+        assert!(state.cancel_request(1, 11));
+        let status1 = wait_completed(&mut rx1).await;
+        assert_ne!(status1, "completed");
+
+        let _ = rel2.send(());
+        assert_eq!(wait_completed(&mut rx2).await, "completed");
+
+        // Now test cancel_run_for(conn, Some(run_id)) and disconnect isolation.
+        let (tx1b, mut rx1b) = mpsc::unbounded_channel();
+        let r1b = state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: 1,
+                    request_id: 12,
+                },
+                SubmitPromptParams {
+                    prompt: "first again".into(),
+                    session_id: Some(s1.id.clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(tx1b),
+            )
+            .await
+            .unwrap();
+        let _rel1b = entered_rx.recv().await.unwrap();
+
+        let (tx2b, mut rx2b) = mpsc::unbounded_channel();
+        let _r2b = state
+            .submit_prompt_for(
+                ClientOwner {
+                    conn_id: 2,
+                    request_id: 23,
+                },
+                SubmitPromptParams {
+                    prompt: "second again".into(),
+                    session_id: Some(s2.id.clone()),
+                    ..SubmitPromptParams::default()
+                },
+                StreamSink::Mpsc(tx2b),
+            )
+            .await
+            .unwrap();
+        let rel2b = entered_rx.recv().await.unwrap();
+
+        assert!(state.cancel_run_for(1, Some(&r1b.run_id)));
+        assert_ne!(wait_completed(&mut rx1b).await, "completed");
+
+        // Disconnect conn 1 while conn 2's run is still active: conn 2 completes cleanly.
+        state.on_client_disconnected(1).await;
+        let _ = rel2b.send(());
+        assert_eq!(wait_completed(&mut rx2b).await, "completed");
+        let _ = r1.run_id;
+    }
+
+    #[tokio::test]
+    async fn usage_stats_buckets_runs_by_utc_offset_minutes() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "auto");
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(ScriptedModel {
+                chunks: vec!["ok".into()],
+                thinking: None,
+                delay_ms: 0,
+            })
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        state
+            .submit_prompt(submit_params("count tokens"), StreamSink::Mpsc(tx))
+            .await
+            .unwrap();
+        assert_eq!(wait_completed(&mut rx).await, "completed");
+
+        let east = state.usage_stats(Some(30), Some(480)).await.unwrap();
+        let west = state.usage_stats(Some(30), Some(-480)).await.unwrap();
+        assert_eq!(east.days.len(), 1);
+        assert_eq!(west.days.len(), 1);
+        assert_eq!(east.days[0].day_start.rem_euclid(86_400), 57_600);
+        assert_eq!(west.days[0].day_start.rem_euclid(86_400), 28_800);
     }
 }

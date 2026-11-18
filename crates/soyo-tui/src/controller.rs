@@ -470,6 +470,7 @@ impl App {
                 session_id: Some(remote.session.id.0.to_string()),
                 personal_context: backend::personal_context_dto(&self.options.personal_context),
                 anthropic_prompt_cache: self.options.anthropic_prompt_cache,
+                env: Some(self.config.environment().export_pairs()),
             };
             let remote_run = backend::spawn_remote_run(
                 remote.client.clone(),
@@ -1146,7 +1147,8 @@ pub async fn run(config: Config, options: Options) -> Result<u8> {
         return Err(text::TUI_TEXT_OUTPUT.into());
     }
     let helper = if options.use_helper {
-        HelperClient::connect_or_spawn().await.ok()
+        let target = soyo_ipc::HelperTarget::from_config(&config);
+        HelperClient::connect_or_spawn_for(&target).await.ok()
     } else {
         None
     };

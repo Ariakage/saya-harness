@@ -19,11 +19,11 @@ mod tests {
 
     fn use_temp_helper_dir() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("helper");
         // SAFETY: tests in this crate set SOYO_HELPER_DIR before any
-        // server/client reads it; runs are serialized by the Once + this
-        // being the only module touching the variable.
+        // server/client reads it; runs are serialized by `serial()`.
         unsafe {
-            std::env::set_var("SOYO_HELPER_DIR", dir.path());
+            std::env::set_var("SOYO_HELPER_DIR", &helper);
         }
         dir
     }
@@ -32,7 +32,9 @@ mod tests {
         let dir = use_temp_helper_dir();
         let server = HelperServer::new(HostService::from_environment());
         let handle = tokio::spawn(async move {
-            let _ = server.run().await;
+            if let Err(err) = server.run().await {
+                eprintln!("test helper server error: {}: {}", err.code, err.message);
+            }
         });
         // Wait for the socket to accept.
         for _ in 0..100 {
@@ -70,10 +72,10 @@ mod tests {
     #[tokio::test]
     async fn stale_socket_is_reclaimed_on_bind() {
         let _guard = serial().await;
-        let dir = use_temp_helper_dir();
-        std::fs::create_dir_all(dir.path()).unwrap();
-        let stale = dir.path().join("helper.sock");
-        std::fs::write(&stale, b"stale").unwrap();
+        let _dir = use_temp_helper_dir();
+        let target = soyo_ipc::HelperTarget::from_environment().unwrap();
+        soyo_fs::ensure_private_dir(&target.helper_dir(), "helper", "helper").unwrap();
+        std::fs::write(target.socket_path(), b"stale").unwrap();
         let (_dir, handle) = running_server().await;
         let client = HelperClient::connect().await.expect("connect");
         client.shutdown_daemon().await;
@@ -83,8 +85,9 @@ mod tests {
     #[tokio::test]
     async fn server_exits_when_socket_file_removed() {
         let _guard = serial().await;
-        let (dir, handle) = running_server().await;
-        let sock = dir.path().join("helper.sock");
+        let (_dir, handle) = running_server().await;
+        let target = soyo_ipc::HelperTarget::from_environment().unwrap();
+        let sock = target.socket_path();
         assert!(sock.exists());
         // Simulate tempdir/cleanup removal: the helper is unreachable forever.
         std::fs::remove_file(&sock).unwrap();
@@ -174,9 +177,11 @@ mod tests {
         let _guard = serial().await;
         let dir = tempfile::tempdir().unwrap();
         let helper = dir.path().join("helper");
+        let state_home = dir.path().join("state");
         let config_path = dir.path().join("config.toml");
         let _env = EnvGuard::set(&[
             ("SOYO_HELPER_DIR", helper.to_str().unwrap()),
+            ("XDG_STATE_HOME", state_home.to_str().unwrap()),
             ("SOYO_CONFIG", config_path.to_str().unwrap()),
         ]);
         let service = HostService::from_environment();
@@ -199,12 +204,25 @@ mod tests {
         assert!(text.contains("permissions = \"manual\""), "{text}");
         assert!(!text.contains("sk-test-123"), "{text}");
 
-        // The secret lives only in the helper-private env overlay.
-        let overlay = std::fs::read_to_string(helper.join("env")).unwrap();
+        // The secret lives only in `<state_dir>/secrets/env` (0700 dir, 0600 file).
+        let env_path = state_home.join("soyo").join("secrets").join("env");
+        let overlay = std::fs::read_to_string(&env_path).unwrap();
         assert!(
             overlay.contains("SOYO_SETUP_TEST_KEY=sk-test-123"),
             "{overlay}"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(env_path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            let file_mode = std::fs::metadata(&env_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            assert_eq!(file_mode, 0o600);
+        }
 
         // Re-running merges into the same document instead of replacing it.
         let mut second = setup_params();
@@ -239,6 +257,91 @@ mod tests {
             boot.workspace,
             nested.canonicalize().unwrap().to_string_lossy().to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn helper_permissions_and_flock_serialization() {
+        let _guard = serial().await;
+        let (_dir, handle) = running_server().await;
+        let target = soyo_ipc::HelperTarget::from_environment().unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(target.helper_dir())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            let sock_mode = std::fs::metadata(target.socket_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            let pid_mode = std::fs::metadata(target.pid_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            assert_eq!(sock_mode, 0o600);
+            assert_eq!(pid_mode, 0o600);
+        }
+
+        // Launching a competing server against the same HelperTarget must fail
+        // with helper_already_running without disturbing the active server.
+        let rival = HelperServer::new(HostService::from_environment());
+        let err = rival.run().await.unwrap_err();
+        assert_eq!(err.code, "helper_already_running");
+
+        let client = HelperClient::connect()
+            .await
+            .expect("live helper stays reachable");
+        client.shutdown_daemon().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_env_migrates_once_without_clobbering() {
+        let _guard = serial().await;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let legacy_dir = home.join(".soyo");
+        let legacy_env = legacy_dir.join("env");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(&legacy_env, "SOYO_MIGRATE_TEST=migrated-secret\n").unwrap();
+
+        let _env = EnvGuard::set(&[("HOME", home.to_str().unwrap())]);
+        crate::envfile::migrate_legacy_env(&state_dir);
+
+        let dest = crate::envfile::env_file_path_for(&state_dir);
+        let migrated = std::fs::read_to_string(&dest).unwrap();
+        assert!(
+            migrated.contains("SOYO_MIGRATE_TEST=migrated-secret"),
+            "{migrated}"
+        );
+        assert!(!legacy_env.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(dest.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            let file_mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            assert_eq!(file_mode, 0o600);
+        }
+
+        // Re-introducing a legacy env file later must not overwrite destination.
+        std::fs::write(&legacy_env, "SOYO_MIGRATE_TEST=must-not-overwrite\n").unwrap();
+        crate::envfile::migrate_legacy_env(&state_dir);
+        let after = std::fs::read_to_string(&dest).unwrap();
+        assert!(after.contains("migrated-secret"));
+        assert!(!after.contains("must-not-overwrite"));
     }
 
     #[tokio::test]
