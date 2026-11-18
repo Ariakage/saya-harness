@@ -16,5 +16,9 @@ __pycache__/
 /desktop/node_modules/
 /desktop/dist/
 
+# Site frontend dependencies and generated build output.
+/site/node_modules/
+/site/dist/
+
 /node_modules/
 /dist/

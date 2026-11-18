@@ -1,0 +1,344 @@
+@import "tailwindcss";
+
+/* Source Serif 4 variable — Latin subset only (D-076). */
+@font-face {
+  font-family: "Source Serif 4 Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url("@fontsource-variable/source-serif-4/files/source-serif-4-latin-wght-normal.woff2")
+    format("woff2-variations");
+}
+
+/* ------------------------------------------------------------------
+   Soyo site theme tokens — mirrors docs/design/desktop-ui.md §8.2.
+   Dark values are Soyo Dark, light values are Soyo Light.
+   ------------------------------------------------------------------ */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-sidebar: #1b1a18;
+  --surface-app: #201f1d;
+  --surface-raised: #282725;
+  --surface-overlay: #2d2c29;
+  --surface-hover: #34322f;
+  --border-subtle: #2f2d2a;
+  --border: #3a3835;
+  --border-strong: #76716a;
+  --text-primary: #ecebe6;
+  --text-secondary: #bdb9b0;
+  --text-tertiary: #a09b92;
+  --accent: #d9a08e;
+  --accent-hover: #e4b3a3;
+  --accent-pressed: #cf9480;
+  --accent-text: #d9a08e;
+  --on-accent: #1f140f;
+  --info: #9db6e0;
+  --success: #86cfa0;
+  --warning: #e9b762;
+  --danger: #f08a80;
+
+  --mode-work: #6aaefc;
+  --mode-code: #86cfa0;
+  --mode-plan: #bea3f5;
+  --mode-build: #efb25e;
+
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --semantic-bg-alpha: 0.12;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --surface-sidebar: #efece5;
+  --surface-app: #f7f5ef;
+  --surface-raised: #ffffff;
+  --surface-overlay: #ffffff;
+  --surface-hover: #e3dfd5;
+  --border-subtle: #dfdbd1;
+  --border: #d3cec3;
+  --border-strong: #8c877d;
+  --text-primary: #1f1e1b;
+  --text-secondary: #4f4c46;
+  --text-tertiary: #66625b;
+  --accent: #a9583f;
+  --accent-hover: #9a4e36;
+  --accent-pressed: #8c452f;
+  --accent-text: #964f36;
+  --on-accent: #ffffff;
+  --info: #2b5ea7;
+  --success: #2a6e45;
+  --warning: #88580b;
+  --danger: #b2352b;
+
+  --mode-work: #235fbb;
+  --mode-code: #2a6e45;
+  --mode-plan: #6d45c2;
+  --mode-build: #88580b;
+
+  --shadow-popover: 0 8px 24px rgba(31, 30, 27, 0.12);
+  --shadow-dialog: 0 24px 64px rgba(31, 30, 27, 0.18);
+  --semantic-bg-alpha: 0.1;
+}
+
+@theme inline {
+  --color-surface-sidebar: var(--surface-sidebar);
+  --color-surface-app: var(--surface-app);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-hover: var(--surface-hover);
+  --color-border-subtle: var(--border-subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+  --color-accent-text: var(--accent-text);
+  --color-on-accent: var(--on-accent);
+  --color-info: var(--info);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-mode-work: var(--mode-work);
+  --color-mode-code: var(--mode-code);
+  --color-mode-plan: var(--mode-plan);
+  --color-mode-build: var(--mode-build);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--surface-app);
+    color: var(--text-primary);
+    font-family:
+      -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter,
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  code,
+  pre,
+  kbd {
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+      "Liberation Mono", monospace;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  button:not(:disabled),
+  a {
+    cursor: pointer;
+  }
+
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/* Display serif — per spec, reserved for the home greeting / display use. */
+.font-display {
+  font-family:
+    "Source Serif 4 Variable", "Songti SC", "Songti TC", "Noto Serif CJK SC",
+    "Noto Serif CJK TC", serif;
+  font-optical-sizing: auto;
+}
+
+/* Soyo pill (§4.1 / §8.7): static & interactive variants. */
+.soyo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  padding: 3px 10px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.soyo-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  padding: 5px 14px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.soyo-pill-btn:hover {
+  background-color: var(--surface-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.soyo-pill-btn:active {
+  transform: scale(0.98);
+}
+
+/* Buttons (§8.7). */
+.soyo-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background-color: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 8px 18px;
+  white-space: nowrap;
+  transition: background-color 150ms ease, transform 100ms ease;
+}
+
+.soyo-btn-primary:hover {
+  background-color: var(--accent-hover);
+}
+
+.soyo-btn-primary:active {
+  background-color: var(--accent-pressed);
+  transform: scale(0.98);
+}
+
+.soyo-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  padding: 8px 18px;
+  white-space: nowrap;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    transform 100ms ease;
+}
+
+.soyo-btn-secondary:hover {
+  background-color: var(--surface-hover);
+}
+
+.soyo-btn-secondary:active {
+  transform: scale(0.98);
+}
+
+/* Mode badge: colored dot + label, always with text (§8.3). */
+.soyo-mode-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  flex: none;
+}
+
+/* Composer card (§8.6). */
+.soyo-composer {
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-popover);
+  transition: border-color 150ms ease;
+}
+
+.soyo-composer:focus-within {
+  border-color: var(--border-strong);
+}
+
+/* Inline diff rows (§4.2), adapted to theme semantic alpha. */
+.soyo-diff-add {
+  background: color-mix(in srgb, var(--success) calc(var(--semantic-bg-alpha) * 100%), transparent);
+}
+
+.soyo-diff-del {
+  background: color-mix(in srgb, var(--danger) calc(var(--semantic-bg-alpha) * 100%), transparent);
+}
+
+/* Motion primitives (§5.1). */
+@keyframes soyo-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes soyo-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes soyo-pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.soyo-enter {
+  animation: soyo-msg-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.soyo-enter-1 { animation-delay: 60ms; }
+.soyo-enter-2 { animation-delay: 140ms; }
+.soyo-enter-3 { animation-delay: 220ms; }
+
+.soyo-pulse-dot {
+  animation: soyo-pulse-soft 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
