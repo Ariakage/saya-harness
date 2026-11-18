@@ -707,6 +707,17 @@ export function installBrowserPreviewMock(): boolean {
     },
   ];
 
+  let previewPrefs = {
+    nickname: "ariakage" as string | null,
+    avatar_data: null as string | null,
+    theme: "system" as string | null,
+    font_size: 14 as number | null,
+    conversation_font: "default" as string | null,
+    reduce_motion: false as boolean | null,
+    inspector_open: true as boolean | null,
+  };
+  let previewGlobalPrompt = "# Workspace Instructions\nFollow AGENTS.md and keep design tokens centralized.";
+
   const previewMemoryEntries = [
     {
       id: "mem_001",
@@ -762,14 +773,16 @@ export function installBrowserPreviewMock(): boolean {
       case "submit_prompt": {
         const payload = args as {
           prompt: string;
+          sessionId?: string | null;
           onEvent: Channel<DesktopStreamEnvelope_Deserialize>;
         };
+        const activeSid = payload.sessionId ?? CONVERSATION_SESSION.id;
         if (activeAbort && !activeAbort.cancelled) {
           payload.onEvent.onmessage({
             kind: "schema_event",
             data: {
               schema_version: 1,
-              session_id: CONVERSATION_SESSION.id,
+              session_id: activeSid,
               run_id: "preview-run",
               seq: sequenceCounter++,
               timestamp: new Date().toISOString(),
@@ -784,7 +797,7 @@ export function installBrowserPreviewMock(): boolean {
           });
           return {
             action: "steered",
-            session_id: CONVERSATION_SESSION.id,
+            session_id: activeSid,
             run_id: "preview-run",
           };
         }
@@ -794,7 +807,7 @@ export function installBrowserPreviewMock(): boolean {
         simulateRunStream(payload.prompt, payload.onEvent, abortToken);
         return {
           action: "started",
-          session_id: CONVERSATION_SESSION.id,
+          session_id: activeSid,
           run_id: "preview-run",
         };
       }
@@ -1021,6 +1034,145 @@ export function installBrowserPreviewMock(): boolean {
             preview_url: `soyo-attachment://localhost/draft/draft_${idx}`,
           };
         });
+      }
+      case "get_usage_stats": {
+        const req = args as { days?: number; utcOffsetMinutes?: number | null };
+        const rangeDays = req.days ?? 30;
+        const offsetSecs = (req.utcOffsetMinutes ?? 0) * 60;
+        const daySec = 86400;
+        const now = Math.floor(Date.now() / 1000);
+        const shift = (ts: number) => ts + offsetSecs;
+        const todayStart =
+          shift(now) - ((shift(now) % daySec) + daySec) % daySec - offsetSecs;
+        return {
+          range_days: rangeDays,
+          generated_at: now,
+          totals: {
+            input_tokens: 18420,
+            output_tokens: 6140,
+            cached_input_tokens: 4800,
+            runs: 7,
+            requests: 19,
+            estimated: true,
+          },
+          by_purpose: [
+            {
+              purpose: "execution",
+              totals: {
+                input_tokens: 15200,
+                output_tokens: 5100,
+                cached_input_tokens: 4200,
+                runs: 7,
+                requests: 14,
+                estimated: true,
+              },
+            },
+            {
+              purpose: "review",
+              totals: {
+                input_tokens: 2100,
+                output_tokens: 640,
+                cached_input_tokens: 400,
+                runs: 3,
+                requests: 3,
+                estimated: false,
+              },
+            },
+            {
+              purpose: "compaction",
+              totals: {
+                input_tokens: 1120,
+                output_tokens: 400,
+                cached_input_tokens: 200,
+                runs: 2,
+                requests: 2,
+                estimated: false,
+              },
+            },
+          ],
+          days: [
+            {
+              day_start: todayStart - 2 * daySec,
+              input_tokens: 5200,
+              output_tokens: 1800,
+              cached_input_tokens: 1200,
+              estimated: false,
+            },
+            {
+              day_start: todayStart - daySec,
+              input_tokens: 7100,
+              output_tokens: 2340,
+              cached_input_tokens: 1900,
+              estimated: true,
+            },
+            {
+              day_start: todayStart,
+              input_tokens: 6120,
+              output_tokens: 2000,
+              cached_input_tokens: 1700,
+              estimated: false,
+            },
+          ],
+        };
+      }
+      case "get_helper_status":
+        return {
+          connected: true,
+          version: "0.3.0",
+          pid: 42100,
+          active_runs: activeAbort && !activeAbort.cancelled ? 1 : 0,
+          active_clients: 1,
+          detail: null,
+        };
+      case "get_user_name":
+        return "ariakage";
+      case "get_desktop_prefs":
+        return previewPrefs;
+      case "update_desktop_prefs": {
+        const req = (args as { params?: Partial<typeof previewPrefs> }).params ?? {};
+        previewPrefs = {
+          ...previewPrefs,
+          ...(req.theme !== undefined ? { theme: req.theme } : {}),
+          ...(req.font_size !== undefined ? { font_size: req.font_size } : {}),
+          ...(req.conversation_font !== undefined
+            ? { conversation_font: req.conversation_font }
+            : {}),
+          ...(req.reduce_motion !== undefined
+            ? { reduce_motion: req.reduce_motion }
+            : {}),
+          ...(req.inspector_open !== undefined
+            ? { inspector_open: req.inspector_open }
+            : {}),
+        };
+        return previewPrefs;
+      }
+      case "set_nickname": {
+        const req = args as { nickname?: string | null };
+        previewPrefs = { ...previewPrefs, nickname: req.nickname ?? null };
+        return previewPrefs;
+      }
+      case "set_avatar": {
+        const req = args as { sourcePath?: string | null };
+        previewPrefs = {
+          ...previewPrefs,
+          avatar_data: req.sourcePath ? "data:image/png;base64," : null,
+        };
+        return previewPrefs;
+      }
+      case "get_global_prompt":
+        return {
+          content: previewGlobalPrompt,
+          path: "~/.soyo/AGENTS.md",
+          source_path: null,
+        };
+      case "set_global_prompt": {
+        const req = args as { content: string };
+        previewGlobalPrompt = req.content;
+        return {
+          content: previewGlobalPrompt,
+          path: "~/.soyo/AGENTS.md",
+          source_path: null,
+        };
       }
       default:
         throw {

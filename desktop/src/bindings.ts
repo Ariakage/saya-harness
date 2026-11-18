@@ -7,11 +7,12 @@ export const commands = {
 	listSessions: (page: number | null) => typedError<SessionPageDto_Serialize, DesktopError>(__TAURI_INVOKE("list_sessions", { page })),
 	getBootstrapState: () => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("get_bootstrap_state")),
 	newSession: () => typedError<ActiveSessionDto_Serialize, DesktopError>(__TAURI_INVOKE("new_session")),
-	submitPrompt: (prompt: string, attachments: AttachmentTokenDto[], onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("submit_prompt", { prompt, attachments, onEvent })),
+	submitPrompt: (prompt: string, attachments: AttachmentTokenDto[], sessionId: string | null, onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("submit_prompt", { prompt, attachments, sessionId, onEvent })),
 	cancelRun: () => typedError<boolean, DesktopError>(__TAURI_INVOKE("cancel_run")),
 	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
 	getRunState: () => typedError<RunStateDto_Serialize, DesktopError>(__TAURI_INVOKE("get_run_state")),
-	getUsageStats: (days: number) => typedError<UsageStatsDto, DesktopError>(__TAURI_INVOKE("get_usage_stats", { days })),
+	getUsageStats: (days: number, utcOffsetMinutes: number | null) => typedError<UsageStatsDto, DesktopError>(__TAURI_INVOKE("get_usage_stats", { days, utcOffsetMinutes })),
+	getHelperStatus: () => typedError<HelperStatusDto_Serialize, DesktopError>(__TAURI_INVOKE("get_helper_status")),
 	setupEnvironment: (params: SetupEnvironmentParams_Deserialize) => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("setup_environment", { params })),
 	replyApproval: (approvalId: string, callId: string, approved: boolean) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_approval", { approvalId, callId, approved })),
 	replyInput: (inputId: string, answer: string) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_input", { inputId, answer })),
@@ -41,6 +42,7 @@ export const commands = {
 	stagePastedAttachments: (items: PastedAttachmentItem[]) => typedError<StagedAttachmentDto[], DesktopError>(__TAURI_INVOKE("stage_pasted_attachments", { items })),
 	getUserName: () => typedError<string | null, DesktopError>(__TAURI_INVOKE("get_user_name")),
 	getDesktopPrefs: () => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("get_desktop_prefs")),
+	updateDesktopPrefs: (params: UpdateDesktopPrefsParams_Deserialize) => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("update_desktop_prefs", { params })),
 	setNickname: (nickname: string | null) => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("set_nickname", { nickname })),
 	setAvatar: (sourcePath: string | null) => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("set_avatar", { sourcePath })),
 	getGlobalPrompt: () => typedError<GlobalPromptDto_Serialize, DesktopError>(__TAURI_INVOKE("get_global_prompt")),
@@ -223,12 +225,32 @@ export type DesktopPrefsDto_Deserialize = {
 	nickname?: string | null,
 	/**  Data URL (`data:image/...;base64,...`) for the configured avatar, if any. */
 	avatar_data?: string | null,
+	/**  Preferred UI theme (`"system"` | `"light"` | `"dark"`). */
+	theme?: string | null,
+	/**  Message body font size (`13` | `14` | `16`). */
+	font_size?: number | null,
+	/**  Conversation body font (`"default"` | `"serif"` | `"system"`). */
+	conversation_font?: string | null,
+	/**  Whether motion effects (including shader canvas) are disabled. */
+	reduce_motion?: boolean | null,
+	/**  Docked inspector state on wide viewports (`>= 1280px`). */
+	inspector_open?: boolean | null,
 };
 
 export type DesktopPrefsDto_Serialize = {
 	nickname: string | null,
 	/**  Data URL (`data:image/...;base64,...`) for the configured avatar, if any. */
 	avatar_data: string | null,
+	/**  Preferred UI theme (`"system"` | `"light"` | `"dark"`). */
+	theme: string | null,
+	/**  Message body font size (`13` | `14` | `16`). */
+	font_size: number | null,
+	/**  Conversation body font (`"default"` | `"serif"` | `"system"`). */
+	conversation_font: string | null,
+	/**  Whether motion effects (including shader canvas) are disabled. */
+	reduce_motion: boolean | null,
+	/**  Docked inspector state on wide viewports (`>= 1280px`). */
+	inspector_open: boolean | null,
 };
 
 /**  Unified channel message pushed during an active run. */
@@ -341,6 +363,26 @@ export type GlobalPromptDto_Serialize = {
 	path: string,
 	/**  Path the content was read from, when a legacy file was used. */
 	source_path: string | null,
+};
+
+export type HelperStatusDto = HelperStatusDto_Serialize | HelperStatusDto_Deserialize;
+
+export type HelperStatusDto_Deserialize = {
+	connected: boolean,
+	version?: string | null,
+	pid?: number | null,
+	active_runs: number,
+	active_clients: number,
+	detail?: string | null,
+};
+
+export type HelperStatusDto_Serialize = {
+	connected: boolean,
+	version: string | null,
+	pid: number | null,
+	active_runs: number,
+	active_clients: number,
+	detail: string | null,
 };
 
 export type InputRequestDto = {
@@ -939,6 +981,24 @@ export type ToolResultDto_Serialize = {
 	summary: string | null,
 	formatted: string,
 	media_refs: string[],
+};
+
+export type UpdateDesktopPrefsParams = UpdateDesktopPrefsParams_Serialize | UpdateDesktopPrefsParams_Deserialize;
+
+export type UpdateDesktopPrefsParams_Deserialize = {
+	theme?: string | null,
+	font_size?: number | null,
+	conversation_font?: string | null,
+	reduce_motion?: boolean | null,
+	inspector_open?: boolean | null,
+};
+
+export type UpdateDesktopPrefsParams_Serialize = {
+	theme: string | null,
+	font_size: number | null,
+	conversation_font: string | null,
+	reduce_motion: boolean | null,
+	inspector_open: boolean | null,
 };
 
 /**

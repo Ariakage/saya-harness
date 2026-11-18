@@ -26,6 +26,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         commands::compact_session,
         commands::get_run_state,
         commands::get_usage_stats,
+        commands::get_helper_status,
         commands::setup_environment,
         commands::reply_approval,
         commands::reply_input,
@@ -55,6 +56,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         peripheral_commands::stage_pasted_attachments,
         peripheral_commands::get_user_name,
         peripheral_commands::get_desktop_prefs,
+        peripheral_commands::update_desktop_prefs,
         peripheral_commands::set_nickname,
         peripheral_commands::set_avatar,
         peripheral_commands::get_global_prompt,
@@ -134,6 +136,8 @@ mod tests {
             "exportSession",
             "stageAttachments",
             "stagePastedAttachments",
+            "getHelperStatus",
+            "updateDesktopPrefs",
         ] {
             assert!(content.contains(symbol), "missing {symbol} in bindings.ts");
         }

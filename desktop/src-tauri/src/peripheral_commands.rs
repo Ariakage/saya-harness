@@ -7,7 +7,7 @@ use crate::{
         BackgroundJobDto, BootstrapStateDto, CredentialRecordDto, DesktopError, DesktopPrefsDto,
         ExportFormatDto, ExportResultDto, ExportScopeDto, ExtensionItemDto, GlobalPromptDto,
         McpServerDto, MemoryConfirmResultDto, MemoryQueryResultDto, ModuleStatusDto,
-        PreparedMemoryReviewDto, SandboxBackendDto, StagedAttachmentDto,
+        PreparedMemoryReviewDto, SandboxBackendDto, StagedAttachmentDto, UpdateDesktopPrefsParams,
     },
 };
 use tauri::State;
@@ -251,6 +251,15 @@ pub async fn set_avatar(
     source_path: Option<String>,
 ) -> Result<DesktopPrefsDto, DesktopError> {
     state.set_avatar(source_path).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn update_desktop_prefs(
+    state: State<'_, DesktopState>,
+    params: UpdateDesktopPrefsParams,
+) -> Result<DesktopPrefsDto, DesktopError> {
+    state.update_desktop_prefs(params).await
 }
 
 #[tauri::command]

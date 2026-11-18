@@ -4,9 +4,9 @@ use crate::{
     client_state::{DesktopState, StreamSink},
     types::{
         ActiveSessionDto, AttachmentTokenDto, BootstrapStateDto, DesktopError,
-        DesktopStreamEnvelope, ModeStateDto, PermissionModeDto, ResumeSessionResultDto,
-        RunStateDto, SessionPageDto, SetupEnvironmentParams, SubmitPromptResultDto, UsageStatsDto,
-        WorkModeDto,
+        DesktopStreamEnvelope, HelperStatusDto, ModeStateDto, PermissionModeDto,
+        ResumeSessionResultDto, RunStateDto, SessionPageDto, SetupEnvironmentParams,
+        SubmitPromptResultDto, UsageStatsDto, WorkModeDto,
     },
 };
 use tauri::{State, ipc::Channel};
@@ -40,10 +40,11 @@ pub async fn submit_prompt(
     state: State<'_, DesktopState>,
     prompt: String,
     attachments: Vec<AttachmentTokenDto>,
+    session_id: Option<String>,
     on_event: Channel<DesktopStreamEnvelope>,
 ) -> Result<SubmitPromptResultDto, DesktopError> {
     state
-        .submit_prompt(prompt, attachments, StreamSink::Tauri(on_event))
+        .submit_prompt(prompt, attachments, session_id, StreamSink::Tauri(on_event))
         .await
 }
 
@@ -73,8 +74,17 @@ pub async fn get_run_state(state: State<'_, DesktopState>) -> Result<RunStateDto
 pub async fn get_usage_stats(
     state: State<'_, DesktopState>,
     days: u32,
+    utc_offset_minutes: Option<i32>,
 ) -> Result<UsageStatsDto, DesktopError> {
-    state.usage_stats(days).await
+    state.usage_stats(days, utc_offset_minutes).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_helper_status(
+    state: State<'_, DesktopState>,
+) -> Result<HelperStatusDto, DesktopError> {
+    Ok(state.get_helper_status().await)
 }
 
 #[tauri::command]

@@ -729,8 +729,14 @@ export const useAppStore = create<AppState>((set, get) => {
         return true;
       }
       const channel = createEventChannel();
+      const targetSessionId = get().sessionId;
       try {
-        const res = await commands.submitPrompt(trimmed, mergedAttachments, channel);
+        const res = await commands.submitPrompt(
+          trimmed,
+          mergedAttachments,
+          targetSessionId,
+          channel
+        );
         if (res.status !== "ok") {
           set({ error: res.error });
           return false;

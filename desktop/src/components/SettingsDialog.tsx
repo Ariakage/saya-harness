@@ -141,7 +141,10 @@ export function SettingsDialog({
     setUsageLoading(true);
     setUsageError(null);
     void commands
-      .getUsageStats(USAGE_RANGE_DAYS[usageRange])
+      .getUsageStats(
+        USAGE_RANGE_DAYS[usageRange],
+        -new Date().getTimezoneOffset()
+      )
       .then((res) => {
         if (cancelled) return;
         if (res.status === "ok") {
