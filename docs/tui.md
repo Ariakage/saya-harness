@@ -166,7 +166,7 @@ debug构建可运行 `soyo tui-preview syntax`打开共享场景的交互预览�
 
 Ctrl+P打开居中的浮层命令面板，方向键选择、Enter执行选中项，Esc或再次Ctrl+P关闭。/mode plan|build|code|work由用户触发，标题同时显示实际模式和core待切换模式。/permissions auto|manual|bypass在运行空闲时修改本次权限设置。/status、/cancel、/help与/exit提供运行状态和控制。
 
-当前模式具有专属色，WORK为晴蓝 `#58A6FF`，CODE为薄荷绿 `#7DCB9B`，PLAN为薰衣草紫 `#BB9AF7`，BUILD为暖杏橙 `#F6AD55`。输入框色条与底栏实际模式文字同步着色。待切换时，底栏当前与目标文字各用其模式色，色条随实际生效模式更新。
+当前模式具有专属色，WORK为晴蓝 `#6AAEFC`，CODE为薄荷绿 `#86CFA0`，PLAN为薰衣草紫 `#BEA3F5`，BUILD为暖杏橙 `#EFB25E`（与桌面端 Soyo Dark 的 `--mode-*` 令牌一致，见 D-075）。输入框色条与底栏实际模式文字同步着色。待切换时，底栏当前与目标文字各用其模式色，色条随实际生效模式更新。
 
 输入框为空且命令面板关闭时，Tab按WORK→CODE→PLAN→BUILD→WORK循环模式。运行中显示待生效模式，连续按下从最近请求的选择继续循环，进入PLAN仍遵循后台清理和调用边界。切换会使旧审批失效。含空格、正文或命令前缀的草稿沿原编辑／补全处理，权限设置独立。
 

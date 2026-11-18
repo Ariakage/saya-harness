@@ -459,7 +459,7 @@ fn session_layout_keeps_status_input_and_footer_in_their_observable_regions() {
         assert!(status.ends_with("auto│"));
         assert_eq!(buffer[(3, title_row)].symbol(), "M");
         assert_eq!(buffer[(1, title_row)].symbol(), INPUT_STRIPE);
-        assert_eq!(buffer[(1, title_row)].fg, BLUE);
+        assert_eq!(buffer[(1, title_row)].fg, mode_color("WORK"));
         assert_eq!(buffer[(1, title_row)].bg, INPUT_BACKGROUND);
         assert_eq!(buffer[(2, title_row)].bg, INPUT_BACKGROUND);
         assert_eq!(buffer[(3, input_row)].symbol(), "h");
@@ -508,7 +508,7 @@ fn resizing_across_former_breakpoints_keeps_one_reference_layout() {
         assert!(row_text(buffer, 1).starts_with("┌ • . "));
         assert!(row_text(buffer, height - 6).contains("✓ Ready"));
         assert_eq!(buffer[(3, height - 5)].symbol(), "M");
-        assert_eq!(buffer[(1, height - 5)].fg, BLUE);
+        assert_eq!(buffer[(1, height - 5)].fg, mode_color("WORK"));
         assert_eq!(buffer[(3, height - 4)].bg, INPUT_BACKGROUND);
         assert!(row_text(buffer, height - 1).starts_with("└WORK"));
         assert!(row_text(buffer, height - 1).contains("input"));
@@ -2108,10 +2108,10 @@ fn tiny_composers_and_long_pastes_keep_real_input_cells_and_warning_priority() {
 fn active_mode_colors_link_the_third_cell_stripe_and_footer_at_all_sizes() {
     assert_eq!(UnicodeWidthStr::width(INPUT_STRIPE), 1);
     for (mode, color) in [
-        ("WORK", Color::Rgb(88, 166, 255)),
-        ("CODE", Color::Rgb(125, 203, 155)),
-        ("PLAN", Color::Rgb(187, 154, 247)),
-        ("BUILD", Color::Rgb(246, 173, 85)),
+        ("WORK", Color::Rgb(106, 174, 252)),
+        ("CODE", Color::Rgb(134, 207, 160)),
+        ("PLAN", Color::Rgb(190, 163, 245)),
+        ("BUILD", Color::Rgb(239, 178, 94)),
         ("FUTURE", MUTED),
     ] {
         for (width, height, input_top, input_height) in [

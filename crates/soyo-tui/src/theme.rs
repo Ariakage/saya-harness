@@ -21,13 +21,19 @@ pub(crate) const CODE_FOREGROUND: Color = Color::Rgb(196, 196, 204);
 pub(crate) const GREEN: Color = Color::Rgb(125, 203, 155);
 pub(crate) const RED: Color = Color::Rgb(248, 113, 113);
 
+/// Mode accents aligned with the desktop Soyo Dark tokens (`--mode-*`, D-075).
+pub(crate) const MODE_WORK: Color = Color::Rgb(106, 174, 252);
+pub(crate) const MODE_CODE: Color = Color::Rgb(134, 207, 160);
+pub(crate) const MODE_PLAN: Color = Color::Rgb(190, 163, 245);
+pub(crate) const MODE_BUILD: Color = Color::Rgb(239, 178, 94);
+
 /// Accent shared by the active mode label and the message input stripe.
 pub(crate) fn mode_color(mode: &str) -> Color {
     match mode {
-        "WORK" => BLUE,
-        "CODE" => GREEN,
-        "PLAN" => HEADING,
-        "BUILD" => AMBER,
+        "WORK" => MODE_WORK,
+        "CODE" => MODE_CODE,
+        "PLAN" => MODE_PLAN,
+        "BUILD" => MODE_BUILD,
         _ => MUTED,
     }
 }
