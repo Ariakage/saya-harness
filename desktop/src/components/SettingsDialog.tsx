@@ -123,10 +123,19 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const locale = useAppStore((s) => s.locale);
   const setLocale = useAppStore((s) => s.setLocale);
+  const nickname = useAppStore((s) => s.nickname);
+  const avatarData = useAppStore((s) => s.avatarData);
+  const userName = useAppStore((s) => s.userName);
+  const setNickname = useAppStore((s) => s.setNickname);
+  const setAvatar = useAppStore((s) => s.setAvatar);
   const t = getMessages(locale);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [workspaceInput, setWorkspaceInput] = useState("");
   const [triggerInput, setTriggerInput] = useState("");
+  const [nicknameInput, setNicknameInput] = useState("");
+  const [promptText, setPromptText] = useState("");
+  const [promptPath, setPromptPath] = useState("");
+  const [promptSaved, setPromptSaved] = useState(false);
   const [usageRange, setUsageRange] = useState<"7d" | "30d" | "90d">("30d");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -148,6 +157,21 @@ export function SettingsDialog({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
+
+  useEffect(() => {
+    setNicknameInput(nickname ?? "");
+  }, [nickname]);
+
+  useEffect(() => {
+    if (!open || !isTauri()) return;
+    void commands.getGlobalPrompt().then((res) => {
+      if (res.status === "ok") {
+        setPromptText(res.data.content);
+        setPromptPath(res.data.path);
+        setPromptSaved(false);
+      }
+    });
+  }, [open]);
 
   useEffect(() => {
     if (bootstrap) {
@@ -619,6 +643,136 @@ export function SettingsDialog({
                         </option>
                       ))}
                     </select>
+                  </div>
+                )}
+
+                {activeTab === "general" && (
+                  <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                    <div className="text-[12px] font-medium text-[#e8e8e8]">
+                      {t.settings.profileLabel}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={avatarData ?? "/app-icon.png"}
+                        alt={t.settings.avatarLabel}
+                        className="h-9 w-9 rounded-[22%] object-cover ring-1 ring-[#2a2a2a]"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={saving}
+                          title={t.settings.changeAvatar}
+                          onClick={() => {
+                            if (!isTauri()) return;
+                            void openDialog({
+                              multiple: false,
+                              title: "Choose avatar image",
+                              filters: [
+                                {
+                                  name: "Images",
+                                  extensions: ["png", "jpg", "jpeg", "webp", "gif"],
+                                },
+                              ],
+                            }).then((picked) => {
+                              const path = Array.isArray(picked) ? picked[0] : picked;
+                              if (path) void setAvatar(path);
+                            });
+                          }}
+                          className="soyo-pill-btn text-[#c9c9c9] disabled:opacity-40"
+                        >
+                          {t.settings.changeAvatar}
+                        </button>
+                        {avatarData && (
+                          <button
+                            type="button"
+                            disabled={saving}
+                            onClick={() => void setAvatar(null)}
+                            className="soyo-pill-btn text-[#8a8a8a] disabled:opacity-40"
+                          >
+                            {t.settings.resetAvatar}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="settings-nickname-input"
+                        className="block text-[12px] text-[#a3a3a3]"
+                      >
+                        {t.settings.nicknameLabel}
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          id="settings-nickname-input"
+                          type="text"
+                          value={nicknameInput}
+                          disabled={saving}
+                          placeholder={userName ?? t.home.fallbackName}
+                          onChange={(e) => setNicknameInput(e.target.value)}
+                          className="soyo-input flex-1 px-2.5 py-1.5 text-xs text-[#d9d9d9]"
+                        />
+                        <button
+                          type="button"
+                          aria-label="Apply nickname"
+                          disabled={saving}
+                          onClick={() =>
+                            void setNickname(nicknameInput.trim() || null)
+                          }
+                          className="soyo-pill-btn font-medium text-[#d9a08e] disabled:opacity-40"
+                        >
+                          {t.settings.apply}
+                        </button>
+                      </div>
+                      <p className="text-[10.5px] text-[#6e6e6e]">
+                        {t.settings.nicknameHint}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === "general" && (
+                  <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[12px] font-medium text-[#e8e8e8]">
+                        {t.settings.globalPromptLabel}
+                      </div>
+                      {promptSaved && (
+                        <span className="text-[10.5px] text-[#4ade80]">
+                          {t.settings.promptSaved}
+                        </span>
+                      )}
+                    </div>
+                    <textarea
+                      aria-label={t.settings.globalPromptLabel}
+                      rows={6}
+                      value={promptText}
+                      disabled={saving}
+                      onChange={(e) => {
+                        setPromptText(e.target.value);
+                        setPromptSaved(false);
+                      }}
+                      className="soyo-input w-full resize-y px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-[#d9d9d9]"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-[10.5px] text-[#6e6e6e]">
+                        {t.settings.globalPromptHint(promptPath || "~/.soyo/AGENTS.md")}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={saving || !isTauri()}
+                        onClick={() => {
+                          void commands.setGlobalPrompt(promptText).then((res) => {
+                            if (res.status === "ok") {
+                              setPromptPath(res.data.path);
+                              setPromptSaved(true);
+                            }
+                          });
+                        }}
+                        className="soyo-pill-btn shrink-0 font-medium text-[#d9a08e] disabled:opacity-40"
+                      >
+                        {t.settings.savePrompt}
+                      </button>
+                    </div>
                   </div>
                 )}
 

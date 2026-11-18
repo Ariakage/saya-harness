@@ -36,6 +36,11 @@ export const commands = {
 	exportSession: (sessionId: string | null, targetPath: string, format: ExportFormatDto, scope: ExportScopeDto, includeTools: boolean) => typedError<ExportResultDto, DesktopError>(__TAURI_INVOKE("export_session", { sessionId, targetPath, format, scope, includeTools })),
 	stageAttachments: (paths: string[]) => typedError<StagedAttachmentDto[], DesktopError>(__TAURI_INVOKE("stage_attachments", { paths })),
 	getUserName: () => typedError<string | null, DesktopError>(__TAURI_INVOKE("get_user_name")),
+	getDesktopPrefs: () => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("get_desktop_prefs")),
+	setNickname: (nickname: string | null) => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("set_nickname", { nickname })),
+	setAvatar: (sourcePath: string | null) => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("set_avatar", { sourcePath })),
+	getGlobalPrompt: () => typedError<GlobalPromptDto_Serialize, DesktopError>(__TAURI_INVOKE("get_global_prompt")),
+	setGlobalPrompt: (content: string) => typedError<GlobalPromptDto_Serialize, DesktopError>(__TAURI_INVOKE("set_global_prompt", { content })),
 };
 
 /* Types */
@@ -208,6 +213,20 @@ export type DesktopError = {
 	message: string,
 };
 
+export type DesktopPrefsDto = DesktopPrefsDto_Serialize | DesktopPrefsDto_Deserialize;
+
+export type DesktopPrefsDto_Deserialize = {
+	nickname?: string | null,
+	/**  Data URL (`data:image/...;base64,...`) for the configured avatar, if any. */
+	avatar_data?: string | null,
+};
+
+export type DesktopPrefsDto_Serialize = {
+	nickname: string | null,
+	/**  Data URL (`data:image/...;base64,...`) for the configured avatar, if any. */
+	avatar_data: string | null,
+};
+
 /**  Unified channel message pushed during an active run. */
 export type DesktopStreamEnvelope = DesktopStreamEnvelope_Serialize | DesktopStreamEnvelope_Deserialize;
 
@@ -278,6 +297,26 @@ export type ExtensionItemDto_Serialize = {
 	scope: string,
 	version: string | null,
 	active: boolean,
+};
+
+export type GlobalPromptDto = GlobalPromptDto_Serialize | GlobalPromptDto_Deserialize;
+
+export type GlobalPromptDto_Deserialize = {
+	/**  Editable content of the user-scope instructions file. */
+	content: string,
+	/**  Absolute path the editor writes to (`~/.soyo/AGENTS.md`). */
+	path: string,
+	/**  Path the content was read from, when a legacy file was used. */
+	source_path?: string | null,
+};
+
+export type GlobalPromptDto_Serialize = {
+	/**  Editable content of the user-scope instructions file. */
+	content: string,
+	/**  Absolute path the editor writes to (`~/.soyo/AGENTS.md`). */
+	path: string,
+	/**  Path the content was read from, when a legacy file was used. */
+	source_path: string | null,
 };
 
 export type InputRequestDto = {

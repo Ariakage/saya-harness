@@ -82,6 +82,8 @@ export interface AppState {
   configChangeSessionId: string | null;
   recoveryBanner: string | null;
   userName: string | null;
+  nickname: string | null;
+  avatarData: string | null;
   error: DesktopError | null;
 
   initApp: () => Promise<void>;
@@ -112,6 +114,8 @@ export interface AppState {
   setMarkdownMode: (mode: MarkdownDisplayMode) => void;
   toggleMarkdownMode: () => void;
   setLocale: (locale: LocaleId) => void;
+  setNickname: (nickname: string | null) => Promise<boolean>;
+  setAvatar: (sourcePath: string | null) => Promise<boolean>;
   clearError: () => void;
   handleStreamEnvelope: (envelope: DesktopStreamEnvelope_Deserialize) => void;
 }
@@ -424,6 +428,8 @@ export const useAppStore = create<AppState>((set, get) => {
     configChangeSessionId: null,
     recoveryBanner: null,
     userName: null,
+    nickname: null,
+    avatarData: null,
     error: null,
 
     applyBootstrap: (boot) =>
@@ -478,10 +484,11 @@ export const useAppStore = create<AppState>((set, get) => {
     initApp: async () => {
       set({ loading: true });
       try {
-        const [bootRes, listRes, nameRes] = await Promise.all([
+        const [bootRes, listRes, nameRes, prefsRes] = await Promise.all([
           commands.getBootstrapState(),
           commands.listSessions(1),
           commands.getUserName(),
+          commands.getDesktopPrefs(),
         ]);
         const updates: Partial<AppState> = {
           initialized: true,
@@ -489,6 +496,12 @@ export const useAppStore = create<AppState>((set, get) => {
           userName:
             nameRes.status === "ok" && nameRes.data?.trim()
               ? nameRes.data.trim()
+              : null,
+          nickname:
+            prefsRes.status === "ok" ? (prefsRes.data?.nickname ?? null) : null,
+          avatarData:
+            prefsRes.status === "ok"
+              ? (prefsRes.data?.avatar_data ?? null)
               : null,
         };
         if (bootRes.status === "ok") {
@@ -818,6 +831,36 @@ export const useAppStore = create<AppState>((set, get) => {
         document.documentElement.lang = locale;
       }
       set({ locale });
+    },
+
+    setNickname: async (nickname) => {
+      try {
+        const res = await commands.setNickname(nickname);
+        if (res.status === "ok") {
+          set({ nickname: res.data.nickname });
+          return true;
+        }
+        set({ error: res.error });
+        return false;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    setAvatar: async (sourcePath) => {
+      try {
+        const res = await commands.setAvatar(sourcePath);
+        if (res.status === "ok") {
+          set({ avatarData: res.data.avatar_data });
+          return true;
+        }
+        set({ error: res.error });
+        return false;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
     },
 
     clearError: () => set({ error: null }),

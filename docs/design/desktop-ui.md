@@ -150,7 +150,12 @@
 - **入口 2 — Settings `General` 标签页**：在 [desktop/src/components/SettingsDialog.tsx](../../desktop/src/components/SettingsDialog.tsx) 的常规设置中提供 `<select aria-label="Interface language">` 同步切换。
 - **选择弹窗规范（`LanguageDialog`）**：居中模态窗宽 `max-w-[580px]`（底色 `#1e1e1e`、边框 `#2b2b2b`、圆角 `14px`），使用 `grid-cols-1 sm:grid-cols-3` 三列单选网格展示双行语言卡片（母语名称 + 副标题）；当前选中卡片使用 `#242c3a` 背景、`#38465e` 边框与 `#6ea1f7` 勾选标记，支持点击空白遮罩或 `Escape` 键关闭。
 - **全页面本地化覆盖**：除主框架（顶栏、侧栏、Home、Composer、ContextSidebar、Split Browser Preview）与设置弹窗（含 Usage 统计标签与堆叠图提示）外，同步覆盖所有次级弹窗与状态视图——[SessionBrowserDialog](../../desktop/src/components/SessionBrowserDialog.tsx)、[McpCredentialsDialog](../../desktop/src/components/McpCredentialsDialog.tsx)、[MemoryDialog](../../desktop/src/components/MemoryDialog.tsx)、[ExportDialog](../../desktop/src/components/ExportDialog.tsx)、[ModulesPanel](../../desktop/src/components/ModulesPanel.tsx)、[ApprovalDialog](../../desktop/src/components/ApprovalDialog.tsx)、[ClarificationDialog](../../desktop/src/components/ClarificationDialog.tsx)、[EffortPopover](../../desktop/src/components/EffortPopover.tsx)、[ThinkingCardView](../../desktop/src/components/ThinkingCardView.tsx)、[ToolCardView](../../desktop/src/components/ToolCardView.tsx)、[AttachmentPreview](../../desktop/src/components/AttachmentPreview.tsx) 与 [UpdaterBanner](../../desktop/src/components/UpdaterBanner.tsx)。
-- **Home 问候语（`home.greetings` / `pickGreeting`）**：问候语按时段与随机池抽取，挂载时抽取一次、切换语言时重新抽取。时段分桶各存 3 条候选：05–12 `morning`、12–18 `afternoon`、18–23 `evening`、23–05 `night`，桶内均匀抽取；另有 15% 概率从 `anytime` 池（16 条，如 `You're here!`、`How can I help, ariakage?`、`今天在想什么？`）抽取以制造变化。Figma 各帧展示不同取值（`Good morning` / `Good evening` / `You're here!`）以覆盖该可变状态。
+- **Home 问候语（`home.greetings` / `pickGreeting`）**：问候语按时段与随机池抽取，挂载时抽取一次、切换语言时重新抽取。时段分桶各存 3 条候选：05–12 `morning`、12–18 `afternoon`、18–23 `evening`、23–05 `night`，桶内均匀抽取；另有 15% 概率从 `anytime` 池（20+ 条，如 `You're here!`、`How can I help, {name}?`、`今天在想什么？`）抽取以制造变化。`{name}` 由 `formatGreeting` 按 `昵称 → OS 账户名 → 本地化兜底词`（`friend` / `朋友`）解析。Figma 各帧展示不同取值（`Good morning` / `Good evening` / `You're here!`）以覆盖该可变状态。
+
+### 4.5 个人资料与全局指令（`desktop_prefs` / `~/.soyo/AGENTS.md`）
+
+- **个人资料卡**（Settings → General）：头像更换使用原生图片选择器（PNG/JPEG/WebP/GIF，≤4 MB），图片以 data URL 存入 `~/.soyo/desktop_prefs.json`，`Reset` 恢复应用图标；昵称可覆盖问候语与 User menu 显示名，留空回退 OS 账户名。
+- **全局指令卡**（Settings → General）：textarea 直接编辑用户级 `~/.soyo/AGENTS.md`；该文件由运行时作为 `user` 作用域指令注入所有会话，**不读写项目内 `AGENTS.md`**。读取按 `.soyo → .saya → .agents` 顺序兼容旧路径，写入固定 `.soyo`。
 
 ---
 

@@ -164,10 +164,13 @@ export function App() {
   const clearError = useAppStore((s) => s.clearError);
   const t = getMessages(locale);
   const userName = useAppStore((s) => s.userName);
+  const nickname = useAppStore((s) => s.nickname);
+  const avatarData = useAppStore((s) => s.avatarData);
+  const displayName = nickname ?? userName;
   const greeting = useMemo(
-    () => pickGreeting(t.home, userName),
+    () => pickGreeting(t.home, displayName),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [locale, userName],
+    [locale, displayName],
   );
 
   const previewMode = isBrowserPreview();
@@ -820,7 +823,7 @@ export function App() {
               className="flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors hover:bg-[#1a1a1a]"
             >
               <img
-                src="/app-icon.png"
+                src={avatarData ?? "/app-icon.png"}
                 alt="Soyo"
                 className="h-6 w-6 rounded-[22%] object-cover ring-1 ring-[#2a2a2a]"
               />
@@ -832,7 +835,9 @@ export function App() {
                 className="soyo-popover-up absolute bottom-0 left-[calc(100%+10px)] z-50 w-[220px] origin-bottom-left rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.65)]"
               >
                 <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[#6e6e6e]">
-                  <div className="font-medium text-[#e8e8e8]">soyo-desktop</div>
+                  <div className="font-medium text-[#e8e8e8]">
+                    {displayName ?? "soyo-desktop"}
+                  </div>
                   <div className="truncate font-mono text-[10.5px]">
                     {bootstrap?.selected_profile ?? "default"}
                   </div>

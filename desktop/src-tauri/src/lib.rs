@@ -49,6 +49,11 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         peripheral_commands::export_session,
         peripheral_commands::stage_attachments,
         peripheral_commands::get_user_name,
+        peripheral_commands::get_desktop_prefs,
+        peripheral_commands::set_nickname,
+        peripheral_commands::set_avatar,
+        peripheral_commands::get_global_prompt,
+        peripheral_commands::set_global_prompt,
     ])
 }
 

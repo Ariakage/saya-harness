@@ -753,3 +753,20 @@ pub struct StagedAttachmentDto {
     pub kind: String,
     pub preview_url: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct DesktopPrefsDto {
+    pub nickname: Option<String>,
+    /// Data URL (`data:image/...;base64,...`) for the configured avatar, if any.
+    pub avatar_data: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct GlobalPromptDto {
+    /// Editable content of the user-scope instructions file.
+    pub content: String,
+    /// Absolute path the editor writes to (`~/.soyo/AGENTS.md`).
+    pub path: String,
+    /// Path the content was read from, when a legacy file was used.
+    pub source_path: Option<String>,
+}

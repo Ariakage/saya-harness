@@ -197,6 +197,16 @@ export interface UiMessages {
     browse: string;
     apply: string;
     languageLabel: string;
+    profileLabel: string;
+    avatarLabel: string;
+    changeAvatar: string;
+    resetAvatar: string;
+    nicknameLabel: string;
+    nicknameHint: string;
+    globalPromptLabel: string;
+    globalPromptHint: (path: string) => string;
+    savePrompt: string;
+    promptSaved: string;
     modelProfile: string;
     thinkingEffort: string;
     sandboxBackend: string;
@@ -561,6 +571,17 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       browse: "Browse…",
       apply: "Apply",
       languageLabel: "Language",
+      profileLabel: "Profile",
+      avatarLabel: "Avatar",
+      changeAvatar: "Change…",
+      resetAvatar: "Reset",
+      nicknameLabel: "Nickname",
+      nicknameHint: "Shown in greetings; leave empty to use your account name.",
+      globalPromptLabel: "Global instructions",
+      globalPromptHint: (path: string) =>
+        `Applies to every session in all workspaces. Saved to ${path}, not your project files.`,
+      savePrompt: "Save",
+      promptSaved: "Saved",
       modelProfile: "Model Profile",
       thinkingEffort: "Thinking Effort",
       sandboxBackend: "Sandbox Backend",
@@ -949,6 +970,17 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       browse: "浏览…",
       apply: "应用",
       languageLabel: "界面语言",
+      profileLabel: "个人资料",
+      avatarLabel: "头像",
+      changeAvatar: "更换…",
+      resetAvatar: "重置",
+      nicknameLabel: "昵称",
+      nicknameHint: "显示在问候语中；留空则使用系统账户名。",
+      globalPromptLabel: "全局提示词",
+      globalPromptHint: (path: string) =>
+        `对所有工作区的会话生效，保存到 ${path}，不修改项目内文件。`,
+      savePrompt: "保存",
+      promptSaved: "已保存",
       modelProfile: "模型配置",
       thinkingEffort: "思考强度",
       sandboxBackend: "沙箱后端",
@@ -1334,6 +1366,17 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       browse: "瀏覽…",
       apply: "套用",
       languageLabel: "介面語言",
+      profileLabel: "個人資料",
+      avatarLabel: "頭像",
+      changeAvatar: "更換…",
+      resetAvatar: "重置",
+      nicknameLabel: "暱稱",
+      nicknameHint: "顯示在問候語中；留空則使用系統帳戶名。",
+      globalPromptLabel: "全局提示詞",
+      globalPromptHint: (path: string) =>
+        `對所有工作區的工作階段生效，儲存到 ${path}，不會修改專案內檔案。`,
+      savePrompt: "儲存",
+      promptSaved: "已儲存",
       modelProfile: "模型設定檔",
       thinkingEffort: "思考強度",
       sandboxBackend: "沙箱後端",

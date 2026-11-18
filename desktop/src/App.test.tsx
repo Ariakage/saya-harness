@@ -175,6 +175,12 @@ describe("App Stage 3 runtime integration", () => {
       if (cmd === "get_user_name") {
         return "ariakage";
       }
+      if (cmd === "get_desktop_prefs") {
+        return { nickname: null, avatar_data: null };
+      }
+      if (cmd === "get_global_prompt") {
+        return { content: "", path: "/tmp/AGENTS.md", source_path: null };
+      }
       if (cmd === "list_sessions") {
         return samplePage();
       }
@@ -1020,6 +1026,9 @@ describe("App Stage 3 runtime integration", () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "get_bootstrap_state") return boot;
       if (cmd === "get_user_name") return "ariakage";
+      if (cmd === "get_desktop_prefs") {
+        return { nickname: null, avatar_data: null };
+      }
       if (cmd === "list_sessions") return samplePage();
       if (cmd === "list_modules" || cmd === "list_extensions" || cmd === "list_jobs") {
         return [];
