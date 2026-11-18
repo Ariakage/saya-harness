@@ -1,7 +1,7 @@
 //! Tauri command definitions exposed to the desktop frontend via Specta.
 
 use crate::{
-    runtime_bridge::{DesktopState, StreamSink},
+    client_state::{DesktopState, StreamSink},
     types::{
         ActiveSessionDto, AttachmentTokenDto, BootstrapStateDto, DesktopError,
         DesktopStreamEnvelope, ModeStateDto, PermissionModeDto, ResumeSessionResultDto,
@@ -24,7 +24,7 @@ pub async fn list_sessions(
 pub async fn get_bootstrap_state(
     state: State<'_, DesktopState>,
 ) -> Result<BootstrapStateDto, DesktopError> {
-    Ok(state.get_bootstrap_state().await)
+    state.get_bootstrap_state().await
 }
 
 #[tauri::command]
@@ -49,7 +49,7 @@ pub async fn submit_prompt(
 #[tauri::command]
 #[specta::specta]
 pub async fn cancel_run(state: State<'_, DesktopState>) -> Result<bool, DesktopError> {
-    Ok(state.cancel_run())
+    state.cancel_run().await
 }
 
 #[tauri::command]
@@ -69,7 +69,7 @@ pub async fn reply_approval(
     call_id: String,
     approved: bool,
 ) -> Result<(), DesktopError> {
-    state.reply_approval(&approval_id, &call_id, approved)
+    state.reply_approval(&approval_id, &call_id, approved).await
 }
 
 #[tauri::command]
@@ -79,7 +79,7 @@ pub async fn reply_input(
     input_id: String,
     answer: String,
 ) -> Result<(), DesktopError> {
-    state.reply_input(&input_id, answer)
+    state.reply_input(&input_id, answer).await
 }
 
 #[tauri::command]

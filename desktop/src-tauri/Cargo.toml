@@ -9,10 +9,8 @@ license.workspace = true
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
+soyo-ipc = { path = "../../crates/soyo-ipc" }
 soyo-core = { path = "../../crates/soyo-core" }
-soyo-app = { path = "../../crates/soyo-app" }
-soyo-contract = { path = "../../crates/soyo-contract" }
-soyo-fs = { path = "../../crates/soyo-fs" }
 tauri = { version = "=2.12.5", features = ["specta"] }
 tauri-plugin-updater = "=2.14.1"
 specta = { version = "=2.0.0-rc.26", features = ["derive", "serde_json", "uuid"] }
