@@ -6,11 +6,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml"><img src="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/Ariakage/soyo-harness/releases"><img src="https://img.shields.io/github/v/release/Ariakage/soyo-harness?include_prereleases&display_name=tag&logo=github" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/Rust-1.99.1-DEA584?logo=rust&logoColor=white" alt="Rust 1.99.1">
-  <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20%7C%20Linux-lightgrey" alt="Platform">
+  <a href="https://github.com/Ariakage/soyo-harness/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Ariakage/soyo-harness/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI" alt="CI"></a>
+  <a href="https://github.com/Ariakage/soyo-harness/releases"><img src="https://img.shields.io/github/v/release/Ariakage/soyo-harness?include_prereleases&display_name=tag&style=for-the-badge&logo=github&logoColor=white" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea043?style=for-the-badge" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Rust-1.99.1-DEA584?style=for-the-badge&logo=rust&logoColor=black" alt="Rust 1.99.1">
+  <img src="https://img.shields.io/badge/platform-macOS_15%2B_%7C_Linux-6e7681?style=for-the-badge" alt="Platform">
 </p>
 
 <p align="center">
