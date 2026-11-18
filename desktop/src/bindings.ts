@@ -11,6 +11,7 @@ export const commands = {
 	cancelRun: () => typedError<boolean, DesktopError>(__TAURI_INVOKE("cancel_run")),
 	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
 	getRunState: () => typedError<RunStateDto_Serialize, DesktopError>(__TAURI_INVOKE("get_run_state")),
+	getUsageStats: (days: number) => typedError<UsageStatsDto, DesktopError>(__TAURI_INVOKE("get_usage_stats", { days })),
 	replyApproval: (approvalId: string, callId: string, approved: boolean) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_approval", { approvalId, callId, approved })),
 	replyInput: (inputId: string, answer: string) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_input", { inputId, answer })),
 	setWorkMode: (mode: WorkModeDto) => typedError<ModeStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_work_mode", { mode })),
@@ -839,6 +840,18 @@ export type ToolResultDto_Serialize = {
 	media_refs: string[],
 };
 
+/**
+ *  One UTC day of aggregated usage; `day_start` is the unix timestamp at
+ *  00:00 UTC so clients can format the label in the local timezone.
+ */
+export type UsageDayDto = {
+	day_start: number,
+	input_tokens: number,
+	output_tokens: number,
+	cached_input_tokens: number,
+	estimated: boolean,
+};
+
 export type UsageDto = UsageDto_Serialize | UsageDto_Deserialize;
 
 export type UsageDto_Deserialize = {
@@ -852,6 +865,35 @@ export type UsageDto_Serialize = {
 	input_tokens: number | null,
 	output_tokens: number | null,
 	cached_input_tokens: number | null,
+	estimated: boolean,
+};
+
+/**  Per-purpose totals (`execution`, `review`, `compaction`). */
+export type UsagePurposeDto = {
+	purpose: string,
+	totals: UsageTotalsDto,
+};
+
+/**  Cross-session usage report returned by `usage_stats`. */
+export type UsageStatsDto = {
+	range_days: number,
+	generated_at: number,
+	totals: UsageTotalsDto,
+	by_purpose: UsagePurposeDto[],
+	days: UsageDayDto[],
+};
+
+/**
+ *  Aggregated token usage over a set of runs. Token fields sum only the
+ *  reported/estimated values — runs that never reported usage contribute
+ *  zero, and `estimated` is true when any contributor was an estimate.
+ */
+export type UsageTotalsDto = {
+	input_tokens: number,
+	output_tokens: number,
+	cached_input_tokens: number,
+	runs: number,
+	requests: number,
 	estimated: boolean,
 };
 

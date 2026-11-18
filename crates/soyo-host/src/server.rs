@@ -266,6 +266,12 @@ async fn dispatch(
                 .map(|v| v as u32);
             service.list_sessions_page(page).await.and_then(ok)
         }
+        "usage_stats" => {
+            let days = param_opt(&params, "days")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32);
+            service.usage_stats(days).await.and_then(ok)
+        }
         "new_session" => {
             let r = async {
                 let cwd = param_opt(&params, "cwd")

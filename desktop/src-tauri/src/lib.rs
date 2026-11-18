@@ -25,6 +25,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         commands::cancel_run,
         commands::compact_session,
         commands::get_run_state,
+        commands::get_usage_stats,
         commands::reply_approval,
         commands::reply_input,
         commands::set_work_mode,

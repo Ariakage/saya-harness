@@ -34,7 +34,8 @@ use soyo_ipc::{
         MessageRoleDto, ModeStateDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto,
         ResumeSessionDto, ResumeSessionResultDto, RunPromptParams, RunResultDto, RunStateDto,
         SchemaEnvelopeDto, SchemaEventDto, SessionItemDto, SessionPageDto, SubmitPromptParams,
-        SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto, WorkModeDto,
+        SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto, UsageDayDto,
+        UsagePurposeDto, UsageStatsDto, UsageTotalsDto, WorkModeDto,
     },
 };
 use std::{
@@ -252,6 +253,19 @@ fn format_elapsed(d: Duration) -> String {
         let s = d.as_secs() % 60;
         format!("{m}m {s}s")
     }
+}
+
+fn fold_usage(totals: &mut UsageTotalsDto, usage: &Usage) {
+    totals.input_tokens = totals
+        .input_tokens
+        .saturating_add(usage.input_tokens.unwrap_or(0));
+    totals.output_tokens = totals
+        .output_tokens
+        .saturating_add(usage.output_tokens.unwrap_or(0));
+    totals.cached_input_tokens = totals
+        .cached_input_tokens
+        .saturating_add(usage.cached_input_tokens.unwrap_or(0));
+    totals.estimated |= usage.estimated;
 }
 
 fn format_tokens(total: u64, estimated: bool) -> String {
@@ -482,6 +496,109 @@ impl HostService {
             page: page_num,
             page_size: SESSIONS_PAGE_SIZE as u32,
             items,
+        })
+    }
+
+    /// Cross-session token usage aggregated over `days` UTC days. Data-plane
+    /// query — reads persisted `run_metrics` from the shared store; it does
+    /// not touch any prepared or active session.
+    pub async fn usage_stats(&self, days: Option<u32>) -> Result<UsageStatsDto, DesktopError> {
+        let range_days = days.unwrap_or(30).clamp(1, 365);
+        let cfg = self.require_config().await?;
+        let secrets = self.current_secrets();
+        let store = offload_boundary(move || {
+            session::open(&cfg).map_err(|err| BoundaryError::new("storage_error", err.to_string()))
+        })
+        .await
+        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let since = now - i64::from(range_days) * 86_400;
+        let records = store
+            .usage_metrics_since(since)
+            .await
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+
+        let mut totals = UsageTotalsDto::default();
+        let mut purposes: Vec<(&'static str, UsageTotalsDto)> = vec![
+            ("execution", UsageTotalsDto::default()),
+            ("review", UsageTotalsDto::default()),
+            ("compaction", UsageTotalsDto::default()),
+        ];
+        let mut days: std::collections::BTreeMap<i64, UsageDayDto> =
+            std::collections::BTreeMap::new();
+        const DAY: i64 = 86_400;
+
+        for record in records {
+            totals.runs = totals.runs.saturating_add(1);
+            totals.requests = totals.requests.saturating_add(
+                record
+                    .metrics
+                    .execution_requests
+                    .saturating_add(record.metrics.review_requests)
+                    .saturating_add(record.metrics.compaction_requests),
+            );
+            let usages = [
+                (
+                    0usize,
+                    record.metrics.execution_requests,
+                    &record.metrics.execution_usage,
+                ),
+                (
+                    1,
+                    record.metrics.review_requests,
+                    &record.metrics.review_usage,
+                ),
+                (
+                    2,
+                    record.metrics.compaction_requests,
+                    &record.metrics.compaction_usage,
+                ),
+            ];
+            for (idx, requests, usage) in usages {
+                if requests > 0 {
+                    purposes[idx].1.requests = purposes[idx].1.requests.saturating_add(requests);
+                    purposes[idx].1.runs = purposes[idx].1.runs.saturating_add(1);
+                }
+                let Some(usage) = usage else { continue };
+                fold_usage(&mut purposes[idx].1, usage);
+                fold_usage(&mut totals, usage);
+                let day = days
+                    .entry(record.started_at - record.started_at.rem_euclid(DAY))
+                    .or_insert(UsageDayDto {
+                        day_start: record.started_at - record.started_at.rem_euclid(DAY),
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cached_input_tokens: 0,
+                        estimated: false,
+                    });
+                day.input_tokens = day
+                    .input_tokens
+                    .saturating_add(usage.input_tokens.unwrap_or(0));
+                day.output_tokens = day
+                    .output_tokens
+                    .saturating_add(usage.output_tokens.unwrap_or(0));
+                day.cached_input_tokens = day
+                    .cached_input_tokens
+                    .saturating_add(usage.cached_input_tokens.unwrap_or(0));
+                day.estimated |= usage.estimated;
+            }
+        }
+
+        Ok(UsageStatsDto {
+            range_days,
+            generated_at: now,
+            totals,
+            by_purpose: purposes
+                .into_iter()
+                .map(|(purpose, totals)| UsagePurposeDto {
+                    purpose: purpose.to_string(),
+                    totals,
+                })
+                .collect(),
+            days: days.into_values().collect(),
         })
     }
 

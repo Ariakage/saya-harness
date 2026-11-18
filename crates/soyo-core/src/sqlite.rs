@@ -1221,6 +1221,14 @@ pub struct RunMetricsRecord {
     pub run_id: RunId,
     pub metrics: crate::metrics::RunMetrics,
 }
+/// Persisted per-run metrics joined with the run's start timestamp.
+#[derive(Debug, Serialize)]
+pub struct UsageMetricsRecord {
+    pub session_id: SessionId,
+    pub run_id: RunId,
+    pub started_at: i64,
+    pub metrics: crate::metrics::RunMetrics,
+}
 impl SqliteStore {
     /// Return persisted metrics in session order.
     pub async fn run_metrics(
@@ -1239,6 +1247,52 @@ impl SqliteStore {
                 Ok(RunMetricsRecord {run_id,metrics})
             }).collect()
         }).await.map_err(|_|error("storage_error","database worker failed"))?
+    }
+    /// Persisted run metrics joined with their run's start time, across all
+    /// sessions — feeds aggregated usage reports. `since_unixepoch` bounds the
+    /// range by `runs.started_at`.
+    pub async fn usage_metrics_since(
+        &self,
+        since_unixepoch: i64,
+    ) -> Result<Vec<UsageMetricsRecord>, BoundaryError> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = inner
+                .lock()
+                .map_err(|_| error("storage_error", "database lock failed"))?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT l.session_id,l.run_id,l.reference,r.started_at \
+                     FROM change_log l JOIN runs r ON r.id=l.run_id AND r.session_id=l.session_id \
+                     WHERE l.kind='run_metrics' AND r.started_at>=?1 ORDER BY r.started_at",
+                )
+                .map_err(sql_error)?;
+            let rows = stmt
+                .query_map([since_unixepoch], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(sql_error)?;
+            rows.map(|row| {
+                let (session, run, raw, started_at) = row.map_err(sql_error)?;
+                Ok(UsageMetricsRecord {
+                    session_id: serde_json::from_value(serde_json::json!(session))
+                        .map_err(|_| error("storage_corrupt", "invalid metrics session ID"))?,
+                    run_id: serde_json::from_value(serde_json::json!(run))
+                        .map_err(|_| error("storage_corrupt", "invalid metrics run ID"))?,
+                    started_at,
+                    metrics: serde_json::from_str(&raw)
+                        .map_err(|_| error("storage_corrupt", "invalid run metrics"))?,
+                })
+            })
+            .collect()
+        })
+        .await
+        .map_err(|_| error("storage_error", "database worker failed"))?
     }
     /// Reserve a sequence range while holding the session writer lock. Unused
     /// numbers remain gaps after interruption; visible numbers are never reused.

@@ -578,6 +578,57 @@ pub struct RunStateDto {
     pub revision: u64,
 }
 
+/// Aggregated token usage over a set of runs. Token fields sum only the
+/// reported/estimated values — runs that never reported usage contribute
+/// zero, and `estimated` is true when any contributor was an estimate.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct UsageTotalsDto {
+    #[specta(type = Number)]
+    pub input_tokens: u64,
+    #[specta(type = Number)]
+    pub output_tokens: u64,
+    #[specta(type = Number)]
+    pub cached_input_tokens: u64,
+    #[specta(type = Number)]
+    pub runs: u64,
+    #[specta(type = Number)]
+    pub requests: u64,
+    pub estimated: bool,
+}
+
+/// Per-purpose totals (`execution`, `review`, `compaction`).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct UsagePurposeDto {
+    pub purpose: String,
+    pub totals: UsageTotalsDto,
+}
+
+/// One UTC day of aggregated usage; `day_start` is the unix timestamp at
+/// 00:00 UTC so clients can format the label in the local timezone.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct UsageDayDto {
+    #[specta(type = Number)]
+    pub day_start: i64,
+    #[specta(type = Number)]
+    pub input_tokens: u64,
+    #[specta(type = Number)]
+    pub output_tokens: u64,
+    #[specta(type = Number)]
+    pub cached_input_tokens: u64,
+    pub estimated: bool,
+}
+
+/// Cross-session usage report returned by `usage_stats`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct UsageStatsDto {
+    pub range_days: u32,
+    #[specta(type = Number)]
+    pub generated_at: i64,
+    pub totals: UsageTotalsDto,
+    pub by_purpose: Vec<UsagePurposeDto>,
+    pub days: Vec<UsageDayDto>,
+}
+
 /// Parameters for `resume_session`; the desktop path only sends
 /// `session_id`/`accept_config_change`, the CLI resume command passes the
 /// full `ResumeOptions` equivalents.

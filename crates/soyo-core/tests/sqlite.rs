@@ -1178,3 +1178,50 @@ async fn signed_provider_state_with_known_secret_fails_closed_without_modificati
     assert_eq!(store.load_session(session.id).await?.unwrap(), session);
     Ok(())
 }
+
+#[tokio::test]
+async fn usage_metrics_since_returns_metrics_joined_with_run_start()
+-> Result<(), Box<dyn std::error::Error>> {
+    use soyo_core::{contract::Usage, metrics::RunMetrics};
+    let temp = TempDir::new()?;
+    let (session, run) = fixture(temp.path());
+    let store = SqliteStore::open(temp.path(), vec![])?;
+    store
+        .commit(&[
+            StoreChange::Session(session.clone()),
+            StoreChange::RunStarted(run.clone()),
+            StoreChange::RunMetrics {
+                run_id: run.id,
+                metrics: RunMetrics {
+                    execution_requests: 1,
+                    review_requests: 0,
+                    compaction_requests: 0,
+                    tool_calls: 0,
+                    tool_executions: 0,
+                    duration_ms: 10,
+                    execution_usage: Some(Usage {
+                        input_tokens: Some(100),
+                        output_tokens: Some(50),
+                        cached_input_tokens: Some(40),
+                        estimated: true,
+                    }),
+                    review_usage: None,
+                    compaction_usage: None,
+                    execution_cost: None,
+                    review_cost: None,
+                    compaction_cost: None,
+                },
+            },
+        ])
+        .await?;
+    let all = store.usage_metrics_since(0).await?;
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].run_id, run.id);
+    assert_eq!(all[0].session_id, session.id);
+    assert!(all[0].started_at > 0);
+    let usage = all[0].metrics.execution_usage.as_ref().unwrap();
+    assert_eq!(usage.input_tokens, Some(100));
+    assert!(usage.estimated);
+    assert!(store.usage_metrics_since(i64::MAX).await?.is_empty());
+    Ok(())
+}
