@@ -49,8 +49,9 @@
 - 提交前检查工作区和暂存内容，只提交属于本次阶段性任务的修改，保留用户和其他协作者的无关工作。
 - Commit message 必须遵循 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。
 - 标题使用 `type(scope): description` 形式；`scope` 可省略。新增功能使用 `feat`，修复缺陷使用 `fix`；文档、测试、重构等改动可使用 `docs`、`test`、`refactor` 等合适的类型。
+- 标题与正文的 description 默认使用英文。
 - 破坏性变更在冒号前标记 `!`，或使用 `BREAKING CHANGE:` 脚注说明。
-- 示例：`docs(agents): 约定提交信息使用 Conventional Commits`。
+- 示例：`docs(agents): record Conventional Commits usage in English`。
 
 ## 运行时与界面边界
 
