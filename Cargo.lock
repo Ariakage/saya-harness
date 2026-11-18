@@ -4911,7 +4911,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cap-std",
  "libc",
@@ -4925,7 +4925,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "libc",
@@ -4943,7 +4943,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-contract"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4952,7 +4952,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4994,7 +4994,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -5017,7 +5017,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-fs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "soyo-contract",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "soyo-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
