@@ -2,6 +2,8 @@
 
 本文档定义 `soyo-desktop` 的视觉语言、窗口布局、组件约定、动效规范与图标资产清单，对应实现位于 [`desktop/src/`](../../desktop/src/) 与 [`desktop/src-tauri/`](../../desktop/src-tauri/)。
 
+> **状态**：§1–§7 描述现行实现，目前只有 Soyo Dark。D-075（2026-11-19）已确认视觉修正方案与 Soyo Light 亮色主题，目标规范见 [§8](#8-d-075-目标规范已确认待实施)，尚未实施；各阶段落地后改写 §1–§7 的对应条目。
+
 ---
 
 ## 1. 设计语言与命名约定
@@ -222,3 +224,164 @@ python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
 - 脚本以自身位置解析仓库根目录，读取 `desktop/public/app-icon.png` 注入各 frame；任意目录下均可运行。
 - 修改设计时改脚本后重新生成，再对变更 frame 执行导入替换；不要直接在 Figma 里手改样式以免与单源失同步。
 - 当前 frame 序列：`01 Home · 02 Session+Context · 03 Approval · 04 Settings · 05 User Menu · 06 Sessions · 07 Attach Menu · 08 Browser Preview · 09 Subagent & Goal · 10 Usage & Tokens · 11 Slash Commands · 12 Attachments Preview · 13 Model & Effort · 14 Language`。
+
+---
+
+## 8. D-075 目标规范（已确认，待实施）
+
+本节是 D-075 确认的目标规范，来源是[第二轮审查报告](../reviews/review-2026-11-19.md)第 6 节，并在此基础上追加 Soyo Light 亮色主题。代码尚未按本节修改；§1–§7 仍描述现行实现，每个阶段落地后再改写对应条目。
+
+### 8.1 参照与原则
+
+- **参照对象**：参照 Claude Desktop 等对话式 AI 桌面应用的设计语言（项目负责人指定）。只借鉴设计语言，不复制 Logo、专有字体或品牌色值；Soyo 保留自己的强调色系、应用图标和 lucide 图标体系。
+- **六条原则**：
+  1. 暖调、低饱和的中性色；颜色只用于强调与状态，同一种颜色只表示一种含义。
+  2. 导航放在单一的带文字侧栏中，可以收起；内容区居中，留白充足。
+  3. 输入框保持极简，任何宽度下都不折行。
+  4. 衬线字体只用于首页问候语。
+  5. 文案用 sentence case，并全部经过 i18n；危险状态同时显示文字与图标，不只靠颜色。
+  6. Soyo Dark 与 Soyo Light 两套主题必须同等完整：任何组件都要在两套主题下通过对比度与截图验收。
+- **单一来源**：Token 只在 `desktop/src/theme/tokens.css` 中定义（Tailwind v4 `@theme`）。组件不得再使用任意十六进制色值；设计稿生成器与 Figma Variables 都从这份定义派生。
+
+### 8.2 颜色 Token
+
+“最小对比度”指该文字色在本主题全部 5 个表面上的最小值，按 WCAG 公式计算。文字 Token 一律 ≥ 4.5:1，控件边界 ≥ 3:1。
+
+| Token | Soyo Dark | Soyo Light | 用途 | 最小对比度（Dark／Light） |
+| --- | --- | --- | --- | --- |
+| `--surface-sidebar` | `#1b1a18` | `#f2f0eb` | 侧栏、导轨 | — |
+| `--surface-app` | `#201f1d` | `#faf9f6` | 主画布 | — |
+| `--surface-raised` | `#282725` | `#ffffff` | 卡片、输入框、菜单 | — |
+| `--surface-overlay` | `#2d2c29` | `#ffffff`（配合 `--shadow-dialog`） | 对话框、弹出层 | — |
+| `--surface-hover` | `#34322f` | `#e9e6df` | 悬停、选中行 | — |
+| `--border-subtle` | `#2f2d2a` | `#e8e5de` | 分隔线（装饰） | — |
+| `--border` | `#3a3835` | `#dcd8cf` | 卡片描边（装饰） | — |
+| `--border-strong` | `#76716a` | `#8c877d` | 输入框与控件边界 | 3.08／3.39 |
+| `--text-primary` | `#ecebe6` | `#1f1e1b` | 标题、正文 | 10.71／13.37 |
+| `--text-secondary` | `#bdb9b0` | `#4f4c46` | 次要文字、标签 | 6.53／6.86 |
+| `--text-tertiary` | `#a09b92` | `#69655d` | 时间、元数据、占位符（最弱一级） | 4.62／4.65 |
+| `--accent` | `#d9a08e` | `#a9583f` | 主按钮填充、选中指示、焦点环、开关开启态 | — |
+| `--accent-text` | `#d9a08e` | `#9c5238` | 强调色文字 | 5.70／4.58 |
+| `--on-accent` | `#1f140f` | `#ffffff` | 主按钮文字 | 8.04／5.05（相对 `--accent`） |
+| `--info` | `#9db6e0` | `#2b5ea7` | 链接、信息提示、`Manual approval` | 6.21／5.17 |
+| `--success` | `#86cfa0` | `#2c7448` | Diff 新增、完成状态 | 6.97／4.56 |
+| `--warning` | `#e9b762` | `#8a5a0b` | 警告横幅、待切换标记 | 6.95／4.75 |
+| `--danger` | `#f08a80` | `#b4362b` | 错误、Diff 删除、`Bypass permissions` | 5.27／4.81 |
+
+语义背景（横幅、Diff 行）使用对应语义色叠加：Dark 为 12% 透明度，Light 为 10%。叠加后文字对比度仍须 ≥ 4.5:1。
+
+### 8.3 模式与权限显示
+
+| 模式 | Soyo Dark | Soyo Light | 最小对比度（Dark／Light） |
+| --- | --- | --- | --- |
+| WORK | `#6aaefc` | `#2563c4` | 5.52／4.60 |
+| CODE | `#86cfa0` | `#2c7448` | 6.97／4.56 |
+| PLAN | `#bea3f5` | `#6d45c2` | 5.93／5.14 |
+| BUILD | `#efb25e` | `#8a5a0b` | 6.82／4.75 |
+
+- **模式色的使用范围**：只用于模式徽标的圆点与文字，不用于大面积背景，也不与强调色共用。模式徽标始终带文字标签：CODE 与 `--success`、BUILD 与 `--warning` 色相接近，单靠颜色无法区分。TUI 的 `mode_color` 采用 Dark 一列。
+- **权限显示**：
+  - `Auto`：用 `--text-secondary`，不着色。
+  - `Manual approval`：用 `--info`，配 `Hand` 图标。
+  - `Bypass permissions`：用 `--danger`，配 `ShieldAlert` 图标与完整文字，在顶栏与输入框中常驻显示；开启前仍须先打开设置中的“Allow bypass permissions mode”。
+
+### 8.4 字体、字号、圆角、间距与阴影
+
+- **字体**：
+  - 控件与正文使用系统字体栈，不打包字体。
+  - 展示字体 `--font-display` 打包一款 SIL OFL 授权的衬线字体（建议 Source Serif 4，子集化为 woff2），用于首页问候语和“对话字体：衬线”选项。
+  - 等宽字体使用 `ui-monospace` 字体栈。
+  - 生成器与实现共用同一份 `font-family` 定义。
+- **字号**：6 级，最小 11px；字重只用 400、500、600。
+
+  | 级别 | 字号／行高 | 用途 |
+  | --- | --- | --- |
+  | caption | 11／16px | 时间、计数、键盘提示 |
+  | small | 12／18px | 次要控件、元数据 |
+  | ui | 13／20px | 默认控件文字 |
+  | body | 14／22px | 对话正文；Appearance 可选 13、14、16px |
+  | title | 16／24px | 对话框与分区标题 |
+  | display | 28／36px（衬线） | 首页问候语 |
+
+- **圆角**：4px（复选框、小标签）、8px（按钮、输入框）、12px（卡片、菜单）、16px（对话框、输入框卡片）；徽标用全圆角。
+- **间距**：按 4px 网格取 4、8、12、16、24、32。
+- **阴影**：只保留两级。
+
+  | Token | Soyo Dark | Soyo Light |
+  | --- | --- | --- |
+  | `--shadow-popover` | `0 8px 24px rgba(0, 0, 0, 0.45)` | `0 8px 24px rgba(31, 30, 27, 0.12)` |
+  | `--shadow-dialog` | `0 24px 64px rgba(0, 0, 0, 0.55)` | `0 24px 64px rgba(31, 30, 27, 0.18)` |
+
+### 8.5 主题切换与适配
+
+- **偏好设置**：Appearance 提供“主题：System（默认，跟随系统外观）／Light／Dark”，偏好随桌面偏好保存（`desktop_prefs`）。为避免启动时闪烁，可在 `localStorage` 缓存上次生效的主题；主题不是敏感数据，不违反 D-072 第 (4) 条。
+- **切换机制**：
+  - 用 `<html data-theme="dark|light">` 切换。System 模式按 `prefers-color-scheme` 决定，并监听系统切换。
+  - 同步 CSS `color-scheme`，让滚动条和原生表单控件跟随主题。
+  - 同步 Tauri 窗口主题，让标题栏与红绿灯按钮跟随主题。
+- **增强对比度**：`prefers-contrast: more` 时，`--text-tertiary` 提升为 `--text-secondary` 的取值，`--border` 提升为 `--border-strong` 的取值。两套主题都适用。
+- **减弱动效**：`prefers-reduced-motion` 覆盖全部动效，包括 Tailwind `transition-*`、`animate-spin`，以及 EffortPopover 的 WebGL 动画（改为静态帧）。
+- **内容适配**：以下内容随主题切换：
+  - Shiki 代码高亮（深浅各一套主题）；
+  - Mermaid（`dark`／`default` 主题）；
+  - Diff 新增与删除底色；
+  - EffortPopover 能量网格配色；
+  - 附件与媒体预览底板；
+  - 选中文本颜色与焦点环。
+
+  应用图标和头像不随主题变化。
+
+### 8.6 布局与断点
+
+- **侧栏**：
+  - 宽 248px，顶部是带文字的导航：New session、Search、Sessions、Memory、MCP & credentials、Export、Customize。
+  - 中部是 Recents（按项目分组）与 View all；底部是用户行（头像、名称 · 当前 profile）。
+  - 可收起为 48px 图标导轨；Home 空态不隐藏侧栏。
+- **断点**：
+  - 窗口 ≥ 1280px：侧栏展开，Inspector 可常驻。
+  - 1024–1279px：Inspector 改为覆盖式抽屉，默认关闭。
+  - < 1024px（最小 900px）：侧栏自动收起为导轨。
+- **Composer**：
+  - 16px 圆角的单张卡片。
+  - 左侧是 `+` 菜单，包含附件、粘贴、@ 提及、斜杠命令、Compact 和 Web search 开关；已启用的工具显示为可移除的标签。
+  - 右侧依次是“模式 · 权限”胶囊、“模型 · 思考强度”胶囊、发送／停止按钮。
+  - 所有胶囊 `whitespace-nowrap`；主区宽度 < 640px 时，模型胶囊只显示简称。
+
+### 8.7 组件与文案
+
+- **`Button`**：所有变体统一悬停、按下、禁用和焦点状态。
+  - primary：`--accent` 填充，`--on-accent` 文字。
+  - secondary：raised 表面 + `--border-strong` 描边。
+  - ghost：透明，悬停时用 hover 表面。
+  - danger：`--danger` 文字与描边，只用于不可撤销的操作。
+
+  审批卡片中，Allow 用 primary，Deny 用 secondary。
+- **`DialogShell`**：16px 圆角、overlay 表面、1px `--border`、`--shadow-dialog`；宽度只有 sm 480、md 640、lg 760 三档。
+- **`Pill`**：8px 圆角，不折行，静态与可交互两种样式。
+- **图标**：只用 lucide，尺寸 14px 或 16px，`strokeWidth` 1.75；禁止用 Unicode 字符当图标。
+- **文案**：
+  - 统一 sentence case；WORK、CODE、PLAN、BUILD 作为产品专名保留大写。
+  - 权限标签固定为 `Auto`、`Manual approval`、`Bypass permissions`。
+  - `aria-label` 与 `title` 全部经过 i18n。
+
+### 8.8 设置信息架构
+
+- **结构**：三组，共 9 项：General、Appearance、Model & profiles、Permissions ｜ Modules、MCP & credentials、Memory ｜ Usage、Import & export。
+- **Appearance**：包含主题、界面语言（并入现在的 LanguageDialog）、正文字号、对话字体（无衬线／衬线）和减弱动效。
+- **About**：位于 General 底部，显示版本号（与 workspace 一致）、helper 状态和检查更新。不设 System 页。
+
+### 8.9 设计稿与工具链
+
+- **生成器**：[devin_theme_gen.py](devin_theme_gen.py) 改为读取 `tokens.css`，按 `--theme dark|light` 输出 CSS 变量。
+- **Figma Variables**：导入 Figma 后，用 `use_figma` 脚本按值把节点绑定到 Variables 集合 “Soyo Theme”。该集合有 Dark、Light 两种 mode，变量名与 CSS 变量一致。
+- **设计稿 frame**：Theme 页重新生成全部 14 个 frame；至少为 01 Home、02 Conversation、04 Settings 增加 Light 版本。
+- **TUI**：`crates/soyo-tui/src/theme.rs` 的 `mode_color` 与 [tui.md](../tui.md) 改用 §8.3 的 Dark 一列。
+
+### 8.10 实施阶段与验收
+
+| 阶段 | 内容 | 验收 |
+| --- | --- | --- |
+| 1 | 权限配色；Composer 不折行与 `+` 菜单；宽度断点；文字 Token；最小字号 11px | 1280×840 与 900×620 截图无折行、无裁切；对比度脚本通过 |
+| 2 | 引入 `tokens.css`（同时定义 Dark、Light）、`Button`、`Pill`、`DialogShell`；按组件分批替换任意值 | TSX 中 `[#…]` 任意色值为 0；字号不超过 6 级，圆角不超过 5 种 |
+| 3 | 合并侧栏、设置信息架构、图标、字体、文案与 i18n；主题切换与 §8.5 全部内容适配，完成 Light 主题验收 | 两套主题 × 两种窗口尺寸截图通过；两套主题对比度脚本通过；没有硬编码 `aria-label`／`title` |
+| 4 | Figma Variables（Dark／Light）与生成器；TUI 模式色；改写 §1–§7 与决策影响栏 | Figma 可绑定节点 ≥ 95% 绑定变量；规范、生成器、实现三处数值一致 |

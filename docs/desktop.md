@@ -21,7 +21,7 @@ desktop/
 - **独立安装、共享数据**：用户可单独安装 CLI/TUI、单独安装桌面端或两者并存；两端共享同一 XDG 配置（`config.toml`）、SQLite 会话库（`sessions.sqlite3`）、模块存储（`modules.sqlite3`）、OutputStore、全局记忆与宿主私有凭据存储（`state_dir/credentials`）。
 - **图标与界面组件**：所有桌面端界面图标统一使用已固定版本的 `lucide-react`；窗口与应用安装包图标由 1024x1024 RGBA 源生成为 `desktop/src-tauri/icons/` 与 `desktop/public/app-icon.png`。
 - **浏览器实时预览**：执行 `just desktop-preview` 启动 Vite HMR 开发服务，在常规浏览器访问 `http://127.0.0.1:1420/?preview=1&scene=conversation`（支持 `home`、`conversation`、`approval`、`effort`、`usage`、`browser`、`subagent`、`markdown`、`clarification`、`peripheral` 场景，通过 `@tauri-apps/api/mocks` 脱敏替身预览和调整界面）。
-- **视觉体系**：遵循 [UI/UX 设计规范](design/desktop-ui.md) 中的 Soyo Dark（`soyo-dark`：四栏布局、近黑底色、`#d9a08e` 强调色与 `#8aa8d8` 信息蓝分工、统一 pill、内联审批卡片、项目分组会话与 `EffortPopover` WebGL2 能量网格滑块）。
+- **视觉体系**：遵循 [UI/UX 设计规范](design/desktop-ui.md) 中的 Soyo Dark（`soyo-dark`：四栏布局、近黑底色、`#d9a08e` 强调色与 `#8aa8d8` 信息蓝分工、统一 pill、内联审批卡片、项目分组会话与 `EffortPopover` WebGL2 能量网格滑块）。 D-075（2026-11-19）已确认视觉修正方案与 Soyo Light 亮色主题，目标规范见设计规范 §8，尚未实施。
 
 ## Helper 后端与 IPC 契约
 
