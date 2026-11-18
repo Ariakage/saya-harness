@@ -32,11 +32,12 @@ cargo install just --locked
 
 | 命令 | 用途 |
 | --- | --- |
-| `just check` | 复用 `scripts/check.sh`，依次检查格式、严格Clippy、workspace测试及优化构建 |
+| `just check` | 复用 `scripts/check.sh`，依次检查格式、严格Clippy、默认workspace测试及优化构建 |
 | `just fmt`／`just fmt-check` | 格式化／只检查Rust格式 |
-| `just clippy` | 全workspace、全目标严格Clippy |
-| `just test` | 全workspace测试，可追加过滤条件和测试参数 |
+| `just clippy` | 默认workspace全目标严格Clippy |
+| `just test` | 默认workspace测试，可追加过滤条件和测试参数 |
 | `just build`／`just release` | 开发／优化构建，可追加Cargo构建参数 |
+| `just desktop-check` | 显式执行 `soyo-desktop` 严格Clippy、Rust测试及前端类型检查／单测／构建 |
 | `just run` | 运行开发版Soyo，可追加CLI参数 |
 | `just prompt code` | 输出指定场景的完整离线模型请求，可省略为 `all` |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
