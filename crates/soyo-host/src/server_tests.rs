@@ -95,6 +95,29 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn helper_info_reports_process_identity_and_compat() {
+        let _guard = serial().await;
+        let (_dir, handle) = running_server().await;
+        let client = HelperClient::connect().await.expect("connect");
+
+        let info: serde_json::Value = client
+            .call_typed("helper_info", &json!({}))
+            .await
+            .expect("helper_info call");
+        assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
+        assert!(info["pid"].as_u64().is_some_and(|pid| pid > 0));
+        assert!(!info["exe_path"].as_str().unwrap_or_default().is_empty());
+        assert_eq!(info["run_active"], false);
+
+        // Same workspace build, indeterminate exe comparison → no mismatch.
+        let compat = client.helper_compat().await;
+        assert!(!compat.mismatch, "{}", compat.detail);
+
+        client.shutdown_daemon().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    }
+
     /// Process-global env vars must be restored on drop so other tests in the
     /// same process never observe a leaked configuration.
     struct EnvGuard(Vec<(String, Option<std::ffi::OsString>)>);

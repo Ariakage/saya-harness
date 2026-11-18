@@ -37,7 +37,17 @@ impl DesktopState {
 
     async fn client(&self) -> Result<&Arc<HelperClient>, DesktopError> {
         self.client
-            .get_or_try_init(HelperClient::connect_or_spawn)
+            .get_or_try_init(|| async {
+                let client = HelperClient::connect_or_spawn().await?;
+                // Recycle a stale daemon built from another binary/version —
+                // but never kill one that is mid-run for another client.
+                let compat = client.helper_compat().await;
+                if compat.mismatch && !compat.run_active {
+                    client.restart().await
+                } else {
+                    Ok(client)
+                }
+            })
             .await
     }
 

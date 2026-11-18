@@ -8,6 +8,6 @@ pub mod socket;
 pub mod tool_format;
 pub mod types;
 
-pub use client::HelperClient;
+pub use client::{HelperClient, HelperCompat};
 pub use protocol::{ClientFrame, PROTOCOL_VERSION, ServerFrame};
 pub use socket::{HelperEndpoint, helper_pid_path, helper_socket_name};

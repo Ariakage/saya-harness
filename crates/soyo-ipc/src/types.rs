@@ -715,6 +715,20 @@ pub struct ActiveSessionDto {
     pub last_usage: Option<UsageDto>,
 }
 
+/// Identity of the running helper process, reported by `helper_info` for
+/// client-side version/binary compatibility checks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HelperInfoDto {
+    /// `CARGO_PKG_VERSION` of the running helper binary.
+    pub version: String,
+    /// Executable path the helper was launched from.
+    pub exe_path: String,
+    /// OS process id.
+    pub pid: u32,
+    /// A run is in flight — recycling the helper would destroy it.
+    pub run_active: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct BootstrapStateDto {
     pub version: String,

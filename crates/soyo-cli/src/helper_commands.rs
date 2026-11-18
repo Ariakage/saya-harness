@@ -2,6 +2,7 @@
 
 use soyo_host::{HelperServer, HostService};
 use soyo_ipc::{HelperClient, helper_pid_path};
+use std::sync::Arc;
 
 /// Run the helper daemon in the foreground (clients spawn it detached).
 pub async fn run_helper() -> u8 {
@@ -72,11 +73,50 @@ fn pid_is_alive(pid: u32) -> bool {
 /// Ensure a helper is running (spawn if necessary). Used by interactive entry
 /// points before they do their first runtime work.
 pub async fn ensure_helper() -> Result<(), String> {
-    match HelperClient::connect_or_spawn().await {
+    match connect_checked(true).await {
         Ok(client) => {
             client.detach().await;
             Ok(())
         }
         Err(err) => Err(err.message),
     }
+}
+
+/// Connect to the helper, reconciling a stale daemon first.
+///
+/// When the running helper is a different version or binary than this client
+/// would spawn, an idle helper is recycled: interactive callers (`prompt`)
+/// confirm first, non-interactive callers recycle silently. A busy helper is
+/// never killed — the client proceeds against it so in-flight runs survive.
+pub async fn connect_checked(
+    prompt: bool,
+) -> Result<Arc<HelperClient>, soyo_ipc::types::DesktopError> {
+    let client = HelperClient::connect_or_spawn().await?;
+    let compat = client.helper_compat().await;
+    if !compat.mismatch {
+        return Ok(client);
+    }
+    if compat.run_active {
+        eprintln!(
+            "soyo: helper version mismatch ({}); leaving it running",
+            compat.detail
+        );
+        return Ok(client);
+    }
+    if prompt && !confirm_helper_restart(&compat.detail) {
+        return Ok(client);
+    }
+    eprintln!("soyo: restarting stale helper ({})", compat.detail);
+    client.restart().await
+}
+
+fn confirm_helper_restart(detail: &str) -> bool {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return true;
+    }
+    eprint!("soyo: helper version mismatch ({detail}). Restart helper? [y/N] ");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).is_ok()
+        && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }

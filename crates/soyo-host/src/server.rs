@@ -260,6 +260,7 @@ async fn dispatch(
 ) {
     let result = match method.as_str() {
         "get_bootstrap_state" => ok(service.get_bootstrap_state().await),
+        "helper_info" => ok(service.helper_info().await),
         "list_sessions_page" => {
             let page = param_opt(&params, "page")
                 .and_then(Value::as_u64)

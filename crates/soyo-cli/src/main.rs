@@ -611,7 +611,7 @@ async fn compact_via_helper(
     if cli.config.is_some() || cli.data_dir.is_some() {
         return compact_session(cli, config, session_id, accept_config_change).await;
     }
-    match HelperClient::connect_or_spawn().await {
+    match helper_commands::connect_checked(false).await {
         Ok(client) => {
             match compact_over_socket(&client, cli, config, session_id, accept_config_change).await
             {
@@ -1111,7 +1111,7 @@ async fn run_via_helper(
         )
         .await;
     }
-    match HelperClient::connect_or_spawn().await {
+    match helper_commands::connect_checked(false).await {
         Ok(client) => match run_over_socket(&client, config, cli, args, payload).await {
             Ok(code) => Ok(code),
             Err(err) => {

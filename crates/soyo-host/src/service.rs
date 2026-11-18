@@ -370,6 +370,21 @@ impl HostService {
         self.secrets.snapshot().unwrap_or_default()
     }
 
+    /// Identity of this helper process for client-side compatibility checks:
+    /// version + executable let callers detect a stale daemon built from a
+    /// different binary, `run_active` keeps a busy helper from being recycled.
+    pub async fn helper_info(&self) -> soyo_ipc::types::HelperInfoDto {
+        let run_active = self.inner.lock().await.active_run_id.is_some();
+        soyo_ipc::types::HelperInfoDto {
+            version: env!("CARGO_PKG_VERSION").into(),
+            exe_path: std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            pid: std::process::id(),
+            run_active,
+        }
+    }
+
     pub async fn get_bootstrap_state(&self) -> BootstrapStateDto {
         let guard = self.inner.lock().await;
         let secrets = self.current_secrets();

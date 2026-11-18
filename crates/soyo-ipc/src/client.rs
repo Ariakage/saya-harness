@@ -20,7 +20,7 @@ use crate::{
     framing::{FrameWriter, read_server_frame, split, write_frame},
     protocol::{ClientFrame, ServerFrame},
     socket::HelperEndpoint,
-    types::{DesktopError, DesktopStreamEnvelope},
+    types::{DesktopError, DesktopStreamEnvelope, HelperInfoDto},
 };
 
 type PendingResult = oneshot::Sender<Result<Value, DesktopError>>;
@@ -36,6 +36,15 @@ enum PendingEntry {
 #[derive(Default)]
 struct PendingMap {
     entries: HashMap<u64, PendingEntry>,
+}
+
+/// Result of [`HelperClient::helper_compat`]: whether the running helper is
+/// stale relative to this client, whether a run keeps it busy, and a short
+/// human-readable summary for prompts and logs.
+pub struct HelperCompat {
+    pub mismatch: bool,
+    pub run_active: bool,
+    pub detail: String,
 }
 
 /// Shared client handle. Clone-free use via `Arc` inside managed state.
@@ -260,6 +269,82 @@ impl HelperClient {
     /// Ask the daemon to exit (does not wait for confirmation).
     pub async fn shutdown_daemon(&self) {
         let _ = self.send_frame(&ClientFrame::Shutdown).await;
+    }
+
+    /// Identity of the connected helper (version, exe, pid, run state).
+    /// Helpers built before this op existed return a dispatch error.
+    pub async fn helper_info(&self) -> Result<HelperInfoDto, DesktopError> {
+        self.call_typed("helper_info", &serde_json::json!({})).await
+    }
+
+    /// Compare the running helper against the binary this client would spawn.
+    /// `mismatch` is true when the helper predates `helper_info`, reports a
+    /// different version, or runs from a different executable; `run_active`
+    /// comes from `helper_info`, or `get_bootstrap_state` on older helpers, so
+    /// callers can avoid killing someone else's in-flight run.
+    pub async fn helper_compat(&self) -> HelperCompat {
+        match self.helper_info().await {
+            Ok(info) => {
+                let expected_exe = helper_bin();
+                let exe_differs = match (
+                    std::fs::canonicalize(&info.exe_path),
+                    std::fs::canonicalize(&expected_exe),
+                ) {
+                    (Ok(running), Ok(expected)) => running != expected,
+                    // Expected binary unresolvable (bare `soyo` fallback with
+                    // no PATH hit): cannot compare — version is the only signal.
+                    _ => false,
+                };
+                let version_differs = info.version != env!("CARGO_PKG_VERSION");
+                HelperCompat {
+                    mismatch: exe_differs || version_differs,
+                    run_active: info.run_active,
+                    detail: format!(
+                        "running v{} ({}), expected v{} ({})",
+                        info.version,
+                        info.exe_path,
+                        env!("CARGO_PKG_VERSION"),
+                        expected_exe.display()
+                    ),
+                }
+            }
+            Err(_) => {
+                // Older helper without `helper_info`: stale by definition, but
+                // still check for a busy run before recycling.
+                let run_active = self
+                    .call_typed::<_, serde_json::Value>(
+                        "get_bootstrap_state",
+                        &serde_json::json!({}),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|boot| boot.get("run_active").and_then(|v| v.as_bool()))
+                    .unwrap_or(false);
+                HelperCompat {
+                    mismatch: true,
+                    run_active,
+                    detail: "helper predates helper_info (stale daemon)".into(),
+                }
+            }
+        }
+    }
+
+    /// Shut down the connected helper and establish a fresh connection,
+    /// respawning via [`helper_bin`] so the replacement matches this client's
+    /// build. Fails if the daemon does not exit or the respawn cannot serve.
+    pub async fn restart(&self) -> Result<Arc<Self>, DesktopError> {
+        self.shutdown_daemon().await;
+        for _ in 0..50 {
+            match Self::connect().await {
+                Ok(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+                // Socket is gone: respawn and hand back the fresh client.
+                Err(_) => return Self::connect_or_spawn().await,
+            }
+        }
+        Err(DesktopError::new(
+            "helper_restart",
+            "helper did not exit after shutdown",
+        ))
     }
 
     /// Close the client half of the connection. Pending requests fail fast
