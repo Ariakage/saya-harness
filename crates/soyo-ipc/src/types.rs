@@ -1,4 +1,4 @@
-//! Specta-typed IPC Data Transfer Objects for `soyo-desktop`.
+//! Specta-typed IPC data transfer objects shared by interactive clients.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

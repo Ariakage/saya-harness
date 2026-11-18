@@ -422,15 +422,15 @@ backend = "host"
                         call_id: "call_ask".into(),
                         name: "ask_user".into(),
                         arguments:
-                            r#"{"question":"Which crate?","options":["soyo-desktop","soyo-cli"]}"#
+                            r#"{"question":"Which crate?","options":["crate-alpha","crate-beta"]}"#
                                 .into(),
                     })],
                     usage: None,
                 }],
                 vec![
-                    ModelUpdate::TextDelta("Chose soyo-desktop.".into()),
+                    ModelUpdate::TextDelta("Chose crate-alpha.".into()),
                     ModelUpdate::Finished {
-                        items: vec![HistoryItem::AssistantText("Chose soyo-desktop.".into())],
+                        items: vec![HistoryItem::AssistantText("Chose crate-alpha.".into())],
                         usage: None,
                     },
                 ],
@@ -454,7 +454,7 @@ backend = "host"
         };
         assert_eq!(input_req.question, "Which crate?");
         state
-            .reply_input(&input_req.input_id, Some("soyo-desktop".into()))
+            .reply_input(&input_req.input_id, Some("crate-alpha".into()))
             .unwrap();
 
         let mut saw_tool_ok = false;
@@ -465,7 +465,7 @@ backend = "host"
                 DesktopStreamEnvelope::SchemaEvent(ev) => {
                     if let soyo_ipc::types::SchemaEventDto::ToolFinished { result, .. } = ev.payload
                     {
-                        saw_tool_ok = result.ok && result.formatted.contains("soyo-desktop");
+                        saw_tool_ok = result.ok && result.formatted.contains("crate-alpha");
                     }
                 }
                 DesktopStreamEnvelope::RunCompleted { status, error, .. } => {

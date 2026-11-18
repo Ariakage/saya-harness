@@ -64,6 +64,16 @@ class DesktopPackagingTest(unittest.TestCase):
         self.assertNotIn("*", csp)
         self.assertNotRegex(csp, r"https?://(?!localhost\b|ipc\.localhost\b|soyo-attachment\.localhost\b|saya-attachment\.localhost\b)")
 
+        # Symlink and scope enforcement moved host-side when attachment
+        # resolution became an IPC proxy to the helper: the Tauri handler only
+        # forwards requests, so the canonicalization/symlink guards must exist
+        # in the helper's attachment module.
+        host_attachment = (
+            ROOT / "crates" / "soyo-host" / "src" / "attachment.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("symlink", host_attachment.lower())
+        self.assertIn("canonicalize", host_attachment)
+
         cap = json.loads((TAURI_DIR / "capabilities" / "default.json").read_text(encoding="utf-8"))
         permissions = cap.get("permissions", [])
         self.assertIn("updater:default", permissions)
@@ -172,7 +182,6 @@ class DesktopPackagingTest(unittest.TestCase):
         self.assertIn("register_attachment_protocols", lib_rs)
         self.assertIn('"X-Content-Type-Options", "nosniff"', proto_rs)
         self.assertIn('"Cache-Control", "private, no-store"', proto_rs)
-        self.assertIn("symlink", proto_rs.lower())
 
     def test_desktop_release_workflow_matrix_and_secret_hygiene(self):
         workflow_path = ROOT / ".github" / "workflows" / "desktop-release.yml"
