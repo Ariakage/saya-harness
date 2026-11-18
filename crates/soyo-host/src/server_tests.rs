@@ -220,6 +220,25 @@ mod tests {
         let text = std::fs::read_to_string(&config_path).unwrap();
         assert!(text.contains("[profiles.openai]"), "{text}");
         assert!(text.contains("[profiles.secondary]"), "{text}");
+
+        // A missing workspace directory is created instead of rejected.
+        let nested = dir.path().join("nested").join("work");
+        let mut third = setup_params();
+        third.profile_name = "third".into();
+        third.auth = Some("none".into());
+        third.api_key_env = None;
+        third.api_key = None;
+        third.base_url = "http://localhost:11434/v1".into();
+        third.workspace = Some(nested.to_str().unwrap().to_owned());
+        let boot = service
+            .setup_environment(third)
+            .await
+            .expect("setup creates missing workspace");
+        assert!(nested.is_dir());
+        assert_eq!(
+            boot.workspace,
+            nested.canonicalize().unwrap().to_string_lossy().to_string()
+        );
     }
 
     #[tokio::test]

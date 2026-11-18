@@ -455,7 +455,29 @@ impl HostService {
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
         if let Some(path) = workspace {
-            return self.set_workspace(&path).await;
+            // First-run setup creates the directory when it does not exist;
+            // `set_workspace` alone only accepts pre-existing directories.
+            let base_cwd = {
+                let guard = self.inner.lock().await;
+                guard.config.as_ref().map(|cfg| cfg.cwd.clone())
+            };
+            let requested = PathBuf::from(&path);
+            let resolved = offload_boundary(move || -> Result<PathBuf, BoundaryError> {
+                let candidate = match (requested.is_absolute(), &base_cwd) {
+                    (true, _) => requested,
+                    (false, Some(base)) => base.join(requested),
+                    (false, None) => requested,
+                };
+                if !candidate.exists() {
+                    fs::create_dir_all(&candidate).map_err(|_| {
+                        BoundaryError::new("workspace_missing", "Cannot create workspace directory")
+                    })?;
+                }
+                Ok(candidate)
+            })
+            .await
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+            return self.set_workspace(&resolved.to_string_lossy()).await;
         }
         Ok(self.get_bootstrap_state().await)
     }

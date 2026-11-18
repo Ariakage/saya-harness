@@ -521,7 +521,7 @@ export function SetupWizard({
               type="button"
               disabled={applying || !isTauri()}
               onClick={() => void finish()}
-              className="soyo-pill-btn inline-flex items-center gap-1.5 bg-[#d9a08e] px-4 py-1.5 text-[12px] font-semibold text-[#181818] disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-[8px] bg-[#d9a08e] px-4 py-1.5 text-[12px] font-semibold text-[#181818] transition-colors hover:bg-[#e2b3a4] disabled:cursor-not-allowed disabled:opacity-40"
             >
               {applying ? t.setup.applyingLabel : t.setup.finishLabel}
             </button>
