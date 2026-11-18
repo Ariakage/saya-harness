@@ -34,7 +34,7 @@ use soyo_ipc::{
     client::HelperClient,
     types::{
         ApprovalRequestDto, DesktopError, DesktopStreamEnvelope, PersonalContextDto,
-        RunPromptParams, SubmitPromptResultDto,
+        ResumeSessionDto, RunPromptParams, SubmitPromptResultDto,
     },
 };
 use std::{
@@ -597,6 +597,201 @@ async fn compact_session(
         Output::Jsonl => Ok(status_code(result.status)),
         Output::Json => report_json(&result, config),
         Output::Text => Ok(report_result(&result, &prepared.session, false, config)),
+    }
+}
+/// `soyo compact` through the shared helper, keeping the same output contract
+/// as the in-process path. Explicit `--config`/`--data-dir` and helper
+/// failures fall back to `compact_session`.
+async fn compact_via_helper(
+    cli: &Cli,
+    config: &Config,
+    session_id: &str,
+    accept_config_change: bool,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    if cli.config.is_some() || cli.data_dir.is_some() {
+        return compact_session(cli, config, session_id, accept_config_change).await;
+    }
+    match HelperClient::connect_or_spawn().await {
+        Ok(client) => {
+            match compact_over_socket(&client, cli, config, session_id, accept_config_change).await
+            {
+                Ok(code) => Ok(code),
+                Err(err) => {
+                    client.detach().await;
+                    Err(err)
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "soyo: helper unavailable ({}); using in-process runtime",
+                safe_output(&err.message, config)
+            );
+            compact_session(cli, config, session_id, accept_config_change).await
+        }
+    }
+}
+async fn compact_over_socket(
+    client: &Arc<HelperClient>,
+    cli: &Cli,
+    config: &Config,
+    session_id: &str,
+    accept_config_change: bool,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    // Pin the target session inside the helper before compacting it.
+    if let Err(err) = client
+        .call(
+            "resume_session",
+            serde_json::to_value(ResumeSessionDto {
+                session_id: session_id.to_owned(),
+                accept_config_change,
+                cwd_explicit: cli.cwd.is_some(),
+                profile_explicit: cli.profile.is_some(),
+                mode_override: cli.mode.map(|m| WorkMode::from(m).into()),
+            })?,
+        )
+        .await
+    {
+        eprintln!(
+            "soyo: helper resume rejected ({}: {}); using in-process runtime",
+            err.code,
+            safe_output(&err.message, config)
+        );
+        return compact_session(cli, config, session_id, accept_config_change).await;
+    }
+    let cancel = Arc::new(Cancel::new());
+    let _signals = signals::CancellationListener::start(cancel.clone())?;
+    // Forward process cancellation to the compaction inside the helper.
+    {
+        let watch_cancel = cancel.clone();
+        let watch_client = client.clone();
+        tokio::spawn(async move {
+            watch_cancel.cancelled().await;
+            let _ = watch_client.call("cancel_run", serde_json::json!({})).await;
+        });
+    }
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+    let call_client = client.clone();
+    let call = tokio::spawn(async move {
+        call_client
+            .call_streaming::<_, SubmitPromptResultDto>(
+                "compact_session",
+                &serde_json::json!({"raw_events": true}),
+                events_tx,
+            )
+            .await
+    });
+    let mut saw_event = false;
+    let mut finished: Option<RunResult> = None;
+    let mut completed_error: Option<DesktopError> = None;
+    let mut needs_input_question: Option<String> = None;
+    while let Some(envelope) = events_rx.recv().await {
+        saw_event = true;
+        match envelope {
+            DesktopStreamEnvelope::RawSchemaEvent { event } => {
+                if let Ok(schema_event) = serde_json::from_value::<Event>(event.clone())
+                    && let EventPayload::RunFinished(result) = schema_event.payload
+                {
+                    finished = Some(result);
+                }
+                if config.output == Output::Jsonl {
+                    let mut stdout = io::stdout().lock();
+                    serde_json::to_writer(&mut stdout, &event)
+                        .map_err(|_| cli_error("output_error", "cannot write event"))?;
+                    stdout
+                        .write_all(b"\n")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|_| cli_error("output_error", "cannot write event"))?;
+                }
+            }
+            DesktopStreamEnvelope::RunCompleted {
+                error,
+                needs_input_question: question,
+                ..
+            } => {
+                completed_error = error;
+                needs_input_question = question;
+            }
+            _ => {}
+        }
+    }
+    let started = match call.await {
+        Ok(Ok(dto)) => dto,
+        Ok(Err(err)) => {
+            if !saw_event {
+                // Rejected before the compaction started — reproduce the
+                // standalone outcome through the in-process path.
+                eprintln!(
+                    "soyo: helper compaction rejected ({}: {}); using in-process runtime",
+                    err.code,
+                    safe_output(&err.message, config)
+                );
+                return compact_session(cli, config, session_id, accept_config_change).await;
+            }
+            return Err(Box::new(helper_boundary_error(&err)));
+        }
+        Err(_) => return Err("helper run task failed".into()),
+    };
+    match (finished, completed_error) {
+        (Some(result), error) => {
+            if let Some(err) = error {
+                log_warning(
+                    config,
+                    "error",
+                    "run.failed",
+                    serde_json::json!({"session_id":started.session_id,"run_id":started.run_id,"error":{"code":err.code,"message":err.message}}),
+                );
+                report_runtime_error(&helper_boundary_error(&err), config);
+                return match config.output {
+                    Output::Json => report_json(&result, config),
+                    _ => Ok(1),
+                };
+            }
+            log_run_result(config, &result);
+            match config.output {
+                Output::Jsonl => Ok(status_code(result.status)),
+                Output::Json => report_json(&result, config),
+                Output::Text => Ok(report_result_inner(
+                    &result,
+                    needs_input_question,
+                    false,
+                    config,
+                )),
+            }
+        }
+        (None, error) => {
+            // No run.finished reached the wire (boundary failure before or
+            // during emit_failure): same reporting as the in-process Err arm.
+            let err = error.unwrap_or_else(|| {
+                DesktopError::new("run_terminated", "Run ended without a result")
+            });
+            log_warning(
+                config,
+                "error",
+                "run.failed",
+                serde_json::json!({"session_id":started.session_id,"run_id":started.run_id,"error":{"code":err.code,"message":err.message}}),
+            );
+            report_runtime_error(&helper_boundary_error(&err), config);
+            if config.output == Output::Json {
+                let session_id = serde_json::from_value::<SessionId>(serde_json::Value::String(
+                    started.session_id,
+                ))
+                .unwrap_or_default();
+                let run_id =
+                    serde_json::from_value::<RunId>(serde_json::Value::String(started.run_id))
+                        .unwrap_or_default();
+                let result = failed_run_result(
+                    session_id,
+                    run_id,
+                    ErrorInfo {
+                        code: err.code,
+                        message: err.message,
+                    },
+                );
+                return report_json(&result, config);
+            }
+            Ok(1)
+        }
     }
 }
 async fn build_runtime(
@@ -1481,7 +1676,7 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
         }) => match load_config(overrides, env) {
             Err(error) => output_error(error, cli.output.map(Into::into)),
             Ok(config) => {
-                match compact_session(cli, &config, session_id, *accept_config_change).await {
+                match compact_via_helper(cli, &config, session_id, *accept_config_change).await {
                     Ok(code) => code,
                     Err(error) => output_error(
                         boxed_error(&*error, "invalid_input", &config),
