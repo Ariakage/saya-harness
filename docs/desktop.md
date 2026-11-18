@@ -1,6 +1,8 @@
 # 桌面端设计（soyo-desktop）
 
-**依据 D-072（2026-11-18）确立的 F-14 GUI 工程与安全契约维护本文；D-073（2026-11-21）将后端拓扑由进程内链接切换为共享 `soyo helper` 守护进程，D-072 其余条款继续有效。实际实现与验证状态以[开发进度](progress.md)与代码为准，不复用 TUI 验收状态。**
+**依据 D-072（2026-11-18）确立的 F-14 GUI 工程与安全契约维护本文；D-073（2026-11-18）将后端拓扑由进程内链接切换为共享 `soyo helper` 守护进程，D-072 其余条款继续有效。实际实现与验证状态以[开发进度](progress.md)与代码为准，不复用 TUI 验收状态。**
+
+> **待实施的变更**：D-077（2026-11-19）确认了 helper 的多客户端、安全与配置契约，将取代下文“Helper 后端与 IPC 契约”中的单例、socket 位置与回退规则；D-078 确认随包附带 `soyo`、暂停 Windows 交付并调整发布规则。两项均未实施，在此之前下文描述现行实现。
 
 `soyo-desktop` 是 Soyo Harness 的桌面图形界面，位于顶层 `desktop/` 目录，作为与 `soyo-cli`、`soyo-tui` 并列的独立交付物和薄界面层。桌面端不再进程内链接运行时：所有运行时能力经本机 `soyo helper` 守护进程（`crates/soyo-host` + `crates/soyo-ipc`，Unix socket + NDJSON）提供，CLI/TUI/desktop 共享同一后端。
 

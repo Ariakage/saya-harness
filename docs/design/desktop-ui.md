@@ -233,7 +233,7 @@ python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
 
 ### 8.1 参照与原则
 
-- **参照对象**：参照 Claude Desktop 等对话式 AI 桌面应用的设计语言（项目负责人指定）。只借鉴设计语言，不复制 Logo、专有字体或品牌色值；Soyo 保留自己的强调色系、应用图标和 lucide 图标体系。
+- **参照对象**：参照 Claude Desktop 等对话式 AI 桌面应用的设计语言（项目负责人指定），详细描述见 §8.11。只借鉴设计语言，不复制 Logo、专有字体或品牌色值；Soyo 保留自己的强调色系、应用图标和 lucide 图标体系。
 - **六条原则**：
   1. 暖调、低饱和的中性色；颜色只用于强调与状态，同一种颜色只表示一种含义。
   2. 导航放在单一的带文字侧栏中，可以收起；内容区居中，留白充足。
@@ -245,28 +245,28 @@ python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
 
 ### 8.2 颜色 Token
 
-“最小对比度”指该文字色在本主题全部 5 个表面上的最小值，按 WCAG 公式计算。文字 Token 一律 ≥ 4.5:1，控件边界 ≥ 3:1。
+“最小对比度”指该文字色在本主题全部 5 个表面上的最小值，按 WCAG 公式计算。文字 Token 一律 ≥ 4.5:1，控件边界 ≥ 3:1。Light 列已按 D-076 调整，与参照对象的品牌色值拉开距离（见 §8.11）。
 
 | Token | Soyo Dark | Soyo Light | 用途 | 最小对比度（Dark／Light） |
 | --- | --- | --- | --- | --- |
-| `--surface-sidebar` | `#1b1a18` | `#f2f0eb` | 侧栏、导轨 | — |
-| `--surface-app` | `#201f1d` | `#faf9f6` | 主画布 | — |
+| `--surface-sidebar` | `#1b1a18` | `#efece5` | 侧栏、导轨 | — |
+| `--surface-app` | `#201f1d` | `#f7f5ef` | 主画布 | — |
 | `--surface-raised` | `#282725` | `#ffffff` | 卡片、输入框、菜单 | — |
 | `--surface-overlay` | `#2d2c29` | `#ffffff`（配合 `--shadow-dialog`） | 对话框、弹出层 | — |
-| `--surface-hover` | `#34322f` | `#e9e6df` | 悬停、选中行 | — |
-| `--border-subtle` | `#2f2d2a` | `#e8e5de` | 分隔线（装饰） | — |
-| `--border` | `#3a3835` | `#dcd8cf` | 卡片描边（装饰） | — |
-| `--border-strong` | `#76716a` | `#8c877d` | 输入框与控件边界 | 3.08／3.39 |
-| `--text-primary` | `#ecebe6` | `#1f1e1b` | 标题、正文 | 10.71／13.37 |
-| `--text-secondary` | `#bdb9b0` | `#4f4c46` | 次要文字、标签 | 6.53／6.86 |
-| `--text-tertiary` | `#a09b92` | `#69655d` | 时间、元数据、占位符（最弱一级） | 4.62／4.65 |
+| `--surface-hover` | `#34322f` | `#e3dfd5` | 悬停、选中行 | — |
+| `--border-subtle` | `#2f2d2a` | `#dfdbd1` | 分隔线（装饰） | — |
+| `--border` | `#3a3835` | `#d3cec3` | 卡片描边（装饰） | — |
+| `--border-strong` | `#76716a` | `#8c877d` | 输入框与控件边界（对相邻背景） | 3.08／3.28 |
+| `--text-primary` | `#ecebe6` | `#1f1e1b` | 标题、正文 | 10.71／12.53 |
+| `--text-secondary` | `#bdb9b0` | `#4f4c46` | 次要文字、标签 | 6.53／6.43 |
+| `--text-tertiary` | `#a09b92` | `#66625b` | 时间、元数据、占位符（最弱一级） | 4.62／4.56 |
 | `--accent` | `#d9a08e` | `#a9583f` | 主按钮填充、选中指示、焦点环、开关开启态 | — |
-| `--accent-text` | `#d9a08e` | `#9c5238` | 强调色文字 | 5.70／4.58 |
+| `--accent-text` | `#d9a08e` | `#964f36` | 强调色文字 | 5.70／4.55 |
 | `--on-accent` | `#1f140f` | `#ffffff` | 主按钮文字 | 8.04／5.05（相对 `--accent`） |
-| `--info` | `#9db6e0` | `#2b5ea7` | 链接、信息提示、`Manual approval` | 6.21／5.17 |
-| `--success` | `#86cfa0` | `#2c7448` | Diff 新增、完成状态 | 6.97／4.56 |
-| `--warning` | `#e9b762` | `#8a5a0b` | 警告横幅、待切换标记 | 6.95／4.75 |
-| `--danger` | `#f08a80` | `#b4362b` | 错误、Diff 删除、`Bypass permissions` | 5.27／4.81 |
+| `--info` | `#9db6e0` | `#2b5ea7` | 链接、信息提示、`Manual approval` | 6.21／4.84 |
+| `--success` | `#86cfa0` | `#2a6e45` | Diff 新增、完成状态 | 6.97／4.62 |
+| `--warning` | `#e9b762` | `#88580b` | 警告横幅、待切换标记 | 6.95／4.58 |
+| `--danger` | `#f08a80` | `#b2352b` | 错误、Diff 删除、`Bypass permissions` | 5.27／4.59 |
 
 语义背景（横幅、Diff 行）使用对应语义色叠加：Dark 为 12% 透明度，Light 为 10%。叠加后文字对比度仍须 ≥ 4.5:1。
 
@@ -274,10 +274,10 @@ python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
 
 | 模式 | Soyo Dark | Soyo Light | 最小对比度（Dark／Light） |
 | --- | --- | --- | --- |
-| WORK | `#6aaefc` | `#2563c4` | 5.52／4.60 |
-| CODE | `#86cfa0` | `#2c7448` | 6.97／4.56 |
-| PLAN | `#bea3f5` | `#6d45c2` | 5.93／5.14 |
-| BUILD | `#efb25e` | `#8a5a0b` | 6.82／4.75 |
+| WORK | `#6aaefc` | `#235fbb` | 5.52／4.61 |
+| CODE | `#86cfa0` | `#2a6e45` | 6.97／4.62 |
+| PLAN | `#bea3f5` | `#6d45c2` | 5.93／4.81 |
+| BUILD | `#efb25e` | `#88580b` | 6.82／4.58 |
 
 - **模式色的使用范围**：只用于模式徽标的圆点与文字，不用于大面积背景，也不与强调色共用。模式徽标始终带文字标签：CODE 与 `--success`、BUILD 与 `--warning` 色相接近，单靠颜色无法区分。TUI 的 `mode_color` 采用 Dark 一列。
 - **权限显示**：
@@ -385,3 +385,57 @@ python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
 | 2 | 引入 `tokens.css`（同时定义 Dark、Light）、`Button`、`Pill`、`DialogShell`；按组件分批替换任意值 | TSX 中 `[#…]` 任意色值为 0；字号不超过 6 级，圆角不超过 5 种 |
 | 3 | 合并侧栏、设置信息架构、图标、字体、文案与 i18n；主题切换与 §8.5 全部内容适配，完成 Light 主题验收 | 两套主题 × 两种窗口尺寸截图通过；两套主题对比度脚本通过；没有硬编码 `aria-label`／`title` |
 | 4 | Figma Variables（Dark／Light）与生成器；TUI 模式色；改写 §1–§7 与决策影响栏 | Figma 可绑定节点 ≥ 95% 绑定变量；规范、生成器、实现三处数值一致 |
+
+### 8.11 参照主题详细描述（Claude Desktop）
+
+- **来源**：本节依据 2026-11 可查到的公开资料整理：
+  - Claude 帮助中心的外观设置说明（[Customizing your appearance settings](https://support.claude.com/en/articles/8887527-customizing-your-appearance-settings)）；
+  - 第三方整理的 Claude Desktop（macOS）界面地图（[weloveclaude.com](https://www.weloveclaude.com/reference/desktop-sitemap)）；
+  - Anthropic 关于 Claude Code 桌面版改版的文章（[Redesigning Claude Code on desktop](https://claude.com/resources/articles/claude-code-desktop-redesign)）；
+  - Anthropic 品牌规范中的色值与字体。
+- **适用范围**：参照对象会持续改版，本节只记录用于决策的特征，不作为参照对象的权威说明。按 D-075 的边界，Soyo 只借鉴设计语言，表中“Soyo 对应”一列才是实现依据。
+
+| 维度 | 参照对象的做法 | Soyo 对应 |
+| --- | --- | --- |
+| 整体气质 | 暖调中性色（米白、炭灰）配单一暖橙强调色；界面安静，内容优先，装饰极少 | 暖调中性色配自有桃陶色强调（Dark `#d9a08e`、Light `#a9583f`），见 §8.2 |
+| 品牌色值 | 深 `#141413`、浅 `#faf9f5`、中灰 `#b0aea5`、浅灰 `#e8e6dc`、强调橙 `#d97757`、辅助蓝 `#6a9bcc`、辅助绿 `#788c5d` | 不使用；§8.2–§8.3 中每个 Token 与上述每个色值的 RGB 分量差之和都 ≥ 12（已校验） |
+| 品牌字体 | 品牌规范中，标题用 Poppins，正文用 Lora | 不沿用这组字体：控件与正文用系统字体，展示字体用 Source Serif 4（§8.12） |
+| 外观模式 | Light、Match System、Dark 三档，位于 Settings › Appearance；左下角账户菜单也可切换 | System（默认）、Light、Dark 三档，位于 Settings › Appearance；底部用户菜单提供同一开关 |
+| 对话字体 | Default、Match System、Dyslexic Friendly | 默认（系统无衬线）、衬线、系统三档；不提供易读障碍字体（§8.12） |
+| 侧栏 | 左侧单栏：顶部为 New、Search 等导航，中部为置顶与最近会话，底部为头像与名称组成的账户区；可用按钮开合，但不能完全关闭 | 248px 带文字侧栏，可收起为 48px 导轨（同样不完全隐藏）；底部用户行打开用户菜单（§8.6、§8.12） |
+| 快捷键 | 新建 ⌘N、搜索 ⌘K、开合侧栏 ⌘B、设置 ⌘, | 采用同一组快捷键（也符合 macOS 惯例） |
+| 输入框 | 大圆角输入卡片；左侧为添加文件、连接器等入口，模型与思考强度合并为一个控件，右侧为发送 | §8.6 的 Composer：`+` 菜单、“模式 · 权限”胶囊、“模型 · 思考强度”胶囊、发送 |
+| 消息排版 | 用户消息为右对齐的圆角气泡；回复下方有复制、重试、编辑与反馈的操作行 | 用户消息为右对齐气泡；助手回复不加气泡，按正文排版；操作行在悬停时显示（§8.12） |
+| 设置 | 左侧为分组导航；General 含外观与文字大小；桌面版另有本机相关页（System、Extensions、Developer） | 三组共 9 项；Appearance 独立成页；不设 System 页，helper 状态放在 General › About（§8.8） |
+| 多会话（Claude Code 桌面版） | 侧栏集中显示活动会话与最近会话，可按状态、项目、环境过滤，也可按项目分组；PR 合并或关闭后会话自动归档 | Recents 按项目分组；会话浏览器可按项目和状态过滤；不做自动归档（§8.12） |
+| 图标与动效 | 细线条单色图标；动效克制、短暂 | lucide、`strokeWidth` 1.75；沿用 §5.1 的时长与曲线 |
+
+### 8.12 细则定稿（D-076）
+
+以下各项原为待定，现由 D-076 确定。
+
+| 事项 | 定稿 |
+| --- | --- |
+| 展示字体 | Source Serif 4（SIL OFL 1.1），可变字重 woff2，只打包 Latin 子集；中文回退为 `"Songti SC", "Songti TC", "Noto Serif CJK SC", "Noto Serif CJK TC", serif` |
+| 对话字体 | 默认为系统无衬线；可选“衬线”（Source Serif 4）或“系统”（跟随系统字体）；不提供易读障碍字体 |
+| 主题偏好与缓存 | 偏好存为 `desktop_prefs.theme`（`system`／`light`／`dark`）；`localStorage` 键 `soyo.theme` 只缓存最终生效的 `dark`／`light`，用于启动时首帧 |
+| Inspector 默认状态 | 首次启动且窗口 ≥ 1280px 时展开，此后记住上次状态（`desktop_prefs.inspector_open`）；窗口 < 1280px 时一律为抽屉，默认关闭 |
+| 侧栏导航行为 | 见本表下方“侧栏导航行为”一段 |
+| Recents 数量 | 每个项目分组最多 5 条，总计最多 30 条；其余经 View all 进入会话浏览器 |
+| 会话浏览器 | 可按项目、状态（进行中、已完成、失败）过滤；不做自动归档 |
+| 模型胶囊 | 显示“模型名 · 思考强度”；主区 < 640px 时只显示模型名前 16 个字符（超出加省略号），隐藏强度文字；完整内容在 `title` 与弹层中显示 |
+| 强调色状态 | Dark：hover `#e4b3a3`、pressed `#cf9480`（`--on-accent` 上为 9.68／7.04:1）<br>Light：hover `#9a4e36`、pressed `#8c452f`（白字上为 5.97／6.98:1）<br>禁用态统一 40% 不透明度（WCAG 对禁用控件不作对比度要求） |
+| 焦点环、选中与滚动条 | 焦点环为 2px `--accent`，偏移 2px，对相邻背景 ≥ 3:1；选中文本用 `--accent` 30% 透明度；滚动条宽 6px，滑块为 `--border-strong`，轨道透明 |
+| 用户菜单 | 点击底部用户行打开，包含：主题（System／Light／Dark）、语言、设置、关于 |
+| 消息排版 | 用户消息为右对齐气泡（`--surface-raised`、12px 圆角）；助手回复不加气泡，用 `body` 字号；操作行（复制、重试、编辑）悬停显示 |
+| 设计稿范围 | 14 个 frame 全部生成 Dark、Light 两版，共 28 个；Light 版整体向右平移 4560px（三列 × 1520），与 Dark 版并排 |
+
+**侧栏导航行为**：
+
+- New session（⌘N）：新建会话。
+- Search（⌘K）：打开覆盖式搜索，范围为会话标题与内容。
+- Sessions：打开会话浏览器。
+- Memory、MCP & credentials：分别打开设置中的对应页。
+- Export：打开当前会话的导出对话框，没有会话时禁用。
+- Customize：打开设置中的 Appearance 页。
+- ⌘B 开合侧栏，⌘, 打开设置。
