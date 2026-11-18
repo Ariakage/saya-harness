@@ -17,7 +17,7 @@ export function StagedAttachmentsStrip({
 
   return (
     <div
-      className="flex flex-wrap gap-2 pb-1"
+      className="flex flex-wrap gap-2 pb-1.5"
       data-testid="staged-attachments-strip"
     >
       {items.map((item) => {
@@ -25,30 +25,30 @@ export function StagedAttachmentsStrip({
         return (
           <div
             key={item.id}
-            className="flex items-center gap-2 rounded-md border border-[#303038] bg-[#141416] px-2 py-1 text-[11px]"
+            className="flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#222222] px-[9px] py-[6px] text-[11.5px] text-[#c9c9c9]"
           >
             {isImage ? (
               <img
                 src={item.preview_url}
                 alt={sanitizeDisplayText(item.filename)}
-                className="h-6 w-6 rounded object-cover"
+                className="h-[26px] w-[26px] rounded-[6px] object-cover"
               />
             ) : (
-              <Paperclip className="h-3.5 w-3.5 text-[#58A6FF]" />
+              <FileText className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
             )}
-            <div className="max-w-[180px]">
-              <div className="truncate font-medium text-[#E8E8ED]">
+            <div className="flex items-baseline gap-1.5 max-w-[200px]">
+              <span className="truncate font-medium text-[#e8e8e8]">
                 {sanitizeDisplayText(item.filename)}
-              </div>
-              <div className="truncate font-mono text-[10px] text-[#81818B]">
-                {item.kind} · {Math.max(1, Math.round(item.size_bytes / 1024))} KiB
-              </div>
+              </span>
+              <span className="shrink-0 font-mono text-[10.5px] text-[#6e6e6e]">
+                {Math.max(1, Math.round(item.size_bytes / 1024))} KB
+              </span>
             </div>
             <button
               type="button"
               onClick={() => onRemove(item.id)}
               aria-label={`Remove ${item.filename}`}
-              className="rounded p-0.5 text-[#81818B] hover:bg-[#202024] hover:text-[#E8E8ED]"
+              className="rounded p-0.5 text-[#6e6e6e] hover:bg-[#2c2c2c] hover:text-[#e8e8e8]"
             >
               <X className="h-3 w-3" />
             </button>
@@ -78,33 +78,36 @@ export function SessionMediaPreview({
 
   return (
     <div className="space-y-1.5" data-testid="session-media-preview">
-      <div className="text-[10px] uppercase tracking-wider text-[#81818B]">
+      <div className="text-[10px] uppercase tracking-wider text-[#6e6e6e]">
         Attachments ({mediaRefs.length})
       </div>
       <div className="flex flex-wrap gap-2">
         {mediaRefs.map((ref) => {
           const url = buildMediaAttachmentUrl(sessionId, ref);
-          const likelyImage = /\.(png|jpe?g|webp|gif)$/i.test(ref) || ref.includes("image");
+          const likelyImage =
+            /\.(png|jpe?g|webp|gif)$/i.test(ref) || ref.includes("image");
           return (
             <div
               key={ref}
-              className="flex items-center gap-2 rounded border border-[#303038] bg-[#09090B] p-1.5 text-[11px]"
+              className="flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#1a1a1a] p-1.5 text-[11px]"
             >
               {likelyImage ? (
                 <img
                   src={url}
                   alt={ref}
-                  className="h-12 w-12 rounded border border-[#303038] object-cover"
+                  className="h-12 w-12 rounded-[6px] border border-[#2e2e2e] object-cover"
                 />
               ) : (
-                <FileText className="h-4 w-4 shrink-0 text-[#58A6FF]" />
+                <Paperclip className="h-4 w-4 shrink-0 text-[#d9a08e]" />
               )}
               <div className="max-w-[200px]">
-                <div className="flex items-center gap-1 font-mono text-[10px] text-[#D4D4D8] truncate">
-                  {likelyImage && <ImageIcon className="h-3 w-3 text-[#7DCB9B]" />}
+                <div className="flex items-center gap-1 truncate font-mono text-[10.5px] text-[#e8e8e8]">
+                  {likelyImage && (
+                    <ImageIcon className="h-3 w-3 shrink-0 text-[#4ade80]" />
+                  )}
                   <span className="truncate">{sanitizeDisplayText(ref)}</span>
                 </div>
-                <div className="truncate font-mono text-[9px] text-[#81818B]">
+                <div className="truncate font-mono text-[9.5px] text-[#6e6e6e]">
                   {url}
                 </div>
               </div>

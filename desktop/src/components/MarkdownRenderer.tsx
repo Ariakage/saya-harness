@@ -211,14 +211,14 @@ export function MarkdownRenderer({
             <button
               type="button"
               onClick={onToggleMode}
-              className="inline-flex items-center gap-1 rounded border border-[#303038] bg-[#202024] px-2 py-0.5 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+              className="devin-pill-btn text-[11px] text-[#c9c9c9] hover:text-[#e8e8e8]"
             >
               <Eye className="h-3 w-3" />
               Render
             </button>
           </div>
         )}
-        <pre className="overflow-x-auto whitespace-pre-wrap rounded-md border border-[#303038] bg-[#09090B] p-3 text-xs leading-relaxed text-[#D4D4D8]">
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-[10px] border border-[#262626] bg-[#161616] p-3 text-xs leading-relaxed text-[#c9d1d9]">
           <code>{sanitized}</code>
         </pre>
       </div>
@@ -232,7 +232,7 @@ export function MarkdownRenderer({
           <button
             type="button"
             onClick={onToggleMode}
-            className="inline-flex items-center gap-1 rounded border border-[#303038] bg-[#202024] px-2 py-0.5 text-[11px] text-[#81818B] hover:text-[#E8E8ED]"
+            className="devin-pill-btn text-[11px] text-[#a3a3a3] hover:text-[#e8e8e8]"
           >
             <Code2 className="h-3 w-3" />
             Source
@@ -266,14 +266,14 @@ export function MarkdownRenderer({
                   ? "Math"
                   : "Code";
               return (
-                <div className="my-2 rounded-md border border-[#F6AD55]/40 bg-[#141416] p-3 text-xs">
-                  <div className="mb-1.5 flex items-center justify-between text-[#F6AD55]">
+                <div className="my-2 rounded-[10px] border border-[#4a3f2a] bg-[#1c1a15] p-3 text-xs">
+                  <div className="mb-1.5 flex items-center justify-between text-[#fac454]">
                     <span className="font-medium">{kindLabel}</span>
-                    <span className="rounded border border-[#F6AD55]/40 bg-[#F6AD55]/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+                    <span className="devin-pill text-[10px] uppercase tracking-wide text-[#fac454]">
                       source fallback
                     </span>
                   </div>
-                  <pre className="overflow-x-auto rounded bg-[#09090B] p-2 text-xs text-[#D4D4D8]">
+                  <pre className="overflow-x-auto rounded-[8px] border border-[#2e2820] bg-[#121110] p-2 text-xs text-[#c9c9c9]">
                     <code>{rawText}</code>
                   </pre>
                 </div>

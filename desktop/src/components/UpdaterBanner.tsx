@@ -101,23 +101,23 @@ export function UpdaterBanner() {
   return (
     <div
       data-testid="updater-banner"
-      className="flex flex-wrap items-center justify-between gap-2 border-b border-[#58A6FF]/40 bg-[#58A6FF]/10 px-4 py-1.5 text-xs text-[#E8E8ED]"
+      className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2e2e2e] bg-[#1a1a1a] px-4 py-1.5 text-xs text-[#e8e8e8]"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <Download className="h-3.5 w-3.5 shrink-0 text-[#58A6FF]" />
+        <Download className="h-3.5 w-3.5 shrink-0 text-[#d9a08e]" />
         <span className="font-medium">
           Update available: v{sanitizeDisplayText(update.version)}
         </span>
-        <span className="font-mono text-[11px] text-[#81818B]">
+        <span className="font-mono text-[11px] text-[#7a7a7a]">
           (current v{sanitizeDisplayText(update.currentVersion)})
         </span>
         {progressText && (
-          <span className="font-mono text-[11px] text-[#7DCB9B]">
+          <span className="font-mono text-[11px] text-[#4ade80]">
             {progressText}
           </span>
         )}
         {errorMsg && (
-          <span className="text-[11px] text-[#F87171]">{errorMsg}</span>
+          <span className="text-[11px] text-[#f87171]">{errorMsg}</span>
         )}
       </div>
 
@@ -127,7 +127,7 @@ export function UpdaterBanner() {
             type="button"
             disabled={installing}
             onClick={() => void handleInstall()}
-            className="inline-flex items-center gap-1 rounded bg-[#58A6FF] px-2.5 py-1 text-[11px] font-semibold text-[#09090B] hover:bg-[#73B5FF] disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-[7px] bg-[#d9a08e] px-2.5 py-1 text-[11px] font-semibold text-[#1c120e] hover:bg-[#e2a68f] disabled:opacity-50"
           >
             <RefreshCw
               className={`h-3 w-3 ${installing ? "animate-spin" : ""}`}
@@ -139,7 +139,7 @@ export function UpdaterBanner() {
           type="button"
           onClick={() => void handleDismiss()}
           aria-label="Dismiss update banner"
-          className="rounded p-0.5 text-[#81818B] hover:bg-[#202024] hover:text-[#E8E8ED]"
+          className="rounded p-0.5 text-[#7a7a7a] hover:bg-[#242424] hover:text-[#e8e8e8]"
         >
           <X className="h-3.5 w-3.5" />
         </button>

@@ -20,23 +20,23 @@ export type WorkModeVisual = {
 export const WORK_MODE_STYLES: Record<WorkModeDto, WorkModeVisual> = {
   work: {
     label: "WORK",
-    color: "#58A6FF",
-    badgeClass: "border-[#58A6FF]/40 bg-[#58A6FF]/15 text-[#58A6FF]",
+    color: "#d9a08e",
+    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#d9a08e]",
   },
   code: {
     label: "CODE",
-    color: "#7DCB9B",
-    badgeClass: "border-[#7DCB9B]/40 bg-[#7DCB9B]/15 text-[#7DCB9B]",
+    color: "#4ade80",
+    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#4ade80]",
   },
   plan: {
     label: "PLAN",
-    color: "#BB9AF7",
-    badgeClass: "border-[#BB9AF7]/40 bg-[#BB9AF7]/15 text-[#BB9AF7]",
+    color: "#a096eb",
+    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#a096eb]",
   },
   build: {
     label: "BUILD",
-    color: "#F6AD55",
-    badgeClass: "border-[#F6AD55]/40 bg-[#F6AD55]/15 text-[#F6AD55]",
+    color: "#fac454",
+    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#fac454]",
   },
 };
 

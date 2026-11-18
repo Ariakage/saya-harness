@@ -1,6 +1,6 @@
 # Soyo Harness Desktop — UI/UX 设计规范
 
-> **状态**：设计稿已确认（Figma），实现未完成。本文描述的是桌面 GUI 的目标设计，不代表现有代码行为。设计稿载体：Figma 文件 `ocT9XcOCUCifMHyta771gs` 的 **Page 3（`03 · Devin Theme`，节点 `20:4`）**，共 13 帧，每帧 1280×720，均为可编辑图层。
+> **状态**：设计稿已确认（Figma）且已接入 `desktop/src/`（Devin Theme 全套布局与 `cc_eff` 五档 Effort WebGL2 滑块）。设计稿载体：Figma 文件 `ocT9XcOCUCifMHyta771gs` 的 **Page 3（`03 · Devin Theme`，节点 `20:4`）**，共 13 帧，每帧 1280×720，均为可编辑图层。
 >
 > Page 2（`6:4`）保留旧版 11 屏参考稿，不再演进。
 

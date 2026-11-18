@@ -1,4 +1,4 @@
-import { ShieldAlert } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ApprovalRequestDto_Deserialize } from "../bindings";
 import { WORK_MODE_STYLES, sanitizeDisplayText } from "../lib/sanitize";
@@ -39,97 +39,77 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
   const modeStyle = WORK_MODE_STYLES[request.work_mode];
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
+    <section
+      role="region"
       aria-label="Approval Required"
       data-testid="approval-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      className="rounded-[12px] border border-[#4a3f2a] bg-[#1c1a15] p-[14px] text-xs"
     >
-      <div className="w-full max-w-xl rounded-xl border border-[#F6AD55]/50 bg-[#141416] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[#303038] px-4 py-3">
-          <div className="flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-[#F6AD55]" />
-            <h2 className="text-sm font-semibold text-[#E8E8ED]">
-              Approval Required
-            </h2>
-          </div>
-          <span
-            className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${modeStyle.badgeClass}`}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[13px] font-semibold text-[#e8d9b0]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[#fac454]" />
+          <span>Approval required</span>
+        </div>
+        <span className={`devin-pill ${modeStyle.badgeClass}`}>
+          {modeStyle.label}
+        </span>
+      </div>
+
+      <div className="my-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[9px] border border-[#2e2820] bg-[#171512] px-3 py-2.5 text-[12px]">
+        <span className="text-[#8a8a8a]">Tool</span>
+        <span className="font-mono text-[11.5px] text-[#d9d9d9]">
+          {sanitizeDisplayText(request.tool)}
+        </span>
+        {request.action && (
+          <>
+            <span className="text-[#8a8a8a]">Action</span>
+            <span className="font-mono text-[11.5px] text-[#7aa2f7]">
+              {sanitizeDisplayText(request.action)}
+            </span>
+          </>
+        )}
+        <span className="text-[#8a8a8a]">Call</span>
+        <span className="font-mono text-[11.5px] text-[#d9d9d9]">
+          {sanitizeDisplayText(request.call_id)}
+        </span>
+        <span className="text-[#8a8a8a]">Workspace</span>
+        <span className="truncate font-mono text-[11.5px] text-[#d9d9d9]">
+          {sanitizeDisplayText(request.cwd)}
+        </span>
+      </div>
+
+      <div className="text-[12.5px] text-[#c9c9c9]">
+        {sanitizeDisplayText(request.operation_summary)}
+      </div>
+
+      <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[#2e2820] bg-[#121110] px-2.5 py-2 font-mono text-[12px] text-[#e8e8e8]">
+        {sanitizeDisplayText(request.formatted_call)}
+      </pre>
+
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] text-[#6e6e6e]">
+          Press <strong className="text-[#a3a3a3]">Y</strong> to allow or{" "}
+          <strong className="text-[#a3a3a3]">N</strong> to deny
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void handleDecision(false)}
+            className="devin-pill-btn text-[#f87171] disabled:opacity-40"
           >
-            {modeStyle.label}
-          </span>
-        </div>
-
-        <div className="space-y-3 p-4 text-xs">
-          <div className="grid grid-cols-2 gap-2 rounded-md border border-[#303038] bg-[#09090B] p-2.5 text-[11px]">
-            <div>
-              <span className="text-[#81818B]">Tool: </span>
-              <span className="font-mono text-[#E8E8ED]">
-                {sanitizeDisplayText(request.tool)}
-              </span>
-            </div>
-            <div>
-              <span className="text-[#81818B]">Call: </span>
-              <span className="font-mono text-[#D4D4D8]">
-                {sanitizeDisplayText(request.call_id)}
-              </span>
-            </div>
-            {request.action && (
-              <div className="col-span-2">
-                <span className="text-[#81818B]">Action: </span>
-                <span className="font-mono text-[#F6AD55]">
-                  {sanitizeDisplayText(request.action)}
-                </span>
-              </div>
-            )}
-            <div className="col-span-2 truncate">
-              <span className="text-[#81818B]">Workspace: </span>
-              <span className="font-mono text-[#D4D4D8]">
-                {sanitizeDisplayText(request.cwd)}
-              </span>
-            </div>
-          </div>
-
-          <div className="text-[#E8E8ED]">
-            {sanitizeDisplayText(request.operation_summary)}
-          </div>
-
-          <div>
-            <div className="mb-1 text-[10px] uppercase tracking-wider text-[#81818B]">
-              Formatted Call
-            </div>
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-[#303038] bg-[#09090B] p-2.5 font-mono text-[11px] text-[#D4D4D8]">
-              {sanitizeDisplayText(request.formatted_call)}
-            </pre>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between border-t border-[#303038] px-4 py-3 text-xs">
-          <span className="text-[11px] text-[#81818B]">
-            Press <kbd className="rounded bg-[#202024] px-1">Y</kbd> to allow or{" "}
-            <kbd className="rounded bg-[#202024] px-1">N</kbd> to deny
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => void handleDecision(false)}
-              className="rounded-md border border-[#F87171]/50 bg-[#F87171]/10 px-3 py-1.5 font-medium text-[#F87171] hover:bg-[#F87171]/20 disabled:opacity-50"
-            >
-              Deny (N)
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => void handleDecision(true)}
-              className="rounded-md bg-[#7DCB9B] px-3.5 py-1.5 font-semibold text-[#09090B] hover:bg-[#8ED8AB] disabled:opacity-50"
-            >
-              Allow (Y)
-            </button>
-          </div>
+            Deny (N)
+          </button>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void handleDecision(true)}
+            className="devin-pill-btn text-[#4ade80] disabled:opacity-40"
+          >
+            Allow (Y)
+          </button>
         </div>
       </div>
-    </div>
+    </section>
   );
 }

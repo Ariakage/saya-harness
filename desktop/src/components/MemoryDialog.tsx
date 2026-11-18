@@ -14,7 +14,9 @@ export interface MemoryDialogProps {
 
 export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
   const [queryCmd, setQueryCmd] = useState("list");
-  const [queryResult, setQueryResult] = useState<MemoryQueryResultDto | null>(null);
+  const [queryResult, setQueryResult] = useState<MemoryQueryResultDto | null>(
+    null
+  );
   const [actionCmd, setActionCmd] = useState("");
   const [prepared, setPrepared] = useState<PreparedMemoryReviewDto | null>(null);
   const [confirmMsg, setConfirmMsg] = useState<string | null>(null);
@@ -85,13 +87,13 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
       aria-modal="true"
       aria-label="Global Memory Manager"
       data-testid="memory-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-[#303038] bg-[#141416] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[#303038] px-4 py-3">
+      <div className="flex max-h-[85vh] w-full max-w-[700px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+        <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
-            <Database className="h-4 w-4 text-[#BB9AF7]" />
-            <h2 className="text-sm font-semibold text-[#E8E8ED]">
+            <Database className="h-4 w-4 text-[#d9a08e]" />
+            <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
               Global Memory Administration (Two-Phase Review)
             </h2>
           </div>
@@ -99,7 +101,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
             type="button"
             onClick={onClose}
             aria-label="Close memory manager"
-            className="rounded p-1 text-[#81818B] hover:bg-[#202024] hover:text-[#E8E8ED]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -107,12 +109,12 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs">
           {errorMsg && (
-            <div className="rounded border border-[#F87171]/40 bg-[#F87171]/10 px-3 py-2 text-[#F87171]">
+            <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
               {errorMsg}
             </div>
           )}
           {confirmMsg && (
-            <div className="rounded border border-[#7DCB9B]/40 bg-[#7DCB9B]/10 px-3 py-2 text-[#7DCB9B]">
+            <div className="rounded-[8px] border border-[#4ade80]/35 bg-[#161c17] px-3 py-2 text-[#4ade80]">
               {confirmMsg}
             </div>
           )}
@@ -125,26 +127,26 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 value={queryCmd}
                 onChange={(e) => setQueryCmd(e.target.value)}
                 placeholder="list | search <query> | show <id> | sources | history"
-                className="flex-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1.5 font-mono text-xs text-[#E8E8ED]"
+                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
               />
               <button
                 type="button"
                 onClick={() => void runQuery(queryCmd)}
-                className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-3 py-1.5 font-medium text-[#E8E8ED] hover:border-[#58A6FF]"
+                className="devin-pill-btn font-medium text-[#e8e8e8]"
               >
-                <Search className="h-3.5 w-3.5" />
+                <Search className="h-3.5 w-3.5 text-[#8a8a8a]" />
                 Query
               </button>
             </div>
             {queryResult && (
-              <pre className="max-h-56 overflow-auto rounded-md border border-[#303038] bg-[#09090B] p-3 font-mono text-[11px] text-[#D4D4D8]">
+              <pre className="max-h-56 overflow-auto rounded-[10px] border border-[#262626] bg-[#141414] p-3 font-mono text-[11px] text-[#c9d1d9]">
                 {JSON.stringify(queryResult.data, null, 2)}
               </pre>
             )}
           </div>
 
-          <div className="space-y-2 rounded-md border border-[#303038] bg-[#09090B] p-3">
-            <div className="font-medium text-[#E8E8ED]">
+          <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
+            <div className="font-medium text-[#e8e8e8]">
               Prepare Memory Mutation / Export
             </div>
             <div className="flex gap-2">
@@ -155,33 +157,33 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                 disabled={runActive || busy}
                 onChange={(e) => setActionCmd(e.target.value)}
                 placeholder="e.g. forget <fact_id> | correct <fact_id> <text> | export <path>"
-                className="flex-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1.5 font-mono text-xs text-[#E8E8ED] disabled:opacity-50"
+                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e] disabled:opacity-50"
               />
               <button
                 type="button"
                 disabled={runActive || busy || !actionCmd.trim()}
                 onClick={() => void handlePrepare()}
-                className="rounded-md bg-[#BB9AF7] px-3 py-1.5 font-semibold text-[#09090B] disabled:opacity-40"
+                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 font-semibold text-[#1c120e] disabled:opacity-40"
               >
                 Prepare Review
               </button>
             </div>
 
             {prepared && (
-              <div className="mt-2 space-y-2 rounded border border-[#BB9AF7]/40 bg-[#141416] p-3">
+              <div className="mt-2 space-y-2 rounded-[9px] border border-[#4a3f2a] bg-[#1c1a15] p-3">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-mono text-[#BB9AF7]">
+                  <span className="font-mono text-[#e8d9b0]">
                     op: {prepared.operation_id} · rev: {prepared.expected_revision}
                   </span>
                 </div>
-                <pre className="max-h-40 overflow-auto rounded bg-[#09090B] p-2 font-mono text-[11px] text-[#D4D4D8]">
+                <pre className="max-h-40 overflow-auto rounded-[8px] border border-[#2e2820] bg-[#121110] p-2 font-mono text-[11px] text-[#d9d9d9]">
                   {JSON.stringify(prepared.review, null, 2)}
                 </pre>
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => setPrepared(null)}
-                    className="rounded border border-[#303038] bg-[#202024] px-3 py-1 text-[#D4D4D8]"
+                    className="devin-pill-btn text-[#c9c9c9]"
                   >
                     Discard
                   </button>
@@ -189,7 +191,7 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
                     type="button"
                     disabled={busy}
                     onClick={() => void handleConfirm()}
-                    className="inline-flex items-center gap-1 rounded bg-[#7DCB9B] px-3 py-1 font-semibold text-[#09090B]"
+                    className="devin-pill-btn font-semibold text-[#4ade80]"
                   >
                     <Check className="h-3.5 w-3.5" />
                     Confirm Apply

@@ -150,6 +150,8 @@ describe("App Stage 3 runtime integration", () => {
       pendingApproval: null,
       pendingInput: null,
       stagedAttachments: [],
+      ultracodeEnabled: false,
+      submitMode: "steer",
       configChangeSessionId: null,
       recoveryBanner: null,
       error: null,
@@ -797,5 +799,78 @@ describe("App Stage 3 runtime integration", () => {
     } finally {
       delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
     }
+  });
+
+  it("opens EffortPopover slider, toggles Ultracode, supports slash palette and Usage tab", async () => {
+    let currentEffort: string | null = "medium";
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_bootstrap_state") {
+        return {
+          ...sampleBootstrap(),
+          thinking_effort: currentEffort,
+        };
+      }
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "list_modules") return [];
+      if (cmd === "list_extensions") return [];
+      if (cmd === "list_jobs") return [];
+      if (cmd === "set_thinking_effort") {
+        currentEffort = (args as { effort: string | null }).effort;
+        return {
+          ...sampleBootstrap(),
+          thinking_effort: currentEffort,
+        };
+      }
+      return null;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId("effort-pill")).toBeTruthy();
+      expect(screen.getByTestId("effort-pill").textContent).toContain("Effort: Medium");
+    });
+
+    // Open cc_eff Effort Popover and toggle Ultracode
+    fireEvent.click(screen.getByTestId("effort-pill"));
+    await waitFor(() => {
+      expect(screen.getByTestId("effort-popover")).toBeTruthy();
+      expect(screen.getByTestId("effort-level-label").textContent).toBe("Medium");
+    });
+
+    fireEvent.click(screen.getByRole("switch", { name: "Ultracode toggle" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_thinking_effort", { effort: "max" });
+      expect(screen.getByTestId("effort-level-label").textContent).toBe("Ultracode");
+      expect(screen.getByTestId("effort-pill").textContent).toContain("Effort: Ultracode");
+    });
+
+    // Keyboard step left from Ultracode -> Max (with High usage warning)
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Effort slider" }), {
+      key: "ArrowLeft",
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("effort-level-label").textContent).toBe("Max");
+      expect(
+        screen.getByText(/Model thinks longer with Max effort and uses your limits faster/i)
+      ).toBeTruthy();
+    });
+
+    // Slash command palette
+    const input = screen.getByLabelText("Prompt input");
+    fireEvent.change(input, { target: { value: "/mo" } });
+    await waitFor(() => {
+      expect(screen.getByTestId("slash-command-palette")).toBeTruthy();
+    });
+
+    // Settings Usage tab
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-dialog")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-panel")).toBeTruthy();
+      expect(screen.getByText("Tokens per day")).toBeTruthy();
+    });
   });
 });

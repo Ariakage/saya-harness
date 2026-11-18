@@ -19,11 +19,16 @@ import type {
 } from "../bindings";
 
 export type PreviewScene =
+  | "home"
   | "conversation"
   | "markdown"
   | "approval"
   | "clarification"
-  | "peripheral";
+  | "peripheral"
+  | "usage"
+  | "effort"
+  | "browser"
+  | "subagent";
 
 let installed = false;
 let currentScene: PreviewScene = "conversation";
@@ -185,6 +190,64 @@ mindmap
   ],
 };
 
+const HOME_EMPTY_SESSION: ActiveSessionDto_Serialize = {
+  ...CONVERSATION_SESSION,
+  id: "01930000-0000-7000-8000-000000000000",
+  title: "New session",
+  work_mode: "work",
+  messages: [],
+  todos: [],
+  last_usage: null,
+};
+
+const SUBAGENT_SHOWCASE_SESSION: ActiveSessionDto_Serialize = {
+  ...CONVERSATION_SESSION,
+  id: "01930000-0000-7000-8000-000000000010",
+  title: "Find session restore & wire preview mode",
+  work_mode: "code",
+  messages: [
+    {
+      id: "sub-user-1",
+      role: "user",
+      label: "You",
+      text: "Find where session restore is implemented, then wire preview mode.",
+      streaming: false,
+      truncated: false,
+      tool_call_id: null,
+      tool_name: null,
+      tool_summary: null,
+      tool_ok: null,
+      media_refs: [],
+    },
+    {
+      id: "sub-tool-1",
+      role: "tool",
+      label: "subagent_explore",
+      text: "grep restore_session -> done\nread_file session_store.rs -> done\nread_file runtime_bridge.rs -> 3 tool calls · 4.2k tok",
+      streaming: false,
+      truncated: false,
+      tool_call_id: "call_sub_1",
+      tool_name: "subagent_explore",
+      tool_summary: "3 tool calls · 4.2k tok",
+      tool_ok: true,
+      media_refs: [],
+    },
+    {
+      id: "sub-ast-1",
+      role: "assistant",
+      label: "Assistant",
+      text: "Dispatched read-only `subagent_explore` to locate the session restore path while wiring preview scenes across `desktop/src/preview/browserPreview.ts`.",
+      streaming: false,
+      truncated: false,
+      tool_call_id: null,
+      tool_name: null,
+      tool_summary: null,
+      tool_ok: null,
+      media_refs: [],
+    },
+  ],
+};
+
 export function isBrowserPreview(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -217,11 +280,16 @@ export function getPreviewScene(): PreviewScene {
   if (typeof window !== "undefined") {
     const param = new URLSearchParams(window.location.search).get("scene");
     if (
+      param === "home" ||
       param === "markdown" ||
       param === "conversation" ||
       param === "approval" ||
       param === "clarification" ||
-      param === "peripheral"
+      param === "peripheral" ||
+      param === "usage" ||
+      param === "effort" ||
+      param === "browser" ||
+      param === "subagent"
     ) {
       currentScene = param;
     }
@@ -240,7 +308,13 @@ export function setPreviewScene(scene: PreviewScene): void {
 
 function buildBootstrap(scene: PreviewScene): BootstrapStateDto_Serialize {
   const session =
-    scene === "markdown" ? MARKDOWN_SHOWCASE_SESSION : CONVERSATION_SESSION;
+    scene === "home"
+      ? HOME_EMPTY_SESSION
+      : scene === "subagent"
+        ? SUBAGENT_SHOWCASE_SESSION
+        : scene === "markdown"
+          ? MARKDOWN_SHOWCASE_SESSION
+          : CONVERSATION_SESSION;
   return {
     version: "0.2.0",
     config_ready: true,
@@ -514,6 +588,24 @@ export function installBrowserPreviewMock(): boolean {
         profile: "openai-responses",
         title: MARKDOWN_SHOWCASE_SESSION.title,
         updated_at: BASE_TIMESTAMP - 3600,
+        last_status: "completed",
+      },
+      {
+        id: SUBAGENT_SHOWCASE_SESSION.id,
+        workspace: "/workspace/AkaMemo",
+        work_mode: "code",
+        profile: "anthropic-official",
+        title: "项目 AGENTS.md 与文档规范 (fork)",
+        updated_at: BASE_TIMESTAMP - 7200,
+        last_status: "completed",
+      },
+      {
+        id: "01930000-0000-7000-8000-000000000011",
+        workspace: "/workspace/ai-gateway",
+        work_mode: "work",
+        profile: "anthropic-official",
+        title: "导出会话到 HANDOFF 文档",
+        updated_at: BASE_TIMESTAMP - 18000,
         last_status: "completed",
       },
     ],

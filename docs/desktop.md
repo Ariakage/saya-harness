@@ -20,7 +20,8 @@ desktop/
 - **保持默认构建不变**：根 [Cargo.toml](../Cargo.toml) 通过 `default-members` 保留既有六个 crate（`soyo-contract`、`soyo-fs`、`soyo-core`、`soyo-cli`、`soyo-app`、`soyo-tui`），常规 `cargo build` / `cargo test` / `scripts/check.sh` 行为不变；`soyo-desktop` 仅通过 `cargo tauri` 或 `-p soyo-desktop` 显式构建与测试。
 - **独立安装、共享数据**：用户可单独安装 CLI/TUI、单独安装桌面端或两者并存；两端共享同一 XDG 配置（`config.toml`）、SQLite 会话库（`sessions.sqlite3`）、模块存储（`modules.sqlite3`）、OutputStore、全局记忆与宿主私有凭据存储（`state_dir/credentials`）。
 - **图标与界面组件**：所有桌面端界面图标统一使用已固定版本的 `lucide-react`；窗口与应用安装包图标由 1024x1024 RGBA 源生成为 `desktop/src-tauri/icons/` 与 `desktop/public/app-icon.png`。
-- **浏览器实时预览**：执行 `just desktop-preview` 启动 Vite HMR 开发服务，在常规浏览器访问 `http://127.0.0.1:1420/?preview=1&scene=conversation`（支持 `conversation`、`markdown`、`approval`、`clarification`、`peripheral` 场景，通过 `@tauri-apps/api/mocks` 脱敏替身预览和调整界面）。
+- **浏览器实时预览**：执行 `just desktop-preview` 启动 Vite HMR 开发服务，在常规浏览器访问 `http://127.0.0.1:1420/?preview=1&scene=conversation`（支持 `home`、`conversation`、`approval`、`effort`、`usage`、`browser`、`subagent`、`markdown`、`clarification`、`peripheral` 场景，通过 `@tauri-apps/api/mocks` 脱敏替身预览和调整界面）。
+- **视觉体系**：遵循 [UI/UX 设计规范](design/desktop-ui.md) 中的 Devin Theme（四栏布局、近黑底色、`#d9a08e` 强调色与 `#8aa8d8` 信息蓝分工、统一 pill、内联审批卡片、项目分组会话与 `EffortPopover` WebGL2 能量网格滑块）。
 
 ## 进程内运行时桥接与 IPC 契约
 
@@ -35,7 +36,7 @@ desktop/
 - **严格 CSP 与禁远程 URL**：`tauri.conf.json` 配置严格 `app.security.csp`，禁止加载外部脚本或连接远程页面，窗口只加载本地打包资源，不开放 Tauri `fs` 或 `assetProtocol` scope。
 - **凭据脱敏与禁止前端落盘**：凭据仅通过 `soyo-core` 的 `FileCredentialStore` 与 `SecretRegistry` 管理；禁止接入 Tauri keyring 插件，禁止将任何凭据、令牌或私钥写入 `localStorage` / `sessionStorage` / IndexedDB。前端凭据管理页面仅获取并展示不含明文密钥的脱敏元数据（`CredentialMetadata`）。所有跨 IPC 的事件、思考快照、工具输出和错误提示均先经 `SecretRegistry` 脱敏。
 - **自定义附件预览协议（`soyo-attachment://`）**：通过 `tauri::Builder::register_uri_scheme_protocol` 注册 `soyo-attachment`（并保留兼容别名 `saya-attachment`），仅允许读取当前活动会话已登记的草稿附件白名单或已验证归属当前会话的 `OutputStore` 媒体／文件对象，校验规范路径、禁止符号链接与路径穿越，并附加 `X-Content-Type-Options: nosniff` 与 `Cache-Control: private, no-store`。
-- **流式 Markdown 渲染**：前端采用 Streamdown + Shiki + mermaid.js，按 [Markdown 说明](markdown-rendering.md) 的语义支持 `render`/`source` 切换、控制字符净化、HTML 源码安全呈现、代码块与 Mermaid 预算回退（`source fallback`）及脚注双向跳转；四工作模式颜色（WORK `#58A6FF`、CODE `#7DCB9B`、PLAN `#BB9AF7`、BUILD `#F6AD55`）与 `docs/tui-design.md` 一致。
+- **流式 Markdown 渲染**：前端采用 Streamdown + Shiki + mermaid.js，按 [Markdown 说明](markdown-rendering.md) 的语义支持 `render`/`source` 切换、控制字符净化、HTML 源码安全呈现、代码块与 Mermaid 预算回退（`source fallback`）及脚注双向跳转；四工作模式颜色与 Devin Theme 统一 pill 对齐（CODE `#4ade80`、WORK `#d9a08e`、PLAN `#a096eb`、BUILD `#fac454`）。
 
 ## 打包、签名与自动更新
 

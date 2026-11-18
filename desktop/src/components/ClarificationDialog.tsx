@@ -32,24 +32,24 @@ export function ClarificationDialog({
       aria-modal="true"
       aria-label="Clarification Needed"
       data-testid="clarification-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="w-full max-w-lg rounded-xl border border-[#58A6FF]/50 bg-[#141416] shadow-2xl">
-        <div className="flex items-center gap-2 border-b border-[#303038] px-4 py-3">
-          <MessageSquareMore className="h-4 w-4 text-[#58A6FF]" />
-          <h2 className="text-sm font-semibold text-[#E8E8ED]">
+      <div className="w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+        <div className="flex items-center gap-2 border-b border-[#232323] px-4 py-3">
+          <MessageSquareMore className="h-4 w-4 text-[#d9a08e]" />
+          <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
             Clarification Needed
           </h2>
         </div>
 
         <div className="space-y-3 p-4 text-xs">
-          <p className="text-sm leading-relaxed text-[#E8E8ED]">
+          <p className="text-sm leading-relaxed text-[#e8e8e8]">
             {sanitizeDisplayText(request.question)}
           </p>
 
           {request.options.length > 0 && (
             <div className="space-y-1.5">
-              <div className="text-[10px] uppercase tracking-wider text-[#81818B]">
+              <div className="text-[10px] uppercase tracking-wider text-[#6e6e6e]">
                 Suggested Options
               </div>
               <div className="flex flex-col gap-1.5">
@@ -59,9 +59,9 @@ export function ClarificationDialog({
                     type="button"
                     disabled={submitting}
                     onClick={() => void submitAnswer(opt)}
-                    className="flex items-center gap-2 rounded-md border border-[#303038] bg-[#09090B] px-3 py-2 text-left text-xs text-[#E8E8ED] hover:border-[#58A6FF] hover:bg-[#202024] disabled:opacity-50"
+                    className="flex items-center gap-2 rounded-[9px] border border-[#262626] bg-[#1a1a1a] px-3 py-2 text-left text-xs text-[#e8e8e8] transition-colors hover:border-[#d9a08e]/50 hover:bg-[#222222] disabled:opacity-50"
                   >
-                    <span className="rounded bg-[#202024] px-1.5 py-0.5 font-mono text-[10px] text-[#58A6FF]">
+                    <span className="devin-pill py-0 font-mono text-[10px] text-[#7aa2f7]">
                       {idx + 1}
                     </span>
                     <span>{sanitizeDisplayText(opt)}</span>
@@ -74,7 +74,7 @@ export function ClarificationDialog({
           <div className="space-y-1.5">
             <label
               htmlFor="clarification-custom-input"
-              className="block text-[10px] uppercase tracking-wider text-[#81818B]"
+              className="block text-[10px] uppercase tracking-wider text-[#6e6e6e]"
             >
               Custom Answer
             </label>
@@ -91,13 +91,13 @@ export function ClarificationDialog({
                   }
                 }}
                 placeholder="Type your response..."
-                className="flex-1 rounded-md border border-[#303038] bg-[#202024] px-3 py-1.5 text-xs text-[#E8E8ED] placeholder:text-[#81818B] focus:border-[#58A6FF] focus:outline-none"
+                className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-3 py-1.5 text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:border-[#d9a08e] focus:outline-none"
               />
               <button
                 type="button"
                 disabled={submitting || customAnswer.trim().length === 0}
                 onClick={() => void submitAnswer(customAnswer)}
-                className="rounded-md bg-[#58A6FF] px-3.5 py-1.5 font-semibold text-[#09090B] hover:bg-[#73B5FF] disabled:opacity-40"
+                className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] hover:bg-[#e2a68f] disabled:opacity-40"
               >
                 Submit
               </button>

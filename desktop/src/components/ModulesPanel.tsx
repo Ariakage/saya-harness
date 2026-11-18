@@ -24,9 +24,9 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
       commands.listExtensions(),
       commands.listJobs(),
     ]);
-    if (modRes.status === "ok") setModules(modRes.data);
-    if (extRes.status === "ok") setExtensions(extRes.data);
-    if (jobRes.status === "ok") setJobs(jobRes.data);
+    if (modRes.status === "ok" && Array.isArray(modRes.data)) setModules(modRes.data);
+    if (extRes.status === "ok" && Array.isArray(extRes.data)) setExtensions(extRes.data);
+    if (jobRes.status === "ok" && Array.isArray(jobRes.data)) setJobs(jobRes.data);
   }, []);
 
   useEffect(() => {
@@ -56,39 +56,41 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
   return (
     <div className="space-y-4 text-xs" data-testid="modules-panel">
       {statusMessage && (
-        <div className="rounded border border-[#F87171]/40 bg-[#F87171]/10 px-2.5 py-1.5 text-[11px] text-[#F87171]">
+        <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-2.5 py-1.5 text-[11px] text-[#f87171]">
           {statusMessage}
         </div>
       )}
 
       <section className="space-y-2">
-        <div className="flex items-center gap-1.5 font-medium text-[#E8E8ED]">
-          <Blocks className="h-3.5 w-3.5 text-[#58A6FF]" />
+        <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
+          <Blocks className="h-3.5 w-3.5 text-[#d9a08e]" />
           <span>Runtime Modules</span>
         </div>
         {modules.length === 0 ? (
-          <div className="text-[11px] text-[#81818B]">No module status available.</div>
+          <div className="text-[11px] text-[#6e6e6e]">
+            No module status available.
+          </div>
         ) : (
           <ul className="space-y-2">
             {modules.map((mod) => (
               <li
                 key={mod.module}
-                className="flex items-start justify-between gap-3 rounded-md border border-[#303038] bg-[#09090B] p-2.5"
+                className="flex items-start justify-between gap-3 rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-2.5"
               >
                 <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono font-semibold text-[#E8E8ED]">
+                    <span className="font-mono font-semibold text-[#e8e8e8]">
                       {mod.module}
                     </span>
-                    <span className="rounded border border-[#303038] bg-[#141416] px-1.5 py-0.5 text-[10px] text-[#81818B]">
+                    <span className="devin-pill text-[10px] text-[#7a7a7a]">
                       {mod.source}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#81818B]">
+                  <div className="text-[11px] text-[#8a8a8a]">
                     {sanitizeDisplayText(mod.description)}
                   </div>
                   {mod.issue && (
-                    <div className="flex items-center gap-1 text-[11px] text-[#F6AD55]">
+                    <div className="flex items-center gap-1 text-[11px] text-[#fac454]">
                       <AlertTriangle className="h-3 w-3 shrink-0" />
                       <span>{sanitizeDisplayText(mod.issue)}</span>
                     </div>
@@ -98,10 +100,8 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                   type="button"
                   disabled={runActive}
                   onClick={() => void handleToggleModule(mod)}
-                  className={`shrink-0 rounded-md px-2.5 py-1 text-[11px] font-semibold ${
-                    mod.enabled
-                      ? "bg-[#7DCB9B]/20 text-[#7DCB9B] border border-[#7DCB9B]/40"
-                      : "bg-[#202024] text-[#81818B] border border-[#303038]"
+                  className={`devin-pill-btn shrink-0 ${
+                    mod.enabled ? "text-[#4ade80]" : "text-[#8a8a8a]"
                   } disabled:opacity-40`}
                 >
                   {mod.enabled ? "Enabled" : "Disabled"}
@@ -113,12 +113,12 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
       </section>
 
       <section className="space-y-2">
-        <div className="flex items-center gap-1.5 font-medium text-[#E8E8ED]">
-          <Puzzle className="h-3.5 w-3.5 text-[#BB9AF7]" />
+        <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
+          <Puzzle className="h-3.5 w-3.5 text-[#a096eb]" />
           <span>Extensions & Project Discovery ({extensions.length})</span>
         </div>
         {extensions.length === 0 ? (
-          <div className="text-[11px] text-[#81818B]">
+          <div className="text-[11px] text-[#6e6e6e]">
             No discovered rules, skills, or plugins in current workspace.
           </div>
         ) : (
@@ -126,17 +126,17 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
             {extensions.map((ext) => (
               <li
                 key={`${ext.kind}:${ext.id}`}
-                className="flex items-center justify-between gap-2 rounded border border-[#303038] bg-[#09090B] px-2.5 py-1.5 text-[11px]"
+                className="flex items-center justify-between gap-2 rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-2.5 py-1.5 text-[11px]"
               >
                 <div className="min-w-0">
-                  <span className="mr-1.5 rounded bg-[#202024] px-1 py-0.5 font-mono text-[10px] text-[#BB9AF7]">
+                  <span className="mr-1.5 rounded bg-[#222222] px-1.5 py-0.5 font-mono text-[10px] text-[#7aa2f7]">
                     {ext.kind}
                   </span>
-                  <span className="font-medium text-[#E8E8ED]">
+                  <span className="font-medium text-[#e8e8e8]">
                     {sanitizeDisplayText(ext.name)}
                   </span>
                 </div>
-                <span className="shrink-0 font-mono text-[10px] text-[#81818B]">
+                <span className="shrink-0 font-mono text-[10px] text-[#6e6e6e]">
                   {ext.scope}
                 </span>
               </li>
@@ -146,12 +146,12 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
       </section>
 
       <section className="space-y-2">
-        <div className="flex items-center gap-1.5 font-medium text-[#E8E8ED]">
-          <Briefcase className="h-3.5 w-3.5 text-[#F6AD55]" />
+        <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
+          <Briefcase className="h-3.5 w-3.5 text-[#fac454]" />
           <span>Background Jobs ({jobs.length})</span>
         </div>
         {jobs.length === 0 ? (
-          <div className="text-[11px] text-[#81818B]">
+          <div className="text-[11px] text-[#6e6e6e]">
             No background jobs recorded in active session.
           </div>
         ) : (
@@ -159,13 +159,13 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
             {jobs.map((job) => (
               <li
                 key={job.job_id}
-                className="flex items-center justify-between gap-2 rounded border border-[#303038] bg-[#09090B] px-2.5 py-1.5 text-[11px]"
+                className="flex items-center justify-between gap-2 rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-2.5 py-1.5 text-[11px]"
               >
                 <div className="min-w-0">
-                  <div className="truncate font-mono text-[#E8E8ED]">
+                  <div className="truncate font-mono text-[#e8e8e8]">
                     {job.tool ?? "job"} · {job.job_id}
                   </div>
-                  <div className="truncate text-[10px] text-[#81818B]">
+                  <div className="truncate text-[10px] text-[#8a8a8a]">
                     state: {job.state}
                     {job.summary ? ` · ${sanitizeDisplayText(job.summary)}` : ""}
                   </div>
@@ -174,7 +174,7 @@ export function ModulesPanel({ runActive }: ModulesPanelProps) {
                   <button
                     type="button"
                     onClick={() => void handleCancelJob(job.job_id)}
-                    className="inline-flex shrink-0 items-center gap-1 rounded border border-[#F87171]/40 bg-[#F87171]/10 px-2 py-0.5 text-[10px] text-[#F87171]"
+                    className="devin-pill-btn shrink-0 text-[10px] text-[#f87171]"
                   >
                     <XCircle className="h-3 w-3" />
                     Cancel

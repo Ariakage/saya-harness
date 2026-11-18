@@ -72,12 +72,17 @@ export interface AppState {
   pendingApproval: ApprovalRequestDto_Deserialize | null;
   pendingInput: InputRequestDto | null;
   stagedAttachments: StagedAttachmentDto[];
+  ultracodeEnabled: boolean;
+  submitMode: "steer" | "queue";
   configChangeSessionId: string | null;
   recoveryBanner: string | null;
   error: DesktopError | null;
 
   initApp: () => Promise<void>;
   applyBootstrap: (boot: BootstrapStateDto_Serialize) => void;
+  setThinkingEffort: (effort: string | null, ultracode?: boolean) => Promise<boolean>;
+  selectProfile: (profile: string) => Promise<boolean>;
+  setSubmitMode: (mode: "steer" | "queue") => void;
   refreshSessions: (page?: number) => Promise<void>;
   startNewSession: () => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<boolean>;
@@ -406,6 +411,8 @@ export const useAppStore = create<AppState>((set, get) => {
     pendingApproval: null,
     pendingInput: null,
     stagedAttachments: [],
+    ultracodeEnabled: false,
+    submitMode: "steer",
     configChangeSessionId: null,
     recoveryBanner: null,
     error: null,
@@ -425,6 +432,39 @@ export const useAppStore = create<AppState>((set, get) => {
             ? applySessionDto(null)
             : {}),
       })),
+
+    setThinkingEffort: async (effort, ultracode = false) => {
+      try {
+        const res = await commands.setThinkingEffort(effort);
+        if (res.status === "ok") {
+          set({ ultracodeEnabled: ultracode });
+          get().applyBootstrap(res.data);
+          return true;
+        }
+        set({ error: res.error });
+        return false;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    selectProfile: async (profile) => {
+      try {
+        const res = await commands.selectProfile(profile);
+        if (res.status === "ok") {
+          get().applyBootstrap(res.data);
+          return true;
+        }
+        set({ error: res.error });
+        return false;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    setSubmitMode: (mode) => set({ submitMode: mode }),
 
     initApp: async () => {
       set({ loading: true });

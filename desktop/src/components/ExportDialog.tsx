@@ -61,13 +61,13 @@ export function ExportDialog({
       aria-modal="true"
       aria-label="Export Session"
       data-testid="export-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="w-full max-w-lg rounded-xl border border-[#303038] bg-[#141416] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[#303038] px-4 py-3">
+      <div className="w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+        <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
-            <Download className="h-4 w-4 text-[#58A6FF]" />
-            <h2 className="text-sm font-semibold text-[#E8E8ED]">
+            <Download className="h-4 w-4 text-[#d9a08e]" />
+            <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
               Export Session Transcript
             </h2>
           </div>
@@ -75,7 +75,7 @@ export function ExportDialog({
             type="button"
             onClick={onClose}
             aria-label="Close export dialog"
-            className="rounded p-1 text-[#81818B] hover:bg-[#202024] hover:text-[#E8E8ED]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -83,13 +83,13 @@ export function ExportDialog({
 
         <div className="space-y-3 p-4 text-xs">
           {errorMsg && (
-            <div className="rounded border border-[#F87171]/40 bg-[#F87171]/10 px-3 py-2 text-[#F87171]">
+            <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
               {errorMsg}
             </div>
           )}
 
           {result && (
-            <div className="space-y-1 rounded border border-[#7DCB9B]/40 bg-[#7DCB9B]/10 p-2.5 text-[#7DCB9B]">
+            <div className="space-y-1 rounded-[9px] border border-[#4ade80]/35 bg-[#161c17] p-2.5 text-[#4ade80]">
               <div className="font-medium">Export published</div>
               <div className="truncate font-mono text-[11px]">
                 {result.path} ({result.bytes} bytes · {result.format})
@@ -100,16 +100,17 @@ export function ExportDialog({
           <div className="space-y-1">
             <label
               htmlFor="export-target-path"
-              className="block font-medium text-[#E8E8ED]"
+              className="block text-[12px] text-[#a3a3a3]"
             >
-              Output File Path (relative to {workspace || "workspace"} or absolute)
+              Output File Path (relative to {workspace || "workspace"} or
+              absolute)
             </label>
             <input
               id="export-target-path"
               type="text"
               value={targetPath}
               onChange={(e) => setTargetPath(e.target.value)}
-              className="w-full rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1.5 font-mono text-xs text-[#E8E8ED]"
+              className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8]"
             />
           </div>
 
@@ -117,7 +118,7 @@ export function ExportDialog({
             <div className="space-y-1">
               <label
                 htmlFor="export-format-select"
-                className="block font-medium text-[#E8E8ED]"
+                className="block text-[12px] text-[#a3a3a3]"
               >
                 Format
               </label>
@@ -131,17 +132,21 @@ export function ExportDialog({
                     prev.replace(/\.(md|json)$/i, next === "json" ? ".json" : ".md")
                   );
                 }}
-                className="w-full rounded-md border border-[#303038] bg-[#202024] px-2 py-1.5 text-xs text-[#E8E8ED]"
+                className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2 py-1.5 text-xs text-[#e8e8e8]"
               >
-                <option value="markdown">Markdown (.md)</option>
-                <option value="json">JSON v1 (.json)</option>
+                <option value="markdown" className="bg-[#181818]">
+                  Markdown (.md)
+                </option>
+                <option value="json" className="bg-[#181818]">
+                  JSON v1 (.json)
+                </option>
               </select>
             </div>
 
             <div className="space-y-1">
               <label
                 htmlFor="export-scope-select"
-                className="block font-medium text-[#E8E8ED]"
+                className="block text-[12px] text-[#a3a3a3]"
               >
                 Scope
               </label>
@@ -149,15 +154,19 @@ export function ExportDialog({
                 id="export-scope-select"
                 value={scope}
                 onChange={(e) => setScope(e.target.value as ExportScopeDto)}
-                className="w-full rounded-md border border-[#303038] bg-[#202024] px-2 py-1.5 text-xs text-[#E8E8ED]"
+                className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2 py-1.5 text-xs text-[#e8e8e8]"
               >
-                <option value="transcript">Transcript</option>
-                <option value="full">Full (with events/metrics)</option>
+                <option value="transcript" className="bg-[#181818]">
+                  Transcript
+                </option>
+                <option value="full" className="bg-[#181818]">
+                  Full (with events/metrics)
+                </option>
               </select>
             </div>
           </div>
 
-          <label className="inline-flex items-center gap-2 text-[#D4D4D8]">
+          <label className="inline-flex items-center gap-2 text-[#c9c9c9]">
             <input
               type="checkbox"
               checked={includeTools}
@@ -167,11 +176,11 @@ export function ExportDialog({
           </label>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-[#303038] px-4 py-3 text-xs">
+        <div className="flex justify-end gap-2 border-t border-[#232323] px-4 py-3 text-xs">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md border border-[#303038] bg-[#202024] px-3 py-1.5 text-[#D4D4D8]"
+            className="devin-pill-btn text-[#c9c9c9]"
           >
             Close
           </button>
@@ -179,7 +188,7 @@ export function ExportDialog({
             type="button"
             disabled={busy || !sessionId || !targetPath.trim()}
             onClick={() => void handleExport()}
-            className="rounded-md bg-[#58A6FF] px-3.5 py-1.5 font-semibold text-[#09090B] disabled:opacity-40"
+            className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] disabled:opacity-40"
           >
             {busy ? "Exporting..." : "Publish Export"}
           </button>

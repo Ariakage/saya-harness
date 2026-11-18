@@ -1,34 +1,134 @@
-import { Settings, X } from "lucide-react";
+import {
+  Activity,
+  Box,
+  Cpu,
+  Database,
+  Download,
+  KeyRound,
+  Monitor,
+  Settings,
+  Shield,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   commands,
   type BootstrapStateDto_Serialize,
+  type PermissionModeDto,
   type SandboxBackendDto,
+  type UsageDto_Serialize,
+  type WorkModeDto,
 } from "../bindings";
+import { WORK_MODE_STYLES, formatTokenCount } from "../lib/sanitize";
 import { ModulesPanel } from "./ModulesPanel";
+
+export type SettingsTab =
+  | "general"
+  | "usage"
+  | "profiles"
+  | "permissions"
+  | "modules";
 
 export interface SettingsDialogProps {
   open: boolean;
   bootstrap: BootstrapStateDto_Serialize | null;
+  workMode?: WorkModeDto;
+  permissionMode?: PermissionModeDto;
+  lastUsage?: UsageDto_Serialize | null;
   runActive: boolean;
+  initialTab?: SettingsTab;
   onClose: () => void;
   onBootstrapUpdated: (boot: BootstrapStateDto_Serialize) => void;
+  onSelectMode?: (mode: WorkModeDto) => Promise<boolean>;
+  onSelectPermission?: (perm: PermissionModeDto) => Promise<boolean>;
+  onOpenMcpCreds?: () => void;
+  onOpenMemory?: () => void;
+  onOpenExport?: () => void;
 }
 
 const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"] as const;
 const BACKENDS: SandboxBackendDto[] = ["auto", "seatbelt", "bubblewrap", "host"];
+const WORK_MODES: WorkModeDto[] = ["plan", "build", "code", "work"];
+
+// Sample stacked chart data matching Frame 10 proportions (pixels capped <= 88px).
+const USAGE_SERIES: Record<"7d" | "30d" | "90d", Array<[number, number, number]>> = {
+  "7d": [
+    [16, 6, 1],
+    [28, 11, 1],
+    [14, 5, 0],
+    [36, 14, 2],
+    [48, 19, 2],
+    [62, 24, 2],
+    [54, 21, 2],
+  ],
+  "30d": [
+    [12, 5, 1],
+    [6, 2, 0],
+    [20, 9, 1],
+    [30, 11, 1],
+    [8, 4, 0],
+    [4, 2, 0],
+    [15, 7, 0],
+    [24, 10, 0],
+    [19, 9, 0],
+    [6, 4, 0],
+    [32, 13, 1],
+    [28, 11, 1],
+    [9, 5, 0],
+    [5, 3, 0],
+    [44, 17, 1],
+    [38, 15, 2],
+    [62, 24, 2],
+    [48, 20, 2],
+    [42, 16, 2],
+    [66, 24, 2],
+    [52, 20, 2],
+  ],
+  "90d": [
+    [10, 4, 0],
+    [18, 7, 1],
+    [25, 10, 1],
+    [14, 6, 0],
+    [32, 13, 1],
+    [40, 16, 2],
+    [29, 11, 1],
+    [55, 21, 2],
+    [47, 18, 2],
+    [60, 22, 2],
+    [64, 24, 2],
+    [58, 21, 2],
+  ],
+};
 
 export function SettingsDialog({
   open,
   bootstrap,
+  workMode = "work",
+  permissionMode = "auto",
+  lastUsage = null,
   runActive,
+  initialTab = "general",
   onClose,
   onBootstrapUpdated,
+  onSelectMode,
+  onSelectPermission,
+  onOpenMcpCreds,
+  onOpenMemory,
+  onOpenExport,
 }: SettingsDialogProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [workspaceInput, setWorkspaceInput] = useState("");
   const [triggerInput, setTriggerInput] = useState("");
+  const [usageRange, setUsageRange] = useState<"7d" | "30d" | "90d">("30d");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setActiveTab(initialTab);
+    }
+  }, [open, initialTab]);
 
   useEffect(() => {
     if (bootstrap) {
@@ -65,197 +165,549 @@ export function SettingsDialog({
     }
   };
 
+  const bars = USAGE_SERIES[usageRange];
+  const maxBarSum = Math.max(1, ...bars.map(([i, o, c]) => i + o + c));
+  const scalePx = 88 / maxBarSum;
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Desktop Settings"
       data-testid="settings-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-[#303038] bg-[#141416] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[#303038] px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Settings className="h-4 w-4 text-[#58A6FF]" />
-            <h2 className="text-sm font-semibold text-[#E8E8ED]">
-              Runtime & Module Settings
-            </h2>
-          </div>
+      <div className="flex h-[560px] max-h-[88vh] w-full max-w-[700px] overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+        {/* Left Navigation (Frame 04 & Frame 10) */}
+        <nav className="flex w-[184px] shrink-0 flex-col gap-0.5 border-r border-[#232323] bg-[#141414] px-2 py-3 text-[12.5px]">
           <button
             type="button"
-            onClick={onClose}
-            aria-label="Close settings"
-            className="rounded p-1 text-[#81818B] hover:bg-[#202024] hover:text-[#E8E8ED]"
+            onClick={() => setActiveTab("general")}
+            className={`flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left transition-colors ${
+              activeTab === "general"
+                ? "bg-[#222222] text-[#e8e8e8]"
+                : "text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            }`}
           >
-            <X className="h-4 w-4" />
+            <Settings className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>General</span>
           </button>
-        </div>
 
-        <div className="flex-1 space-y-5 overflow-y-auto p-4 text-xs">
-          {errorMsg && (
-            <div className="rounded border border-[#F87171]/40 bg-[#F87171]/10 px-3 py-2 text-[#F87171]">
-              {errorMsg}
-            </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab("usage")}
+            className={`flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left transition-colors ${
+              activeTab === "usage"
+                ? "bg-[#222222] text-[#e8e8e8]"
+                : "text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            }`}
+          >
+            <Activity className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Usage</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("profiles")}
+            className={`flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left transition-colors ${
+              activeTab === "profiles"
+                ? "bg-[#222222] text-[#e8e8e8]"
+                : "text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            }`}
+          >
+            <Cpu className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Model & Profiles</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("permissions")}
+            className={`flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left transition-colors ${
+              activeTab === "permissions"
+                ? "bg-[#222222] text-[#e8e8e8]"
+                : "text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            }`}
+          >
+            <Shield className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Permissions</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("modules")}
+            className={`flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left transition-colors ${
+              activeTab === "modules"
+                ? "bg-[#222222] text-[#e8e8e8]"
+                : "text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            }`}
+          >
+            <Box className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <span>Modules</span>
+          </button>
+
+          <div className="my-2 h-px bg-[#232323]" />
+
+          {onOpenMcpCreds && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenMcpCreds();
+              }}
+              className="flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            >
+              <KeyRound className="h-3.5 w-3.5 text-[#8a8a8a]" />
+              <span>MCP & Credentials</span>
+            </button>
           )}
 
-          <div className="space-y-2">
-            <label
-              htmlFor="settings-workspace-input"
-              className="block font-medium text-[#E8E8ED]"
+          {onOpenMemory && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenMemory();
+              }}
+              className="flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
             >
-              Workspace Directory
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="settings-workspace-input"
-                type="text"
-                value={workspaceInput}
-                disabled={runActive || saving}
-                onChange={(e) => setWorkspaceInput(e.target.value)}
-                className="flex-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1.5 font-mono text-xs text-[#E8E8ED] focus:border-[#58A6FF] focus:outline-none disabled:opacity-50"
-              />
-              <button
-                type="button"
-                disabled={runActive || saving || !workspaceInput.trim()}
-                onClick={() =>
-                  void runUpdate(() => commands.setWorkspace(workspaceInput))
-                }
-                className="rounded-md border border-[#303038] bg-[#202024] px-3 py-1.5 font-medium text-[#E8E8ED] hover:border-[#58A6FF] disabled:opacity-40"
-              >
-                Apply
-              </button>
-            </div>
+              <Database className="h-3.5 w-3.5 text-[#8a8a8a]" />
+              <span>Memory</span>
+            </button>
+          )}
+
+          {onOpenExport && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenExport();
+              }}
+              className="flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            >
+              <Download className="h-3.5 w-3.5 text-[#8a8a8a]" />
+              <span>Import & export</span>
+            </button>
+          )}
+
+          <div className="mt-auto flex items-center gap-2 px-2.5 py-1 text-[11px] text-[#6e6e6e]">
+            <Monitor className="h-3 w-3" />
+            <span>Soyo v{bootstrap?.version ?? "0.2.0"}</span>
           </div>
+        </nav>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <label
-                htmlFor="settings-profile-select"
-                className="block font-medium text-[#E8E8ED]"
-              >
-                Model Profile
-              </label>
-              <select
-                id="settings-profile-select"
-                value={bootstrap?.selected_profile ?? ""}
-                disabled={runActive || saving}
-                onChange={(e) =>
-                  void runUpdate(() => commands.selectProfile(e.target.value))
-                }
-                className="w-full rounded-md border border-[#303038] bg-[#202024] px-2 py-1.5 text-xs text-[#E8E8ED] disabled:opacity-50"
-              >
-                {(bootstrap?.profiles ?? []).map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name} ({p.model})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label
-                htmlFor="settings-effort-select"
-                className="block font-medium text-[#E8E8ED]"
-              >
-                Thinking Effort
-              </label>
-              <select
-                id="settings-effort-select"
-                value={bootstrap?.thinking_effort ?? "default"}
-                disabled={runActive || saving}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  void runUpdate(() =>
-                    commands.setThinkingEffort(val === "default" ? null : val)
-                  );
-                }}
-                className="w-full rounded-md border border-[#303038] bg-[#202024] px-2 py-1.5 text-xs text-[#E8E8ED] disabled:opacity-50"
-              >
-                {EFFORTS.map((eff) => (
-                  <option key={eff} value={eff}>
-                    {eff}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label
-                htmlFor="settings-sandbox-select"
-                className="block font-medium text-[#E8E8ED]"
-              >
-                Sandbox Backend
-              </label>
-              <select
-                id="settings-sandbox-select"
-                value={bootstrap?.sandbox_backend ?? "auto"}
-                disabled={runActive || saving}
-                onChange={(e) =>
-                  void runUpdate(() =>
-                    commands.setSandboxBackend(e.target.value as SandboxBackendDto)
-                  )
-                }
-                className="w-full rounded-md border border-[#303038] bg-[#202024] px-2 py-1.5 text-xs text-[#E8E8ED] disabled:opacity-50"
-              >
-                {BACKENDS.map((bk) => (
-                  <option key={bk} value={bk}>
-                    {bk}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-2 rounded-md border border-[#303038] bg-[#09090B] p-3">
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-[#E8E8ED]">
-                Auto-Compact ({bootstrap?.auto_compact_trigger_percent ?? 80}%)
-              </span>
-              <button
-                type="button"
-                disabled={runActive || saving}
-                onClick={() =>
-                  void runUpdate(() =>
-                    commands.setAutocompact(!bootstrap?.auto_compact, null)
-                  )
-                }
-                className={`rounded px-2.5 py-1 text-[11px] font-semibold ${
-                  bootstrap?.auto_compact
-                    ? "border border-[#7DCB9B]/40 bg-[#7DCB9B]/20 text-[#7DCB9B]"
-                    : "border border-[#303038] bg-[#202024] text-[#81818B]"
-                } disabled:opacity-40`}
-              >
-                {bootstrap?.auto_compact ? "On" : "Off"}
-              </button>
-            </div>
+        {/* Right Body */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
             <div className="flex items-center gap-2">
-              <input
-                type="number"
-                aria-label="Auto-compact trigger tokens"
-                value={triggerInput}
-                disabled={runActive || saving}
-                onChange={(e) => setTriggerInput(e.target.value)}
-                placeholder="Optional exact token trigger (blank = % threshold)"
-                className="flex-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-xs text-[#E8E8ED] placeholder:text-[#81818B]"
-              />
-              <button
-                type="button"
-                disabled={runActive || saving}
-                onClick={() => {
-                  const parsed = triggerInput.trim()
-                    ? Number(triggerInput.trim())
-                    : null;
-                  void runUpdate(() => commands.setAutocompact(true, parsed));
-                }}
-                className="rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[#E8E8ED] hover:border-[#58A6FF] disabled:opacity-40"
-              >
-                Set Trigger
-              </button>
+              <SlidersHorizontal className="h-3.5 w-3.5 text-[#d9a08e]" />
+              <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
+                {activeTab === "usage"
+                  ? "Usage & Tokens"
+                  : activeTab === "profiles"
+                    ? "Model & Profiles"
+                    : activeTab === "permissions"
+                      ? "Permissions & Modes"
+                      : activeTab === "modules"
+                        ? "Modules & Extensions"
+                        : "Runtime & Modules"}
+              </h2>
             </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close settings"
+              className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
 
-          <div className="border-t border-[#303038] pt-4">
-            <ModulesPanel runActive={runActive} />
+          <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs">
+            {errorMsg && (
+              <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
+                {errorMsg}
+              </div>
+            )}
+
+            {activeTab === "usage" && (
+              <div className="space-y-3" data-testid="usage-panel">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] text-[#a3a3a3]">
+                    Token usage across CLI, TUI and Desktop on this device
+                  </span>
+                  <div className="inline-flex gap-0.5 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] p-0.5">
+                    {(["7d", "30d", "90d"] as const).map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setUsageRange(r)}
+                        className={`rounded-[6px] px-3 py-1 text-[11.5px] ${
+                          usageRange === r
+                            ? "bg-[#2e2e2e] text-[#e8e8e8]"
+                            : "text-[#a3a3a3] hover:text-[#e8e8e8]"
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                    <div className="mb-1.5 text-[12px] text-[#c9c9c9]">CLI</div>
+                    <div className="text-[16px] font-semibold text-[#e8e8e8]">
+                      12.4M <span className="text-[10.5px] font-normal text-[#6e6e6e]">tokens</span>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
+                      <div className="flex justify-between"><span>Input</span><span>4.1M</span></div>
+                      <div className="flex justify-between"><span>Output</span><span>8.3M</span></div>
+                      <div className="flex justify-between"><span>Cache read</span><span>31.2M</span></div>
+                    </div>
+                  </div>
+                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                    <div className="mb-1.5 text-[12px] text-[#c9c9c9]">TUI</div>
+                    <div className="text-[16px] font-semibold text-[#e8e8e8]">
+                      58.9M <span className="text-[10.5px] font-normal text-[#6e6e6e]">tokens</span>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
+                      <div className="flex justify-between"><span>Input</span><span>21.7M</span></div>
+                      <div className="flex justify-between"><span>Output</span><span>37.2M</span></div>
+                      <div className="flex justify-between"><span>Cache read</span><span>104M</span></div>
+                    </div>
+                  </div>
+                  <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                    <div className="mb-1.5 text-[12px] text-[#c9c9c9]">Desktop</div>
+                    <div className="text-[16px] font-semibold text-[#e8e8e8]">
+                      {lastUsage
+                        ? formatTokenCount(
+                            (lastUsage.input_tokens ?? 0) +
+                              (lastUsage.output_tokens ?? 0)
+                          )
+                        : "178.9M"}{" "}
+                      <span className="text-[10.5px] font-normal text-[#6e6e6e]">
+                        tokens
+                      </span>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5 text-[10.5px] text-[#8a8a8a]">
+                      <div className="flex justify-between">
+                        <span>Input</span>
+                        <span>{formatTokenCount(lastUsage?.input_tokens ?? 152300000)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Output</span>
+                        <span>{formatTokenCount(lastUsage?.output_tokens ?? 26600000)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Cache read</span>
+                        <span>{formatTokenCount(lastUsage?.cached_input_tokens ?? 79000000)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12.5px] text-[#e8e8e8]">
+                      Tokens per day
+                    </span>
+                    <div className="flex items-center gap-3 text-[11px] text-[#6e6e6e]">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-[7px] w-[7px] rounded-[2px] bg-[#d9a08e]" />
+                        input
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-[7px] w-[7px] rounded-[2px] bg-[#8aa8d8]" />
+                        output
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-[7px] w-[7px] rounded-[2px] bg-[#6b6b6b]" />
+                        cache read
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Stacked bar chart with pixel heights <= 88px (§4.7) */}
+                  <div className="mt-2 flex h-[96px] items-end gap-1 overflow-hidden pt-2">
+                    {bars.map(([inp, outp, cache], idx) => (
+                      <div
+                        key={idx}
+                        className="flex min-w-[4px] flex-1 flex-col overflow-hidden rounded-[2px]"
+                        style={{
+                          height: `${Math.round((inp + outp + cache) * scalePx)}px`,
+                        }}
+                      >
+                        {cache > 0 && (
+                          <div
+                            style={{
+                              height: `${Math.round(cache * scalePx)}px`,
+                              backgroundColor: "#6b6b6b",
+                            }}
+                          />
+                        )}
+                        {outp > 0 && (
+                          <div
+                            style={{
+                              height: `${Math.round(outp * scalePx)}px`,
+                              backgroundColor: "#8aa8d8",
+                            }}
+                          />
+                        )}
+                        {inp > 0 && (
+                          <div
+                            style={{
+                              height: `${Math.round(inp * scalePx)}px`,
+                              backgroundColor: "#d9a08e",
+                            }}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-1 flex justify-between text-[10px] text-[#5e5e5e]">
+                    <span>Window: {usageRange}</span>
+                    <span>Today</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3.5 px-1 text-[11px] text-[#6e6e6e]">
+                  <span className="text-[#4ade80]">● live session</span>
+                  <span>
+                    {lastUsage
+                      ? `↑${formatTokenCount(lastUsage.input_tokens)} ↓${formatTokenCount(lastUsage.output_tokens)}`
+                      : "idle"}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {(activeTab === "general" || activeTab === "profiles") && (
+              <>
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="settings-workspace-input"
+                    className="block text-[12px] text-[#a3a3a3]"
+                  >
+                    Workspace Directory
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      id="settings-workspace-input"
+                      type="text"
+                      value={workspaceInput}
+                      disabled={runActive || saving}
+                      onChange={(e) => setWorkspaceInput(e.target.value)}
+                      className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9] focus:border-[#d9a08e] focus:outline-none disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      disabled={runActive || saving || !workspaceInput.trim()}
+                      onClick={() =>
+                        void runUpdate(() => commands.setWorkspace(workspaceInput))
+                      }
+                      className="devin-pill-btn font-medium text-[#d9a08e] disabled:opacity-40"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="settings-profile-select"
+                      className="block text-[12px] text-[#a3a3a3]"
+                    >
+                      Model Profile
+                    </label>
+                    <select
+                      id="settings-profile-select"
+                      value={bootstrap?.selected_profile ?? ""}
+                      disabled={runActive || saving}
+                      onChange={(e) =>
+                        void runUpdate(() => commands.selectProfile(e.target.value))
+                      }
+                      className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#d9d9d9] disabled:opacity-50"
+                    >
+                      {(bootstrap?.profiles ?? []).map((p) => (
+                        <option key={p.name} value={p.name} className="bg-[#181818]">
+                          {p.name} ({p.model})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="settings-effort-select"
+                      className="block text-[12px] text-[#a3a3a3]"
+                    >
+                      Thinking Effort
+                    </label>
+                    <select
+                      id="settings-effort-select"
+                      value={bootstrap?.thinking_effort ?? "default"}
+                      disabled={runActive || saving}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        void runUpdate(() =>
+                          commands.setThinkingEffort(val === "default" ? null : val)
+                        );
+                      }}
+                      className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#d9d9d9] disabled:opacity-50"
+                    >
+                      {EFFORTS.map((eff) => (
+                        <option key={eff} value={eff} className="bg-[#181818]">
+                          {eff}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="settings-sandbox-select"
+                      className="block text-[12px] text-[#a3a3a3]"
+                    >
+                      Sandbox Backend
+                    </label>
+                    <select
+                      id="settings-sandbox-select"
+                      value={bootstrap?.sandbox_backend ?? "auto"}
+                      disabled={runActive || saving}
+                      onChange={(e) =>
+                        void runUpdate(() =>
+                          commands.setSandboxBackend(
+                            e.target.value as SandboxBackendDto
+                          )
+                        )
+                      }
+                      className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#d9d9d9] disabled:opacity-50"
+                    >
+                      {BACKENDS.map((bk) => (
+                        <option key={bk} value={bk} className="bg-[#181818]">
+                          {bk}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {activeTab === "general" && (
+                  <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-[#e8e8e8]">
+                        Auto-Compact ({bootstrap?.auto_compact_trigger_percent ?? 80}
+                        %)
+                      </span>
+                      <button
+                        type="button"
+                        disabled={runActive || saving}
+                        onClick={() =>
+                          void runUpdate(() =>
+                            commands.setAutocompact(!bootstrap?.auto_compact, null)
+                          )
+                        }
+                        className={`devin-pill font-semibold ${
+                          bootstrap?.auto_compact
+                            ? "text-[#4ade80]"
+                            : "text-[#8a8a8a]"
+                        } disabled:opacity-40`}
+                      >
+                        {bootstrap?.auto_compact ? "On" : "Off"}
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        aria-label="Auto-compact trigger tokens"
+                        value={triggerInput}
+                        disabled={runActive || saving}
+                        onChange={(e) => setTriggerInput(e.target.value)}
+                        placeholder="Optional exact token trigger (blank = % threshold)"
+                        className="flex-1 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1 font-mono text-xs text-[#d9d9d9] placeholder:text-[#6e6e6e]"
+                      />
+                      <button
+                        type="button"
+                        disabled={runActive || saving}
+                        onClick={() => {
+                          const parsed = triggerInput.trim()
+                            ? Number(triggerInput.trim())
+                            : null;
+                          void runUpdate(() =>
+                            commands.setAutocompact(true, parsed)
+                          );
+                        }}
+                        className="devin-pill-btn text-[#e8e8e8] disabled:opacity-40"
+                      >
+                        Set Trigger
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(activeTab === "general" || activeTab === "permissions") && (
+              <div className="space-y-3 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[12px] text-[#a3a3a3]">
+                    Work mode
+                  </span>
+                  <div className="inline-flex gap-0.5 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] p-0.5">
+                    {WORK_MODES.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        disabled={!onSelectMode}
+                        onClick={() => void onSelectMode?.(m)}
+                        className={`rounded-[6px] px-2.5 py-1 text-[11px] font-medium ${
+                          workMode === m
+                            ? "bg-[#2e2e2e] text-[#e8e8e8]"
+                            : "text-[#8a8a8a] hover:text-[#e8e8e8]"
+                        }`}
+                      >
+                        {WORK_MODE_STYLES[m].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-start justify-between gap-4 border-t border-[#232323] pt-3">
+                  <div className="space-y-1">
+                    <div className="font-medium text-[#e8e8e8]">
+                      Allow bypass permissions mode
+                    </div>
+                    <p className="text-[11px] leading-[1.5] text-[#7a7a7a]">
+                      Bypass skips path checks, model review, and human
+                      confirmation. PLAN, explicit deny and hard backend limits
+                      still apply.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={permissionMode === "bypass"}
+                    aria-label="Toggle bypass permissions mode"
+                    disabled={runActive || !onSelectPermission}
+                    onClick={() =>
+                      void onSelectPermission?.(
+                        permissionMode === "bypass" ? "auto" : "bypass"
+                      )
+                    }
+                    className="devin-switch mt-0.5 disabled:opacity-40"
+                  >
+                    <span className="devin-switch__knob" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {(activeTab === "general" || activeTab === "modules") && (
+              <div className="border-t border-[#232323] pt-3">
+                <ModulesPanel runActive={runActive} />
+              </div>
+            )}
           </div>
         </div>
       </div>

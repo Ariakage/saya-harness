@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import type { ThinkingSnapshotDto } from "../bindings";
 
@@ -18,59 +18,43 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
   const anyTruncated = entries.some((entry) => entry.truncated);
 
   return (
-    <div
-      className="rounded-lg border border-[#303038] bg-[#141416] text-xs"
-      data-testid="thinking-card"
-    >
+    <div className="text-[12.5px]" data-testid="thinking-card">
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[#202024]/50"
+        className="flex w-full items-center gap-2 px-0.5 py-1.5 text-left text-[#8a8a8a] transition-colors hover:text-[#c9c9c9]"
       >
-        <div className="flex items-center gap-2">
-          <Brain className="h-3.5 w-3.5 text-[#BB9AF7]" />
-          <span className="font-medium text-[#E8E8ED]">Thinking</span>
-          {anyActive && (
-            <span className="inline-flex items-center gap-1 rounded bg-[#BB9AF7]/15 px-1.5 py-0.5 text-[10px] text-[#BB9AF7]">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#BB9AF7]" />
-              reasoning
-            </span>
-          )}
-          {anyTruncated && (
-            <span className="rounded border border-[#303038] px-1.5 py-0.5 text-[10px] text-[#81818B]">
-              truncated
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 text-[#81818B]">
-          {!expanded && latest.available && (
-            <span className="max-w-md truncate text-[11px]">
-              {latest.text.trim().split("\n").pop() || "Thinking..."}
-            </span>
-          )}
-          {expanded ? (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-          )}
-        </div>
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
+        )}
+        <span>{expanded ? "Thinking" : anyActive ? "Thinking…" : "Thought"}</span>
+        {!expanded && (
+          <span className="devin-pill text-[#a3a3a3]">
+            {anyActive ? "reasoning" : "auto-collapsed"}
+          </span>
+        )}
+        {anyTruncated && (
+          <span className="devin-pill text-[#7a7a7a]">truncated</span>
+        )}
+        {!expanded && latest.available && (
+          <span className="ml-auto max-w-md truncate text-[11.5px] text-[#6e6e6e]">
+            {latest.text.trim().split("\n").pop() || ""}
+          </span>
+        )}
       </button>
+
       {expanded && (
-        <div className="space-y-2 border-t border-[#303038] px-3 py-2.5">
+        <div className="ml-[7px] mt-0.5 space-y-2 border-l-2 border-[#2c2c2c] py-0.5 pl-[14px] text-[12.5px] leading-[1.65] text-[#8a8a8a]">
           {entries.map((entry) => (
             <div key={entry.request_id} className="space-y-1">
-              <div className="flex items-center justify-between text-[10px] text-[#81818B]">
-                <span className="font-mono">{entry.request_id}</span>
-                <span>
-                  {entry.active ? "active" : entry.available ? "done" : "redacted"}
-                </span>
-              </div>
               {entry.available ? (
-                <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded bg-[#09090B] p-2 font-mono text-[11px] leading-relaxed text-[#D4D4D8]">
+                <div className="whitespace-pre-wrap">
                   {entry.text || "(empty)"}
-                </pre>
+                </div>
               ) : (
-                <div className="rounded bg-[#09090B] px-2 py-1.5 text-[11px] text-[#81818B]">
+                <div className="text-[#6e6e6e]">
                   Reasoning trace unavailable or redacted.
                 </div>
               )}

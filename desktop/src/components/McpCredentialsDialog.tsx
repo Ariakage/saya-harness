@@ -107,13 +107,13 @@ export function McpCredentialsDialog({
       aria-modal="true"
       aria-label="MCP Servers and Credentials"
       data-testid="mcp-credentials-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
     >
-      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-[#303038] bg-[#141416] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-[#303038] px-4 py-3">
+      <div className="flex max-h-[85vh] w-full max-w-[660px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+        <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
           <div className="flex items-center gap-2">
-            <KeyRound className="h-4 w-4 text-[#7DCB9B]" />
-            <h2 className="text-sm font-semibold text-[#E8E8ED]">
+            <KeyRound className="h-4 w-4 text-[#d9a08e]" />
+            <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
               MCP Servers & Credentials (Redacted Metadata Only)
             </h2>
           </div>
@@ -121,7 +121,7 @@ export function McpCredentialsDialog({
             type="button"
             onClick={onClose}
             aria-label="Close MCP and credentials dialog"
-            className="rounded p-1 text-[#81818B] hover:bg-[#202024] hover:text-[#E8E8ED]"
+            className="rounded-[7px] p-1 text-[#8a8a8a] hover:bg-[#222222] hover:text-[#e8e8e8]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -129,18 +129,18 @@ export function McpCredentialsDialog({
 
         <div className="flex-1 space-y-5 overflow-y-auto p-4 text-xs">
           {errorMsg && (
-            <div className="rounded border border-[#F87171]/40 bg-[#F87171]/10 px-3 py-2 text-[#F87171]">
+            <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
               {errorMsg}
             </div>
           )}
 
           <section className="space-y-2">
-            <div className="flex items-center gap-1.5 font-medium text-[#E8E8ED]">
-              <Plug className="h-3.5 w-3.5 text-[#58A6FF]" />
+            <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
+              <Plug className="h-3.5 w-3.5 text-[#7aa2f7]" />
               <span>Configured MCP Servers</span>
             </div>
             {servers.length === 0 ? (
-              <div className="rounded border border-[#303038] bg-[#09090B] p-3 text-[#81818B]">
+              <div className="rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-3 text-[#6e6e6e]">
                 No MCP servers configured.
               </div>
             ) : (
@@ -148,18 +148,18 @@ export function McpCredentialsDialog({
                 {servers.map((srv) => (
                   <li
                     key={srv.name}
-                    className="flex items-center justify-between gap-3 rounded-md border border-[#303038] bg-[#09090B] p-2.5"
+                    className="flex items-center justify-between gap-3 rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-2.5"
                   >
                     <div className="min-w-0 space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono font-semibold text-[#E8E8ED]">
+                        <span className="font-mono font-semibold text-[#e8e8e8]">
                           {sanitizeDisplayText(srv.name)}
                         </span>
-                        <span className="rounded bg-[#202024] px-1.5 py-0.5 text-[10px] text-[#81818B]">
+                        <span className="devin-pill py-0 text-[10.5px] text-[#7aa2f7]">
                           {srv.transport}
                         </span>
                       </div>
-                      <div className="truncate font-mono text-[11px] text-[#81818B]">
+                      <div className="truncate font-mono text-[11px] text-[#7a7a7a]">
                         {sanitizeDisplayText(srv.target)}
                       </div>
                     </div>
@@ -167,10 +167,8 @@ export function McpCredentialsDialog({
                       type="button"
                       disabled={runActive}
                       onClick={() => void handleToggleServer(srv)}
-                      className={`shrink-0 rounded px-2.5 py-1 text-[11px] font-semibold ${
-                        srv.enabled
-                          ? "border border-[#7DCB9B]/40 bg-[#7DCB9B]/20 text-[#7DCB9B]"
-                          : "border border-[#303038] bg-[#202024] text-[#81818B]"
+                      className={`devin-pill-btn shrink-0 ${
+                        srv.enabled ? "text-[#4ade80]" : "text-[#8a8a8a]"
                       } disabled:opacity-40`}
                     >
                       {srv.enabled ? "Enabled" : "Disabled"}
@@ -182,12 +180,12 @@ export function McpCredentialsDialog({
           </section>
 
           <section className="space-y-2">
-            <div className="flex items-center gap-1.5 font-medium text-[#E8E8ED]">
-              <ShieldCheck className="h-3.5 w-3.5 text-[#7DCB9B]" />
+            <div className="flex items-center gap-1.5 font-medium text-[#e8e8e8]">
+              <ShieldCheck className="h-3.5 w-3.5 text-[#4ade80]" />
               <span>Stored Credential References</span>
             </div>
             {credentials.length === 0 ? (
-              <div className="rounded border border-[#303038] bg-[#09090B] p-3 text-[#81818B]">
+              <div className="rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-3 text-[#6e6e6e]">
                 No stored host credential references.
               </div>
             ) : (
@@ -195,23 +193,23 @@ export function McpCredentialsDialog({
                 {credentials.map((cred) => (
                   <li
                     key={cred.reference}
-                    className="flex items-center justify-between gap-3 rounded-md border border-[#303038] bg-[#09090B] p-2.5"
+                    className="flex items-center justify-between gap-3 rounded-[9px] border border-[#262626] bg-[#1a1a1a] p-2.5"
                   >
                     <div className="min-w-0 space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[#E8E8ED]">
+                        <span className="font-mono text-[#e8e8e8]">
                           {cred.server} ({cred.kind})
                         </span>
-                        <span className="text-[10px] text-[#81818B]">
+                        <span className="text-[10.5px] text-[#6e6e6e]">
                           rev {cred.revision}
                         </span>
                         {cred.revoked && (
-                          <span className="rounded bg-[#F87171]/15 px-1.5 py-0.5 text-[10px] text-[#F87171]">
+                          <span className="devin-pill py-0 text-[10px] text-[#f87171]">
                             revoked
                           </span>
                         )}
                       </div>
-                      <div className="truncate font-mono text-[10px] text-[#81818B]">
+                      <div className="truncate font-mono text-[10.5px] text-[#7a7a7a]">
                         {cred.reference} · {sanitizeDisplayText(cred.audience)}
                       </div>
                     </div>
@@ -219,7 +217,7 @@ export function McpCredentialsDialog({
                       <button
                         type="button"
                         onClick={() => void handleRevoke(cred.reference)}
-                        className="inline-flex shrink-0 items-center gap-1 rounded border border-[#F87171]/40 bg-[#F87171]/10 px-2.5 py-1 text-[11px] text-[#F87171]"
+                        className="devin-pill-btn shrink-0 text-[#f87171]"
                       >
                         <Trash2 className="h-3 w-3" />
                         Revoke
@@ -231,12 +229,13 @@ export function McpCredentialsDialog({
             )}
           </section>
 
-          <section className="space-y-2 rounded-md border border-[#303038] bg-[#09090B] p-3">
-            <div className="font-medium text-[#E8E8ED]">
+          <section className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
+            <div className="font-medium text-[#e8e8e8]">
               Import Bearer Secret from Environment Variable
             </div>
-            <p className="text-[11px] text-[#81818B]">
-              Plaintext tokens stay in host memory and private storage; enter only the environment variable name.
+            <p className="text-[11px] text-[#7a7a7a]">
+              Plaintext tokens stay in host memory and private storage; enter
+              only the environment variable name.
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <input
@@ -245,7 +244,7 @@ export function McpCredentialsDialog({
                 value={importServer}
                 onChange={(e) => setImportServer(e.target.value)}
                 placeholder="HTTP MCP server name"
-                className="rounded border border-[#303038] bg-[#202024] px-2.5 py-1.5 text-xs text-[#E8E8ED]"
+                className="rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
               />
               <input
                 type="text"
@@ -253,7 +252,7 @@ export function McpCredentialsDialog({
                 value={envVar}
                 onChange={(e) => setEnvVar(e.target.value)}
                 placeholder="Env var name (e.g. MCP_TOKEN)"
-                className="rounded border border-[#303038] bg-[#202024] px-2.5 py-1.5 font-mono text-xs text-[#E8E8ED]"
+                className="rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 font-mono text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
               />
             </div>
             <input
@@ -262,10 +261,10 @@ export function McpCredentialsDialog({
               value={scopesInput}
               onChange={(e) => setScopesInput(e.target.value)}
               placeholder="Optional comma-separated scopes"
-              className="w-full rounded border border-[#303038] bg-[#202024] px-2.5 py-1.5 text-xs text-[#E8E8ED]"
+              className="w-full rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] px-2.5 py-1.5 text-xs text-[#e8e8e8] placeholder:text-[#6e6e6e]"
             />
             <div className="flex items-center justify-between pt-1">
-              <label className="inline-flex items-center gap-2 text-[11px] text-[#D4D4D8]">
+              <label className="inline-flex items-center gap-2 text-[11px] text-[#c9c9c9]">
                 <input
                   type="checkbox"
                   checked={approveScopes}
@@ -275,9 +274,11 @@ export function McpCredentialsDialog({
               </label>
               <button
                 type="button"
-                disabled={busy || !importServer.trim() || !envVar.trim() || !approveScopes}
+                disabled={
+                  busy || !importServer.trim() || !envVar.trim() || !approveScopes
+                }
                 onClick={() => void handleImport()}
-                className="rounded-md bg-[#7DCB9B] px-3 py-1.5 text-xs font-semibold text-[#09090B] disabled:opacity-40"
+                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 text-xs font-semibold text-[#1c120e] disabled:opacity-40"
               >
                 Import Reference
               </button>
