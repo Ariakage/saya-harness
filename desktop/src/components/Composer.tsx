@@ -15,7 +15,7 @@ import {
   SlidersHorizontal,
   Square,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type {
   PermissionModeDto,
   ProfileOptionDto_Serialize,
@@ -48,6 +48,7 @@ export interface ComposerProps {
   submitMode?: "steer" | "queue";
   stagedAttachments?: StagedAttachmentDto[];
   forcePopover?: "attach" | "commands" | "effort" | "model" | null;
+  draftSeed?: { text: string; nonce: number } | null;
   onSubmit: (prompt: string) => Promise<boolean>;
   onCancel: () => Promise<void>;
   onCompact: () => Promise<boolean>;
@@ -87,6 +88,7 @@ export function Composer({
   submitMode = "steer",
   stagedAttachments = [],
   forcePopover = null,
+  draftSeed = null,
   onSubmit,
   onCancel,
   onCompact,
@@ -103,6 +105,7 @@ export function Composer({
   onOpenExport,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sending, setSending] = useState(false);
   const [attachInputOpen, setAttachInputOpen] = useState(false);
   const [attachPath, setAttachPath] = useState("");
@@ -115,6 +118,16 @@ export function Composer({
   useEffect(() => {
     setActivePopover(forcePopover);
   }, [forcePopover]);
+
+  useEffect(() => {
+    if (!draftSeed) return;
+    setDraft(draftSeed.text);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+  }, [draftSeed]);
 
   const trimmed = draft.trim();
   const hasInput = trimmed.length > 0;
@@ -481,6 +494,7 @@ export function Composer({
         )}
 
         <textarea
+          ref={textareaRef}
           aria-label="Prompt input"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

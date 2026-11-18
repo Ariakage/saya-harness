@@ -12,6 +12,7 @@ import {
   Eye,
   Flag,
   Folder,
+  GitBranch,
   Globe,
   HelpCircle,
   History,
@@ -157,6 +158,10 @@ export function App() {
   const [browserPaneOpen, setBrowserPaneOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    text: string;
+    nonce: number;
+  } | null>(null);
   const [forceHome, setForceHome] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -847,17 +852,16 @@ export function App() {
                               {msg.text}
                             </pre>
                           </div>
-                          {/* Hover actions row (§4.2) */}
+                          {/* Hover actions row (§4.2): timestamp · branch · retry · edit · copy */}
                           <div className="mt-1 flex items-center gap-2.5 px-2 text-[11px] text-[#6e6e6e] opacity-0 transition-opacity group-hover:opacity-100">
                             <span>{msg.label}</span>
                             <button
                               type="button"
-                              onClick={() => void handleCopyMessage(msg.id, msg.text)}
-                              title="Copy message"
-                              className="inline-flex items-center gap-1 hover:text-[#e8e8e8]"
+                              disabled
+                              title="Branch session from this message (not yet supported by the runtime)"
+                              className="opacity-40"
                             >
-                              <Copy className="h-3 w-3" />
-                              {copiedId === msg.id && <span>Copied</span>}
+                              <GitBranch className="h-3 w-3" />
                             </button>
                             <button
                               type="button"
@@ -870,13 +874,31 @@ export function App() {
                             </button>
                             <button
                               type="button"
+                              onClick={() =>
+                                setEditDraft({ text: msg.text, nonce: Date.now() })
+                              }
+                              title="Edit message in composer"
+                              className="hover:text-[#e8e8e8]"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyMessage(msg.id, msg.text)}
+                              title="Copy message"
+                              className="inline-flex items-center gap-1 hover:text-[#e8e8e8]"
+                            >
+                              <Copy className="h-3 w-3" />
+                              {copiedId === msg.id && <span>Copied</span>}
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => setExportOpen(true)}
                               title="Export / share"
                               className="hover:text-[#e8e8e8]"
                             >
                               <Share2 className="h-3 w-3" />
                             </button>
-                            <Pencil className="h-3 w-3 opacity-50" />
                           </div>
                         </div>
                       );
@@ -977,6 +999,7 @@ export function App() {
                 submitMode={submitMode}
                 stagedAttachments={stagedAttachments}
                 forcePopover={forceComposerPopover}
+                draftSeed={editDraft}
                 onSubmit={(prompt) => submitPrompt(prompt)}
                 onCancel={cancelActiveRun}
                 onCompact={compactCurrentSession}
