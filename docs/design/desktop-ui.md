@@ -223,6 +223,19 @@ python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
 
 - 脚本以自身位置解析仓库根目录，读取 `desktop/public/app-icon.png` 注入各 frame；任意目录下均可运行。
 - 修改设计时改脚本后重新生成，再对变更 frame 执行导入替换；不要直接在 Figma 里手改样式以免与单源失同步。
+
+### .pen 迁移
+
+同一套设计稿已迁移为仓库内的 pen.dev 文档 [`desktop-ui.pen`](desktop-ui.pen)：单个 `.pen` 文件包含全部 14 个 frame（4 列网格排布），内嵌图片资源落在 [`assets/`](assets/) 并以 `./assets/<hash>.png` 相对引用。节点为绝对定位的 `frame`/`rectangle`/`text`/`path`（SVG 保留 `viewBox` 与 path 几何、lucide 描边色与线宽按缩放还原），渐变与阴影按 .pen fill/effect 结构映射；虚线描边、分侧描边色等 CSS 特性按最接近形式打平。
+
+[html_to_pen.py](html_to_pen.py) 是迁移转换器：重新生成方式与 Figma 同步一致——先跑 `devin_theme_gen.py` 得到各 frame 的 HTML，再经本脚本（playwright + 系统 Chrome 计算布局）输出 `.pen`：
+
+```bash
+python3 docs/design/devin_theme_gen.py /tmp/soyo_frames
+python3 docs/design/html_to_pen.py /tmp/soyo_frames docs/design/desktop-ui.pen
+```
+
+转换器依赖 `playwright`（venv 中安装即可，`playwright install` 不需要——直接驱动系统 Chrome）。`.pen` 与 Figma 设计稿同源于生成脚本，修改设计仍以生成器为准，改完同时重跑两条同步路径。
 - 当前 frame 序列：`01 Home · 02 Session+Context · 03 Approval · 04 Settings · 05 User Menu · 06 Sessions · 07 Attach Menu · 08 Browser Preview · 09 Subagent & Goal · 10 Usage & Tokens · 11 Slash Commands · 12 Attachments Preview · 13 Model & Effort · 14 Language`。
 
 ---
