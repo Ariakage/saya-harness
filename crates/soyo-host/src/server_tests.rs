@@ -79,4 +79,19 @@ mod tests {
         client.shutdown_daemon().await;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
+
+    #[tokio::test]
+    async fn server_exits_when_socket_file_removed() {
+        let _guard = serial().await;
+        let (dir, handle) = running_server().await;
+        let sock = dir.path().join("helper.sock");
+        assert!(sock.exists());
+        // Simulate tempdir/cleanup removal: the helper is unreachable forever.
+        std::fs::remove_file(&sock).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+        assert!(
+            result.is_ok(),
+            "helper server should exit after its socket path is removed"
+        );
+    }
 }

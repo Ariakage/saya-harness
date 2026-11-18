@@ -73,6 +73,25 @@ impl HelperServer {
             write_pid_file();
         }
 
+        // Watchdog: the bound socket lives at a filesystem path; if that path
+        // is unlinked (tempdir cleanup, `soyo kill` racing a stale bind) or
+        // rebound by another helper, this instance can never be reached again
+        // and must exit instead of leaking as an orphan.
+        if let Some(path) = HelperEndpoint::socket_path()
+            && let Some(bound) = socket_file_identity(&path)
+        {
+            let shutdown = Arc::clone(&self.shutdown);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(SOCKET_WATCHDOG_INTERVAL).await;
+                    if socket_file_identity(&path) != Some(bound) {
+                        shutdown.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            });
+        }
+
         let service = Arc::clone(&self.service);
         while !self.shutdown.load(Ordering::Relaxed) {
             let accept = tokio::select! {
@@ -115,6 +134,22 @@ fn write_pid_file() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&path, format!("{}\n", std::process::id()));
+}
+
+const SOCKET_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Identity of the bound socket file: `(dev, ino)` on Unix, existence-only
+/// elsewhere. `None` when the path is gone — treated as "socket removed".
+#[cfg(unix)]
+fn socket_file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn socket_file_identity(path: &std::path::Path) -> Option<()> {
+    std::fs::metadata(path).ok().map(|_| ())
 }
 
 async fn handle_client(stream: LocalStream, service: Arc<HostService>, shutdown: Arc<AtomicBool>) {
