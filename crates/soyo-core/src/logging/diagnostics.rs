@@ -125,6 +125,14 @@ impl Diagnostics {
             queue: self.queue.clone(),
         }))
     }
+    /// Scope this diagnostic subscriber across the execution of `future`.
+    pub fn instrument<F: std::future::Future>(
+        &self,
+        future: F,
+    ) -> impl std::future::Future<Output = F::Output> + use<F> {
+        use tracing::instrument::WithSubscriber;
+        future.with_subscriber(self.dispatch())
+    }
     /// Number of events lost to a full queue or unavailable worker.
     pub fn dropped(&self) -> u64 {
         self.queue.state.dropped.load(Ordering::Relaxed)

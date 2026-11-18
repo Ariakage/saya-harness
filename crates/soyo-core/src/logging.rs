@@ -41,6 +41,17 @@ pub enum LogLevel {
     Warn,
     Error,
 }
+impl LogLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
 impl std::str::FromStr for LogLevel {
     type Err = BoundaryError;
     fn from_str(value: &str) -> Result<Self, Self::Err> {

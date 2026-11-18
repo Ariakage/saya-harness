@@ -1408,8 +1408,12 @@ fn memory_root_prefers_soyo_and_falls_back_to_saya() {
         .unwrap()
     };
     assert_eq!(load().memory_root().unwrap(), temp.path().join(".soyo"));
-    fs::create_dir_all(temp.path().join(".saya")).unwrap();
-    assert_eq!(load().memory_root().unwrap(), temp.path().join(".saya"));
+    // Non-memory files in ~/.soyo (e.g. desktop preferences or global prompt) must
+    // not shadow existing global memory stored under legacy ~/.saya.
     fs::create_dir_all(temp.path().join(".soyo")).unwrap();
+    fs::write(temp.path().join(".soyo/desktop_prefs.json"), "{}").unwrap();
+    fs::create_dir_all(temp.path().join(".saya/memory")).unwrap();
+    assert_eq!(load().memory_root().unwrap(), temp.path().join(".saya"));
+    fs::write(temp.path().join(".soyo/MEMORY.md"), "# memory").unwrap();
     assert_eq!(load().memory_root().unwrap(), temp.path().join(".soyo"));
 }

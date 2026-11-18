@@ -69,6 +69,19 @@ impl Environment {
     pub fn from_pairs(pairs: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         Self(pairs.into_iter().collect())
     }
+    /// Export UTF-8 key/value pairs for IPC run environment snapshots.
+    pub fn export_pairs(&self) -> BTreeMap<String, String> {
+        self.0
+            .iter()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_owned(), v.to_str()?.to_owned())))
+            .collect()
+    }
+    /// Insert variables from `defaults` only when missing (preserves caller overrides).
+    pub fn merge_missing(&mut self, defaults: impl IntoIterator<Item = (OsString, OsString)>) {
+        for (key, value) in defaults {
+            self.0.entry(key).or_insert(value);
+        }
+    }
     /// `SOYO_*` lookups fall back to the pre-rename `SAYA_*` spelling so
     /// existing environments and wrapper scripts keep working.
     fn lookup(&self, name: &str) -> Option<&OsStr> {
@@ -636,6 +649,10 @@ pub struct Config {
     env: Environment,
 }
 impl Config {
+    /// Helper-private setup secrets overlay path (`<state_dir>/secrets/env`).
+    pub fn secrets_env_path(&self) -> PathBuf {
+        self.state_dir.join("secrets").join("env")
+    }
     /// Captured HOME used for user-level discovery and default storage roots.
     pub fn home(&self) -> Option<PathBuf> {
         self.env.path("HOME")
@@ -647,12 +664,14 @@ impl Config {
                 let home = self
                     .home()
                     .ok_or_else(|| invalid("HOME is required for the default memory root"))?;
+                let has_memory =
+                    |dir: &Path| dir.join("MEMORY.md").exists() || dir.join("memory").is_dir();
                 let new = home.join(".soyo");
-                if new.is_dir() {
+                if has_memory(&new) {
                     new
                 } else {
                     let legacy = home.join(".saya");
-                    if legacy.is_dir() { legacy } else { new }
+                    if has_memory(&legacy) { legacy } else { new }
                 }
             }
         };
@@ -733,6 +752,71 @@ fn legacy_dir_fallback(new: PathBuf, legacy: PathBuf) -> PathBuf {
         new
     }
 }
+/// Resolved configuration and XDG runtime paths for helper identity and storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeDirs {
+    pub config_path: PathBuf,
+    pub data_dir: PathBuf,
+    pub state_dir: PathBuf,
+}
+
+/// Canonicalize the deepest existing ancestor of `path` and append remaining
+/// components so symlinked roots (e.g. `/tmp` vs `/private/tmp`) resolve
+/// identically even before target files exist on disk.
+pub fn canonicalize_deepest(path: &Path) -> PathBuf {
+    let mut suffix = Vec::new();
+    let mut cursor = path;
+    loop {
+        if cursor.exists()
+            && let Ok(canon) = std::fs::canonicalize(cursor)
+        {
+            let mut out = canon;
+            for part in suffix.into_iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let Some(name) = cursor.file_name() else {
+            return path.to_path_buf();
+        };
+        suffix.push(name.to_os_string());
+        let Some(parent) = cursor.parent() else {
+            return path.to_path_buf();
+        };
+        cursor = parent;
+    }
+}
+
+/// Resolve `(config_path, data_dir, state_dir)` with the exact same precedence as
+/// [`load`], without requiring `config.toml` or directories to exist on disk.
+pub fn resolve_runtime_dirs(
+    overrides: &Overrides,
+    env: &Environment,
+    process_cwd: &Path,
+) -> Result<RuntimeDirs, BoundaryError> {
+    let config = launch_path(config_path(overrides, env)?, process_cwd)?;
+    let data_dir = launch_path(
+        match overrides
+            .data_dir
+            .clone()
+            .or_else(|| env.path("SOYO_DATA_DIR"))
+        {
+            Some(p) => p,
+            None => default_dir(env, "XDG_DATA_HOME", ".local/share")?,
+        },
+        process_cwd,
+    )?;
+    let state_dir = launch_path(
+        default_dir(env, "XDG_STATE_HOME", ".local/state")?,
+        process_cwd,
+    )?;
+    Ok(RuntimeDirs {
+        config_path: config,
+        data_dir,
+        state_dir,
+    })
+}
+
 /// Select the sole configuration path without loading or creating it.
 pub fn config_path(overrides: &Overrides, env: &Environment) -> Result<PathBuf, BoundaryError> {
     if let Some(path) = overrides.config.clone().or_else(|| env.path("SOYO_CONFIG")) {

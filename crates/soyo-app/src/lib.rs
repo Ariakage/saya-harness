@@ -447,6 +447,10 @@ pub fn build_runtime(
             .extend(git_control.write_denied.iter().cloned());
     }
     let credential_path = config.state_dir.join("credentials");
+    let secrets_dir = config.state_dir.join("secrets");
+    let secrets_env_path = secrets_dir.join("env");
+    let helper_runtime_dir = config.state_dir.join("helper");
+    let legacy_secrets_env_path = home.as_ref().map(|h| h.join(".soyo/env"));
     let credential_backed = config.mcp.servers.values().any(|server| {
         server.enabled
             && matches!(
@@ -460,11 +464,19 @@ pub fn build_runtime(
             config.config_path.clone(),
             config.data_dir.clone(),
             config.state_dir.clone(),
+            secrets_dir.clone(),
+            secrets_env_path.clone(),
+            helper_runtime_dir.clone(),
             config.cache_dir.clone(),
         ] {
             if path.try_exists()? {
                 sandbox.protected_paths.push(path);
             }
+        }
+        if let Some(legacy_env) = &legacy_secrets_env_path
+            && legacy_env.try_exists()?
+        {
+            sandbox.protected_paths.push(legacy_env.clone());
         }
         for name in [".saya/local", ".soyo/local"] {
             let project_control = session.workspace.join(name);
@@ -474,6 +486,12 @@ pub fn build_runtime(
         }
     } else if credential_backed || credential_path.exists() {
         return Err("host execution cannot protect the credential store".into());
+    } else if secrets_env_path.exists()
+        || legacy_secrets_env_path
+            .as_ref()
+            .is_some_and(|path| path.exists())
+    {
+        return Err("host execution cannot protect the stored secret environment overlay".into());
     }
     if config.browser.credentials.enabled
         && let Some(store) = config.browser.credentials.store.as_ref()
@@ -536,10 +554,16 @@ pub fn build_runtime(
         config.config_path.clone(),
         config.data_dir.clone(),
         config.state_dir.clone(),
+        secrets_dir,
+        secrets_env_path,
+        helper_runtime_dir,
         config.cache_dir.clone(),
         session.workspace.join(".saya/local"),
         session.workspace.join(".soyo/local"),
     ];
+    if let Some(legacy_env) = legacy_secrets_env_path {
+        private_paths.push(legacy_env);
+    }
     private_paths.extend(memory_paths);
     private_paths.extend(sandbox.protected_paths.iter().cloned());
     private_paths.extend(git_control.private_paths.iter().cloned());
