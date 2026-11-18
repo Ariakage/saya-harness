@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Soyo",
+  "version": "0.2.0",
+  "identifier": "com.ariakage.soyo.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Soyo",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 620,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: soyo-attachment: http://soyo-attachment.localhost saya-attachment: http://saya-attachment.localhost; media-src 'self' blob: soyo-attachment: http://soyo-attachment.localhost saya-attachment: http://saya-attachment.localhost; font-src 'self' data:; connect-src ipc: http://ipc.localhost soyo-attachment: http://soyo-attachment.localhost saya-attachment: http://saya-attachment.localhost; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["dmg", "app", "nsis", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "15.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/Ariakage/soyo-harness/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

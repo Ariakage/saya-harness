@@ -20,21 +20,31 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# 执行 workspace 全目标严格 Clippy
+# 执行 workspace 全目标严格 Clippy（遵循 default-members）
 clippy:
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --all-targets --locked -- -D warnings
 
-# 执行 workspace 测试，可追加过滤条件和测试参数
+# 执行 workspace 测试，可追加过滤条件和测试参数（遵循 default-members）
 test *args:
-    cargo test --workspace --locked --no-fail-fast "$@"
+    cargo test --locked --no-fail-fast "$@"
 
-# 构建开发版本，可追加 Cargo 构建参数
+# 构建开发版本，可追加 Cargo 构建参数（遵循 default-members）
 build *args:
-    cargo build --workspace --locked "$@"
+    cargo build --locked "$@"
 
-# 构建优化版本，可追加 Cargo 构建参数
+# 构建优化版本，可追加 Cargo 构建参数（遵循 default-members）
 release *args:
-    cargo build --workspace --release --locked "$@"
+    cargo build --release --locked "$@"
+
+# 执行桌面端 Rust 检查、测试与前端校验
+desktop-check:
+    cargo clippy -p soyo-desktop --all-targets --locked -- -D warnings
+    cargo test -p soyo-desktop --locked
+    pnpm --dir desktop run check
+
+# 启动桌面端前端 Vite 浏览器实时预览服务（http://127.0.0.1:1420）
+desktop-preview *args:
+    pnpm --dir desktop run dev "$@"
 
 # 运行开发版 Saya，可追加 CLI 参数
 run *args:

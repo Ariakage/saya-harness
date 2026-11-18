@@ -6,6 +6,15 @@ members = [
     "crates/soyo-cli",
     "crates/soyo-app",
     "crates/soyo-tui",
+    "desktop/src-tauri",
+]
+default-members = [
+    "crates/soyo-contract",
+    "crates/soyo-fs",
+    "crates/soyo-core",
+    "crates/soyo-cli",
+    "crates/soyo-app",
+    "crates/soyo-tui",
 ]
 resolver = "3"
 

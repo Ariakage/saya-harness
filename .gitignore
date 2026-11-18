@@ -11,3 +11,7 @@ __pycache__/
 # Private local test configuration and credentials.
 /.saya/local/
 /.soyo/local/
+
+# Desktop frontend dependencies and generated build output.
+/desktop/node_modules/
+/desktop/dist/
