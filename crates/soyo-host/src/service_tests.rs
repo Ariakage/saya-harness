@@ -9,12 +9,21 @@ mod tests {
         config::{self, Environment, Overrides},
         contract::{BoundaryError, HistoryItem, ModelPurpose, ToolCall, Usage},
     };
-    use soyo_ipc::types::{DesktopStreamEnvelope, WorkModeDto};
+    use soyo_ipc::types::{
+        DesktopStreamEnvelope, ResumeSessionDto, SubmitPromptParams, WorkModeDto,
+    };
     use std::{
         collections::VecDeque,
         sync::{Arc, Mutex},
     };
     use tokio::sync::mpsc;
+
+    fn submit_params(prompt: &str) -> SubmitPromptParams {
+        SubmitPromptParams {
+            prompt: prompt.into(),
+            ..SubmitPromptParams::default()
+        }
+    }
 
     struct ScriptedModel {
         chunks: Vec<String>,
@@ -233,7 +242,7 @@ backend = "host"
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         let res = state
-            .submit_prompt("Say hello".into(), vec![], StreamSink::Mpsc(tx))
+            .submit_prompt(submit_params("Say hello"), StreamSink::Mpsc(tx))
             .await
             .unwrap();
         assert_eq!(res.action, "started");
@@ -283,7 +292,7 @@ backend = "host"
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         state
-            .submit_prompt("Slow task".into(), vec![], StreamSink::Mpsc(tx))
+            .submit_prompt(submit_params("Slow task"), StreamSink::Mpsc(tx))
             .await
             .unwrap();
 
@@ -343,7 +352,7 @@ backend = "host"
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         state
-            .submit_prompt("Read notes".into(), vec![], StreamSink::Mpsc(tx))
+            .submit_prompt(submit_params("Read notes"), StreamSink::Mpsc(tx))
             .await
             .unwrap();
 
@@ -430,7 +439,7 @@ backend = "host"
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         state
-            .submit_prompt("Clarify target".into(), vec![], StreamSink::Mpsc(tx))
+            .submit_prompt(submit_params("Clarify target"), StreamSink::Mpsc(tx))
             .await
             .unwrap();
 
@@ -500,7 +509,7 @@ backend = "host"
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         let submit_res = state
-            .submit_prompt("Persist me".into(), vec![], StreamSink::Mpsc(tx))
+            .submit_prompt(submit_params("Persist me"), StreamSink::Mpsc(tx))
             .await
             .unwrap();
         while let Some(env) = rx.recv().await {
@@ -513,7 +522,13 @@ backend = "host"
         // Fresh state resumes the persisted session from SQLite.
         let fresh_state = HostService::with_config(cfg);
         let resumed = fresh_state
-            .resume_session(&submit_res.session_id, false)
+            .resume_session(&ResumeSessionDto {
+                session_id: submit_res.session_id.clone(),
+                accept_config_change: false,
+                cwd_explicit: false,
+                profile_explicit: false,
+                mode_override: None,
+            })
             .await
             .unwrap();
         let session = resumed.bootstrap.session.expect("session should resume");
@@ -739,7 +754,7 @@ scopes = ["docs:read"]
         // Create and run a session, then export as Markdown and JSON.
         let (tx, mut rx) = mpsc::unbounded_channel();
         let submit = state
-            .submit_prompt("Run before export".into(), vec![], StreamSink::Mpsc(tx))
+            .submit_prompt(submit_params("Run before export"), StreamSink::Mpsc(tx))
             .await
             .unwrap();
         while let Some(env) = rx.recv().await {
@@ -823,11 +838,11 @@ scopes = ["docs:read"]
                     completed_status = Some(status);
                     break;
                 }
-                // Raw runs must not leak the desktop rendering DTOs.
-                DesktopStreamEnvelope::SchemaEvent(_)
-                | DesktopStreamEnvelope::Thinking(_)
-                | DesktopStreamEnvelope::Context { .. } => {
-                    panic!("raw run_prompt must not emit desktop DTO frames");
+                // Raw runs must not leak the desktop event projection.
+                // Thinking/Context still flow — interactive clients need the
+                // aux channels; headless consumers ignore them.
+                DesktopStreamEnvelope::SchemaEvent(_) => {
+                    panic!("raw run_prompt must not emit SchemaEvent frames");
                 }
                 _ => {}
             }

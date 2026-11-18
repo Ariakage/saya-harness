@@ -32,9 +32,9 @@ use soyo_ipc::{
         ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
         ContextEntryDto, DesktopError, DesktopStreamEnvelope, InputRequestDto, McpStatusBadgeDto,
         MessageRoleDto, ModeStateDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto,
-        ResumeSessionResultDto, RunPromptParams, RunResultDto, SchemaEnvelopeDto, SchemaEventDto,
-        SessionItemDto, SessionPageDto, SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto,
-        ToolResultDto, WorkModeDto,
+        ResumeSessionDto, ResumeSessionResultDto, RunPromptParams, RunResultDto, RunStateDto,
+        SchemaEnvelopeDto, SchemaEventDto, SessionItemDto, SessionPageDto, SubmitPromptParams,
+        SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto, WorkModeDto,
     },
 };
 use std::{
@@ -68,6 +68,9 @@ pub struct StartRunRequest {
     pub anthropic_prompt_cache: bool,
     /// Emit `RawSchemaEvent` passthrough instead of `SchemaEvent` DTOs.
     pub raw_events: bool,
+    /// Run media capture on the prompt before appending it (`soyo chat`
+    /// parity); the runtime summary keeps the original text.
+    pub capture_media: bool,
     /// Emit the synthetic `session.created`/`session.resumed` line the CLI
     /// event writer emits before the run starts.
     pub emit_session_event: bool,
@@ -89,6 +92,7 @@ impl StartRunRequest {
             personal_context: PersonalContext::default(),
             anthropic_prompt_cache: false,
             raw_events: false,
+            capture_media: false,
             emit_session_event: false,
             config: None,
             resumed: false,
@@ -481,7 +485,15 @@ impl HostService {
         })
     }
 
-    pub async fn new_session(&self) -> Result<ActiveSessionDto, DesktopError> {
+    /// Create a new session (`new_session`). `cwd`/`profile` let interactive
+    /// clients pin the session's workspace and profile to what they resolved
+    /// locally — the helper may have been spawned under a different cwd or
+    /// default profile.
+    pub async fn new_session(
+        &self,
+        cwd: Option<String>,
+        profile: Option<String>,
+    ) -> Result<ActiveSessionDto, DesktopError> {
         let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
         if guard.active_run_id.is_some() {
@@ -489,6 +501,16 @@ impl HostService {
                 "run_active",
                 "Cancel or wait for the active run before creating a new session",
             ));
+        }
+        if let Some(cwd) = cwd
+            && let Some(cfg) = &mut guard.config
+        {
+            cfg.cwd = PathBuf::from(cwd);
+        }
+        if let Some(profile) = profile
+            && let Some(cfg) = &mut guard.config
+        {
+            cfg.profile = Some(profile);
         }
         let cfg = guard.config.clone().ok_or_else(|| {
             DesktopError::new(
@@ -520,15 +542,64 @@ impl HostService {
 
     pub async fn submit_prompt(
         &self,
-        prompt: String,
-        attachments: Vec<AttachmentTokenDto>,
+        params: SubmitPromptParams,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
-        let trimmed = prompt.trim();
+        let trimmed = params.prompt.trim();
         if trimmed.is_empty() {
             return Err(DesktopError::new("invalid_input", "Prompt cannot be empty"));
         }
-        let expanded = expand_attachments(&prompt, &attachments);
+        let expanded = expand_attachments(&params.prompt, &params.attachments);
+
+        // Session pinning: interactive clients (chat/TUI) pass the session id
+        // they opened. With no prepared session the helper resumes it; a
+        // different prepared session is contention — fail instead of writing
+        // the prompt into the wrong session.
+        if let Some(wanted) = &params.session_id {
+            let secrets = self.current_secrets();
+            let mut guard = self.inner.lock().await;
+            if guard.active_run_id.is_none() {
+                match &guard.prepared {
+                    Some(prepared) if prepared.session.id.0.to_string() == *wanted => {}
+                    Some(_) => {
+                        return Err(DesktopError::new(
+                            "session_changed",
+                            "Another session became active; reopen yours and retry",
+                        ));
+                    }
+                    None => {
+                        let cfg = guard.config.clone().ok_or_else(|| {
+                            DesktopError::new(
+                                "invalid_config",
+                                guard
+                                    .config_error
+                                    .as_deref()
+                                    .unwrap_or("Configuration is not loaded"),
+                            )
+                        })?;
+                        let prepared = session::resume(
+                            &cfg,
+                            wanted,
+                            session::ResumeOptions {
+                                accept_config_change: false,
+                                cwd_explicit: false,
+                                profile_explicit: false,
+                                mode_override: None,
+                            },
+                        )
+                        .await
+                        .map_err(|err| {
+                            DesktopError::new(
+                                "resume_failed",
+                                redaction::redact_str(&err.to_string(), &secrets),
+                            )
+                        })?;
+                        self.sync_attachment_scope(Some(&prepared));
+                        guard.prepared = Some(prepared);
+                    }
+                }
+            }
+        }
 
         // Fast-path: if a run is currently active, steer it at the next model boundary.
         let steered_run_id = {
@@ -573,8 +644,18 @@ impl HostService {
             });
         }
 
-        self.start_run(Some(expanded), RunKind::Execution, sink)
-            .await
+        let mut req = StartRunRequest::desktop(Some(expanded), RunKind::Execution);
+        req.raw_events = params.raw_events;
+        req.capture_media = params.capture_media;
+        req.anthropic_prompt_cache = params.anthropic_prompt_cache;
+        req.personal_context = params
+            .personal_context
+            .map(|p| PersonalContext {
+                preferences: p.preferences,
+                memory: p.memory,
+            })
+            .unwrap_or_default();
+        self.start_run_ex(req, sink).await
     }
 
     /// Socket-backed `soyo run`: headless-or-interactive execution that keeps
@@ -704,6 +785,7 @@ impl HostService {
                     .unwrap_or_default(),
                 anthropic_prompt_cache: params.anthropic_prompt_cache,
                 raw_events: true,
+                capture_media: false,
                 emit_session_event: true,
                 config: Some(cfg),
                 resumed: params.session_id.is_some(),
@@ -780,6 +862,7 @@ impl HostService {
             personal_context,
             anthropic_prompt_cache,
             raw_events,
+            capture_media,
             emit_session_event,
             config: config_override,
             resumed,
@@ -958,13 +1041,33 @@ impl HostService {
 
         if kind == RunKind::Execution
             && let Some(text) = &expanded_prompt
-            && let Err(err) = session::append(prepared, text.clone()).await
         {
-            self.clear_active_state(&mut guard);
-            return Err(DesktopError::new(
-                "storage_error",
-                redaction::redact_str(&err.to_string(), &secrets),
-            ));
+            // `soyo chat` parity: pasted-media markers are captured into the
+            // session media store and the rewritten text is what lands in
+            // history; the runtime summary keeps the original prompt.
+            let append_text = if capture_media {
+                match soyo_core::media::capture_user(
+                    text,
+                    prepared.media_capabilities,
+                    &prepared.media,
+                    prepared.session.id,
+                ) {
+                    Ok(capture) => capture.text,
+                    Err(err) => {
+                        self.clear_active_state(&mut guard);
+                        return Err(DesktopError::from_boundary(&err, &secrets));
+                    }
+                }
+            } else {
+                text.clone()
+            };
+            if let Err(err) = session::append(prepared, append_text).await {
+                self.clear_active_state(&mut guard);
+                return Err(DesktopError::new(
+                    "storage_error",
+                    redaction::redact_str(&err.to_string(), &secrets),
+                ));
+            }
         }
 
         // Mirror the CLI's pre-run line so `--output jsonl` streams start with
@@ -1363,10 +1466,10 @@ impl HostService {
 
     pub async fn resume_session(
         &self,
-        session_id: &str,
-        accept_config_change: bool,
+        params: &ResumeSessionDto,
     ) -> Result<ResumeSessionResultDto, DesktopError> {
         let secrets = self.current_secrets();
+        let session_id = params.session_id.as_str();
         let parsed_id = session::parse_id(session_id).map_err(|err| {
             DesktopError::new(
                 "invalid_session_id",
@@ -1420,10 +1523,10 @@ impl HostService {
             &cfg,
             session_id,
             session::ResumeOptions {
-                accept_config_change,
-                cwd_explicit: false,
-                profile_explicit: false,
-                mode_override: None,
+                accept_config_change: params.accept_config_change,
+                cwd_explicit: params.cwd_explicit,
+                profile_explicit: params.profile_explicit,
+                mode_override: params.mode_override.map(Into::into),
             },
         )
         .await
@@ -1459,6 +1562,109 @@ impl HostService {
             recovered_runs,
             recovered_tools,
         })
+    }
+
+    /// Live mode/compaction state for interactive clients. When a run is
+    /// active the answer comes from the runtime handle (real mode
+    /// revision); otherwise it reflects the prepared session's stored mode.
+    pub async fn get_run_state(&self) -> Result<RunStateDto, DesktopError> {
+        let secrets = self.current_secrets();
+        if let Ok(guard) = self.active_control.lock()
+            && let Some(control) = guard.as_ref()
+            && let Some(handle) = &control.handle
+        {
+            let snapshot = handle
+                .mode()
+                .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+            return Ok(RunStateDto {
+                current: snapshot.current.into(),
+                pending: snapshot.pending.map(Into::into),
+                active_run: true,
+                compaction_pending: handle.compaction_pending(),
+                revision: snapshot.revision,
+            });
+        }
+        let guard = self.inner.lock().await;
+        let current = guard
+            .prepared
+            .as_ref()
+            .map(|prepared| prepared.session.work_mode)
+            .or_else(|| guard.config.as_ref().map(|cfg| cfg.mode))
+            .ok_or_else(|| {
+                DesktopError::new(
+                    "invalid_config",
+                    guard
+                        .config_error
+                        .as_deref()
+                        .unwrap_or("Configuration is not loaded"),
+                )
+            })?;
+        Ok(RunStateDto {
+            current: current.into(),
+            pending: None,
+            active_run: false,
+            compaction_pending: false,
+            revision: 0,
+        })
+    }
+
+    /// Load one session's durable record by id (`get_session`). Returns the
+    /// `Session` JSON with registered secrets redacted; null when absent.
+    pub async fn get_session(&self, session_id: &str) -> Result<Value, DesktopError> {
+        let secrets = self.current_secrets();
+        let parsed_id = session::parse_id(session_id).map_err(|err| {
+            DesktopError::new(
+                "invalid_session_id",
+                redaction::redact_str(&err.to_string(), &secrets),
+            )
+        })?;
+        let cfg = self.require_config().await?;
+        let store = session::open(&cfg).map_err(|err| {
+            DesktopError::new(
+                "storage_error",
+                redaction::redact_str(&err.to_string(), &secrets),
+            )
+        })?;
+        let session = store
+            .load_session(parsed_id)
+            .await
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+        let value = serde_json::to_value(&session).map_err(|err| {
+            DesktopError::new(
+                "storage_error",
+                redaction::redact_str(&err.to_string(), &secrets),
+            )
+        })?;
+        Ok(redaction::redact_value(&value, &secrets))
+    }
+
+    /// Bounded committed snapshot of a session (`read_session_snapshot`).
+    /// Read-only: never creates, migrates, recovers or locks the source
+    /// session. Registered secrets are redacted before returning.
+    pub async fn read_session_snapshot(&self, session_id: &str) -> Result<Value, DesktopError> {
+        let secrets = self.current_secrets();
+        let parsed_id = session::parse_id(session_id).map_err(|err| {
+            DesktopError::new(
+                "invalid_session_id",
+                redaction::redact_str(&err.to_string(), &secrets),
+            )
+        })?;
+        let cfg = self.require_config().await?;
+        let snapshot = soyo_core::sqlite::SqliteStore::read_snapshot(
+            &cfg.data_dir,
+            parsed_id,
+            soyo_core::sqlite::SnapshotLimits::default(),
+            Arc::new(RunCancellation::new()),
+        )
+        .await
+        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+        let value = serde_json::to_value(&snapshot).map_err(|err| {
+            DesktopError::new(
+                "storage_error",
+                redaction::redact_str(&err.to_string(), &secrets),
+            )
+        })?;
+        Ok(redaction::redact_value(&value, &secrets))
     }
 
     pub async fn shutdown(&self) {
@@ -1609,7 +1815,6 @@ async fn drive_active_run(mut params: DriverParams) {
             }
             changed = params.thinking_rx.changed(), if thinking_open => {
                 match changed {
-                    Ok(()) if params.raw_events => {}
                     Ok(()) => {
                         let log = params.thinking_rx.borrow_and_update().clone();
                         let secrets = params.secrets.snapshot().unwrap_or_default();
@@ -1626,7 +1831,6 @@ async fn drive_active_run(mut params: DriverParams) {
             }
             changed = params.context_rx.changed(), if context_open => {
                 match changed {
-                    Ok(()) if params.raw_events => {}
                     Ok(()) => {
                         if let Some(snapshot) = params.context_rx.borrow_and_update().clone()
                             && params.sink.send(convert_context(snapshot)).is_err()
@@ -1686,7 +1890,7 @@ async fn drive_active_run(mut params: DriverParams) {
             }
         }
     }
-    if !consumer_disconnected && !params.raw_events {
+    if !consumer_disconnected {
         let log = params.thinking_rx.borrow_and_update().clone();
         if !log.entries.is_empty() {
             let secrets = params.secrets.snapshot().unwrap_or_default();

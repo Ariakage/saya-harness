@@ -531,6 +531,65 @@ pub struct AttachmentTokenDto {
     pub path: String,
 }
 
+/// Parameters for the interactive `submit_prompt` helper method. Extra fields
+/// are optional so existing desktop `{prompt, attachments}` requests decode
+/// unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct SubmitPromptParams {
+    pub prompt: String,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentTokenDto>,
+    /// Emit `RawSchemaEvent` passthrough alongside the DTO envelopes — the CLI
+    /// and TUI consume raw schema-v1 events for full-fidelity rendering.
+    #[serde(default)]
+    pub raw_events: bool,
+    /// Run media capture on the prompt text before appending it (`soyo chat`
+    /// parity for pasted media markers).
+    #[serde(default)]
+    pub capture_media: bool,
+    /// Session the prompt must land on. When the helper's prepared session is
+    /// empty the helper resumes this id; a different prepared id is rejected
+    /// with `session_changed` instead of silently writing to the wrong session.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Personal context for this run only (`soyo chat` passes preferences and
+    /// session memory on every prompt). Not persisted.
+    #[serde(default)]
+    pub personal_context: Option<PersonalContextDto>,
+    #[serde(default)]
+    pub anthropic_prompt_cache: bool,
+}
+
+/// Live run/session control state for interactive clients (`/status`, mode
+/// display, post-run compaction checks).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct RunStateDto {
+    pub current: WorkModeDto,
+    pub pending: Option<WorkModeDto>,
+    pub active_run: bool,
+    pub compaction_pending: bool,
+    /// Monotonic revision of the helper's mode state; bumped on every
+    /// `set_work_mode` so clients can detect changes like `ModeSnapshot::revision`.
+    #[specta(type = Number)]
+    pub revision: u64,
+}
+
+/// Parameters for `resume_session`; the desktop path only sends
+/// `session_id`/`accept_config_change`, the CLI resume command passes the
+/// full `ResumeOptions` equivalents.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ResumeSessionDto {
+    pub session_id: String,
+    #[serde(default)]
+    pub accept_config_change: bool,
+    #[serde(default)]
+    pub cwd_explicit: bool,
+    #[serde(default)]
+    pub profile_explicit: bool,
+    #[serde(default)]
+    pub mode_override: Option<WorkModeDto>,
+}
+
 /// Paginated session metadata returned by `list_sessions`.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SessionItemDto {

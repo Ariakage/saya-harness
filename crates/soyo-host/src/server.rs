@@ -266,12 +266,54 @@ async fn dispatch(
                 .map(|v| v as u32);
             service.list_sessions_page(page).await.and_then(ok)
         }
-        "new_session" => service.new_session().await.and_then(ok),
+        "new_session" => {
+            let r = async {
+                let cwd = param_opt(&params, "cwd")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let profile = param_opt(&params, "profile")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                service.new_session(cwd, profile).await
+            };
+            r.await.and_then(ok)
+        }
         "resume_session" => {
             let r = async {
-                let session_id = param_string(&params, "session_id")?.to_owned();
-                let accept = param_bool(&params, "accept_config_change")?;
-                service.resume_session(&session_id, accept).await
+                let resume: soyo_ipc::types::ResumeSessionDto = serde_json::from_value(params)
+                    .map_err(|err| {
+                        DesktopError::new("invalid_params", format!("resume_session params: {err}"))
+                    })?;
+                service.resume_session(&resume).await
+            };
+            r.await.and_then(ok)
+        }
+        "get_run_state" => service.get_run_state().await.and_then(ok),
+        "get_job" => {
+            let r = async {
+                let job_id = param_string(&params, "job_id")?;
+                service.get_job(job_id).await
+            };
+            r.await.and_then(ok)
+        }
+        "get_session" => {
+            let r = async {
+                let session_id = param_string(&params, "session_id")?;
+                service.get_session(session_id).await
+            };
+            r.await.and_then(ok)
+        }
+        "read_session_snapshot" => {
+            let r = async {
+                let session_id = param_string(&params, "session_id")?;
+                service.read_session_snapshot(session_id).await
+            };
+            r.await.and_then(ok)
+        }
+        "cancel_job" => {
+            let r = async {
+                let job_id = param_string(&params, "job_id")?;
+                service.cancel_job(job_id).await
             };
             r.await.and_then(ok)
         }
@@ -508,17 +550,11 @@ async fn dispatch_streaming(
     let sink = StreamSink::Mpsc(events_tx);
     let result = match method {
         "submit_prompt" => {
-            let prompt = param_string(&params, "prompt")?.to_owned();
-            let attachments = param_opt(&params, "attachments")
-                .cloned()
-                .map(|v| {
-                    serde_json::from_value(v).map_err(|err| {
-                        DesktopError::new("invalid_params", format!("attachments: {err}"))
-                    })
-                })
-                .transpose()?
-                .unwrap_or_default();
-            service.submit_prompt(prompt, attachments, sink).await
+            let prompt_params: soyo_ipc::types::SubmitPromptParams = serde_json::from_value(params)
+                .map_err(|err| {
+                    DesktopError::new("invalid_params", format!("submit_prompt params: {err}"))
+                })?;
+            service.submit_prompt(prompt_params, sink).await
         }
         "run_prompt" => {
             let run_params: soyo_ipc::types::RunPromptParams = serde_json::from_value(params)

@@ -806,6 +806,841 @@ pub async fn chat(
     outcome
 }
 
+// ---------------------------------------------------------------------------
+// Helper-backed chat (`soyo chat` / `soyo resume` over the shared socket)
+// ---------------------------------------------------------------------------
+
+use soyo_ipc::{
+    HelperClient,
+    types::{
+        ActiveSessionDto, BackgroundJobDto, DesktopError, DesktopStreamEnvelope, InputRequestDto,
+        ModeStateDto, PermissionModeDto, PersonalContextDto, ResumeSessionDto,
+        ResumeSessionResultDto, RunStateDto, SubmitPromptParams, SubmitPromptResultDto,
+        WorkModeDto,
+    },
+};
+
+/// Resume parameters for `chat_via_helper`, mirroring `session::ResumeOptions`
+/// for the in-process fallback path.
+pub struct RemoteResume {
+    pub session_id: String,
+    pub accept_config_change: bool,
+    pub cwd_explicit: bool,
+    pub profile_explicit: bool,
+    pub mode_override: Option<WorkMode>,
+}
+
+/// A live remote run: the streaming `submit_prompt`/`compact_session` call is
+/// spawned so the console loop can interleave input, approvals and cancels.
+struct Remote {
+    kind: RunKind,
+    join: tokio::task::JoinHandle<Result<SubmitPromptResultDto, DesktopError>>,
+    events: mpsc::UnboundedReceiver<DesktopStreamEnvelope>,
+    events_open: bool,
+    streamed: bool,
+    cancelling: bool,
+    finished: Option<RunResult>,
+    completed_error: Option<DesktopError>,
+    needs_input_question: Option<String>,
+}
+
+/// A pending approval/input routed over IPC. `display` carries a dummy reply
+/// channel so `show_prompt` can render the request unchanged; the real reply
+/// goes through `reply_approval`/`reply_input`.
+enum PendingRemote {
+    Approval {
+        display: UiRequest,
+        approval_id: String,
+        call_id: String,
+    },
+    Input {
+        display: UiRequest,
+        input_id: String,
+    },
+}
+
+impl PendingRemote {
+    fn display(&self) -> &UiRequest {
+        match self {
+            PendingRemote::Approval { display, .. } | PendingRemote::Input { display, .. } => {
+                display
+            }
+        }
+    }
+}
+
+fn approval_display(dto: &soyo_ipc::types::ApprovalRequestDto) -> Option<UiRequest> {
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    Some(UiRequest::Approval(approval_request_from_dto(dto)?, tx))
+}
+
+fn input_display(dto: &InputRequestDto) -> UiRequest {
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    UiRequest::Input(
+        InputRequest {
+            question: dto.question.clone(),
+            options: dto.options.clone(),
+        },
+        tx,
+    )
+}
+
+fn boxed_helper(err: DesktopError) -> Box<dyn std::error::Error> {
+    format!("{}: {}", err.code, err.message).into()
+}
+
+async fn remote_call<T: serde::de::DeserializeOwned>(
+    client: &Arc<HelperClient>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<T, DesktopError> {
+    client.call(method, params).await.and_then(|v| {
+        serde_json::from_value(v).map_err(|e| {
+            DesktopError::new("helper_protocol", format!("decode {method} result: {e}"))
+        })
+    })
+}
+
+fn remote_job_display(job: Option<&BackgroundJobDto>) -> String {
+    let data = match job {
+        None => serde_json::json!({"status":"not_found"}),
+        Some(job) => serde_json::json!({
+            "status": job.state,
+            "ok": job.ok,
+            "result": job.summary,
+        }),
+    };
+    safe_terminal_text(&data.to_string())
+}
+
+/// Helper-backed equivalent of [`chat`]. Falls back to the in-process loop
+/// when the helper cannot be reached so `soyo chat` keeps working standalone.
+pub async fn chat_via_helper(
+    mut config: Config,
+    personal_context: PersonalContext,
+    anthropic_prompt_cache: bool,
+    existing: Option<RemoteResume>,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    if config.output != Output::Text {
+        return Err("chat requires text output".into());
+    }
+    let secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut console = Console::open(secrets).map_err(|_| "chat requires a controlling terminal")?;
+    let mut interrupts = signals::Signals::new()?;
+
+    // Profile selection stays local: it must happen before the helper session
+    // is created so the new session binds the chosen profile.
+    let resume = existing.as_ref().map(|resume| {
+        (
+            resume.session_id.clone(),
+            ResumeSessionDto {
+                session_id: resume.session_id.clone(),
+                accept_config_change: resume.accept_config_change,
+                cwd_explicit: resume.cwd_explicit,
+                profile_explicit: resume.profile_explicit,
+                mode_override: resume.mode_override.map(Into::into),
+            },
+        )
+    });
+    if existing.is_none() {
+        match choose_profile(&mut config, &mut console, &mut interrupts).await? {
+            ProfileSelection::Selected => {}
+            ProfileSelection::Exit => return Ok(0),
+            ProfileSelection::Interrupted => return Ok(130),
+        }
+    }
+
+    let client = match HelperClient::connect_or_spawn().await {
+        Ok(client) => client,
+        Err(err) => {
+            // No shared backend: preserve standalone behaviour by running the
+            // embedded runtime exactly like the pre-helper CLI did.
+            console.print(&format!(
+                "soyo: helper unavailable ({}); running in-process\n",
+                err.message
+            ))?;
+            let prepared = match existing {
+                Some(resume) => Some(
+                    session::resume(
+                        &config,
+                        &resume.session_id,
+                        session::ResumeOptions {
+                            accept_config_change: resume.accept_config_change,
+                            cwd_explicit: resume.cwd_explicit,
+                            profile_explicit: resume.profile_explicit,
+                            mode_override: resume.mode_override,
+                        },
+                    )
+                    .await?,
+                ),
+                None => Some(session::create(&config, new_session(&config)?).await?),
+            };
+            return chat(config, personal_context, anthropic_prompt_cache, prepared).await;
+        }
+    };
+
+    // Open the session on the helper.
+    let (session_id, workspace, mut session_mode) = match resume {
+        Some((session_id, dto)) => {
+            let result: ResumeSessionResultDto =
+                remote_call(&client, "resume_session", serde_json::to_value(&dto)?)
+                    .await
+                    .map_err(boxed_helper)?;
+            if result.recovered_runs > 0 {
+                console.print(&format!("Recovered {} interrupted run(s); {} tool outcome(s) unknown; no tools were replayed.\n", result.recovered_runs, result.recovered_tools))?;
+            }
+            let session = load_remote_session(&client, &session_id).await?;
+            (session_id, session.workspace.clone(), session.work_mode)
+        }
+        None => {
+            let dto: ActiveSessionDto = remote_call(
+                &client,
+                "new_session",
+                serde_json::json!({
+                    "cwd": config.cwd.to_string_lossy(),
+                    "profile": config.profile,
+                }),
+            )
+            .await
+            .map_err(boxed_helper)?;
+            (dto.id, PathBuf::from(&dto.workspace), dto.work_mode.into())
+        }
+    };
+
+    let mut permissions = config.permissions_mode;
+    let mut active: Option<Remote> = None;
+    let mut pending: Option<PendingRemote> = None;
+    let mut exit_after_run: Option<u8> = None;
+    let mut terminal_open = true;
+
+    let outcome = async {
+        console.print("Soyo chat (persistent session, shared helper). Type /help for commands.\n> ")?;
+        loop {
+            enum Tick {
+                Line(Option<Result<String, &'static str>>),
+                Envelope(Option<Box<DesktopStreamEnvelope>>),
+                Finished(Result<Result<SubmitPromptResultDto, DesktopError>, tokio::task::JoinError>),
+                Interrupt(Option<signals::Received>),
+            }
+            let event = if let Some(run) = active.as_mut() {
+                tokio::select! { biased;
+                    sig=interrupts.recv()=>Tick::Interrupt(sig),
+                    result=&mut run.join=>Tick::Finished(result),
+                    env=run.events.recv(), if run.events_open=>Tick::Envelope(env.map(Box::new)),
+                    line=console.lines.recv(), if terminal_open=>Tick::Line(line),
+                }
+            } else {
+                tokio::select! { biased; sig=interrupts.recv()=>Tick::Interrupt(sig), line=console.lines.recv()=>Tick::Line(line) }
+            };
+            match event {
+                Tick::Interrupt(result) => {
+                    if result.is_none() {
+                        return Err("signal listener closed".into());
+                    }
+                    if let Some(run) = active.as_mut() {
+                        if result == Some(signals::Received::Terminate) {
+                            exit_after_run = Some(130);
+                            run.cancelling = true;
+                            let _ = client
+                                .call("cancel_run", serde_json::json!({}))
+                                .await;
+                        } else if run.cancelling {
+                            std::process::exit(130);
+                        } else {
+                            run.cancelling = true;
+                            let _ = client
+                                .call("cancel_run", serde_json::json!({}))
+                                .await;
+                        }
+                        pending = None;
+                        console.print("\nCancelling run...\n")?;
+                    } else {
+                        console.print("\nInterrupted.\n")?;
+                        return Ok(130);
+                    }
+                }
+                Tick::Finished(joined) => {
+                    let old = active.take().ok_or("missing active run")?;
+                    pending = None;
+                    let compact_after_run = old.kind == RunKind::Execution
+                        && !old.cancelling
+                        && remote_compaction_pending(&client).await;
+                    let mut completed = false;
+                    match joined {
+                        Err(_) => {
+                            eprintln!("soyo: helper run task failed");
+                            return Ok(1);
+                        }
+                        Ok(Err(err)) => {
+                            // Run was rejected or failed at the helper boundary.
+                            log_warning(
+                                &config,
+                                "error",
+                                "run.failed",
+                                serde_json::json!({"session_id":session_id,"error":{"code":err.code,"message":err.message}}),
+                            );
+                            report_runtime_error(&helper_boundary_error(&err), &config);
+                        }
+                        Ok(Ok(_result)) => {
+                            if let Some(err) = old.completed_error {
+                                log_warning(
+                                    &config,
+                                    "error",
+                                    "run.failed",
+                                    serde_json::json!({"session_id":session_id,"error":{"code":err.code,"message":err.message}}),
+                                );
+                                report_runtime_error(&helper_boundary_error(&err), &config);
+                            } else if let Some(result) = old.finished {
+                                completed = result.status == RunStatus::Completed;
+                                log_run_result(&config, &result);
+                                let code = report_result_inner(
+                                    &result,
+                                    old.needs_input_question.clone(),
+                                    old.streamed,
+                                    &config,
+                                );
+                                if code != 0 {
+                                    return Ok(code);
+                                }
+                            } else {
+                                eprintln!("soyo: run finished without a result");
+                            }
+                        }
+                    }
+                    if let Some(code) = exit_after_run {
+                        if terminal_open {
+                            console.print("Goodbye.\n")?;
+                        }
+                        return Ok(code);
+                    }
+                    // Keep the local mode mirror current; boundary switches
+                    // apply while a run finishes.
+                    session_mode = remote_mode(&client).await.unwrap_or(session_mode);
+                    if compact_after_run && completed {
+                        match start_remote(&client, RunKind::Compaction, SubmitPromptParams {
+                            session_id: Some(session_id.clone()),
+                            ..SubmitPromptParams::default()
+                        }).await {
+                            Ok(run) => {
+                                active = Some(run);
+                                console.print("Compacting context...\n")?;
+                                continue;
+                            }
+                            Err(error) => console.print(&format!(
+                                "soyo: {}\n",
+                                safe_terminal_text(&error.message)
+                            ))?,
+                        }
+                    }
+                    console.print("> ")?;
+                }
+                Tick::Envelope(Some(env)) => match *env {
+                    DesktopStreamEnvelope::RawSchemaEvent { event } => {
+                        if let Ok(schema_event) = serde_json::from_value::<Event>(event) {
+                            match schema_event.payload {
+                                EventPayload::ModelTextDelta { text, .. } => {
+                                    console.print(&safe_terminal_text(&text))?;
+                                    if let Some(run) = active.as_mut() {
+                                        run.streamed = true;
+                                    }
+                                }
+                                EventPayload::RunFinished(result) => {
+                                    if let Some(run) = active.as_mut() {
+                                        run.finished = Some(result);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    DesktopStreamEnvelope::ApprovalNeeded(dto) => {
+                        if terminal_open
+                            && pending.is_none()
+                            && let Some(display) = approval_display(&dto)
+                        {
+                            show_prompt(&mut console, &display, &config)?;
+                            pending = Some(PendingRemote::Approval {
+                                display,
+                                approval_id: dto.approval_id,
+                                call_id: dto.call_id,
+                            });
+                        }
+                    }
+                    DesktopStreamEnvelope::InputNeeded(dto) => {
+                        if terminal_open && pending.is_none() {
+                            let display = input_display(&dto);
+                            show_prompt(&mut console, &display, &config)?;
+                            pending = Some(PendingRemote::Input {
+                                display,
+                                input_id: dto.input_id,
+                            });
+                        }
+                    }
+                    DesktopStreamEnvelope::RunCompleted {
+                        error,
+                        needs_input_question,
+                        ..
+                    } => {
+                        if let Some(run) = active.as_mut() {
+                            run.completed_error = error;
+                            run.needs_input_question = needs_input_question;
+                        }
+                    }
+                    _ => {}
+                },
+                Tick::Envelope(None) => {
+                    if let Some(run) = active.as_mut() {
+                        run.events_open = false;
+                    }
+                }
+                Tick::Line(None) => {
+                    if let Some(run) = active.as_mut() {
+                        terminal_open = false;
+                        run.cancelling = true;
+                        let _ = client.call("cancel_run", serde_json::json!({})).await;
+                        pending = None;
+                        exit_after_run = Some(0);
+                        continue;
+                    }
+                    return Ok(0);
+                }
+                Tick::Line(Some(Err(error))) => {
+                    if let Some(run) = active.as_mut() {
+                        eprintln!("soyo: {error}");
+                        terminal_open = false;
+                        run.cancelling = true;
+                        let _ = client.call("cancel_run", serde_json::json!({})).await;
+                        pending = None;
+                        exit_after_run = Some(1);
+                        continue;
+                    }
+                    return Err(error.into());
+                }
+                Tick::Line(Some(Ok(line))) => {
+                    let escaped = line.starts_with("//");
+                    let text = if escaped { line[1..].to_owned() } else { line };
+                    if !escaped && text.starts_with('/') {
+                        let mut words = text.split_whitespace();
+                        let command = words.next().unwrap_or("");
+                        let arg = words.next();
+                        if words.next().is_some()
+                            || (arg.is_some()
+                                && matches!(
+                                    command,
+                                    "/help" | "/status" | "/cancel" | "/exit" | "/jobs" | "/compact"
+                                ))
+                        {
+                            console.print("Invalid command arguments.\n")?;
+                            if active.is_none() {
+                                console.print("> ")?;
+                            } else if let Some(request) = pending.as_ref() {
+                                show_prompt(&mut console, request.display(), &config)?;
+                            }
+                            continue;
+                        }
+                        match command {
+                            "/help" => help(&mut console)?,
+                            "/exit" => {
+                                if let Some(run) = active.as_mut() {
+                                    run.cancelling = true;
+                                    let _ =
+                                        client.call("cancel_run", serde_json::json!({})).await;
+                                    pending = None;
+                                    exit_after_run = Some(0);
+                                    console.print("Cancelling run...\n")?;
+                                } else {
+                                    console.print("Goodbye.\n")?;
+                                    return Ok(0);
+                                }
+                            }
+                            "/cancel" => {
+                                if let Some(run) = active.as_mut() {
+                                    run.cancelling = true;
+                                    let _ =
+                                        client.call("cancel_run", serde_json::json!({})).await;
+                                    pending = None;
+                                    console.print("Cancelling run...\n")?;
+                                } else {
+                                    console.print("No active run.\n")?;
+                                }
+                            }
+                            "/compact" => {
+                                match remote_compact(&client, active.is_some()).await {
+                                    Ok(CompactOutcome::Queued) => console.print(
+                                        "Compaction requested for the next model boundary.\n",
+                                    )?,
+                                    Ok(CompactOutcome::Started(run)) => {
+                                        active = Some(*run);
+                                        console.print("Compacting context...\n")?;
+                                    }
+                                    Ok(CompactOutcome::Rejected(message)) => {
+                                        console.print(&format!("{message}\n"))?
+                                    }
+                                    Err(error) => console.print(&format!(
+                                        "soyo: {}\n",
+                                        safe_terminal_text(&error.message)
+                                    ))?,
+                                }
+                            }
+                            "/jobs" => {
+                                let jobs: Vec<BackgroundJobDto> = remote_call(
+                                    &client,
+                                    "list_jobs",
+                                    serde_json::json!({}),
+                                )
+                                .await
+                                .unwrap_or_default();
+                                if jobs.is_empty() {
+                                    console.print("No background jobs.\n")?;
+                                } else {
+                                    for job in &jobs {
+                                        console.print(&format!(
+                                            "{} {} {}\n",
+                                            safe_terminal_text(&job.job_id),
+                                            safe_terminal_text(
+                                                job.tool.as_deref().unwrap_or("-")
+                                            ),
+                                            remote_job_display(Some(job))
+                                        ))?;
+                                    }
+                                }
+                            }
+                            "/job" => {
+                                if let Some(id) = arg {
+                                    let job: Option<BackgroundJobDto> = remote_call(
+                                        &client,
+                                        "get_job",
+                                        serde_json::json!({"job_id": id}),
+                                    )
+                                    .await
+                                    .unwrap_or_default();
+                                    console.print(&format!(
+                                        "{}\n",
+                                        remote_job_display(job.as_ref())
+                                    ))?;
+                                } else {
+                                    console.print("Usage: /job ID.\n")?;
+                                }
+                            }
+                            "/cancel-job" => {
+                                if let Some(id) = arg {
+                                    let cancelled: bool = remote_call(
+                                        &client,
+                                        "cancel_job",
+                                        serde_json::json!({"job_id": id}),
+                                    )
+                                    .await
+                                    .unwrap_or(false);
+                                    console.print(if cancelled {
+                                        "Background cancellation requested.\n"
+                                    } else {
+                                        "Background job not running or not found.\n"
+                                    })?;
+                                } else {
+                                    console.print("Usage: /cancel-job ID.\n")?;
+                                }
+                            }
+                            "/mode" => {
+                                if let Some(arg) = arg {
+                                    if let Some(mode) = work_mode(arg) {
+                                        if let Err(e) =
+                                            session::check_roots(&config, &workspace, mode)
+                                        {
+                                            console.print(&format!(
+                                                "soyo: {}\n> ",
+                                                safe_terminal_text(&e.to_string())
+                                            ))?;
+                                            continue;
+                                        }
+                                        match remote_call::<ModeStateDto>(
+                                            &client,
+                                            "set_work_mode",
+                                            serde_json::json!({"mode": WorkModeDto::from(mode)}),
+                                        )
+                                        .await
+                                        {
+                                            Ok(state) => {
+                                                // The helper already failed any
+                                                // stale approval; drop the
+                                                // local pending marker.
+                                                pending = None;
+                                                session_mode = state.current.into();
+                                                console.print(&format!(
+                                                    "Mode: {}{}\n",
+                                                    display_mode(session_mode),
+                                                    state.pending.map_or(
+                                                        String::new(),
+                                                        |m| format!(
+                                                            "; pending {}",
+                                                            display_mode(m.into())
+                                                        )
+                                                    )
+                                                ))?;
+                                            }
+                                            Err(error) => console.print(&format!(
+                                                "soyo: {}\n",
+                                                safe_terminal_text(&error.message)
+                                            ))?,
+                                        }
+                                    } else {
+                                        console.print("Unknown mode.\n")?;
+                                    }
+                                } else if active.is_some() {
+                                    if let Some(state) = remote_run_state(&client).await {
+                                        console.print(&format!(
+                                            "Mode: {}{}\n",
+                                            display_mode(state.current.into()),
+                                            state.pending.map_or(String::new(), |m| format!(
+                                                "; pending {}",
+                                                display_mode(m.into())
+                                            ))
+                                        ))?;
+                                    }
+                                } else {
+                                    console.print(&format!(
+                                        "Mode: {}\n",
+                                        display_mode(session_mode)
+                                    ))?;
+                                }
+                            }
+                            "/permissions" => {
+                                if let Some(arg) = arg {
+                                    if active.is_some() {
+                                        console.print(
+                                            "Permissions can only change while idle.\n",
+                                        )?;
+                                    } else if let Some(value) = permission(arg) {
+                                        match remote_call::<PermissionModeDto>(
+                                            &client,
+                                            "set_permission_mode",
+                                            serde_json::json!({"permissions": PermissionModeDto::from(value)}),
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                permissions = value;
+                                                console.print(&format!(
+                                                    "Permissions: {}\n",
+                                                    display_permission(value)
+                                                ))?;
+                                            }
+                                            Err(error) => console.print(&format!(
+                                                "soyo: {}\n",
+                                                safe_terminal_text(&error.message)
+                                            ))?,
+                                        }
+                                    } else {
+                                        console.print("Unknown permission mode.\n")?;
+                                    }
+                                } else {
+                                    console.print(&format!(
+                                        "Permissions: {}\n",
+                                        display_permission(permissions)
+                                    ))?;
+                                }
+                            }
+                            "/status" => {
+                                let (mode, pending_mode) =
+                                    match remote_run_state(&client).await {
+                                        Some(state) => (
+                                            state.current.into(),
+                                            state.pending.map(Into::into),
+                                        ),
+                                        None => (session_mode, None),
+                                    };
+                                console.print(&format!(
+                                    "Status: {}; mode: {}; pending: {}; permissions: {}\n",
+                                    if active.is_some() { "running" } else { "idle" },
+                                    display_mode(mode),
+                                    pending_mode.map_or("none", display_mode),
+                                    display_permission(permissions)
+                                ))?;
+                            }
+                            _ => console.print("Unknown command; use /help.\n")?,
+                        }
+                        if active.is_none() {
+                            console.print("> ")?;
+                        } else if let Some(request) = pending.as_ref() {
+                            show_prompt(&mut console, request.display(), &config)?;
+                        }
+                        continue;
+                    }
+                    if let Some(request) = pending.take() {
+                        match request {
+                            PendingRemote::Approval {
+                                approval_id,
+                                call_id,
+                                ..
+                            } => {
+                                let yes = matches!(
+                                    text.trim().to_ascii_lowercase().as_str(),
+                                    "y" | "yes"
+                                );
+                                let _ = client
+                                    .call(
+                                        "reply_approval",
+                                        serde_json::json!({
+                                            "approval_id": approval_id,
+                                            "call_id": call_id,
+                                            "approved": yes,
+                                        }),
+                                    )
+                                    .await;
+                            }
+                            PendingRemote::Input { input_id, .. } => {
+                                let _ = client
+                                    .call(
+                                        "reply_input",
+                                        serde_json::json!({
+                                            "input_id": input_id,
+                                            "answer": text,
+                                        }),
+                                    )
+                                    .await;
+                            }
+                        }
+                        continue;
+                    }
+                    if active.is_some() {
+                        console.print("Run in progress; use /compact, /status, /mode or /cancel.\n")?;
+                        continue;
+                    }
+                    if text.trim().is_empty() {
+                        console.print("> ")?;
+                        continue;
+                    }
+                    match start_remote(&client, RunKind::Execution, SubmitPromptParams {
+                        prompt: text,
+                        session_id: Some(session_id.clone()),
+                        raw_events: true,
+                        capture_media: true,
+                        personal_context: Some(PersonalContextDto {
+                            preferences: personal_context.preferences.clone(),
+                            memory: personal_context.memory.clone(),
+                        }),
+                        anthropic_prompt_cache,
+                        ..SubmitPromptParams::default()
+                    }).await {
+                        Ok(run) => active = Some(run),
+                        Err(error) => {
+                            console
+                                .print(&format!("soyo: {}\n> ", safe_terminal_text(&error.message)))?;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    .await;
+    pending.take();
+    if active.is_some()
+        && let Some(run) = active.take()
+    {
+        run.join.abort();
+        let _ = client.call("cancel_run", serde_json::json!({})).await;
+    }
+    client.detach().await;
+    outcome
+}
+
+enum CompactOutcome {
+    Queued,
+    Started(Box<Remote>),
+    Rejected(String),
+}
+
+/// `/compact`: mid-run this queues compaction at the next model boundary
+/// (`compact_session` resolves immediately); idle it becomes the active run.
+async fn remote_compact(
+    client: &Arc<HelperClient>,
+    mid_run: bool,
+) -> Result<CompactOutcome, DesktopError> {
+    if mid_run {
+        let dto: SubmitPromptResultDto = client
+            .call_streaming(
+                "compact_session",
+                &serde_json::json!({}),
+                mpsc::unbounded_channel().0,
+            )
+            .await?;
+        return Ok(match dto.action.as_str() {
+            "compaction_queued" => CompactOutcome::Queued,
+            _ => CompactOutcome::Rejected(format!("compact: {}", dto.action)),
+        });
+    }
+    Ok(CompactOutcome::Started(Box::new(
+        start_remote(client, RunKind::Compaction, SubmitPromptParams::default()).await?,
+    )))
+}
+
+async fn start_remote(
+    client: &Arc<HelperClient>,
+    kind: RunKind,
+    params: SubmitPromptParams,
+) -> Result<Remote, DesktopError> {
+    let (events_tx, events) = mpsc::unbounded_channel();
+    let method = match kind {
+        RunKind::Execution => "submit_prompt",
+        RunKind::Compaction => "compact_session",
+    };
+    let client = Arc::clone(client);
+    let join = tokio::spawn(async move {
+        client
+            .call_streaming::<_, SubmitPromptResultDto>(method, &params, events_tx)
+            .await
+    });
+    Ok(Remote {
+        kind,
+        join,
+        events,
+        events_open: true,
+        streamed: false,
+        cancelling: false,
+        finished: None,
+        completed_error: None,
+        needs_input_question: None,
+    })
+}
+
+async fn remote_run_state(client: &Arc<HelperClient>) -> Option<RunStateDto> {
+    remote_call(client, "get_run_state", serde_json::json!({}))
+        .await
+        .ok()
+}
+
+async fn remote_mode(client: &Arc<HelperClient>) -> Option<WorkMode> {
+    remote_run_state(client)
+        .await
+        .map(|state| state.current.into())
+}
+
+async fn remote_compaction_pending(client: &Arc<HelperClient>) -> bool {
+    remote_run_state(client)
+        .await
+        .map(|state| state.compaction_pending)
+        .unwrap_or(false)
+}
+
+async fn load_remote_session(
+    client: &Arc<HelperClient>,
+    session_id: &str,
+) -> Result<Session, Box<dyn std::error::Error>> {
+    let value: serde_json::Value = remote_call(
+        client,
+        "get_session",
+        serde_json::json!({"session_id": session_id}),
+    )
+    .await
+    .map_err(boxed_helper)?;
+    let session = serde_json::from_value::<Option<Session>>(value)?.ok_or("session not found")?;
+    Ok(session)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

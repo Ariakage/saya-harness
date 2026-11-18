@@ -1321,7 +1321,7 @@ async fn launch_tui(cli: &Cli, overrides: Overrides, environment: Environment) -
     }
 }
 
-async fn run_chat_session(cli: &Cli, config: Config, prepared: Option<session::Prepared>) -> u8 {
+async fn run_chat_session(cli: &Cli, config: Config, resume: Option<chat::RemoteResume>) -> u8 {
     let personal = match personal_context(cli, &config) {
         Ok(personal) => personal,
         Err(e) => return fail(safe_output(&e.to_string(), &config)),
@@ -1329,7 +1329,34 @@ async fn run_chat_session(cli: &Cli, config: Config, prepared: Option<session::P
     let Ok(secrets) = config_secrets(&config) else {
         return fail("sensitive details unavailable");
     };
-    match chat::chat(config, personal, cli.anthropic_prompt_cache, prepared).await {
+    if cli.config.is_some() || cli.data_dir.is_some() {
+        // Explicit config/data-dir overrides bypass the shared helper — the
+        // same contract `soyo run` uses, since the daemon cannot honor
+        // per-invocation storage paths.
+        let prepared = match resume {
+            Some(resume) => match session::resume(
+                &config,
+                &resume.session_id,
+                session::ResumeOptions {
+                    accept_config_change: resume.accept_config_change,
+                    cwd_explicit: resume.cwd_explicit,
+                    profile_explicit: resume.profile_explicit,
+                    mode_override: resume.mode_override,
+                },
+            )
+            .await
+            {
+                Ok(prepared) => Some(prepared),
+                Err(e) => return fail(safe_output(&e.to_string(), &config)),
+            },
+            None => None,
+        };
+        return match chat::chat(config, personal, cli.anthropic_prompt_cache, prepared).await {
+            Ok(code) => code,
+            Err(e) => fail(redacted_text(&e.to_string(), &secrets)),
+        };
+    }
+    match chat::chat_via_helper(config, personal, cli.anthropic_prompt_cache, resume).await {
         Ok(code) => code,
         Err(e) => fail(redacted_text(&e.to_string(), &secrets)),
     }
@@ -1483,21 +1510,21 @@ async fn dispatch_command(cli: &Cli, overrides: Overrides, env: Environment) -> 
             accept_config_change,
         }) => match load_config(overrides, env) {
             Err(e) => fail(e),
-            Ok(config) => match session::resume(
-                &config,
-                session_id,
-                session::ResumeOptions {
-                    accept_config_change: *accept_config_change,
-                    cwd_explicit: cli.cwd.is_some(),
-                    profile_explicit: cli.profile.is_some(),
-                    mode_override: cli.mode.map(Into::into),
-                },
-            )
-            .await
-            {
-                Ok(prepared) => run_chat_session(cli, config, Some(prepared)).await,
-                Err(e) => fail(safe_output(&e.to_string(), &config)),
-            },
+            Ok(config) => {
+                ensure_helper_started().await;
+                run_chat_session(
+                    cli,
+                    config,
+                    Some(chat::RemoteResume {
+                        session_id: session_id.clone(),
+                        accept_config_change: *accept_config_change,
+                        cwd_explicit: cli.cwd.is_some(),
+                        profile_explicit: cli.profile.is_some(),
+                        mode_override: cli.mode.map(Into::into),
+                    }),
+                )
+                .await
+            }
         },
     }
 }

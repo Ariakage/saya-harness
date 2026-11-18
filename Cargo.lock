@@ -4983,6 +4983,7 @@ dependencies = [
  "clap",
  "libc",
  "rusqlite",
+ "serde",
  "serde_json",
  "soyo-app",
  "soyo-contract",

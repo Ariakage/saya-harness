@@ -562,6 +562,39 @@ impl HostService {
             .collect())
     }
 
+    /// Single background job by id (`get_job`), with the same live-status
+    /// overlay as `list_jobs`. `None` when the session has no such job.
+    pub async fn get_job(&self, job_id: &str) -> Result<Option<BackgroundJobDto>, DesktopError> {
+        let jobs = self.list_jobs().await?;
+        Ok(jobs.into_iter().find(|job| job.job_id == job_id))
+    }
+
+    /// Request cancellation of a still-running background job (`cancel_job`).
+    /// Returns `false` when there is no active run or the job is not running.
+    pub async fn cancel_job(&self, job_id: &str) -> Result<bool, DesktopError> {
+        let secrets = self.current_secrets();
+        let handle = self
+            .active_control
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|c| c.handle.clone()));
+        let Some(handle) = handle else {
+            return Ok(false);
+        };
+        match handle
+            .background_status(job_id)
+            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?
+        {
+            Some(soyo_core::background::JobStatus::Running) => {
+                handle
+                    .cancel_background(job_id)
+                    .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     pub fn cancel_background_job(&self, job_id: &str) -> Result<bool, DesktopError> {
         let secrets = self.current_secrets();
         let control_guard = self
