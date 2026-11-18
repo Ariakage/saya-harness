@@ -255,7 +255,9 @@ async fn dispatch(
             let r = (|| {
                 service.reply_input(
                     param_string(&params, "input_id")?,
-                    param_string(&params, "answer")?.to_owned(),
+                    param_opt(&params, "answer")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                 )
             })();
             r.and_then(|_| ok(Value::Null))
@@ -434,7 +436,7 @@ async fn dispatch(
                 body_b64: STANDARD.encode(&payload.body),
             })
         })(),
-        "submit_prompt" | "compact_session" => {
+        "submit_prompt" | "compact_session" | "run_prompt" => {
             dispatch_streaming(id, &method, params, &service, &writer).await
         }
         _ => Err(DesktopError::new(
@@ -482,6 +484,13 @@ async fn dispatch_streaming(
                 .transpose()?
                 .unwrap_or_default();
             service.submit_prompt(prompt, attachments, sink).await
+        }
+        "run_prompt" => {
+            let run_params: soyo_ipc::types::RunPromptParams = serde_json::from_value(params)
+                .map_err(|err| {
+                    DesktopError::new("invalid_params", format!("run_prompt params: {err}"))
+                })?;
+            service.run_prompt(run_params, sink).await
         }
         _ => service.compact_session(sink).await,
     };

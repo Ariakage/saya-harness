@@ -16,8 +16,8 @@ use soyo_core::{
     boundary::{Cancellation, Model, Operation, Store, StoreChange},
     config::{self, Config, Environment, Overrides},
     contract::{
-        BoundaryError, ErrorInfo, Event, EventPayload, HistoryItem, ModelPurpose, RunId, RunResult,
-        Session, Usage, WorkMode,
+        BoundaryError, ErrorInfo, Event, EventPayload, HistoryItem, ModelPurpose, Persistence,
+        RunId, RunResult, RunStatus, SCHEMA_VERSION, Session, SessionId, Usage, WorkMode,
     },
     credentials::SecretRegistry,
     execution::BackendKind,
@@ -32,9 +32,9 @@ use soyo_ipc::{
         ActiveSessionDto, ApprovalRequestDto, AttachmentTokenDto, BootstrapStateDto,
         ContextEntryDto, DesktopError, DesktopStreamEnvelope, InputRequestDto, McpStatusBadgeDto,
         MessageRoleDto, ModeStateDto, PermissionModeDto, ProfileOptionDto, RestoredMessageDto,
-        ResumeSessionResultDto, RunResultDto, SchemaEnvelopeDto, SchemaEventDto, SessionItemDto,
-        SessionPageDto, SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto, ToolResultDto,
-        WorkModeDto,
+        ResumeSessionResultDto, RunPromptParams, RunResultDto, SchemaEnvelopeDto, SchemaEventDto,
+        SessionItemDto, SessionPageDto, SubmitPromptResultDto, ThinkingSnapshotDto, TodoItemDto,
+        ToolResultDto, WorkModeDto,
     },
 };
 use std::{
@@ -52,6 +52,48 @@ const MAX_RESTORED_HISTORY: usize = 512;
 pub enum RunKind {
     Execution,
     Compaction,
+}
+
+/// Per-run knobs carried by `start_run_ex`. Desktop submit/compact paths keep
+/// the interactive defaults; `run_prompt` (the socket-backed `soyo run`)
+/// supplies overrides, headless interaction, and raw event passthrough.
+pub struct StartRunRequest {
+    pub expanded_prompt: Option<String>,
+    pub kind: RunKind,
+    /// Wire approval/input handlers. Headless runs leave them `None` so the
+    /// runtime ends `needs_confirmation`/`needs_input` like the in-process CLI.
+    pub interactive: bool,
+    pub approvals: Preauthorizations,
+    pub personal_context: PersonalContext,
+    pub anthropic_prompt_cache: bool,
+    /// Emit `RawSchemaEvent` passthrough instead of `SchemaEvent` DTOs.
+    pub raw_events: bool,
+    /// Emit the synthetic `session.created`/`session.resumed` line the CLI
+    /// event writer emits before the run starts.
+    pub emit_session_event: bool,
+    /// Per-run config with client overrides applied; the shared daemon config
+    /// is left untouched.
+    pub config: Option<Config>,
+    /// Whether the prepared session came from a resume (`session.resumed`
+    /// vs `session.created` for `emit_session_event`).
+    pub resumed: bool,
+}
+
+impl StartRunRequest {
+    fn desktop(expanded_prompt: Option<String>, kind: RunKind) -> Self {
+        Self {
+            expanded_prompt,
+            kind,
+            interactive: true,
+            approvals: Preauthorizations::default(),
+            personal_context: PersonalContext::default(),
+            anthropic_prompt_cache: false,
+            raw_events: false,
+            emit_session_event: false,
+            config: None,
+            resumed: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -526,11 +568,154 @@ impl HostService {
                 action: "steered".into(),
                 session_id,
                 run_id,
+                recovered_runs: None,
+                recovered_tools: None,
             });
         }
 
         self.start_run(Some(expanded), RunKind::Execution, sink)
             .await
+    }
+
+    /// Socket-backed `soyo run`: headless-or-interactive execution that keeps
+    /// the CLI's session prep, resume options, approval files, personal
+    /// context, and raw schema-event output on the shared runtime.
+    pub async fn run_prompt(
+        &self,
+        params: RunPromptParams,
+        sink: StreamSink,
+    ) -> Result<SubmitPromptResultDto, DesktopError> {
+        let secrets = self.current_secrets();
+        if params.prompt.trim().is_empty() {
+            return Err(DesktopError::new("invalid_input", "Prompt cannot be empty"));
+        }
+        let expanded = expand_attachments(&params.prompt, &params.attachments);
+
+        let mut guard = self.inner.lock().await;
+        if guard.active_run_id.is_some() {
+            return Err(DesktopError::new(
+                "run_active",
+                "Another run is already active",
+            ));
+        }
+        let mut cfg = guard.config.clone().ok_or_else(|| {
+            DesktopError::new(
+                "invalid_config",
+                guard
+                    .config_error
+                    .as_deref()
+                    .unwrap_or("Configuration is not loaded"),
+            )
+        })?;
+        if cfg.profile.is_none() && params.profile.is_none() {
+            return Err(DesktopError::new(
+                "invalid_config",
+                "Select a configured model profile first",
+            ));
+        }
+        // Client overrides apply to this run only; the shared daemon config
+        // (and other clients' sessions) stay untouched.
+        if let Some(cwd) = &params.cwd {
+            cfg.cwd = PathBuf::from(cwd);
+        }
+        if let Some(profile) = &params.profile {
+            cfg.profile = Some(profile.clone());
+        }
+        if let Some(mode) = params.mode {
+            cfg.mode = mode.into();
+        }
+        if let Some(permissions) = params.permissions {
+            cfg.permissions_mode = permissions.into();
+        }
+        if cfg.profile.is_none() {
+            return Err(DesktopError::new(
+                "invalid_config",
+                "Select a configured model profile first",
+            ));
+        }
+
+        let prepared = if let Some(session_id) = &params.session_id {
+            session::resume(
+                &cfg,
+                session_id,
+                session::ResumeOptions {
+                    accept_config_change: params.accept_config_change,
+                    cwd_explicit: params.cwd.is_some(),
+                    profile_explicit: params.profile.is_some(),
+                    mode_override: params.mode.map(Into::into),
+                },
+            )
+            .await
+            .map_err(|err| {
+                let msg = redaction::redact_str(&err.to_string(), &secrets);
+                let code = if msg.contains("configuration changed") {
+                    "config_change_requires_confirmation"
+                } else {
+                    "resume_failed"
+                };
+                DesktopError::new(code, msg)
+            })?
+        } else {
+            let new_sess = soyo_app::new_session(&cfg).map_err(|err| {
+                DesktopError::new(
+                    "invalid_config",
+                    redaction::redact_str(&err.to_string(), &secrets),
+                )
+            })?;
+            session::create(&cfg, new_sess).await.map_err(|err| {
+                DesktopError::new(
+                    "storage_error",
+                    redaction::redact_str(&err.to_string(), &secrets),
+                )
+            })?
+        };
+        let recovered_runs = prepared.recovery.interrupted_runs as u32;
+        let recovered_tools =
+            (prepared.recovery.unknown_tools + prepared.recovery.closed_calls) as u32;
+        let workspace = prepared.session.workspace.clone();
+        self.sync_attachment_scope(Some(&prepared));
+        guard.last_usage = None;
+        guard.prepared = Some(prepared);
+        drop(guard);
+
+        let approvals = if let Some(path) = &params.approval_file {
+            Preauthorizations::from_file(std::path::Path::new(path), &workspace).map_err(|err| {
+                DesktopError::new(
+                    "invalid_input",
+                    redaction::redact_str(&err.to_string(), &secrets),
+                )
+            })?
+        } else {
+            Preauthorizations::default()
+        };
+
+        self.start_run_ex(
+            StartRunRequest {
+                expanded_prompt: Some(expanded),
+                kind: RunKind::Execution,
+                interactive: params.interactive,
+                approvals,
+                personal_context: params
+                    .personal_context
+                    .map(|p| PersonalContext {
+                        preferences: p.preferences,
+                        memory: p.memory,
+                    })
+                    .unwrap_or_default(),
+                anthropic_prompt_cache: params.anthropic_prompt_cache,
+                raw_events: true,
+                emit_session_event: true,
+                config: Some(cfg),
+                resumed: params.session_id.is_some(),
+            },
+            sink,
+        )
+        .await
+        .map(|mut result| {
+            result.recovered_runs = Some(recovered_runs);
+            result.recovered_tools = Some(recovered_tools);
+            result
+        })
     }
 
     pub async fn compact_session(
@@ -564,6 +749,8 @@ impl HostService {
                 action: "compaction_queued".into(),
                 session_id: String::new(),
                 run_id: control.run_id.0.to_string(),
+                recovered_runs: None,
+                recovered_tools: None,
             });
         }
 
@@ -576,6 +763,27 @@ impl HostService {
         kind: RunKind,
         sink: StreamSink,
     ) -> Result<SubmitPromptResultDto, DesktopError> {
+        self.start_run_ex(StartRunRequest::desktop(expanded_prompt, kind), sink)
+            .await
+    }
+
+    async fn start_run_ex(
+        &self,
+        req: StartRunRequest,
+        sink: StreamSink,
+    ) -> Result<SubmitPromptResultDto, DesktopError> {
+        let StartRunRequest {
+            expanded_prompt,
+            kind,
+            interactive,
+            approvals,
+            personal_context,
+            anthropic_prompt_cache,
+            raw_events,
+            emit_session_event,
+            config: config_override,
+            resumed,
+        } = req;
         let secrets = self.current_secrets();
         let mut guard = self.inner.lock().await;
         if guard.active_run_id.is_some() {
@@ -584,15 +792,17 @@ impl HostService {
                 "Another run is already active",
             ));
         }
-        let cfg = guard.config.clone().ok_or_else(|| {
-            DesktopError::new(
-                "invalid_config",
-                guard
-                    .config_error
-                    .as_deref()
-                    .unwrap_or("Configuration is not loaded"),
-            )
-        })?;
+        let cfg = config_override
+            .or_else(|| guard.config.clone())
+            .ok_or_else(|| {
+                DesktopError::new(
+                    "invalid_config",
+                    guard
+                        .config_error
+                        .as_deref()
+                        .unwrap_or("Configuration is not loaded"),
+                )
+            })?;
         if cfg.profile.is_none() {
             return Err(DesktopError::new(
                 "invalid_config",
@@ -676,8 +886,11 @@ impl HostService {
             writer
         });
         let store: Arc<dyn Store> = Arc::new(EventStore(writer.clone()));
+        // The channel is created unconditionally so the driver can poll it;
+        // headless runs never wire the handlers, so no request can arrive.
         let (interaction, request_rx) =
             input_channel(16).map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
+        let event_writer = writer.clone();
 
         let launch_summary = expanded_prompt
             .clone()
@@ -698,11 +911,15 @@ impl HostService {
                 permissions: cfg.permissions_mode,
                 store,
                 cancellation: cancel.clone(),
-                confirmation: Some(interaction.clone()),
-                input: Some(interaction),
-                approvals: Preauthorizations::default(),
-                personal_context: PersonalContext::default(),
-                anthropic_prompt_cache: false,
+                confirmation: if interactive {
+                    Some(interaction.clone())
+                } else {
+                    None
+                },
+                input: if interactive { Some(interaction) } else { None },
+                approvals,
+                personal_context,
+                anthropic_prompt_cache,
                 run_id: Some(run_id),
                 secret_registry: Some(self.secrets.clone()),
             },
@@ -750,6 +967,35 @@ impl HostService {
             ));
         }
 
+        // Mirror the CLI's pre-run line so `--output jsonl` streams start with
+        // session.created / session.resumed exactly like the in-process path.
+        if emit_session_event {
+            let (work_mode, workspace, profile) = (
+                session_snapshot.work_mode,
+                session_snapshot.workspace.clone(),
+                session_snapshot.profile.clone(),
+            );
+            let payload = if resumed {
+                EventPayload::SessionResumed {
+                    work_mode,
+                    permissions: cfg.permissions_mode,
+                    workspace,
+                    profile,
+                }
+            } else {
+                EventPayload::SessionCreated {
+                    work_mode,
+                    permissions: cfg.permissions_mode,
+                    workspace,
+                    profile,
+                }
+            };
+            if let Err(err) = event_writer.emit(payload, None, true).await {
+                self.clear_active_state(&mut guard);
+                return Err(DesktopError::from_boundary(&err, &secrets));
+            }
+        }
+
         let mut current = prepared.session.clone();
         let handle = runtime.handle();
         if let Ok(mut control) = self.active_control.lock()
@@ -775,6 +1021,7 @@ impl HostService {
         tokio::spawn(async move {
             drive_active_run(DriverParams {
                 run_id,
+                session_id,
                 model_display,
                 started_at,
                 sink,
@@ -789,6 +1036,8 @@ impl HostService {
                 inner: inner_arc,
                 active_control,
                 secrets: registry,
+                event_writer,
+                raw_events,
             })
             .await;
         });
@@ -801,6 +1050,8 @@ impl HostService {
             },
             session_id: session_id.0.to_string(),
             run_id: run_id.0.to_string(),
+            recovered_runs: None,
+            recovered_tools: None,
         })
     }
 
@@ -900,7 +1151,9 @@ impl HostService {
         }
     }
 
-    pub fn reply_input(&self, input_id: &str, answer: String) -> Result<(), DesktopError> {
+    /// `answer: None` declines the prompt — the runtime sees the same `Ok(None)`
+    /// the in-process handler produces when a user dismisses the question.
+    pub fn reply_input(&self, input_id: &str, answer: Option<String>) -> Result<(), DesktopError> {
         let mut guard = self
             .active_control
             .lock()
@@ -940,7 +1193,7 @@ impl HostService {
                                 "Input request expired or was cancelled",
                             ));
                         }
-                        if reply.send(Ok(Some(answer))).is_err() {
+                        if reply.send(Ok(answer)).is_err() {
                             return Err(DesktopError::new(
                                 "stale_input",
                                 "Input receiver closed before answer delivery",
@@ -1239,6 +1492,7 @@ impl HostService {
 
 struct DriverParams {
     run_id: RunId,
+    session_id: SessionId,
     model_display: String,
     started_at: Instant,
     sink: StreamSink,
@@ -1253,6 +1507,9 @@ struct DriverParams {
     inner: Arc<AsyncMutex<DesktopInner>>,
     active_control: Arc<StdMutex<Option<ActiveControl>>>,
     secrets: Arc<SecretRegistry>,
+    event_writer: Arc<EventWriter>,
+    /// `run_prompt` consumers get raw schema-v1 envelopes instead of DTOs.
+    raw_events: bool,
 }
 
 async fn drive_active_run(mut params: DriverParams) {
@@ -1334,9 +1591,13 @@ async fn drive_active_run(mut params: DriverParams) {
             maybe_event = params.event_rx.recv(), if events_open => {
                 match maybe_event {
                     Some(event) => {
-                        let secrets = params.secrets.snapshot().unwrap_or_default();
-                        let dto = convert_event(event, &mut tool_tracker, &secrets);
-                        if params.sink.send(DesktopStreamEnvelope::SchemaEvent(dto)).is_err() {
+                        let envelope = envelope_for_event(
+                            params.raw_events,
+                            &params.secrets,
+                            event,
+                            &mut tool_tracker,
+                        );
+                        if params.sink.send(envelope).is_err() {
                             consumer_disconnected = true;
                             params.cancel.cancel();
                         }
@@ -1348,6 +1609,7 @@ async fn drive_active_run(mut params: DriverParams) {
             }
             changed = params.thinking_rx.changed(), if thinking_open => {
                 match changed {
+                    Ok(()) if params.raw_events => {}
                     Ok(()) => {
                         let log = params.thinking_rx.borrow_and_update().clone();
                         let secrets = params.secrets.snapshot().unwrap_or_default();
@@ -1364,6 +1626,7 @@ async fn drive_active_run(mut params: DriverParams) {
             }
             changed = params.context_rx.changed(), if context_open => {
                 match changed {
+                    Ok(()) if params.raw_events => {}
                     Ok(()) => {
                         if let Some(snapshot) = params.context_rx.borrow_and_update().clone()
                             && params.sink.send(convert_context(snapshot)).is_err()
@@ -1383,21 +1646,47 @@ async fn drive_active_run(mut params: DriverParams) {
         }
     };
 
+    // On boundary failure emit the terminal `run.finished` line the in-process
+    // CLI produces via `EventWriter::emit_failure`, so raw/JSONL consumers see
+    // exactly one final event either way.
+    match &run_outcome {
+        Ok((Err(err), _)) => {
+            let _ = params
+                .event_writer
+                .emit_failure(failed_run_result(
+                    params.session_id,
+                    params.run_id,
+                    err.0.clone(),
+                ))
+                .await;
+        }
+        Err(join_err) => {
+            let _ = params
+                .event_writer
+                .emit_failure(failed_run_result(
+                    params.session_id,
+                    params.run_id,
+                    ErrorInfo {
+                        code: "run_task_failed".into(),
+                        message: join_err.to_string(),
+                    },
+                ))
+                .await;
+        }
+        _ => {}
+    }
+
     // Drain any events/thinking/context produced right before completion.
     while let Ok(event) = params.event_rx.try_recv() {
         if !consumer_disconnected {
-            let secrets = params.secrets.snapshot().unwrap_or_default();
-            let dto = convert_event(event, &mut tool_tracker, &secrets);
-            if params
-                .sink
-                .send(DesktopStreamEnvelope::SchemaEvent(dto))
-                .is_err()
-            {
+            let envelope =
+                envelope_for_event(params.raw_events, &params.secrets, event, &mut tool_tracker);
+            if params.sink.send(envelope).is_err() {
                 consumer_disconnected = true;
             }
         }
     }
-    if !consumer_disconnected {
+    if !consumer_disconnected && !params.raw_events {
         let log = params.thinking_rx.borrow_and_update().clone();
         if !log.entries.is_empty() {
             let secrets = params.secrets.snapshot().unwrap_or_default();
@@ -1417,7 +1706,7 @@ async fn drive_active_run(mut params: DriverParams) {
     let cleanup_res = params.handle.shutdown_background().await;
 
     let secrets = params.secrets.snapshot().unwrap_or_default();
-    let (status_str, usage_opt, todos, final_error) = match run_outcome {
+    let (status_str, usage_opt, todos, final_error, needs_input_question) = match run_outcome {
         Ok((outcome, updated_session)) => {
             let todos = current_todos(&updated_session.history)
                 .into_iter()
@@ -1442,6 +1731,30 @@ async fn drive_active_run(mut params: DriverParams) {
             {
                 final_error = Some(DesktopError::from_boundary(&cleanup_err, &secrets));
             }
+            // Same clarification lookup the CLI's report_result performs on
+            // session history for `needs_input` text output.
+            let needs_input_question = if status_str == "needs_input" {
+                updated_session
+                    .history
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        HistoryItem::ToolResult { result, .. }
+                            if result
+                                .error
+                                .as_ref()
+                                .is_some_and(|e| e.code == "needs_input") =>
+                        {
+                            result
+                                .data
+                                .as_ref()
+                                .map(|data| redaction::redact_str(&data.to_string(), &secrets))
+                        }
+                        _ => None,
+                    })
+            } else {
+                None
+            };
             let mut inner = params.inner.lock().await;
             if let Some(cfg) = &mut inner.config {
                 cfg.mode = updated_session.work_mode;
@@ -1453,7 +1766,13 @@ async fn drive_active_run(mut params: DriverParams) {
                 inner.last_usage = Some(usage.clone());
             }
             inner.active_run_id = None;
-            (status_str, usage_opt, todos, final_error)
+            (
+                status_str,
+                usage_opt,
+                todos,
+                final_error,
+                needs_input_question,
+            )
         }
         Err(_) => {
             let mut inner = params.inner.lock().await;
@@ -1466,6 +1785,7 @@ async fn drive_active_run(mut params: DriverParams) {
                     "run_task_failed",
                     "Runtime task terminated unexpectedly",
                 )),
+                None,
             )
         }
     };
@@ -1493,7 +1813,44 @@ async fn drive_active_run(mut params: DriverParams) {
             summary_line: redaction::redact_str(&summary_line, &secrets),
             todos,
             error: final_error,
+            needs_input_question,
         });
+    }
+}
+
+fn envelope_for_event(
+    raw_events: bool,
+    registry: &SecretRegistry,
+    event: Event,
+    tool_tracker: &mut HashMap<String, (String, Option<Value>, Instant)>,
+) -> DesktopStreamEnvelope {
+    if raw_events {
+        DesktopStreamEnvelope::RawSchemaEvent {
+            event: serde_json::to_value(&event).unwrap_or(Value::Null),
+        }
+    } else {
+        let secrets = registry.snapshot().unwrap_or_default();
+        DesktopStreamEnvelope::SchemaEvent(convert_event(event, tool_tracker, &secrets))
+    }
+}
+
+/// Terminal result emitted on boundary failure; mirrors the CLI's
+/// `failed_run_result` so `run.finished` carries the same shape.
+fn failed_run_result(session_id: SessionId, run_id: RunId, error: ErrorInfo) -> RunResult {
+    RunResult {
+        schema_version: SCHEMA_VERSION,
+        session_id: Some(session_id),
+        run_id: Some(run_id),
+        status: RunStatus::Failed,
+        stop_reason: Some(error.code.clone()),
+        text: None,
+        error: Some(error.clone()),
+        usage: None,
+        artifacts: vec![],
+        persistence: Some(Persistence {
+            saved: false,
+            error: Some(error),
+        }),
     }
 }
 

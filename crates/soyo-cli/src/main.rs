@@ -23,11 +23,19 @@ use soyo_core::{
     boundary::{Cancellation, Operation, Store},
     config::{self, Config, Environment, Output, Overrides},
     contract::{
-        BoundaryError, ErrorInfo, HistoryItem, PermissionMode, Persistence, RunId, RunResult,
-        RunStatus, SCHEMA_VERSION, Session, SessionId, WorkMode,
+        ApprovalRequest, BoundaryError, ErrorInfo, Event, EventPayload, HistoryItem,
+        PermissionMode, Persistence, RunId, RunResult, RunStatus, SCHEMA_VERSION, Session,
+        SessionId, WorkMode,
     },
-    input::InputHandler,
+    input::{InputHandler, InputRequest},
     runtime::{AgentRuntime, ApprovalHandler, PersonalContext},
+};
+use soyo_ipc::{
+    client::HelperClient,
+    types::{
+        ApprovalRequestDto, DesktopError, DesktopStreamEnvelope, PersonalContextDto,
+        RunPromptParams, SubmitPromptResultDto,
+    },
 };
 use std::{
     fs::OpenOptions,
@@ -35,6 +43,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+use tokio::sync::mpsc;
 
 #[derive(Parser)]
 #[command(name = "soyo", version, about = "Soyo Agent Runtime Harness")]
@@ -658,6 +667,27 @@ fn report_result(
     streamed: bool,
     config: &Config,
 ) -> u8 {
+    let clarification = session.history.iter().rev().find_map(|item| match item {
+        HistoryItem::ToolResult { result, .. }
+            if result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.code == "needs_input") =>
+        {
+            result.data.as_ref().map(|data| data.to_string())
+        }
+        _ => None,
+    });
+    report_result_inner(result, clarification, streamed, config)
+}
+/// Shared tail of run reporting. `clarification` is the rendered needs_input
+/// question — from session history in-process, from the helper over socket.
+fn report_result_inner(
+    result: &soyo_core::contract::RunResult,
+    clarification: Option<String>,
+    streamed: bool,
+    config: &Config,
+) -> u8 {
     let output = if streamed {
         Some("\n".into())
     } else if result.status != RunStatus::NeedsInput
@@ -677,22 +707,9 @@ fn report_result(
         eprintln!("soyo: unfinished background jobs were cancelled when the run ended");
     }
     if result.status == RunStatus::NeedsInput
-        && let Some(question) = session.history.iter().rev().find_map(|item| match item {
-            HistoryItem::ToolResult { result, .. }
-                if result
-                    .error
-                    .as_ref()
-                    .is_some_and(|e| e.code == "needs_input") =>
-            {
-                result.data.as_ref()
-            }
-            _ => None,
-        })
+        && let Some(question) = &clarification
     {
-        eprintln!(
-            "soyo: clarification: {}",
-            safe_output(&question.to_string(), config)
-        );
+        eprintln!("soyo: clarification: {}", safe_output(question, config));
     }
     if let Some(e) = &result.error {
         eprintln!(
@@ -822,7 +839,6 @@ async fn run(
     )
     .await?;
     if let Some(events) = &events {
-        use soyo_core::contract::EventPayload;
         let payload = if args.session.is_some() {
             EventPayload::SessionResumed {
                 work_mode: session.work_mode,
@@ -866,6 +882,346 @@ async fn run(
             }
             if config.output == Output::Json {
                 let result = failed_run_result(session.id, run_id, error.0);
+                return report_json(&result, config);
+            }
+            Ok(1)
+        }
+    }
+}
+/// Runtime payload for a single `soyo run`, shared by the in-process and
+/// socket-backed paths.
+struct RunPayload {
+    text: String,
+    personal_context: PersonalContext,
+    anthropic_prompt_cache: bool,
+    resume_options: session::ResumeOptions,
+}
+/// `soyo run` through the shared helper daemon. Falls back to the in-process
+/// path when the helper cannot start or when config-source overrides
+/// (`--config`/`--data-dir`) cannot cross the socket boundary.
+async fn run_via_helper(
+    config: &Config,
+    cli: &Cli,
+    args: &RunArgs,
+    payload: RunPayload,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    if cli.config.is_some() || cli.data_dir.is_some() {
+        return run(
+            config,
+            args,
+            payload.text,
+            payload.personal_context,
+            payload.anthropic_prompt_cache,
+            payload.resume_options,
+        )
+        .await;
+    }
+    match HelperClient::connect_or_spawn().await {
+        Ok(client) => match run_over_socket(&client, config, cli, args, payload).await {
+            Ok(code) => Ok(code),
+            Err(err) => {
+                client.detach().await;
+                Err(err)
+            }
+        },
+        Err(err) => {
+            eprintln!(
+                "soyo: helper unavailable ({}); using in-process runtime",
+                safe_output(&err.message, config)
+            );
+            run(
+                config,
+                args,
+                payload.text,
+                payload.personal_context,
+                payload.anthropic_prompt_cache,
+                payload.resume_options,
+            )
+            .await
+        }
+    }
+}
+fn approval_request_from_dto(dto: &ApprovalRequestDto) -> Option<ApprovalRequest> {
+    Some(ApprovalRequest {
+        approval_id: dto.approval_id.clone(),
+        call_id: dto.call_id.clone(),
+        run_id: serde_json::from_value(serde_json::Value::String(dto.run_id.clone())).ok()?,
+        tool: dto.tool.clone(),
+        operation_summary: dto.operation_summary.clone(),
+        arguments: dto.arguments.clone(),
+        cwd: PathBuf::from(&dto.cwd),
+        work_mode: dto.work_mode.into(),
+    })
+}
+fn helper_boundary_error(err: &DesktopError) -> BoundaryError {
+    BoundaryError(
+        ErrorInfo {
+            code: err.code.clone(),
+            message: err.message.clone(),
+        },
+        None,
+        None,
+    )
+}
+async fn run_over_socket(
+    client: &Arc<HelperClient>,
+    config: &Config,
+    cli: &Cli,
+    args: &RunArgs,
+    payload: RunPayload,
+) -> Result<u8, Box<dyn std::error::Error>> {
+    let RunPayload {
+        text,
+        personal_context,
+        anthropic_prompt_cache,
+        resume_options,
+    } = payload;
+    let terminal = if args.interactive {
+        let secrets = config_secrets(config)?;
+        match Terminal::open(secrets) {
+            Ok(t) => Some(Arc::new(t)),
+            Err(e) => {
+                eprintln!("terminal unavailable: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let cancel = Arc::new(Cancel::new());
+    let _signals = signals::CancellationListener::start(cancel.clone())?;
+    // Forward process cancellation to the run inside the helper.
+    {
+        let watch_cancel = cancel.clone();
+        let watch_client = client.clone();
+        tokio::spawn(async move {
+            watch_cancel.cancelled().await;
+            let _ = watch_client.call("cancel_run", serde_json::json!({})).await;
+        });
+    }
+
+    let params = RunPromptParams {
+        prompt: text,
+        session_id: args.session.clone(),
+        accept_config_change: args.accept_config_change,
+        cwd: cli.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        profile: cli.profile.clone(),
+        mode: cli.mode.map(|m| WorkMode::from(m).into()),
+        permissions: cli.permissions.map(|p| PermissionMode::from(p).into()),
+        approval_file: args
+            .approval_file
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        interactive: terminal.is_some(),
+        anthropic_prompt_cache,
+        personal_context: Some(PersonalContextDto {
+            preferences: personal_context.preferences.clone(),
+            memory: personal_context.memory.clone(),
+        }),
+        attachments: Vec::new(),
+    };
+
+    // `params` moves into the streaming call; keep the fields the in-process
+    // fallback needs to reconstruct the original request.
+    let fallback_text = params.prompt.clone();
+    let fallback_personal = personal_context;
+    let fallback_cache = params.anthropic_prompt_cache;
+
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+    let call_client = client.clone();
+    let call = tokio::spawn(async move {
+        call_client
+            .call_streaming::<_, SubmitPromptResultDto>("run_prompt", &params, events_tx)
+            .await
+    });
+
+    let mut saw_event = false;
+    let mut streamed_text = false;
+    let mut finished: Option<RunResult> = None;
+    let mut completed_error: Option<DesktopError> = None;
+    let mut needs_input_question: Option<String> = None;
+    while let Some(envelope) = events_rx.recv().await {
+        saw_event = true;
+        match envelope {
+            DesktopStreamEnvelope::RawSchemaEvent { event } => {
+                if let Ok(schema_event) = serde_json::from_value::<Event>(event.clone()) {
+                    match schema_event.payload {
+                        EventPayload::ModelTextDelta { text, .. }
+                            if config.output == Output::Text =>
+                        {
+                            let mut stdout = io::stdout().lock();
+                            let _ = stdout
+                                .write_all(safe_terminal_text(&text).as_bytes())
+                                .and_then(|()| stdout.flush());
+                            streamed_text = true;
+                        }
+                        EventPayload::RunFinished(result) => finished = Some(result),
+                        _ => {}
+                    }
+                }
+                if config.output == Output::Jsonl {
+                    let mut stdout = io::stdout().lock();
+                    serde_json::to_writer(&mut stdout, &event)
+                        .map_err(|_| cli_error("output_error", "cannot write event"))?;
+                    stdout
+                        .write_all(b"\n")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|_| cli_error("output_error", "cannot write event"))?;
+                }
+            }
+            DesktopStreamEnvelope::ApprovalNeeded(dto) => {
+                if let Some(term) = &terminal {
+                    let approved = match approval_request_from_dto(&dto) {
+                        Some(req) => term
+                            .confirm(&req, cancel.as_ref())
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or(false),
+                        None => false,
+                    };
+                    let _ = client
+                        .call(
+                            "reply_approval",
+                            serde_json::json!({
+                                "approval_id": dto.approval_id,
+                                "call_id": dto.call_id,
+                                "approved": approved,
+                            }),
+                        )
+                        .await;
+                }
+            }
+            DesktopStreamEnvelope::InputNeeded(dto) => {
+                if let Some(term) = &terminal {
+                    let answer = term
+                        .ask(
+                            &InputRequest {
+                                question: dto.question,
+                                options: dto.options,
+                            },
+                            cancel.as_ref(),
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    let _ = client
+                        .call(
+                            "reply_input",
+                            serde_json::json!({
+                                "input_id": dto.input_id,
+                                "answer": answer,
+                            }),
+                        )
+                        .await;
+                }
+            }
+            DesktopStreamEnvelope::RunCompleted {
+                error,
+                needs_input_question: question,
+                ..
+            } => {
+                completed_error = error;
+                needs_input_question = question;
+            }
+            _ => {}
+        }
+    }
+
+    // The terminal response resolves once the run driver finishes forwarding.
+    let started = match call.await {
+        Ok(Ok(dto)) => dto,
+        Ok(Err(err)) => {
+            if !saw_event {
+                // The run never started inside the helper; the in-process path
+                // preserves the standalone `soyo run` semantics.
+                eprintln!(
+                    "soyo: helper run rejected ({}: {}); using in-process runtime",
+                    err.code,
+                    safe_output(&err.message, config)
+                );
+                return run(
+                    config,
+                    args,
+                    fallback_text,
+                    fallback_personal,
+                    fallback_cache,
+                    resume_options,
+                )
+                .await;
+            }
+            return Err(Box::new(helper_boundary_error(&err)));
+        }
+        Err(_) => return Err("helper run task failed".into()),
+    };
+
+    if started.recovered_runs.unwrap_or(0) > 0 {
+        eprintln!(
+            "soyo: recovered {} interrupted run(s); {} tool outcome(s) unknown; no tools were replayed",
+            started.recovered_runs.unwrap_or(0),
+            started.recovered_tools.unwrap_or(0)
+        );
+    }
+
+    match (finished, completed_error) {
+        (Some(result), error) => {
+            if let Some(err) = error {
+                // Boundary/runtime failure after events started; mirror the
+                // in-process Err arm: emit_failure already printed (JSONL),
+                // JSON re-reports the result, text reports the error.
+                log_warning(
+                    config,
+                    "error",
+                    "run.failed",
+                    serde_json::json!({"session_id":started.session_id,"run_id":started.run_id,"error":{"code":err.code,"message":err.message}}),
+                );
+                report_runtime_error(&helper_boundary_error(&err), config);
+                return match config.output {
+                    Output::Json => report_json(&result, config),
+                    _ => Ok(1),
+                };
+            }
+            log_run_result(config, &result);
+            match config.output {
+                Output::Jsonl => Ok(status_code(result.status)),
+                Output::Json => report_json(&result, config),
+                Output::Text => Ok(report_result_inner(
+                    &result,
+                    needs_input_question,
+                    streamed_text,
+                    config,
+                )),
+            }
+        }
+        (None, error) => {
+            // No run.finished reached the wire (boundary failure before or
+            // during emit_failure): same reporting as the in-process Err arm.
+            let err = error.unwrap_or_else(|| {
+                DesktopError::new("run_terminated", "Run ended without a result")
+            });
+            log_warning(
+                config,
+                "error",
+                "run.failed",
+                serde_json::json!({"session_id":started.session_id,"run_id":started.run_id,"error":{"code":err.code,"message":err.message}}),
+            );
+            report_runtime_error(&helper_boundary_error(&err), config);
+            if config.output == Output::Json {
+                let session_id = serde_json::from_value::<SessionId>(serde_json::Value::String(
+                    started.session_id,
+                ))
+                .unwrap_or_default();
+                let run_id =
+                    serde_json::from_value::<RunId>(serde_json::Value::String(started.run_id))
+                        .unwrap_or_default();
+                let result = failed_run_result(
+                    session_id,
+                    run_id,
+                    ErrorInfo {
+                        code: err.code,
+                        message: err.message,
+                    },
+                );
                 return report_json(&result, config);
             }
             Ok(1)
@@ -1175,17 +1531,20 @@ async fn dispatch_run_command(
         }
     };
     let output = config.output;
-    match run(
+    match run_via_helper(
         &config,
+        cli,
         args,
-        text,
-        personal,
-        cli.anthropic_prompt_cache,
-        session::ResumeOptions {
-            accept_config_change: args.accept_config_change,
-            cwd_explicit: cli.cwd.is_some(),
-            profile_explicit: cli.profile.is_some(),
-            mode_override: cli.mode.map(Into::into),
+        RunPayload {
+            text,
+            personal_context: personal,
+            anthropic_prompt_cache: cli.anthropic_prompt_cache,
+            resume_options: session::ResumeOptions {
+                accept_config_change: args.accept_config_change,
+                cwd_explicit: cli.cwd.is_some(),
+                profile_explicit: cli.profile.is_some(),
+                mode_override: cli.mode.map(Into::into),
+            },
         },
     )
     .await

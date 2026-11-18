@@ -492,6 +492,14 @@ pub struct AttachmentPayloadDto {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum DesktopStreamEnvelope {
     SchemaEvent(SchemaEnvelopeDto),
+    /// Raw schema-v1 event passthrough produced only by `run_prompt`. CLI
+    /// consumers print it verbatim for `--output jsonl` parity; desktop
+    /// streams never carry it, so it stays out of the generated TS union.
+    #[specta(skip)]
+    RawSchemaEvent {
+        #[specta(type = Unknown)]
+        event: Value,
+    },
     Thinking(Vec<ThinkingSnapshotDto>),
     Context {
         entries: Vec<ContextEntryDto>,
@@ -509,6 +517,10 @@ pub enum DesktopStreamEnvelope {
         summary_line: String,
         todos: Vec<TodoItemDto>,
         error: Option<DesktopError>,
+        /// Clarification question carried when `status == "needs_input"`;
+        /// mirrors the CLI's session-history lookup for text output.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        needs_input_question: Option<String>,
     },
 }
 
@@ -620,6 +632,54 @@ pub struct SubmitPromptResultDto {
     pub action: String,
     pub session_id: String,
     pub run_id: String,
+    /// Interrupted runs recovered while preparing the session (`run_prompt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovered_runs: Option<u32>,
+    /// Tool outcomes left unknown by recovery (`run_prompt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovered_tools: Option<u32>,
+}
+
+/// Personal context supplied with a `run_prompt` request; mirrors the
+/// runtime's `PersonalContext` (explicitly provided, never persisted).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct PersonalContextDto {
+    #[serde(default)]
+    pub preferences: Option<String>,
+    #[serde(default)]
+    pub memory: Option<String>,
+}
+
+/// Parameters for the `run_prompt` helper method — the socket-backed form of
+/// `soyo run`. `interactive` wires approval/input replies over the socket;
+/// headless callers leave it off so runs end `needs_confirmation`/`needs_input`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct RunPromptParams {
+    pub prompt: String,
+    /// Resume an existing session instead of creating a new one.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub accept_config_change: bool,
+    /// Explicit workspace override (`--cwd`); also marks resume `cwd_explicit`.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub mode: Option<WorkModeDto>,
+    #[serde(default)]
+    pub permissions: Option<PermissionModeDto>,
+    #[serde(default)]
+    pub approval_file: Option<String>,
+    #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
+    pub anthropic_prompt_cache: bool,
+    #[serde(default)]
+    pub personal_context: Option<PersonalContextDto>,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentTokenDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

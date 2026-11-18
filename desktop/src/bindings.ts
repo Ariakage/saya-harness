@@ -7,9 +7,9 @@ export const commands = {
 	listSessions: (page: number | null) => typedError<SessionPageDto_Serialize, DesktopError>(__TAURI_INVOKE("list_sessions", { page })),
 	getBootstrapState: () => typedError<BootstrapStateDto_Serialize, DesktopError>(__TAURI_INVOKE("get_bootstrap_state")),
 	newSession: () => typedError<ActiveSessionDto_Serialize, DesktopError>(__TAURI_INVOKE("new_session")),
-	submitPrompt: (prompt: string, attachments: AttachmentTokenDto[], onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto, DesktopError>(__TAURI_INVOKE("submit_prompt", { prompt, attachments, onEvent })),
+	submitPrompt: (prompt: string, attachments: AttachmentTokenDto[], onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("submit_prompt", { prompt, attachments, onEvent })),
 	cancelRun: () => typedError<boolean, DesktopError>(__TAURI_INVOKE("cancel_run")),
-	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
+	compactSession: (onEvent: Channel<DesktopStreamEnvelope_Deserialize>) => typedError<SubmitPromptResultDto_Serialize, DesktopError>(__TAURI_INVOKE("compact_session", { onEvent })),
 	replyApproval: (approvalId: string, callId: string, approved: boolean) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_approval", { approvalId, callId, approved })),
 	replyInput: (inputId: string, answer: string) => typedError<null, DesktopError>(__TAURI_INVOKE("reply_input", { inputId, answer })),
 	setWorkMode: (mode: WorkModeDto) => typedError<ModeStateDto_Serialize, DesktopError>(__TAURI_INVOKE("set_work_mode", { mode })),
@@ -243,6 +243,11 @@ export type DesktopStreamEnvelope_Deserialize = { kind: "schema_event"; data: Sc
 	summary_line: string,
 	todos: TodoItemDto[],
 	error?: DesktopError | null,
+	/**
+	 *  Clarification question carried when `status == "needs_input"`;
+	 *  mirrors the CLI's session-history lookup for text output.
+	 */
+	needs_input_question?: string | null,
 } };
 
 /**  Unified channel message pushed during an active run. */
@@ -258,6 +263,11 @@ export type DesktopStreamEnvelope_Serialize = { kind: "schema_event"; data: Sche
 	summary_line: string,
 	todos: TodoItemDto[],
 	error: DesktopError | null,
+	/**
+	 *  Clarification question carried when `status == "needs_input"`;
+	 *  mirrors the CLI's session-history lookup for text output.
+	 */
+	needs_input_question?: string,
 } };
 
 export type ErrorInfoDto = {
@@ -720,10 +730,26 @@ export type StagedAttachmentDto = {
 	preview_url: string,
 };
 
-export type SubmitPromptResultDto = {
+export type SubmitPromptResultDto = SubmitPromptResultDto_Serialize | SubmitPromptResultDto_Deserialize;
+
+export type SubmitPromptResultDto_Deserialize = {
 	action: string,
 	session_id: string,
 	run_id: string,
+	/**  Interrupted runs recovered while preparing the session (`run_prompt`). */
+	recovered_runs?: number | null,
+	/**  Tool outcomes left unknown by recovery (`run_prompt`). */
+	recovered_tools?: number | null,
+};
+
+export type SubmitPromptResultDto_Serialize = {
+	action: string,
+	session_id: string,
+	run_id: string,
+	/**  Interrupted runs recovered while preparing the session (`run_prompt`). */
+	recovered_runs?: number,
+	/**  Tool outcomes left unknown by recovery (`run_prompt`). */
+	recovered_tools?: number,
 };
 
 export type ThinkingSnapshotDto = {

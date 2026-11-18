@@ -445,7 +445,7 @@ backend = "host"
         };
         assert_eq!(input_req.question, "Which crate?");
         state
-            .reply_input(&input_req.input_id, "soyo-desktop".into())
+            .reply_input(&input_req.input_id, Some("soyo-desktop".into()))
             .unwrap();
 
         let mut saw_tool_ok = false;
@@ -762,5 +762,207 @@ scopes = ["docs:read"]
         assert!(md_res.bytes > 0);
         let md_text = std::fs::read_to_string(&md_path).unwrap();
         assert!(md_text.contains("Exportable reply"));
+    }
+
+    /// `run_prompt` (`soyo run` over socket): raw schema-v1 envelopes instead
+    /// of desktop DTOs, synthetic `session.created` first, `run.finished`
+    /// carrying a full `RunResult`, and recovery counts on the response.
+    #[tokio::test]
+    async fn run_prompt_streams_raw_schema_events_and_finished_result() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = test_config(root.path());
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(ScriptedModel {
+                chunks: vec!["Hello ".into(), "socket!".into()],
+                thinking: Some("pondering".into()),
+                delay_ms: 0,
+            })
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let res = state
+            .run_prompt(
+                soyo_ipc::types::RunPromptParams {
+                    prompt: "Say hello".into(),
+                    ..Default::default()
+                },
+                StreamSink::Mpsc(tx),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.action, "started");
+        assert_eq!(res.recovered_runs, Some(0));
+        assert_eq!(res.recovered_tools, Some(0));
+
+        let mut saw_session_created = false;
+        let mut deltas = String::new();
+        let mut finished: Option<serde_json::Value> = None;
+        let mut completed_status = None;
+        let mut event_count = 0usize;
+        while let Some(env) = rx.recv().await {
+            match env {
+                DesktopStreamEnvelope::RawSchemaEvent { event } => {
+                    event_count += 1;
+                    let parsed: soyo_core::contract::Event =
+                        serde_json::from_value(event).expect("valid schema-v1 event");
+                    assert_eq!(parsed.schema_version, 1);
+                    match parsed.payload {
+                        soyo_core::contract::EventPayload::SessionCreated { .. } => {
+                            saw_session_created = true;
+                        }
+                        soyo_core::contract::EventPayload::ModelTextDelta { text, .. } => {
+                            deltas.push_str(&text);
+                        }
+                        soyo_core::contract::EventPayload::RunFinished(result) => {
+                            finished = Some(serde_json::to_value(result).unwrap());
+                        }
+                        _ => {}
+                    }
+                }
+                DesktopStreamEnvelope::RunCompleted { status, .. } => {
+                    completed_status = Some(status);
+                    break;
+                }
+                // Raw runs must not leak the desktop rendering DTOs.
+                DesktopStreamEnvelope::SchemaEvent(_)
+                | DesktopStreamEnvelope::Thinking(_)
+                | DesktopStreamEnvelope::Context { .. } => {
+                    panic!("raw run_prompt must not emit desktop DTO frames");
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_session_created, "first event must be session.created");
+        assert!(event_count > 2);
+        assert_eq!(deltas, "Hello socket!");
+        assert_eq!(completed_status.as_deref(), Some("completed"));
+        let result = finished.expect("run.finished must arrive as a raw event");
+        assert_eq!(result["status"], "completed");
+        assert_eq!(result["text"], "Hello socket!");
+    }
+
+    /// Headless `run_prompt` (`interactive: false`): approval requests never
+    /// reach the wire — the runtime ends `needs_confirmation` like the
+    /// in-process CLI without a terminal.
+    #[tokio::test]
+    async fn run_prompt_headless_ends_needs_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "manual");
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(QueueModel::new(vec![vec![ModelUpdate::Finished {
+                items: vec![HistoryItem::ToolCall(ToolCall {
+                    call_id: "call_todo_1".into(),
+                    name: "todo_write".into(),
+                    arguments: r#"{"todos":[{"id":"1","content":"Check","status":"in_progress"}]}"#
+                        .into(),
+                })],
+                usage: None,
+            }]]))
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        state
+            .run_prompt(
+                soyo_ipc::types::RunPromptParams {
+                    prompt: "Update todos".into(),
+                    interactive: false,
+                    ..Default::default()
+                },
+                StreamSink::Mpsc(tx),
+            )
+            .await
+            .unwrap();
+
+        let mut completed_status = None;
+        let mut finished_status = None;
+        while let Some(env) = rx.recv().await {
+            match env {
+                DesktopStreamEnvelope::RawSchemaEvent { event } => {
+                    let parsed: soyo_core::contract::Event = serde_json::from_value(event).unwrap();
+                    if let soyo_core::contract::EventPayload::RunFinished(result) = parsed.payload {
+                        finished_status =
+                            Some(serde_json::to_value(result.status).unwrap().to_string());
+                    }
+                }
+                DesktopStreamEnvelope::ApprovalNeeded(_)
+                | DesktopStreamEnvelope::InputNeeded(_) => {
+                    panic!("headless run must not emit interaction requests");
+                }
+                DesktopStreamEnvelope::RunCompleted { status, .. } => {
+                    completed_status = Some(status);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        // RunCompleted.status keeps the existing debug-lowercase convention
+        // desktop consumers already parse; the raw run.finished event carries
+        // the snake_case RunStatus the CLI maps to exit codes.
+        assert_eq!(completed_status.as_deref(), Some("needsconfirmation"));
+        assert_eq!(finished_status.as_deref(), Some("\"needs_confirmation\""));
+    }
+
+    /// Interactive `run_prompt`: approval requests cross the socket and
+    /// `reply_approval` unblocks the run, matching the desktop interaction
+    /// contract on the same transport.
+    #[tokio::test]
+    async fn run_prompt_interactive_approval_round_trip() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        let cfg = test_config_with_workspace(&home, &workspace, "manual");
+        let state = HostService::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(QueueModel::new(vec![
+                vec![ModelUpdate::Finished {
+                    items: vec![HistoryItem::ToolCall(ToolCall {
+                        call_id: "call_todo_1".into(),
+                        name: "todo_write".into(),
+                        arguments:
+                            r#"{"todos":[{"id":"1","content":"Check","status":"completed"}]}"#
+                                .into(),
+                    })],
+                    usage: None,
+                }],
+                vec![
+                    ModelUpdate::TextDelta("Approved and done".into()),
+                    ModelUpdate::Finished {
+                        items: vec![HistoryItem::AssistantText("Approved and done".into())],
+                        usage: None,
+                    },
+                ],
+            ]))
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        state
+            .run_prompt(
+                soyo_ipc::types::RunPromptParams {
+                    prompt: "Update todos".into(),
+                    interactive: true,
+                    ..Default::default()
+                },
+                StreamSink::Mpsc(tx),
+            )
+            .await
+            .unwrap();
+
+        let mut completed_status = None;
+        while let Some(env) = rx.recv().await {
+            match env {
+                DesktopStreamEnvelope::ApprovalNeeded(req) => {
+                    state
+                        .reply_approval(&req.approval_id, &req.call_id, true)
+                        .unwrap();
+                }
+                DesktopStreamEnvelope::RunCompleted { status, .. } => {
+                    completed_status = Some(status);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(completed_status.as_deref(), Some("completed"));
     }
 }
