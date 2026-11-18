@@ -1,94 +1,308 @@
-import { useEffect, useState } from "react";
-import { commands, type DesktopError, type SessionItemDto } from "./bindings";
-import { isBrowserPreview } from "./preview/browserPreview";
+import { Code2, Eye, Plus, Shield, Sparkles, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Composer } from "./components/Composer";
+import { ContextSidebar } from "./components/ContextSidebar";
+import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import { ThinkingCardView } from "./components/ThinkingCardView";
+import { ToolCardView } from "./components/ToolCardView";
+import { PERMISSION_MODE_LABELS, WORK_MODE_STYLES } from "./lib/sanitize";
+import {
+  type PreviewScene,
+  getPreviewScene,
+  isBrowserPreview,
+  setPreviewScene,
+} from "./preview/browserPreview";
+import { useAppStore } from "./store/useAppStore";
 
 export function App() {
-  const [sessions, setSessions] = useState<SessionItemDto[]>([]);
-  const [error, setError] = useState<DesktopError | null>(null);
-  const [loading, setLoading] = useState(true);
+  const bootstrap = useAppStore((s) => s.bootstrap);
+  const loading = useAppStore((s) => s.loading);
+  const sessionId = useAppStore((s) => s.sessionId);
+  const sessionTitle = useAppStore((s) => s.sessionTitle);
+  const historyOmitted = useAppStore((s) => s.historyOmitted);
+  const workMode = useAppStore((s) => s.workMode);
+  const pendingMode = useAppStore((s) => s.pendingMode);
+  const permissionMode = useAppStore((s) => s.permissionMode);
+  const messages = useAppStore((s) => s.messages);
+  const thinkingEntries = useAppStore((s) => s.thinkingEntries);
+  const contextEntries = useAppStore((s) => s.contextEntries);
+  const contextSkillsCount = useAppStore((s) => s.contextSkillsCount);
+  const contextEstimated = useAppStore((s) => s.contextEstimated);
+  const mcpServers = useAppStore((s) => s.mcpServers);
+  const todos = useAppStore((s) => s.todos);
+  const recentSessions = useAppStore((s) => s.recentSessions);
+  const runActive = useAppStore((s) => s.runActive);
+  const cancelling = useAppStore((s) => s.cancelling);
+  const summaryLine = useAppStore((s) => s.summaryLine);
+  const markdownMode = useAppStore((s) => s.markdownMode);
+  const error = useAppStore((s) => s.error);
+
+  const initApp = useAppStore((s) => s.initApp);
+  const startNewSession = useAppStore((s) => s.startNewSession);
+  const submitPrompt = useAppStore((s) => s.submitPrompt);
+  const cancelActiveRun = useAppStore((s) => s.cancelActiveRun);
+  const compactCurrentSession = useAppStore((s) => s.compactCurrentSession);
+  const toggleMarkdownMode = useAppStore((s) => s.toggleMarkdownMode);
+  const clearError = useAppStore((s) => s.clearError);
+
+  const previewMode = isBrowserPreview();
+  const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    let active = true;
-    commands
-      .listSessions(1)
-      .then((res) => {
-        if (!active) return;
-        if (res.status === "ok") {
-          setSessions(res.data.items);
-          setError(null);
-        } else {
-          setError(res.error);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!active) return;
-        setError({
-          code: "ipc_error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+    void initApp();
+  }, [initApp]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages.length, thinkingEntries.length]);
+
+  const handleSceneChange = (nextScene: PreviewScene) => {
+    setPreviewScene(nextScene);
+    setScene(nextScene);
+    void initApp();
+  };
+
+  const modeStyle = WORK_MODE_STYLES[workMode];
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[#09090B] text-[#D4D4D8]">
-      <header className="flex items-center justify-between border-b border-[#303038] bg-[#141416] px-4 py-2.5">
-        <div className="flex items-center gap-2.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-[#58A6FF]" />
-          <h1 className="text-sm font-semibold tracking-tight text-[#E8E8ED]">
+      <header className="flex items-center justify-between gap-3 border-b border-[#303038] bg-[#141416] px-4 py-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            className="h-2.5 w-2.5 shrink-0 rounded-full"
+            style={{ backgroundColor: modeStyle.color }}
+          />
+          <h1 className="shrink-0 text-sm font-semibold tracking-tight text-[#E8E8ED]">
             Soyo Harness
           </h1>
-          <span className="rounded bg-[#202024] px-1.5 py-0.5 text-[11px] text-[#81818B]">
-            Desktop
+          <span
+            className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${modeStyle.badgeClass}`}
+          >
+            {modeStyle.label}
           </span>
-          {isBrowserPreview() && (
-            <span className="rounded border border-[#58A6FF]/40 bg-[#58A6FF]/15 px-1.5 py-0.5 text-[11px] text-[#58A6FF]">
-              Browser Preview
+          {pendingMode && (
+            <span className="shrink-0 rounded border border-[#303038] bg-[#202024] px-1.5 py-0.5 text-[10px] text-[#81818B]">
+              → {WORK_MODE_STYLES[pendingMode].label} (next turn)
             </span>
           )}
+          <span className="hidden items-center gap-1 rounded border border-[#303038] bg-[#09090B] px-1.5 py-0.5 text-[10px] text-[#81818B] sm:inline-flex">
+            <Shield className="h-3 w-3" />
+            {PERMISSION_MODE_LABELS[permissionMode]}
+          </span>
+          <span className="truncate text-xs text-[#81818B]">{sessionTitle}</span>
         </div>
-        <div className="text-xs text-[#81818B]">
-          {loading ? "Loading sessions..." : `${sessions.length} session(s)`}
+
+        <div className="flex shrink-0 items-center gap-2">
+          {previewMode && (
+            <div className="flex items-center gap-1 rounded-md border border-[#58A6FF]/40 bg-[#58A6FF]/10 px-2 py-1 text-[11px]">
+              <Sparkles className="h-3 w-3 text-[#58A6FF]" />
+              <span className="mr-1 text-[#58A6FF]">Preview</span>
+              {(["conversation", "markdown"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => handleSceneChange(item)}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    scene === item
+                      ? "bg-[#58A6FF] font-semibold text-[#09090B]"
+                      : "text-[#D4D4D8] hover:bg-[#202024]"
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={toggleMarkdownMode}
+            title="Toggle global Markdown Render / Source mode"
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#D4D4D8] hover:border-[#58A6FF]"
+          >
+            {markdownMode === "render" ? (
+              <>
+                <Code2 className="h-3 w-3" />
+                Source
+              </>
+            ) : (
+              <>
+                <Eye className="h-3 w-3" />
+                Render
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void startNewSession()}
+            disabled={runActive}
+            className="inline-flex items-center gap-1 rounded-md border border-[#303038] bg-[#202024] px-2.5 py-1 text-[11px] text-[#E8E8ED] hover:border-[#58A6FF] disabled:opacity-40"
+          >
+            <Plus className="h-3 w-3" />
+            New Session
+          </button>
         </div>
       </header>
-      <main className="flex flex-1 overflow-hidden">
-        <aside className="w-72 border-r border-[#303038] bg-[#141416] p-3">
-          <div className="mb-2 text-xs font-medium uppercase tracking-wider text-[#81818B]">
-            Recent Sessions
-          </div>
-          {error ? (
-            <div className="rounded border border-[#F87171]/40 bg-[#F87171]/10 p-2 text-xs text-[#F87171]">
-              {error.code}: {error.message}
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {error && (
+            <div className="flex items-center justify-between gap-2 border-b border-[#F87171]/40 bg-[#F87171]/10 px-4 py-2 text-xs text-[#F87171]">
+              <span>
+                <strong>{error.code}:</strong> {error.message}
+              </span>
+              <button
+                type="button"
+                onClick={clearError}
+                aria-label="Dismiss error"
+                className="rounded p-0.5 hover:bg-[#F87171]/20"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
-          ) : sessions.length === 0 && !loading ? (
-            <div className="text-xs text-[#81818B]">No sessions yet.</div>
-          ) : (
-            <ul className="space-y-1.5">
-              {sessions.map((item) => (
-                <li
-                  key={item.id}
-                  className="rounded border border-[#303038] bg-[#09090B] px-2.5 py-2 text-xs"
-                >
-                  <div className="truncate font-medium text-[#E8E8ED]">
-                    {item.title ?? "Untitled session"}
-                  </div>
-                  <div className="mt-0.5 truncate text-[11px] text-[#81818B]">
-                    {item.work_mode.toUpperCase()} · {item.profile}
-                  </div>
-                </li>
-              ))}
-            </ul>
           )}
-        </aside>
-        <section className="flex flex-1 items-center justify-center p-6 text-sm text-[#81818B]">
-          Select or start a session to begin.
-        </section>
-      </main>
+
+          {bootstrap && !bootstrap.config_ready && (
+            <div className="border-b border-[#F6AD55]/40 bg-[#F6AD55]/10 px-4 py-2 text-xs text-[#F6AD55]">
+              Configuration incomplete ({bootstrap.config_path}):{" "}
+              {bootstrap.config_error ?? "Select or configure a profile first."}
+            </div>
+          )}
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+            <div className="mx-auto flex max-w-4xl flex-col gap-3">
+              {historyOmitted && (
+                <div className="rounded-md border border-[#303038] bg-[#141416] px-3 py-1.5 text-[11px] text-[#81818B]">
+                  Earlier history omitted to stay within desktop restore window; full history remains on disk.
+                </div>
+              )}
+
+              {loading && messages.length === 0 ? (
+                <div className="py-16 text-center text-xs text-[#81818B]">
+                  Loading runtime state...
+                </div>
+              ) : messages.length === 0 && thinkingEntries.length === 0 ? (
+                <div className="rounded-xl border border-[#303038] bg-[#141416] p-8 text-center">
+                  <div className="text-sm font-medium text-[#E8E8ED]">
+                    Ready in {modeStyle.label} mode
+                  </div>
+                  <p className="mt-1 text-xs text-[#81818B]">
+                    Send a prompt below to start a schema v1 run with in-process `soyo-app`.
+                  </p>
+                </div>
+              ) : null}
+
+              {messages.map((msg) => {
+                if (msg.role === "user") {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="self-end rounded-xl border border-[#58A6FF]/30 bg-[#202024] px-3.5 py-2.5 text-sm text-[#E8E8ED] max-w-2xl"
+                    >
+                      <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-[#58A6FF]">
+                        {msg.label}
+                      </div>
+                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
+                        {msg.text}
+                      </pre>
+                    </div>
+                  );
+                }
+
+                if (msg.role === "tool") {
+                  return <ToolCardView key={msg.id} message={msg} />;
+                }
+
+                if (msg.role === "run_summary") {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="flex items-center justify-between rounded-md border border-[#303038] bg-[#141416]/70 px-3 py-1.5 text-[11px] text-[#81818B]"
+                    >
+                      <span className="font-mono uppercase text-[#D4D4D8]">
+                        {msg.label}
+                      </span>
+                      <span className="font-mono">{msg.text}</span>
+                    </div>
+                  );
+                }
+
+                if (msg.role === "system") {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="rounded-md border border-[#303038] bg-[#141416] px-3 py-2 text-xs text-[#81818B]"
+                    >
+                      {msg.text}
+                    </div>
+                  );
+                }
+
+                return (
+                  <article
+                    key={msg.id}
+                    className="rounded-xl border border-[#303038] bg-[#141416] px-4 py-3"
+                  >
+                    <div className="mb-1.5 flex items-center justify-between text-[11px] text-[#81818B]">
+                      <span className="font-medium text-[#E8E8ED]">
+                        {msg.label}
+                      </span>
+                      {msg.streaming && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-[#58A6FF]">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#58A6FF]" />
+                          streaming
+                        </span>
+                      )}
+                    </div>
+                    <MarkdownRenderer
+                      content={msg.text}
+                      mode={markdownMode}
+                      streaming={msg.streaming}
+                    />
+                  </article>
+                );
+              })}
+
+              {thinkingEntries.length > 0 && (
+                <ThinkingCardView entries={thinkingEntries} />
+              )}
+
+              {summaryLine && (
+                <div className="text-right font-mono text-[11px] text-[#81818B]">
+                  {summaryLine}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <Composer
+            disabled={!bootstrap?.config_ready && !previewMode}
+            runActive={runActive}
+            cancelling={cancelling}
+            hasSession={sessionId !== null}
+            onSubmit={(prompt) => submitPrompt(prompt)}
+            onCancel={cancelActiveRun}
+            onCompact={compactCurrentSession}
+          />
+        </div>
+
+        <ContextSidebar
+          bootstrap={bootstrap}
+          workMode={workMode}
+          contextEntries={contextEntries}
+          contextSkillsCount={contextSkillsCount}
+          contextEstimated={contextEstimated}
+          todos={todos}
+          mcpServers={mcpServers}
+          recentSessions={recentSessions}
+          activeSessionId={sessionId}
+        />
+      </div>
     </div>
   );
 }

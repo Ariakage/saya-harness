@@ -1,0 +1,614 @@
+//! Specta-typed IPC Data Transfer Objects for `soyo-desktop`.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use soyo_core::{
+    contract::{
+        ApprovalSource, BoundaryError, ErrorInfo, ModelPurpose, PermissionMode, ReviewSource,
+        RunResult, RunStatus, ToolResult, Usage, WorkMode,
+    },
+    tools::todo::{TodoItem, TodoStatus},
+};
+use specta::Type;
+use specta_typescript::{Number, Unknown};
+
+use crate::redaction;
+
+/// Structured IPC error returned to the frontend; sensitive values are redacted.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct DesktopError {
+    pub code: String,
+    pub message: String,
+}
+
+impl DesktopError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn from_boundary(error: &BoundaryError, secrets: &[String]) -> Self {
+        Self {
+            code: error.code().to_owned(),
+            message: redaction::redact_str(error.message(), secrets),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkModeDto {
+    Plan,
+    Build,
+    Code,
+    Work,
+}
+
+impl From<WorkMode> for WorkModeDto {
+    fn from(value: WorkMode) -> Self {
+        match value {
+            WorkMode::Plan => Self::Plan,
+            WorkMode::Build => Self::Build,
+            WorkMode::Code => Self::Code,
+            WorkMode::Work => Self::Work,
+        }
+    }
+}
+
+impl From<WorkModeDto> for WorkMode {
+    fn from(value: WorkModeDto) -> Self {
+        match value {
+            WorkModeDto::Plan => Self::Plan,
+            WorkModeDto::Build => Self::Build,
+            WorkModeDto::Code => Self::Code,
+            WorkModeDto::Work => Self::Work,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionModeDto {
+    Auto,
+    Bypass,
+    Manual,
+}
+
+impl From<PermissionMode> for PermissionModeDto {
+    fn from(value: PermissionMode) -> Self {
+        match value {
+            PermissionMode::Auto => Self::Auto,
+            PermissionMode::Bypass => Self::Bypass,
+            PermissionMode::Manual => Self::Manual,
+        }
+    }
+}
+
+impl From<PermissionModeDto> for PermissionMode {
+    fn from(value: PermissionModeDto) -> Self {
+        match value {
+            PermissionModeDto::Auto => Self::Auto,
+            PermissionModeDto::Bypass => Self::Bypass,
+            PermissionModeDto::Manual => Self::Manual,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPurposeDto {
+    Execution,
+    Review,
+    Compaction,
+}
+
+impl From<ModelPurpose> for ModelPurposeDto {
+    fn from(value: ModelPurpose) -> Self {
+        match value {
+            ModelPurpose::Execution => Self::Execution,
+            ModelPurpose::Review => Self::Review,
+            ModelPurpose::Compaction => Self::Compaction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatusDto {
+    Completed,
+    Failed,
+    NeedsConfirmation,
+    NeedsInput,
+    LimitReached,
+    Cancelled,
+}
+
+impl From<RunStatus> for RunStatusDto {
+    fn from(value: RunStatus) -> Self {
+        match value {
+            RunStatus::Completed => Self::Completed,
+            RunStatus::Failed => Self::Failed,
+            RunStatus::NeedsConfirmation => Self::NeedsConfirmation,
+            RunStatus::NeedsInput => Self::NeedsInput,
+            RunStatus::LimitReached => Self::LimitReached,
+            RunStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatusDto {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<TodoStatus> for TodoStatusDto {
+    fn from(value: TodoStatus) -> Self {
+        match value {
+            TodoStatus::Pending => Self::Pending,
+            TodoStatus::InProgress => Self::InProgress,
+            TodoStatus::Completed => Self::Completed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct TodoItemDto {
+    pub id: String,
+    pub content: String,
+    pub status: TodoStatusDto,
+}
+
+impl TodoItemDto {
+    pub fn from_redacted(item: TodoItem, secrets: &[String]) -> Self {
+        Self {
+            id: redaction::redact_str(&item.id, secrets),
+            content: redaction::redact_str(&item.content, secrets),
+            status: item.status.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ErrorInfoDto {
+    pub code: String,
+    pub message: String,
+}
+
+impl ErrorInfoDto {
+    pub fn from_redacted(info: &ErrorInfo, secrets: &[String]) -> Self {
+        Self {
+            code: info.code.clone(),
+            message: redaction::redact_str(&info.message, secrets),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct UsageDto {
+    #[specta(type = Option<Number>)]
+    pub input_tokens: Option<u64>,
+    #[specta(type = Option<Number>)]
+    pub output_tokens: Option<u64>,
+    #[specta(type = Option<Number>)]
+    pub cached_input_tokens: Option<u64>,
+    pub estimated: bool,
+}
+
+impl From<Usage> for UsageDto {
+    fn from(value: Usage) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cached_input_tokens: value.cached_input_tokens,
+            estimated: value.estimated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ContextEntryDto {
+    pub label: String,
+    #[specta(type = Number)]
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ThinkingSnapshotDto {
+    pub request_id: String,
+    pub text: String,
+    pub active: bool,
+    pub truncated: bool,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ToolResultDto {
+    pub ok: bool,
+    #[specta(type = Option<Unknown>)]
+    pub data: Option<Value>,
+    pub error: Option<ErrorInfoDto>,
+    pub truncated: bool,
+    pub summary: Option<String>,
+    pub formatted: String,
+    pub media_refs: Vec<String>,
+}
+
+impl ToolResultDto {
+    pub fn from_redacted(
+        name: &str,
+        args: Option<&Value>,
+        result: &ToolResult,
+        elapsed_ms: Option<u64>,
+        secrets: &[String],
+    ) -> Self {
+        let elapsed = elapsed_ms.map(std::time::Duration::from_millis);
+        let formatted_raw = match args {
+            Some(args) => crate::tool_format::call_and_result(name, args, result, elapsed),
+            None => crate::tool_format::result(result),
+        };
+        let summary_raw = crate::tool_format::summarize_call(name, args, Some(result), elapsed);
+        Self {
+            ok: result.ok,
+            data: result
+                .data
+                .as_ref()
+                .map(|val| redaction::redact_value(val, secrets)),
+            error: result
+                .error
+                .as_ref()
+                .map(|err| ErrorInfoDto::from_redacted(err, secrets)),
+            truncated: result.truncated,
+            summary: summary_raw.map(|text| redaction::redact_str(&text, secrets)),
+            formatted: redaction::redact_str(&formatted_raw, secrets),
+            media_refs: result
+                .media_refs
+                .iter()
+                .map(|r| redaction::redact_str(r, secrets))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct RunResultDto {
+    pub schema_version: u8,
+    pub session_id: Option<String>,
+    pub run_id: Option<String>,
+    pub status: RunStatusDto,
+    pub stop_reason: Option<String>,
+    pub text: Option<String>,
+    pub error: Option<ErrorInfoDto>,
+    pub usage: Option<UsageDto>,
+}
+
+impl RunResultDto {
+    pub fn from_redacted(result: &RunResult, secrets: &[String]) -> Self {
+        Self {
+            schema_version: result.schema_version,
+            session_id: result.session_id.map(|id| id.0.to_string()),
+            run_id: result.run_id.map(|id| id.0.to_string()),
+            status: result.status.into(),
+            stop_reason: result
+                .stop_reason
+                .as_deref()
+                .map(|s| redaction::redact_str(s, secrets)),
+            text: result
+                .text
+                .as_deref()
+                .map(|s| redaction::redact_str(s, secrets)),
+            error: result
+                .error
+                .as_ref()
+                .map(|err| ErrorInfoDto::from_redacted(err, secrets)),
+            usage: result.usage.clone().map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSourceDto {
+    Rule,
+    Model,
+}
+
+impl From<ReviewSource> for ReviewSourceDto {
+    fn from(value: ReviewSource) -> Self {
+        match value {
+            ReviewSource::Rule => Self::Rule,
+            ReviewSource::Model => Self::Model,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSourceDto {
+    User,
+    Preauthorization,
+}
+
+impl From<ApprovalSource> for ApprovalSourceDto {
+    fn from(value: ApprovalSource) -> Self {
+        match value {
+            ApprovalSource::User => Self::User,
+            ApprovalSource::Preauthorization => Self::Preauthorization,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "type", content = "data")]
+pub enum SchemaEventDto {
+    #[serde(rename = "session.created")]
+    SessionCreated {
+        work_mode: WorkModeDto,
+        permissions: PermissionModeDto,
+        workspace: String,
+        profile: String,
+    },
+    #[serde(rename = "session.resumed")]
+    SessionResumed {
+        work_mode: WorkModeDto,
+        permissions: PermissionModeDto,
+        workspace: String,
+        profile: String,
+    },
+    #[serde(rename = "run.started")]
+    RunStarted {
+        work_mode: WorkModeDto,
+        permissions: PermissionModeDto,
+        profile: String,
+    },
+    #[serde(rename = "mode.change_requested")]
+    ModeChangeRequested { from: WorkModeDto, to: WorkModeDto },
+    #[serde(rename = "mode.changed")]
+    ModeChanged { from: WorkModeDto, to: WorkModeDto },
+    #[serde(rename = "model.started")]
+    ModelStarted {
+        request_id: String,
+        purpose: ModelPurposeDto,
+        profile: String,
+    },
+    #[serde(rename = "model.text_delta")]
+    ModelTextDelta { request_id: String, text: String },
+    #[serde(rename = "model.finished")]
+    ModelFinished {
+        request_id: String,
+        purpose: ModelPurposeDto,
+        ok: bool,
+        usage: Option<UsageDto>,
+        error: Option<ErrorInfoDto>,
+    },
+    #[serde(rename = "tool.requested")]
+    ToolRequested {
+        call_id: String,
+        name: String,
+        #[specta(type = Unknown)]
+        args: Value,
+        summary: Option<String>,
+        formatted: String,
+    },
+    #[serde(rename = "permission.reviewed")]
+    PermissionReviewed {
+        call_id: String,
+        decision: String,
+        source: ReviewSourceDto,
+        reason: String,
+    },
+    #[serde(rename = "permission.requested")]
+    PermissionRequested {
+        approval_id: String,
+        call_id: String,
+        operation_summary: String,
+        work_mode: WorkModeDto,
+    },
+    #[serde(rename = "permission.resolved")]
+    PermissionResolved {
+        approval_id: String,
+        call_id: String,
+        decision: String,
+        source: ApprovalSourceDto,
+    },
+    #[serde(rename = "tool.started")]
+    ToolStarted { call_id: String, name: String },
+    #[serde(rename = "tool.finished")]
+    ToolFinished {
+        call_id: String,
+        name: String,
+        result: ToolResultDto,
+    },
+    #[serde(rename = "input.requested")]
+    InputRequested {
+        input_id: String,
+        question: String,
+        options: Vec<String>,
+    },
+    #[serde(rename = "input.received")]
+    InputReceived { input_id: String, answer: String },
+    #[serde(rename = "mcp.status")]
+    McpStatus { servers: Vec<McpStatusBadgeDto> },
+    #[serde(rename = "run.finished")]
+    RunFinished(RunResultDto),
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct McpStatusBadgeDto {
+    pub server: String,
+    pub transport: String,
+    pub state: String,
+    pub tools: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SchemaEnvelopeDto {
+    pub schema_version: u8,
+    pub session_id: String,
+    pub run_id: Option<String>,
+    #[specta(type = Number)]
+    pub seq: u64,
+    pub timestamp: String,
+    pub payload: SchemaEventDto,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ApprovalRequestDto {
+    pub approval_id: String,
+    pub call_id: String,
+    pub run_id: String,
+    pub tool: String,
+    pub operation_summary: String,
+    #[specta(type = Unknown)]
+    pub arguments: Value,
+    pub formatted_call: String,
+    pub action: Option<String>,
+    pub cwd: String,
+    pub work_mode: WorkModeDto,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct InputRequestDto {
+    pub input_id: String,
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+/// Unified channel message pushed during an active run.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum DesktopStreamEnvelope {
+    SchemaEvent(SchemaEnvelopeDto),
+    Thinking(Vec<ThinkingSnapshotDto>),
+    Context {
+        entries: Vec<ContextEntryDto>,
+        skills_count: Option<u32>,
+        estimated: bool,
+    },
+    ModeState {
+        current: WorkModeDto,
+        pending: Option<WorkModeDto>,
+    },
+    ApprovalNeeded(ApprovalRequestDto),
+    InputNeeded(InputRequestDto),
+    RunCompleted {
+        status: String,
+        summary_line: String,
+        todos: Vec<TodoItemDto>,
+        error: Option<DesktopError>,
+    },
+}
+
+/// Attachment reference sent from the desktop composer.
+#[derive(Debug, Clone, Deserialize, Type)]
+pub struct AttachmentTokenDto {
+    pub token: String,
+    pub path: String,
+}
+
+/// Paginated session metadata returned by `list_sessions`.
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SessionItemDto {
+    pub id: String,
+    pub workspace: String,
+    pub work_mode: WorkModeDto,
+    pub profile: String,
+    pub title: Option<String>,
+    #[specta(type = Number)]
+    pub updated_at: i64,
+    pub last_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SessionPageDto {
+    pub page: u32,
+    pub page_size: u32,
+    pub items: Vec<SessionItemDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageRoleDto {
+    User,
+    Assistant,
+    Thinking,
+    Tool,
+    System,
+    RunSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct RestoredMessageDto {
+    pub id: String,
+    pub role: MessageRoleDto,
+    pub label: String,
+    pub text: String,
+    pub streaming: bool,
+    pub truncated: bool,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_summary: Option<String>,
+    pub tool_ok: Option<bool>,
+    pub media_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ProfileOptionDto {
+    pub name: String,
+    pub model: String,
+    pub protocol: String,
+    #[specta(type = Number)]
+    pub context_window_tokens: u64,
+    pub thinking_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct ActiveSessionDto {
+    pub id: String,
+    pub title: String,
+    pub workspace: String,
+    pub work_mode: WorkModeDto,
+    pub profile: String,
+    pub model: String,
+    pub messages: Vec<RestoredMessageDto>,
+    pub todos: Vec<TodoItemDto>,
+    pub history_omitted: bool,
+    pub last_usage: Option<UsageDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct BootstrapStateDto {
+    pub version: String,
+    pub config_ready: bool,
+    pub config_path: String,
+    pub config_error: Option<String>,
+    pub workspace: String,
+    pub selected_profile: Option<String>,
+    pub selected_model: Option<String>,
+    #[specta(type = Option<Number>)]
+    pub context_window_tokens: Option<u64>,
+    pub thinking_effort: Option<String>,
+    pub work_mode: WorkModeDto,
+    pub pending_mode: Option<WorkModeDto>,
+    pub permission_mode: PermissionModeDto,
+    pub sandbox_backend: String,
+    pub auto_compact: bool,
+    #[specta(type = Option<Number>)]
+    pub auto_compact_trigger_tokens: Option<u64>,
+    pub auto_compact_trigger_percent: u16,
+    pub profiles: Vec<ProfileOptionDto>,
+    pub session: Option<ActiveSessionDto>,
+    pub run_active: bool,
+    pub active_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SubmitPromptResultDto {
+    pub action: String,
+    pub session_id: String,
+    pub run_id: String,
+}

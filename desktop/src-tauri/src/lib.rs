@@ -1,230 +1,27 @@
 //! Tauri 2 in-process desktop shell for Soyo Harness.
 
-use serde::{Deserialize, Serialize};
-use soyo_app::{offload_boundary, session};
-use soyo_core::{
-    config::{self, Config, Environment, Overrides},
-    contract::{BoundaryError, WorkMode},
-    credentials::SecretRegistry,
-    redaction,
-    sqlite::SessionSummary,
-};
-use specta::Type;
-use specta_typescript::{Number, Typescript};
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-use tauri::State;
+pub mod commands;
+pub mod redaction;
+pub mod runtime_bridge;
+pub mod tool_format;
+pub mod types;
+
+pub use runtime_bridge::DesktopState;
+pub use types::{DesktopError, SessionItemDto, SessionPageDto, WorkModeDto};
+
+use specta_typescript::Typescript;
+use tauri::Manager;
 use tauri_specta::{Builder, collect_commands};
 
-const SESSIONS_PAGE_SIZE: u64 = 20;
-
-/// Structured IPC error returned to the frontend; sensitive values are redacted.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct DesktopError {
-    pub code: String,
-    pub message: String,
-}
-
-impl DesktopError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-
-    pub fn from_boundary(error: &BoundaryError, secrets: &[String]) -> Self {
-        let mut message = serde_json::Value::String(error.message().to_owned());
-        let safe_message = if redaction::redact(&mut message, secrets).is_ok() {
-            message
-                .as_str()
-                .unwrap_or("sensitive details withheld")
-                .to_owned()
-        } else {
-            "sensitive details withheld".to_owned()
-        };
-        Self {
-            code: error.code().to_owned(),
-            message: safe_message,
-        }
-    }
-}
-
-/// Paginated session metadata returned by `list_sessions`.
-#[derive(Debug, Clone, Serialize, Type)]
-pub struct SessionItemDto {
-    pub id: String,
-    pub workspace: String,
-    pub work_mode: WorkModeDto,
-    pub profile: String,
-    pub title: Option<String>,
-    #[specta(type = Number)]
-    pub updated_at: i64,
-    pub last_status: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkModeDto {
-    Plan,
-    Build,
-    Code,
-    Work,
-}
-
-impl From<WorkMode> for WorkModeDto {
-    fn from(value: WorkMode) -> Self {
-        match value {
-            WorkMode::Plan => Self::Plan,
-            WorkMode::Build => Self::Build,
-            WorkMode::Code => Self::Code,
-            WorkMode::Work => Self::Work,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Type)]
-pub struct SessionPageDto {
-    pub page: u32,
-    pub page_size: u32,
-    pub items: Vec<SessionItemDto>,
-}
-
-/// Shared in-process desktop application state.
-pub struct DesktopState {
-    inner: Arc<Mutex<DesktopInner>>,
-    secrets: Arc<SecretRegistry>,
-}
-
-struct DesktopInner {
-    config: Option<Config>,
-    config_error: Option<String>,
-}
-
-impl DesktopState {
-    pub fn from_environment() -> Self {
-        let env = Environment::capture();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        match config::load(Overrides::default(), env, &cwd) {
-            Ok(cfg) => Self::with_config(cfg),
-            Err(err) => Self {
-                inner: Arc::new(Mutex::new(DesktopInner {
-                    config: None,
-                    config_error: Some(err.message().to_owned()),
-                })),
-                secrets: Arc::new(SecretRegistry::default()),
-            },
-        }
-    }
-
-    pub fn with_config(cfg: Config) -> Self {
-        let registry = Arc::new(SecretRegistry::default());
-        let known = cfg
-            .secret_env_names()
-            .iter()
-            .filter_map(|name| cfg.secret(name).ok().map(str::to_owned))
-            .collect::<Vec<_>>();
-        let _ = registry.register(&known);
-        Self {
-            inner: Arc::new(Mutex::new(DesktopInner {
-                config: Some(cfg),
-                config_error: None,
-            })),
-            secrets: registry,
-        }
-    }
-
-    fn current_secrets(&self) -> Vec<String> {
-        self.secrets.snapshot().unwrap_or_default()
-    }
-
-    fn config_snapshot(&self) -> Result<Config, DesktopError> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|_| DesktopError::new("state_lock", "desktop state lock failed"))?;
-        if let Some(cfg) = &guard.config {
-            Ok(cfg.clone())
-        } else {
-            Err(DesktopError::new(
-                "invalid_config",
-                guard
-                    .config_error
-                    .as_deref()
-                    .unwrap_or("configuration is not loaded"),
-            ))
-        }
-    }
-
-    pub async fn list_sessions_page(
-        &self,
-        page: Option<u32>,
-    ) -> Result<SessionPageDto, DesktopError> {
-        let page_num = page.unwrap_or(1).max(1);
-        let offset = u64::from(page_num - 1) * SESSIONS_PAGE_SIZE;
-        let cfg = self.config_snapshot()?;
-        let secrets = self.current_secrets();
-        let store = offload_boundary(move || {
-            session::open(&cfg).map_err(|err| BoundaryError::new("storage_error", err.to_string()))
-        })
-        .await
-        .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-        let summaries = store
-            .list_sessions(offset, SESSIONS_PAGE_SIZE)
-            .await
-            .map_err(|err| DesktopError::from_boundary(&err, &secrets))?;
-
-        let items = summaries
-            .into_iter()
-            .map(|summary| redact_summary(summary, &secrets))
-            .collect();
-        Ok(SessionPageDto {
-            page: page_num,
-            page_size: SESSIONS_PAGE_SIZE as u32,
-            items,
-        })
-    }
-}
-
-fn redact_string(raw: &str, secrets: &[String]) -> String {
-    let mut value = serde_json::Value::String(raw.to_owned());
-    if redaction::redact(&mut value, secrets).is_ok() {
-        value
-            .as_str()
-            .unwrap_or("sensitive details withheld")
-            .to_owned()
-    } else {
-        "sensitive details withheld".to_owned()
-    }
-}
-
-fn redact_summary(summary: SessionSummary, secrets: &[String]) -> SessionItemDto {
-    SessionItemDto {
-        id: summary.id.0.to_string(),
-        workspace: redact_string(&summary.workspace.to_string_lossy(), secrets),
-        work_mode: summary.work_mode.into(),
-        profile: redact_string(&summary.profile, secrets),
-        title: summary.title.map(|t| redact_string(&t, secrets)),
-        updated_at: summary.updated_at,
-        last_status: summary
-            .last_status
-            .map(|status| format!("{status:?}").to_lowercase()),
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn list_sessions(
-    state: State<'_, DesktopState>,
-    page: Option<u32>,
-) -> Result<SessionPageDto, DesktopError> {
-    state.list_sessions_page(page).await
-}
-
 pub fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![list_sessions])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        commands::list_sessions,
+        commands::get_bootstrap_state,
+        commands::new_session,
+        commands::submit_prompt,
+        commands::cancel_run,
+        commands::compact_session,
+    ])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -239,8 +36,14 @@ pub fn run() {
             builder.mount_events(app);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Soyo desktop application");
+        .build(tauri::generate_context!())
+        .expect("error while building Soyo desktop application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let state = app_handle.state::<DesktopState>();
+                tauri::async_runtime::block_on(state.shutdown());
+            }
+        });
 }
 
 pub fn export_bindings_to(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -251,32 +54,238 @@ pub fn export_bindings_to(path: &std::path::Path) -> Result<(), Box<dyn std::err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_bridge::StreamSink;
+    use crate::types::DesktopStreamEnvelope;
+    use soyo_core::{
+        boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation},
+        config::{self, Environment, Overrides},
+        contract::{BoundaryError, HistoryItem, Usage},
+    };
+    use std::{path::PathBuf, sync::Arc};
+    use tokio::sync::mpsc;
+
+    struct ScriptedModel {
+        chunks: Vec<String>,
+        thinking: Option<String>,
+        delay_ms: u64,
+    }
+
+    struct ScriptedStream {
+        chunks: Vec<String>,
+        thinking: Option<String>,
+        step: usize,
+        sent_thinking: bool,
+        delay_ms: u64,
+    }
+
+    impl Model for ScriptedModel {
+        fn start<'a>(
+            &'a self,
+            _request: &'a ModelRequest,
+            _cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Box<dyn ModelStream>> {
+            let chunks = self.chunks.clone();
+            let thinking = self.thinking.clone();
+            let delay_ms = self.delay_ms;
+            Box::pin(async move {
+                Ok(Box::new(ScriptedStream {
+                    chunks,
+                    thinking,
+                    step: 0,
+                    sent_thinking: false,
+                    delay_ms,
+                }) as Box<dyn ModelStream>)
+            })
+        }
+    }
+
+    impl ModelStream for ScriptedStream {
+        fn next<'a>(
+            &'a mut self,
+            cancel: &'a dyn Cancellation,
+        ) -> Operation<'a, Option<ModelUpdate>> {
+            Box::pin(async move {
+                if self.delay_ms > 0 {
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {
+                            return Err(BoundaryError::new("cancelled", "model stream cancelled"));
+                        }
+                        () = tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)) => {}
+                    }
+                }
+                if cancel.is_cancelled() {
+                    return Err(BoundaryError::new("cancelled", "model stream cancelled"));
+                }
+                if let Some(thought) = self.thinking.clone()
+                    && !self.sent_thinking
+                {
+                    self.sent_thinking = true;
+                    return Ok(Some(ModelUpdate::ThinkingDelta { text: thought }));
+                }
+                if self.step < self.chunks.len() {
+                    let text = self.chunks[self.step].clone();
+                    self.step += 1;
+                    return Ok(Some(ModelUpdate::TextDelta(text)));
+                }
+                let full: String = self.chunks.concat();
+                Ok(Some(ModelUpdate::Finished {
+                    items: vec![HistoryItem::AssistantText(full)],
+                    usage: Some(Usage {
+                        input_tokens: Some(42),
+                        output_tokens: Some(12),
+                        cached_input_tokens: None,
+                        estimated: false,
+                    }),
+                }))
+            })
+        }
+    }
+
+    fn test_config(root: &std::path::Path) -> config::Config {
+        let cfg_path = root.join("config.toml");
+        std::fs::write(
+            &cfg_path,
+            r#"
+schema_version = 1
+
+[defaults]
+profile = "fixture"
+mode = "work"
+permissions = "auto"
+
+[profiles.fixture]
+protocol = "openai-responses"
+base_url = "http://127.0.0.1:9/v1"
+model = "fixture-model"
+auth = "none"
+context_window_tokens = 128000
+max_output_tokens = 4096
+
+[sandbox]
+backend = "host"
+"#,
+        )
+        .unwrap();
+        config::load(
+            Overrides {
+                config: Some(cfg_path),
+                cwd: Some(root.to_path_buf()),
+                ..Default::default()
+            },
+            Environment::from_pairs([("HOME".into(), root.as_os_str().to_owned())]),
+            root,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn export_specta_bindings() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts");
         export_bindings_to(&path).expect("specta bindings export should succeed");
         let content = std::fs::read_to_string(&path).expect("bindings.ts should exist");
-        assert!(content.contains("listSessions"));
+        for symbol in [
+            "listSessions",
+            "getBootstrapState",
+            "newSession",
+            "submitPrompt",
+            "cancelRun",
+            "compactSession",
+        ] {
+            assert!(content.contains(symbol), "missing {symbol} in bindings.ts");
+        }
     }
 
     #[tokio::test]
     async fn list_sessions_returns_redacted_empty_page_for_fresh_store() {
         let root = tempfile::tempdir().unwrap();
-        let cfg_path = root.path().join("config.toml");
-        std::fs::write(&cfg_path, "schema_version = 1\n").unwrap();
-        let cfg = config::load(
-            Overrides {
-                config: Some(cfg_path),
-                ..Default::default()
-            },
-            Environment::from_pairs([("HOME".into(), root.path().as_os_str().to_owned())]),
-            root.path(),
-        )
-        .unwrap();
+        let cfg = test_config(root.path());
         let state = DesktopState::with_config(cfg);
         let page = state.list_sessions_page(Some(1)).await.unwrap();
         assert_eq!(page.page, 1);
         assert!(page.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_prompt_streams_events_and_finishes_via_channel() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = test_config(root.path());
+        let state = DesktopState::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(ScriptedModel {
+                chunks: vec!["Hello ".into(), "desktop!".into()],
+                thinking: Some("Analyzing prompt".into()),
+                delay_ms: 0,
+            })
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let res = state
+            .submit_prompt("Say hello".into(), vec![], StreamSink::Mpsc(tx))
+            .await
+            .unwrap();
+        assert_eq!(res.action, "started");
+
+        let mut deltas = String::new();
+        let mut saw_run_started = false;
+        let mut saw_completed = false;
+        while let Some(env) = rx.recv().await {
+            match env {
+                DesktopStreamEnvelope::SchemaEvent(ev) => match ev.payload {
+                    crate::types::SchemaEventDto::RunStarted { .. } => saw_run_started = true,
+                    crate::types::SchemaEventDto::ModelTextDelta { text, .. } => {
+                        deltas.push_str(&text);
+                    }
+                    _ => {}
+                },
+                DesktopStreamEnvelope::RunCompleted { status, .. } => {
+                    assert_eq!(status, "completed");
+                    saw_completed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_run_started);
+        assert!(saw_completed);
+        assert_eq!(deltas, "Hello desktop!");
+
+        let bootstrap = state.get_bootstrap_state().await;
+        assert!(!bootstrap.run_active);
+        assert!(bootstrap.session.is_some());
+        let session = bootstrap.session.unwrap();
+        assert!(session.messages.iter().any(|m| m.text == "Hello desktop!"));
+    }
+
+    #[tokio::test]
+    async fn cancel_run_interrupts_streaming_and_cleans_up() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = test_config(root.path());
+        let state = DesktopState::with_config(cfg).with_test_model(Arc::new(|| {
+            Arc::new(ScriptedModel {
+                chunks: vec!["chunk1".into(), "chunk2".into(), "chunk3".into()],
+                thinking: None,
+                delay_ms: 250,
+            })
+        }));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        state
+            .submit_prompt("Slow task".into(), vec![], StreamSink::Mpsc(tx))
+            .await
+            .unwrap();
+
+        // Wait until first event arrives, then cancel.
+        let _ = rx.recv().await;
+        assert!(state.cancel_run());
+
+        let mut completed_status = None;
+        while let Some(env) = rx.recv().await {
+            if let DesktopStreamEnvelope::RunCompleted { status, .. } = env {
+                completed_status = Some(status);
+                break;
+            }
+        }
+        assert_eq!(completed_status.as_deref(), Some("cancelled"));
+        assert!(!state.get_bootstrap_state().await.run_active);
     }
 }
