@@ -144,6 +144,12 @@ export interface UiMessages {
     queue: string;
     queuedPrompt: string;
     compactionQueued: string;
+    mentionHeader: string;
+    mentionEmpty: string;
+    mentionSkill: string;
+    mentionPlugin: string;
+    mentionMcp: string;
+    dropHint: string;
     hintEnter: string;
     hintShiftEnter: string;
     hintTab: string;
@@ -564,6 +570,12 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       queue: "Queue",
       queuedPrompt: "queued",
       compactionQueued: "compact queued",
+      mentionHeader: "Reference a skill, plugin, or MCP server",
+      mentionEmpty: "No matches",
+      mentionSkill: "skill",
+      mentionPlugin: "plugin",
+      mentionMcp: "mcp",
+      dropHint: "Drop files to attach",
       hintEnter: "Enter send",
       hintShiftEnter: "Shift+Enter newline",
       hintTab: "Empty Tab cycle mode",
@@ -1011,6 +1023,12 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       queue: "排队",
       queuedPrompt: "已排队",
       compactionQueued: "压缩已排队",
+      mentionHeader: "引用 Skill、插件或 MCP 服务器",
+      mentionEmpty: "无匹配项",
+      mentionSkill: "技能",
+      mentionPlugin: "插件",
+      mentionMcp: "mcp",
+      dropHint: "松开以附加文件",
       hintEnter: "Enter 发送",
       hintShiftEnter: "Shift+Enter 换行",
       hintTab: "空框 Tab 切模式",
@@ -1454,6 +1472,12 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       queue: "排程",
       queuedPrompt: "已排程",
       compactionQueued: "壓縮已排程",
+      mentionHeader: "引用 Skill、外掛或 MCP 伺服器",
+      mentionEmpty: "無符合項目",
+      mentionSkill: "技能",
+      mentionPlugin: "外掛",
+      mentionMcp: "mcp",
+      dropHint: "放開以附加檔案",
       hintEnter: "Enter 傳送",
       hintShiftEnter: "Shift+Enter 換行",
       hintTab: "空欄 Tab 切換模式",

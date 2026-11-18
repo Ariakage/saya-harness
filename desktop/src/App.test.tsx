@@ -32,6 +32,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   isTauri: () => isTauriMock(),
 }));
 
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: () => Promise.resolve(() => {}),
+  }),
+}));
+
 vi.mock("@tauri-apps/plugin-updater", () => ({
   check: (...args: unknown[]) => checkUpdateMock(...args),
 }));
@@ -1591,5 +1597,84 @@ describe("App Stage 3 runtime integration", () => {
     });
     const t = getMessages("en-US");
     expect(document.body.textContent).toContain(t.home.configIncomplete);
+  });
+
+  it("opens the @ mention palette and inserts the picked reference", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return sampleBootstrap();
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "get_global_prompt")
+        return { content: "", path: "/tmp/AGENTS.md", source_path: null };
+      if (cmd === "list_extensions")
+        return [
+          {
+            kind: "skill",
+            id: "sk-1",
+            name: "pdf-extract",
+            description: "Extract text from PDFs",
+            scope: "workspace",
+            version: null,
+            active: true,
+          },
+          {
+            kind: "plugin",
+            id: "pl-1",
+            name: "git-tools",
+            description: "Extra git commands",
+            scope: "user",
+            version: "1.0.0",
+            active: true,
+          },
+          {
+            kind: "rule",
+            id: "rl-1",
+            name: "hidden-rule",
+            description: "not mentionable",
+            scope: "workspace",
+            version: null,
+            active: true,
+          },
+        ];
+      if (cmd === "list_mcp_servers")
+        return [
+          {
+            name: "docs-search",
+            transport: "stdio",
+            enabled: true,
+            target: "docs-mcp",
+            scopes: [],
+            credential_ref: null,
+          },
+        ];
+      return null;
+    });
+
+    render(<App />);
+    const input = await screen.findByLabelText("Prompt input");
+    fireEvent.change(input, { target: { value: "hi @" } });
+
+    const palette = await screen.findByTestId("mention-palette");
+    await waitFor(() => {
+      expect(palette.textContent).toContain("@pdf-extract");
+    });
+    expect(palette.textContent).toContain("@git-tools");
+    expect(palette.textContent).toContain("@docs-search");
+    expect(palette.textContent).not.toContain("hidden-rule");
+
+    // Filtering by query narrows the list.
+    fireEvent.change(input, { target: { value: "hi @pdf" } });
+    await waitFor(() => {
+      expect(palette.textContent).toContain("@pdf-extract");
+    });
+    expect(palette.textContent).not.toContain("@git-tools");
+
+    fireEvent.mouseDown(screen.getByText("@pdf-extract"));
+    await waitFor(() => {
+      expect((input as HTMLTextAreaElement).value).toBe(
+        "hi @pdf-extract "
+      );
+    });
+    expect(screen.queryByTestId("mention-palette")).toBeNull();
   });
 });

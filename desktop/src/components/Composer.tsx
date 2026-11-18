@@ -18,8 +18,10 @@ import {
   X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { commands } from "../bindings";
 import type {
   PermissionModeDto,
   ProfileOptionDto_Serialize,
@@ -84,6 +86,36 @@ interface SlashCommandItem {
   action: () => void;
 }
 
+type MentionKind = "skill" | "plugin" | "mcp";
+
+interface MentionItem {
+  kind: MentionKind;
+  name: string;
+  desc: string;
+}
+
+interface MentionState {
+  start: number;
+  end: number;
+  query: string;
+}
+
+const MENTION_ICONS: Record<MentionKind, typeof Layers> = {
+  skill: Layers,
+  plugin: Puzzle,
+  mcp: Cpu,
+};
+
+function detectMention(value: string, caret: number): MentionState | null {
+  const before = value.slice(0, caret);
+  const at = before.lastIndexOf("@");
+  if (at < 0) return null;
+  if (at > 0 && !/\s/.test(before[at - 1])) return null;
+  const query = before.slice(at + 1);
+  if (/[\s@]/.test(query)) return null;
+  return { start: at, end: caret, query };
+}
+
 export function Composer({
   disabled,
   runActive,
@@ -136,10 +168,78 @@ export function Composer({
   const [activePopover, setActivePopover] = useState<
     "attach" | "commands" | "effort" | "model" | null
   >(forcePopover);
+  const [mention, setMention] = useState<MentionState | null>(null);
+  const [mentionItems, setMentionItems] = useState<MentionItem[] | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     setActivePopover(forcePopover);
   }, [forcePopover]);
+
+  // Lazily load mentionable items the first time "@" opens the palette.
+  useEffect(() => {
+    if (!mention || mentionItems !== null || !isTauri()) return;
+    let cancelled = false;
+    void (async () => {
+      const [extRes, mcpRes] = await Promise.all([
+        commands.listExtensions(),
+        commands.listMcpServers(),
+      ]);
+      if (cancelled) return;
+      const items: MentionItem[] = [];
+      if (extRes.status === "ok" && Array.isArray(extRes.data)) {
+        for (const ext of extRes.data) {
+          if (ext.kind === "skill" || ext.kind === "plugin") {
+            items.push({
+              kind: ext.kind,
+              name: ext.name,
+              desc: ext.description,
+            });
+          }
+        }
+      }
+      if (mcpRes.status === "ok" && Array.isArray(mcpRes.data)) {
+        for (const srv of mcpRes.data) {
+          items.push({ kind: "mcp", name: srv.name, desc: srv.target });
+        }
+      }
+      setMentionItems(items);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mention, mentionItems]);
+
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [mention?.query]);
+
+  // Files dropped anywhere on the window are staged as attachments.
+  useEffect(() => {
+    if (!isTauri() || !onStageAttachments) return;
+    let unlisten: (() => void) | null = null;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "drop") {
+          setDragOver(false);
+          if (!disabled && event.payload.paths.length > 0) {
+            void onStageAttachments(event.payload.paths);
+          }
+        } else if (
+          event.payload.type === "enter" ||
+          event.payload.type === "over"
+        ) {
+          setDragOver(true);
+        } else {
+          setDragOver(false);
+        }
+      })
+      .then((f) => {
+        unlisten = f;
+      });
+    return () => unlisten?.();
+  }, [onStageAttachments, disabled]);
 
   // Close lightweight popovers (attach/commands/effort/model, attach input)
   // when pressing outside the composer. Settings dialog is unaffected.
@@ -177,6 +277,18 @@ export function Composer({
   const slashOpen =
     activePopover === "commands" ||
     (draft.startsWith("/") && !draft.includes("\n") && !draft.includes(" "));
+
+  const mentionMatches = mention
+    ? (mentionItems ?? [])
+        .filter((it) =>
+          it.name.toLowerCase().includes(mention.query.toLowerCase())
+        )
+        .slice(0, 8)
+    : [];
+  const mentionActiveIdx =
+    mentionMatches.length > 0
+      ? Math.min(mentionIndex, mentionMatches.length - 1)
+      : 0;
 
   const slashCommands: SlashCommandItem[] = [
     {
@@ -297,6 +409,19 @@ export function Composer({
     }
   };
 
+  const applyMention = (item: MentionItem) => {
+    if (!mention) return;
+    const next = `${draft.slice(0, mention.start)}@${item.name} ${draft.slice(mention.end)}`;
+    const caret = mention.start + item.name.length + 2;
+    setDraft(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    });
+  };
+
   const handleActionClick = async () => {
     if (isStopState) {
       if (!cancelling) {
@@ -320,6 +445,33 @@ export function Composer({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention) {
+      if (event.key === "ArrowDown" && mentionMatches.length > 0) {
+        event.preventDefault();
+        setMentionIndex((i) => (i + 1) % mentionMatches.length);
+        return;
+      }
+      if (event.key === "ArrowUp" && mentionMatches.length > 0) {
+        event.preventDefault();
+        setMentionIndex(
+          (i) => (i - 1 + mentionMatches.length) % mentionMatches.length
+        );
+        return;
+      }
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        mentionMatches.length > 0
+      ) {
+        event.preventDefault();
+        applyMention(mentionMatches[mentionActiveIdx]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (event.key === "Tab" && draft.length === 0 && onCycleMode) {
       event.preventDefault();
       void onCycleMode();
@@ -388,6 +540,67 @@ export function Composer({
                 <span className="text-[12px] text-[#8a8a8a]">{item.desc}</span>
               </button>
             ))}
+        </div>
+      )}
+
+      {/* Mention Palette — "@" references a skill, plugin, or MCP server */}
+      {mention && !slashOpen && (
+        <div
+          data-testid="mention-palette"
+          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[11px] border border-[#2c2c2c] bg-[#1c1c1c] p-1.5 shadow-[0_-8px_32px_rgba(0,0,0,0.45)]"
+        >
+          <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
+            {t.composer.mentionHeader}
+          </div>
+          {mentionItems !== null && mentionMatches.length === 0 ? (
+            <div className="px-2.5 py-1.5 text-[12px] text-[#6e6e6e]">
+              {t.composer.mentionEmpty}
+            </div>
+          ) : (
+            mentionMatches.map((item, idx) => {
+              const Icon = MENTION_ICONS[item.kind];
+              const kindLabel =
+                item.kind === "skill"
+                  ? t.composer.mentionSkill
+                  : item.kind === "plugin"
+                    ? t.composer.mentionPlugin
+                    : t.composer.mentionMcp;
+              return (
+                <button
+                  key={`${item.kind}:${item.name}`}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyMention(item);
+                  }}
+                  className={`flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[#262626] ${
+                    idx === mentionActiveIdx ? "bg-[#262626]/60" : ""
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
+                  <span className="font-mono text-[#8aa8d8]">
+                    @{item.name}
+                  </span>
+                  <span className="truncate text-[12px] text-[#8a8a8a]">
+                    {item.desc}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.05em] text-[#6e6e6e]">
+                    {kindLabel}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* Drag-over drop hint */}
+      {dragOver && (
+        <div
+          data-testid="composer-drop-overlay"
+          className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[14px] border border-dashed border-[#d9a08e] bg-[#181818]/85 text-[12px] font-medium text-[#d9a08e]"
+        >
+          {t.composer.dropHint}
         </div>
       )}
 
@@ -577,7 +790,15 @@ export function Composer({
           ref={textareaRef}
           aria-label="Prompt input"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setMention(
+              detectMention(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length
+              )
+            );
+          }}
           onKeyDown={handleKeyDown}
           disabled={disabled}
           rows={variant === "home" ? 2 : 2}
