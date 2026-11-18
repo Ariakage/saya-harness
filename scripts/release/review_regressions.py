@@ -99,7 +99,7 @@ def check(binary):
         assert code == 0 and result['status'] == 'completed'
         assert not (workspace / 'forbidden.txt').exists()
         context = json.loads(seen[1]['messages'][1]['content'])
-        assert context['saya_runtime_context_v1']['work_mode'] == 'plan'
+        assert context['soyo_runtime_context_v1']['work_mode'] == 'plan'
     print('R-01 explicit PLAN on resume: passed')
 
     secret = 'fixture"secret\\tail'

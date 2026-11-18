@@ -2084,8 +2084,8 @@ def todos_manual_plan_and_restore_journey(binary):
                             value = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        if 'saya_runtime_context_v1' in value:
-                            contexts.append(value['saya_runtime_context_v1'])
+                        if 'soyo_runtime_context_v1' in value:
+                            contexts.append(value['soyo_runtime_context_v1'])
             if not contexts or contexts[-1].get('todos') != snapshots[index]:
                 raise RuntimeError('latest canonical todos were omitted from the next runtime context')
             return {'call': calls[index + 1] if index < 2 else write}
@@ -2583,7 +2583,7 @@ def session_restore_and_export(binary):
                 terminal.wait(first_export.exists, 'JSON export file')
                 terminal.until('Exported')
                 first = json.loads(first_export.read_text())
-                if first.get('export_type') != 'saya.session' or first['session']['id'] != identifier:
+                if first.get('export_type') != 'soyo.session' or first['session']['id'] != identifier:
                     raise RuntimeError('TUI exported a different session')
                 if first['snapshot']['scope'] != 'transcript' or first['snapshot']['include_tools']:
                     raise RuntimeError('default TUI export did not use transcript privacy defaults')
