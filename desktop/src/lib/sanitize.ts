@@ -20,30 +20,34 @@ export type WorkModeVisual = {
 export const WORK_MODE_STYLES: Record<WorkModeDto, WorkModeVisual> = {
   work: {
     label: "WORK",
-    color: "#d9a08e",
-    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#d9a08e]",
+    color: "var(--mode-work)",
+    badgeClass:
+      "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--mode-work)]",
   },
   code: {
     label: "CODE",
-    color: "#4ade80",
-    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#4ade80]",
+    color: "var(--mode-code)",
+    badgeClass:
+      "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--mode-code)]",
   },
   plan: {
     label: "PLAN",
-    color: "#a096eb",
-    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#a096eb]",
+    color: "var(--mode-plan)",
+    badgeClass:
+      "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--mode-plan)]",
   },
   build: {
     label: "BUILD",
-    color: "#fac454",
-    badgeClass: "border-[#2e2e2e] bg-[#1c1c1c] text-[#fac454]",
+    color: "var(--mode-build)",
+    badgeClass:
+      "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--mode-build)]",
   },
 };
 
 export const PERMISSION_MODE_LABELS: Record<PermissionModeDto, string> = {
-  auto: "auto",
-  bypass: "bypass permissions",
-  manual: "Manual Approval",
+  auto: "Auto",
+  bypass: "Bypass permissions",
+  manual: "Manual approval",
 };
 
 export function formatTokenCount(tokens: number | null | undefined): string {

@@ -458,7 +458,7 @@ describe("App Stage 3 runtime integration", () => {
     // Switch permission mode to manual via the topbar permission pill menu
     fireEvent.click(screen.getByTitle("Permission mode"));
     fireEvent.click(
-      screen.getByRole("button", { name: "Manual Approval" })
+      screen.getByRole("button", { name: /Manual approval/i })
     );
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_permission_mode", {

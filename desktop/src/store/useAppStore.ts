@@ -1,4 +1,4 @@
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, isTauri } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import {
   commands,
@@ -29,8 +29,13 @@ import {
   type LocaleId,
 } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
+import { isBrowserPreview } from "../preview/browserPreview";
 
 export type MarkdownDisplayMode = "render" | "source";
+export type ThemePreference = "system" | "light" | "dark";
+export type ResolvedTheme = "dark" | "light";
+export type ConversationFont = "default" | "serif" | "system";
+export type ConversationFontSize = 13 | 14 | 16;
 
 export interface DesktopMessage {
   id: string;
@@ -91,9 +96,17 @@ export interface AppState {
   userName: string | null;
   nickname: string | null;
   avatarData: string | null;
+  theme: ThemePreference;
+  resolvedTheme: ResolvedTheme;
+  fontSize: ConversationFontSize;
+  conversationFont: ConversationFont;
+  reduceMotion: boolean;
+  inspectorOpenPref: boolean | null;
+  helperReconnecting: boolean;
   error: DesktopError | null;
 
   initApp: () => Promise<void>;
+  reconnectHelper: () => Promise<void>;
   applyBootstrap: (boot: BootstrapStateDto_Serialize) => void;
   setThinkingEffort: (effort: string | null, ultracode?: boolean) => Promise<boolean>;
   selectProfile: (profile: string) => Promise<boolean>;
@@ -127,8 +140,94 @@ export interface AppState {
   setLocale: (locale: LocaleId) => void;
   setNickname: (nickname: string | null) => Promise<boolean>;
   setAvatar: (sourcePath: string | null) => Promise<boolean>;
+  setTheme: (theme: ThemePreference) => Promise<void>;
+  setFontSize: (fontSize: ConversationFontSize) => Promise<void>;
+  setConversationFont: (conversationFont: ConversationFont) => Promise<void>;
+  setReduceMotion: (reduceMotion: boolean) => Promise<void>;
+  setInspectorOpenPref: (inspectorOpen: boolean) => Promise<void>;
+  applySystemThemeChange: () => void;
   clearError: () => void;
   handleStreamEnvelope: (envelope: DesktopStreamEnvelope_Deserialize) => void;
+}
+
+const VALID_THEMES: ReadonlySet<string> = new Set(["system", "light", "dark"]);
+const VALID_FONTS: ReadonlySet<string> = new Set(["default", "serif", "system"]);
+const DISCONNECT_CODES: ReadonlySet<string> = new Set([
+  "helper_disconnected",
+  "helper_io",
+  "helper_shutdown",
+]);
+
+function readPreviewThemeParam(): ThemePreference | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = new URLSearchParams(window.location.search).get("theme");
+    if (raw === "light" || raw === "dark" || raw === "system") {
+      return raw;
+    }
+  } catch {
+    // Ignore malformed URLs.
+  }
+  return null;
+}
+
+function getSystemTheme(): ResolvedTheme {
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    return window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
+  }
+  return "dark";
+}
+
+function resolveTheme(pref: ThemePreference): ResolvedTheme {
+  if (pref === "light" || pref === "dark") {
+    return pref;
+  }
+  return getSystemTheme();
+}
+
+function applyAppearanceToDom(opts: {
+  theme: ThemePreference;
+  resolvedTheme: ResolvedTheme;
+  fontSize: ConversationFontSize;
+  conversationFont: ConversationFont;
+  reduceMotion: boolean;
+}) {
+  if (typeof document !== "undefined") {
+    const root = document.documentElement;
+    root.dataset.theme = opts.resolvedTheme;
+    root.style.colorScheme = opts.resolvedTheme;
+    root.dataset.convSize = String(opts.fontSize);
+    root.dataset.convFont = opts.conversationFont;
+    root.dataset.reduceMotion = opts.reduceMotion ? "true" : "false";
+  }
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem("soyo.theme", opts.resolvedTheme);
+    } catch {
+      // Storage may be unavailable in restricted frames.
+    }
+  }
+  if (isTauri() && !isBrowserPreview()) {
+    void import("@tauri-apps/api/window")
+      .then((mod) =>
+        mod.getCurrentWindow?.().setTheme(opts.theme === "system" ? null : opts.theme)
+      )
+      .catch(() => {});
+  }
+}
+
+function normalizeThemePref(raw: string | null | undefined): ThemePreference {
+  return raw && VALID_THEMES.has(raw) ? (raw as ThemePreference) : "system";
+}
+
+function normalizeFontSize(raw: number | null | undefined): ConversationFontSize {
+  return raw === 13 || raw === 14 || raw === 16 ? raw : 14;
+}
+
+function normalizeConversationFont(raw: string | null | undefined): ConversationFont {
+  return raw && VALID_FONTS.has(raw) ? (raw as ConversationFont) : "default";
 }
 
 const MAX_RENDERED_MESSAGES = 400;
@@ -431,6 +530,44 @@ export const useAppStore = create<AppState>((set, get) => {
     return channel;
   };
 
+  const initialTheme: ThemePreference = readPreviewThemeParam() ?? "system";
+  const initialResolvedTheme: ResolvedTheme = resolveTheme(initialTheme);
+  let reconnectInFlight = false;
+
+  const persistPrefs = (patch: {
+    theme?: string;
+    font_size?: number;
+    conversation_font?: string;
+    reduce_motion?: boolean;
+    inspector_open?: boolean;
+  }) => {
+    void commands
+      .updateDesktopPrefs({
+        theme: patch.theme ?? null,
+        font_size: patch.font_size ?? null,
+        conversation_font: patch.conversation_font ?? null,
+        reduce_motion: patch.reduce_motion ?? null,
+        inspector_open: patch.inspector_open ?? null,
+      })
+      .catch(() => {});
+  };
+
+  const reportError = (err: DesktopError) => {
+    const isDisconnect = DISCONNECT_CODES.has(err.code);
+    if (isDisconnect) {
+      set({
+        error: err,
+        helperReconnecting: true,
+        runActive: false,
+        streamOwned: false,
+        cancelling: false,
+      });
+      void get().reconnectHelper();
+    } else {
+      set({ error: err });
+    }
+  };
+
   return {
     initialized: false,
     loading: false,
@@ -469,6 +606,13 @@ export const useAppStore = create<AppState>((set, get) => {
     userName: null,
     nickname: null,
     avatarData: null,
+    theme: initialTheme,
+    resolvedTheme: initialResolvedTheme,
+    fontSize: 14,
+    conversationFont: "default",
+    reduceMotion: false,
+    inspectorOpenPref: null,
+    helperReconnecting: false,
     error: null,
 
     applyBootstrap: (boot) => {
@@ -479,6 +623,7 @@ export const useAppStore = create<AppState>((set, get) => {
         permissionMode: boot.permission_mode,
         runActive: boot.run_active,
         activeRunId: boot.active_run_id,
+        helperReconnecting: false,
         error: null,
         ...(boot.session &&
         (boot.session.id !== state.sessionId || !state.runActive)
@@ -488,6 +633,38 @@ export const useAppStore = create<AppState>((set, get) => {
             : {}),
       }));
       ensureRunStatePoll();
+    },
+
+    reconnectHelper: async () => {
+      if (reconnectInFlight) return;
+      reconnectInFlight = true;
+      set({ helperReconnecting: true });
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+          }
+          const [bootRes, listRes] = await Promise.all([
+            commands.getBootstrapState(),
+            commands.listSessions(1),
+          ]);
+          if (bootRes.status === "ok") {
+            get().applyBootstrap(bootRes.data);
+            if (listRes.status === "ok") {
+              set({ recentSessions: listRes.data.items });
+            }
+            return;
+          }
+          if (!DISCONNECT_CODES.has(bootRes.error.code)) {
+            set({ error: bootRes.error, helperReconnecting: false });
+            return;
+          }
+        }
+      } catch (err) {
+        set({ error: normalizeError(err) });
+      } finally {
+        reconnectInFlight = false;
+      }
     },
 
     setThinkingEffort: async (effort, ultracode = false) => {
@@ -501,7 +678,7 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ error: res.error });
         return false;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -516,7 +693,7 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ error: res.error });
         return false;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -530,22 +707,30 @@ export const useAppStore = create<AppState>((set, get) => {
         const res = await commands.getBootstrapState();
         if (res.status === "ok") {
           get().applyBootstrap(res.data);
+        } else {
+          reportError(res.error);
         }
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
       }
     },
 
     syncRunState: async () => {
       try {
         const res = await commands.getRunState();
-        if (res.status !== "ok") return;
+        if (res.status !== "ok") {
+          if (DISCONNECT_CODES.has(res.error.code)) {
+            reportError(res.error);
+          }
+          return;
+        }
         const wasActive = get().runActive;
         set({
           runActive: res.data.active_run,
           workMode: res.data.current,
           pendingMode: res.data.pending ?? null,
           compactionPending: res.data.compaction_pending,
+          helperReconnecting: false,
         });
         if (wasActive && !res.data.active_run) {
           stopRunStatePoll();
@@ -566,6 +751,20 @@ export const useAppStore = create<AppState>((set, get) => {
           commands.getUserName(),
           commands.getDesktopPrefs(),
         ]);
+        const prefs = prefsRes.status === "ok" ? prefsRes.data : null;
+        const previewTheme = isBrowserPreview() ? readPreviewThemeParam() : null;
+        const nextTheme = previewTheme ?? normalizeThemePref(prefs?.theme);
+        const nextResolved = resolveTheme(nextTheme);
+        const nextFontSize = normalizeFontSize(prefs?.font_size);
+        const nextConvFont = normalizeConversationFont(prefs?.conversation_font);
+        const nextReduceMotion = prefs?.reduce_motion ?? false;
+        applyAppearanceToDom({
+          theme: nextTheme,
+          resolvedTheme: nextResolved,
+          fontSize: nextFontSize,
+          conversationFont: nextConvFont,
+          reduceMotion: nextReduceMotion,
+        });
         const updates: Partial<AppState> = {
           initialized: true,
           loading: false,
@@ -573,12 +772,18 @@ export const useAppStore = create<AppState>((set, get) => {
             nameRes.status === "ok" && nameRes.data?.trim()
               ? nameRes.data.trim()
               : null,
-          nickname:
-            prefsRes.status === "ok" ? (prefsRes.data?.nickname ?? null) : null,
-          avatarData:
-            prefsRes.status === "ok"
-              ? (prefsRes.data?.avatar_data ?? null)
+          nickname: prefs?.nickname ?? null,
+          avatarData: prefs?.avatar_data ?? null,
+          theme: nextTheme,
+          resolvedTheme: nextResolved,
+          fontSize: nextFontSize,
+          conversationFont: nextConvFont,
+          reduceMotion: nextReduceMotion,
+          inspectorOpenPref:
+            typeof prefs?.inspector_open === "boolean"
+              ? prefs.inspector_open
               : null,
+          helperReconnecting: false,
         };
         if (bootRes.status === "ok") {
           updates.bootstrap = bootRes.data;
@@ -612,7 +817,7 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ recentSessions: res.data.items });
         }
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
       }
     },
 
@@ -642,7 +847,7 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ error: res.error });
         }
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
       }
     },
 
@@ -654,7 +859,7 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const res = await commands.stageAttachments(cleaned);
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         set((state) => {
@@ -670,7 +875,7 @@ export const useAppStore = create<AppState>((set, get) => {
         });
         return true;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -682,7 +887,7 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const res = await commands.stagePastedAttachments(items);
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         set((state) => {
@@ -698,7 +903,7 @@ export const useAppStore = create<AppState>((set, get) => {
         });
         return true;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -738,7 +943,7 @@ export const useAppStore = create<AppState>((set, get) => {
           channel
         );
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         const userMessage: DesktopMessage = {
@@ -778,7 +983,7 @@ export const useAppStore = create<AppState>((set, get) => {
         ensureRunStatePoll();
         return true;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -804,7 +1009,7 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const res = await commands.compactSession(channel);
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         const queued = res.data.action === "compaction_queued";
@@ -820,7 +1025,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return true;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -838,7 +1043,7 @@ export const useAppStore = create<AppState>((set, get) => {
         );
         set({ pendingApproval: null });
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         return true;
@@ -861,7 +1066,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const res = await commands.replyInput(pending.input_id, trimmed);
         set({ pendingInput: null });
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         return true;
@@ -875,7 +1080,7 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const res = await commands.setWorkMode(mode);
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         set((state) => ({
@@ -886,7 +1091,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }));
         return true;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -902,13 +1107,13 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const res = await commands.setPermissionMode(permissions);
         if (res.status !== "ok") {
-          set({ error: res.error });
+          reportError(res.error);
           return false;
         }
         set({ permissionMode: res.data, error: null });
         return true;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -960,7 +1165,7 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().refreshSessions(1);
         return "ok";
       } catch (err) {
-        set({ error: normalizeError(err), configChangeSessionId: null });
+        reportError(normalizeError(err)); set({ configChangeSessionId: null });
         return "error";
       }
     },
@@ -991,7 +1196,7 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ error: res.error });
         return false;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
     },
@@ -1006,9 +1211,83 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ error: res.error });
         return false;
       } catch (err) {
-        set({ error: normalizeError(err) });
+        reportError(normalizeError(err));
         return false;
       }
+    },
+
+    setTheme: async (theme) => {
+      const state = get();
+      const resolvedTheme = resolveTheme(theme);
+      applyAppearanceToDom({
+        theme,
+        resolvedTheme,
+        fontSize: state.fontSize,
+        conversationFont: state.conversationFont,
+        reduceMotion: state.reduceMotion,
+      });
+      set({ theme, resolvedTheme });
+      persistPrefs({ theme });
+    },
+
+    setFontSize: async (fontSize) => {
+      const state = get();
+      applyAppearanceToDom({
+        theme: state.theme,
+        resolvedTheme: state.resolvedTheme,
+        fontSize,
+        conversationFont: state.conversationFont,
+        reduceMotion: state.reduceMotion,
+      });
+      set({ fontSize });
+      persistPrefs({ font_size: fontSize });
+    },
+
+    setConversationFont: async (conversationFont) => {
+      const state = get();
+      applyAppearanceToDom({
+        theme: state.theme,
+        resolvedTheme: state.resolvedTheme,
+        fontSize: state.fontSize,
+        conversationFont,
+        reduceMotion: state.reduceMotion,
+      });
+      set({ conversationFont });
+      persistPrefs({ conversation_font: conversationFont });
+    },
+
+    setReduceMotion: async (reduceMotion) => {
+      const state = get();
+      applyAppearanceToDom({
+        theme: state.theme,
+        resolvedTheme: state.resolvedTheme,
+        fontSize: state.fontSize,
+        conversationFont: state.conversationFont,
+        reduceMotion,
+      });
+      set({ reduceMotion });
+      persistPrefs({ reduce_motion: reduceMotion });
+    },
+
+    setInspectorOpenPref: async (inspectorOpen) => {
+      set({ inspectorOpenPref: inspectorOpen });
+      persistPrefs({ inspector_open: inspectorOpen });
+    },
+
+    applySystemThemeChange: () => {
+      const state = get();
+      if (state.theme !== "system") return;
+      if (isBrowserPreview() && readPreviewThemeParam() !== null) return;
+      const resolvedTheme = getSystemTheme();
+      if (resolvedTheme === state.resolvedTheme) return;
+      applyAppearanceToDom({
+        theme: state.theme,
+        resolvedTheme,
+        fontSize: state.fontSize,
+        conversationFont: state.conversationFont,
+        reduceMotion: state.reduceMotion,
+      });
+      set({ resolvedTheme });
     },
 
     clearError: () => set({ error: null }),

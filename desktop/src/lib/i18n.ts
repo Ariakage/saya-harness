@@ -407,6 +407,147 @@ export interface UiMessages {
     installingBtn: string;
     installRestartBtn: string;
   };
+  appearance: {
+    title: string;
+    themeLabel: string;
+    themeSystem: string;
+    themeLight: string;
+    themeDark: string;
+    languageLabel: string;
+    languageHint: string;
+    fontSizeLabel: string;
+    fontSizeSmall: string;
+    fontSizeDefault: string;
+    fontSizeLarge: string;
+    convFontLabel: string;
+    convFontDefault: string;
+    convFontSerif: string;
+    convFontSystem: string;
+    reduceMotionLabel: string;
+    reduceMotionDesc: string;
+  };
+  about: {
+    title: string;
+    productName: string;
+    versionLabel: string;
+    helperLabel: string;
+    helperConnected: string;
+    helperDisconnected: string;
+    helperReconnecting: string;
+    helperMeta: (pid: number | null, runs: number, clients: number) => string;
+    checkUpdatesBtn: string;
+    checkingUpdates: string;
+    upToDate: string;
+    updateAvailable: (v: string) => string;
+    updateUnavailable: string;
+    refreshHelperBtn: string;
+  };
+  extra: {
+    themeAction: string;
+    aboutAction: string;
+    recentsTitle: string;
+    moreCount: (n: number) => string;
+    navAccount: string;
+    navAppearance: string;
+    titleAccount: string;
+    titleAppearance: string;
+    titleMcp: string;
+    titleMemory: string;
+    titleExport: string;
+    openMcpDialogBtn: string;
+    openMemoryDialogBtn: string;
+    openExportDialogBtn: string;
+    exportUnavailableHint: string;
+    permAuto: string;
+    permManual: string;
+    permBypass: string;
+    permBypassWarning: string;
+    filterAllProjects: string;
+    filterAllStatuses: string;
+    statusActive: string;
+    statusCompleted: string;
+    statusFailed: string;
+    reconnectBanner: string;
+    reconnectBtn: string;
+    searchOverlayTitle: string;
+    searchOverlayPlaceholder: string;
+    searchOverlayEmpty: string;
+    pasteAction: string;
+    mentionAction: string;
+    slashAction: string;
+    selectModelHeader: string;
+    selectEffortHeader: string;
+    thinkingDuration: (text: string) => string;
+  };
+  a11y: {
+    toggleSidebar: string;
+    collapseSidebar: string;
+    expandSidebar: string;
+    viewMode: string;
+    renderedView: string;
+    sourceView: string;
+    switchOrBrowseSessions: string;
+    workMode: string;
+    permissionMode: string;
+    queuedModeTip: (mode: string) => string;
+    switchModeTip: (mode: string) => string;
+    searchSessions: string;
+    moreSessionActions: string;
+    dismissError: string;
+    addContextMenu: string;
+    stageLocalAttachment: string;
+    slashCommands: string;
+    compactSessionHistory: string;
+    cycleWorkMode: string;
+    switchGuidanceMode: string;
+    promptInput: string;
+    attachmentPathInput: string;
+    removeAttachment: (name: string) => string;
+    sendPrompt: string;
+    cancelRun: string;
+    modelAndEffort: string;
+    closeSettings: string;
+    aboutEffort: string;
+    effortSlider: string;
+    setEffort: (name: string) => string;
+    ultracodeToggle: string;
+    approvalRegion: string;
+    clarificationDialog: string;
+    contextUsage: (pct: number) => string;
+    contextTitle: (detail: string) => string;
+    browserBack: string;
+    browserForward: string;
+    reloadPreview: string;
+    openExternalSettings: string;
+    closeSplitBrowser: string;
+    userMenu: string;
+    userMenuTitle: (profile: string) => string;
+    toggleBypass: string;
+    triggerTokens: string;
+    closeDialog: string;
+    closeInspector: string;
+    openInspector: string;
+    exportPathInput: string;
+    workspaceFilter: string;
+    statusFilter: string;
+    copyMessage: string;
+    sidebarNav: string;
+    removeToolChip: (name: string) => string;
+    closeImagePreview: string;
+    dismissUpdater: string;
+    closeExport: string;
+    closeSessionBrowser: string;
+    closeMcpDialog: string;
+    closeMemoryDialog: string;
+    memoryQueryInput: string;
+    memoryActionInput: string;
+    mcpServerInput: string;
+    mcpEnvInput: string;
+    mcpScopesInput: string;
+    searchOverlayClose: string;
+    avatarUpload: string;
+    nicknameInput: string;
+  };
 }
 
 const MESSAGES: Record<LocaleId, UiMessages> = {
@@ -863,6 +1004,148 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       installingBtn: "Installing...",
       installRestartBtn: "Install & Restart",
     },
+    appearance: {
+      title: "Appearance",
+      themeLabel: "Theme",
+      themeSystem: "System",
+      themeLight: "Light",
+      themeDark: "Dark",
+      languageLabel: "Language",
+      languageHint: "Applies immediately across desktop controls and labels.",
+      fontSizeLabel: "Message font size",
+      fontSizeSmall: "13px Compact",
+      fontSizeDefault: "14px Default",
+      fontSizeLarge: "16px Large",
+      convFontLabel: "Conversation font",
+      convFontDefault: "Default sans",
+      convFontSerif: "Serif (Source Serif 4)",
+      convFontSystem: "System UI",
+      reduceMotionLabel: "Reduce motion",
+      reduceMotionDesc: "Disable transitions, loader animation, and Effort WebGL grid motion.",
+    },
+    about: {
+      title: "About Soyo",
+      productName: "Soyo Desktop",
+      versionLabel: "Version",
+      helperLabel: "Helper daemon",
+      helperConnected: "Connected",
+      helperDisconnected: "Disconnected",
+      helperReconnecting: "Reconnecting…",
+      helperMeta: (pid, runs, clients) =>
+        `PID ${pid ?? "—"} · ${runs} active run(s) · ${clients} client(s)`,
+      checkUpdatesBtn: "Check for updates",
+      checkingUpdates: "Checking…",
+      upToDate: "You're up to date.",
+      updateAvailable: (v) => `Update v${v} available — use the banner above to install.`,
+      updateUnavailable: "Update check unavailable in preview or offline environment.",
+      refreshHelperBtn: "Refresh",
+    },
+    extra: {
+      themeAction: "Theme",
+      aboutAction: "About Soyo",
+      recentsTitle: "Recents",
+      moreCount: (n) => `+ ${n} more`,
+      navAccount: "Account",
+      navAppearance: "Appearance",
+      titleAccount: "Account & Instructions",
+      titleAppearance: "Appearance & Language",
+      titleMcp: "MCP & Credentials",
+      titleMemory: "Global Memory",
+      titleExport: "Import & Export",
+      openMcpDialogBtn: "Open MCP & credentials manager",
+      openMemoryDialogBtn: "Open memory manager",
+      openExportDialogBtn: "Open session exporter",
+      exportUnavailableHint: "Start or resume a session first to export its transcript.",
+      permAuto: "Auto",
+      permManual: "Manual approval",
+      permBypass: "Bypass permissions",
+      permBypassWarning: "Bypass permissions active: tools execute without confirmation",
+      filterAllProjects: "All projects",
+      filterAllStatuses: "All statuses",
+      statusActive: "In progress",
+      statusCompleted: "Completed",
+      statusFailed: "Failed",
+      reconnectBanner: "Helper connection interrupted. Reconnecting to daemon…",
+      reconnectBtn: "Retry now",
+      searchOverlayTitle: "Search sessions",
+      searchOverlayPlaceholder: "Filter by session title, workspace, or content…",
+      searchOverlayEmpty: "No matching sessions found.",
+      pasteAction: "Paste path or media",
+      mentionAction: "Insert @ mention",
+      slashAction: "Insert / command",
+      selectModelHeader: "Model profile",
+      selectEffortHeader: "Reasoning effort",
+      thinkingDuration: (text) => text,
+    },
+    a11y: {
+      toggleSidebar: "Toggle sidebar",
+      collapseSidebar: "Collapse sidebar",
+      expandSidebar: "Expand sidebar",
+      viewMode: "View mode",
+      renderedView: "Rendered conversation view",
+      sourceView: "Markdown source view",
+      switchOrBrowseSessions: "Switch or browse sessions",
+      workMode: "Work mode",
+      permissionMode: "Permission mode",
+      queuedModeTip: (mode) => `Queued ${mode} for next turn`,
+      switchModeTip: (mode) => `Switch to ${mode} mode`,
+      searchSessions: "Search sessions",
+      moreSessionActions: "More session actions",
+      dismissError: "Dismiss error",
+      addContextMenu: "Add context menu",
+      stageLocalAttachment: "Stage local attachment",
+      slashCommands: "Slash commands",
+      compactSessionHistory: "Compact session history",
+      cycleWorkMode: "Cycle work mode",
+      switchGuidanceMode: "Switch run guidance mode (Steer / Queue)",
+      promptInput: "Prompt input",
+      attachmentPathInput: "Local attachment file path",
+      removeAttachment: (name) => `Remove ${name}`,
+      sendPrompt: "Send",
+      cancelRun: "Stop",
+      modelAndEffort: "Model profile and reasoning effort",
+      closeSettings: "Close settings",
+      aboutEffort: "About effort",
+      effortSlider: "Effort slider",
+      setEffort: (name) => `Set effort to ${name}`,
+      ultracodeToggle: "Ultracode toggle",
+      approvalRegion: "Approval required",
+      clarificationDialog: "Clarification needed",
+      contextUsage: (pct) => `Context usage ${pct}%`,
+      contextTitle: (detail) => `Context: ${detail}`,
+      browserBack: "Browser back",
+      browserForward: "Browser forward",
+      reloadPreview: "Reload preview",
+      openExternalSettings: "Open external settings",
+      closeSplitBrowser: "Close split browser",
+      userMenu: "User menu",
+      userMenuTitle: (profile) => `Account & Profile Menu (${profile})`,
+      toggleBypass: "Toggle bypass permissions mode",
+      triggerTokens: "Auto-compact trigger tokens",
+      closeDialog: "Close dialog",
+      closeInspector: "Close inspector",
+      openInspector: "Open inspector",
+      exportPathInput: "Export target path",
+      workspaceFilter: "Filter sessions by project",
+      statusFilter: "Filter sessions by status",
+      copyMessage: "Copy",
+      sidebarNav: "Primary navigation",
+      removeToolChip: (name) => `Disable ${name}`,
+      closeImagePreview: "Close image preview",
+      dismissUpdater: "Dismiss update notification",
+      closeExport: "Close export dialog",
+      closeSessionBrowser: "Close session browser",
+      closeMcpDialog: "Close MCP and credentials dialog",
+      closeMemoryDialog: "Close memory dialog",
+      memoryQueryInput: "Memory query command",
+      memoryActionInput: "Memory action command",
+      mcpServerInput: "MCP server name",
+      mcpEnvInput: "Environment variable name",
+      mcpScopesInput: "Credential scopes",
+      searchOverlayClose: "Close search",
+      avatarUpload: "Upload avatar image",
+      nicknameInput: "Display nickname",
+    },
   },
   "zh-CN": {
     languageDialog: {
@@ -1312,6 +1595,148 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       installingBtn: "正在安装…",
       installRestartBtn: "安装并重启",
     },
+    appearance: {
+      title: "外观",
+      themeLabel: "主题",
+      themeSystem: "跟随系统",
+      themeLight: "浅色",
+      themeDark: "深色",
+      languageLabel: "界面语言",
+      languageHint: "即时切换桌面端控件、标签与提示文案。",
+      fontSizeLabel: "正文字号",
+      fontSizeSmall: "13px 紧凑",
+      fontSizeDefault: "14px 默认",
+      fontSizeLarge: "16px 较大",
+      convFontLabel: "对话字体",
+      convFontDefault: "默认无衬线",
+      convFontSerif: "衬线（Source Serif 4）",
+      convFontSystem: "系统字体",
+      reduceMotionLabel: "减弱动效",
+      reduceMotionDesc: "关闭界面过渡、加载方块动画与 Effort 网格动态渲染。",
+    },
+    about: {
+      title: "关于 Soyo",
+      productName: "Soyo 桌面端",
+      versionLabel: "版本",
+      helperLabel: "helper 守护进程",
+      helperConnected: "已连接",
+      helperDisconnected: "未连接",
+      helperReconnecting: "正在重连…",
+      helperMeta: (pid, runs, clients) =>
+        `PID ${pid ?? "—"} · ${runs} 个活动 Run · ${clients} 个客户端`,
+      checkUpdatesBtn: "检查更新",
+      checkingUpdates: "正在检查…",
+      upToDate: "当前已是最新版本。",
+      updateAvailable: (v) => `发现新版本 v${v} — 请使用顶部横幅安装。`,
+      updateUnavailable: "预览或离线环境下无法检查更新。",
+      refreshHelperBtn: "刷新状态",
+    },
+    extra: {
+      themeAction: "主题",
+      aboutAction: "关于 Soyo",
+      recentsTitle: "最近会话",
+      moreCount: (n) => `+ 还有 ${n} 条`,
+      navAccount: "账户",
+      navAppearance: "外观",
+      titleAccount: "账户与全局指令",
+      titleAppearance: "外观与语言",
+      titleMcp: "MCP 与凭据",
+      titleMemory: "全局记忆",
+      titleExport: "导入与导出",
+      openMcpDialogBtn: "打开 MCP 与凭据管理",
+      openMemoryDialogBtn: "打开记忆管理",
+      openExportDialogBtn: "打开会话导出",
+      exportUnavailableHint: "请先创建或恢复一个会话再导出内容。",
+      permAuto: "Auto",
+      permManual: "Manual approval",
+      permBypass: "Bypass permissions",
+      permBypassWarning: "Bypass permissions 已启用：工具将跳过人工确认直接执行",
+      filterAllProjects: "全部项目",
+      filterAllStatuses: "全部状态",
+      statusActive: "进行中",
+      statusCompleted: "已完成",
+      statusFailed: "失败",
+      reconnectBanner: "helper 连接已断开，正在自动重连守护进程…",
+      reconnectBtn: "立即重试",
+      searchOverlayTitle: "搜索会话",
+      searchOverlayPlaceholder: "按会话标题、项目路径或内容筛选…",
+      searchOverlayEmpty: "没有找到匹配的会话。",
+      pasteAction: "粘贴路径或媒体",
+      mentionAction: "插入 @ 引用",
+      slashAction: "插入 / 命令",
+      selectModelHeader: "模型配置",
+      selectEffortHeader: "思考强度",
+      thinkingDuration: (text) => text,
+    },
+    a11y: {
+      toggleSidebar: "切换侧栏",
+      collapseSidebar: "收起侧栏",
+      expandSidebar: "展开侧栏",
+      viewMode: "视图模式",
+      renderedView: "Markdown 渲染视图",
+      sourceView: "Markdown 源码视图",
+      switchOrBrowseSessions: "切换或浏览会话",
+      workMode: "工作模式",
+      permissionMode: "权限模式",
+      queuedModeTip: (mode) => `下一轮将切换至 ${mode}`,
+      switchModeTip: (mode) => `切换到 ${mode} 模式`,
+      searchSessions: "搜索会话",
+      moreSessionActions: "更多会话操作",
+      dismissError: "关闭错误提示",
+      addContextMenu: "打开操作菜单",
+      stageLocalAttachment: "暂存本地附件",
+      slashCommands: "斜杠命令",
+      compactSessionHistory: "压缩会话历史",
+      cycleWorkMode: "轮换工作模式",
+      switchGuidanceMode: "切换运行引导方式（转向 / 排队）",
+      promptInput: "消息输入框",
+      attachmentPathInput: "本地附件路径",
+      removeAttachment: (name) => `移除 ${name}`,
+      sendPrompt: "发送",
+      cancelRun: "停止",
+      modelAndEffort: "模型与思考强度",
+      closeSettings: "关闭设置",
+      aboutEffort: "关于思考强度",
+      effortSlider: "思考强度滑块",
+      setEffort: (name) => `将思考强度设为 ${name}`,
+      ultracodeToggle: "切换 Ultracode",
+      approvalRegion: "需要人工批准",
+      clarificationDialog: "需要澄清输入",
+      contextUsage: (pct) => `上下文占用 ${pct}%`,
+      contextTitle: (detail) => `上下文：${detail}`,
+      browserBack: "浏览器后退",
+      browserForward: "浏览器前进",
+      reloadPreview: "重新加载预览",
+      openExternalSettings: "打开设置",
+      closeSplitBrowser: "关闭分屏浏览器",
+      userMenu: "用户菜单",
+      userMenuTitle: (profile) => `账户与配置菜单（${profile}）`,
+      toggleBypass: "切换 Bypass permissions 模式",
+      triggerTokens: "自动压缩触发阈值 Token 数",
+      closeDialog: "关闭对话框",
+      closeInspector: "关闭检查器",
+      openInspector: "打开检查器",
+      exportPathInput: "导出目标路径",
+      workspaceFilter: "按项目筛选会话",
+      statusFilter: "按状态筛选会话",
+      copyMessage: "复制",
+      sidebarNav: "主导航",
+      removeToolChip: (name) => `停用 ${name}`,
+      closeImagePreview: "关闭图片预览",
+      dismissUpdater: "忽略更新提示",
+      closeExport: "关闭导出对话框",
+      closeSessionBrowser: "关闭会话浏览器",
+      closeMcpDialog: "关闭 MCP 与凭据窗口",
+      closeMemoryDialog: "关闭记忆管理窗口",
+      memoryQueryInput: "记忆查询命令",
+      memoryActionInput: "记忆操作命令",
+      mcpServerInput: "MCP 服务器名称",
+      mcpEnvInput: "环境变量名",
+      mcpScopesInput: "凭据作用域",
+      searchOverlayClose: "关闭搜索",
+      avatarUpload: "上传头像图片",
+      nicknameInput: "显示昵称",
+    },
   },
   "zh-TW": {
     languageDialog: {
@@ -1760,6 +2185,148 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       installedRestart: "更新已安裝 — 請重新啟動 Soyo 完成套用。",
       installingBtn: "正在安裝…",
       installRestartBtn: "安裝並重啟",
+    },
+    appearance: {
+      title: "外觀",
+      themeLabel: "主題",
+      themeSystem: "跟隨系統",
+      themeLight: "淺色",
+      themeDark: "深色",
+      languageLabel: "介面語言",
+      languageHint: "即時切換桌面端控制項、標籤與提示文案。",
+      fontSizeLabel: "內文字級",
+      fontSizeSmall: "13px 緊湊",
+      fontSizeDefault: "14px 預設",
+      fontSizeLarge: "16px 較大",
+      convFontLabel: "對話字體",
+      convFontDefault: "預設無襯線",
+      convFontSerif: "襯線（Source Serif 4）",
+      convFontSystem: "系統字體",
+      reduceMotionLabel: "減少動態效果",
+      reduceMotionDesc: "停用過場動畫、方塊載入動畫與 Effort 網格動態算繪。",
+    },
+    about: {
+      title: "關於 Soyo",
+      productName: "Soyo 桌面版",
+      versionLabel: "版本",
+      helperLabel: "helper 背景服務",
+      helperConnected: "已連線",
+      helperDisconnected: "未連線",
+      helperReconnecting: "正在重新連線…",
+      helperMeta: (pid, runs, clients) =>
+        `PID ${pid ?? "—"} · ${runs} 個進行中 Run · ${clients} 個用戶端`,
+      checkUpdatesBtn: "檢查更新",
+      checkingUpdates: "正在檢查…",
+      upToDate: "目前已是最新版本。",
+      updateAvailable: (v) => `發現新版本 v${v} — 請從頂部橫幅安裝。`,
+      updateUnavailable: "預覽或離線環境下無法檢查更新。",
+      refreshHelperBtn: "重新整理",
+    },
+    extra: {
+      themeAction: "主題",
+      aboutAction: "關於 Soyo",
+      recentsTitle: "最近工作階段",
+      moreCount: (n) => `+ 還有 ${n} 筆`,
+      navAccount: "帳戶",
+      navAppearance: "外觀",
+      titleAccount: "帳戶與全域指令",
+      titleAppearance: "外觀與語言",
+      titleMcp: "MCP 與憑證",
+      titleMemory: "全域記憶",
+      titleExport: "匯入與匯出",
+      openMcpDialogBtn: "開啟 MCP 與憑證管理",
+      openMemoryDialogBtn: "開啟記憶管理",
+      openExportDialogBtn: "開啟工作階段匯出",
+      exportUnavailableHint: "請先建立或恢復工作階段再進行匯出。",
+      permAuto: "Auto",
+      permManual: "Manual approval",
+      permBypass: "Bypass permissions",
+      permBypassWarning: "Bypass permissions 已啟用：工具將略過人工確認直接執行",
+      filterAllProjects: "全部專案",
+      filterAllStatuses: "全部狀態",
+      statusActive: "進行中",
+      statusCompleted: "已完成",
+      statusFailed: "失敗",
+      reconnectBanner: "helper 連線已中斷，正在自動重新連線…",
+      reconnectBtn: "立即重試",
+      searchOverlayTitle: "搜尋工作階段",
+      searchOverlayPlaceholder: "依工作階段標題、專案路徑或內容篩選…",
+      searchOverlayEmpty: "找不到相符的工作階段。",
+      pasteAction: "貼上路徑或媒體",
+      mentionAction: "插入 @ 提及",
+      slashAction: "插入 / 指令",
+      selectModelHeader: "模型設定檔",
+      selectEffortHeader: "思考強度",
+      thinkingDuration: (text) => text,
+    },
+    a11y: {
+      toggleSidebar: "切換側欄",
+      collapseSidebar: "收合側欄",
+      expandSidebar: "展開側欄",
+      viewMode: "檢視模式",
+      renderedView: "Markdown 算繪檢視",
+      sourceView: "Markdown 原始碼檢視",
+      switchOrBrowseSessions: "切換或瀏覽工作階段",
+      workMode: "工作模式",
+      permissionMode: "權限模式",
+      queuedModeTip: (mode) => `下一輪將切換至 ${mode}`,
+      switchModeTip: (mode) => `切換至 ${mode} 模式`,
+      searchSessions: "搜尋工作階段",
+      moreSessionActions: "更多工作階段操作",
+      dismissError: "關閉錯誤通知",
+      addContextMenu: "開啟動作選單",
+      stageLocalAttachment: "暫存本機附件",
+      slashCommands: "斜線指令",
+      compactSessionHistory: "精簡工作階段歷史",
+      cycleWorkMode: "輪換工作模式",
+      switchGuidanceMode: "切換執行導引模式（轉向 / 排隊）",
+      promptInput: "訊息輸入框",
+      attachmentPathInput: "本機附件檔案路徑",
+      removeAttachment: (name) => `移除 ${name}`,
+      sendPrompt: "傳送",
+      cancelRun: "停止",
+      modelAndEffort: "模型與思考強度",
+      closeSettings: "關閉設定",
+      aboutEffort: "關於思考強度",
+      effortSlider: "思考強度滑桿",
+      setEffort: (name) => `將思考強度設為 ${name}`,
+      ultracodeToggle: "切換 Ultracode",
+      approvalRegion: "需要人工核准",
+      clarificationDialog: "需要釐清輸入",
+      contextUsage: (pct) => `內容視窗使用率 ${pct}%`,
+      contextTitle: (detail) => `內容視窗：${detail}`,
+      browserBack: "瀏覽器上一頁",
+      browserForward: "瀏覽器下一頁",
+      reloadPreview: "重新載入預覽",
+      openExternalSettings: "開啟設定",
+      closeSplitBrowser: "關閉分割瀏覽器",
+      userMenu: "使用者選單",
+      userMenuTitle: (profile) => `帳戶與設定檔選單（${profile}）`,
+      toggleBypass: "切換 Bypass permissions 模式",
+      triggerTokens: "自動精簡觸發閾值 Token 數",
+      closeDialog: "關閉對話方塊",
+      closeInspector: "關閉檢查器",
+      openInspector: "開啟檢查器",
+      exportPathInput: "匯出目標路徑",
+      workspaceFilter: "依專案篩選工作階段",
+      statusFilter: "依狀態篩選工作階段",
+      copyMessage: "複製",
+      sidebarNav: "主導覽",
+      removeToolChip: (name) => `停用 ${name}`,
+      closeImagePreview: "關閉圖片預覽",
+      dismissUpdater: "忽略更新提示",
+      closeExport: "關閉匯出對話方塊",
+      closeSessionBrowser: "關閉工作階段瀏覽器",
+      closeMcpDialog: "關閉 MCP 與憑證視窗",
+      closeMemoryDialog: "關閉記憶管理視窗",
+      memoryQueryInput: "記憶查詢指令",
+      memoryActionInput: "記憶操作指令",
+      mcpServerInput: "MCP 伺服器名稱",
+      mcpEnvInput: "環境變數名稱",
+      mcpScopesInput: "憑證作用域",
+      searchOverlayClose: "關閉搜尋",
+      avatarUpload: "上傳頭像圖片",
+      nicknameInput: "顯示暱稱",
     },
   },
 };

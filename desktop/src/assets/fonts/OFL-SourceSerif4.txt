@@ -1,0 +1,4 @@
+Source Serif 4 (Variable Weight, Optical Size)
+Licensed under the SIL Open Font License, Version 1.1.
+Original project: https://github.com/adobe-fonts/source-serif
+Bundled as WOFF2 for offline display typography and optional serif conversation reading mode per Soyo Desktop UI specification (§8.4, §8.12).
