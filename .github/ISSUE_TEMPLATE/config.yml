@@ -3,6 +3,9 @@ contact_links:
   - name: Usage questions & support / 使用问题与支持
     url: https://github.com/Ariakage/soyo-harness/blob/main/SUPPORT.md
     about: Check SUPPORT.md and docs/ before asking / 提问前请先查看 SUPPORT.md 与 docs/ 文档
+  - name: Email support / 邮件支持
+    url: mailto:soyo@soying.org
+    about: soyo@soying.org — include version, OS, and repro steps / 请附版本、系统与复现步骤
   - name: Security vulnerability reports / 安全漏洞报告
     url: https://github.com/Ariakage/soyo-harness/security/advisories/new
     about: Do not disclose publicly — use private reporting / 请勿公开披露，使用 GitHub 私密报告

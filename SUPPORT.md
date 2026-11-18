@@ -17,6 +17,7 @@ Most usage and development questions are already covered:
 - **Usage questions / general discussion**: open an [Issue](https://github.com/Ariakage/soyo-harness/issues) describing your environment (`soyo --version`, OS and architecture) and what you have tried.
 - **Bugs**: use the [Bug Report](https://github.com/Ariakage/soyo-harness/issues/new?template=bug_report.yml) form.
 - **Feature requests**: use the [Feature Request](https://github.com/Ariakage/soyo-harness/issues/new?template=feature_request.yml) form.
+- **Email support**: write to [soyo@soying.org](mailto:soyo@soying.org) — include `soyo --version`, OS, and reproduction steps where relevant.
 - **Security issues**: use the private channel in [SECURITY.md](SECURITY.md); do not disclose publicly.
 
 ## Notes
@@ -44,6 +45,7 @@ Most usage and development questions are already covered:
 - **使用问题 / 一般讨论**：开 [Issue](https://github.com/Ariakage/soyo-harness/issues)，说明你的环境（`soyo --version`、操作系统与架构）和已尝试的步骤。
 - **Bug**：使用 [Bug 报告](https://github.com/Ariakage/soyo-harness/issues/new?template=bug_report.yml) 模板。
 - **功能建议**：使用 [功能建议](https://github.com/Ariakage/soyo-harness/issues/new?template=feature_request.yml) 模板。
+- **邮件支持**：写信至 [soyo@soying.org](mailto:soyo@soying.org)，请附上 `soyo --version`、操作系统与相关复现步骤。
 - **安全问题**：请走 [SECURITY.md](SECURITY.md) 的私密渠道，不要公开披露。
 
 ## 注意事项
