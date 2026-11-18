@@ -149,6 +149,7 @@ export function App() {
   const setSubmitMode = useAppStore((s) => s.setSubmitMode);
   const startNewSession = useAppStore((s) => s.startNewSession);
   const stageAttachments = useAppStore((s) => s.stageAttachments);
+  const stagePastedAttachments = useAppStore((s) => s.stagePastedAttachments);
   const removeStagedAttachment = useAppStore((s) => s.removeStagedAttachment);
   const submitPrompt = useAppStore((s) => s.submitPrompt);
   const cancelActiveRun = useAppStore((s) => s.cancelActiveRun);
@@ -1338,6 +1339,7 @@ export function App() {
                     setSubmitMode(submitMode === "steer" ? "queue" : "steer")
                   }
                   onStageAttachments={stageAttachments}
+                  onPasteAttachments={stagePastedAttachments}
                   onRemoveAttachment={removeStagedAttachment}
                   onOpenSettings={() => handleOpenSettings("general")}
                   onOpenSessions={() => setSessionsOpen(true)}
@@ -1611,6 +1613,7 @@ export function App() {
                 }
                 onClearQueuedPrompt={clearQueuedPrompt}
                 onStageAttachments={stageAttachments}
+                onPasteAttachments={stagePastedAttachments}
                 onRemoveAttachment={removeStagedAttachment}
                 onOpenSettings={() => handleOpenSettings("general")}
                 onOpenSessions={() => setSessionsOpen(true)}

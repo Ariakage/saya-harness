@@ -17,6 +17,7 @@ import {
   type RestoredMessageDto_Serialize,
   type SchemaEnvelopeDto_Deserialize,
   type SessionItemDto_Serialize,
+  type PastedAttachmentItem,
   type StagedAttachmentDto,
   type ThinkingSnapshotDto,
   type TodoItemDto,
@@ -103,6 +104,7 @@ export interface AppState {
   refreshSessions: (page?: number) => Promise<void>;
   startNewSession: () => Promise<void>;
   stageAttachments: (paths: string[]) => Promise<boolean>;
+  stagePastedAttachments: (items: PastedAttachmentItem[]) => Promise<boolean>;
   removeStagedAttachment: (id: string) => void;
   submitPrompt: (
     prompt: string,
@@ -651,6 +653,34 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       try {
         const res = await commands.stageAttachments(cleaned);
+        if (res.status !== "ok") {
+          set({ error: res.error });
+          return false;
+        }
+        set((state) => {
+          const existingIds = new Set(state.stagedAttachments.map((a) => a.id));
+          const merged = [
+            ...state.stagedAttachments,
+            ...res.data.filter((item) => !existingIds.has(item.id)),
+          ];
+          return {
+            stagedAttachments: merged,
+            error: null,
+          };
+        });
+        return true;
+      } catch (err) {
+        set({ error: normalizeError(err) });
+        return false;
+      }
+    },
+
+    stagePastedAttachments: async (items) => {
+      if (items.length === 0) {
+        return false;
+      }
+      try {
+        const res = await commands.stagePastedAttachments(items);
         if (res.status !== "ok") {
           set({ error: res.error });
           return false;

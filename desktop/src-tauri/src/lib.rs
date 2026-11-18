@@ -52,6 +52,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         peripheral_commands::confirm_memory_action,
         peripheral_commands::export_session,
         peripheral_commands::stage_attachments,
+        peripheral_commands::stage_pasted_attachments,
         peripheral_commands::get_user_name,
         peripheral_commands::get_desktop_prefs,
         peripheral_commands::set_nickname,
@@ -132,6 +133,7 @@ mod tests {
             "confirmMemoryAction",
             "exportSession",
             "stageAttachments",
+            "stagePastedAttachments",
         ] {
             assert!(content.contains(symbol), "missing {symbol} in bindings.ts");
         }

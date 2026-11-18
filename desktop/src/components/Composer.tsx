@@ -23,6 +23,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { commands } from "../bindings";
 import type {
+  PastedAttachmentItem,
   PermissionModeDto,
   ProfileOptionDto_Serialize,
   StagedAttachmentDto,
@@ -72,6 +73,7 @@ export interface ComposerProps {
   onToggleSubmitMode?: () => void;
   onClearQueuedPrompt?: () => void;
   onStageAttachments?: (paths: string[]) => Promise<boolean>;
+  onPasteAttachments?: (items: PastedAttachmentItem[]) => Promise<boolean>;
   onRemoveAttachment?: (id: string) => void;
   onOpenSettings?: () => void;
   onOpenSessions?: () => void;
@@ -148,6 +150,7 @@ export function Composer({
   onToggleSubmitMode,
   onClearQueuedPrompt,
   onStageAttachments,
+  onPasteAttachments,
   onRemoveAttachment,
   onOpenSettings,
   onOpenSessions,
@@ -798,6 +801,32 @@ export function Composer({
                 e.target.selectionStart ?? e.target.value.length
               )
             );
+          }}
+          onPaste={(e) => {
+            // Clipboard files (screenshots, copied files) carry no usable
+            // path in a webview — stage their bytes via the paste pipeline.
+            const files = Array.from(e.clipboardData?.files ?? []);
+            if (
+              files.length === 0 ||
+              !onPasteAttachments ||
+              disabled ||
+              !isTauri()
+            ) {
+              return;
+            }
+            e.preventDefault();
+            setStaging(true);
+            void (async () => {
+              const items = await Promise.all(
+                files.map(async (f, i) => ({
+                  name: f.name || `pasted-${i + 1}.png`,
+                  data: Array.from(new Uint8Array(await f.arrayBuffer())),
+                }))
+              );
+              await onPasteAttachments(items);
+            })()
+              .catch(() => {})
+              .finally(() => setStaging(false));
           }}
           onKeyDown={handleKeyDown}
           disabled={disabled}

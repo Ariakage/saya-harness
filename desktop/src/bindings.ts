@@ -38,6 +38,7 @@ export const commands = {
 	confirmMemoryAction: (actionId: string) => typedError<MemoryConfirmResultDto, DesktopError>(__TAURI_INVOKE("confirm_memory_action", { actionId })),
 	exportSession: (sessionId: string | null, targetPath: string, format: ExportFormatDto, scope: ExportScopeDto, includeTools: boolean) => typedError<ExportResultDto, DesktopError>(__TAURI_INVOKE("export_session", { sessionId, targetPath, format, scope, includeTools })),
 	stageAttachments: (paths: string[]) => typedError<StagedAttachmentDto[], DesktopError>(__TAURI_INVOKE("stage_attachments", { paths })),
+	stagePastedAttachments: (items: PastedAttachmentItem[]) => typedError<StagedAttachmentDto[], DesktopError>(__TAURI_INVOKE("stage_pasted_attachments", { items })),
 	getUserName: () => typedError<string | null, DesktopError>(__TAURI_INVOKE("get_user_name")),
 	getDesktopPrefs: () => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("get_desktop_prefs")),
 	setNickname: (nickname: string | null) => typedError<DesktopPrefsDto_Serialize, DesktopError>(__TAURI_INVOKE("set_nickname", { nickname })),
@@ -424,6 +425,17 @@ export type ModuleStatusDto_Serialize = {
 	source: string,
 	active: boolean,
 	issue: string | null,
+};
+
+/**
+ *  Clipboard-provided attachment written to a temp file before staging, since
+ *  pasted files in a webview carry bytes but no real filesystem path.
+ */
+export type PastedAttachmentItem = {
+	/**  Suggested filename; the extension drives mime/kind inference. */
+	name: string,
+	/**  Raw file bytes. */
+	data: number[],
 };
 
 export type PermissionModeDto = "auto" | "bypass" | "manual";

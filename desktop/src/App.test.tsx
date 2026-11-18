@@ -1677,4 +1677,62 @@ describe("App Stage 3 runtime integration", () => {
     });
     expect(screen.queryByTestId("mention-palette")).toBeNull();
   });
+
+  it("stages clipboard files pasted into the composer", async () => {
+    isTauriMock.mockReturnValue(true);
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return sampleBootstrap();
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "get_global_prompt")
+        return { content: "", path: "/tmp/AGENTS.md", source_path: null };
+      if (cmd === "stage_pasted_attachments")
+        return [
+          {
+            id: "draft_paste_1",
+            token: "att_tok_p1",
+            path: "/tmp/soyo-paste-1/1-screenshot.png",
+            filename: "screenshot.png",
+            mime: "image/png",
+            size_bytes: 32,
+            kind: "image",
+            preview_url: "soyo-attachment://localhost/draft/draft_paste_1",
+          },
+        ];
+      return null;
+    });
+
+    render(<App />);
+    const input = await screen.findByLabelText("Prompt input");
+    const file = new File([new Uint8Array([1, 2, 3])], "screenshot.png", {
+      type: "image/png",
+    });
+    const pasteEvent = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: { files: [file], getData: () => "" },
+    });
+    fireEvent(input, pasteEvent);
+
+    await waitFor(() => {
+      expect(
+        invokeMock.mock.calls.some(
+          ([cmd]) => cmd === "stage_pasted_attachments"
+        )
+      ).toBe(true);
+    });
+    const [, args] = invokeMock.mock.calls.find(
+      ([cmd]) => cmd === "stage_pasted_attachments"
+    )!;
+    expect((args as { items: { name: string }[] }).items[0].name).toBe(
+      "screenshot.png"
+    );
+    expect((args as { items: { data: number[] }[] }).items[0].data).toEqual([
+      1, 2, 3,
+    ]);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("screenshot.png");
+    });
+  });
 });

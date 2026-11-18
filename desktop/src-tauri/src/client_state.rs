@@ -12,11 +12,36 @@ use crate::types::{
     SandboxBackendDto, SessionPageDto, SetupEnvironmentParams, StagedAttachmentDto,
     SubmitPromptResultDto, UsageStatsDto, WorkModeDto,
 };
+use serde::Deserialize;
 use serde_json::json;
 use soyo_ipc::HelperClient;
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tokio::sync::{OnceCell, mpsc};
+
+/// Clipboard-provided attachment written to a temp file before staging, since
+/// pasted files in a webview carry bytes but no real filesystem path.
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+pub struct PastedAttachmentItem {
+    /// Suggested filename; the extension drives mime/kind inference.
+    pub name: String,
+    /// Raw file bytes.
+    pub data: Vec<u8>,
+}
+
+fn sanitize_paste_name(raw: &str, index: usize) -> String {
+    let filtered: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .take(80)
+        .collect();
+    let trimmed = filtered.trim_matches('.');
+    if trimmed.is_empty() {
+        format!("pasted-{index}.bin")
+    } else {
+        trimmed.to_string()
+    }
+}
 
 /// Event channel used by streaming commands (kept for command-signature parity).
 pub enum StreamSink {
@@ -440,6 +465,45 @@ impl DesktopState {
             .await?
             .call_typed("stage_attachments", &json!({ "paths": paths }))
             .await
+    }
+
+    /// Materialize clipboard blobs to per-process temp files and stage them
+    /// through the normal path-based attachment pipeline. Written files are
+    /// removed when staging fails so rejected payloads do not linger.
+    pub async fn stage_pasted_attachments(
+        &self,
+        items: Vec<PastedAttachmentItem>,
+    ) -> Result<Vec<StagedAttachmentDto>, DesktopError> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dir = std::env::temp_dir().join(format!("soyo-paste-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|err| {
+            DesktopError::new(
+                "attachment_io",
+                format!("Cannot prepare paste directory: {err}"),
+            )
+        })?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let mut paths = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            let name = sanitize_paste_name(&item.name, index);
+            let path = dir.join(format!("{stamp}-{index}-{name}"));
+            std::fs::write(&path, &item.data).map_err(|err| {
+                DesktopError::new("attachment_io", format!("Cannot write pasted file: {err}"))
+            })?;
+            paths.push(path.to_string_lossy().into_owned());
+        }
+        let result = self.stage_attachments(paths.clone()).await;
+        if result.is_err() {
+            for path in &paths {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        result
     }
 
     pub async fn fetch_attachment(

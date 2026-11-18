@@ -212,6 +212,15 @@ pub async fn stage_attachments(
 ) -> Result<Vec<StagedAttachmentDto>, DesktopError> {
     state.stage_attachments(paths).await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn stage_pasted_attachments(
+    state: State<'_, DesktopState>,
+    items: Vec<crate::client_state::PastedAttachmentItem>,
+) -> Result<Vec<StagedAttachmentDto>, DesktopError> {
+    state.stage_pasted_attachments(items).await
+}
 #[tauri::command]
 #[specta::specta]
 pub async fn get_user_name(state: State<'_, DesktopState>) -> Result<Option<String>, DesktopError> {
