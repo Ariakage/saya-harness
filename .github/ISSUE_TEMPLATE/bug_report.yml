@@ -1,0 +1,82 @@
+name: Bug Report / Bug 报告
+description: Report a defect or unexpected behavior / 报告 Soyo 的缺陷或异常行为
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please make sure you are on the latest release (`soyo --version`).
+        Do not disclose security issues here — report them privately via [SECURITY.md](https://github.com/Ariakage/soyo-harness/blob/main/SECURITY.md).
+
+        感谢报告问题。填写前请确认你使用的是最新版本（`soyo --version`）。
+        安全问题请勿在此披露，请按 SECURITY.md 私密报告。
+  - type: textarea
+    id: description
+    attributes:
+      label: Description / 问题描述
+      description: What happened, and what did you expect instead? / 发生了什么？预期行为是什么？
+      placeholder: Doing X produced Y, expected Z… / 执行 X 时出现 Y，预期应为 Z…
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      description: Minimal steps or commands to reproduce / 提供最小复现步骤或命令序列
+      placeholder: |
+        1. soyo config init
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / 版本
+      description: Output of `soyo --version` / `soyo --version` 的输出
+      placeholder: soyo 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system / 操作系统
+      options:
+        - macOS (Apple Silicon / aarch64)
+        - macOS (Intel / x86_64)
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - Other / 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area / 涉及范围
+      description: Leave blank if unsure / 不确定可留空
+      multiple: true
+      options:
+        - CLI
+        - TUI
+        - Agent loop / Agent 循环
+        - Model integration / 模型接入
+        - Sandbox isolation / 沙箱隔离
+        - MCP
+        - Credentials / 凭据
+        - Browser
+        - Session & resume / 会话与恢复
+        - Documentation / 文档
+        - Other / 其他
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and output / 日志与输出
+      description: |
+        Paste relevant logs or terminal output. Redact first: remove API keys, tokens, and personal paths.
+        粘贴相关日志或终端输出。**请先脱敏**：移除 API Key、令牌与个人路径。凭据只应通过环境变量引用。
+      render: shell
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context / 补充信息
+      description: Redacted config, screenshots, or anything else relevant / 配置（脱敏后）、相关截图或其他线索

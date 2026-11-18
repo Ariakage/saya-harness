@@ -1,0 +1,56 @@
+name: Feature Request / 功能建议
+description: Propose a new capability or improvement / 提议新能力或改进
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [docs/vision.md](https://github.com/Ariakage/soyo-harness/blob/main/docs/vision.md)
+        and the [capability roadmap](https://github.com/Ariakage/soyo-harness/blob/main/docs/capability-roadmap.md) first —
+        your idea may already be planned.
+
+        产品方向与已确认范围见 docs/vision.md 与能力路线图，建议先确认所提功能不在已规划范围内。
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve / 要解决的问题
+      description: What scenario or pain point motivates this? / 你遇到了什么场景或痛点？
+      placeholder: When doing X, Y makes it difficult because… / 当我做 X 时，因为 Y 所以很不方便…
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / 建议方案
+      description: Desired behavior, command, config, or UI / 希望的行为、命令、配置或界面是什么样的？
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / 备选方案
+      description: Other approaches considered and why they fall short / 考虑过的其他做法及放弃原因
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area / 涉及范围
+      description: Leave blank if unsure / 不确定可留空
+      multiple: true
+      options:
+        - CLI
+        - TUI
+        - Agent loop / Agent 循环
+        - Model integration / 模型接入
+        - Sandbox isolation / 沙箱隔离
+        - MCP
+        - Credentials / 凭据
+        - Browser
+        - Session & resume / 会话与恢复
+        - Documentation / 文档
+        - Other / 其他
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context / 补充信息
+      description: Related issues, external references, or sketches / 相关 Issue、外部参考或草图
