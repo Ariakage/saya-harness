@@ -154,10 +154,12 @@ describe("App Stage 3 runtime integration", () => {
       stagedAttachments: [],
       ultracodeEnabled: false,
       submitMode: "steer",
+      locale: "en-US",
       configChangeSessionId: null,
       recoveryBanner: null,
       error: null,
     });
+    document.documentElement.lang = "en-US";
   });
 
   it("hydrates bootstrap state, streams prompt events via Channel, and cancels cleanly", async () => {
@@ -1005,6 +1007,67 @@ describe("App Stage 3 runtime integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rail Home" }));
     await waitFor(() => {
       expect(screen.queryByTestId("sidebar-panel")).toBeNull();
+    });
+  });
+
+  it("opens Choose your language from user menu and switches en-US, zh-CN, and zh-TW", async () => {
+    const boot = sampleBootstrap();
+    boot.session!.messages = [];
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "list_sessions") return samplePage();
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Good morning, ariakage.")).toBeTruthy();
+    });
+
+    // Open user menu and verify Language entry
+    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+    const langEntry = await screen.findByTestId("user-menu-language");
+    fireEvent.click(langEntry);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("language-dialog")).toBeTruthy();
+      expect(screen.getByText("Choose your language")).toBeTruthy();
+      expect(screen.getByTestId("language-option-en-US")).toBeTruthy();
+      expect(screen.getByTestId("language-option-zh-CN")).toBeTruthy();
+      expect(screen.getByTestId("language-option-zh-TW")).toBeTruthy();
+    });
+
+    // Switch to Simplified Chinese
+    fireEvent.click(screen.getByTestId("language-option-zh-CN"));
+    await waitFor(() => {
+      expect(useAppStore.getState().locale).toBe("zh-CN");
+      expect(document.documentElement.lang).toBe("zh-CN");
+      expect(screen.getByText("选择语言")).toBeTruthy();
+      expect(screen.getByText("早上好，ariakage。")).toBeTruthy();
+    });
+
+    // Switch to Traditional Chinese
+    fireEvent.click(screen.getByTestId("language-option-zh-TW"));
+    await waitFor(() => {
+      expect(useAppStore.getState().locale).toBe("zh-TW");
+      expect(document.documentElement.lang).toBe("zh-TW");
+      expect(screen.getByText("選擇語言")).toBeTruthy();
+      expect(screen.getByText("早安，ariakage。")).toBeTruthy();
+    });
+
+    // Switch back to English (United States)
+    fireEvent.click(screen.getByTestId("language-option-en-US"));
+    await waitFor(() => {
+      expect(useAppStore.getState().locale).toBe("en-US");
+      expect(screen.getByText("Choose your language")).toBeTruthy();
+      expect(screen.getByText("Good morning, ariakage.")).toBeTruthy();
+    });
+
+    // Escape closes LanguageDialog
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("language-dialog")).toBeNull();
     });
   });
 });

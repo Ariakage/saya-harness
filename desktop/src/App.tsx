@@ -46,9 +46,11 @@ import { ClarificationDialog } from "./components/ClarificationDialog";
 import { Composer } from "./components/Composer";
 import { ContextSidebar } from "./components/ContextSidebar";
 import { ExportDialog } from "./components/ExportDialog";
+import { LanguageDialog } from "./components/LanguageDialog";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { McpCredentialsDialog } from "./components/McpCredentialsDialog";
 import { MemoryDialog } from "./components/MemoryDialog";
+import { getMessages } from "./lib/i18n";
 import {
   PERMISSION_MODE_LABELS,
   WORK_MODE_STYLES,
@@ -157,13 +159,17 @@ export function App() {
   const clearConfigChangePrompt = useAppStore((s) => s.clearConfigChangePrompt);
   const setMarkdownMode = useAppStore((s) => s.setMarkdownMode);
   const toggleMarkdownMode = useAppStore((s) => s.toggleMarkdownMode);
+  const locale = useAppStore((s) => s.locale);
+  const setLocale = useAppStore((s) => s.setLocale);
   const clearError = useAppStore((s) => s.clearError);
+  const t = getMessages(locale);
 
   const previewMode = isBrowserPreview();
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [languageOpen, setLanguageOpen] = useState(false);
   const [mcpCredsOpen, setMcpCredsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -403,7 +409,7 @@ export function App() {
             className="flex h-[26px] min-w-0 max-w-[380px] items-center gap-1.5 rounded-[6px] px-2 text-left text-[12.5px] transition-colors hover:bg-[#1a1a1a]"
           >
             <span className="truncate font-medium text-[#d9d9d9]">
-              {isHomeEmpty ? "Home" : sessionTitle}
+              {isHomeEmpty ? t.topbar.home : sessionTitle}
             </span>
             <span className="hidden shrink-0 text-[#6b6b6b] sm:inline">
               · {currentProject}
@@ -644,7 +650,7 @@ export function App() {
                     className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#d9a08e] hover:bg-[#262626] disabled:opacity-40"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    <span>New session</span>
+                    <span>{t.topbar.newSession}</span>
                   </button>
                   <button
                     type="button"
@@ -661,8 +667,8 @@ export function App() {
                     )}
                     <span>
                       {markdownMode === "render"
-                        ? "Show markdown source"
-                        : "Render markdown"}
+                        ? t.topbar.showMarkdownSource
+                        : t.topbar.renderMarkdown}
                     </span>
                   </button>
                   <button
@@ -674,7 +680,7 @@ export function App() {
                     className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
                   >
                     <Globe className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                    <span>Browser preview</span>
+                    <span>{t.topbar.browserPreview}</span>
                     {browserPaneOpen && (
                       <span className="ml-auto text-[#4ade80]">✓</span>
                     )}
@@ -688,7 +694,7 @@ export function App() {
                     className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
                   >
                     <PanelRight className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                    <span>Inspector</span>
+                    <span>{t.topbar.inspector}</span>
                     {inspectorOpen && (
                       <span className="ml-auto text-[#4ade80]">✓</span>
                     )}
@@ -703,7 +709,7 @@ export function App() {
                     className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
                   >
                     <Download className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                    <span>Export session…</span>
+                    <span>{t.topbar.exportSession}</span>
                   </button>
                   <button
                     type="button"
@@ -714,7 +720,7 @@ export function App() {
                     className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
                   >
                     <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                    <span>Browse sessions…</span>
+                    <span>{t.topbar.browseSessions}</span>
                   </button>
                 </div>
               )}
@@ -831,7 +837,20 @@ export function App() {
                   className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
                 >
                   <Settings className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>General & Preferences</span>
+                  <span>{t.userMenu.settings}</span>
+                  <span className="ml-auto text-[11px] text-[#6e6e6e]">⌘,</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="user-menu-language"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    setLanguageOpen(true);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
+                >
+                  <Globe className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                  <span>{t.userMenu.language}</span>
                 </button>
                 <button
                   type="button"
@@ -839,7 +858,7 @@ export function App() {
                   className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>Usage analytics</span>
+                  <span>{t.userMenu.usage}</span>
                 </button>
                 <button
                   type="button"
@@ -847,7 +866,7 @@ export function App() {
                   className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
                 >
                   <Bookmark className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>Model providers</span>
+                  <span>{t.userMenu.profiles}</span>
                 </button>
                 <div className="my-1 h-px bg-[#2a2a2a]" />
                 <button
@@ -856,7 +875,7 @@ export function App() {
                   className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#8a8a8a] transition-colors hover:bg-[#262626] hover:text-[#e8e8e8]"
                 >
                   <X className="h-3.5 w-3.5" />
-                  <span>Close menu</span>
+                  <span>{t.userMenu.close}</span>
                 </button>
               </div>
             )}
@@ -878,7 +897,7 @@ export function App() {
           <>
             <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
               <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                Sessions
+                {t.sidebar.sessionsTitle}
               </span>
               <button
                 type="button"
@@ -902,14 +921,14 @@ export function App() {
               className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a] disabled:opacity-40"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>New session</span>
+              <span>{t.sidebar.newSession}</span>
             </button>
 
             {/* Pinned & Project-Grouped Recent Sessions (§2 & Frame 02) */}
             <div className="mt-2 flex-1 space-y-2.5 overflow-y-auto pr-0.5">
               <div>
                 <div className="px-2 py-1 text-[11px] text-[#6b6b6b]">
-                  Pinned 1
+                  {t.sidebar.pinned}
                 </div>
                 <div className="rounded-[8px] px-2.5 py-1.5 transition-colors hover:bg-[#1a1a1a]">
                   <div className="flex items-center gap-1.5 text-[12.5px] text-[#d9d9d9]">
@@ -917,14 +936,14 @@ export function App() {
                     <span className="truncate">Hi, I&apos;m Soyo…</span>
                   </div>
                   <div className="mt-0.5 pl-[18px] text-[11px] text-[#d9a08e]">
-                    Answer questions
+                    {t.sidebar.answerQuestions}
                   </div>
                 </div>
               </div>
 
               {groupedSessions.length === 0 ? (
                 <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
-                  No recent sessions yet.
+                  {t.sidebar.noRecentSessions}
                 </div>
               ) : (
                 groupedSessions.map(([proj, items]) => (
@@ -955,7 +974,7 @@ export function App() {
                           }`}
                         >
                           <span className="truncate text-[12.5px] font-medium">
-                            {item.title ?? "Untitled session"}
+                            {item.title ?? t.sidebar.untitledSession}
                           </span>
                           <span className="truncate text-[11px] text-[#6e6e6e]">
                             {item.work_mode} · {item.last_status ?? "saved"}
@@ -972,7 +991,7 @@ export function App() {
               onClick={() => setSessionsOpen(true)}
               className="px-2.5 py-1.5 text-left text-[12px] text-[#6e6e6e] transition-colors hover:text-[#a3a3a3]"
             >
-              View all
+              {t.sidebar.viewAll}
             </button>
           </>
         )}
@@ -981,7 +1000,7 @@ export function App() {
           <>
             <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
               <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                Search
+                {t.sidebar.searchTitle}
               </span>
             </div>
             <div className="flex items-center gap-2 rounded-[8px] border border-[#2b2b2b] bg-[#161616] px-2.5 py-1.5 transition-colors focus-within:border-[#d9a08e]">
@@ -989,7 +1008,7 @@ export function App() {
               <input
                 value={sessionQuery}
                 onChange={(e) => setSessionQuery(e.target.value)}
-                placeholder="Search sessions…"
+                placeholder={t.sidebar.searchPlaceholder}
                 aria-label="Search sessions"
                 className="w-full bg-transparent text-[12.5px] text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:outline-none"
               />
@@ -997,7 +1016,7 @@ export function App() {
             <div className="mt-2 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
               {filteredSessions.length === 0 ? (
                 <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
-                  No matching sessions.
+                  {t.sidebar.noMatchingSessions}
                 </div>
               ) : (
                 filteredSessions.map((item) => (
@@ -1016,7 +1035,7 @@ export function App() {
                     }`}
                   >
                     <span className="truncate text-[12.5px] font-medium">
-                      {item.title ?? "Untitled session"}
+                      {item.title ?? t.sidebar.untitledSession}
                     </span>
                     <span className="truncate text-[11px] text-[#6e6e6e]">
                       {workspaceBase(item.workspace)} · {item.work_mode} ·{" "}
@@ -1031,7 +1050,7 @@ export function App() {
               onClick={() => setSessionsOpen(true)}
               className="px-2.5 py-1.5 text-left text-[12px] text-[#6e6e6e] hover:text-[#a3a3a3]"
             >
-              Browse all sessions…
+              {t.sidebar.browseAllSessions}
             </button>
           </>
         )}
@@ -1040,19 +1059,18 @@ export function App() {
           <>
             <div className="px-1 pb-2 pt-0.5">
               <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                Memory
+                {t.sidebar.memoryTitle}
               </span>
             </div>
             <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
               <div className="flex items-center justify-between text-[11.5px]">
-                <span className="font-medium text-[#e8e8e8]">Global store</span>
+                <span className="font-medium text-[#e8e8e8]">{t.sidebar.globalStore}</span>
                 <span className="soyo-pill py-0 text-[10px] text-[#4ade80]">
-                  two-phase
+                  {t.sidebar.twoPhase}
                 </span>
               </div>
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-[#8a8a8a]">
-                Global memory entries persist across sessions and are injected
-                into the system context.
+                {t.sidebar.memoryDesc}
               </p>
             </div>
             <button
@@ -1061,7 +1079,7 @@ export function App() {
               className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
             >
               <Database className="h-3.5 w-3.5" />
-              <span>Open memory</span>
+              <span>{t.sidebar.openMemory}</span>
             </button>
             <div className="flex-1" />
           </>
@@ -1071,13 +1089,13 @@ export function App() {
           <>
             <div className="px-1 pb-2 pt-0.5">
               <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                MCP & Creds
+                {t.sidebar.mcpTitle}
               </span>
             </div>
             <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
               <div className="flex items-center justify-between text-[11.5px]">
                 <span className="font-medium text-[#e8e8e8]">
-                  Workspace bridges
+                  {t.sidebar.workspaceBridges}
                 </span>
                 <span className="font-mono text-[10.5px] text-[#7aa2f7]">
                   {mcpServers.length}
@@ -1085,7 +1103,7 @@ export function App() {
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-[#8a8a8a]">
                 {mcpServers.length === 0
-                  ? "No MCP servers active in current run."
+                  ? t.sidebar.noMcpActive
                   : `${mcpServers.length} MCP server${mcpServers.length > 1 ? "s" : ""} registered with host redaction.`}
               </p>
             </div>
@@ -1119,7 +1137,7 @@ export function App() {
               className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
             >
               <KeyRound className="h-3.5 w-3.5" />
-              <span>Manage servers & credentials</span>
+              <span>{t.sidebar.manageMcp}</span>
             </button>
             <div className="flex-1" />
           </>
@@ -1129,7 +1147,7 @@ export function App() {
           <>
             <div className="px-1 pb-2 pt-0.5">
               <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                Export
+                {t.sidebar.exportTitle}
               </span>
             </div>
             <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
@@ -1144,8 +1162,7 @@ export function App() {
                 <span className="truncate font-mono">{currentProject}</span>
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-[#8a8a8a]">
-                Export the current session as a Markdown handoff or JSON v1
-                archive.
+                {t.sidebar.exportDesc}
               </p>
             </div>
             <button
@@ -1154,7 +1171,7 @@ export function App() {
               className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Export session…</span>
+              <span>{t.sidebar.exportSession}</span>
             </button>
             <button
               type="button"
@@ -1162,7 +1179,7 @@ export function App() {
               className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
             >
               <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
-              <span>Browse sessions to export</span>
+              <span>{t.sidebar.browseToExport}</span>
             </button>
             <div className="flex-1" />
           </>
@@ -1172,17 +1189,17 @@ export function App() {
           <>
             <div className="px-1 pb-2 pt-0.5">
               <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                Customize
+                {t.sidebar.customizeTitle}
               </span>
             </div>
             <nav className="grid grid-cols-1 gap-0.5 text-[12.5px]">
               {(
                 [
-                  ["general", "General & preferences"],
-                  ["profiles", "Model providers & profiles"],
-                  ["permissions", "Permissions & sandbox"],
-                  ["modules", "Modules & skills"],
-                  ["usage", "Usage & tokens"],
+                  ["general", t.sidebar.customizeGeneral],
+                  ["profiles", t.sidebar.customizeProfiles],
+                  ["permissions", t.sidebar.customizePermissions],
+                  ["modules", t.sidebar.customizeModules],
+                  ["usage", t.sidebar.customizeUsage],
                 ] as const
               ).map(([tab, label]) => (
                 <button
@@ -1225,9 +1242,9 @@ export function App() {
 
         {bootstrap && !bootstrap.config_ready && (
           <div className="border-b border-[#4a3f2a] bg-[#1c1a15] px-4 py-2 text-xs text-[#e8d9b0]">
-            Configuration incomplete
+            {t.home.configIncomplete}
             {bootstrap.config_path ? ` (${bootstrap.config_path})` : ""}:{" "}
-            {bootstrap.config_error ?? "Select or configure a profile first."}
+            {bootstrap.config_error ?? t.home.configFallback}
           </div>
         )}
 
@@ -1253,7 +1270,7 @@ export function App() {
                     alt="Soyo"
                     className="h-[30px] w-[30px] rounded-[22%] object-cover"
                   />
-                  <span>Good morning, ariakage.</span>
+                  <span>{t.home.greeting}</span>
                 </div>
 
                 <Composer
@@ -1303,7 +1320,7 @@ export function App() {
                   <span className="inline-flex min-w-0 items-center gap-1.5">
                     <Folder className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
                     <span className="truncate font-medium">
-                      {currentProject || "Project or folder"}
+                      {currentProject || t.home.projectOrFolder}
                     </span>
                   </span>
                   {bootstrap?.workspace && (
@@ -1315,22 +1332,22 @@ export function App() {
 
                 <div className="mt-8 w-full max-w-[620px] space-y-0.5">
                   <div className="px-3 py-1 text-[11.5px] text-[#6b6b6b]">
-                    Ideas for you
+                    {t.home.ideasForYou}
                   </div>
                   {[
                     {
                       icon: Clock,
-                      text: "Summarize today's sessions into a handoff note",
+                      text: t.home.ideaSummarize,
                       action: () => setExportOpen(true),
                     },
                     {
                       icon: Box,
-                      text: "Audit MCP servers and credential scopes",
+                      text: t.home.ideaAuditMcp,
                       action: () => setMcpCredsOpen(true),
                     },
                     {
                       icon: SlidersHorizontal,
-                      text: "Customize Soyo for this workspace",
+                      text: t.home.ideaCustomize,
                       action: () => handleOpenSettings("general"),
                     },
                   ].map((idea) => {
@@ -1360,14 +1377,13 @@ export function App() {
                 <div className="mx-auto flex max-w-[840px] flex-col gap-3.5">
                   {historyOmitted && (
                     <div className="rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-3 py-1.5 text-[11.5px] text-[#8a8a8a]">
-                      Earlier history omitted to stay within desktop restore
-                      window; full history remains on disk.
+                      {t.home.historyOmitted}
                     </div>
                   )}
 
                   {loading && messages.length === 0 && (
                     <div className="py-16 text-center text-xs text-[#6e6e6e]">
-                      Loading runtime state...
+                      {t.home.loadingRuntime}
                     </div>
                   )}
 
@@ -1748,6 +1764,12 @@ export function App() {
         sessionId={sessionId}
         workspace={bootstrap?.workspace ?? ""}
         onClose={() => setExportOpen(false)}
+      />
+      <LanguageDialog
+        open={languageOpen}
+        locale={locale}
+        onSelectLocale={setLocale}
+        onClose={() => setLanguageOpen(false)}
       />
     </div>
   );

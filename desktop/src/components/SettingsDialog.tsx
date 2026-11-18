@@ -22,7 +22,9 @@ import {
   type UsageDto_Serialize,
   type WorkModeDto,
 } from "../bindings";
+import { LANGUAGE_OPTIONS, getMessages, type LocaleId } from "../lib/i18n";
 import { WORK_MODE_STYLES, formatTokenCount } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 import { ModulesPanel } from "./ModulesPanel";
 
 export type SettingsTab =
@@ -119,6 +121,9 @@ export function SettingsDialog({
   onOpenMemory,
   onOpenExport,
 }: SettingsDialogProps) {
+  const locale = useAppStore((s) => s.locale);
+  const setLocale = useAppStore((s) => s.setLocale);
+  const t = getMessages(locale);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [workspaceInput, setWorkspaceInput] = useState("");
   const [triggerInput, setTriggerInput] = useState("");
@@ -204,7 +209,7 @@ export function SettingsDialog({
             }`}
           >
             <Settings className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>General</span>
+            <span>{t.settings.navGeneral}</span>
           </button>
 
           <button
@@ -217,7 +222,7 @@ export function SettingsDialog({
             }`}
           >
             <Activity className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Usage</span>
+            <span>{t.settings.navUsage}</span>
           </button>
 
           <button
@@ -230,7 +235,7 @@ export function SettingsDialog({
             }`}
           >
             <Cpu className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Model & Profiles</span>
+            <span>{t.settings.navProfiles}</span>
           </button>
 
           <button
@@ -243,7 +248,7 @@ export function SettingsDialog({
             }`}
           >
             <Shield className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Permissions</span>
+            <span>{t.settings.navPermissions}</span>
           </button>
 
           <button
@@ -256,7 +261,7 @@ export function SettingsDialog({
             }`}
           >
             <Box className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Modules</span>
+            <span>{t.settings.navModules}</span>
           </button>
 
           <div className="my-2 h-px bg-[#232323]" />
@@ -271,7 +276,7 @@ export function SettingsDialog({
               className="flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
             >
               <KeyRound className="h-3.5 w-3.5 text-[#8a8a8a]" />
-              <span>MCP & Credentials</span>
+              <span>{t.settings.navMcp}</span>
             </button>
           )}
 
@@ -285,7 +290,7 @@ export function SettingsDialog({
               className="flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
             >
               <Database className="h-3.5 w-3.5 text-[#8a8a8a]" />
-              <span>Memory</span>
+              <span>{t.settings.navMemory}</span>
             </button>
           )}
 
@@ -299,7 +304,7 @@ export function SettingsDialog({
               className="flex items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#a3a3a3] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
             >
               <Download className="h-3.5 w-3.5 text-[#8a8a8a]" />
-              <span>Import & export</span>
+              <span>{t.settings.navExport}</span>
             </button>
           )}
 
@@ -316,14 +321,14 @@ export function SettingsDialog({
               <SlidersHorizontal className="h-3.5 w-3.5 text-[#d9a08e]" />
               <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
                 {activeTab === "usage"
-                  ? "Usage & Tokens"
+                  ? t.settings.titleUsage
                   : activeTab === "profiles"
-                    ? "Model & Profiles"
+                    ? t.settings.titleProfiles
                     : activeTab === "permissions"
-                      ? "Permissions & Modes"
+                      ? t.settings.titlePermissions
                       : activeTab === "modules"
-                        ? "Modules & Extensions"
-                        : "Runtime & Modules"}
+                        ? t.settings.titleModules
+                        : t.settings.titleGeneral}
               </h2>
             </div>
             <button
@@ -350,7 +355,7 @@ export function SettingsDialog({
               <div className="space-y-3" data-testid="usage-panel">
                 <div className="flex items-center justify-between">
                   <span className="text-[12px] text-[#a3a3a3]">
-                    Token usage across CLI, TUI and Desktop on this device
+                    {t.settings.usageSubtitle}
                   </span>
                   <div className="inline-flex gap-0.5 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] p-0.5">
                     {(["7d", "30d", "90d"] as const).map((r) => (
@@ -426,7 +431,7 @@ export function SettingsDialog({
                 <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
                   <div className="flex items-center justify-between">
                     <span className="text-[12.5px] text-[#e8e8e8]">
-                      Tokens per day
+                      {t.settings.tokensPerDay}
                     </span>
                     <div className="flex items-center gap-3 text-[11px] text-[#6e6e6e]">
                       <span className="inline-flex items-center gap-1">
@@ -465,7 +470,7 @@ export function SettingsDialog({
                             className={`pointer-events-none absolute bottom-full z-50 mb-1.5 hidden ${alignClass} whitespace-nowrap rounded-[7px] border border-[#383838] bg-[#161616] px-2.5 py-1.5 text-left text-[10.5px] shadow-[0_12px_32px_rgba(0,0,0,0.8)] group-hover:block`}
                           >
                             <div className="mb-0.5 font-medium text-[#e8e8e8]">
-                              {idx === bars.length - 1 ? "Today" : `Day ${idx + 1}`}
+                              {idx === bars.length - 1 ? t.settings.today : `Day ${idx + 1}`}
                               <span className="ml-1.5 text-[#8a8a8a]">
                                 {inp + outp + cache}k total
                               </span>
@@ -524,16 +529,16 @@ export function SettingsDialog({
                   </div>
                   <div className="mt-1 flex justify-between text-[10px] text-[#5e5e5e]">
                     <span>Window: {usageRange}</span>
-                    <span>Today</span>
+                    <span>{t.settings.today}</span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3.5 px-1 text-[11px] text-[#6e6e6e]">
-                  <span className="text-[#4ade80]">● live session</span>
+                  <span className="text-[#4ade80]">● {t.settings.liveSession}</span>
                   <span>
                     {lastUsage
                       ? `↑${formatTokenCount(lastUsage.input_tokens)} ↓${formatTokenCount(lastUsage.output_tokens)}`
-                      : "idle"}
+                      : t.settings.idle}
                   </span>
                 </div>
               </div>
@@ -546,7 +551,7 @@ export function SettingsDialog({
                     htmlFor="settings-workspace-input"
                     className="block text-[12px] text-[#a3a3a3]"
                   >
-                    Workspace Directory
+                    {t.settings.workspaceDir}
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -578,7 +583,7 @@ export function SettingsDialog({
                       }}
                       className="soyo-pill-btn font-medium text-[#c9c9c9] disabled:opacity-40"
                     >
-                      Browse…
+                      {t.settings.browse}
                     </button>
                     <button
                       type="button"
@@ -588,10 +593,34 @@ export function SettingsDialog({
                       }
                       className="soyo-pill-btn font-medium text-[#d9a08e] disabled:opacity-40"
                     >
-                      Apply
+                      {t.settings.apply}
                     </button>
                   </div>
                 </div>
+
+                {activeTab === "general" && (
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="settings-language-select"
+                      className="block text-[12px] text-[#a3a3a3]"
+                    >
+                      {t.settings.languageLabel}
+                    </label>
+                    <select
+                      id="settings-language-select"
+                      aria-label="Interface language"
+                      value={locale}
+                      onChange={(e) => setLocale(e.target.value as LocaleId)}
+                      className="soyo-select w-full px-2.5 py-1.5 text-xs text-[#d9d9d9]"
+                    >
+                      {LANGUAGE_OPTIONS.map((opt) => (
+                        <option key={opt.id} value={opt.id} className="bg-[#181818]">
+                          {opt.nativeLabel} — {opt.subtitle}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="space-y-1.5">
@@ -599,7 +628,7 @@ export function SettingsDialog({
                       htmlFor="settings-profile-select"
                       className="block text-[12px] text-[#a3a3a3]"
                     >
-                      Model Profile
+                      {t.settings.modelProfile}
                     </label>
                     <select
                       id="settings-profile-select"
@@ -623,7 +652,7 @@ export function SettingsDialog({
                       htmlFor="settings-effort-select"
                       className="block text-[12px] text-[#a3a3a3]"
                     >
-                      Thinking Effort
+                      {t.settings.thinkingEffort}
                     </label>
                     <select
                       id="settings-effort-select"
@@ -650,7 +679,7 @@ export function SettingsDialog({
                       htmlFor="settings-sandbox-select"
                       className="block text-[12px] text-[#a3a3a3]"
                     >
-                      Sandbox Backend
+                      {t.settings.sandboxBackend}
                     </label>
                     <select
                       id="settings-sandbox-select"
@@ -678,7 +707,7 @@ export function SettingsDialog({
                   <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-[#e8e8e8]">
-                        Auto-Compact ({bootstrap?.auto_compact_trigger_percent ?? 80}
+                        {t.settings.autoCompact} ({bootstrap?.auto_compact_trigger_percent ?? 80}
                         %)
                       </span>
                       <button
@@ -695,7 +724,7 @@ export function SettingsDialog({
                             : "text-[#8a8a8a]"
                         } disabled:opacity-40`}
                       >
-                        {bootstrap?.auto_compact ? "On" : "Off"}
+                        {bootstrap?.auto_compact ? t.settings.on : t.settings.off}
                       </button>
                     </div>
                     <div className="flex items-center gap-2">
@@ -705,7 +734,7 @@ export function SettingsDialog({
                         value={triggerInput}
                         disabled={runActive || saving}
                         onChange={(e) => setTriggerInput(e.target.value)}
-                        placeholder="Optional exact token trigger (blank = % threshold)"
+                        placeholder={t.settings.triggerPlaceholder}
                         className="soyo-input flex-1 px-2.5 py-1 font-mono text-xs text-[#d9d9d9]"
                       />
                       <button
@@ -721,7 +750,7 @@ export function SettingsDialog({
                         }}
                         className="soyo-pill-btn text-[#e8e8e8] disabled:opacity-40"
                       >
-                        Set Trigger
+                        {t.settings.setTrigger}
                       </button>
                     </div>
                   </div>
@@ -733,7 +762,7 @@ export function SettingsDialog({
               <div className="space-y-3 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-[12px] text-[#a3a3a3]">
-                    Work mode
+                    {t.settings.workMode}
                   </span>
                   <div className="inline-flex gap-0.5 rounded-[8px] border border-[#2b2b2b] bg-[#1e1e1e] p-0.5">
                     {WORK_MODES.map((m) => (
@@ -757,12 +786,10 @@ export function SettingsDialog({
                 <div className="flex items-start justify-between gap-4 border-t border-[#232323] pt-3">
                   <div className="space-y-1">
                     <div className="font-medium text-[#e8e8e8]">
-                      Allow bypass permissions mode
+                      {t.settings.allowBypassTitle}
                     </div>
                     <p className="text-[11px] leading-[1.5] text-[#7a7a7a]">
-                      Bypass skips path checks, model review, and human
-                      confirmation. PLAN, explicit deny and hard backend limits
-                      still apply.
+                      {t.settings.allowBypassDesc}
                     </p>
                   </div>
                   <button

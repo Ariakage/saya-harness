@@ -23,6 +23,10 @@ import {
   type UsageDto_Serialize,
   type WorkModeDto,
 } from "../bindings";
+import {
+  DEFAULT_LOCALE,
+  type LocaleId,
+} from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
 
 export type MarkdownDisplayMode = "render" | "source";
@@ -69,6 +73,7 @@ export interface AppState {
   activeRunId: string | null;
   summaryLine: string | null;
   markdownMode: MarkdownDisplayMode;
+  locale: LocaleId;
   pendingApproval: ApprovalRequestDto_Deserialize | null;
   pendingInput: InputRequestDto | null;
   stagedAttachments: StagedAttachmentDto[];
@@ -105,6 +110,7 @@ export interface AppState {
   clearConfigChangePrompt: () => void;
   setMarkdownMode: (mode: MarkdownDisplayMode) => void;
   toggleMarkdownMode: () => void;
+  setLocale: (locale: LocaleId) => void;
   clearError: () => void;
   handleStreamEnvelope: (envelope: DesktopStreamEnvelope_Deserialize) => void;
 }
@@ -408,6 +414,7 @@ export const useAppStore = create<AppState>((set, get) => {
     activeRunId: null,
     summaryLine: null,
     markdownMode: "render",
+    locale: DEFAULT_LOCALE,
     pendingApproval: null,
     pendingInput: null,
     stagedAttachments: [],
@@ -798,6 +805,13 @@ export const useAppStore = create<AppState>((set, get) => {
       set((state) => ({
         markdownMode: state.markdownMode === "render" ? "source" : "render",
       })),
+
+    setLocale: (locale) => {
+      if (typeof document !== "undefined") {
+        document.documentElement.lang = locale;
+      }
+      set({ locale });
+    },
 
     clearError: () => set({ error: null }),
 

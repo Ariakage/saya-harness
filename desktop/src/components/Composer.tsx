@@ -25,11 +25,13 @@ import type {
   StagedAttachmentDto,
   WorkModeDto,
 } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import {
   PERMISSION_MODE_LABELS,
   WORK_MODE_STYLES,
   sanitizeDisplayText,
 } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 import { StagedAttachmentsStrip } from "./AttachmentPreview";
 import { EffortPill, EffortPopover } from "./EffortPopover";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -107,6 +109,8 @@ export function Composer({
   onOpenMcp,
   onOpenExport,
 }: ComposerProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -163,7 +167,7 @@ export function Composer({
   const slashCommands: SlashCommandItem[] = [
     {
       cmd: "/model",
-      desc: "switch model profile",
+      desc: t.composer.cmdModel,
       action: () => {
         setDraft("");
         setActivePopover("model");
@@ -171,7 +175,7 @@ export function Composer({
     },
     {
       cmd: "/mode",
-      desc: "change work mode — plan · build · code · work",
+      desc: t.composer.cmdMode,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -180,7 +184,7 @@ export function Composer({
     },
     {
       cmd: "/permission",
-      desc: "auto · bypass permissions · manual approval",
+      desc: t.composer.cmdPermission,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -189,7 +193,7 @@ export function Composer({
     },
     {
       cmd: "/compact",
-      desc: "summarize context to free window space",
+      desc: t.composer.cmdCompact,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -198,7 +202,7 @@ export function Composer({
     },
     {
       cmd: "/export",
-      desc: "export session to markdown handoff",
+      desc: t.composer.cmdExport,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -207,7 +211,7 @@ export function Composer({
     },
     {
       cmd: "/sessions",
-      desc: "browse and restore sessions",
+      desc: t.composer.cmdSessions,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -216,7 +220,7 @@ export function Composer({
     },
     {
       cmd: "/memory",
-      desc: "view and edit workspace memory",
+      desc: t.composer.cmdMemory,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -225,7 +229,7 @@ export function Composer({
     },
     {
       cmd: "/mcp",
-      desc: "manage MCP servers and credentials",
+      desc: t.composer.cmdMcp,
       action: () => {
         setDraft("");
         setActivePopover(null);
@@ -347,7 +351,7 @@ export function Composer({
           className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[11px] border border-[#2c2c2c] bg-[#1c1c1c] p-1.5 shadow-[0_-8px_32px_rgba(0,0,0,0.45)]"
         >
           <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
-            Commands
+            {t.composer.commandsHeader}
           </div>
           {slashCommands
             .filter((item) =>
@@ -385,7 +389,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <Paperclip className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Add files or photos</span>
+            <span>{t.composer.addFilesOrPhotos}</span>
             <span className="ml-auto text-[11px] text-[#6e6e6e]">⌘U</span>
           </button>
           <button
@@ -394,7 +398,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <FolderOpen className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Add folder</span>
+            <span>{t.composer.addFolder}</span>
           </button>
           <button
             type="button"
@@ -405,7 +409,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Enter path manually</span>
+            <span>{t.composer.enterPathManually}</span>
           </button>
           <div className="my-1 h-px bg-[#2a2a2a]" />
           <button
@@ -417,7 +421,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Skills</span>
+            <span>{t.composer.skills}</span>
             <ChevronRight className="ml-auto h-3 w-3 text-[#6e6e6e]" />
           </button>
           <button
@@ -429,7 +433,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <Layers className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Connectors</span>
+            <span>{t.composer.connectors}</span>
             <ChevronRight className="ml-auto h-3 w-3 text-[#6e6e6e]" />
           </button>
           <button
@@ -441,7 +445,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
           >
             <Puzzle className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>Add plugins</span>
+            <span>{t.composer.addPlugins}</span>
           </button>
         </div>
       )}
@@ -453,7 +457,7 @@ export function Composer({
           className="soyo-popover-up absolute bottom-[calc(100%+12px)] right-16 z-30 w-[240px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
         >
           <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
-            Model profile
+            {t.composer.modelProfileHeader}
           </div>
           {profiles.length === 0 ? (
             <div className="px-2.5 py-1.5 text-[12px] text-[#8a8a8a]">
@@ -497,7 +501,7 @@ export function Composer({
             className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9a08e] transition-colors hover:bg-[#262626]"
           >
             <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
-            <span>Manage profiles…</span>
+            <span>{t.composer.manageProfiles}</span>
           </button>
         </div>
       )}
@@ -540,7 +544,7 @@ export function Composer({
                   void handleStage();
                 }
               }}
-              placeholder="Local file path inside workspace or readable file..."
+              placeholder={t.composer.stagePathPlaceholder}
               className="soyo-input flex-1 px-2.5 py-1 font-mono text-xs"
             />
             <button
@@ -550,7 +554,7 @@ export function Composer({
               className="inline-flex items-center gap-1 rounded-[7px] bg-[#d9a08e] px-2.5 py-1 text-[11px] font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
             >
               <Plus className="h-3 w-3" />
-              Stage
+              {t.composer.stageBtn}
             </button>
           </div>
         )}
@@ -565,12 +569,12 @@ export function Composer({
           rows={variant === "home" ? 2 : 2}
           placeholder={
             approvalPending
-              ? "Steer the run, or reply to approval above…"
+              ? t.composer.placeholderApproval
               : runActive
-                ? "Steer the run, or press Esc / Stop…"
+                ? t.composer.placeholderActive
                 : variant === "home"
-                  ? "How can I help you today?"
-                  : "Type a message or / for commands…"
+                  ? t.composer.placeholderHome
+                  : t.composer.placeholderDefault
           }
           className="max-h-40 min-h-[26px] w-full resize-none bg-transparent text-[13.5px] leading-[1.45] text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:outline-none disabled:opacity-50"
         />
@@ -582,7 +586,7 @@ export function Composer({
             className="soyo-panel-enter mt-2 rounded-[10px] border border-dashed border-[#3a3a3a] px-3 py-2 text-[12px]"
           >
             <div className="mb-1 text-[10px] uppercase tracking-[0.06em] text-[#6e6e6e]">
-              Message preview
+              {t.composer.messagePreview}
             </div>
             <div className="text-[#c9c9c9]">
               <MarkdownRenderer content={draft} mode="render" />
@@ -624,7 +628,7 @@ export function Composer({
                 className="inline-flex h-[26px] items-center gap-1 rounded-[8px] px-2 text-[12px] text-[#a3a3a3] hover:bg-[#262626] hover:text-[#e8e8e8] disabled:opacity-40"
               >
                 <Paperclip className="h-3.5 w-3.5" />
-                <span>Attach</span>
+                <span>{t.composer.attach}</span>
               </button>
             )}
 
@@ -639,7 +643,7 @@ export function Composer({
               }`}
             >
               <Globe className="h-3 w-3 text-[#8a8a8a]" />
-              <span>Web search</span>
+              <span>{t.composer.webSearch}</span>
             </button>
             )}
 
@@ -669,7 +673,7 @@ export function Composer({
                 className="inline-flex h-[26px] items-center gap-1 rounded-[8px] border border-[#2e2e2e] bg-[#1c1c1c] px-2.5 text-[12px] text-[#c9c9c9] hover:border-[#3a3a3a] disabled:opacity-40"
               >
                 <Minimize2 className="h-3 w-3 text-[#8a8a8a]" />
-                <span>Compact</span>
+                <span>{t.composer.compact}</span>
               </button>
             )}
           </div>
@@ -677,7 +681,7 @@ export function Composer({
           <div className="flex items-center gap-1">
             {approvalPending && (
               <span className="soyo-pill text-[#fac454]">
-                paused · approval required
+                {t.composer.pausedApproval}
               </span>
             )}
 
@@ -740,7 +744,7 @@ export function Composer({
                 title="Switch run guidance mode (Steer / Queue)"
                 className="inline-flex h-[26px] items-center gap-1 rounded-[7px] border border-[#2e2e2e] bg-[#1c1c1c] px-2 text-[11px] text-[#c9c9c9] transition-colors hover:border-[#3a3a3a]"
               >
-                <span>{submitMode === "queue" ? "Queue" : "Steer"}</span>
+                <span>{submitMode === "queue" ? t.composer.queue : t.composer.steer}</span>
                 <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
               </button>
             )}
@@ -792,10 +796,10 @@ export function Composer({
       <div className="mx-auto flex max-w-[840px] flex-col gap-2">
         {cardInner}
         <div className="flex items-center justify-center gap-4 text-[11px] text-[#5e5e5e]">
-          <span>Enter send</span>
-          <span>Shift+Enter newline</span>
-          <span>Empty Tab cycle mode</span>
-          <span>Esc cancel</span>
+          <span>{t.composer.hintEnter}</span>
+          <span>{t.composer.hintShiftEnter}</span>
+          <span>{t.composer.hintTab}</span>
+          <span>{t.composer.hintEsc}</span>
         </div>
       </div>
     </div>

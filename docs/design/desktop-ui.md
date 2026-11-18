@@ -143,6 +143,13 @@
   - 修复约定：外层柱容器只保留定位与提升层级的 `hover:z-30 focus-within:z-30`；仅将 `group-hover:brightness-110` 与 `overflow-hidden rounded-[2px]` 应用在包裹三色堆叠段（input `#d9a08e`、output `#8aa8d8`、cache read `#6b6b6b`）的内层 `<div>` 上。
   - Tooltip 使用 `z-50 border-[#383838] bg-[#161616] shadow-[0_12px_32px_rgba(0,0,0,0.8)]`，并根据索引边缘自适应水平对齐（前 3 根 `left-0`、后 3 根 `right-0`、其余 `left-1/2 -translate-x-1/2`），避免贴边裁切。
 
+### 4.4 语言切换与本地化（`i18n` / `LanguageDialog`）
+
+- **首版支持语言**：定义于 [desktop/src/lib/i18n.ts](../../desktop/src/lib/i18n.ts)，支持 `en-US`（`English (United States)`，默认）、`zh-CN`（`简体中文 (中国)`）与 `zh-TW`（`繁體中文 (台灣)`），由 `useAppStore` 维护并在切换时同步写入 `document.documentElement.lang`（不使用 `localStorage` 等禁止存储 API）。
+- **入口 1 — User Menu `Language` 项**：在左下角 Primary Rail 的 `User menu` 弹出菜单中，`Settings`（带 `⌘,` 快捷键标识）下方提供带 `Globe` 图标的 `Language` 入口（`data-testid="user-menu-language"`），点击打开 [desktop/src/components/LanguageDialog.tsx](../../desktop/src/components/LanguageDialog.tsx)。
+- **入口 2 — Settings `General` 标签页**：在 [desktop/src/components/SettingsDialog.tsx](../../desktop/src/components/SettingsDialog.tsx) 的常规设置中提供 `<select aria-label="Interface language">` 同步切换。
+- **选择弹窗规范（`LanguageDialog`）**：居中模态窗宽 `max-w-[580px]`（底色 `#1e1e1e`、边框 `#2b2b2b`、圆角 `14px`），使用 `grid-cols-1 sm:grid-cols-3` 三列单选网格展示双行语言卡片（母语名称 + 副标题）；当前选中卡片使用 `#242c3a` 背景、`#38465e` 边框与 `#6ea1f7` 勾选标记，支持点击空白遮罩或 `Escape` 键关闭。
+
 ---
 
 ## 5. 动效规范与可访问性

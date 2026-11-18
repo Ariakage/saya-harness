@@ -7,8 +7,9 @@ import type {
   TodoItemDto,
   WorkModeDto,
 } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import { WORK_MODE_STYLES, formatTokenCount } from "../lib/sanitize";
-import type { DesktopMessage } from "../store/useAppStore";
+import { type DesktopMessage, useAppStore } from "../store/useAppStore";
 
 export interface ContextSidebarProps {
   bootstrap: BootstrapStateDto_Serialize | null;
@@ -90,6 +91,8 @@ export function ContextSidebar({
   activeSessionId,
   messages = [],
 }: ContextSidebarProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const modeStyle = WORK_MODE_STYLES[workMode];
   const outputPaths = extractOutputPaths(messages);
   const windowTokens = bootstrap?.context_window_tokens ?? null;
@@ -114,7 +117,7 @@ export function ContextSidebar({
       {/* Runtime */}
       <section className="space-y-1.5">
         <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
-          <span>Runtime</span>
+          <span>{t.inspector.runtime}</span>
           <span
             className="text-[10px]"
             style={{ color: modeStyle.color }}
@@ -125,30 +128,30 @@ export function ContextSidebar({
         </div>
         <div className="space-y-1 text-[12px]">
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">Profile</span>
+            <span className="text-[#7a7a7a]">{t.inspector.profile}</span>
             <span className="truncate font-mono text-[11.5px] text-[#c9c9c9]">
-              {bootstrap?.selected_profile ?? "unset"}
+              {bootstrap?.selected_profile ?? t.inspector.unset}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">Model</span>
+            <span className="text-[#7a7a7a]">{t.inspector.model}</span>
             <span className="truncate font-mono text-[11.5px] text-[#c9c9c9]">
-              {bootstrap?.selected_model ?? "unset"}
+              {bootstrap?.selected_model ?? t.inspector.unset}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">Sandbox</span>
+            <span className="text-[#7a7a7a]">{t.inspector.sandbox}</span>
             <span className="truncate font-mono text-[11.5px] text-[#c9c9c9]">
               {bootstrap?.sandbox_backend ?? "default"}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">Workspace</span>
+            <span className="text-[#7a7a7a]">{t.inspector.workspace}</span>
             <span
               className="truncate font-mono text-[11px] text-[#c9c9c9]"
               title={bootstrap?.workspace}
             >
-              {basenameFromWorkspace(bootstrap?.workspace) || "unset"}
+              {basenameFromWorkspace(bootstrap?.workspace) || t.inspector.unset}
             </span>
           </div>
         </div>
@@ -159,7 +162,7 @@ export function ContextSidebar({
       {/* Context window */}
       <section className="space-y-2">
         <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
-          <span>Context window</span>
+          <span>{t.inspector.contextWindow}</span>
           <span className="font-mono text-[11.5px] text-[#6e6e6e]">
             {contextEstimated ? "~" : ""}
             {formatTokenCount(totalContextTokens)}
@@ -171,7 +174,7 @@ export function ContextSidebar({
 
         {contextEntries.length === 0 ? (
           <div className="text-[11.5px] text-[#6e6e6e]">
-            Context breakdown updates on model turns.
+            {t.inspector.contextEmpty}
           </div>
         ) : (
           <div className="space-y-2.5">
@@ -243,7 +246,7 @@ export function ContextSidebar({
                 <li className="flex items-center justify-between text-[#a3a3a3]">
                   <span className="inline-flex items-center gap-1.5">
                     <span className="h-2 w-2 rounded-[2px] bg-[#3a3a3a]" />
-                    <span>Free space</span>
+                    <span>{t.inspector.freeSpace}</span>
                   </span>
                   <span className="font-mono text-[#7a7a7a]">
                     {formatTokenCount(freeTokens)} · {Math.max(0, 100 - usagePercent)}%
@@ -266,13 +269,13 @@ export function ContextSidebar({
       {/* Tasks */}
       <section className="space-y-1.5">
         <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
-          <span>Tasks</span>
+          <span>{t.inspector.tasks}</span>
           <span className="font-mono text-[11px] text-[#6e6e6e]">
             {todos.filter((t) => t.status === "completed").length}/{todos.length}
           </span>
         </div>
         {todos.length === 0 ? (
-          <div className="text-[11.5px] text-[#6e6e6e]">No active tasks.</div>
+          <div className="text-[11.5px] text-[#6e6e6e]">{t.inspector.noActiveTasks}</div>
         ) : (
           <ul className="space-y-1.5 pt-0.5 text-[12px]">
             {todos.map((item) => (
@@ -336,7 +339,7 @@ export function ContextSidebar({
       {/* Outputs & Recent */}
       <section className="space-y-1.5">
         <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
-          <span>{outputPaths.length > 0 ? "Outputs" : "Outputs & Recent"}</span>
+          <span>{outputPaths.length > 0 ? t.inspector.outputs : t.inspector.outputsAndRecent}</span>
           <span className="font-mono text-[11px] text-[#6e6e6e]">
             {outputPaths.length > 0 ? outputPaths.length : recentSessions.length}
           </span>
@@ -355,7 +358,7 @@ export function ContextSidebar({
             ))}
           </ul>
         ) : recentSessions.length === 0 ? (
-          <div className="text-[11.5px] text-[#6e6e6e]">No saved sessions.</div>
+          <div className="text-[11.5px] text-[#6e6e6e]">{t.inspector.noSavedSessions}</div>
         ) : (
           <ul className="space-y-1">
             {recentSessions.slice(0, 5).map((item) => {
