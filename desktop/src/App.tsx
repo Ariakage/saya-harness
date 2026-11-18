@@ -163,10 +163,11 @@ export function App() {
   const setLocale = useAppStore((s) => s.setLocale);
   const clearError = useAppStore((s) => s.clearError);
   const t = getMessages(locale);
+  const userName = useAppStore((s) => s.userName);
   const greeting = useMemo(
-    () => pickGreeting(t.home),
+    () => pickGreeting(t.home, userName),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [locale],
+    [locale, userName],
   );
 
   const previewMode = isBrowserPreview();

@@ -48,6 +48,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         peripheral_commands::confirm_memory_action,
         peripheral_commands::export_session,
         peripheral_commands::stage_attachments,
+        peripheral_commands::get_user_name,
     ])
 }
 

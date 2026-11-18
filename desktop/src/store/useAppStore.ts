@@ -81,6 +81,7 @@ export interface AppState {
   submitMode: "steer" | "queue";
   configChangeSessionId: string | null;
   recoveryBanner: string | null;
+  userName: string | null;
   error: DesktopError | null;
 
   initApp: () => Promise<void>;
@@ -422,6 +423,7 @@ export const useAppStore = create<AppState>((set, get) => {
     submitMode: "steer",
     configChangeSessionId: null,
     recoveryBanner: null,
+    userName: null,
     error: null,
 
     applyBootstrap: (boot) =>
@@ -476,13 +478,18 @@ export const useAppStore = create<AppState>((set, get) => {
     initApp: async () => {
       set({ loading: true });
       try {
-        const [bootRes, listRes] = await Promise.all([
+        const [bootRes, listRes, nameRes] = await Promise.all([
           commands.getBootstrapState(),
           commands.listSessions(1),
+          commands.getUserName(),
         ]);
         const updates: Partial<AppState> = {
           initialized: true,
           loading: false,
+          userName:
+            nameRes.status === "ok" && nameRes.data?.trim()
+              ? nameRes.data.trim()
+              : null,
         };
         if (bootRes.status === "ok") {
           updates.bootstrap = bootRes.data;

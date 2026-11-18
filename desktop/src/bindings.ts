@@ -35,6 +35,7 @@ export const commands = {
 	confirmMemoryAction: (actionId: string) => typedError<MemoryConfirmResultDto, DesktopError>(__TAURI_INVOKE("confirm_memory_action", { actionId })),
 	exportSession: (sessionId: string | null, targetPath: string, format: ExportFormatDto, scope: ExportScopeDto, includeTools: boolean) => typedError<ExportResultDto, DesktopError>(__TAURI_INVOKE("export_session", { sessionId, targetPath, format, scope, includeTools })),
 	stageAttachments: (paths: string[]) => typedError<StagedAttachmentDto[], DesktopError>(__TAURI_INVOKE("stage_attachments", { paths })),
+	getUserName: () => typedError<string | null, DesktopError>(__TAURI_INVOKE("get_user_name")),
 };
 
 /* Types */

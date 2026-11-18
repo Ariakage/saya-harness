@@ -92,6 +92,7 @@ export interface UiMessages {
       night: string[];
       anytime: string[];
     };
+    fallbackName: string;
     projectOrFolder: string;
     ideasForYou: string;
     ideaSummarize: string;
@@ -409,50 +410,52 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
     home: {
       greetings: {
         morning: [
-          "Good morning, ariakage.",
-          "Morning, ariakage.",
+          "Good morning, {name}.",
+          "Morning, {name}.",
           "Rise and ship.",
         ],
         afternoon: [
-          "Good afternoon, ariakage.",
-          "Afternoon, ariakage.",
+          "Good afternoon, {name}.",
+          "Afternoon, {name}.",
           "Hope the day's going well.",
         ],
         evening: [
-          "Good evening, ariakage.",
-          "Evening, ariakage.",
+          "Good evening, {name}.",
+          "Evening, {name}.",
           "Winding down or ramping up?",
         ],
         night: [
-          "Up late, ariakage?",
+          "Up late, {name}?",
           "Burning the midnight oil?",
           "Quiet hours. Good focus time.",
         ],
         anytime: [
           "You're here!",
-          "Welcome back, ariakage.",
-          "Welcome, ariakage.",
-          "Good to see you, ariakage.",
-          "Hey, ariakage.",
+          "Welcome back, {name}.",
+          "Welcome, {name}.",
+          "Good to see you, {name}.",
+          "Hey, {name}.",
           "Let's build something.",
           "What are we making today?",
           "What would you like to work on in this project?",
           "What's on your mind today?",
           "What's on the agenda today?",
-          "What's up next, ariakage?",
+          "What's up next, {name}?",
           "Where should we begin?",
-          "Ariakage, what can I do for you?",
+          "{name}, what can I do for you?",
           "Ready to dive in?",
           "Ready when you are.",
-          "How can I help, ariakage?",
+          "How can I help, {name}?",
           "How can I help you today?",
           "Yay, you're here!",
           "Hello hello!",
           "Oh! It's you.",
           "Psst… over here.",
           "You + me + a blinking cursor.",
+          "Let's GO!",
         ],
       },
+      fallbackName: "friend",
       projectOrFolder: "Project or folder",
       ideasForYou: "Ideas for you",
       ideaSummarize: "Summarize today's sessions into a handoff note",
@@ -793,51 +796,55 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
     home: {
       greetings: {
         morning: [
-          "早上好，ariakage。",
+          "早上好，{name}。",
           "早安。",
           "新的一天，开始吧。",
         ],
         afternoon: [
-          "下午好，ariakage。",
+          "下午好，{name}。",
           "午安。",
           "下午时光，慢慢来。",
         ],
         evening: [
-          "晚上好，ariakage。",
+          "晚上好，{name}。",
           "晚间好。",
           "收工还是继续？",
         ],
         night: [
-          "夜深了，ariakage。",
+          "夜深了，{name}。",
           "还在忙？",
           "深夜适合专注。",
         ],
         anytime: [
           "你来了！",
-          "欢迎回来，ariakage。",
-          "欢迎，ariakage。",
-          "很高兴见到你，ariakage。",
-          "嗨，ariakage。",
+          "欢迎回来，{name}。",
+          "欢迎，{name}。",
+          "很高兴见到你，{name}。",
+          "嗨，{name}。",
           "开始构建吧。",
           "今天做点什么？",
           "这个项目里想做点什么？",
           "今天在想什么？",
           "今天的议程是什么？",
-          "接下来做什么，ariakage？",
+          "接下来做什么，{name}？",
           "我们从哪里开始？",
           "准备好开始了？",
           "随时待命。",
           "随时可以开始。",
-          "有什么可以帮你，ariakage？",
+          "有什么可以帮你，{name}？",
           "今天有什么可以帮你？",
-          "ariakage，我能帮你做些什么？",
+          "{name}，我能帮你做些什么？",
           "你来啦！",
           "嘿嘿，是你呀。",
           "等你好久啦。",
           "开工啦开工啦。",
-          "今天也要加油鸭。",
+          "今天也要加油喵。",
+          "Let's GO!",
+          "出发喽！",
+          "加入游戏。",
         ],
       },
+      fallbackName: "朋友",
       projectOrFolder: "项目或文件夹",
       ideasForYou: "为你推荐",
       ideaSummarize: "将今天的会话整理为交接笔记",
@@ -1174,51 +1181,55 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
     home: {
       greetings: {
         morning: [
-          "早安，ariakage。",
+          "早安，{name}。",
           "早上好。",
           "新的一天，開始吧。",
         ],
         afternoon: [
-          "午安，ariakage。",
+          "午安，{name}。",
           "下午好。",
           "午後時光，慢慢來。",
         ],
         evening: [
-          "晚上好，ariakage。",
+          "晚上好，{name}。",
           "晚間好。",
           "收工還是繼續？",
         ],
         night: [
-          "夜深了，ariakage。",
+          "夜深了，{name}。",
           "還在忙？",
           "深夜適合專注。",
         ],
         anytime: [
           "你來了！",
-          "歡迎回來，ariakage。",
-          "歡迎，ariakage。",
-          "很高興見到你，ariakage。",
-          "嗨，ariakage。",
+          "歡迎回來，{name}。",
+          "歡迎，{name}。",
+          "很高興見到你，{name}。",
+          "嗨，{name}。",
           "開始建構吧。",
           "今天做點什麼？",
           "這個專案裡想做點什麼？",
           "今天在想什麼？",
           "今天的議程是什麼？",
-          "接下來做什麼，ariakage？",
+          "接下來做什麼，{name}？",
           "我們從哪裡開始？",
           "準備好開始了？",
           "隨時待命。",
           "隨時可以開始。",
-          "有什麼可以幫你，ariakage？",
+          "有什麼可以幫你，{name}？",
           "今天有什麼可以幫你？",
-          "ariakage，我能幫你做些什麼？",
+          "{name}，我能幫你做些什麼？",
           "你來啦！",
           "嘿嘿，是你呀。",
           "等你好久啦。",
           "開工啦開工啦。",
-          "今天也要加油鴨。",
+          "今天也要加油喵。",
+          "Let's GO!",
+          "出發嘍！",
+          "加入遊戲。",
         ],
       },
+      fallbackName: "朋友",
       projectOrFolder: "專案或資料夾",
       ideasForYou: "為你推薦",
       ideaSummarize: "將今天的工作階段整理為交接筆記",
@@ -1502,27 +1513,42 @@ export function getMessages(locale: LocaleId): UiMessages {
   return MESSAGES[locale] ?? MESSAGES[DEFAULT_LOCALE];
 }
 
+export function formatGreeting(
+  template: string,
+  name: string | null,
+  fallbackName: string,
+): string {
+  return template.replaceAll("{name}", name?.trim() || fallbackName);
+}
+
 export function greetingCandidates(
   home: UiMessages["home"],
+  name: string | null,
 ): string[] {
   const g = home.greetings;
-  return [...g.morning, ...g.afternoon, ...g.evening, ...g.night, ...g.anytime];
+  return [...g.morning, ...g.afternoon, ...g.evening, ...g.night, ...g.anytime].map(
+    (tpl) => formatGreeting(tpl, name, home.fallbackName),
+  );
 }
 
 export function pickGreeting(
   home: UiMessages["home"],
+  name: string | null,
   now: Date = new Date(),
   rand: () => number = Math.random,
 ): string {
   const g = home.greetings;
   const pick = (arr: string[]): string =>
     arr[Math.floor(rand() * arr.length)] ?? arr[0] ?? "";
-  if (g.anytime.length > 0 && rand() < 0.15) {
-    return pick(g.anytime);
-  }
-  const h = now.getHours();
-  if (h >= 5 && h < 12) return pick(g.morning);
-  if (h >= 12 && h < 18) return pick(g.afternoon);
-  if (h >= 18 && h < 23) return pick(g.evening);
-  return pick(g.night);
+  const tpl =
+    g.anytime.length > 0 && rand() < 0.15
+      ? pick(g.anytime)
+      : (() => {
+          const h = now.getHours();
+          if (h >= 5 && h < 12) return pick(g.morning);
+          if (h >= 12 && h < 18) return pick(g.afternoon);
+          if (h >= 18 && h < 23) return pick(g.evening);
+          return pick(g.night);
+        })();
+  return formatGreeting(tpl, name, home.fallbackName);
 }

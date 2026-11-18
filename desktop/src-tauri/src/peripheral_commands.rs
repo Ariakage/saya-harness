@@ -1163,3 +1163,12 @@ pub async fn stage_attachments(
 ) -> Result<Vec<StagedAttachmentDto>, DesktopError> {
     state.stage_attachments(paths).await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_user_name() -> Result<Option<String>, DesktopError> {
+    Ok(std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("USERNAME").ok())
+        .filter(|name| !name.trim().is_empty()))
+}

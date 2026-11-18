@@ -172,6 +172,9 @@ describe("App Stage 3 runtime integration", () => {
       if (cmd === "get_bootstrap_state") {
         return sampleBootstrap();
       }
+      if (cmd === "get_user_name") {
+        return "ariakage";
+      }
       if (cmd === "list_sessions") {
         return samplePage();
       }
@@ -1016,6 +1019,7 @@ describe("App Stage 3 runtime integration", () => {
     boot.session!.messages = [];
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "get_user_name") return "ariakage";
       if (cmd === "list_sessions") return samplePage();
       if (cmd === "list_modules" || cmd === "list_extensions" || cmd === "list_jobs") {
         return [];
@@ -1030,7 +1034,7 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     const expectGreetingFrom = (locale: "en-US" | "zh-CN" | "zh-TW") => {
-      const candidates = greetingCandidates(getMessages(locale).home);
+      const candidates = greetingCandidates(getMessages(locale).home, "ariakage");
       const shown = candidates.some((g) => screen.queryByText(g) !== null);
       expect(shown).toBeTruthy();
     };
