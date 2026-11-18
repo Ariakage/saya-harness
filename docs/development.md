@@ -38,6 +38,7 @@ cargo install just --locked
 | `just test` | 默认workspace测试，可追加过滤条件和测试参数 |
 | `just build`／`just release` | 开发／优化构建，可追加Cargo构建参数 |
 | `just desktop-check` | 显式执行 `soyo-desktop` 严格Clippy、Rust测试及前端类型检查／单测／构建 |
+| `just desktop-preview` | 启动桌面端 Vite 浏览器实时预览服务（`?preview=1` 基于 `@tauri-apps/api/mocks`） |
 | `just run` | 运行开发版Soyo，可追加CLI参数 |
 | `just prompt code` | 输出指定场景的完整离线模型请求，可省略为 `all` |
 | `just tui-preview syntax` | 运行debug专属TUI场景预览 |
@@ -53,6 +54,7 @@ just test restored_flags_are_observable_before_the_child_reads_its_release -- --
 just run --help
 just prompt code
 just prompt all | jq '.requests.compact.request.instructions'
+just desktop-preview
 just tui-preview footnotes --source
 just render-preview 140 60 mermaid --json
 just release

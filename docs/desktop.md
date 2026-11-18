@@ -19,6 +19,8 @@ desktop/
 - **不混入核心 crates**：`crates/` 目录不存放任何 GUI 或 Tauri 代码；运行时逻辑不得依赖 Tauri 或前端类型。
 - **保持默认构建不变**：根 [Cargo.toml](../Cargo.toml) 通过 `default-members` 保留既有六个 crate（`soyo-contract`、`soyo-fs`、`soyo-core`、`soyo-cli`、`soyo-app`、`soyo-tui`），常规 `cargo build` / `cargo test` / `scripts/check.sh` 行为不变；`soyo-desktop` 仅通过 `cargo tauri` 或 `-p soyo-desktop` 显式构建与测试。
 - **独立安装、共享数据**：用户可单独安装 CLI/TUI、单独安装桌面端或两者并存；两端共享同一 XDG 配置（`config.toml`）、SQLite 会话库（`sessions.sqlite3`）、模块存储（`modules.sqlite3`）、OutputStore、全局记忆与宿主私有凭据存储（`state_dir/credentials`）。
+- **图标与界面组件**：所有桌面端界面图标统一使用已固定版本的 `lucide-react`；窗口与应用安装包图标由 1024x1024 RGBA 源生成为 `desktop/src-tauri/icons/` 与 `desktop/public/app-icon.png`。
+- **浏览器实时预览**：执行 `just desktop-preview` 启动 Vite HMR 开发服务，在常规浏览器访问 `http://127.0.0.1:1420/?preview=1&scene=conversation`（支持 `conversation`、`markdown`、`approval`、`clarification`、`peripheral` 场景，通过 `@tauri-apps/api/mocks` 脱敏替身预览和调整界面）。
 
 ## 进程内运行时桥接与 IPC 契约
 
@@ -38,5 +40,5 @@ desktop/
 ## 打包、签名与自动更新
 
 - **安装包矩阵**：`bundle.targets` 配置 `dmg`、`app`（macOS aarch64/x86_64）、`nsis`（Windows，明确不发 MSI）与 `appimage`（Linux），同时开启 `bundle.createUpdaterArtifacts: true`。
-- **自动更新**：集成 `tauri-plugin-updater` 与 Ed25519 签名校验，使用 GitHub Releases 发布的 `latest.json` 作为更新端点，更新安装须经用户确认。
-- **CI Secrets 隔离**：Ed25519 签名私钥及 Apple 签名／公证（notarization）凭据全部通过 GitHub Actions Secrets 注入 `.github/workflows/desktop-release.yml`，仓库代码中不得出现任何密钥或密码。
+- **自动更新**：集成 `tauri-plugin-updater` 与 Ed25519 签名校验，使用 GitHub Releases 发布的 `latest.json` 作为更新端点；前端 `UpdaterBanner` 发现新版本后展示提示条，需用户显式点击确认才执行 `downloadAndInstall()`（浏览器预览及离线/空开发公钥下自动静默跳过）。
+- **CI Secrets 隔离与回归**：Ed25519 签名私钥及 Apple 签名／公证（notarization）凭据全部通过 GitHub Actions Secrets 注入 [.github/workflows/desktop-release.yml](../.github/workflows/desktop-release.yml)；仓库内 [test_desktop_packaging.py](../scripts/release/test_desktop_packaging.py) 作为 `just test-tooling` 的离线回归检查 CSP、零明文密钥、依赖精确锁版、`lucide-react` 约束与工作流矩阵契约。

@@ -71,7 +71,7 @@ flowchart TD
 | F-11 | 多模态与附件 | 中 | F-01、F-06 | 使用图片、PDF 和其他附件完成任务 |
 | F-12 | 日志、追踪、回放与评估 | 近期及贯穿各批次 | MVP 事件与安全日志 | 五级诊断、关联追踪、失败定位与版本评估 |
 | F-13 | 稳定 SDK、服务与远程执行 | 后期 | F-01、F-02、F-08、F-12 | 将 Soyo 嵌入其他产品，管理远端任务 |
-| F-14 | 默认 TUI 与桌面端 GUI | TUI 已交付，GUI 按 D-072 实施中 | 共享应用服务与事件；导出依赖 F-19 | TUI 提供全屏终端交互；`soyo-desktop` 提供独立安装的 Tauri 2 桌面端界面 |
+| F-14 | 默认 TUI 与桌面端 GUI | TUI 已交付；GUI（`soyo-desktop`）已按 D-072 完成本机实现与检查（多平台发行包待 CI 验证） | 共享应用服务与事件；导出依赖 F-19 | TUI 提供全屏终端交互；`soyo-desktop` 提供独立安装的 Tauri 2 桌面端界面 |
 | F-15 | 平台与分发完善 | 后期 | F-01、F-14 | 扩展系统支持、安装、更新与发行体验 |
 | F-16 | 模型路由与故障切换 | 中 | F-06、F-12、F-18 | 按能力、预算和可用性选择已配置模型 |
 | F-17 | 项目索引与 LSP 代码智能 | 高 | F-01、F-06 | 基于符号、引用和诊断理解代码，减少全文扫描 |
@@ -256,7 +256,7 @@ DEV-040 至 DEV-042 已实现五级日志、tracing span、`--log-level`、本�
 
 0.2.0 已交付默认 TUI，无子命令的 `soyo` 在 stdin／stdout 均连接终端时进入全屏界面，文本交互使用 `soyo chat`。N0 已建立共享 soyo-app 与有界事件／交互桥，N1 已接入 soyo-tui、TTY 路由和终端恢复。当前 N2 增加真实 MCP 生命周期与工具数展示，各轮交互增量按源码记录验证，见[TUI 文档](tui.md)和[开发进度](progress.md)。
 
-GUI 方向已于 D-072 确认为 Tauri 2 + in-process 桌面端 `soyo-desktop`（`desktop/` 与 `desktop/src-tauri`，React + Vite + TypeScript，Windows NSIS／Linux AppImage／macOS `.dmg` 与 `.app.tar.gz` + Ed25519 Updater 分发），当前进入分阶段实施与独立验证，见[桌面端设计](desktop.md)。桌面端的实现状态与多平台安装包验收证据独立记录于[开发进度](progress.md)，不复用 TUI 的四平台候选验收结果。
+GUI 方向已于 D-072 确认为 Tauri 2 + in-process 桌面端 `soyo-desktop`（`desktop/` 与 `desktop/src-tauri`，React + Vite + TypeScript + `lucide-react`，Windows NSIS／Linux AppImage／macOS `.dmg` 与 `.app.tar.gz` + Ed25519 Updater 分发），目前已完成工作区骨架、schema v1 Channel 流式对话与取消、审批／澄清往返、模式与权限切换、会话恢复、外围管理（设置／模块开关／脱敏 MCP 与凭据／两阶段全局记忆／会话导出／受限 `soyo-attachment://` 协议）、更新提示条及 `desktop-release.yml` 打包工作流并通过本机检查，见[桌面端设计](desktop.md)。桌面端的实际本机验证与尚未运行的远端多平台打包／签名公证边界独立记录于[开发进度](progress.md)，不复用 TUI 的四平台候选验收结果。
 
 **价值**：让已形成的运行时能力有清楚的交互入口。
 

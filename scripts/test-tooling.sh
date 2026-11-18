@@ -20,6 +20,7 @@ python3 -B scripts/release/test_package.py $verbose
 python3 -B scripts/release/test_verify_macos15.py $verbose
 python3 -B scripts/release/test_verify_linux.py $verbose
 python3 -B scripts/release/test_script_helpers.py $verbose
+python3 -B scripts/release/test_desktop_packaging.py $verbose
 python3 -B -m unittest discover -s scripts/n3 -p 'test_*.py' $verbose
 python3 -B scripts/n5/test_browser_vm.py $verbose
 python3 -I -B scripts/n5/test_acceptance.py $verbose

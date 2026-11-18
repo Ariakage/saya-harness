@@ -6,7 +6,7 @@ import type {
   SessionPageDto_Serialize,
 } from "./bindings";
 
-const { invokeMock, MockChannel } = vi.hoisted(() => {
+const { invokeMock, MockChannel, checkUpdateMock } = vi.hoisted(() => {
   class HoistedChannel<T> {
     id = Math.floor(Math.random() * 100000);
     onmessage: (message: T) => void = () => {};
@@ -14,12 +14,17 @@ const { invokeMock, MockChannel } = vi.hoisted(() => {
   return {
     invokeMock: vi.fn(),
     MockChannel: HoistedChannel,
+    checkUpdateMock: vi.fn(),
   };
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
   Channel: MockChannel,
+}));
+
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: (...args: unknown[]) => checkUpdateMock(...args),
 }));
 
 vi.mock("@streamdown/mermaid", () => ({
@@ -116,6 +121,8 @@ function samplePage(): SessionPageDto_Serialize {
 describe("App Stage 3 runtime integration", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    checkUpdateMock.mockReset();
+    checkUpdateMock.mockResolvedValue(null);
     useAppStore.setState({
       initialized: false,
       loading: false,
@@ -747,5 +754,48 @@ describe("App Stage 3 runtime integration", () => {
         })
       );
     });
+  });
+
+  it("displays updater banner when update exists and triggers downloadAndInstall on user confirmation", async () => {
+    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
+    const close = vi.fn().mockResolvedValue(undefined);
+    checkUpdateMock.mockResolvedValue({
+      available: true,
+      currentVersion: "0.2.0",
+      version: "0.3.1",
+      rawJson: {},
+      downloadAndInstall,
+      close,
+    });
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_bootstrap_state") return sampleBootstrap();
+      if (cmd === "list_sessions") return samplePage();
+      return null;
+    });
+
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      render(<App />);
+      await waitFor(() => {
+        expect(screen.getByTestId("updater-banner")).toBeTruthy();
+        expect(screen.getByText(/Update available: v0\.3\.1/)).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Install & Restart" }));
+      await waitFor(() => {
+        expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+        expect(
+          screen.getByText(/Update installed — restart Soyo to finish applying\./)
+        ).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByLabelText("Dismiss update banner"));
+      await waitFor(() => {
+        expect(screen.queryByTestId("updater-banner")).toBeNull();
+      });
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    }
   });
 });

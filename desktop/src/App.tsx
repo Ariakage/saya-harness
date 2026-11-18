@@ -24,6 +24,7 @@ import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ThinkingCardView } from "./components/ThinkingCardView";
 import { ToolCardView } from "./components/ToolCardView";
+import { UpdaterBanner } from "./components/UpdaterBanner";
 import { WORK_MODE_STYLES } from "./lib/sanitize";
 import {
   PREVIEW_APPROVAL_REQUEST,
@@ -261,6 +262,7 @@ export function App() {
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 flex-1 flex-col">
+          <UpdaterBanner />
           {error && (
             <div className="flex items-center justify-between gap-2 border-b border-[#F87171]/40 bg-[#F87171]/10 px-4 py-2 text-xs text-[#F87171]">
               <span>

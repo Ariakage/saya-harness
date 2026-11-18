@@ -1,0 +1,134 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_draft:
+        description: Create release as draft when manually triggered
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  release-desktop:
+    name: ${{ matrix.platform }} (${{ matrix.target }})
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.1
+          rustup target add "${{ matrix.target }}"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: '10.33.0'
+          package_json_file: desktop/package.json
+
+      - name: Install Linux Tauri and AppImage dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install desktop frontend dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+
+      - name: Run desktop Rust and frontend checks
+        run: |
+          cargo clippy -p soyo-desktop --all-targets --locked -- -D warnings
+          cargo test -p soyo-desktop --locked
+          pnpm --dir desktop run check
+
+      - name: Prepare optional updater pubkey config override
+        id: build_args
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          args="--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
+          if [ -n "$TAURI_UPDATER_PUBLIC_KEY" ]; then
+            cfg_path=$(python3 - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "updater-override.json"
+          p.write_text(json.dumps({"plugins": {"updater": {"pubkey": os.environ["TAURI_UPDATER_PUBLIC_KEY"]}}}), encoding="utf-8")
+          print(p.as_posix())
+          PY
+          )
+            args="$args --config $cfg_path"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - name: Build, sign, notarize, and publish desktop release artifacts
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b19abd31f2f3c20e0e737 # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: desktop
+          tauriScript: pnpm tauri
+          args: ${{ steps.build_args.outputs.args }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('desktop-v__VERSION__-ci.{0}', github.run_number) }}
+          releaseName: 'Soyo Desktop v__VERSION__'
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.release_draft || contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
