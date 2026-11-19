@@ -334,12 +334,21 @@ fn node_exposure(program: &std::path::Path) -> (Vec<std::path::PathBuf>, Vec<std
         if let Ok(real) = std::fs::canonicalize(&candidate) {
             if real.is_dir() {
                 roots.insert(real);
-            } else {
-                // The recorded path and its resolved target both need literal
-                // exposure when a keg `opt/` symlink points into `Cellar/`.
-                files.insert(candidate);
-                files.insert(real);
+                return;
             }
+            // A keg `opt/` path resolves through symlinks Seatbelt refuses to
+            // read; every symlink component on the recorded chain needs its
+            // own literal exposure alongside the canonical target file.
+            for ancestor in candidate.ancestors() {
+                if std::fs::symlink_metadata(ancestor)
+                    .map(|meta| meta.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    files.insert(ancestor.to_path_buf());
+                }
+            }
+            files.insert(candidate);
+            files.insert(real);
         } else if candidate.is_file() {
             files.insert(candidate);
         }
