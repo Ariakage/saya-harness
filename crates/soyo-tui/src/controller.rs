@@ -80,6 +80,8 @@ pub struct Options {
 }
 struct Active {
     kind: RunKind,
+    prompt_display: String,
+    prompt_attachments: Vec<attachments::Attachment>,
     cancel: Arc<RunCancellation>,
     join: tokio::task::JoinHandle<RunOutcome>,
     events: mpsc::Receiver<Event>,
@@ -484,11 +486,14 @@ impl App {
             self.refresh_header();
             if kind == RunKind::Execution {
                 self.reset_context();
-                self.state.push_message(Role::User, ui_text::YOU, display);
+                self.state
+                    .push_message(Role::User, ui_text::YOU, display.clone());
             }
             summary.start(Instant::now());
             self.active = Some(Active {
                 kind,
+                prompt_display: display,
+                prompt_attachments: attachments.clone(),
                 cancel: Arc::new(RunCancellation::new()),
                 join: remote_run.join,
                 events,
@@ -608,7 +613,8 @@ impl App {
         self.refresh_header();
         if kind == RunKind::Execution {
             self.reset_context();
-            self.state.push_message(Role::User, ui_text::YOU, display);
+            self.state
+                .push_message(Role::User, ui_text::YOU, display.clone());
         }
         let handle = runtime.handle();
         summary.start(Instant::now());
@@ -621,6 +627,8 @@ impl App {
         });
         self.active = Some(Active {
             kind,
+            prompt_display: display,
+            prompt_attachments: attachments.clone(),
             cancel,
             join,
             events,
@@ -797,6 +805,17 @@ impl App {
                         self.notice(&error.to_string());
                         if error.is_storage_error() || error.has_observed_result() {
                             failure = Some(Box::new(error) as Box<dyn std::error::Error>);
+                        } else if let Some(active) = &self.active
+                            && active.kind == RunKind::Execution
+                        {
+                            // A run rejected before producing anything (e.g.
+                            // remote launch validation) keeps the user's draft
+                            // instead of losing it, matching the local
+                            // `start_run` error path.
+                            self.restore_unsent_prompt(
+                                active.prompt_display.clone(),
+                                active.prompt_attachments.clone(),
+                            );
                         }
                     }
                 }

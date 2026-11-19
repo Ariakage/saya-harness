@@ -619,7 +619,7 @@ impl App {
                 let target = permission(argument).ok_or(text::PERMISSIONS_USAGE)?;
                 self.sync_remote_config(
                     "set_permission_mode",
-                    serde_json::json!({"mode": soyo_ipc::types::PermissionModeDto::from(target)}),
+                    serde_json::json!({"permissions": soyo_ipc::types::PermissionModeDto::from(target)}),
                 )
                 .await?;
                 self.config.permissions_mode = target;

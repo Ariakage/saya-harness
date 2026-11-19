@@ -971,6 +971,9 @@ pub async fn chat_via_helper(
                 "soyo: helper unavailable ({}); running in-process\n",
                 err.message
             ))?;
+            // The standalone console below opens its own /dev/tty reader;
+            // release this one first so the two readers cannot split input.
+            drop(console);
             let prepared = match existing {
                 Some(resume) => Some(
                     session::resume(

@@ -230,6 +230,7 @@ impl App {
                     let checking = cancel.clone();
                     let cwd = self.config.cwd.to_string_lossy().into_owned();
                     let profile = self.config.profile.clone();
+                    let mode = self.config.mode;
                     let join = tokio::spawn(async move {
                         let dto: soyo_ipc::types::ActiveSessionDto = client
                             .call_typed(
@@ -238,6 +239,22 @@ impl App {
                             )
                             .await
                             .map_err(|err| failure(&err.code, err.message.clone()))?;
+                        // `new_session` always starts from the helper's default
+                        // mode; align an explicit `--mode` selection exactly
+                        // like the local `new_session(&config)` path does.
+                        let wanted = soyo_ipc::types::WorkModeDto::from(mode);
+                        if dto.work_mode != wanted {
+                            let _: soyo_ipc::types::ModeStateDto = client
+                                .call_typed(
+                                    "set_work_mode",
+                                    &serde_json::json!({
+                                        "session_id": dto.id,
+                                        "mode": wanted,
+                                    }),
+                                )
+                                .await
+                                .map_err(|err| failure(&err.code, err.message.clone()))?;
+                        }
                         let remote = backend::RemotePrepared::load(client, &dto.id)
                             .await
                             .map_err(error)?;

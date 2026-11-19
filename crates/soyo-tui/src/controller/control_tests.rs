@@ -841,6 +841,8 @@ async fn attach_model(app: &mut App, model: Arc<dyn Model>) {
     let (_interaction, requests) = input_channel(1).unwrap();
     app.active = Some(Active {
         kind: RunKind::Execution,
+        prompt_display: String::new(),
+        prompt_attachments: Vec::new(),
         cancel,
         join,
         events,

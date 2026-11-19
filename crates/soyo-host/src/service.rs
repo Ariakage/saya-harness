@@ -2305,7 +2305,7 @@ impl HostService {
 
         let cfg = {
             let mut guard = self.inner.lock().await;
-            if let Some(slot) = guard.sessions.get(&parsed_id) {
+            if let Some(slot) = guard.sessions.get_mut(&parsed_id) {
                 if slot.active_run_id.is_some() {
                     if slot.owner_conn_id != Some(conn_id) {
                         return Err(DesktopError::new(
@@ -2324,11 +2324,18 @@ impl HostService {
                         recovered_tools: 0,
                     });
                 }
+                if slot.owner_conn_id.is_some_and(|owner| owner != conn_id) {
+                    return Err(DesktopError::new(
+                        "session_busy",
+                        "Target session is owned by another connected client",
+                    ));
+                }
                 if !params.accept_config_change
                     && !params.cwd_explicit
                     && !params.profile_explicit
                     && params.mode_override.is_none()
                 {
+                    slot.owner_conn_id = Some(conn_id);
                     guard.connection_sessions.insert(conn_id, parsed_id);
                     drop(guard);
                     let bootstrap = self
