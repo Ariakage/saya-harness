@@ -350,6 +350,7 @@ fn node_exposure(program: &std::path::Path) -> (Vec<std::path::PathBuf>, Vec<std
                 .unwrap_or(false)
                 && let Some(parent) = ancestor.parent()
                 && let Ok(parent) = std::fs::canonicalize(parent)
+                && parent != std::path::Path::new("/")
             {
                 roots.insert(parent);
             }
