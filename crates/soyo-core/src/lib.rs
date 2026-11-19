@@ -26,6 +26,7 @@ pub mod goal;
 pub mod hook_store;
 pub mod hooks;
 pub mod input;
+pub mod js_repl;
 pub mod logging;
 
 pub mod mcp;

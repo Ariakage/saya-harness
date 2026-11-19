@@ -469,6 +469,10 @@ pub fn builtin_effect(name: &str) -> Option<ToolEffect> {
         "read_file" | "list_dir" | "find_files" | "search_text" => ToolEffect::FileRead,
         "write_file" | "edit_file" | "apply_patch" => ToolEffect::FileWrite,
         "exec" => ToolEffect::Process,
+        // The sandboxed REPL worker is a managed subprocess; scripts cannot
+        // bridge themselves (js_repl::allowed_sub_call denies the name first)
+        // and Process is outside the read-only PLAN tool set.
+        "js_repl" => ToolEffect::Process,
         "todo_write" | "output_read" | "output_search" | "tool_search" | "tool_describe" => {
             ToolEffect::SessionMetadata
         }

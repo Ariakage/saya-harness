@@ -206,7 +206,7 @@ impl SeatbeltBackend {
         if Path::new(&payload[0]) == std::env::current_exe().map_err(super::io_error)?
             && payload
                 .get(1)
-                .is_some_and(|value| value == "__soyo-file-worker")
+                .is_some_and(|value| value == "__soyo-file-worker" || value == "__soyo-js-worker")
         {
             payload[0] = self.helper_path.clone().into_os_string();
         }

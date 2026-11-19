@@ -33,3 +33,9 @@ schema编译入口供外部注册和MCP目录验证复用。MCP传输、结果�
 注册时逐条通过工具自身的离线jsonschema校验与`SecretRegistry`已知凭据检查，结构或内容不合格返回`invalid_tool_example`，命中已知凭据返回`credential_exposure`；非空样例列表加入审批指纹，空列表保持既有指纹不变。MCP服务可通过`[mcp.servers.NAME.tool_examples]`（按远端工具名索引，最多256项）注入宿主编写的样例，插件manifest的`[[mcp]]`同样支持`tool_examples`，宿主配置覆盖清单同名词条；样例不取自MCP服务器自身。
 
 模型侧投影分两条路径：延迟加载工具经`tool_describe`在展开结果中返回样例；常驻工具将样例以规范化紧凑JSON追加到描述文本末尾，不进入input schema，因此`strict_tools`与第三方兼容端点保持合法。
+
+## `js_repl`（F-21，D-082/D-083）
+
+`js_repl` 是实验性、严格默认关闭的内置控制面，`enabled` 时经 `register_control_definition` 注册，副作用分类固定为 `Process`（沙箱子进程语义，不在 PLAN 只读集合内）。审批按 `Target::Metadata` 绑定完整脚本原文与 `timeout_seconds`；`[js_repl]` 限额一节见[配置](configuration.md)。
+
+脚本发出的桥接调用不复用脚本自身的许可：每一次 `soyo.callTool` 在宿主侧重新生成合成 call（`外层:repl:N`）并完整走一遍 `check_pre_dispatch_hooks` → `dispatcher.authorize`（含人工确认）→ 一次性许可 → `execute` → `tool.finished` 与脱敏。可桥接集合只含只读工具——`FileRead`、`WebRead`、发现与输出查询类 `SessionMetadata`，以及描述符声明 `ExternalReadOnly`/`WebRead` 的外部工具；`exec`、写入、`ask_user`、会话与后台控制、`memory_*`/`skill_*`/`checkpoint_*`、浏览器工具、`todo_write` 与 `js_repl` 自身在授权前以 `permission_denied` 拒绝，未注册名称同样 fail-closed。桥接调用经 `ReplStore` 持久化 ToolIntent/ToolFinished 证据但不写入 `History`，因此合成 call ID 永远不进入模型上下文；只有脚本最终 `return` 值成为外层 `js_repl` 调用的 `ToolResult`。

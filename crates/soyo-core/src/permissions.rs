@@ -499,6 +499,15 @@ impl Operation {
             target: Target::Input,
         }
     }
+    /// Construct the experimental JS REPL operation. The approval binds the
+    /// exact script and timeout arguments; every tool call the script issues
+    /// later is authorized independently through the normal dispatch path.
+    pub fn js_repl() -> Self {
+        Self {
+            tool: "js_repl".into(),
+            target: Target::Metadata,
+        }
+    }
     /// Construct a session metadata update with no workspace target.
     pub fn todo_write() -> Self {
         Self {

@@ -830,6 +830,21 @@ impl OneShotPermit {
         }
         self.end()
     }
+    /// Consume the one-shot permit bound to this exact script call. The check
+    /// runs twice against mode, permission revision, cancellation and the
+    /// normalized script arguments before the permit ends; script-issued tool
+    /// calls never reuse this permit.
+    pub(crate) fn consume_js_repl(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<(), BoundaryError> {
+        let operation = Operation::js_repl();
+        if !self.check(call, context, &operation)? || !self.check(call, context, &operation)? {
+            return Err(failure("stale_approval", "js_repl approval is stale"));
+        }
+        self.end()
+    }
     /// Use an exact, one-shot permit around one run-local background control.
     pub(crate) fn with_background_control<T>(
         &self,

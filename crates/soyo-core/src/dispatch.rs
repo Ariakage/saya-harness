@@ -194,6 +194,77 @@ impl Store for BackgroundStore {
     }
 }
 
+/// A `js_repl` child operation follows the background layering rule: durable
+/// intent/result records, but its synthetic call ID never enters model
+/// history. The flags let the caller backfill evidence when a gate denied the
+/// call before dispatch committed either record.
+pub(crate) struct ReplStore {
+    inner: Arc<dyn Store>,
+    call_id: String,
+    intent: AtomicBool,
+    finished: AtomicBool,
+}
+impl ReplStore {
+    pub(crate) fn new(inner: Arc<dyn Store>, call_id: String) -> Self {
+        Self {
+            inner,
+            call_id,
+            intent: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+        }
+    }
+    pub(crate) fn intent_recorded(&self) -> bool {
+        self.intent.load(Ordering::Acquire)
+    }
+    pub(crate) fn finished_recorded(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+}
+impl Store for ReplStore {
+    fn memory_exposures(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Vec<crate::memory_context::MemoryExposure>> {
+        self.inner.memory_exposures(id)
+    }
+    fn context_checkpoint(
+        &self,
+        id: crate::contract::SessionId,
+    ) -> StoreOperation<'_, Option<crate::context_store::ContextCheckpoint>> {
+        self.inner.context_checkpoint(id)
+    }
+
+    fn output_references(
+        &self,
+        id: SessionId,
+    ) -> StoreOperation<'_, Vec<crate::output_store::OutputMetadata>> {
+        self.inner.output_references(id)
+    }
+
+    fn load_session(&self, id: SessionId) -> StoreOperation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> StoreOperation<'a, ()> {
+        Box::pin(async move {
+            for change in changes {
+                match change {
+                    StoreChange::ToolIntent { call, .. } if call.call_id == self.call_id => {
+                        self.intent.store(true, Ordering::Release);
+                    }
+                    StoreChange::ToolFinished { call_id, .. } if call_id == &self.call_id => {
+                        self.finished.store(true, Ordering::Release);
+                    }
+                    _ => {}
+                }
+            }
+            let filtered: Vec<_> = changes.iter().filter(|change| !matches!(change,
+                StoreChange::History { item: HistoryItem::ToolResult { call_id, .. }, .. } if call_id == &self.call_id
+            )).cloned().collect();
+            self.inner.commit(&filtered).await
+        })
+    }
+}
+
 /// Tool components for one run. Approval grants are never persisted or reused
 /// on resume. The surrounding runtime must enforce durability before exposing
 /// side-effecting operations to a real workspace.
@@ -217,6 +288,7 @@ pub struct ToolDispatcher {
     external_active: Arc<AtomicUsize>,
     execution: RwLock<Option<Arc<crate::execution::PreparedEnvironment>>>,
     secret_registry: OnceLock<Arc<crate::credentials::SecretRegistry>>,
+    js_repl: OnceLock<crate::js_repl::ReplLimits>,
 }
 #[derive(Debug, Clone)]
 struct McpDiscoveryConfig {
@@ -375,6 +447,27 @@ impl ToolDispatcher {
         self.manager
             .authorize(input, review.model, review.budget, &config)
             .await
+    }
+    /// Enable the experimental read-only JS REPL with validated limits. When
+    /// unset, `js_repl` calls are treated as an unknown tool.
+    pub(crate) fn set_js_repl(
+        &self,
+        limits: crate::js_repl::ReplLimits,
+    ) -> Result<(), BoundaryError> {
+        self.js_repl
+            .set(limits)
+            .map_err(|_| failure("invalid_config", "js_repl is already configured"))
+    }
+    /// The prepared native environment, when one was installed for this run.
+    pub(crate) fn execution_environment(
+        &self,
+    ) -> Result<Option<crate::execution::PreparedEnvironment>, BoundaryError> {
+        Ok(self
+            .execution
+            .read()
+            .map_err(|_| failure("sandbox_error", "execution environment lock failed"))?
+            .as_ref()
+            .map(|environment| environment.as_ref().clone()))
     }
     /// Install a prepared environment at a runtime-controlled safe boundary.
     pub(crate) fn set_execution_environment(
@@ -608,6 +701,17 @@ impl ToolDispatcher {
             .get(name)
             .cloned())
     }
+    /// Snapshot the bound descriptor for a registered tool, or `None` when the
+    /// name is not registered. Callers must not infer capability from the
+    /// descriptor alone; authorization still applies per call.
+    pub(crate) fn registered_descriptor(
+        &self,
+        name: &str,
+    ) -> Result<Option<crate::registry::OperationDescriptor>, BoundaryError> {
+        Ok(self
+            .registered(name)?
+            .map(|entry| entry.descriptor().clone()))
+    }
     /// Add a host-configured external adapter. The descriptor remains bound to
     /// this discovery revision for the complete approval and execution path.
     pub fn register_external(
@@ -754,6 +858,7 @@ impl ToolDispatcher {
             external_active: Arc::new(AtomicUsize::new(0)),
             execution: RwLock::new(None),
             secret_registry: OnceLock::new(),
+            js_repl: OnceLock::new(),
         };
         for definition in dispatcher.native_definitions() {
             dispatcher
@@ -865,6 +970,13 @@ impl ToolDispatcher {
         } else if call.name == "ask_user" {
             crate::input::InputRequest::parse(call)?;
             Operation::ask_user()
+        } else if call.name == crate::js_repl::TOOL_NAME {
+            let limits = self
+                .js_repl
+                .get()
+                .ok_or_else(|| failure("unknown_tool", "js_repl is not enabled"))?;
+            crate::js_repl::parse_args(call, limits)?;
+            Operation::js_repl()
         } else if matches!(call.name.as_str(), "output_read" | "output_search") {
             let store = self
                 .output_store
@@ -1113,6 +1225,10 @@ impl ToolDispatcher {
                 .await;
         }
         match call.name.as_str() {
+            crate::js_repl::TOOL_NAME => Err(failure(
+                "permission_denied",
+                "js_repl is dispatched by the runtime; recursion is not supported",
+            )),
             "output_read" | "output_search" => {
                 let output_store = self
                     .output_store
@@ -1664,5 +1780,109 @@ impl ToolDispatcher {
         let result = crate::tools::write::sanitize_result(&result, &self.current_secrets()?)?;
         save_result(store, call, context, &result).await?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        contract::{PermissionMode, SessionId, WorkMode},
+        memory::MemoryStore,
+    };
+    use std::sync::Arc;
+
+    fn session(workspace: &str) -> (crate::contract::Session, crate::contract::Run) {
+        let session = crate::contract::Session {
+            id: SessionId::new(),
+            workspace: workspace.into(),
+            work_mode: WorkMode::Work,
+            profile: "fake".into(),
+            protocol: crate::contract::ModelProtocol::Responses,
+            model: "fake".into(),
+            history: vec![],
+        };
+        let run = crate::contract::Run {
+            id: crate::contract::RunId::new(),
+            session_id: session.id,
+            work_mode: WorkMode::Work,
+            permissions: PermissionMode::Bypass,
+        };
+        (session, run)
+    }
+
+    #[tokio::test]
+    async fn repl_store_filters_child_history_but_keeps_durable_evidence() {
+        let (session, run) = session("workspace");
+        let inner: Arc<MemoryStore> = Arc::new(MemoryStore::default());
+        inner
+            .commit(&[
+                StoreChange::Session(session.clone()),
+                StoreChange::RunStarted(run.clone()),
+            ])
+            .await
+            .unwrap();
+        let store = ReplStore::new(inner.clone(), "outer:repl:0".into());
+        let child = ToolCall {
+            call_id: "outer:repl:0".into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        };
+        let other = ToolCall {
+            call_id: "outer:repl:1".into(),
+            name: "list_dir".into(),
+            arguments: "{}".into(),
+        };
+        store
+            .commit(&[
+                StoreChange::ToolIntent {
+                    run_id: run.id,
+                    call: child.clone(),
+                },
+                StoreChange::ToolIntent {
+                    run_id: run.id,
+                    call: other.clone(),
+                },
+                StoreChange::ToolFinished {
+                    run_id: run.id,
+                    call_id: child.call_id.clone(),
+                    result: ToolResult::success(None),
+                },
+                StoreChange::History {
+                    session_id: session.id,
+                    item: HistoryItem::ToolResult {
+                        call_id: child.call_id.clone(),
+                        result: ToolResult::success(None),
+                    },
+                },
+                StoreChange::History {
+                    session_id: session.id,
+                    item: HistoryItem::ToolResult {
+                        call_id: other.call_id.clone(),
+                        result: ToolResult::success(None),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+        assert!(store.intent_recorded());
+        assert!(store.finished_recorded());
+        let stored = inner.load_session(session.id).await.unwrap().unwrap();
+        assert_eq!(stored.history.len(), 1);
+        match &stored.history[0] {
+            HistoryItem::ToolResult { call_id, .. } => {
+                assert_eq!(call_id, "outer:repl:1");
+            }
+            _ => panic!("unexpected history item"),
+        }
+        let changes = inner.changes().unwrap();
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            StoreChange::ToolIntent { call, .. } if call.call_id == "outer:repl:0"
+        )));
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            StoreChange::ToolFinished { call_id, .. } if call_id == "outer:repl:0"
+        )));
     }
 }

@@ -27,6 +27,7 @@ lol_html = "=3.0.3"
 nix = { version = "0.31.3", features = ["signal", "process"] }
 regex = "1.13.1"
 reqwest = { version = "0.13.2", default-features = false, features = ["http2", "json", "rustls", "system-proxy", "stream"] }
+rquickjs = { version = "0.14.0", default-features = false, features = ["rust-alloc", "std"] }
 rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest", "reqwest", "auth"] }
 httpdate = "1.0.3"
 serde = { version = "1.0.229", features = ["derive"] }

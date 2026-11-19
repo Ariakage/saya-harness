@@ -1,0 +1,196 @@
+//! Host-side supervision of one `__soyo-js-worker` inside a prepared
+//! environment. Owns the worker process group, the bounded stdio protocol and
+//! the deadline/cancellation race. Permission decisions never happen here:
+//! each bridged call is handed to the caller's gate one message at a time.
+
+use super::{MAX_WIRE_BYTES, WORKER_COMMAND, WorkerInit, WorkerMessage, protocol};
+use crate::{
+    boundary::Cancellation,
+    contract::{BoundaryError, ErrorInfo, ToolResult, error_codes},
+    execution::{BackendKind, PreparedEnvironment},
+    tools::exec::{ExecConfig, ExecPlan, ManagedProcess, environment_digest},
+};
+use std::{collections::BTreeMap, path::Path, time::Duration};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
+    BoundaryError(
+        ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        },
+        None,
+        None,
+    )
+}
+
+/// One supervised worker. Dropping it kills the process group via
+/// `ManagedProcess`; `shutdown` reaps the leader and releases the lease.
+pub(crate) struct ReplWorker {
+    process: Option<ManagedProcess>,
+    stdin: tokio::process::ChildStdin,
+    stdout: BufReader<tokio::process::ChildStdout>,
+    stderr: Option<tokio::task::JoinHandle<()>>,
+}
+impl ReplWorker {
+    /// Launch the worker inside `environment` under the run's own sandbox
+    /// policy. No tool call is dispatched here; the process only receives the
+    /// bounded init frame afterwards. The explicit-host compatibility backend
+    /// is rejected: F-21 requires the native isolation selected by D-082/083.
+    pub(crate) fn spawn(
+        environment: &PreparedEnvironment,
+        workspace: &Path,
+        timeout: Duration,
+    ) -> Result<Self, BoundaryError> {
+        if environment.identity().backend == BackendKind::Host {
+            return Err(failure(
+                "sandbox_capability_unavailable",
+                "js_repl requires a native isolated backend, not the host compatibility mode",
+            ));
+        }
+        let argv = environment.internal_worker_argv(WORKER_COMMAND)?;
+        let argv = argv
+            .iter()
+            .map(|value| {
+                value
+                    .to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| failure("invalid_path", "worker argv must be UTF-8"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut env = BTreeMap::new();
+        environment.apply_environment(&mut env)?;
+        let plan = ExecPlan {
+            argv,
+            cwd: workspace.to_path_buf(),
+            timeout,
+            environment_digest: environment_digest(&env, Some(environment)),
+        };
+        let cwd = cap_std::fs::Dir::open_ambient_dir(workspace, cap_std::ambient_authority())
+            .map_err(|error| failure("invalid_path", error.to_string()))?;
+        let config = ExecConfig {
+            default_timeout: timeout,
+            max_timeout: timeout,
+            stdout_max: MAX_WIRE_BYTES,
+            stderr_max: 64 * 1024,
+            execution: Some(environment.clone()),
+            environment: crate::config::Environment::from_pairs([]),
+            ..ExecConfig::default()
+        };
+        let mut process = ManagedProcess::spawn(&plan, cwd, env, &config, true)?;
+        let stdin = process
+            .take_stdin()
+            .ok_or_else(|| failure("spawn_error", "worker stdin unavailable"))?;
+        let stdout = process
+            .take_stdout()
+            .ok_or_else(|| failure("spawn_error", "worker stdout unavailable"))?;
+        // Drain stderr into a bounded buffer so worker diagnostics never block
+        // the pipe or leak into tool data; it is dropped with the process.
+        let stderr = process.take_stderr().map(|stderr| {
+            tokio::spawn(async move {
+                let mut bounded = stderr.take(64 * 1024);
+                let mut sink = Vec::new();
+                let _ = bounded.read_to_end(&mut sink).await;
+            })
+        });
+        Ok(Self {
+            process: Some(process),
+            stdin,
+            stdout: BufReader::new(stdout),
+            stderr,
+        })
+    }
+    /// Write the init frame carrying script and engine limits.
+    pub(crate) async fn initialize(
+        &mut self,
+        init: &WorkerInit,
+        cancel: &dyn Cancellation,
+        deadline: Duration,
+    ) -> Result<(), BoundaryError> {
+        self.write(&protocol::encode(init)?, cancel, deadline).await
+    }
+    /// Read the next worker message within the deadline. `Ok(None)` means the
+    /// worker exited (or closed its channel) before another message arrived.
+    pub(crate) async fn next(
+        &mut self,
+        cancel: &dyn Cancellation,
+        deadline: Duration,
+    ) -> Result<Option<WorkerMessage>, BoundaryError> {
+        let line = self.read_line(cancel, deadline).await?;
+        match line {
+            Some(line) => protocol::decode(&line).map(Some),
+            None => Ok(None),
+        }
+    }
+    /// Answer one pending bridged call with the dispatched result.
+    pub(crate) async fn reply(
+        &mut self,
+        seq: u32,
+        result: &ToolResult,
+        cancel: &dyn Cancellation,
+        deadline: Duration,
+    ) -> Result<(), BoundaryError> {
+        let bytes = protocol::encode(&protocol::HostMessage::Result {
+            seq,
+            result: result.clone(),
+        })?;
+        self.write(&bytes, cancel, deadline).await
+    }
+    /// Stop the worker and reap it. A still-running group is SIGKILLed; the
+    /// environment lease is released once the child is reaped.
+    pub(crate) async fn shutdown(mut self, cancel: &dyn Cancellation) -> Result<(), BoundaryError> {
+        let mut process = self
+            .process
+            .take()
+            .ok_or_else(|| failure("process_error", "worker already reaped"))?;
+        if let Some(stderr) = self.stderr.take() {
+            stderr.abort();
+        }
+        process
+            .wait(cancel, Duration::from_secs(5))
+            .await
+            .map(|_| ())
+    }
+    async fn write(
+        &mut self,
+        bytes: &[u8],
+        cancel: &dyn Cancellation,
+        deadline: Duration,
+    ) -> Result<(), BoundaryError> {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled")),
+            () = tokio::time::sleep(deadline) => Err(failure(error_codes::TOOL_TIMEOUT, "js_repl worker timed out")),
+            result = async {
+                self.stdin.write_all(bytes).await?;
+                self.stdin.flush().await
+            } => {
+                result.map_err(|error| failure("repl_worker_error", format!("worker channel write failed: {error}")))
+            }
+        }
+    }
+    async fn read_line(
+        &mut self,
+        cancel: &dyn Cancellation,
+        deadline: Duration,
+    ) -> Result<Option<Vec<u8>>, BoundaryError> {
+        let mut line = Vec::new();
+        let mut bounded = (&mut self.stdout).take((MAX_WIRE_BYTES as u64).saturating_add(1));
+        let outcome: Result<usize, BoundaryError> = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled")),
+            () = tokio::time::sleep(deadline) => Err(failure(error_codes::TOOL_TIMEOUT, "js_repl worker timed out")),
+            result = bounded.read_until(b'\n', &mut line) => {
+                result.map_err(|error| failure("repl_worker_error", format!("worker channel read failed: {error}")))
+            }
+        };
+        match outcome? {
+            0 => Ok(None),
+            _ if line.len() > MAX_WIRE_BYTES => Err(failure(
+                "worker_rpc_too_large",
+                "worker message exceeds the wire limit",
+            )),
+            _ => Ok(Some(line)),
+        }
+    }
+}

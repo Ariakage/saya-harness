@@ -322,6 +322,25 @@ DEV-080 的 `[browser.worker]` 仅描述宿主预置的 Playwright MCP worker，
 
 `[browser.credentials]` 默认关闭；启用时必须给出绝对私有 store 路径和至少一个 slot，所有 slot 的 alias 必须唯一，`credential_ref` 必须是合法 UUID 引用，origin 必须是无 path／query／fragment 的精确规范化 HTTPS origin；只有显式回环开发 origin（`localhost` 或回环 IP）允许 HTTP，其余 HTTP origin 拒绝。purpose 只能是 `form_fill`，`max_uses` 为 1 至 32。store 以及运行中解析出的凭据值不会进入模型上下文；只要 credentials 已启用并声明 store，非 Host 执行后端会把 store 路径加入受保护路径，Host 后端直接拒绝，即使 `browser.enabled = false`。`[browser.files]` 默认启用，下载／上传上限各自限制为不超过 16 MiB 的有界 File artifact；启用时不接受任意宿主路径，上传只接受同一 Session 且摘要校验通过的 artifact 引用。
 
+`[js_repl]`（`F-21`，`D-082`/`D-083`）是实验性、严格默认关闭的只读 JavaScript 编排面。`enabled = true` 时模型可见 `js_repl` 工具：脚本在原生沙箱（Seatbelt／Bubblewrap）内的 `__soyo-js-worker` 同二进制子进程中经 QuickJS 求值，没有文件、网络、进程、模块或凭据访问；脚本内 `await soyo.callTool(name, args)` 逐次经有界 RPC 回到宿主，每一次底层调用都重新过 deny、路径根检查、`tool.before_dispatch`/`tool.finished` Hooks、审批、预算、取消与脱敏，只有只读工具（文件读取、发现与输出查询、Web 读取与声明只读副作用的外部工具）可桥接，`exec`、写入、交互、多智能体、会话控制与 `js_repl` 自身一律在派发前拒绝。审批绑定完整脚本原文与超时，显式 `Host` 兼容后端拒绝该工具。所有限额均可调但有硬上界；脚本字节、桥消息与底层调用数超限、worker 崩溃或超时一律以失败结果返回，中间结果不进入模型历史。
+
+```toml
+[js_repl]
+enabled = false
+# 单脚本允许桥接的底层调用数上限（1..）。
+# max_calls = 64
+# QuickJS 堆上限与栈上限（字节；堆 ≤ 1GiB、栈 ≤ 64MiB）。
+# memory_bytes = 67108864
+# stack_bytes = 1048576
+# 脚本源码上限（字节，≤ 4MiB）。
+# script_bytes = 262144
+# 单条桥消息上限（字节，≤ 16MiB）。
+# message_bytes = 8388608
+# 默认与最大墙钟超时（秒；默认 ≤ 最大，最大 ≤ 600）。
+# default_timeout_seconds = 120
+# max_timeout_seconds = 600
+```
+
 ## 输出捕获与上下文预算
 
 N3开发线默认开启私有OutputStore，位置为所选 `data_dir` 下的 `outputs/`。新增配置独立控制捕获存储，原有 `limits.command_stdout_max_bytes`／`command_stderr_max_bytes`继续限制各流的有效捕获量，默认各64KiB。显式扩大这些值时仍受OutputStore对象及Run剩余额度约束。用户媒体快照与工具捕获共用该私有根及总库／对象数配额；`output_capture.enabled = false`只关闭工具输出捕获，不禁用Session媒体快照。

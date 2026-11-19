@@ -698,6 +698,22 @@ impl PreparedEnvironment {
     /// Trusted built-in file worker in this environment's actual filesystem.
     /// Callers must not guess a GUI or test-harness current executable.
     pub fn file_worker_argv(&self) -> Result<Vec<OsString>, BoundaryError> {
+        self.internal_worker_argv("__soyo-file-worker")
+    }
+    /// Trusted built-in worker entry point in this environment's actual
+    /// filesystem. `command` must be a private argv mode recognized by
+    /// `internal_command`; model or user input cannot reach this allowlist.
+    pub fn internal_worker_argv(&self, command: &str) -> Result<Vec<OsString>, BoundaryError> {
+        let (command, image_name) = match command {
+            "__soyo-file-worker" => ("__soyo-file-worker", "saya-file-worker"),
+            "__soyo-js-worker" => ("__soyo-js-worker", "soyo-js-worker"),
+            _ => {
+                return Err(failure(
+                    "invalid_args",
+                    "internal worker command is not recognized",
+                ));
+            }
+        };
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(failure(
                 "sandbox_environment_closed",
@@ -708,14 +724,14 @@ impl PreparedEnvironment {
         if let Some(backend) = &self.inner.linux {
             return Ok(vec![
                 backend.helper_path().as_os_str().to_owned(),
-                "__soyo-file-worker".into(),
+                command.into(),
             ]);
         }
         #[cfg(target_os = "macos")]
         if let Some(backend) = &self.inner.seatbelt {
             return Ok(vec![
                 backend.helper_path().as_os_str().to_owned(),
-                "__soyo-file-worker".into(),
+                command.into(),
             ]);
         }
         let mut worker = self
@@ -724,17 +740,14 @@ impl PreparedEnvironment {
             .lock()
             .map_err(|_| failure("sandbox_prepare_failed", "worker image lock is poisoned"))?;
         if worker.is_none() {
-            let image = self.inner.scratch.join("saya-file-worker");
+            let image = self.inner.scratch.join(image_name);
             transport::copy_launcher(&image).map_err(io_error)?;
             *worker = Some(image);
         }
         let image = worker
             .as_ref()
             .ok_or_else(|| failure("sandbox_prepare_failed", "worker image is unavailable"))?;
-        Ok(vec![
-            image.as_os_str().to_owned(),
-            "__soyo-file-worker".into(),
-        ])
+        Ok(vec![image.as_os_str().to_owned(), command.into()])
     }
     /// Apply immutable environment values selected by this policy. Call before
     /// hashing the effective environment for an authorization decision.

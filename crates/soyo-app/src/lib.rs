@@ -425,6 +425,7 @@ pub fn build_runtime(
         config.context.auto_compact,
         compact,
     )?;
+    runtime = runtime.with_js_repl(config.js_repl.limits()?)?;
     let (mut sandbox, broker) = config
         .sandbox
         .resolve_with_environment(&session.workspace, config.environment())?;

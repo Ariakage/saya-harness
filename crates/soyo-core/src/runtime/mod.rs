@@ -331,6 +331,7 @@ pub struct AgentRuntime {
     services: Arc<services::RuntimeServices>,
     media_store: Option<Arc<crate::output_store::OutputStore>>,
     media_capabilities: crate::config::MediaCapabilities,
+    js_repl: Option<crate::js_repl::ReplLimits>,
     started_at: std::time::SystemTime,
 }
 
@@ -686,6 +687,7 @@ impl AgentRuntime {
             services: Arc::new(services::RuntimeServices::default()),
             media_store: None,
             media_capabilities: crate::config::MediaCapabilities::default(),
+            js_repl: None,
             started_at: std::time::SystemTime::now(),
         })
     }
@@ -729,6 +731,23 @@ impl AgentRuntime {
                 "Dynamic secret registry could not be attached",
             )
         })? = Some(registry);
+        Ok(self)
+    }
+    /// Enable the experimental opt-in read-only JS REPL for this run. The
+    /// validated limits come from configuration; `None` keeps the tool
+    /// unregistered and any fabricated `js_repl` call fails as unknown.
+    pub fn with_js_repl(
+        mut self,
+        settings: Option<crate::js_repl::ReplLimits>,
+    ) -> Result<Self, BoundaryError> {
+        let Some(limits) = settings else {
+            return Ok(self);
+        };
+        limits.validate()?;
+        self.dispatcher
+            .register_control_definition(crate::js_repl::definition())?;
+        self.dispatcher.set_js_repl(limits.clone())?;
+        self.js_repl = Some(limits);
         Ok(self)
     }
     /// Apply a finite execution window and its resolved output target.
@@ -1830,6 +1849,489 @@ impl AgentRuntime {
         self.save_local(session, call, result).await
     }
 
+    /// Execute one authorized `js_repl` call. The script permit is consumed
+    /// exactly once here; it never authorizes any call the script issues.
+    /// Intermediate bridged calls persist durable intent/result evidence but
+    /// never enter model history; only the final script value becomes this
+    /// call's result.
+    async fn execute_js_repl(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        permit: std::sync::Arc<crate::approvals::OneShotPermit>,
+        progress: &mut CallProgress,
+    ) -> Result<ToolResult, BoundaryError> {
+        if !self.dispatcher.owns_permit(&permit) {
+            return Err(BoundaryError::new(
+                error_codes::PERMISSION_DENIED,
+                "permit belongs to another dispatcher",
+            ));
+        }
+        let Some(limits) = self.js_repl.clone() else {
+            return self
+                .save_local(
+                    session,
+                    call,
+                    ToolResult::failure(error_codes::UNKNOWN_TOOL, "js_repl is not enabled"),
+                )
+                .await;
+        };
+        let args = match crate::js_repl::parse_args(call, &limits) {
+            Ok(args) => args,
+            Err(error) => {
+                return self
+                    .save_local(
+                        session,
+                        call,
+                        ToolResult::failure(error.code(), error.message()),
+                    )
+                    .await;
+            }
+        };
+        permit.consume_js_repl(call, context)?;
+        self.store
+            .commit(&[StoreChange::ToolIntent {
+                run_id: self.run.id,
+                call: call.clone(),
+            }])
+            .await?;
+        *progress = CallProgress::Dispatched;
+        let outcome = self
+            .run_js_repl(session, call, context, &limits, &args)
+            .await;
+        let mut result = match outcome {
+            Ok(result) => result,
+            Err(error) => return Err(error),
+        };
+        self.dispatcher.redact_tool_result(&mut result)?;
+        crate::tools::write::save_result(self.store.as_ref(), call, context, &result).await?;
+        session.history.push(HistoryItem::ToolResult {
+            call_id: call.call_id.clone(),
+            result: result.clone(),
+        });
+        Ok(result)
+    }
+
+    /// Spawn the sandboxed worker and drive its bounded bridge. Script-level
+    /// outcomes (script errors, denials, timeouts, worker faults) become
+    /// `Ok` failure results; `Err` is reserved for host faults (cancellation,
+    /// storage, hook reconciliation, budget exhaustion) that must abort the
+    /// run rather than replay or continue the script.
+    async fn run_js_repl(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        limits: &crate::js_repl::ReplLimits,
+        args: &crate::js_repl::ReplArgs,
+    ) -> Result<ToolResult, BoundaryError> {
+        let environment = self.dispatcher.execution_environment()?.ok_or_else(|| {
+            BoundaryError::new(
+                error_codes::SANDBOX_CAPABILITY_UNAVAILABLE,
+                "js_repl requires a prepared native execution environment",
+            )
+        });
+        let mut worker = match environment {
+            Ok(environment) => {
+                match crate::js_repl::ReplWorker::spawn(
+                    &environment,
+                    &context.workspace,
+                    args.timeout,
+                ) {
+                    Ok(worker) => worker,
+                    Err(error) => {
+                        return Ok(ToolResult::failure(
+                            error.code().to_owned(),
+                            error.message().to_owned(),
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                return Ok(ToolResult::failure(
+                    error.code().to_owned(),
+                    error.message().to_owned(),
+                ));
+            }
+        };
+        let deadline = Instant::now() + args.timeout;
+        let outcome = self
+            .drive_js_repl(&mut worker, session, call, context, limits, args, deadline)
+            .await;
+        let shutdown = worker.shutdown(self.cancel.as_ref()).await;
+        shutdown.and(outcome)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn drive_js_repl(
+        &self,
+        worker: &mut crate::js_repl::ReplWorker,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        limits: &crate::js_repl::ReplLimits,
+        args: &crate::js_repl::ReplArgs,
+        deadline: Instant,
+    ) -> Result<ToolResult, BoundaryError> {
+        let init = crate::js_repl::WorkerInit {
+            schema_version: 1,
+            script: args.script.clone(),
+            memory_bytes: limits.memory_bytes,
+            stack_bytes: limits.stack_bytes,
+            max_calls: limits.max_calls,
+        };
+        if let Err(error) = worker
+            .initialize(&init, self.cancel.as_ref(), self.repl_remaining(deadline)?)
+            .await
+        {
+            return self.repl_worker_outcome(error);
+        }
+        loop {
+            let remaining = self.repl_remaining(deadline)?;
+            if remaining.is_zero() {
+                return Ok(ToolResult::failure(
+                    error_codes::TOOL_TIMEOUT,
+                    "js_repl script timed out",
+                ));
+            }
+            let message = match worker.next(self.cancel.as_ref(), remaining).await {
+                Ok(message) => message,
+                Err(error) => return self.repl_worker_outcome(error),
+            };
+            let Some(message) = message else {
+                return Ok(ToolResult::failure(
+                    error_codes::OUTCOME_UNKNOWN,
+                    "js_repl worker exited before producing a result",
+                ));
+            };
+            match message {
+                crate::js_repl::WorkerMessage::Failed { message } => {
+                    return Ok(ToolResult::failure("repl_failed", message));
+                }
+                crate::js_repl::WorkerMessage::Done { value } => {
+                    if serde_json::to_vec(&value)
+                        .map(|bytes| bytes.len() > limits.message_bytes)
+                        .unwrap_or(true)
+                    {
+                        return Ok(ToolResult::failure(
+                            "worker_rpc_too_large",
+                            "js_repl result exceeds its byte limit",
+                        ));
+                    }
+                    return Ok(ToolResult::success(Some(value)));
+                }
+                crate::js_repl::WorkerMessage::Call {
+                    seq,
+                    name,
+                    arguments,
+                } => {
+                    if name.is_empty() || name.len() > 128 || arguments.len() > limits.message_bytes
+                    {
+                        return Ok(ToolResult::failure(
+                            "worker_rpc_too_large",
+                            "js_repl bridged call exceeds its byte limit",
+                        ));
+                    }
+                    let sub = ToolCall {
+                        call_id: format!("{}:repl:{seq}", call.call_id),
+                        name,
+                        arguments,
+                    };
+                    let call_cancel = CallCancel::new(self.cancel.clone());
+                    let remaining = self.repl_remaining(deadline)?;
+                    let dispatched = self.repl_sub_call(session, &sub, context, &call_cancel);
+                    tokio::pin!(dispatched);
+                    let result = tokio::select! {
+                        biased;
+                        () = self.cancel.cancelled() => {
+                            return Err(BoundaryError::new(error_codes::CANCELLED, "run cancelled"));
+                        }
+                        () = sleep(remaining) => {
+                            call_cancel.stop();
+                            let _ = dispatched.await;
+                            ToolResult::failure(error_codes::TOOL_TIMEOUT, "js_repl bridged call timed out")
+                        }
+                        result = &mut dispatched => result?,
+                    };
+                    let remaining = self
+                        .repl_remaining(deadline)
+                        .unwrap_or(Duration::from_secs(5));
+                    match worker
+                        .reply(
+                            seq,
+                            &result,
+                            self.cancel.as_ref(),
+                            remaining.max(Duration::from_secs(5)),
+                        )
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(error) => return self.repl_worker_outcome(error),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Map a worker-side fault to either a script-level failure result or a
+    /// host-level error. Cancellation and storage faults propagate; everything
+    /// the worker could have caused becomes a bounded failure result.
+    fn repl_worker_outcome(&self, error: BoundaryError) -> Result<ToolResult, BoundaryError> {
+        if error.is_code(error_codes::CANCELLED) || error.is_code(error_codes::STORAGE_ERROR) {
+            return Err(error);
+        }
+        Ok(ToolResult::failure(
+            error.code().to_owned(),
+            error.message().to_owned(),
+        ))
+    }
+
+    /// Remaining wall clock for the script: the script deadline bounded by the
+    /// run's active-time budget. Budget exhaustion is a run-level error.
+    fn repl_remaining(&self, deadline: Instant) -> Result<Duration, BoundaryError> {
+        let budget = self.budget.remaining()?;
+        Ok(budget.min(deadline.saturating_duration_since(Instant::now())))
+    }
+
+    /// One script-issued tool call through the exact dispatch path used for
+    /// model-emitted calls: read-only allowlist, `tool.before_dispatch` hooks,
+    /// authorization (including interactive confirmation), permit-bound
+    /// dispatch, `tool.finished` hooks and secret redaction. `Err` is only
+    /// for host faults; every reachable denial becomes a failure result with
+    /// durable intent/result evidence and no model-history entry.
+    async fn repl_sub_call(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        context: &ToolContext,
+        cancel: &CallCancel,
+    ) -> Result<ToolResult, BoundaryError> {
+        let descriptor = self.dispatcher.registered_descriptor(&call.name)?;
+        if !crate::js_repl::allowed_sub_call(&call.name, descriptor.as_ref()) {
+            return self
+                .repl_evidence(
+                    session,
+                    call,
+                    ToolResult::failure(
+                        error_codes::PERMISSION_DENIED,
+                        "this tool cannot be bridged into js_repl",
+                    ),
+                )
+                .await;
+        }
+        if let Some(blocked) = self.check_pre_dispatch_hooks(session, call).await? {
+            return self.repl_evidence(session, call, blocked).await;
+        }
+        let review = DispatchReview {
+            model: self.model.as_ref(),
+            budget: &self.budget,
+            config: &self.review,
+        };
+        let authorization = match self
+            .dispatcher
+            .authorize(
+                call,
+                context,
+                &self.summary,
+                self.confirmation.is_some(),
+                review,
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(error) if invalid_tool_request(&error) => {
+                return self
+                    .repl_evidence(
+                        session,
+                        call,
+                        ToolResult::failure(error.code(), error.message()),
+                    )
+                    .await;
+            }
+            Err(error) => return Err(error),
+        };
+        let authorization = match authorization {
+            Authorization::Pending(request) => match self.confirm(&request).await {
+                Ok(Some(answer)) => {
+                    self.store
+                        .commit(&[StoreChange::Activity {
+                            run_id: self.run.id,
+                            payload: EventPayload::PermissionResolved {
+                                approval_id: request.approval_id.clone(),
+                                call_id: request.call_id.clone(),
+                                decision: if answer { "allow" } else { "deny" }.into(),
+                                source: ApprovalSource::User,
+                            },
+                        }])
+                        .await?;
+                    self.dispatcher.resolve(&request.approval_id, answer)?
+                }
+                Err(e) if e.is_code(error_codes::STALE_APPROVAL) => Authorization::Stale,
+                Err(e) => return Err(e),
+                Ok(None) => {
+                    return self
+                        .repl_evidence(
+                            session,
+                            call,
+                            ToolResult::failure(
+                                error_codes::NEEDS_CONFIRMATION,
+                                "confirmation unavailable",
+                            ),
+                        )
+                        .await;
+                }
+            },
+            other => other,
+        };
+        let permit = match authorization {
+            Authorization::Permit(permit) => permit,
+            Authorization::Denied(_) => {
+                return self
+                    .repl_evidence(
+                        session,
+                        call,
+                        ToolResult::failure(error_codes::PERMISSION_DENIED, "operation denied"),
+                    )
+                    .await;
+            }
+            Authorization::Stale => {
+                return self
+                    .repl_evidence(
+                        session,
+                        call,
+                        ToolResult::failure(
+                            error_codes::STALE_APPROVAL,
+                            "mode or permission changed",
+                        ),
+                    )
+                    .await;
+            }
+            Authorization::Pending(_) | Authorization::NeedsConfirmation(_) => {
+                return self
+                    .repl_evidence(
+                        session,
+                        call,
+                        ToolResult::failure(
+                            error_codes::NEEDS_CONFIRMATION,
+                            "confirmation required",
+                        ),
+                    )
+                    .await;
+            }
+        };
+        let store = Arc::new(crate::dispatch::ReplStore::new(
+            self.store.clone(),
+            call.call_id.clone(),
+        ));
+        let outcome = self
+            .dispatcher
+            .execute_with_cancel_on_store(call, context, permit, cancel, true, store.clone())
+            .await;
+        let result = match outcome {
+            Ok(result) => result,
+            Err(error) if error.is_code(error_codes::CANCELLED) && self.cancel.is_cancelled() => {
+                return Err(error);
+            }
+            Err(error) if error.is_code(error_codes::STORAGE_ERROR) => return Err(error),
+            Err(error) => ToolResult::failure(error.code().to_owned(), error.message().to_owned()),
+        };
+        if !store.intent_recorded() {
+            self.store
+                .commit(&[StoreChange::ToolIntent {
+                    run_id: self.run.id,
+                    call: call.clone(),
+                }])
+                .await?;
+        }
+        if !store.finished_recorded() {
+            self.store
+                .commit(&[StoreChange::ToolFinished {
+                    run_id: self.run.id,
+                    call_id: call.call_id.clone(),
+                    result: result.clone(),
+                }])
+                .await?;
+        }
+        self.repl_finished_hook(session, call, &result).await?;
+        Ok(result)
+    }
+
+    /// Persist intent/result evidence for a script-issued call denied before
+    /// dispatch. No history item is written; the script still observes the
+    /// `tool.finished` hook outcome through `repl_finished_hook`'s caller.
+    async fn repl_evidence(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        result: ToolResult,
+    ) -> Result<ToolResult, BoundaryError> {
+        let mut changes = vec![
+            StoreChange::ToolIntent {
+                run_id: self.run.id,
+                call: call.clone(),
+            },
+            StoreChange::ToolFinished {
+                run_id: self.run.id,
+                call_id: call.call_id.clone(),
+                result: result.clone(),
+            },
+        ];
+        if let Some(code) = result.error.as_ref().map(|error| error.code.as_str()) {
+            let state = match code {
+                "permission_denied" | "mode_denied" => Some(crate::contract::ToolState::Denied),
+                "needs_confirmation" => Some(crate::contract::ToolState::WaitingConfirmation),
+                _ => None,
+            };
+            if let Some(state) = state {
+                changes.push(StoreChange::ToolState {
+                    run_id: self.run.id,
+                    call_id: call.call_id.clone(),
+                    state,
+                });
+            }
+        }
+        self.store.commit(&changes).await?;
+        self.repl_finished_hook(session, call, &result).await?;
+        Ok(result)
+    }
+
+    /// Fire `tool.finished` for one script-issued call. Hook faults and
+    /// cleanup reconciliation are host-level errors that abort the script.
+    async fn repl_finished_hook(
+        &self,
+        session: &mut Session,
+        call: &ToolCall,
+        result: &ToolResult,
+    ) -> Result<(), BoundaryError> {
+        let finished = self
+            .services
+            .fire_hooks(
+                self,
+                session,
+                crate::hooks::HookEvent::ToolFinished,
+                format!(
+                    "tool.finished:{}",
+                    crate::memory_context::digest(call.call_id.as_bytes())
+                ),
+                Some(call.call_id.clone()),
+                serde_json::json!({
+                    "tool": call.name,
+                    "ok": result.ok,
+                    "truncated": result.truncated,
+                    "error_code": result.error_code(),
+                }),
+            )
+            .await?;
+        if finished.cleanup_pending {
+            return Err(BoundaryError::new(
+                error_codes::OUTCOME_UNKNOWN,
+                "A tool-finished hook requires cleanup reconciliation",
+            ));
+        }
+        Ok(())
+    }
+
     async fn execute_authorized_tool(
         &self,
         session: &mut Session,
@@ -1855,6 +2357,11 @@ impl AgentRuntime {
         if call.name == "ask_user" {
             return self
                 .execute_ask_user(session, call, context, permit, progress)
+                .await;
+        }
+        if call.name == crate::js_repl::TOOL_NAME {
+            return self
+                .execute_js_repl(session, call, context, permit, progress)
                 .await;
         }
         let cancel = CallCancel::new(self.cancel.clone());

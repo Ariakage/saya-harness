@@ -60,6 +60,12 @@ pub async fn internal_command(args: Vec<OsString>) -> Option<i32> {
             }
             Some(file_worker_stdio().await)
         }
+        Some("__soyo-js-worker") => {
+            if args.len() != 1 {
+                return Some(64);
+            }
+            Some(crate::js_repl::worker::run_stdio())
+        }
         Some("__soyo-sandbox-launch") => Some(launch::run(&args[1..])),
         _ => None,
     }

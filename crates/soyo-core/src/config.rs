@@ -620,6 +620,8 @@ struct Document {
     web: crate::web::WebSettings,
     #[serde(default)]
     browser: crate::browser::BrowserSettings,
+    #[serde(default)]
+    js_repl: crate::js_repl::JsReplSettings,
 }
 /// Effective settings; no model is implicitly selected. Secret values stay in Environment.
 #[derive(Clone)]
@@ -646,6 +648,8 @@ pub struct Config {
     pub plugins: PluginSettings,
     pub web: crate::web::WebSettings,
     pub browser: crate::browser::BrowserSettings,
+    /// Opt-in experimental JS REPL (`F-21`); `enabled` defaults to `false`.
+    pub js_repl: crate::js_repl::JsReplSettings,
     env: Environment,
 }
 impl Config {
@@ -1090,6 +1094,7 @@ pub fn load(
         plugins: doc.plugins,
         web: doc.web,
         browser: doc.browser,
+        js_repl: doc.js_repl,
         env,
     })
 }
