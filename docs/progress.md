@@ -68,18 +68,18 @@
 | N4 Goal 编排 | DEV-069 至 DEV-074 | 完成（本机受控验收） | 独立版本化 Goal 存储、专属 Session、手动／有限自动 Run、租约恢复、预算、证据核验、重规划、CLI／TUI 与报告通过本机 PTY／故障矩阵，见[N4验收](n4-validation.md) |
 | N5 Browser | DEV-079 至 DEV-083 | 完成（四平台固定源码验收，固定提交 `5fff1c4`；`linux-arm64` 定制引擎已实测） | `BrowserProvider`／`BrowserState`、受控 `fetch_url`／`web_search`、schema v2 安装树与启动前同描述符定位复核、三补丁固定 Playwright worker（`de88c9fc…` 含 `processInfo` 与 `captureScreenshot`）、显式 Colima VM 后端与宿主 broker／SSH 反向网络通道、origin 凭据槽与下载／上传 broker、三协议截图图片链路、native／VM `ChromiumSandboxInspector`、`linux-arm64` 定制 23 文件捕获引擎（`colima-n5cap` `--require-screenshot` 22/22 passed 与 `n5arm22` 原生 `1280x720` Masked PNG 捕获），以及固定源码 `5fff1c4` 上的四平台 [CI 44044030536](https://github.com/Ariakage/saya-harness/actions/runs/44044030536)、[N5 native acceptance 44044034857](https://github.com/Ariakage/saya-harness/actions/runs/44044034857)（Linux 22 步／macOS 19 步零缺项含 Linux x64/ARM64 原生 Chromium sandbox）与 [Release candidates 44044045558](https://github.com/Ariakage/saya-harness/actions/runs/44044045558) 全绿验证；非 `linux-arm64` 定制 Chromium 构建分发与新版号 tag 发布未执行，详情见[N5 验收](n5-validation.md) |
 | F-14 桌面端 GUI（`soyo-desktop`） | D-072 至 D-078 | 本机实现与回归通过（远端 CI 安装包与在线更新未触发） | 已迁移为共享 `soyo helper`（D-073／D-077 `<state_dir>/helper/<fingerprint>.sock` 多会话并发、连接归属与自动重连）、随包 `soyo` sidecar（D-078 macOS `.dmg`/`.app` + Linux AppImage，移除 Windows NSIS）、Soyo Dark/Light 双主题与 `SquaresLoader`/9 项设置（D-075／D-076），通过本机 `soyo-desktop` Clippy/单测、Vitest 23 项、`test_desktop_packaging.py`、10 张 Chrome 截图与 28-frame `.pen` 同步；远端 CI 打包与在线更新未在 GitHub Actions 触发，见[桌面端设计](desktop.md) |
-| N6 工具发现、步骤验证与程序化编排 | DEV-090 至 DEV-096 | 待开始（规划中） | 覆盖 S2 按需工具发现（P1）、S3 Goal 步骤宿主验证器（P1 可靠性线）、S5 工具 schema 真实调用样例（P2 并行）与 S1 默认关闭的只读程序化编排 REPL（P2，位于 S2 之后）；当前均未实现，方案与核验现状见[N6 规划](n6-plan.md) |
+| N6 工具发现、步骤验证与程序化编排 | DEV-090 至 DEV-096 | 待开始（契约已由 D-079–D-082 定案） | 覆盖 S2 按需工具发现（P1，D-079：MCP `> 8` 自动延迟）、S3 Goal 步骤宿主验证器（P1 可靠性线，D-080：结构化 argv + `goal confirm` 锁定）、S5 工具 schema 真实调用样例（P2 并行，D-081：双路径投影）与 S1 只读程序化编排 REPL（P2，D-082：`DEV-094` 评估拍板后进 `DEV-095`）；当前均未实现，详见[N6 规划](n6-plan.md) |
 
 ### N6 任务跟踪（待开始）
 
 | 任务 | 来源 | 优先级／轨道 | 状态 | 依赖／前置核验 |
 | --- | --- | --- | --- | --- |
-| DEV-090 | S2 | P1 实现主线 | 待开始 | 依赖 DEV-059、DEV-062；HEAD（`47996e1`）已核实当前每轮向 `ModelRequest.tools` 全量注入（`registry.rs`/`dispatch.rs`/`runtime/mod.rs`），未见 `defer_loading`/`tool_search`/`tool_describe` |
-| DEV-091 | S3 | P1 可靠性线 | 待开始 | 依赖 DEV-072、DEV-057；HEAD 已核实 `VerificationSpec` 仅含 `Manual`/`FileExists`/`FileSha256`、`GoalStep` 无 `verifier` 字段，需复用 N4 存储与原生沙箱 |
-| DEV-092 | S3 | P1 可靠性线 | 待开始 | 依赖 DEV-091、DEV-074；需跑通当前 N4 验收基线并强制测试失败时不得关闭 Goal |
-| DEV-093 | S5 | P2 并行附带 | 待开始 | 依赖 DEV-054、DEV-059；HEAD 已核实 `ToolDefinition` 仅有 `name`/`description`/`input_schema`，需补齐校验、脱敏与三协议/`tool_describe` 投影 |
-| DEV-094 | S1 | P2 实现主线（S2 之后） | 待开始 | 依赖 DEV-090、DEV-057、DEV-067；需评估 JS 运行时与 Seatbelt／Bubblewrap 接合及只读边界，默认关闭 |
-| DEV-095 | S1 | P2 实现主线（S2 之后） | 待开始 | 依赖 DEV-094；opt-in 只读 JS REPL 执行面与逐底层调用 `deny`/Hooks/审批拦截，不以 37% 省 token 为验收线 |
+| DEV-090 | S2 (`D-079`) | P1 实现主线 | 待开始 | 依赖 DEV-059、DEV-062；HEAD（`47996e1`）已核实当前每轮向 `ModelRequest.tools` 全量注入（`registry.rs`/`dispatch.rs`/`runtime/mod.rs`），按 `D-079` 实现已发现 MCP 工具 `> 8` 自动延迟加载与 `≤ 8` 全量回归 |
+| DEV-091 | S3 (`D-080`) | P1 可靠性线 | 待开始 | 依赖 DEV-072、DEV-057；HEAD 已核实 `VerificationSpec` 仅含 `Manual`/`FileExists`/`FileSha256`、`GoalStep` 无 `verifier` 字段，按 `D-080` 实现结构化 argv（禁隐式 shell）+ `goal confirm` 逐条锁定 + 原生沙箱执行 |
+| DEV-092 | S3 (`D-080`) | P1 可靠性线 | 待开始 | 依赖 DEV-091、DEV-074；需跑通当前 N4 验收基线并强制测试失败时不得关闭 Goal |
+| DEV-093 | S5 (`D-081`) | P2 并行附带 | 待开始 | 依赖 DEV-054、DEV-059；HEAD 已核实 `ToolDefinition` 仅有 `name`/`description`/`input_schema`，按 `D-081` 新增 `examples: Vec<Value>` + 离线校验/脱敏 + 延迟 `tool_describe` 与常驻三协议安全投影 |
+| DEV-094 | S1 (`D-082`) | P2 实现主线（S2 之后） | 待开始 | 依赖 DEV-090、DEV-057、DEV-067；按 `D-082` 先产出纯 Rust 嵌入式 JS 引擎 vs 原生沙箱子进程（及受控 Node 对照）评估报告并**停下来拍板**，确认后再进 `DEV-095` |
+| DEV-095 | S1 (`D-082`) | P2 实现主线（S2 之后） | 待开始 | 依赖 DEV-094；按拍板定案实现 opt-in 只读 JS REPL 执行面与逐底层调用 `deny`/Hooks/审批拦截，不以 37% 省 token 为验收线 |
 | DEV-096 | N6 联合 | 联合验收 | 待开始 | 依赖 DEV-090、DEV-092、DEV-093、DEV-095；跨能力联合回归、开关对照评估与双语增量说明 |
 
 ### 全局记忆规划补充
