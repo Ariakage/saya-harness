@@ -331,26 +331,28 @@ fn node_exposure(program: &std::path::Path) -> (Vec<std::path::PathBuf>, Vec<std
     let mut roots = std::collections::BTreeSet::new();
     let bin_dir = program.parent().map(std::path::Path::to_path_buf);
     let mut expose = |candidate: std::path::PathBuf| {
-        if let Ok(real) = std::fs::canonicalize(&candidate) {
-            if real.is_dir() {
-                roots.insert(real);
-                return;
-            }
-            // A keg `opt/` path resolves through symlinks Seatbelt refuses to
-            // read; every symlink component on the recorded chain needs its
-            // own literal exposure alongside the canonical target file.
-            for ancestor in candidate.ancestors() {
-                if std::fs::symlink_metadata(ancestor)
-                    .map(|meta| meta.file_type().is_symlink())
-                    .unwrap_or(false)
-                {
-                    files.insert(ancestor.to_path_buf());
-                }
-            }
-            files.insert(candidate);
+        let Ok(real) = std::fs::canonicalize(&candidate) else {
+            return;
+        };
+        if real.is_dir() {
+            roots.insert(real);
+            return;
+        }
+        if real.is_file() {
             files.insert(real);
-        } else if candidate.is_file() {
-            files.insert(candidate);
+        }
+        // Symlink components on the recorded chain (keg `opt/` → `Cellar/`)
+        // are only readable when their parent directory is a read root;
+        // read_files entries must stay regular files for policy validation.
+        for ancestor in candidate.ancestors() {
+            if std::fs::symlink_metadata(ancestor)
+                .map(|meta| meta.file_type().is_symlink())
+                .unwrap_or(false)
+                && let Some(parent) = ancestor.parent()
+                && let Ok(parent) = std::fs::canonicalize(parent)
+            {
+                roots.insert(parent);
+            }
         }
     };
     if let Some(bin) = &bin_dir {
