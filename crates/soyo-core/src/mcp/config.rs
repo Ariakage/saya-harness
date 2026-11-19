@@ -52,6 +52,10 @@ pub struct McpServerSettings {
     pub read_only_tools: BTreeSet<String>,
     #[serde(default)]
     pub eager_tools: BTreeSet<String>,
+    /// Host-authored real call examples keyed by the remote tool name. They
+    /// are validated against the discovered schema when the tool registers.
+    #[serde(default)]
+    pub tool_examples: BTreeMap<String, Vec<serde_json::Value>>,
     #[serde(default)]
     pub limits: McpLimitSettings,
 }
@@ -184,6 +188,17 @@ impl McpSettings {
                     .any(|name| !valid_tool_name(name))
             {
                 return Err(error("invalid_config", "MCP eager tool names are invalid"));
+            }
+            if settings.tool_examples.len() > 256
+                || settings.tool_examples.iter().any(|(name, examples)| {
+                    !valid_tool_name(name)
+                        || crate::registry::validate_tool_example_entries(examples, true).is_err()
+                })
+            {
+                return Err(error(
+                    "invalid_config",
+                    "MCP tool examples are invalid or exceed their limits",
+                ));
             }
             match &settings.transport {
                 McpTransportSettings::Stdio(settings) => {
@@ -367,5 +382,53 @@ argv = ["server"]
         )
         .unwrap();
         assert!(bad_eager.validate().is_err());
+    }
+    #[test]
+    fn tool_examples_validate_structure_names_and_limits() {
+        let valid: McpSettings = toml::from_str(
+            r#"[servers.local]
+[servers.local.transport]
+type = "stdio"
+argv = ["server"]
+[servers.local.tool_examples]
+invoice_export = [{ month = "2026-11", format = "csv" }]
+"#,
+        )
+        .unwrap();
+        valid.validate().unwrap();
+        assert_eq!(
+            valid.servers["local"].tool_examples["invoice_export"].len(),
+            1
+        );
+
+        for bad in [
+            // Placeholder values are not real call data.
+            r#"tool_examples = { lookup = [{ path = "<path>" }] }"#,
+            // An empty per-tool list is meaningless.
+            "tool_examples = { lookup = [] }",
+            // Keys must be valid remote tool names.
+            r#"tool_examples = { "bad/name" = [{ path = "docs" }] }"#,
+            // Reserved host fields never come from configuration.
+            r#"tool_examples = { lookup = [{ __soyo_operation = {} }] }"#,
+        ] {
+            let settings: McpSettings = toml::from_str(&format!(
+                "[servers.local]\n{bad}\n[servers.local.transport]\ntype = \"stdio\"\nargv = [\"server\"]\n"
+            ))
+            .unwrap();
+            assert!(settings.validate().is_err(), "{bad}");
+        }
+
+        let oversized: McpSettings = toml::from_str(
+            "[servers.local]\n[servers.local.transport]\ntype = \"stdio\"\nargv = [\"server\"]\n",
+        )
+        .unwrap();
+        let mut settings = oversized;
+        settings
+            .servers
+            .get_mut("local")
+            .unwrap()
+            .tool_examples
+            .extend((0..257).map(|i| (format!("tool_{i:03}"), vec![serde_json::json!({"a": 1})])));
+        assert!(settings.validate().is_err());
     }
 }

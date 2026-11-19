@@ -881,6 +881,7 @@ fn definition(settings: &WebSettings, kind: WebToolKind) -> ToolDefinition {
                 "required":["url"],
                 "additionalProperties":false
             }),
+            examples: Vec::new(),
         },
         WebToolKind::Search => {
             let maximum = settings
@@ -899,6 +900,7 @@ fn definition(settings: &WebSettings, kind: WebToolKind) -> ToolDefinition {
                     "required":["query"],
                     "additionalProperties":false
                 }),
+                examples: Vec::new(),
             }
         }
     }

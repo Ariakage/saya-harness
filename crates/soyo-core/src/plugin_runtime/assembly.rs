@@ -286,11 +286,14 @@ impl Assembler<'_> {
                 (McpTransportSettings::Http(http), None, environment)
             }
         };
+        let mut tool_examples = entry.tool_examples().clone();
+        tool_examples.extend(host.tool_examples);
         let settings = McpServerSettings {
             enabled: true,
             transport,
             read_only_tools: host.read_only_tools,
             eager_tools: host.eager_tools,
+            tool_examples,
             limits: host.limits,
         };
         let one = McpSettings {

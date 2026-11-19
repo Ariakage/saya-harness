@@ -56,6 +56,7 @@ fn stdio_manifest() -> Manifest {
         program: "fixture".into(),
         args: vec!["@plugin/resources/guide.md".into()],
         credential_slots: vec![],
+        tool_examples: Default::default(),
     });
     manifest
 }
@@ -82,6 +83,7 @@ fn http_manifest() -> Manifest {
         id: "remote".into(),
         url: "https://mcp.example.test/v1".into(),
         credential_slots: vec!["account".into()],
+        tool_examples: Default::default(),
     });
     manifest
 }

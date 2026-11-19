@@ -31,7 +31,7 @@ v1 定义声明式 Skills、资源、MCP 服务与受控 Hook 入口。执行组
 | `capabilities` | 申请能力、网络 origins 和 credential slots，形成包的能力上界 |
 | `skills` | entry ID 和包含 SKILL.md 的相对目录 |
 | `resources` | entry ID、相对文件及媒体类型 |
-| `mcp` | entry ID、transport、program／args 或 HTTPS endpoint、凭据槽 |
+| `mcp` | entry ID、transport、program／args 或 HTTPS endpoint、凭据槽、可选 `tool_examples`（按远端工具名提供真实调用样例，约束同 D-081） |
 | `hooks` | entry ID、事件、种类、program／args、超时 |
 | `dependencies` | 依赖包 ID 与版本范围，实际版本和摘要由 lock 固定 |
 

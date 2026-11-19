@@ -242,6 +242,7 @@ async fn external_auth_input_and_unknown_outcomes_stop_before_following_side_eff
                 name: "remote".into(),
                 description: "fixture".into(),
                 input_schema: serde_json::json!({"type":"object"}),
+                examples: Vec::new(),
             }
         }
         fn execute<'a>(
@@ -2687,6 +2688,7 @@ async fn dynamically_learned_credentials_keep_original_dispatch_and_sanitized_hi
                 name: "capture".into(),
                 description: "Controlled in-process credential boundary fixture".into(),
                 input_schema: serde_json::json!({"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"],"additionalProperties":false}),
+                examples: Vec::new(),
             }
         }
         fn execute<'a>(

@@ -15,6 +15,12 @@ const MAX_SCHEMA_BYTES: usize = 64 * 1024;
 const MAX_ARGUMENT_BYTES: usize = 64 * 1024;
 const MAX_JSON_NODES: usize = 4096;
 const MAX_JSON_DEPTH: usize = 32;
+/// At most this many real call examples per tool.
+pub const MAX_TOOL_EXAMPLES: usize = 5;
+/// Serialized byte budget shared by all examples of one tool.
+pub const MAX_TOOL_EXAMPLES_BYTES: usize = 8 * 1024;
+const MAX_TOOL_EXAMPLE_NODES: usize = 256;
+const MAX_TOOL_EXAMPLE_DEPTH: usize = 16;
 
 fn failure(code: &str, message: &'static str) -> BoundaryError {
     BoundaryError(
@@ -154,7 +160,8 @@ impl ToolRegistry {
     pub(crate) fn validate_current_secrets(&self, secrets: &[String]) -> Result<(), BoundaryError> {
         for entry in self.entries.values() {
             let value = serde_json::json!({"descriptor":entry.descriptor,"name":entry.definition.name,
-                "description":entry.definition.description,"schema":entry.definition.input_schema});
+                "description":entry.definition.description,"schema":entry.definition.input_schema,
+                "examples":entry.definition.examples});
             let encoded = serde_json::to_string(&value)
                 .map_err(|_| failure("invalid_tool", "cannot encode tool metadata"))?;
             if crate::redaction::contains_secret(&encoded, secrets) {
@@ -203,6 +210,10 @@ impl ToolRegistry {
     ) -> Result<(), BoundaryError> {
         let effect = builtin_effect(&definition.name)
             .ok_or_else(|| failure("invalid_tool", "unknown built-in tool"))?;
+        if !definition.examples.is_empty() {
+            let validator = compile_external_schema(&definition.input_schema)?;
+            validate_tool_examples(&validator, &definition.examples, &self.known_secrets)?;
+        }
         let descriptor = descriptor(&definition, ToolSource::Builtin, effect)?;
         self.insert(RegisteredTool {
             definition,
@@ -230,9 +241,11 @@ impl ToolRegistry {
             ));
         }
         let validator = compile_external_schema(&definition.input_schema)?;
+        validate_tool_examples(&validator, &definition.examples, &self.known_secrets)?;
         let descriptor = descriptor(&definition, ToolSource::Builtin, effect)?;
         let metadata = serde_json::json!({"descriptor":descriptor,"name":definition.name,
-            "description":definition.description,"schema":definition.input_schema});
+            "description":definition.description,"schema":definition.input_schema,
+            "examples":definition.examples});
         let encoded = serde_json::to_string(&metadata)
             .map_err(|_| failure("invalid_tool", "cannot encode built-in metadata"))?;
         if crate::redaction::contains_secret(&encoded, &self.known_secrets) {
@@ -279,7 +292,8 @@ impl ToolRegistry {
             ));
         }
         let validator = compile_external_schema(&definition.input_schema)?;
-        let metadata = serde_json::json!({"server":server,"revision":revision,"name":definition.name,"description":definition.description,"schema":definition.input_schema});
+        validate_tool_examples(&validator, &definition.examples, &self.known_secrets)?;
+        let metadata = serde_json::json!({"server":server,"revision":revision,"name":definition.name,"description":definition.description,"schema":definition.input_schema,"examples":definition.examples});
         let metadata = serde_json::to_string(&metadata)
             .map_err(|_| failure("invalid_tool", "cannot encode external metadata"))?;
         if crate::redaction::contains_secret(&metadata, &self.known_secrets) {
@@ -486,6 +500,13 @@ fn descriptor(
 ) -> Result<OperationDescriptor, BoundaryError> {
     let mut identity = serde_json::json!({"source":source,"effect":effect,"name":definition.name,
         "description":definition.description,"schema":definition.input_schema});
+    if !definition.examples.is_empty()
+        && let Some(object) = identity.as_object_mut()
+    {
+        // Only non-empty examples join the identity, so tools without examples
+        // keep their existing approval fingerprints.
+        object.insert("examples".into(), Value::Array(definition.examples.clone()));
+    }
     identity.sort_all_objects();
     let bytes = serde_json::to_vec(&identity)
         .map_err(|_| failure("invalid_tool", "cannot encode tool identity"))?;
@@ -524,6 +545,146 @@ fn bounded_json(value: &Value) -> Result<(), BoundaryError> {
     }
     Ok(())
 }
+const PLACEHOLDER_EXACT: [&str; 10] = [
+    "...", "…", "xxx", "xxxx", "tbd", "foo", "bar", "baz", "example", "sample",
+];
+const PLACEHOLDER_FRAGMENTS: [&str; 26] = [
+    "todo",
+    "fixme",
+    "placeholder",
+    "replace_me",
+    "replace-me",
+    "changeme",
+    "change_me",
+    "your_api_key",
+    "your_token",
+    "your_secret",
+    "<your_",
+    "<your-",
+    "<path>",
+    "<file>",
+    "<dir>",
+    "<query>",
+    "<token>",
+    "<secret>",
+    "<api_key>",
+    "<id>",
+    "<value>",
+    "<string>",
+    "<name>",
+    "<url>",
+    "<command>",
+    "<pattern>",
+];
+
+fn is_placeholder(text: &str) -> bool {
+    let lowered = text.trim().to_ascii_lowercase();
+    PLACEHOLDER_EXACT.contains(&lowered.as_str())
+        || PLACEHOLDER_FRAGMENTS.iter().any(|fragment| {
+            if fragment.starts_with('<') {
+                // `<...>` fragments only match at the start, so `Vec<String>` stays valid.
+                lowered.starts_with(fragment)
+            } else {
+                lowered.contains(fragment)
+            }
+        })
+}
+
+fn invalid_example(message: &'static str) -> BoundaryError {
+    failure("invalid_tool_example", message)
+}
+
+/// Structural checks shared by tool definitions, MCP settings and plugin
+/// manifests. Examples must be a bounded list of real JSON objects without
+/// placeholders. Schema conformance is checked separately at registration.
+pub(crate) fn validate_tool_example_entries(
+    examples: &[Value],
+    require_nonempty: bool,
+) -> Result<(), BoundaryError> {
+    if examples.is_empty() {
+        return if require_nonempty {
+            Err(invalid_example("tool example list must not be empty"))
+        } else {
+            Ok(())
+        };
+    }
+    if examples.len() > MAX_TOOL_EXAMPLES {
+        return Err(invalid_example("tool has too many examples"));
+    }
+    let bytes = serde_json::to_vec(examples)
+        .map_err(|_| invalid_example("tool examples cannot be encoded"))?;
+    if bytes.len() > MAX_TOOL_EXAMPLES_BYTES {
+        return Err(invalid_example("tool examples exceed their byte limit"));
+    }
+    for example in examples {
+        let Value::Object(map) = example else {
+            return Err(invalid_example("each tool example must be a JSON object"));
+        };
+        if map.contains_key("__soyo_operation") || map.contains_key("__saya_operation") {
+            return Err(invalid_example("tool example uses a reserved field"));
+        }
+        let mut pending = vec![(example, 0usize)];
+        let mut nodes = 0usize;
+        while let Some((value, depth)) = pending.pop() {
+            nodes += 1;
+            if nodes > MAX_TOOL_EXAMPLE_NODES || depth > MAX_TOOL_EXAMPLE_DEPTH {
+                return Err(invalid_example("tool example structure exceeds limits"));
+            }
+            match value {
+                Value::Object(object) => {
+                    for (key, child) in object {
+                        if is_placeholder(key) {
+                            return Err(invalid_example("tool example contains a placeholder"));
+                        }
+                        pending.push((child, depth + 1));
+                    }
+                }
+                Value::Array(array) => pending.extend(array.iter().map(|item| (item, depth + 1))),
+                Value::String(text) => {
+                    if text
+                        .chars()
+                        .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+                    {
+                        return Err(invalid_example("tool example contains control characters"));
+                    }
+                    if is_placeholder(text) {
+                        return Err(invalid_example("tool example contains a placeholder"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Full registration-time validation: structure, offline schema conformance
+/// and known credentials.
+pub(crate) fn validate_tool_examples(
+    validator: &Validator,
+    examples: &[Value],
+    secrets: &[String],
+) -> Result<(), BoundaryError> {
+    validate_tool_example_entries(examples, false)?;
+    if examples.is_empty() {
+        return Ok(());
+    }
+    let encoded = serde_json::to_string(examples)
+        .map_err(|_| invalid_example("tool examples cannot be encoded"))?;
+    if crate::redaction::contains_secret(&encoded, secrets) {
+        return Err(failure(
+            "credential_exposure",
+            "tool examples contain a known credential",
+        ));
+    }
+    if examples.iter().any(|example| !validator.is_valid(example)) {
+        return Err(invalid_example(
+            "tool example does not match the tool input schema",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn compile_external_schema(schema: &Value) -> Result<Arc<Validator>, BoundaryError> {
     validate_schema(schema)?;
     let validator = jsonschema::options()
@@ -626,6 +787,7 @@ mod model_name_tests {
                 name: self.0.clone(),
                 description: "An offline alias fixture".into(),
                 input_schema: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+                examples: Vec::new(),
             }
         }
         fn execute<'a>(
@@ -665,5 +827,225 @@ mod model_name_tests {
             assert!(mcp_model_name(server, remote).is_err());
         }
         assert!(mcp_model_name("valid", &"x".repeat(129)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod example_tests {
+    use super::*;
+    use serde_json::json;
+
+    struct Fixture(ToolDefinition);
+    impl Tool for Fixture {
+        fn definition(&self) -> ToolDefinition {
+            self.0.clone()
+        }
+        fn execute<'a>(
+            &'a self,
+            _: &'a ToolCall,
+            _: &'a crate::boundary::ToolContext,
+            _: &'a dyn crate::boundary::Cancellation,
+        ) -> crate::boundary::Operation<'a, crate::contract::ToolResult> {
+            Box::pin(async { Err(failure("not_executed", "Example fixture must not execute")) })
+        }
+    }
+
+    fn schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        })
+    }
+
+    fn definition(name: &str, examples: Vec<Value>) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            description: "Search workspace text".into(),
+            input_schema: schema(),
+            examples,
+        }
+    }
+
+    fn code(result: Result<(), BoundaryError>) -> String {
+        result.expect_err("expected failure").0.code
+    }
+
+    #[test]
+    fn valid_examples_register_through_every_path_and_stay_in_the_definition() {
+        let examples = vec![
+            json!({"path": "crates/soyo-core/src", "limit": 20}),
+            json!({"path": "docs"}),
+        ];
+        let mut registry = ToolRegistry::default();
+        registry
+            .register_builtin(definition("search_text", examples.clone()))
+            .unwrap();
+        assert_eq!(
+            registry.get("search_text").unwrap().definition().examples,
+            examples
+        );
+        let name = registry
+            .register_external(
+                "files",
+                "r1",
+                Arc::new(Fixture(definition("lookup", examples.clone()))),
+                ExternalAccess::ReadOnly,
+            )
+            .unwrap();
+        let described = registry.get(&name).unwrap().definition();
+        assert_eq!(described.examples, examples);
+        assert!(!described.description.contains("Examples"));
+    }
+
+    #[test]
+    fn schema_violating_examples_are_rejected_at_registration() {
+        for bad in [
+            json!({"limit": 5}),
+            json!({"path": 7}),
+            json!({"path": "docs", "extra": true}),
+            json!({"path": "docs", "limit": 0}),
+        ] {
+            let mut registry = ToolRegistry::default();
+            let error = registry
+                .register_builtin(definition("search_text", vec![bad.clone()]))
+                .unwrap_err();
+            assert_eq!(error.0.code, "invalid_tool_example", "{bad}");
+            let error = registry
+                .register_external(
+                    "files",
+                    "r1",
+                    Arc::new(Fixture(definition("lookup", vec![bad]))),
+                    ExternalAccess::Unclassified,
+                )
+                .unwrap_err();
+            assert_eq!(error.0.code, "invalid_tool_example");
+        }
+    }
+
+    #[test]
+    fn placeholders_and_oversized_or_non_object_examples_are_rejected() {
+        for text in [
+            "TODO",
+            "<path>",
+            "YOUR_API_KEY",
+            "...",
+            "xxx",
+            "replace_me please",
+            "<your_token>",
+        ] {
+            assert_eq!(
+                code(validate_tool_example_entries(
+                    &[json!({"path": text})],
+                    true
+                )),
+                "invalid_tool_example",
+                "{text}"
+            );
+        }
+        assert_eq!(
+            code(validate_tool_example_entries(
+                &[json!({"TODO": "docs"})],
+                true
+            )),
+            "invalid_tool_example"
+        );
+        for fine in [
+            "Vec<String>",
+            "acct_01HZX4K2",
+            "example.com",
+            "invoice_export",
+        ] {
+            assert!(validate_tool_example_entries(&[json!({"path": fine})], true).is_ok());
+        }
+        let many = vec![json!({"path": "docs"}); MAX_TOOL_EXAMPLES + 1];
+        assert_eq!(
+            code(validate_tool_example_entries(&many, true)),
+            "invalid_tool_example"
+        );
+        let large = vec![json!({"path": "a".repeat(MAX_TOOL_EXAMPLES_BYTES + 1)})];
+        assert_eq!(
+            code(validate_tool_example_entries(&large, true)),
+            "invalid_tool_example"
+        );
+        assert_eq!(
+            code(validate_tool_example_entries(&[json!("docs")], true)),
+            "invalid_tool_example"
+        );
+        assert_eq!(
+            code(validate_tool_example_entries(
+                &[json!({"__soyo_operation": {}})],
+                true
+            )),
+            "invalid_tool_example"
+        );
+        assert_eq!(
+            code(validate_tool_example_entries(&[], true)),
+            "invalid_tool_example"
+        );
+        assert!(validate_tool_example_entries(&[], false).is_ok());
+        assert_eq!(
+            code(validate_tool_example_entries(
+                &[json!({"path": "line\u{7}bell"})],
+                true
+            )),
+            "invalid_tool_example"
+        );
+    }
+
+    #[test]
+    fn known_credentials_in_examples_are_rejected_when_registered_and_when_rotated() {
+        let leaky = vec![json!({"path": "docs/fixture-secret.md"})];
+        let mut registry = ToolRegistry::with_known_secrets(vec!["fixture-secret".into()]);
+        for result in [
+            registry.register_builtin(definition("search_text", leaky.clone())),
+            registry
+                .register_external(
+                    "files",
+                    "r1",
+                    Arc::new(Fixture(definition("lookup", leaky.clone()))),
+                    ExternalAccess::ReadOnly,
+                )
+                .map(|_| ()),
+        ] {
+            assert_eq!(result.unwrap_err().0.code, "credential_exposure");
+        }
+        let mut registry = ToolRegistry::default();
+        registry
+            .register_builtin(definition("search_text", leaky))
+            .unwrap();
+        assert_eq!(
+            registry
+                .validate_current_secrets(&["fixture-secret".into()])
+                .unwrap_err()
+                .0
+                .code,
+            "credential_exposure"
+        );
+    }
+
+    #[test]
+    fn only_non_empty_examples_change_the_operation_fingerprint() {
+        let fingerprint = |examples: Vec<Value>| {
+            let mut registry = ToolRegistry::default();
+            registry
+                .register_builtin(definition("search_text", examples))
+                .unwrap();
+            registry
+                .get("search_text")
+                .unwrap()
+                .descriptor()
+                .fingerprint
+                .clone()
+        };
+        let plain = fingerprint(vec![]);
+        let with = fingerprint(vec![json!({"path": "docs"})]);
+        assert_ne!(plain, with);
+        assert_eq!(with, fingerprint(vec![json!({"path": "docs"})]));
+        assert_ne!(with, fingerprint(vec![json!({"path": "crates"})]));
     }
 }

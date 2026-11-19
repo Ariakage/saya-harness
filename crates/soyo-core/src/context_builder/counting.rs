@@ -160,6 +160,8 @@ struct ToolView<'a> {
     name: &'a str,
     description: &'a str,
     input_schema: &'a Value,
+    #[serde(skip_serializing_if = "<[Value]>::is_empty")]
+    examples: &'a [Value],
 }
 impl<'a> From<&'a ToolDefinition> for ToolView<'a> {
     fn from(value: &'a ToolDefinition) -> Self {
@@ -167,6 +169,7 @@ impl<'a> From<&'a ToolDefinition> for ToolView<'a> {
             name: &value.name,
             description: &value.description,
             input_schema: &value.input_schema,
+            examples: &value.examples,
         }
     }
 }

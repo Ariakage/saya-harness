@@ -72,7 +72,7 @@ impl ResponsesModel {
                 } else {
                     tool.input_schema.clone()
                 };
-                tools.push(json!({"type":"function","name":tool.name,"description":tool.description,"parameters":parameters,"strict":self.settings.strict_tools}));
+                tools.push(json!({"type":"function","name":tool.name,"description":super::projected_tool_description(tool),"parameters":parameters,"strict":self.settings.strict_tools}));
             }
             map.insert("tools".into(), Value::Array(tools));
         }

@@ -1018,6 +1018,29 @@ impl crate::boundary::Tool for WriteTool {
             name: name.into(),
             description: desc.into(),
             input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+            examples: match name {
+                "edit_file" => vec![
+                    json!({
+                        "path": "crates/soyo-core/src/config.rs",
+                        "old_string": "pub const DEFAULT_TIMEOUT_SECONDS: u64 = 30;",
+                        "new_string": "pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;",
+                        "expected_version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    }),
+                    json!({
+                        "path": "crates/soyo-core/src/tools/discovery.rs",
+                        "old_string": "MAX_RESULTS",
+                        "new_string": "MAX_SEARCH_LIMIT",
+                        "replace_all": true,
+                        "expected_version": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                    }),
+                ],
+                "apply_patch" => vec![json!({
+                    "path": "src/lib.rs",
+                    "patch": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -2,3 +2,3 @@\n fn total(a: i32, b: i32) -> i32 {\n-    a - b\n+    a + b\n }\n",
+                    "expected_version": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                })],
+                _ => Vec::new(),
+            },
         }
     }
     fn execute<'a>(

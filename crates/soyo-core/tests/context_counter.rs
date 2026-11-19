@@ -143,7 +143,7 @@ async fn local_counter_matches_actual_wire_body_for_all_three_protocols()
             request.instructions = "Static rules. 静态指令。".into();
             if purpose == ModelPurpose::Execution {
                 request.dynamic_instructions = Some("Current host data. 动态上下文。".into());
-                request.tools.push(ToolDefinition {name:"read_file".into(),description:"Bounded source evidence".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})});
+                request.tools.push(ToolDefinition {name:"read_file".into(),description:"Bounded source evidence".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}), examples: Vec::new() });
             }
             let identity = CountingIdentity {
                 protocol,
@@ -294,6 +294,7 @@ async fn dynamic_output_limits_match_counted_wire_and_keep_all_input()
                 name: "read_file".into(),
                 description: "Complete tool schema remains available".into(),
                 input_schema: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
+                examples: Vec::new(),
             });
             let identity = CountingIdentity {
                 protocol,

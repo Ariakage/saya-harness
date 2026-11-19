@@ -156,6 +156,7 @@ fn definition(kind: BrowserToolKind, settings: &BrowserSettings) -> ToolDefiniti
         name: name.into(),
         description: description.into(),
         input_schema: schema,
+        examples: Vec::new(),
     }
 }
 

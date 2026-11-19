@@ -73,6 +73,7 @@ impl OutputToolKind {
             name: name.into(),
             description: description.into(),
             input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+            examples: Vec::new(),
         }
     }
 }

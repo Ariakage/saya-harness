@@ -159,6 +159,7 @@ async fn every_category_is_driven_by_its_real_source_with_ascii_and_unicode_coun
         name: "exec".into(),
         description: "d".into(),
         input_schema: json!({}),
+        examples: Vec::new(),
     }];
     let snapshot = capture(
         &request,

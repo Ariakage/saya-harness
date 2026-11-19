@@ -230,6 +230,7 @@ async fn missing_review_profile_falls_back_and_execution_switch_is_rejected()
         name: "exec".into(),
         description: String::new(),
         input_schema: json!({"type":"object"}),
+        examples: Vec::new(),
     });
     let error = match router.start(&request, &Never).await {
         Ok(_) => return Err("review accepted tools".into()),

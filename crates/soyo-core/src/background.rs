@@ -1218,6 +1218,7 @@ impl crate::boundary::Tool for BackgroundTool {
             name: name.into(),
             description: description.into(),
             input_schema: serde_json::json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+            examples: Vec::new(),
         }
     }
     fn execute<'a>(

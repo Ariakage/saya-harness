@@ -200,6 +200,8 @@ argv = ["/absolute/path/to/server", "--stdio"]
 
 `env` 左侧是子进程目标变量名，右侧是启动环境中的引用名。只有启用服务的环境引用需要存在。该映射由宿主显式选择，MCP 启动继续经过命令权限与实际环境摘要绑定。`read_only_tools` 是宿主对原始远端工具名的分类，PLAN 的 HTTP MCP 工具仅开放其中明确列出的项，stdio 服务在 PLAN 中保持停止。
 
+按 D-081，每个服务可选 `[mcp.servers.NAME.tool_examples]` 按远端工具名提供 1–5 条真实调用样例（服务级最多 256 项）：加载期校验结构与占位符，注册期再经该工具的离线 input schema 与 `SecretRegistry` 脱敏校验；延迟加载工具经 `tool_describe` 返回样例，常驻工具将样例投影到三协议描述文本（不进入 schema，兼容 `strict_tools`）。详见[工具注册](tool-registry.md#调用样例d-081)。
+
 HTTP 配置使用 `[mcp.servers.NAME.transport]`，设置 `type = "http"` 与完整 `endpoint`。默认要求 HTTPS。明确设置 `allow_insecure_http = true` 可选择明文测试端点。凭据通过 `bearer_env`、`headers_env` 或私有存储的 `credential_ref` 选择，`bearer_env` 与 `credential_ref` 互斥。`scopes` 绑定凭据授权范围。登录、撤销、作用域及完整示例见[MCP 使用说明](mcp.md)。
 
 每个服务可设置 `[mcp.servers.NAME.limits]`。默认连接超时 20 秒，请求／目录发现超时 120 秒，单个 wire 消息和完整工具目录各 1 MiB，最多 32 页、256 个工具，结果投影 256 KiB、128 个内容块。运行时同时执行共享活跃时间与工具预算，人工确认期间暂停活跃计时，收尾独立完成。

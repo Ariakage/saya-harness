@@ -443,6 +443,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
             "required":required,
             "additionalProperties":false
         }),
+        examples: Vec::new(),
     }
 }
 

@@ -550,8 +550,12 @@ fn runtime(
     store: Arc<dyn Store>,
     model_requests: usize,
 ) -> Result<AgentRuntime, BoundaryError> {
-    runtime_without_context(root, run, model, store, model_requests)?
-        .with_context_budget(ContextBudget::new(64_000, 2048, 6401))
+    runtime_without_context(root, run, model, store, model_requests)?.with_context_budget(
+        ContextBudget {
+            target_per_mille: 560,
+            ..ContextBudget::new(64_000, 2048, 6401)
+        },
+    )
 }
 fn runtime_without_context(
     root: &Path,

@@ -55,6 +55,10 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    /// Optional real call examples (at most five JSON objects). Each must
+    /// validate against `input_schema` and contain no placeholders or secrets;
+    /// the registry enforces this when the tool is registered.
+    pub examples: Vec<Value>,
 }
 
 /// Streaming update. A completed turn retains ordered provider items and calls.

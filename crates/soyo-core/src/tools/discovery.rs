@@ -59,6 +59,10 @@ impl ToolDiscoveryKind {
                     },
                     "additionalProperties": false
                 }),
+                examples: vec![
+                    json!({"query": "invoice export", "server": "billing", "limit": 5}),
+                    json!({"query": "pull request", "server": null, "limit": null}),
+                ],
             },
             Self::Describe => ToolDefinition {
                 name: "tool_describe".into(),
@@ -80,6 +84,9 @@ impl ToolDiscoveryKind {
                     "required": ["names"],
                     "additionalProperties": false
                 }),
+                examples: vec![json!({
+                    "names": ["mcp__billing__invoice_export_0123456789abcdef0123"]
+                })],
             },
         }
     }
@@ -412,7 +419,7 @@ pub(crate) fn execute_describe(
                 "access": access_label(entry.descriptor().effect),
                 "description": def.description,
                 "input_schema": def.input_schema,
-                "examples": [],
+                "examples": def.examples,
                 "loaded": true,
             }),
             ToolSource::Builtin => json!({
@@ -420,7 +427,7 @@ pub(crate) fn execute_describe(
                 "source": "builtin",
                 "description": def.description,
                 "input_schema": def.input_schema,
-                "examples": [],
+                "examples": def.examples,
                 "loaded": true,
             }),
         };
@@ -462,6 +469,7 @@ mod tests {
                 name: self.name.clone(),
                 description: self.desc.clone(),
                 input_schema: self.schema.clone(),
+                examples: Vec::new(),
             }
         }
         fn execute<'a>(

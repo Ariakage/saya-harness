@@ -141,6 +141,27 @@ impl ModelSettings {
     }
 }
 
+/// Model-facing tool description with real call examples appended as plain
+/// text. Examples are never added to the JSON schema, so strict-mode schemas
+/// and compatible endpoints stay valid. Empty examples leave the description
+/// byte-identical.
+pub(crate) fn projected_tool_description(tool: &crate::boundary::ToolDefinition) -> String {
+    if tool.examples.is_empty() {
+        return tool.description.clone();
+    }
+    let mut text = tool.description.clone();
+    text.push_str("\n\nExamples:");
+    for example in &tool.examples {
+        let mut canonical = example.clone();
+        canonical.sort_all_objects();
+        if let Ok(rendered) = serde_json::to_string(&canonical) {
+            text.push_str("\n- ");
+            text.push_str(&rendered);
+        }
+    }
+    text
+}
+
 /// Convert an object schema to OpenAI strict form when it is possible without
 /// changing the meanings of present fields. Schemas with open-ended maps cannot
 /// be represented in strict mode and require the caller to disable it explicitly.
@@ -404,5 +425,37 @@ mod tests {
                 .code,
             "invalid_config"
         );
+    }
+}
+
+#[cfg(test)]
+mod example_projection_tests {
+    use super::*;
+    use crate::boundary::ToolDefinition;
+    use serde_json::json;
+
+    fn tool(examples: Vec<Value>) -> ToolDefinition {
+        ToolDefinition {
+            name: "lookup".into(),
+            description: "Find a record".into(),
+            input_schema: json!({"type":"object","properties":{}}),
+            examples,
+        }
+    }
+
+    #[test]
+    fn empty_examples_leave_the_description_byte_identical() {
+        assert_eq!(projected_tool_description(&tool(vec![])), "Find a record");
+    }
+
+    #[test]
+    fn examples_are_appended_as_canonical_compact_json_without_touching_the_schema() {
+        let definition = tool(vec![json!({"query": "invoice", "limit": 5})]);
+        let text = projected_tool_description(&definition);
+        assert_eq!(
+            text,
+            "Find a record\n\nExamples:\n- {\"limit\":5,\"query\":\"invoice\"}"
+        );
+        assert!(definition.input_schema.get("examples").is_none());
     }
 }

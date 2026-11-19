@@ -82,7 +82,7 @@ impl CheckpointState {
             {
                 continue;
             }
-            definitions.push(ToolDefinition { name: name.into(), description: description.into(), input_schema: json!({"type":"object","additionalProperties":false,"properties":properties,"required":required}) });
+            definitions.push(ToolDefinition { name: name.into(), description: description.into(), input_schema: json!({"type":"object","additionalProperties":false,"properties":properties,"required":required}) , examples: Vec::new() });
         }
         definitions
     }

@@ -565,7 +565,7 @@ async fn preserves_reasoning_and_tool_items_in_original_order_on_replay()
         ResponsesCompatibility::default(),
     );
     let mut req = request();
-    req.tools.push(ToolDefinition {name:"read_file".into(),description:"read".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})});
+    req.tools.push(ToolDefinition {name:"read_file".into(),description:"read".into(),input_schema:json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}), examples: Vec::new() });
     let (items, usage, visible) = collect(&model, &req).await?;
     assert!(visible.is_empty());
     let usage = usage.ok_or("missing usage")?;

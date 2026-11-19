@@ -34,6 +34,7 @@ impl Tool for McpToolAdapter {
             name: self.tool.name.clone(),
             description: self.tool.description.clone(),
             input_schema: self.tool.input_schema.clone(),
+            examples: self.tool.examples.clone(),
         }
     }
 

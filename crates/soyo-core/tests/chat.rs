@@ -679,6 +679,7 @@ async fn strict_schema_and_context_budget_fail_before_network()
         name: "tool".into(),
         description: "test".into(),
         input_schema: json!({"type":"object","additionalProperties":{"type":"string"}}),
+        examples: Vec::new(),
     });
     let err = match model.start(&req, &Never).await {
         Ok(_) => return Err("strict open map accepted".into()),
@@ -841,7 +842,7 @@ async fn strict_schema_is_explicit_and_review_requests_do_not_gain_tools()
     cfg.strict_tools = true;
     let model = ChatModel::new(transport(url)?, cfg, ChatCompatibility::default());
     let mut req = request();
-    req.tools.push(ToolDefinition {name:"lookup".into(),description:"find".into(),input_schema:json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false})});
+    req.tools.push(ToolDefinition {name:"lookup".into(),description:"find".into(),input_schema:json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}), examples: Vec::new() });
     collect(&model, &req).await?;
     let first = requests.recv_timeout(Duration::from_secs(1))?;
     assert_eq!(first["tools"][0]["function"]["strict"], true);
@@ -991,6 +992,7 @@ async fn reasoning_is_opaque_and_replayed_per_turn_after_sqlite_restore()
                 name: "read_file".into(),
                 description: "read".into(),
                 input_schema: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
+                examples: Vec::new(),
             }];
             let (items, _, delta) = collect(&model, &req).await?;
             assert!(!delta.contains("opaque-"));

@@ -25,3 +25,11 @@ PLAN只开放宿主认定的只读外部工具。Manual Approval逐次确认，�
 输入schema必须声明object类型，调用参数经schema验证。局部JSON Pointer引用在4096次展开预算内解析，递归引用、资源重定向及动态引用明确拒绝，包括 `$id`、`$anchor`、`$dynamicAnchor`、`$dynamicRef`和`$recursiveRef`。不受支持的正则或schema返回 `invalid_tool_schema`。
 
 schema编译入口供外部注册和MCP目录验证复用。MCP传输、结果类型与输出限额的实现和验收由N2后续阶段单独记录。[验证库文档](https://docs.rs/jsonschema/0.61.0/jsonschema/)
+
+## 调用样例（D-081）
+
+`ToolDefinition.examples`为可选的真实调用样例列表，最多5个JSON对象、合计8KiB、单个样例最多256节点与16层。样例必须是完整真实参数，禁止占位符（如`...`、`TODO`、`<path>`、`YOUR_API_KEY`等常见占位写法）、保留字段`__soyo_operation`（兼容旧拼写`__saya_operation`）与控制字符。
+
+注册时逐条通过工具自身的离线jsonschema校验与`SecretRegistry`已知凭据检查，结构或内容不合格返回`invalid_tool_example`，命中已知凭据返回`credential_exposure`；非空样例列表加入审批指纹，空列表保持既有指纹不变。MCP服务可通过`[mcp.servers.NAME.tool_examples]`（按远端工具名索引，最多256项）注入宿主编写的样例，插件manifest的`[[mcp]]`同样支持`tool_examples`，宿主配置覆盖清单同名词条；样例不取自MCP服务器自身。
+
+模型侧投影分两条路径：延迟加载工具经`tool_describe`在展开结果中返回样例；常驻工具将样例以规范化紧凑JSON追加到描述文本末尾，不进入input schema，因此`strict_tools`与第三方兼容端点保持合法。

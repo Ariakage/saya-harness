@@ -622,6 +622,7 @@ fn pinned_catalog() -> McpCatalog {
             input_schema,
             output_schema: None,
             annotations: None,
+            examples: Vec::new(),
         })
         .collect::<Vec<_>>();
     tools.push(McpTool {
@@ -633,6 +634,7 @@ fn pinned_catalog() -> McpCatalog {
         }),
         output_schema: None,
         annotations: None,
+        examples: Vec::new(),
     });
     tools.push(McpTool {
         name: "browser_evaluate".into(),
@@ -640,6 +642,7 @@ fn pinned_catalog() -> McpCatalog {
         input_schema: json!({"type": "object", "properties": {}}),
         output_schema: None,
         annotations: None,
+        examples: Vec::new(),
     });
     McpCatalog {
         generation: 1,

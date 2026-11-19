@@ -29,6 +29,19 @@ eager_tools = []
 - **稳定前缀与按需展开**：触发延迟加载后，系统提示中的核心内置工具、`tool_search`、`tool_describe` 与 `eager_tools` 按固定顺序构成稳定的前缀列表，其余 MCP schema 暂不注入；模型调用 `tool_search` 按关键词或 `server` 检索脱敏摘要后，调用 `tool_describe`（单次最多 8 个精确模型工具名）查看详情并将命中的工具定义追加到前缀末尾，保持首部系统指令与核心工具缓存前缀逐字节稳定。
 - **安全边界**：`tool_search` 与 `tool_describe` 同样受工作模式（`PLAN` 仅暴露 `read_only_tools` 明确允许的只读工具）、`[permissions]` `deny`／`ask`／`Manual` 规则、目录代次绑定与 `SecretRegistry` 脱敏约束；`tool_search` 不直接展开 schema，必须通过 `tool_describe` 后才会附着到后续请求。
 
+### 调用样例（D-081）
+
+每个服务可通过 `tool_examples` 为远端工具配置宿主编写的真实调用样例（按原始远端工具名索引，每个工具 1–5 条、服务最多 256 项）：
+
+```toml
+[mcp.servers.billing.tool_examples]
+invoice_export = [
+  { month = "2026-11", format = "csv" },
+]
+```
+
+样例在配置加载时做结构与占位符校验，注册时再通过该工具已发现的 input schema 离线校验与 `SecretRegistry` 脱敏检查；延迟加载的工具经 `tool_describe` 返回样例，常驻工具把样例附加到模型侧描述文本。样例只来自宿主配置或插件 manifest，不接受服务器上报内容，具体约束见[工具注册](tool-registry.md#调用样例d-081)。
+
 工具结果按内容类型投影并限制大小。文本与结构化结果可进入模型上下文，不受支持的内容以有界元数据表示。工具失败保留明确错误，连接中断、执行已开始但完成无法确认时按 `unknown` 处理，运行时保存记录并阻止历史重放。
 
 ## stdio 服务

@@ -1549,6 +1549,15 @@ impl Tool for ExecTool {
                 "cwd":{"type":["string","null"]},"timeout_seconds":{"type":["integer","null"],"minimum":1},
                 "env":{"type":"object","additionalProperties":{"type":"object","properties":{"source":{"enum":["literal","reference"]},"value":{"type":"string"}},"required":["source","value"],"additionalProperties":false}}
             },"required":["argv"],"additionalProperties":false}),
+            examples: vec![
+                serde_json::json!({"argv": ["cargo", "test", "-p", "soyo-core", "--lib", "registry"]}),
+                serde_json::json!({
+                    "argv": ["python3", "-m", "unittest", "discover", "-s", "tests"],
+                    "cwd": "scripts",
+                    "timeout_seconds": 60,
+                    "env": {"PYTHONUNBUFFERED": {"source": "literal", "value": "1"}}
+                }),
+            ],
         }
     }
     fn execute<'a>(

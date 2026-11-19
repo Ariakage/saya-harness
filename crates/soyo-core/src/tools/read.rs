@@ -1004,6 +1004,18 @@ impl crate::boundary::Tool for ReadTool {
             name: name.into(),
             description: description.into(),
             input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
+            examples: match name {
+                "search_text" => vec![
+                    json!({"path": "crates/soyo-core/src", "pattern": "ToolDefinition"}),
+                    json!({
+                        "path": "docs",
+                        "pattern": "D-0[78][0-9]",
+                        "regex": true,
+                        "include_ignored": false
+                    }),
+                ],
+                _ => Vec::new(),
+            },
         }
     }
     fn execute<'a>(

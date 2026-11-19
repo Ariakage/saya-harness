@@ -31,6 +31,7 @@ fn request(history: Vec<HistoryItem>) -> ModelRequest {
             name: "read_file".into(),
             description: "Read a bounded page".into(),
             input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+            examples: Vec::new(),
         }],
     }
 }

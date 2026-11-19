@@ -7,7 +7,11 @@ use jsonschema::{PatternOptions, Validator};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, fmt, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::OnceLock,
+};
 
 mod lock;
 mod package;
@@ -63,7 +67,7 @@ fn incompatible(message: &'static str) -> PluginError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema_version: u32,
@@ -121,7 +125,7 @@ pub struct ResourceEntry {
     pub path: String,
     pub media_type: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "transport", deny_unknown_fields)]
 pub enum McpEntry {
     #[serde(rename = "stdio")]
@@ -131,6 +135,9 @@ pub enum McpEntry {
         args: Vec<String>,
         #[serde(default)]
         credential_slots: Vec<String>,
+        /// Real call examples keyed by the remote tool name.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        tool_examples: BTreeMap<String, Vec<serde_json::Value>>,
     },
     #[serde(rename = "streamable-http")]
     Http {
@@ -138,12 +145,20 @@ pub enum McpEntry {
         url: String,
         #[serde(default)]
         credential_slots: Vec<String>,
+        /// Real call examples keyed by the remote tool name.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        tool_examples: BTreeMap<String, Vec<serde_json::Value>>,
     },
 }
 impl McpEntry {
     pub fn id(&self) -> &str {
         match self {
             Self::Stdio { id, .. } | Self::Http { id, .. } => id,
+        }
+    }
+    pub fn tool_examples(&self) -> &BTreeMap<String, Vec<serde_json::Value>> {
+        match self {
+            Self::Stdio { tool_examples, .. } | Self::Http { tool_examples, .. } => tool_examples,
         }
     }
 }
@@ -276,6 +291,19 @@ impl Manifest {
             }
         }
         for entry in &self.mcp {
+            let examples = entry.tool_examples();
+            if examples.len() > 256
+                || examples.iter().any(|(name, list)| {
+                    name.is_empty()
+                        || name.len() > 128
+                        || !name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+                        || crate::registry::validate_tool_example_entries(list, true).is_err()
+                })
+            {
+                return Err(invalid("MCP tool examples are invalid"));
+            }
             let slots = match entry {
                 McpEntry::Stdio {
                     args,

@@ -173,6 +173,7 @@ impl Tool for TodoTool {
                 "required": ["todos"],
                 "additionalProperties": false
             }),
+            examples: Vec::new(),
         }
     }
 

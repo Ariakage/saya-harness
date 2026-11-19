@@ -1232,7 +1232,10 @@ impl RuntimeServices {
                     let tools = catalog
                         .tools
                         .into_iter()
-                        .map(|tool| {
+                        .map(|mut tool| {
+                            if let Some(examples) = configured.tool_examples.get(&tool.name) {
+                                tool.examples = examples.clone();
+                            }
                             let access = if read_only.contains(&tool.name) {
                                 ExternalAccess::ReadOnly
                             } else {

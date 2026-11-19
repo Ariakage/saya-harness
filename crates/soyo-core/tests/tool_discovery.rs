@@ -126,6 +126,7 @@ struct FakeMcpTool {
     remote_name: String,
     description: String,
     schema: Value,
+    examples: Vec<Value>,
     calls: Arc<Mutex<Vec<(String, String)>>>,
 }
 
@@ -135,6 +136,7 @@ impl Tool for FakeMcpTool {
             name: self.remote_name.clone(),
             description: self.description.clone(),
             input_schema: self.schema.clone(),
+            examples: self.examples.clone(),
         }
     }
 
@@ -164,14 +166,20 @@ fn fake_mcp_tool(
     remote_name: &str,
     description: &str,
     schema: Value,
+    examples: Vec<Value>,
     calls: Arc<Mutex<Vec<(String, String)>>>,
 ) -> Arc<dyn Tool> {
     Arc::new(FakeMcpTool {
         remote_name: remote_name.into(),
         description: description.into(),
         schema,
+        examples,
         calls,
     })
+}
+
+fn invoice_example() -> Value {
+    json!({"month": "2026-11", "format": "csv"})
 }
 
 fn fixture(root: &Path, work_mode: WorkMode, permissions: PermissionMode) -> (Session, Run) {
@@ -237,6 +245,7 @@ fn dummy_server_settings(eager_tools: BTreeSet<String>) -> McpServerSettings {
         }),
         read_only_tools: BTreeSet::new(),
         eager_tools,
+        tool_examples: BTreeMap::new(),
         limits: McpLimitSettings::default(),
     }
 }
@@ -283,7 +292,15 @@ fn register_fake_tools(
             } else {
                 ExternalAccess::Unclassified
             };
-            (fake_mcp_tool(&name, &desc, schema, calls.clone()), access)
+            let examples = if name == "invoice_export" {
+                vec![invoice_example()]
+            } else {
+                Vec::new()
+            };
+            (
+                fake_mcp_tool(&name, &desc, schema, examples, calls.clone()),
+                access,
+            )
         })
         .collect();
     runtime.replace_external(server, revision, tools).unwrap();
@@ -356,6 +373,27 @@ async fn large_mcp_catalog_defers_schemas_until_search_and_describe_while_preser
                 names.contains(&target_for_model.as_str()),
                 "Turn 3 must attach the described target MCP tool"
             );
+            // The deferred tool's examples reached the model through tool_describe...
+            let described = req
+                .history
+                .iter()
+                .find_map(|item| match item {
+                    HistoryItem::ToolResult { call_id, result } if call_id == "c2" => {
+                        result.data.clone()
+                    }
+                    _ => None,
+                })
+                .expect("tool_describe result");
+            assert_eq!(
+                described["tools"][0]["examples"],
+                json!([invoice_example()])
+            );
+            // ...and the expanded definition carries them for provider projection.
+            assert_eq!(req.tools.last().unwrap().examples, vec![invoice_example()]);
+            // Turn 1 core tools never leak the deferred tool's examples.
+            assert!(req.tools[..req.tools.len() - 1].iter().all(|tool| {
+                tool.name.starts_with("mcp__") || !tool.description.contains("2026-11")
+            }));
             let mcp_in_req: Vec<_> = names.iter().filter(|n| n.starts_with("mcp__")).collect();
             assert_eq!(mcp_in_req.len(), 1);
             Ok(vec![call(
@@ -607,6 +645,7 @@ tool = "tool_search"
                         "properties": { "id": { "type": "string" } },
                         "additionalProperties": false
                     }),
+                    Vec::new(),
                     calls.clone(),
                 ),
                 ExternalAccess::ReadOnly,

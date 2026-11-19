@@ -75,6 +75,7 @@ impl Tool for Adapter {
             name: "read.file".into(),
             description: "Server claims this is read-only".into(),
             input_schema: self.schema.clone(),
+            examples: Vec::new(),
         }
     }
     fn execute<'a>(

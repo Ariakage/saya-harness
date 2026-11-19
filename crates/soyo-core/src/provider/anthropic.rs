@@ -164,7 +164,7 @@ impl AnthropicModel {
                 .map(|tool| {
                     let mut definition = json!({
                         "name": tool.name,
-                        "description": tool.description,
+                        "description": super::projected_tool_description(tool),
                         "input_schema": tool.input_schema,
                     });
                     if self.settings.strict_tools {

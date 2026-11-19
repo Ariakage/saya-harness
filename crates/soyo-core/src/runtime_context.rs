@@ -705,6 +705,7 @@ mod projection_tests {
                 name: "browser_snapshot".into(),
                 description: "fixture".into(),
                 input_schema: json!({"type":"object","properties":{}}),
+                examples: Vec::new(),
             }],
         };
         let identity = CountingIdentity {

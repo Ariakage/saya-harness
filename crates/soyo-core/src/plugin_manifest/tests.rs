@@ -98,6 +98,7 @@ fn executable_features_capabilities_origins_slots_and_argument_paths_are_bound()
         program: "python3".into(),
         args: vec!["@plugin/mcp/server.py".into()],
         credential_slots: vec![],
+        tool_examples: Default::default(),
     });
     assert!(manifest.validate().is_err());
     manifest
@@ -118,6 +119,7 @@ fn executable_features_capabilities_origins_slots_and_argument_paths_are_bound()
         id: "remote".into(),
         url: "https://mcp.example.test/v1".into(),
         credential_slots: vec!["account".into()],
+        tool_examples: Default::default(),
     });
     manifest
         .compatibility
@@ -149,6 +151,55 @@ fn executable_features_capabilities_origins_slots_and_argument_paths_are_bound()
         *url = "https://user:PRIVATE_VALUE@mcp.example.test/v1".into();
     }
     assert!(manifest.validate().is_err());
+}
+
+#[test]
+fn mcp_tool_examples_follow_the_shared_example_contract() {
+    let mut manifest = parse_manifest(SIMPLE).unwrap();
+    manifest
+        .compatibility
+        .requires_features
+        .push("mcp-stdio-v1".into());
+    manifest
+        .capabilities
+        .requested
+        .extend(["mcp.stdio".into(), "process.exec".into()]);
+    let entry = |tool_examples: std::collections::BTreeMap<String, Vec<serde_json::Value>>| {
+        McpEntry::Stdio {
+            id: "check".into(),
+            program: "python3".into(),
+            args: vec!["@plugin/mcp/server.py".into()],
+            credential_slots: vec![],
+            tool_examples,
+        }
+    };
+    manifest.mcp.push(entry(
+        [(
+            "invoice_export".to_string(),
+            vec![serde_json::json!({"month": "2026-11"})],
+        )]
+        .into_iter()
+        .collect(),
+    ));
+    manifest.validate().unwrap();
+    for bad in [
+        ("lookup", serde_json::json!({"path": "<path>"})),
+        ("lookup", serde_json::json!("docs")),
+        ("bad/name", serde_json::json!({"path": "docs"})),
+    ] {
+        let mut broken = manifest.clone();
+        broken.mcp.clear();
+        broken.mcp.push(entry(
+            [(bad.0.to_string(), vec![bad.1])].into_iter().collect(),
+        ));
+        assert!(broken.validate().is_err(), "{}", bad.0);
+    }
+    let mut empty = manifest.clone();
+    empty.mcp.clear();
+    empty.mcp.push(entry(
+        [("lookup".to_string(), Vec::new())].into_iter().collect(),
+    ));
+    assert!(empty.validate().is_err());
 }
 
 #[test]
@@ -301,6 +352,7 @@ fn alias_names_match_the_actual_model_tool_registry_identifier_boundaries() {
             name: name.into(),
             description: "Alias boundary fixture".into(),
             input_schema: serde_json::json!({"type":"object"}),
+            examples: Vec::new(),
         };
         let prompt = crate::prompt::execution(
             crate::contract::WorkMode::Work,

@@ -140,6 +140,8 @@ pub enum CredentialSlotBinding {
 pub struct HostEntrySettings {
     pub read_only_tools: BTreeSet<String>,
     pub eager_tools: BTreeSet<String>,
+    /// Host-authored examples override the manifest's examples per tool name.
+    pub tool_examples: BTreeMap<String, Vec<serde_json::Value>>,
     pub limits: McpLimitSettings,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -52,5 +52,6 @@ pub(crate) fn definition() -> ToolDefinition {
         name: "ask_user".into(),
         description: "Ask the user a clarification question and wait for their answer.".into(),
         input_schema: serde_json::json!({"type":"object","properties":{"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"}}},"required":["question"],"additionalProperties":false}),
+        examples: Vec::new(),
     }
 }

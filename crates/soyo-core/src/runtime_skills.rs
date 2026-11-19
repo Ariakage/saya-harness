@@ -64,7 +64,7 @@ impl SkillState {
                 "Stop using the selected Skill as context. Supply its catalog name and exact source_sha256. No cleanup scripts are executed.",
             ),
         ] {
-            definitions.push(ToolDefinition {name:name.into(),description:description.into(),input_schema:json!({"type":"object","properties":identity,"required":["name","source_sha256"],"additionalProperties":false})});
+            definitions.push(ToolDefinition {name:name.into(),description:description.into(),input_schema:json!({"type":"object","properties":identity,"required":["name","source_sha256"],"additionalProperties":false}), examples: Vec::new() });
         }
         let mut properties = identity;
         properties["resource"] = json!({"type":"string","minLength":1,"maxLength":1024});
@@ -73,10 +73,11 @@ impl SkillState {
         properties["cursor"] = json!({"type":"object","properties":{"byte_offset":{"type":"integer","minimum":0},"view_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["byte_offset","view_sha256"],"additionalProperties":false});
         properties["max_bytes"] =
             json!({"type":"integer","minimum":1,"maximum":65536,"default":4096});
-        definitions.push(ToolDefinition {name:"skill_read_resource".into(),description:"Read an additional UTF-8 resource of an already active Skill, not its SKILL.md before activation. Activate the Skill successfully first; skill_inactive means activate it, not repeat the read. Paths stay inside that Skill's catalog root. This never executes scripts. Preserve the returned source hash and cursor for subsequent pages.".into(),input_schema:json!({"type":"object","properties":properties,"required":["name","source_sha256","resource"],"additionalProperties":false})});
+        definitions.push(ToolDefinition {name:"skill_read_resource".into(),description:"Read an additional UTF-8 resource of an already active Skill, not its SKILL.md before activation. Activate the Skill successfully first; skill_inactive means activate it, not repeat the read. Paths stay inside that Skill's catalog root. This never executes scripts. Preserve the returned source hash and cursor for subsequent pages.".into(),input_schema:json!({"type":"object","properties":properties,"required":["name","source_sha256","resource"],"additionalProperties":false}), examples: Vec::new() });
         definitions.push(ToolDefinition {name:"skill_catalog".into(),description:"List a bounded page of discovered Skill metadata and source hashes. This does not load inactive Skill bodies. Follow next_cursor to discover further entries.".into(),input_schema:json!({"type":"object","properties":{
             "cursor":{"type":"object","properties":{"offset":{"type":"integer","minimum":0},"view_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"required":["offset","view_sha256"],"additionalProperties":false},
-            "max_items":{"type":"integer","minimum":1,"maximum":64,"default":32},"max_bytes":{"type":"integer","minimum":1024,"maximum":16384,"default":16384}},"additionalProperties":false})});
+            "max_items":{"type":"integer","minimum":1,"maximum":64,"default":32},"max_bytes":{"type":"integer","minimum":1024,"maximum":16384,"default":16384}},"additionalProperties":false}),
+            examples: Vec::new(),});
         definitions
     }
     fn prepare(

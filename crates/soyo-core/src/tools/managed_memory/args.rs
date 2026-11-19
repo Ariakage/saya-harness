@@ -337,6 +337,7 @@ pub(super) fn definitions(
             name: name.into(),
             description: description.into(),
             input_schema,
+            examples: Vec::new(),
         })
         .collect()
 }

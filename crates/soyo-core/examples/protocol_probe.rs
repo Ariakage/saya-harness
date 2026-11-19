@@ -135,6 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: "probe_echo".into(),
         description: "Return the supplied text.".into(),
         input_schema: json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}),
+        examples: Vec::new(),
     }];
     let items = match turn(model.as_ref(), &request).await {
         Ok(items) => items,

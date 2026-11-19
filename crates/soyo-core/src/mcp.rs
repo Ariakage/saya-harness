@@ -121,6 +121,9 @@ pub struct McpTool {
     pub input_schema: Value,
     pub output_schema: Option<Value>,
     pub annotations: Option<Value>,
+    /// Host-configured real call examples; never taken from the server.
+    #[serde(default)]
+    pub examples: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -517,6 +520,7 @@ impl McpClient {
                     annotations: tool
                         .annotations
                         .and_then(|annotations| serde_json::to_value(annotations).ok()),
+                    examples: Vec::new(),
                 });
             }
             cursor = page.next_cursor;

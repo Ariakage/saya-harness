@@ -465,6 +465,7 @@ async fn cached_system_omits_empty_blocks_and_keeps_strict_tools_explicit()
             name: "read_file".into(),
             description: "read".into(),
             input_schema: json!({"type":"object"}),
+            examples: Vec::new(),
         });
         collect(&model, &req).await?;
         let body = requests.recv_timeout(Duration::from_secs(1))?;
@@ -496,6 +497,7 @@ async fn cached_system_omits_empty_blocks_and_keeps_strict_tools_explicit()
             name: "read_file".into(),
             description: "read".into(),
             input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+            examples: Vec::new(),
         });
         collect(&model, &req).await?;
         assert_eq!(
@@ -758,6 +760,7 @@ async fn preserves_signed_thinking_and_groups_tool_results_in_order()
         name: "read_file".into(),
         description: "read".into(),
         input_schema: json!({"type":"object"}),
+        examples: Vec::new(),
     });
     let (items, _, text) = collect(&model, &req).await?;
     assert!(text.is_empty());
@@ -1057,11 +1060,13 @@ async fn prompt_cache_marks_static_system_last_tool_and_rolling_history_within_f
             name: "read_file".into(),
             description: "read".into(),
             input_schema: json!({"type":"object"}),
+            examples: Vec::new(),
         },
         ToolDefinition {
             name: "edit_file".into(),
             description: "edit".into(),
             input_schema: json!({"type":"object"}),
+            examples: Vec::new(),
         },
     ];
     req.history = vec![
@@ -1138,6 +1143,7 @@ async fn official_provider_enables_caching_adaptive_summarized_thinking_and_outp
         name: "read_file".into(),
         description: "read".into(),
         input_schema: json!({"type":"object"}),
+        examples: Vec::new(),
     });
     req.history = vec![
         HistoryItem::UserText("u1".into()),

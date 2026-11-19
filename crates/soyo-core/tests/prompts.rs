@@ -10,6 +10,7 @@ fn tools(names: &[&str]) -> Vec<ToolDefinition> {
             name: (*name).into(),
             description: "registry description".into(),
             input_schema: serde_json::json!({"type":"object"}),
+            examples: Vec::new(),
         })
         .collect()
 }
