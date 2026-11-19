@@ -358,6 +358,9 @@ fn node_exposure(program: &std::path::Path) -> (Vec<std::path::PathBuf>, Vec<std
     if let Some(bin) = &bin_dir {
         expose(bin.join("../lib").components().collect());
         expose(bin.join("lib"));
+        // ICU data and similar resources live beside `lib` in prefix installs.
+        expose(bin.join("../share").components().collect());
+        expose(bin.join("share"));
     }
     let listing = if cfg!(target_os = "macos") {
         std::process::Command::new("otool")

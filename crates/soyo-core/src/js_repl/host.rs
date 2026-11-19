@@ -83,6 +83,13 @@ impl ReplWorker {
             .collect::<Result<Vec<_>, _>>()?;
         let mut env = BTreeMap::new();
         environment.apply_environment(&mut env)?;
+        if matches!(engine, ReplEngine::Node { .. }) {
+            // OpenSSL reads its global config at startup; an empty config at
+            // /dev/null keeps prefix installs (openssl.cnf under etc/) from
+            // needing any extra filesystem exposure.
+            env.entry("OPENSSL_CONF".into())
+                .or_insert_with(|| "/dev/null".into());
+        }
         let plan = ExecPlan {
             argv,
             cwd: workspace.to_path_buf(),
