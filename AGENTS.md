@@ -22,7 +22,7 @@
 
 ## 开始工作
 
-1. 阅读与任务相关的文档、代码和目录内的 `AGENTS.md`。
+1. 先按下方「ikat 仓库索引」约定确认并读取 `.ikat/digest.md` 获取仓库结构概览，再阅读与任务相关的文档、代码和目录内的 `AGENTS.md`。
 2. 检查工作区已有修改，保留用户和其他协作者的工作。
 3. 从实际文件判断项目状态；文档中的计划不代表能力已经实现。
 4. 在已授权范围内推进工作。普通、可逆的实现选择可以自行处理；会改变产品方向或公共契约的问题先说明影响并向用户确认。
@@ -30,6 +30,28 @@
 实现任务开始时读取[开发进度](docs/progress.md)，按对应版本的任务依赖选择工作。MVP 定义见[实施任务](docs/implementation-plan.md)，后续任务见[后续开发计划](docs/post-mvp-plan.md)。任务完成后同步实际状态与验证证据，完成状态依据实际验收结果维护。
 
 本版 MVP 没有需要重新选择的产品阻塞项。按基线推进，普通内部实现细节自行决定；不要把已确认的决定重新拆成偏好问题询问。
+
+## ikat 仓库索引
+
+- **入口与存储边界**：
+  - 优先使用全局安装的 `ikat`；未全局安装时使用 `npx -y ikat-cli@latest`（需要 Node ≥ 20）。
+  - `.ikat/` 为本地生成的结构索引，默认通过 `.git/info/exclude` 忽略，**不纳入 Git 提交**；除非项目明确决定共享索引，不使用 `--tracked`。
+  - 保留文件末尾由 CLI 管理的 `ikat:index` 注释标记块；仓库约定写在标记块之外，且正文其他位置不要出现原始 HTML 注释起止标签（否则再次运行 `ikat init` 会按首个匹配重写正文）。
+- **进入仓库时的读取与检查**：
+  - 每次进入仓库或开始新任务时，先检查 `.ikat/digest.md`：
+    - 若缺失，自动执行 `ikat init --yes`（或 `npx -y ikat-cli@latest init --yes`）初始化索引。
+    - 若已存在，执行 `ikat status` 或对比 `.ikat/digest.md` 头部 `index:` SHA 与 `git rev-parse HEAD`；若处于 `stale` 或旧格式状态，先自动执行 `ikat sync` 增量刷新。
+  - 优先通过 `.ikat/digest.md` 了解仓库骨架、核心模块排名、依赖边与覆盖范围，避免为定位结构全量遍历目录树。
+- **常用探索与沉淀方式**：
+  - 定向阅读源码与文件元数据：`ikat file <path>`（按需 `--lines a-b` 或 `--full`；二进制返回探针元数据，文档按需通过 `ikat convert <path>` 惰性转换）。
+  - 追踪依赖关系：`ikat refs <path>`（支持 `--json`）查看出向 imports 与入向引用。
+  - 架构图：`ikat diagram` 查看 `.ikat/diagram.mmd`，或 `ikat diagram --draft` 生成确定性基线后再基于源码证据修订。
+  - L1 覆盖层（FRAS 条目）：当发现静态提取无法表达的关键约束（重点为 `S:`，或补充缺失/修正错误的 `F:`）时，按 `ikat enrich` 队列用 `ikat put <path> --entry "..."` 写入，只补 L0 缺失的增量；不要批量重写未实际重读的文件。
+  - 证据边界：`.ikat/` 仅作为结构导航与依赖证据，不替代对目标源码与测试的直接核验；若环境缺少 Node ≥ 20 或离线无法执行 `npx`，如实说明并回退常规文件读取，不编造索引结果。
+- **自动更新规则**：
+  - **进入任务时**：缺失则自动 `init`，落后于 `HEAD`（`stale`）或格式过期则自动 `sync`。
+  - **改动文件后**：凡本次任务新增、删除、重命名或修改了仓库文件（源码、配置、脚本或文档），收尾前自动执行 `ikat sync` 增量刷新 L0 索引与 `.ikat/digest.md`（同时清理已删除文件的孤儿 L1 条目）；随后运行 `ikat enrich --only-stale`，仅针对本次实际改动且已重读的文件更新对应 stale L1 条目。
+  - **Git 提交后**：每次创建 commit 使 `HEAD` 变更后，顺手再执行一次 `ikat sync`（`.ikat/` 位于 `.git/info/exclude`，不会弄脏工作区），保持 `ikat status` 与当前 `HEAD` 一致（`fresh`）。
 
 ## 协作与修改范围
 
@@ -53,6 +75,7 @@
 - 标题与正文的 description 默认使用英文。
 - 破坏性变更在冒号前标记 `!`，或使用 `BREAKING CHANGE:` 脚注说明。
 - 示例：`docs(agents): record Conventional Commits usage in English`。
+- 提交完成后，若本地使用 `.ikat/` 索引，按「ikat 仓库索引」约定执行 `ikat sync`，使本地索引记录的 `HEAD` 与最新提交保持一致（不改动工作区跟踪文件）。
 
 ## 运行时与界面边界
 
@@ -87,3 +110,8 @@
 ## 交付说明
 
 简要说明改了什么、为什么改、完成了哪些验证，以及尚未解决的问题。引用代码或文档时提供可定位的路径。
+
+<!-- ikat:index -->
+This repo has an ikat index: read .ikat/digest.md for architecture context.
+Run `ikat init` to regenerate it; remove .ikat/ and this block to opt out.
+<!-- /ikat:index -->
