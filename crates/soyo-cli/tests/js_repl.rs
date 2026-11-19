@@ -8,19 +8,26 @@
 use serde_json::{Value, json};
 use soyo_core::{
     approvals::Preauthorizations,
-    boundary::{Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store},
+    boundary::{
+        Cancellation, Model, ModelRequest, ModelStream, ModelUpdate, Operation, Store, StoreChange,
+    },
     contract::{
         BoundaryError, ErrorInfo, HistoryItem, ModelProtocol, PermissionMode, Run, RunId,
         RunStatus, Session, SessionId, ToolCall, ToolResult, WorkMode,
     },
+    credentials::SecretRegistry,
+    hook_store::{HookStore, HookStoreLimits},
     memory::MemoryStore,
     permissions::{PermissionConfig, Policy},
+    plugin_manifest::{MANIFEST_NAME, PackageSource, SourceKind, inspect_package},
+    plugin_runtime::{ApprovedRuntime, PluginHostBindings, ViewLimits, ViewPool},
+    plugin_store::{EnableGrant, PluginScope, PluginStore, StoreLimits},
     review::ReviewConfig,
     runtime::{AgentRuntime, RuntimeLimits, RuntimeSetup},
     tools::{exec::ExecConfig, read::ReadLimits, read::ReadTools},
 };
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     fs,
     future::{Future, pending},
     io::{BufRead, BufReader, Write},
@@ -455,6 +462,358 @@ async fn js_repl_malformed_arguments_and_timeout_fail_closed() {
     let hang = tool_result(&session, "repl-hang").expect("timeout result");
     assert!(!hang.ok);
     assert_eq!(hang.error.as_ref().unwrap().code, "tool_timeout");
+}
+
+// ---- DEV-096 joint acceptance: hooks, dynamic deny injection, on/off compare ----
+
+#[derive(Default)]
+struct RecordingStore {
+    inner: MemoryStore,
+    changes: Mutex<Vec<StoreChange>>,
+}
+impl Store for RecordingStore {
+    fn load_session(&self, id: SessionId) -> Operation<'_, Option<Session>> {
+        self.inner.load_session(id)
+    }
+    fn commit<'a>(&'a self, changes: &'a [StoreChange]) -> Operation<'a, ()> {
+        Box::pin(async move {
+            self.inner.commit(changes).await?;
+            self.changes.lock().unwrap().extend_from_slice(changes);
+            Ok(())
+        })
+    }
+}
+
+fn recording_runtime(
+    root: &Path,
+    run: Run,
+    model: Arc<dyn Model>,
+    store: Arc<RecordingStore>,
+) -> Result<AgentRuntime, BoundaryError> {
+    let policy = Arc::new(Policy::new(root, PermissionConfig::default())?);
+    let files = Arc::new(ReadTools::new(root, &[], false, ReadLimits::default()).unwrap());
+    AgentRuntime::new(RuntimeSetup {
+        run,
+        model,
+        store: store as Arc<dyn Store>,
+        policy,
+        files,
+        cancellation: Arc::new(NoCancel),
+        review: ReviewConfig::new("fake".into()),
+        exec: ExecConfig::default(),
+        preauthorizations: Preauthorizations::default(),
+        known_secrets: vec![],
+        summary: "task".into(),
+        confirmation: None,
+        limits: RuntimeLimits::default(),
+    })
+}
+
+fn read_call(id: &str, path: &str) -> HistoryItem {
+    HistoryItem::ToolCall(ToolCall {
+        call_id: id.into(),
+        name: "read_file".into(),
+        arguments: json!({"path": path, "start_line": 1, "line_count": 10}).to_string(),
+    })
+}
+fn child_intents(store: &RecordingStore, prefix: &str) -> Vec<String> {
+    store
+        .changes
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|change| match change {
+            StoreChange::ToolIntent { call, .. } if call.call_id.starts_with(prefix) => {
+                Some(call.call_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+fn child_finished(store: &RecordingStore, call_id: &str) -> Option<ToolResult> {
+    store
+        .changes
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|change| match change {
+            StoreChange::ToolFinished {
+                call_id: id,
+                result,
+                ..
+            } if id == call_id => Some(result.clone()),
+            _ => None,
+        })
+}
+fn history_tool_calls(session: &Session) -> Vec<String> {
+    session
+        .history
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::ToolCall(call) => Some(call.call_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn js_repl_dynamically_computed_calls_still_face_the_gate() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut session, run) = fixture(workspace.path(), PermissionMode::Bypass);
+    let script = concat!(
+        "const parts = ['e', 'xec'];",
+        "const path = '..' + '/escape.txt';",
+        "const e = await soyo.callTool(parts.join(''), {argv: ['/bin/id']});",
+        "const r = await soyo.callTool('read_' + 'file', {path, start_line: 1, line_count: 5});",
+        "return [e.error.code, r.error.code];",
+    );
+    let model = Arc::new(FakeModel {
+        turns: Mutex::new(
+            vec![
+                vec![script_call("repl-1", script)],
+                vec![HistoryItem::AssistantText("done".into())],
+            ]
+            .into(),
+        ),
+    });
+    let store = Arc::new(RecordingStore::default());
+    let runtime = recording_runtime(workspace.path(), run, model, store.clone())
+        .unwrap()
+        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .unwrap();
+    let mut runtime = native_environment(runtime, workspace.path());
+    let result = runtime.run(&mut session).await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed);
+    let result = tool_result(&session, "repl-1").expect("tool result recorded");
+    assert!(result.ok, "repl result: {result:?}");
+    let codes = result.data.as_ref().unwrap().as_array().unwrap();
+    assert_eq!(
+        codes,
+        &vec![json!("permission_denied"), json!("path_denied")]
+    );
+    let intents = child_intents(&store, "repl-1:repl:");
+    assert_eq!(intents.len(), 2, "both blocked calls keep durable intent");
+    for call_id in &intents {
+        let finished = child_finished(&store, call_id).expect("finished evidence");
+        assert!(!finished.ok);
+    }
+}
+
+struct HookFixture {
+    _root: tempfile::TempDir,
+    store: PluginStore,
+    pool: Arc<ViewPool>,
+    journal: Arc<HookStore>,
+    bindings: PluginHostBindings,
+    secrets: Arc<SecretRegistry>,
+}
+impl HookFixture {
+    fn new(workspace: &Path) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(SecretRegistry::default());
+        let store = PluginStore::open(
+            root.path().join("store"),
+            secrets.clone(),
+            StoreLimits::default(),
+        )
+        .unwrap();
+        let pool =
+            Arc::new(ViewPool::open(&root.path().join("views"), ViewLimits::default()).unwrap());
+        let journal = Arc::new(
+            HookStore::open(
+                &root.path().join("hooks"),
+                secrets.clone(),
+                HookStoreLimits::default(),
+            )
+            .unwrap(),
+        );
+        let source = root.path().join("package");
+        fs::create_dir(&source).unwrap();
+        fs::write(
+            source.join("check.sh"),
+            "#!/bin/sh\nIFS= read -r event || :\ncase \"$event\" in\n  *'\"tool\":\"read_file\"'*) printf '{\"decision\":\"deny\",\"annotations\":[{\"level\":\"warning\",\"message\":\"fixture veto\"}]}' ;;\n  *) printf '{\"decision\":\"pass\"}' ;;\nesac\n",
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            "schema_version=1\n[plugin]\nid=\"io.soyo.repl-hook-fixture\"\nversion=\"1.0.0\"\ndescription=\"check hook fixture\"\nlicense=\"MIT\"\n[compatibility]\nrequires_soyo=\">=0.2.0, <1.0.0\"\nrequires_features=[\"plugin-manifest-v1\",\"hook-events-v1\"]\n[capabilities]\nrequested=[\"process.exec\",\"hook.check\"]\n[[hooks]]\nid=\"veto\"\nevent=\"tool.before_dispatch\"\nkind=\"check\"\nprogram=\"shell\"\nargs=[\"@plugin/check.sh\"]\ntimeout_ms=5000\n",
+        )
+        .unwrap();
+        let package = inspect_package(&source).unwrap();
+        store
+            .install(
+                &package,
+                PackageSource {
+                    kind: SourceKind::LocalDirectory,
+                    reference: "./hook-fixture".into(),
+                },
+            )
+            .unwrap();
+        let features =
+            BTreeSet::from(["plugin-manifest-v1".to_owned(), "hook-events-v1".to_owned()]);
+        store
+            .enable(
+                package.digest(),
+                PluginScope::workspace(workspace).unwrap(),
+                EnableGrant::requested(package.manifest()),
+                "0.2.0",
+                &features,
+            )
+            .unwrap();
+        let mut bindings = PluginHostBindings::default();
+        bindings.runtimes.insert(
+            "shell".into(),
+            ApprovedRuntime {
+                program: std::fs::canonicalize("/bin/sh").unwrap(),
+                ..ApprovedRuntime::default()
+            },
+        );
+        Self {
+            _root: root,
+            store,
+            pool,
+            journal,
+            bindings,
+            secrets,
+        }
+    }
+}
+
+#[tokio::test]
+async fn js_repl_bridged_calls_pass_check_hooks_individually() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("seed.txt"), "HOOK-VISIBLE").unwrap();
+    let hooks = HookFixture::new(workspace.path());
+    let (mut session, run) = fixture(workspace.path(), PermissionMode::Bypass);
+    let script = concat!(
+        "const denied = await soyo.callTool('read_file', {path: 'seed.txt', start_line: 1, line_count: 5});",
+        "const allowed = await soyo.callTool('list_dir', {path: '.'});",
+        "return {denied: denied.error.code, allowed: allowed.ok};",
+    );
+    let model = Arc::new(FakeModel {
+        turns: Mutex::new(
+            vec![
+                vec![script_call("repl-1", script)],
+                vec![HistoryItem::AssistantText("done".into())],
+            ]
+            .into(),
+        ),
+    });
+    let store = Arc::new(RecordingStore::default());
+    let runtime = recording_runtime(workspace.path(), run, model, store.clone())
+        .unwrap()
+        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .unwrap()
+        .with_plugins(
+            hooks.store.clone(),
+            hooks.pool.clone(),
+            hooks.bindings.clone(),
+            hooks.journal.clone(),
+        )
+        .unwrap()
+        .with_mcp_settings(
+            soyo_core::mcp::config::McpSettings::default(),
+            soyo_core::config::Environment::from_pairs([]),
+            None,
+            hooks.secrets.clone(),
+        )
+        .unwrap();
+    let mut runtime = native_environment(runtime, workspace.path());
+    let result = runtime.run(&mut session).await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed, "{result:?}");
+    let result = tool_result(&session, "repl-1").expect("tool result recorded");
+    assert!(result.ok, "repl result: {result:?}");
+    let data = result.data.as_ref().unwrap();
+    assert_eq!(data["denied"], "hook_denied", "full data: {data}");
+    assert_eq!(data["allowed"], true);
+    let denied = child_finished(&store, "repl-1:repl:0").expect("denied child evidence");
+    assert_eq!(denied.error.as_ref().unwrap().code, "hook_denied");
+    let allowed = child_finished(&store, "repl-1:repl:1").expect("allowed child evidence");
+    assert!(allowed.ok);
+}
+
+#[tokio::test]
+async fn js_repl_multi_file_comparison_against_per_call_dispatch() {
+    let workspace = tempfile::tempdir().unwrap();
+    for (name, body) in [
+        ("alpha.txt", "CONTENT-ALPHA"),
+        ("beta.txt", "CONTENT-BETA"),
+        ("gamma.txt", "CONTENT-GAMMA"),
+    ] {
+        fs::write(workspace.path().join(name), body).unwrap();
+    }
+
+    // Enabled: one model-visible call; three bridged reads stay off history.
+    let (mut session, run) = fixture(workspace.path(), PermissionMode::Bypass);
+    let script = concat!(
+        "const a = await soyo.callTool('read_file', {path: 'alpha.txt', start_line: 1, line_count: 5});",
+        "const b = await soyo.callTool('read_file', {path: 'beta.txt', start_line: 1, line_count: 5});",
+        "const c = await soyo.callTool('read_file', {path: 'gamma.txt', start_line: 1, line_count: 5});",
+        "return [a.data.content, b.data.content, c.data.content];",
+    );
+    let model = Arc::new(FakeModel {
+        turns: Mutex::new(
+            vec![
+                vec![script_call("repl-1", script)],
+                vec![HistoryItem::AssistantText("done".into())],
+            ]
+            .into(),
+        ),
+    });
+    let store = Arc::new(RecordingStore::default());
+    let runtime = recording_runtime(workspace.path(), run, model, store.clone())
+        .unwrap()
+        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .unwrap();
+    let mut runtime = native_environment(runtime, workspace.path());
+    let result = runtime.run(&mut session).await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed);
+    let repl_result = tool_result(&session, "repl-1").expect("repl result");
+    let repl_contents = repl_result
+        .data
+        .as_ref()
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(history_tool_calls(&session), vec!["repl-1".to_owned()]);
+    assert_eq!(child_intents(&store, "repl-1:repl:").len(), 3);
+
+    // Disabled: the same three reads are three model-visible calls.
+    let (mut session, run) = fixture(workspace.path(), PermissionMode::Bypass);
+    let model = Arc::new(FakeModel {
+        turns: Mutex::new(
+            vec![
+                vec![
+                    read_call("read-1", "alpha.txt"),
+                    read_call("read-2", "beta.txt"),
+                    read_call("read-3", "gamma.txt"),
+                ],
+                vec![HistoryItem::AssistantText("done".into())],
+            ]
+            .into(),
+        ),
+    });
+    let store = Arc::new(RecordingStore::default());
+    let mut runtime = recording_runtime(workspace.path(), run, model, store.clone())
+        .unwrap()
+        .with_js_repl(None)
+        .unwrap();
+    let result = runtime.run(&mut session).await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed);
+    let direct_contents: Vec<Value> = ["read-1", "read-2", "read-3"]
+        .iter()
+        .map(|id| tool_result(&session, id).unwrap().data.as_ref().unwrap()["content"].clone())
+        .collect();
+    assert_eq!(repl_contents, direct_contents);
+    assert_eq!(
+        history_tool_calls(&session),
+        vec![
+            "read-1".to_owned(),
+            "read-2".to_owned(),
+            "read-3".to_owned()
+        ]
+    );
 }
 
 #[tokio::test]
