@@ -337,6 +337,7 @@ fn runtime_with_options(
                         })
                     }),
                 read_only_tools: BTreeSet::from(["echo".into()]),
+                eager_tools: BTreeSet::new(),
                 limits: McpLimitSettings {
                     connect_timeout_seconds: 3,
                     request_timeout_seconds: 3,
@@ -344,6 +345,7 @@ fn runtime_with_options(
                 },
             },
         )]),
+        ..McpSettings::default()
     };
     let mut sandbox = SandboxPolicy::workspace(root.into());
     sandbox.backend = BackendKind::Host;

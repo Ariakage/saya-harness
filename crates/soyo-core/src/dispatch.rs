@@ -13,9 +13,13 @@ use crate::{
     contract::{BoundaryError, ErrorInfo, HistoryItem, Session, SessionId, ToolCall, ToolResult},
     mode::ModeController,
     permissions::{Operation, Policy, PolicyGate},
-    registry::{ExternalAccess, RegisteredTool, ToolRegistry},
+    registry::{ExternalAccess, RegisteredTool, ToolEffect, ToolRegistry, ToolSource},
     review::{ReviewConfig, SharedBudget},
     tools::{
+        discovery::{
+            ToolDiscoveryKind, execute_describe, execute_search, is_eager_mcp, validate_describe,
+            validate_search,
+        },
         exec::{ExecConfig, ExecTool},
         read::{ReadTool, ReadToolKind, ReadTools},
         todo::TodoTool,
@@ -23,7 +27,7 @@ use crate::{
     },
 };
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     path::Path,
     sync::{
@@ -208,9 +212,26 @@ pub struct ToolDispatcher {
     output_access_guard: OnceLock<Arc<OutputAccessGuard>>,
     known_secrets: Vec<String>,
     registry: RwLock<ToolRegistry>,
+    mcp_discovery: RwLock<McpDiscoveryConfig>,
+    expanded_tools: RwLock<Vec<String>>,
     external_active: Arc<AtomicUsize>,
     execution: RwLock<Option<Arc<crate::execution::PreparedEnvironment>>>,
     secret_registry: OnceLock<Arc<crate::credentials::SecretRegistry>>,
+}
+#[derive(Debug, Clone)]
+struct McpDiscoveryConfig {
+    defer_loading: crate::mcp::config::McpDeferMode,
+    defer_threshold: usize,
+    eager_tools: BTreeMap<String, BTreeSet<String>>,
+}
+impl Default for McpDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            defer_loading: crate::mcp::config::McpDeferMode::Auto,
+            defer_threshold: crate::mcp::config::DEFAULT_MCP_DEFER_THRESHOLD,
+            eager_tools: BTreeMap::new(),
+        }
+    }
 }
 pub(crate) type OutputAccessGuard =
     dyn Fn(ToolCall, ToolContext) -> StoreOperation<'static, Option<ToolResult>> + Send + Sync;
@@ -454,30 +475,126 @@ impl ToolDispatcher {
             .map_err(|_| failure("registry_error", "tool registry lock failed"))?
             .register_builtin_adapter(definition, adapter)
     }
-    /// Return native tool schemas without executing or authorizing a call.
-    pub fn definitions(
+    /// Configure MCP deferred-discovery thresholds and per-server eager tools.
+    pub fn configure_mcp_discovery(
+        &self,
+        settings: &crate::mcp::config::McpSettings,
+    ) -> Result<(), BoundaryError> {
+        settings.validate()?;
+        let mut eager_tools = BTreeMap::new();
+        for (server, entry) in &settings.servers {
+            if !entry.eager_tools.is_empty() {
+                eager_tools.insert(server.clone(), entry.eager_tools.clone());
+            }
+        }
+        *self
+            .mcp_discovery
+            .write()
+            .map_err(|_| failure("registry_error", "tool discovery lock failed"))? =
+            McpDiscoveryConfig {
+                defer_loading: settings.defer_loading,
+                defer_threshold: settings.defer_threshold,
+                eager_tools,
+            };
+        Ok(())
+    }
+    /// Return native and external tool schemas split into `(stable_eager, expanded)`.
+    /// When deferred loading is inactive, all eligible tools stay in `stable_eager`.
+    pub fn definitions_split(
         &self,
         mode: crate::contract::WorkMode,
-    ) -> Result<Vec<crate::boundary::ToolDefinition>, BoundaryError> {
+    ) -> Result<
+        (
+            Vec<crate::boundary::ToolDefinition>,
+            Vec<crate::boundary::ToolDefinition>,
+        ),
+        BoundaryError,
+    > {
         let registry = self
             .registry
             .read()
             .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
         registry.validate_current_secrets(&self.current_secrets()?)?;
-        Ok(registry
-            .definitions(mode, !self.read_only)
+        let eligible: Vec<&RegisteredTool> = registry
+            .eligible_entries(mode, !self.read_only)
             .into_iter()
-            .filter(|definition| {
+            .filter(|entry| {
                 !self.read_only
                     || !matches!(
-                        crate::registry::builtin_effect(&definition.name),
-                        Some(
-                            crate::registry::ToolEffect::BrowserRead
-                                | crate::registry::ToolEffect::BrowserWrite
-                        )
+                        crate::registry::builtin_effect(&entry.descriptor().name),
+                        Some(ToolEffect::BrowserRead | ToolEffect::BrowserWrite)
                     )
             })
-            .collect())
+            .collect();
+        let mcp_count = eligible
+            .iter()
+            .filter(|entry| matches!(entry.descriptor().source, ToolSource::Mcp { .. }))
+            .count();
+        let discovery = self
+            .mcp_discovery
+            .read()
+            .map_err(|_| failure("registry_error", "tool discovery lock failed"))?;
+        let defer_active = match discovery.defer_loading {
+            crate::mcp::config::McpDeferMode::Always => mcp_count > 0,
+            crate::mcp::config::McpDeferMode::Never => false,
+            crate::mcp::config::McpDeferMode::Auto => mcp_count > discovery.defer_threshold,
+        };
+        if !defer_active {
+            return Ok((
+                eligible
+                    .into_iter()
+                    .map(RegisteredTool::definition)
+                    .collect(),
+                Vec::new(),
+            ));
+        }
+        let mut stable_eager = Vec::new();
+        let mut eager_names = BTreeSet::new();
+        for entry in &eligible {
+            if !matches!(entry.descriptor().source, ToolSource::Mcp { .. }) {
+                let def = entry.definition();
+                eager_names.insert(def.name.clone());
+                stable_eager.push(def);
+            }
+        }
+        stable_eager.push(ToolDiscoveryKind::Search.definition());
+        stable_eager.push(ToolDiscoveryKind::Describe.definition());
+        for entry in &eligible {
+            if matches!(entry.descriptor().source, ToolSource::Mcp { .. })
+                && is_eager_mcp(entry, &discovery.eager_tools)
+            {
+                let def = entry.definition();
+                eager_names.insert(def.name.clone());
+                stable_eager.push(def);
+            }
+        }
+        let expanded_names = self
+            .expanded_tools
+            .read()
+            .map_err(|_| failure("registry_error", "tool discovery lock failed"))?;
+        let mut expanded = Vec::new();
+        for name in expanded_names.iter() {
+            if eager_names.contains(name) {
+                continue;
+            }
+            if let Some(entry) = eligible
+                .iter()
+                .copied()
+                .find(|entry| entry.descriptor().name == *name)
+            {
+                expanded.push(entry.definition());
+            }
+        }
+        Ok((stable_eager, expanded))
+    }
+    /// Return native tool schemas without executing or authorizing a call.
+    pub fn definitions(
+        &self,
+        mode: crate::contract::WorkMode,
+    ) -> Result<Vec<crate::boundary::ToolDefinition>, BoundaryError> {
+        let (mut stable, expanded) = self.definitions_split(mode)?;
+        stable.extend(expanded);
+        Ok(stable)
     }
     /// Whether this dispatcher hides every side-effecting and browser tool.
     pub(crate) fn is_read_only(&self) -> bool {
@@ -526,7 +643,13 @@ impl ToolDispatcher {
             return Err(failure("registry_busy", "external calls are still active"));
         }
         registry.set_known_secrets(secrets);
-        registry.replace_external(server, revision, tools)
+        let names = registry.replace_external(server, revision, tools)?;
+        let mut expanded = self
+            .expanded_tools
+            .write()
+            .map_err(|_| failure("registry_error", "tool discovery lock failed"))?;
+        expanded.retain(|name| registry.get(name).is_some());
+        Ok(names)
     }
     fn begin_external(
         &self,
@@ -626,6 +749,8 @@ impl ToolDispatcher {
             output_access_guard: OnceLock::new(),
             known_secrets: known_secrets.clone(),
             registry: RwLock::new(ToolRegistry::with_known_secrets(known_secrets)),
+            mcp_discovery: RwLock::new(McpDiscoveryConfig::default()),
+            expanded_tools: RwLock::new(Vec::new()),
             external_active: Arc::new(AtomicUsize::new(0)),
             execution: RwLock::new(None),
             secret_registry: OnceLock::new(),
@@ -747,6 +872,12 @@ impl ToolDispatcher {
                 .ok_or_else(|| failure("unknown_tool", "Output storage is unavailable"))?;
             crate::tools::output::validate_call(call, store.limits())?;
             Operation::output_query(&call.name)?
+        } else if call.name == "tool_search" {
+            validate_search(call)?;
+            Operation::tool_discovery(&call.name)?
+        } else if call.name == "tool_describe" {
+            validate_describe(call)?;
+            Operation::tool_discovery(&call.name)?
         } else if call.name == "todo_write" {
             crate::tools::todo::parse(call)?;
             Operation::todo_write()
@@ -861,6 +992,18 @@ impl ToolDispatcher {
                     return false;
                 }
                 Operation::output_query(&call.name)
+            }
+            "tool_search" => {
+                if validate_search(call).is_err() {
+                    return false;
+                }
+                Operation::tool_discovery(&call.name)
+            }
+            "tool_describe" => {
+                if validate_describe(call).is_err() {
+                    return false;
+                }
+                Operation::tool_discovery(&call.name)
             }
             _ => return false,
         };
@@ -1017,6 +1160,80 @@ impl ToolDispatcher {
                     Ok(None) => {}
                     Err(error) => outcome = Err(error),
                 }
+                let result = match &outcome {
+                    Ok(result) => crate::redaction::tool_result(result, &self.current_secrets()?)?,
+                    Err(error) => ToolResult {
+                        ok: false,
+                        data: None,
+                        error: Some(error.0.clone()),
+                        truncated: false,
+                        media_refs: Vec::new(),
+                    },
+                };
+                save_result(store.as_ref(), call, context, &result).await?;
+                outcome.map(|_| result)
+            }
+            "tool_search" | "tool_describe" => {
+                if !permit.authorize_tool_discovery(call, context)? {
+                    return Err(failure(
+                        "stale_approval",
+                        "Tool discovery authorization is stale",
+                    ));
+                }
+                let _lease = TodoLease(&permit);
+                store
+                    .commit(&[StoreChange::ToolIntent {
+                        run_id: context.run.id,
+                        call: call.clone(),
+                    }])
+                    .await?;
+                let outcome =
+                    if permit.authorize_tool_discovery(call, context)? {
+                        let secrets = self.current_secrets()?;
+                        let registry = self
+                            .registry
+                            .read()
+                            .map_err(|_| failure("registry_error", "tool registry lock failed"))?;
+                        registry.validate_current_secrets(&secrets)?;
+                        let discovery = self
+                            .mcp_discovery
+                            .read()
+                            .map_err(|_| failure("registry_error", "tool discovery lock failed"))?;
+                        if call.name == "tool_search" {
+                            let args = validate_search(call)?;
+                            let expanded = self.expanded_tools.read().map_err(|_| {
+                                failure("registry_error", "tool discovery lock failed")
+                            })?;
+                            execute_search(
+                                &registry,
+                                &args,
+                                context.run.work_mode,
+                                !self.read_only,
+                                &discovery.eager_tools,
+                                &expanded,
+                                &secrets,
+                            )
+                        } else {
+                            let args = validate_describe(call)?;
+                            let mut expanded = self.expanded_tools.write().map_err(|_| {
+                                failure("registry_error", "tool discovery lock failed")
+                            })?;
+                            execute_describe(
+                                &registry,
+                                &args,
+                                context.run.work_mode,
+                                !self.read_only,
+                                &discovery.eager_tools,
+                                &mut expanded,
+                                &secrets,
+                            )
+                        }
+                    } else {
+                        Err(failure(
+                            "stale_approval",
+                            "Tool discovery authorization changed",
+                        ))
+                    };
                 let result = match &outcome {
                     Ok(result) => crate::redaction::tool_result(result, &self.current_secrets()?)?,
                     Err(error) => ToolResult {

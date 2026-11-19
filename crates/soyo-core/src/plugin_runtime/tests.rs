@@ -834,6 +834,7 @@ fn server_identity_collision_in_config_and_secret_host_metadata_are_rejected() {
     let server = active.servers().values().next().unwrap();
     let base = McpSettings {
         servers: BTreeMap::from([(server.server_id.clone(), server.settings.clone())]),
+        ..McpSettings::default()
     };
     assert!(active.settings_for_registration(&base).is_err());
     fixture

@@ -139,6 +139,7 @@ pub enum CredentialSlotBinding {
 #[serde(default, deny_unknown_fields)]
 pub struct HostEntrySettings {
     pub read_only_tools: BTreeSet<String>,
+    pub eager_tools: BTreeSet<String>,
     pub limits: McpLimitSettings,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

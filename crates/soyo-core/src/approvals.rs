@@ -802,6 +802,13 @@ impl OneShotPermit {
     ) -> Result<bool, BoundaryError> {
         self.check(call, context, &Operation::output_query(&call.name)?)
     }
+    pub(crate) fn authorize_tool_discovery(
+        &self,
+        call: &ToolCall,
+        context: &ToolContext,
+    ) -> Result<bool, BoundaryError> {
+        self.check(call, context, &Operation::tool_discovery(&call.name)?)
+    }
     pub(crate) fn authorize_todo(
         &self,
         call: &ToolCall,

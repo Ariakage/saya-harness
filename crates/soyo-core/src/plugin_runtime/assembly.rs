@@ -290,10 +290,12 @@ impl Assembler<'_> {
             enabled: true,
             transport,
             read_only_tools: host.read_only_tools,
+            eager_tools: host.eager_tools,
             limits: host.limits,
         };
         let one = McpSettings {
             servers: BTreeMap::from([(identity.server_id(), settings.clone())]),
+            ..McpSettings::default()
         };
         one.validate()?;
         Ok(PluginServerDescriptor {

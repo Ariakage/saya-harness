@@ -175,13 +175,24 @@ impl ToolRegistry {
     pub fn get(&self, name: &str) -> Option<&RegisteredTool> {
         self.entries.get(name)
     }
-    pub fn definitions(&self, mode: WorkMode, durable: bool) -> Vec<ToolDefinition> {
+    pub fn eligible_entries(&self, mode: WorkMode, durable: bool) -> Vec<&RegisteredTool> {
         self.entries
             .values()
             .filter(|entry| {
                 (mode != WorkMode::Plan || entry.descriptor.allowed_in_plan())
                     && (durable || !entry.descriptor.requires_durability())
             })
+            .collect()
+    }
+    pub fn eligible_mcp_count(&self, mode: WorkMode, durable: bool) -> usize {
+        self.eligible_entries(mode, durable)
+            .into_iter()
+            .filter(|entry| matches!(entry.descriptor.source, ToolSource::Mcp { .. }))
+            .count()
+    }
+    pub fn definitions(&self, mode: WorkMode, durable: bool) -> Vec<ToolDefinition> {
+        self.eligible_entries(mode, durable)
+            .into_iter()
             .map(RegisteredTool::definition)
             .collect()
     }
@@ -444,7 +455,9 @@ pub fn builtin_effect(name: &str) -> Option<ToolEffect> {
         "read_file" | "list_dir" | "find_files" | "search_text" => ToolEffect::FileRead,
         "write_file" | "edit_file" | "apply_patch" => ToolEffect::FileWrite,
         "exec" => ToolEffect::Process,
-        "todo_write" | "output_read" | "output_search" => ToolEffect::SessionMetadata,
+        "todo_write" | "output_read" | "output_search" | "tool_search" | "tool_describe" => {
+            ToolEffect::SessionMetadata
+        }
         "ask_user" => ToolEffect::Interaction,
         "background_start" | "background_status" | "background_cancel" => ToolEffect::Control,
         "fetch_url" | "web_search" => ToolEffect::WebRead,

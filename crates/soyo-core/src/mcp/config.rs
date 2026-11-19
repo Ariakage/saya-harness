@@ -8,10 +8,38 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub const DEFAULT_MCP_DEFER_THRESHOLD: usize = 8;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpDeferMode {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+fn default_defer_threshold() -> usize {
+    DEFAULT_MCP_DEFER_THRESHOLD
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McpSettings {
+    pub defer_loading: McpDeferMode,
+    #[serde(default = "default_defer_threshold")]
+    pub defer_threshold: usize,
     pub servers: BTreeMap<String, McpServerSettings>,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self {
+            defer_loading: McpDeferMode::Auto,
+            defer_threshold: DEFAULT_MCP_DEFER_THRESHOLD,
+            servers: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +50,8 @@ pub struct McpServerSettings {
     pub transport: McpTransportSettings,
     #[serde(default)]
     pub read_only_tools: BTreeSet<String>,
+    #[serde(default)]
+    pub eager_tools: BTreeSet<String>,
     #[serde(default)]
     pub limits: McpLimitSettings,
 }
@@ -122,6 +152,12 @@ impl McpLimitSettings {
 }
 impl McpSettings {
     pub fn validate(&self) -> Result<(), BoundaryError> {
+        if self.defer_threshold > 256 {
+            return Err(error(
+                "invalid_config",
+                "MCP defer threshold exceeds supported maximum",
+            ));
+        }
         if self.servers.len() > 16 {
             return Err(error("invalid_config", "MCP server count exceeds sixteen"));
         }
@@ -140,6 +176,14 @@ impl McpSettings {
                     "invalid_config",
                     "MCP read-only tool names are invalid",
                 ));
+            }
+            if settings.eager_tools.len() > 256
+                || settings
+                    .eager_tools
+                    .iter()
+                    .any(|name| !valid_tool_name(name))
+            {
+                return Err(error("invalid_config", "MCP eager tool names are invalid"));
             }
             match &settings.transport {
                 McpTransportSettings::Stdio(settings) => {
@@ -286,5 +330,42 @@ headers_env={"X-Service-Token"="TOKEN_ONE","x-service-token"="TOKEN_TWO"}
         http.headers_env.clear();
         http.scopes.insert("read\u{7f}".into());
         assert!(settings.validate().is_err());
+    }
+    #[test]
+    fn deferred_loading_defaults_and_overrides_validate() {
+        let defaults: McpSettings = toml::from_str("").unwrap();
+        assert_eq!(defaults.defer_loading, McpDeferMode::Auto);
+        assert_eq!(defaults.defer_threshold, DEFAULT_MCP_DEFER_THRESHOLD);
+        defaults.validate().unwrap();
+
+        let configured: McpSettings = toml::from_str(
+            r#"defer_loading = "always"
+defer_threshold = 0
+[servers.local]
+eager_tools = ["lookup"]
+[servers.local.transport]
+type = "stdio"
+argv = ["server", "--stdio"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(configured.defer_loading, McpDeferMode::Always);
+        assert_eq!(configured.defer_threshold, 0);
+        assert!(configured.servers["local"].eager_tools.contains("lookup"));
+        configured.validate().unwrap();
+
+        let bad_threshold: McpSettings = toml::from_str("defer_threshold = 257").unwrap();
+        assert!(bad_threshold.validate().is_err());
+
+        let bad_eager: McpSettings = toml::from_str(
+            r#"[servers.local]
+eager_tools = ["bad/tool"]
+[servers.local.transport]
+type = "stdio"
+argv = ["server"]
+"#,
+        )
+        .unwrap();
+        assert!(bad_eager.validate().is_err());
     }
 }

@@ -144,7 +144,7 @@ impl ModelSettings {
 /// Convert an object schema to OpenAI strict form when it is possible without
 /// changing the meanings of present fields. Schemas with open-ended maps cannot
 /// be represented in strict mode and require the caller to disable it explicitly.
-fn strict_schema(schema: &Value) -> Result<Value, BoundaryError> {
+pub(crate) fn strict_schema(schema: &Value) -> Result<Value, BoundaryError> {
     fn visit(value: &mut Value) -> Result<(), BoundaryError> {
         match value {
             Value::Object(map) => {

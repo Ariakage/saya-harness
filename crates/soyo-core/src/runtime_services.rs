@@ -714,6 +714,7 @@ impl RuntimeServices {
                 );
             }
         }
+        runtime.dispatcher.configure_mcp_discovery(&registered)?;
         self.emit_status(&mut state).await?;
         for (id, server) in &registered.servers {
             if !server.enabled {

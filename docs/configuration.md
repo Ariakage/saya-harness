@@ -179,10 +179,17 @@ allowed_origins = ["https://example.com"]
 
 `mcp.servers` 最多配置 16 个服务，每个服务显式选择 `stdio` 或 `http`，默认启用。分发到模型的工具由宿主注册表命名，参数、schema、权限、目录版本和取消仍经过统一调度。服务器描述及 annotations 作为外部数据处理。
 
+按 D-079，`[mcp]` 支持全局 `defer_loading`（`"auto"`／`"always"`／`"never"`，默认 `"auto"`）与 `defer_threshold`（默认 `8`，合法范围 `1..=256`）：`"auto"` 模式下仅当当前模式可见的已发现 MCP 工具总数超过 `defer_threshold` 时自动启用延迟加载，保留核心内置工具与 `eager_tools` 固定前缀并注入 `tool_search`／`tool_describe` 按需展开，小目录（`≤ 8`）维持全量注入。每个服务可选 `eager_tools` 列出需固定常驻的远端工具名（最多 256 项）。
+
 ```toml
+[mcp]
+defer_loading = "auto"
+defer_threshold = 8
+
 [mcp.servers.local]
 enabled = false
 read_only_tools = ["lookup"]
+eager_tools = []
 
 [mcp.servers.local.transport]
 type = "stdio"

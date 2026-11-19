@@ -516,6 +516,16 @@ impl Operation {
             target: Target::Metadata,
         })
     }
+    /// Search or describe deferred external MCP tool schemas in the registry.
+    pub fn tool_discovery(tool: &str) -> Result<Self, BoundaryError> {
+        if !matches!(tool, "tool_search" | "tool_describe") {
+            return Err(failure("invalid_args", "Unsupported tool discovery query"));
+        }
+        Ok(Self {
+            tool: tool.into(),
+            target: Target::Metadata,
+        })
+    }
     /// Construct a model-facing background status or cancellation operation.
     pub fn background_control(tool: &str) -> Result<Self, BoundaryError> {
         if !matches!(tool, "background_status" | "background_cancel") {

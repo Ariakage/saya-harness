@@ -121,7 +121,11 @@ fn invalid_tool_request(error: &BoundaryError) -> bool {
     )
 }
 fn is_parallel_read_tool_name(name: &str) -> bool {
-    crate::registry::is_local_read_tool(name) || matches!(name, "output_read" | "output_search")
+    crate::registry::is_local_read_tool(name)
+        || matches!(
+            name,
+            "output_read" | "output_search" | "tool_search" | "tool_describe"
+        )
 }
 fn context_target(call: &ToolCall) -> Option<PathBuf> {
     let value: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
@@ -803,6 +807,7 @@ impl AgentRuntime {
         registry: Arc<crate::credentials::SecretRegistry>,
     ) -> Result<Self, BoundaryError> {
         let runtime = self.with_secret_registry(registry.clone())?;
+        runtime.dispatcher.configure_mcp_discovery(&settings)?;
         runtime
             .services
             .configure_mcp(settings, environment, authorizer, registry)?;
@@ -911,26 +916,34 @@ impl AgentRuntime {
     ) -> Result<Vec<ToolDefinition>, BoundaryError> {
         self.definitions(mode)
     }
-    fn definitions(&self, mode: WorkMode) -> Result<Vec<ToolDefinition>, BoundaryError> {
-        let mut tools = self.dispatcher.definitions(mode)?;
+    fn definitions_split(
+        &self,
+        mode: WorkMode,
+    ) -> Result<(Vec<ToolDefinition>, Vec<ToolDefinition>), BoundaryError> {
+        let (mut stable, expanded) = self.dispatcher.definitions_split(mode)?;
         if let Some(memory) = &self.managed_memory {
-            tools.extend(memory.definitions(mode, self.read_only)?);
+            stable.extend(memory.definitions(mode, self.read_only)?);
         }
         if let Some(skills) = &self.skill_state {
-            tools.extend(skills.definitions());
+            stable.extend(skills.definitions());
         }
         if let Some(checkpoints) = &self.checkpoints {
-            tools.extend(checkpoints.definitions(mode, self.read_only));
+            stable.extend(checkpoints.definitions(mode, self.read_only));
         }
         if (self.read_only || mode == WorkMode::Plan)
-            && let Some(definition) = tools
+            && let Some(definition) = stable
                 .iter_mut()
                 .find(|definition| definition.name == "background_start")
         {
             definition.input_schema["properties"]["tool"]["enum"] =
                 serde_json::json!(["read_file", "list_dir", "find_files", "search_text"]);
         }
-        Ok(tools)
+        Ok((stable, expanded))
+    }
+    fn definitions(&self, mode: WorkMode) -> Result<Vec<ToolDefinition>, BoundaryError> {
+        let (mut stable, expanded) = self.definitions_split(mode)?;
+        stable.extend(expanded);
+        Ok(stable)
     }
     fn context(&self, session: &Session, mode: WorkMode) -> ToolContext {
         let mut run = self.run.clone();
@@ -1083,14 +1096,16 @@ impl AgentRuntime {
         let environment_facts = self.services.facts(mode).await?;
         let memory_frame = self.memory_frame(session).await?;
         let skill_frame = self.skill_frame(session).await?;
-        let tools = self.definitions(mode)?;
+        let (stable_tools, expanded_tools) = self.definitions_split(mode)?;
         let instructions = crate::prompt::execution_with_memory(
             mode,
             self.run.permissions,
-            &tools,
+            &stable_tools,
             self.managed_memory.is_some(),
         )?
         .instructions;
+        let mut tools = stable_tools;
+        tools.extend(expanded_tools);
         let mut run = self.run.clone();
         run.work_mode = mode;
         let dynamic_instructions = Some(crate::prompt::system_context(

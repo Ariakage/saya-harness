@@ -8,7 +8,26 @@
 
 MCP 服务通过显式 TOML 配置选择，最多 16 个。运行创建连接并发现工具目录，结束时清理所拥有的进程和连接。恢复会话后等待新输入，下一次 Run 按本次配置重新建立服务。
 
-服务的原始工具名、描述、输入／输出 schema 和 annotations 来自外部服务器。宿主注册表生成带 `mcp__` 前缀、服务器片段、工具片段及稳定摘要的模型工具名。发现内容经过 schema、分页、总量与目录代次检查，实际调用继续检查当前工作模式、权限、授权绑定和取消。目录变化使旧目录授权失效，模型下一次看到的是新注册表快照。
+服务的原始工具名、描述、输入／输出 schema 和 annotations 来自外部服务器。宿主注册表生成带 `mcp__` 前缀、服务器片段、工具片段及稳定摘要的模型工具名。发现内容经过 schema、分页、总量与目录代次检查，实际调用继续检查当前工作模式、权限、授权绑定和取消。目录变化使旧目录授权失效，模型下一次看到的是新注册表快照，目录刷新（`replace_external`）后已移除的展开工具也会从当前暴露集合中剔除。
+
+### 按需发现与延迟加载（D-079）
+
+当配置启用了较多外部 MCP 工具时，可在 `[mcp]` 下通过 `defer_loading`（`"auto"`／`"always"`／`"never"`，默认 `"auto"`）与 `defer_threshold`（默认 `8`，范围 `1..=256`）控制向模型暴露完整 schema 的策略，单个服务还可通过 `eager_tools = ["..."]` 列出即使延迟生效也保持常驻的远端工具名：
+
+```toml
+[mcp]
+defer_loading = "auto"
+defer_threshold = 8
+
+[mcp.servers.billing]
+enabled = true
+read_only_tools = ["invoice_lookup"]
+eager_tools = []
+```
+
+- **阈值触发**：`"auto"` 模式下，仅当当前运行模式允许的已发现 MCP 工具总数超过 `defer_threshold`（默认 `> 8`）时自动启用延迟加载；小目录（`≤ 8`）维持既有全量直接注入，不引入额外搜索轮次。`"always"` 只要存在可用 MCP 工具即启用，`"never"` 强制全量注入。
+- **稳定前缀与按需展开**：触发延迟加载后，系统提示中的核心内置工具、`tool_search`、`tool_describe` 与 `eager_tools` 按固定顺序构成稳定的前缀列表，其余 MCP schema 暂不注入；模型调用 `tool_search` 按关键词或 `server` 检索脱敏摘要后，调用 `tool_describe`（单次最多 8 个精确模型工具名）查看详情并将命中的工具定义追加到前缀末尾，保持首部系统指令与核心工具缓存前缀逐字节稳定。
+- **安全边界**：`tool_search` 与 `tool_describe` 同样受工作模式（`PLAN` 仅暴露 `read_only_tools` 明确允许的只读工具）、`[permissions]` `deny`／`ask`／`Manual` 规则、目录代次绑定与 `SecretRegistry` 脱敏约束；`tool_search` 不直接展开 schema，必须通过 `tool_describe` 后才会附着到后续请求。
 
 工具结果按内容类型投影并限制大小。文本与结构化结果可进入模型上下文，不受支持的内容以有界元数据表示。工具失败保留明确错误，连接中断、执行已开始但完成无法确认时按 `unknown` 处理，运行时保存记录并阻止历史重放。
 

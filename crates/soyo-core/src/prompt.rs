@@ -159,6 +159,15 @@ pub fn execution(
             include_str!("../prompts/v1/output-retrieval.md"),
         ));
     }
+    if names
+        .iter()
+        .any(|name| *name == "tool_search" || *name == "tool_describe")
+    {
+        sections.push((
+            "tool_discovery",
+            include_str!("../prompts/v1/tool-discovery.md"),
+        ));
+    }
     if names.contains("memory_update") || names.contains("memory_forget") {
         sections.push(("memory_operations", MEMORY_OPERATIONS));
     }
