@@ -33,6 +33,7 @@ import {
 } from "../bindings";
 import { LANGUAGE_OPTIONS, getMessages, type LocaleId } from "../lib/i18n";
 import { WORK_MODE_STYLES, formatTokenCount } from "../lib/sanitize";
+import { isBrowserPreview } from "../preview/browserPreview";
 import {
   type ConversationFont,
   type ConversationFontSize,
@@ -283,7 +284,7 @@ export function SettingsDialog({
   }, [nickname]);
 
   useEffect(() => {
-    if (!open || !isTauri()) return;
+    if (!open || (!isTauri() && !isBrowserPreview())) return;
     void commands.getGlobalPrompt().then((res) => {
       if (res.status === "ok" && res.data) {
         setPromptText(res.data.content);
@@ -311,7 +312,9 @@ export function SettingsDialog({
   }, [open, activeTab, refreshHelper]);
 
   useEffect(() => {
-    if (!open || activeTab !== "usage" || !isTauri()) return;
+    if (!open || activeTab !== "usage" || (!isTauri() && !isBrowserPreview())) {
+      return;
+    }
     let cancelled = false;
     setUsageLoading(true);
     setUsageError(null);

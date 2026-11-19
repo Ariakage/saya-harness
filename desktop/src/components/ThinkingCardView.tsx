@@ -50,7 +50,7 @@ export function ThinkingCardView({ entries }: ThinkingCardViewProps) {
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
-        className="group flex w-full items-center gap-2 rounded-[8px] px-1 py-1.5 text-left text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-raised)] hover:text-[var(--text-secondary)]"
+        className="group flex w-full items-center gap-2 rounded-[var(--radius-md)] px-1 py-1.5 text-left text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-raised)] hover:text-[var(--text-secondary)]"
       >
         <ChevronRight
           className={`h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform duration-200 ease-out ${

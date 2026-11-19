@@ -19,6 +19,7 @@ import {
   Folder,
   GitBranch,
   Globe,
+  Hand,
   History,
   KeyRound,
   Lock,
@@ -228,6 +229,10 @@ export function App() {
   );
 
   const previewMode = isBrowserPreview();
+  const hidePreviewBar =
+    previewMode &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("chrome") === "clean";
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
   const [viewportWidth, setViewportWidth] = useState<number>(() =>
     typeof window !== "undefined" ? window.innerWidth : 1280
@@ -606,13 +611,13 @@ export function App() {
         {/* Right Titlebar Zone */}
         <div
           data-tauri-drag-region
-          className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-[12.5px] text-[var(--text-secondary)]"
+          className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-[13px] text-[var(--text-secondary)]"
         >
           <button
             type="button"
             onClick={() => setSessionsOpen(true)}
             title={t.a11y.switchOrBrowseSessions}
-            className="flex h-[26px] min-w-0 max-w-[380px] items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex h-[26px] min-w-0 max-w-[380px] items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-left text-[13px] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <span className="truncate font-medium text-[var(--text-primary)]">
               {isHomeEmpty ? t.topbar.home : sessionTitle}
@@ -634,7 +639,7 @@ export function App() {
               }
             }}
           >
-            {previewMode && (
+            {previewMode && !hidePreviewBar && (
               <div className="flex flex-wrap items-center gap-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-0.5 text-[11px]">
                 <Sparkles className="h-3 w-3 text-[var(--accent-text)]" strokeWidth={1.75} />
                 <span className="mr-0.5 text-[var(--accent-text)]">Preview</span>
@@ -659,7 +664,7 @@ export function App() {
             {(runActive || (previewMode && scene === "subagent")) && (
               <div
                 data-testid="goal-topbar-pill"
-                className="soyo-panel-enter inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--warning)] bg-[var(--warning-surface)] px-2.5 py-1 text-[11.5px] text-[var(--warning)]"
+                className="soyo-panel-enter inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--warning)] bg-[var(--warning-surface)] px-2.5 py-1 text-[12px] text-[var(--warning)]"
               >
                 <Flag className="h-3 w-3 shrink-0" strokeWidth={1.75} />
                 <span className="max-w-[140px] truncate">{sessionTitle}</span>
@@ -668,7 +673,7 @@ export function App() {
                   onClick={() => void cancelActiveRun()}
                   title={t.a11y.cancelRun}
                   aria-label={t.a11y.cancelRun}
-                  className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--warning)] bg-[var(--surface-raised)] text-[var(--warning)] transition-colors hover:bg-[var(--surface-hover)]"
+                  className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--warning)] bg-[var(--surface-raised)] text-[var(--warning)] transition-colors hover:bg-[var(--surface-hover)]"
                 >
                   <Pause className="h-2.5 w-2.5" strokeWidth={1.75} />
                 </button>
@@ -677,7 +682,7 @@ export function App() {
                   onClick={() => void cancelActiveRun()}
                   title={t.a11y.cancelRun}
                   aria-label={t.a11y.cancelRun}
-                  className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--warning)] bg-[var(--surface-raised)] text-[var(--warning)] transition-colors hover:bg-[var(--surface-hover)]"
+                  className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--warning)] bg-[var(--surface-raised)] text-[var(--warning)] transition-colors hover:bg-[var(--surface-hover)]"
                 >
                   <Square className="h-2 w-2 fill-current" />
                 </button>
@@ -691,7 +696,7 @@ export function App() {
                 data-testid="bypass-mode-badge"
                 onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
                 title={t.a11y.permissionMode}
-                className="soyo-pill h-[26px] border-[var(--danger)] bg-[var(--danger-surface)] px-2.5 py-0 text-[11.5px] font-medium text-[var(--danger)]"
+                className="soyo-pill h-[26px] border-[var(--danger)] bg-[var(--danger-surface)] px-2.5 py-0 text-[12px] font-medium text-[var(--danger)]"
               >
                 <ShieldAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
                 <span>{PERMISSION_MODE_LABELS.bypass}</span>
@@ -703,7 +708,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "mode" ? null : "mode")}
-                className="soyo-pill h-[26px] rounded-[var(--radius-sm)] border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-0 text-[11.5px] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
+                className="soyo-pill h-[26px] rounded-[var(--radius-sm)] border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-0 text-[12px] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
                 title={t.a11y.workMode}
                 aria-label={t.a11y.workMode}
                 aria-haspopup="menu"
@@ -726,7 +731,7 @@ export function App() {
               {topMenu === "mode" && (
                 <div
                   role="menu"
-                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[13px] shadow-[var(--shadow-popover)]"
                 >
                   {(
                     Object.keys(WORK_MODE_STYLES) as Array<
@@ -767,26 +772,29 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
-                  className="soyo-pill h-[26px] rounded-[var(--radius-sm)] border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-0 text-[11.5px] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
+                  className="soyo-pill h-[26px] rounded-[var(--radius-sm)] border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-0 text-[12px] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
                   title={t.a11y.permissionMode}
                   aria-label={t.a11y.permissionMode}
                   aria-haspopup="menu"
                 >
                   <span
-                    className={
+                    className={`inline-flex items-center gap-1 ${
                       permissionMode === "manual"
-                        ? "text-[var(--warning)]"
-                        : "text-[var(--info)]"
-                    }
+                        ? "text-[var(--info)]"
+                        : "text-[var(--text-secondary)]"
+                    }`}
                   >
-                    {PERMISSION_MODE_LABELS[permissionMode]}
+                    {permissionMode === "manual" && (
+                      <Hand className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                    )}
+                    <span>{PERMISSION_MODE_LABELS[permissionMode]}</span>
                   </span>
                   <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                 </button>
                 {topMenu === "perm" && (
                   <div
                     role="menu"
-                    className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[196px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
+                    className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[196px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[13px] shadow-[var(--shadow-popover)]"
                   >
                     {(
                       ["auto", "bypass", "manual"] as Array<
@@ -805,12 +813,15 @@ export function App() {
                           perm === "bypass"
                             ? "text-[var(--danger)]"
                             : perm === "manual"
-                              ? "text-[var(--warning)]"
+                              ? "text-[var(--info)]"
                               : "text-[var(--text-secondary)]"
                         }`}
                       >
                         {perm === "bypass" && (
                           <ShieldAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                        )}
+                        {perm === "manual" && (
+                          <Hand className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
                         )}
                         <span>{PERMISSION_MODE_LABELS[perm]}</span>
                         {perm === permissionMode && (
@@ -827,7 +838,7 @@ export function App() {
               <div className="relative">
                 <div
                   role="menu"
-                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[196px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[196px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[13px] shadow-[var(--shadow-popover)]"
                 >
                   {(
                     ["auto", "bypass", "manual"] as Array<
@@ -924,7 +935,7 @@ export function App() {
               {topMenu === "more" && (
                 <div
                   role="menu"
-                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[13px] shadow-[var(--shadow-popover)]"
                 >
                   <button
                     type="button"
@@ -1123,7 +1134,7 @@ export function App() {
                                 : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                             }`}
                           >
-                            <span className="truncate text-[12.5px] font-medium">
+                            <span className="truncate text-[13px] font-medium">
                               {item.title ?? t.sidebar.untitledSession}
                             </span>
                             <span className="truncate text-[11px] text-[var(--text-tertiary)]">
@@ -1182,7 +1193,7 @@ export function App() {
               {!sidebarCollapsed && (
                 <>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12.5px] font-medium text-[var(--text-primary)]">
+                    <div className="truncate text-[13px] font-medium text-[var(--text-primary)]">
                       {displayName ?? "soyo-desktop"}
                     </div>
                     <div className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
@@ -1200,7 +1211,7 @@ export function App() {
             {userMenuOpen && (
               <div
                 data-testid="user-menu-popover"
-                className={`soyo-popover-up absolute z-50 w-[232px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)] ${
+                className={`soyo-popover-up absolute z-50 w-[232px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[13px] shadow-[var(--shadow-popover)] ${
                   sidebarCollapsed
                     ? "bottom-0 left-[calc(100%+10px)] origin-bottom-left"
                     : "bottom-[calc(100%+6px)] left-0 origin-bottom"
@@ -1301,7 +1312,7 @@ export function App() {
         </aside>
 
         {/* Main Content Surface */}
-        <div className="flex min-w-0 flex-1 flex-col bg-[var(--surface-main)]">
+        <div className="flex min-w-0 flex-1 flex-col bg-[var(--surface-app)]">
           <UpdaterBanner />
 
           {helperReconnecting && (
@@ -1355,7 +1366,7 @@ export function App() {
 
           {/* Split Area */}
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="flex min-w-0 flex-1 flex-col">
+            <div data-main-pane className="flex min-w-0 flex-1 flex-col">
               {isHomeEmpty ? (
                 /* Home Empty State (§8) */
                 <div
@@ -1433,7 +1444,7 @@ export function App() {
                   </button>
 
                   <div className="mt-8 w-full max-w-[620px] space-y-0.5">
-                    <div className="px-3 py-1 text-[11.5px] text-[var(--text-tertiary)]">
+                    <div className="px-3 py-1 text-[12px] text-[var(--text-tertiary)]">
                       {t.home.ideasForYou}
                     </div>
                     {[
@@ -1479,7 +1490,7 @@ export function App() {
                 >
                   <div className="mx-auto flex max-w-[840px] flex-col gap-3.5">
                     {historyOmitted && (
-                      <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-1.5 text-[11.5px] text-[var(--text-tertiary)]">
+                      <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-1.5 text-[12px] text-[var(--text-tertiary)]">
                         {t.home.historyOmitted}
                       </div>
                     )}
@@ -1573,7 +1584,7 @@ export function App() {
                         return (
                           <div
                             key={msg.id}
-                            className="flex items-center justify-between px-1 py-0.5 text-[11.5px] text-[var(--text-tertiary)]"
+                            className="flex items-center justify-between px-1 py-0.5 text-[12px] text-[var(--text-tertiary)]"
                           >
                             <span className="font-mono uppercase text-[var(--text-secondary)]">
                               {msg.label}
@@ -1755,7 +1766,7 @@ export function App() {
                   >
                     <RotateCw className="h-3.5 w-3.5" strokeWidth={1.75} />
                   </button>
-                  <div className="flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-1 text-[11.5px] text-[var(--text-secondary)]">
+                  <div className="flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-1 text-[12px] text-[var(--text-secondary)]">
                     <Lock className="h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     <span className="truncate font-mono text-[11px]">
                       localhost:1420
@@ -1781,7 +1792,7 @@ export function App() {
                 </div>
                 <div
                   key={browserRefreshTick}
-                  className="soyo-panel-enter flex min-h-0 flex-1 bg-[var(--surface-main)] text-[11px]"
+                  className="soyo-panel-enter flex min-h-0 flex-1 bg-[var(--surface-app)] text-[11px]"
                 >
                   <div className="flex w-[118px] shrink-0 flex-col gap-0.5 border-r border-[var(--border-subtle)] bg-[var(--surface-sidebar)] p-2">
                     {(
@@ -1814,16 +1825,16 @@ export function App() {
                         alt={t.about.productName}
                         className="h-[18px] w-[18px] rounded-[22%] object-cover"
                       />
-                      <span className="soyo-font-display text-[17px]">{greeting}</span>
+                      <span className="soyo-font-display text-[16px]">{greeting}</span>
                     </div>
-                    <div className="w-full max-w-[320px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-composer)] p-2.5 text-left text-[11px] text-[var(--text-tertiary)]">
+                    <div className="w-full max-w-[320px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-raised)] p-2.5 text-left text-[11px] text-[var(--text-tertiary)]">
                       <div>{t.composer.placeholderHome}</div>
                       <div className="mt-2.5 flex items-center justify-between">
-                        <span className="rounded-[var(--radius-xs)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
+                        <span className="rounded-[var(--radius-sm)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
                           +
                         </span>
                         <div className="flex items-center gap-1.5">
-                          <span className="rounded-[var(--radius-xs)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
+                          <span className="rounded-[var(--radius-sm)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
                             {bootstrap?.selected_model ?? "claude-sonnet-4-5"}
                           </span>
                           <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[var(--accent)] text-[var(--on-accent)]">

@@ -48,7 +48,7 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
       role="region"
       aria-label={t.a11y.approvalRegion}
       data-testid="approval-dialog"
-      className="soyo-msg-enter rounded-[12px] border border-[var(--warning)] bg-[var(--warning-surface)] p-[14px] text-xs shadow-[var(--shadow-sm)]"
+      className="soyo-msg-enter rounded-[var(--radius-lg)] border border-[var(--warning)] bg-[var(--warning-surface)] p-[14px] text-xs"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--text-primary)]">
@@ -60,34 +60,34 @@ export function ApprovalDialog({ request, onReply }: ApprovalDialogProps) {
         </span>
       </div>
 
-      <div className="my-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-2.5 text-[12px]">
+      <div className="my-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-2.5 text-[12px]">
         <span className="text-[var(--text-tertiary)]">{t.approval.tool}</span>
-        <span className="font-mono text-[11.5px] text-[var(--text-primary)]">
+        <span className="font-mono text-[12px] text-[var(--text-primary)]">
           {sanitizeDisplayText(request.tool)}
         </span>
         {request.action && (
           <>
             <span className="text-[var(--text-tertiary)]">{t.approval.action}</span>
-            <span className="font-mono text-[11.5px] text-[var(--info)]">
+            <span className="font-mono text-[12px] text-[var(--info)]">
               {sanitizeDisplayText(request.action)}
             </span>
           </>
         )}
         <span className="text-[var(--text-tertiary)]">{t.approval.call}</span>
-        <span className="font-mono text-[11.5px] text-[var(--text-primary)]">
+        <span className="font-mono text-[12px] text-[var(--text-primary)]">
           {sanitizeDisplayText(request.call_id)}
         </span>
         <span className="text-[var(--text-tertiary)]">{t.approval.workspace}</span>
-        <span className="truncate font-mono text-[11.5px] text-[var(--text-primary)]">
+        <span className="truncate font-mono text-[12px] text-[var(--text-primary)]">
           {sanitizeDisplayText(request.cwd)}
         </span>
       </div>
 
-      <div className="text-[12.5px] text-[var(--text-secondary)]">
+      <div className="text-[13px] text-[var(--text-secondary)]">
         {sanitizeDisplayText(request.operation_summary)}
       </div>
 
-      <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[var(--border)] bg-[var(--surface-code)] px-2.5 py-2 font-mono text-[12px] text-[var(--text-primary)]">
+      <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] px-2.5 py-2 font-mono text-[12px] text-[var(--text-primary)]">
         {sanitizeDisplayText(request.formatted_call)}
       </pre>
 

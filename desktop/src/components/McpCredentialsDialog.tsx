@@ -211,7 +211,7 @@ export function McpCredentialsDialog({
         )}
       </section>
 
-      <section className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-main)] p-3">
+      <section className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-app)] p-3">
         <div className="font-medium text-[var(--text-primary)]">
           {t.mcpDialog.importTitle}
         </div>

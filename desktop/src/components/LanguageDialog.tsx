@@ -50,16 +50,16 @@ export function LanguageDialog({
       }}
       className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs"
     >
-      <div className="soyo-dialog-enter w-full max-w-[580px] rounded-[14px] border border-[var(--border)] bg-[var(--surface-raised)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.68)]">
+      <div className="soyo-dialog-enter w-full max-w-[580px] rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-raised)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.68)]">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">
+          <h2 className="text-[16px] font-semibold text-[var(--text-primary)]">
             {t.languageDialog.title}
           </h2>
           <button
             type="button"
             onClick={onClose}
             aria-label={t.languageDialog.closeAria}
-            className="rounded-[7px] p-1 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+            className="rounded-[var(--radius-md)] p-1 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -80,7 +80,7 @@ export function LanguageDialog({
                 aria-checked={isSelected}
                 data-testid={`language-option-${opt.id}`}
                 onClick={() => onSelectLocale(opt.id)}
-                className={`flex flex-col rounded-[9px] border px-3 py-2.5 text-left transition-colors ${
+                className={`flex flex-col rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors ${
                   isSelected
                     ? "border-[var(--border-strong)] bg-[var(--info-surface)] text-[var(--text-primary)]"
                     : "border-transparent bg-transparent text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"

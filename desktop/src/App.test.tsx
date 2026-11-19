@@ -622,7 +622,7 @@ describe("App Stage 3 runtime integration", () => {
 
     const settingsDialog = screen.getByTestId("settings-dialog");
     fireEvent.click(within(settingsDialog).getByRole("button", { name: "General" }));
-    const wsInput = screen.getByLabelText("Workspace Directory");
+    const wsInput = screen.getByLabelText("Workspace directory");
     fireEvent.change(wsInput, { target: { value: "/workspace/updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => {
@@ -643,9 +643,9 @@ describe("App Stage 3 runtime integration", () => {
       });
     });
 
-    // MCP & Credentials (embedded tab inside Settings)
+    // MCP & credentials (embedded tab inside Settings)
     fireEvent.click(
-      within(settingsDialog).getByRole("button", { name: "MCP & Credentials" })
+      within(settingsDialog).getByRole("button", { name: "MCP & credentials" })
     );
     await waitFor(() => {
       expect(screen.getByTestId("mcp-embedded-panel")).toBeTruthy();

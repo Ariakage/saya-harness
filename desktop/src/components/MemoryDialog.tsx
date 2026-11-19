@@ -123,13 +123,13 @@ export function MemoryDialog({
           </Button>
         </div>
         {queryResult && (
-          <pre className="max-h-56 overflow-auto rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-main)] p-3 font-mono text-[11px] text-[var(--text-secondary)]">
+          <pre className="max-h-56 overflow-auto rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-app)] p-3 font-mono text-[11px] text-[var(--text-secondary)]">
             {JSON.stringify(queryResult.data, null, 2)}
           </pre>
         )}
       </div>
 
-      <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-main)] p-3">
+      <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-app)] p-3">
         <div className="font-medium text-[var(--text-primary)]">
           {t.memoryDialog.prepareTitle}
         </div>

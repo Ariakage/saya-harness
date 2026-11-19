@@ -503,7 +503,7 @@ export function EffortPill({
             : "h-full rounded-r-[var(--radius-md)] bg-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           : `h-[26px] rounded-[var(--radius-md)] border ${
               isUltra
-                ? "border-[var(--ultra)] bg-[var(--ultra-surface)] text-[var(--ultra-bright)] shadow-[var(--shadow-sm)]"
+                ? "border-[var(--ultra)] bg-[var(--ultra-surface)] text-[var(--ultra-bright)]"
                 : "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
             }`
       }`}
@@ -1027,7 +1027,7 @@ export function EffortPopover({
       </div>
 
       <p
-        className={`mx-[2px] mt-[10px] min-h-[34px] text-[11.5px] leading-[1.45] ${
+        className={`mx-[2px] mt-[10px] min-h-[34px] text-[12px] leading-[1.45] ${
           activeLevelText.warning ? "text-[var(--warning)]" : "text-[var(--text-tertiary)]"
         }`}
       >

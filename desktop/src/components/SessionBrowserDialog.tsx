@@ -163,7 +163,7 @@ export function SessionBrowserDialog({
       </div>
 
       {/* Filters bar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface-main)] px-4 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface-app)] px-4 py-2 text-xs">
         <select
           aria-label={t.a11y.workspaceFilter}
           value={projectFilter}
@@ -310,7 +310,7 @@ export function SessionBrowserDialog({
         </div>
 
         {/* Right: Session details summary */}
-        <div className="hidden w-[250px] shrink-0 flex-col justify-between bg-[var(--surface-main)] p-4 text-xs sm:flex">
+        <div className="hidden w-[250px] shrink-0 flex-col justify-between bg-[var(--surface-app)] p-4 text-xs sm:flex">
           {selectedItem ? (
             <div key={selectedItem.id} className="soyo-panel-enter space-y-3">
               <div className="text-[11px] uppercase tracking-wider text-[var(--text-tertiary)]">
@@ -321,7 +321,7 @@ export function SessionBrowserDialog({
                   selectedItem.title ?? t.sidebar.untitledSession
                 )}
               </div>
-              <div className="space-y-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-2.5 text-[11.5px]">
+              <div className="space-y-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-2.5 text-[12px]">
                 <div className="flex justify-between gap-2">
                   <span className="text-[var(--text-tertiary)]">{t.sessionBrowser.project}</span>
                   <span className="font-mono text-[var(--text-primary)]">

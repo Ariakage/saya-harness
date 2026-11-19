@@ -154,7 +154,7 @@ export function preprocessMarkdownForDisplay(raw: string): string {
 
 function MermaidFallbackCard({ chart, error }: MermaidErrorComponentProps) {
   return (
-    <div className="my-2 rounded-[10px] border border-[var(--warning)] bg-[var(--warning-surface)] p-3 text-xs">
+    <div className="my-2 rounded-[var(--radius-lg)] border border-[var(--warning)] bg-[var(--warning-surface)] p-3 text-xs">
       <div className="mb-2 flex items-center justify-between gap-2 text-[var(--warning)]">
         <span className="inline-flex items-center gap-1.5 font-medium">
           <GitBranch className="h-3.5 w-3.5" />
@@ -170,7 +170,7 @@ function MermaidFallbackCard({ chart, error }: MermaidErrorComponentProps) {
           <span>{sanitizeDisplayText(error)}</span>
         </div>
       )}
-      <pre className="overflow-x-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-code)] p-2.5 text-xs text-[var(--text-secondary)]">
+      <pre className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] p-2.5 text-xs text-[var(--text-secondary)]">
         <code>{sanitizeDisplayText(chart)}</code>
       </pre>
     </div>
@@ -233,7 +233,7 @@ export function MarkdownRenderer({
             </button>
           </div>
         )}
-        <pre className="overflow-x-auto whitespace-pre-wrap rounded-[10px] border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-xs leading-relaxed text-[var(--text-primary)]">
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-xs leading-relaxed text-[var(--text-primary)]">
           <code>{sanitized}</code>
         </pre>
       </div>
@@ -290,14 +290,14 @@ export function MarkdownRenderer({
                   ? "Math"
                   : "Code";
               return (
-                <div className="my-2 rounded-[10px] border border-[var(--warning)] bg-[var(--warning-surface)] p-3 text-xs">
+                <div className="my-2 rounded-[var(--radius-lg)] border border-[var(--warning)] bg-[var(--warning-surface)] p-3 text-xs">
                   <div className="mb-1.5 flex items-center justify-between text-[var(--warning)]">
                     <span className="font-medium">{kindLabel}</span>
                     <span className="soyo-pill text-[11px] uppercase tracking-wide text-[var(--warning)]">
                       source fallback
                     </span>
                   </div>
-                  <pre className="overflow-x-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-code)] p-2 text-xs text-[var(--text-secondary)]">
+                  <pre className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] p-2 text-xs text-[var(--text-secondary)]">
                     <code>{rawText}</code>
                   </pre>
                 </div>

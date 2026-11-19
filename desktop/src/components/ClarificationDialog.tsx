@@ -64,7 +64,7 @@ export function ClarificationDialog({
                   type="button"
                   disabled={submitting}
                   onClick={() => void submitAnswer(opt)}
-                  className="flex items-center gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-2 text-left text-xs text-[var(--text-primary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-2 text-left text-xs text-[var(--text-primary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
                 >
                   <span className="soyo-pill py-0 font-mono text-[11px] text-[var(--info)]">
                     {idx + 1}

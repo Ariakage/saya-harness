@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Gauge,
   Globe,
+  Hand,
   Layers,
   List,
   Minimize2,
@@ -193,13 +194,17 @@ export function Composer({
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
+    const target =
+      (el.closest("[data-main-pane]") as HTMLElement | null) ??
+      el.parentElement ??
+      el;
     const updateWidth = () => {
-      const w = el.clientWidth;
+      const w = target.clientWidth;
       setNarrowComposer(w > 0 && w < 640);
     };
     updateWidth();
     const ro = new ResizeObserver(() => updateWidth());
-    ro.observe(el);
+    ro.observe(target);
     return () => ro.disconnect();
   }, []);
 
@@ -582,8 +587,8 @@ export function Composer({
     permissionMode === "bypass"
       ? "text-[var(--danger)]"
       : permissionMode === "manual"
-        ? "text-[var(--warning)]"
-        : "text-[var(--info)]";
+        ? "text-[var(--info)]"
+        : "text-[var(--text-secondary)]";
 
   const cardInner = (
     <div ref={rootRef} className="relative w-full">
@@ -607,7 +612,7 @@ export function Composer({
                 key={item.cmd}
                 type="button"
                 onClick={item.action}
-                className={`flex w-full items-baseline gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)] ${
+                className={`flex w-full items-baseline gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-[var(--surface-hover)] ${
                   idx === 0 ? "bg-[var(--surface-raised)]" : ""
                 }`}
               >
@@ -652,7 +657,7 @@ export function Composer({
                     e.preventDefault();
                     applyMention(item);
                   }}
-                  className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)] ${
+                  className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-[var(--surface-hover)] ${
                     idx === mentionActiveIdx ? "bg-[var(--surface-raised)]" : ""
                   }`}
                 >
@@ -697,7 +702,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={() => void handleBrowse(false)}
-                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <Paperclip className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                 <span>{t.composer.addFilesOrPhotos}</span>
@@ -708,7 +713,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={() => void handleBrowse(true)}
-                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <FolderOpen className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                 <span>{t.composer.addFolder}</span>
@@ -719,7 +724,7 @@ export function Composer({
                   setActivePopover(null);
                   setAttachInputOpen(true);
                 }}
-                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <FileText className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                 <span>{t.composer.enterPathManually}</span>
@@ -729,7 +734,7 @@ export function Composer({
           <button
             type="button"
             onClick={() => void handlePasteAction()}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <ClipboardPaste className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.extra.pasteAction}</span>
@@ -737,7 +742,7 @@ export function Composer({
           <button
             type="button"
             onClick={insertMentionTrigger}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <AtSign className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.extra.mentionAction}</span>
@@ -745,7 +750,7 @@ export function Composer({
           <button
             type="button"
             onClick={() => setActivePopover("commands")}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <List className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.extra.slashAction}</span>
@@ -758,7 +763,7 @@ export function Composer({
                 setActivePopover(null);
                 void onCompact();
               }}
-              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40"
+              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40"
             >
               <Minimize2 className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
               <span>{t.composer.compact}</span>
@@ -771,7 +776,7 @@ export function Composer({
                 setWebSearchActive((v) => !v);
                 setActivePopover(null);
               }}
-              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
             >
               <Globe className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
               <span>{t.composer.webSearch}</span>
@@ -787,7 +792,7 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <FileText className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.composer.skills}</span>
@@ -799,7 +804,7 @@ export function Composer({
               setActivePopover(null);
               onOpenMcp?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <Layers className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.composer.connectors}</span>
@@ -811,7 +816,7 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <Puzzle className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.composer.addPlugins}</span>
@@ -844,7 +849,7 @@ export function Composer({
                     setActivePopover(null);
                     void onSelectProfile?.(prof.name);
                   }}
-                  className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50 ${
+                  className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50 ${
                     active
                       ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
                       : "text-[var(--text-secondary)]"
@@ -871,7 +876,7 @@ export function Composer({
                 type="button"
                 disabled={runActive}
                 onClick={() => setActivePopover("effort")}
-                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40"
               >
                 <Gauge className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                 <span>{t.extra.selectEffortHeader}</span>
@@ -892,7 +897,7 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--accent-text)] transition-colors hover:bg-[var(--surface-hover)]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] text-[var(--accent-text)] transition-colors hover:bg-[var(--surface-hover)]"
           >
             <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
             <span>{t.composer.manageProfiles}</span>
@@ -918,14 +923,14 @@ export function Composer({
       </div>
 
       {/* Single 16px-radius Composer Card (§8.6) */}
-      <div className="soyo-composer-card rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-composer)] px-[14px] py-[12px] shadow-[var(--shadow-sm)]">
+      <div className="soyo-composer-card rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-raised)] px-[14px] py-[12px] shadow-[var(--shadow-popover)]">
         <StagedAttachmentsStrip
           items={stagedAttachments}
           onRemove={(id) => onRemoveAttachment?.(id)}
         />
 
         {attachInputOpen && (
-          <div className="soyo-panel-enter mb-2.5 flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-main)] p-2 text-xs">
+          <div className="soyo-panel-enter mb-2.5 flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-app)] p-2 text-xs">
             <input
               type="text"
               aria-label={t.a11y.attachmentPathInput}
@@ -1006,7 +1011,7 @@ export function Composer({
                   ? t.composer.placeholderHome
                   : t.composer.placeholderDefault
           }
-          className="max-h-40 min-h-[26px] w-full resize-none bg-transparent text-[13.5px] leading-[1.45] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none disabled:opacity-50"
+          className="max-h-40 min-h-[26px] w-full resize-none bg-transparent text-[14px] leading-[1.45] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none disabled:opacity-50"
         />
 
         {/* Message Preview when staging attachments with draft */}
@@ -1055,7 +1060,7 @@ export function Composer({
             {webSearchActive && (
               <span
                 data-testid="active-web-search-chip"
-                className="inline-flex h-[26px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--surface-hover)] px-2 text-[11.5px] text-[var(--text-primary)]"
+                className="inline-flex h-[26px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--surface-hover)] px-2 text-[12px] text-[var(--text-primary)]"
               >
                 <Globe className="h-3 w-3 text-[var(--accent-text)]" strokeWidth={1.75} />
                 <span>{t.composer.webSearch}</span>
@@ -1104,7 +1109,7 @@ export function Composer({
                       type="button"
                       onClick={() => void onCycleMode?.()}
                       title={t.a11y.cycleWorkMode}
-                      className="inline-flex h-full shrink-0 items-center gap-1.5 whitespace-nowrap px-2 text-[11.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                      className="inline-flex h-full shrink-0 items-center gap-1.5 whitespace-nowrap px-2 text-[12px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                     >
                       <span
                         className="h-1.5 w-1.5 shrink-0 rounded-full transition-colors"
@@ -1122,7 +1127,7 @@ export function Composer({
                     permissionMode === "bypass" ? "composer-bypass-badge" : undefined
                   }
                   onClick={() => openPermissionsHandler?.()}
-                  className={`inline-flex h-full shrink-0 items-center gap-1 whitespace-nowrap px-2 text-[11.5px] transition-colors ${
+                  className={`inline-flex h-full shrink-0 items-center gap-1 whitespace-nowrap px-2 text-[12px] transition-colors ${
                     permissionMode === "bypass"
                       ? "bg-[var(--danger-surface)] font-medium text-[var(--danger)]"
                       : `${permissionTextColor} hover:bg-[var(--surface-hover)]`
@@ -1130,6 +1135,9 @@ export function Composer({
                 >
                   {permissionMode === "bypass" && (
                     <ShieldAlert className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                  )}
+                  {permissionMode === "manual" && (
+                    <Hand className="h-3 w-3 shrink-0" strokeWidth={1.75} />
                   )}
                   <span>{PERMISSION_MODE_LABELS[permissionMode]}</span>
                 </button>
@@ -1153,9 +1161,15 @@ export function Composer({
                 onClick={() =>
                   setActivePopover((p) => (p === "model" ? null : "model"))
                 }
-                className="inline-flex h-full shrink-0 items-center whitespace-nowrap px-2 text-[11.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                className="inline-flex h-full shrink-0 items-center whitespace-nowrap px-2 text-[12px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
-                <span className="max-w-[160px] truncate">
+                <span
+                  className={
+                    narrowComposer
+                      ? "max-w-[160px] truncate"
+                      : "max-w-[260px] truncate"
+                  }
+                >
                   {narrowComposer ? compactModelName : fullModelName}
                   {variant === "home" && !narrowComposer && normalizedEffortLabel
                     ? ` · ${normalizedEffortLabel}`
@@ -1253,7 +1267,7 @@ export function Composer({
   }
 
   return (
-    <div className="bg-[var(--surface-main)] px-6 pb-3.5 pt-2">
+    <div className="bg-[var(--surface-app)] px-6 pb-3.5 pt-2">
       <div className="mx-auto flex max-w-[840px] flex-col gap-2">
         {cardInner}
         <div className="flex items-center justify-center gap-4 text-[11px] text-[var(--text-tertiary)]">

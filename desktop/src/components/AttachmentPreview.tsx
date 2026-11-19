@@ -30,13 +30,13 @@ export function StagedAttachmentsStrip({
         return (
           <div
             key={item.id}
-            className="soyo-panel-enter flex items-center gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] px-[9px] py-[6px] text-[11.5px] text-[var(--text-secondary)]"
+            className="soyo-panel-enter flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-[9px] py-[6px] text-[12px] text-[var(--text-secondary)]"
           >
             {isImage ? (
               <img
                 src={item.preview_url}
                 alt={sanitizeDisplayText(item.filename)}
-                className="h-[26px] w-[26px] rounded-[6px] object-cover"
+                className="h-[26px] w-[26px] rounded-[var(--radius-md)] object-cover"
               />
             ) : (
               <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
@@ -97,13 +97,13 @@ export function SessionMediaPreview({
           return (
             <div
               key={ref}
-              className="flex items-center gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] p-1.5 text-[11px]"
+              className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] p-1.5 text-[11px]"
             >
               {likelyImage ? (
                 <img
                   src={url}
                   alt={ref}
-                  className="h-12 w-12 rounded-[6px] border border-[var(--border)] object-cover"
+                  className="h-12 w-12 rounded-[var(--radius-md)] border border-[var(--border)] object-cover"
                 />
               ) : (
                 <Paperclip className="h-4 w-4 shrink-0 text-[var(--accent-text)]" />

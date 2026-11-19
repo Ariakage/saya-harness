@@ -189,10 +189,10 @@ export function SetupWizard({
           className="h-8 w-8 rounded-[22%] object-cover"
         />
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold text-[var(--text-primary)]">
+          <div className="text-[16px] font-semibold text-[var(--text-primary)]">
             {t.setup.welcome}
           </div>
-          <div className="text-[11.5px] text-[var(--text-tertiary)]">
+          <div className="text-[12px] text-[var(--text-tertiary)]">
             {t.setup.welcomeSubtitle}
           </div>
         </div>
@@ -263,7 +263,7 @@ export function SetupWizard({
                     : "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
                 }`}
               >
-                <span className="text-[12.5px]">{opt.nativeLabel}</span>
+                <span className="text-[13px]">{opt.nativeLabel}</span>
                 {locale === opt.id && (
                   <Check
                     className="h-3.5 w-3.5 text-[var(--accent-text)]"
@@ -387,7 +387,7 @@ export function SetupWizard({
 
             {needsKey ? (
               <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-3">
-                <div className="flex items-center gap-2 text-[11.5px] text-[var(--text-secondary)]">
+                <div className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
                   <KeyRound className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                   {t.setup.apiKeyLabel}
                 </div>
@@ -490,7 +490,7 @@ export function SetupWizard({
                   </span>
                   <span>
                     <span
-                      className={`block text-[12.5px] ${
+                      className={`block text-[13px] ${
                         isBypass && selected
                           ? "font-medium text-[var(--danger)]"
                           : "text-[var(--text-primary)]"

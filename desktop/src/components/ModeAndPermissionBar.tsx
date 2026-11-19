@@ -1,4 +1,4 @@
-import { ArrowRight, Shield, ShieldAlert } from "lucide-react";
+import { ArrowRight, Hand, Shield, ShieldAlert } from "lucide-react";
 import type { PermissionModeDto, WorkModeDto } from "../bindings";
 import { getMessages } from "../lib/i18n";
 import { PERMISSION_MODE_LABELS, WORK_MODE_STYLES } from "../lib/sanitize";
@@ -30,8 +30,8 @@ export function ModeAndPermissionBar({
   const permissionTone = isBypass
     ? "text-[var(--danger)]"
     : permissionMode === "manual"
-      ? "text-[var(--warning)]"
-      : "text-[var(--info)]";
+      ? "text-[var(--info)]"
+      : "text-[var(--text-secondary)]";
 
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="mode-permission-bar">
@@ -87,9 +87,15 @@ export function ModeAndPermissionBar({
             strokeWidth={1.75}
             aria-hidden="true"
           />
+        ) : permissionMode === "manual" ? (
+          <Hand
+            className="h-3 w-3 text-[var(--info)]"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
         ) : (
           <Shield
-            className="h-3 w-3 text-[var(--text-tertiary)]"
+            className="h-3 w-3 text-[var(--text-secondary)]"
             strokeWidth={1.75}
             aria-hidden="true"
           />
