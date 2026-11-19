@@ -14,7 +14,7 @@ use crate::{
     execution::{BackendKind, PreparedEnvironment},
     tools::exec::{ExecConfig, ExecPlan, ManagedProcess, environment_digest},
 };
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 fn failure(code: &str, message: impl Into<String>) -> BoundaryError {
@@ -35,6 +35,7 @@ pub(crate) struct ReplWorker {
     stdin: tokio::process::ChildStdin,
     stdout: BufReader<tokio::process::ChildStdout>,
     stderr: Option<tokio::task::JoinHandle<()>>,
+    stderr_buffer: Arc<std::sync::Mutex<Vec<u8>>>,
 }
 impl ReplWorker {
     /// Launch the worker inside `environment` under the run's own sandbox
@@ -106,13 +107,26 @@ impl ReplWorker {
         let stdout = process
             .take_stdout()
             .ok_or_else(|| failure("spawn_error", "worker stdout unavailable"))?;
-        // Drain stderr into a bounded buffer so worker diagnostics never block
-        // the pipe or leak into tool data; it is dropped with the process.
+        // Drain stderr into a shared bounded buffer so worker diagnostics
+        // never block the pipe; the head of the buffer survives for failure
+        // reporting while excess output is dropped.
+        let stderr_buffer = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
         let stderr = process.take_stderr().map(|stderr| {
+            let buffer = Arc::clone(&stderr_buffer);
             tokio::spawn(async move {
                 let mut bounded = stderr.take(64 * 1024);
-                let mut sink = Vec::new();
-                let _ = bounded.read_to_end(&mut sink).await;
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match bounded.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => {
+                            if let Ok(mut sink) = buffer.lock() {
+                                let keep = (64 * 1024usize).saturating_sub(sink.len());
+                                sink.extend_from_slice(&chunk[..read.min(keep)]);
+                            }
+                        }
+                    }
+                }
             })
         });
         Ok(Self {
@@ -120,7 +134,24 @@ impl ReplWorker {
             stdin,
             stdout: BufReader::new(stdout),
             stderr,
+            stderr_buffer,
         })
+    }
+    /// Bounded single-line stderr tail for failure diagnostics; engine
+    /// crashes are otherwise invisible once the protocol channel goes quiet.
+    pub(crate) fn stderr_tail(&self) -> Option<String> {
+        let buffer = self.stderr_buffer.lock().ok()?;
+        if buffer.is_empty() {
+            return None;
+        }
+        let tail = if buffer.len() > 2048 {
+            &buffer[buffer.len() - 2048..]
+        } else {
+            &buffer[..]
+        };
+        let text = String::from_utf8_lossy(tail);
+        let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!line.is_empty()).then_some(line)
     }
     /// Write the init frame carrying script and engine limits.
     pub(crate) async fn initialize(

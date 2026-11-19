@@ -2013,10 +2013,13 @@ impl AgentRuntime {
                 Err(error) => return self.repl_worker_outcome(error),
             };
             let Some(message) = message else {
-                return Ok(ToolResult::failure(
-                    error_codes::OUTCOME_UNKNOWN,
-                    "js_repl worker exited before producing a result",
-                ));
+                let detail = worker
+                    .stderr_tail()
+                    .map(|tail| format!("js_repl worker exited before producing a result: {tail}"))
+                    .unwrap_or_else(|| {
+                        "js_repl worker exited before producing a result".to_string()
+                    });
+                return Ok(ToolResult::failure(error_codes::OUTCOME_UNKNOWN, detail));
             };
             match message {
                 crate::js_repl::WorkerMessage::Failed { message } => {
