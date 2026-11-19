@@ -29,8 +29,8 @@ from process_witness import ProcessLease
 
 EDITOR_PLACEHOLDER = 'Describe a task…'
 INPUT_STRIPE = '\U0001fbcf'
-MODE_COLORS = {'WORK': (88, 166, 255), 'CODE': (125, 203, 155),
-               'PLAN': (187, 154, 247), 'BUILD': (246, 173, 85)}
+MODE_COLORS = {'WORK': (106, 174, 252), 'CODE': (134, 207, 160),
+               'PLAN': (190, 163, 245), 'BUILD': (239, 178, 94)}
 
 
 class Screen:
@@ -751,7 +751,8 @@ class Fixture:
 def environment(root):
     return {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(root), 'TERM': 'xterm-256color',
             'XDG_DATA_HOME': str(root / 'data'), 'XDG_STATE_HOME': str(root / 'state'),
-            'XDG_CACHE_HOME': str(root / 'cache'), 'NO_PROXY': '127.0.0.1,localhost'}
+            'XDG_CACHE_HOME': str(root / 'cache'), 'NO_PROXY': '127.0.0.1,localhost',
+            'SOYO_HELPER_DIR': str(root / 'h')}
 
 
 def configuration(root, fixture, permission='auto'):

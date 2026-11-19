@@ -59,7 +59,8 @@ def main():
                 'auth = "none"', 'context_window_tokens = 128000', 'stream = false', '']))
             env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(root),
                    'XDG_DATA_HOME': str(root / 'data'), 'XDG_STATE_HOME': str(root / 'state'),
-                   'XDG_CACHE_HOME': str(root / 'cache'), 'NO_PROXY': '127.0.0.1,localhost'}
+                   'XDG_CACHE_HOME': str(root / 'cache'), 'NO_PROXY': '127.0.0.1,localhost',
+                   'SOYO_HELPER_DIR': str(root / 'h')}
             common = [str(binary), '--config', str(config), '--cwd', str(workspace)]
             subprocess.run(common + ['config', 'check'], cwd=workspace, env=env,
                            check=True, capture_output=True, timeout=15)
