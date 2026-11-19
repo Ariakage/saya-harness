@@ -13,14 +13,21 @@ use soyo_core::{
     boundary::{Cancellation, Model, ModelRequest, ModelUpdate},
     config::Config,
     contract::{
-        BoundaryError, ErrorInfo, HistoryItem, RunId, RunResult, RunStatus, SCHEMA_VERSION, Usage,
+        BoundaryError, ErrorInfo, HistoryItem, PermissionMode, RunId, RunResult, RunStatus,
+        SCHEMA_VERSION, Usage, WorkMode,
     },
     goal::{
         AcceptanceCriterion, GoalId, GoalLease, GoalPlan, GoalRecord, GoalRunSummary, GoalStatus,
-        GoalStep, GoalStore, VerificationSpec, verify_file_criterion,
+        GoalStep, GoalStore, StepVerificationResult, StepVerificationStatus, VerificationSpec,
+        verify_file_criterion,
     },
     input::InputHandler,
+    permissions::Policy,
     runtime::{ApprovalHandler, PersonalContext},
+    tools::{
+        exec::{ExecConfig, HostVerifierRequest, execute_host_verifier},
+        read::{ReadLimits, ReadTools},
+    },
 };
 use std::{
     sync::{Arc, Mutex},
@@ -702,4 +709,235 @@ pub fn goal_profile_fingerprint(config: &Config, profile: &str) -> Result<String
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+/// Execute a Goal step's human-confirmed structured host verifier inside the
+/// configured `ExecutionBackend` and active permission policy.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_step_verifier(
+    config: &Config,
+    goal: &GoalRecord,
+    step: &GoalStep,
+    attempt: u32,
+    run_id: RunId,
+    permissions: PermissionMode,
+    confirmation: Option<Arc<dyn ApprovalHandler>>,
+    cancel: Arc<dyn Cancellation>,
+) -> Result<StepVerificationResult, BoundaryError> {
+    let Some(verifier) = &step.verifier else {
+        return Err(failure(
+            "invalid_goal",
+            "Goal step has no configured verifier",
+        ));
+    };
+    verifier.validate()?;
+
+    let mut known_secrets = config
+        .secret_env_names()
+        .iter()
+        .map(|name| config.secret(name).map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?;
+    known_secrets.sort();
+    known_secrets.dedup();
+
+    if !goal.verifiers_confirmed() {
+        let mut res = StepVerificationResult {
+            step_id: step.id,
+            attempt,
+            run_id,
+            argv: verifier.argv.clone(),
+            cwd: verifier.cwd.clone(),
+            status: StepVerificationStatus::Denied,
+            exit_code: None,
+            stdout_excerpt: String::new(),
+            stderr_excerpt: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            duration_ms: 0,
+            recorded_at: timestamp()?,
+            error_code: Some("goal_verifier_unconfirmed".into()),
+            error_message: Some(
+                "Goal step verifiers must be locked via `goal confirm` before execution".into(),
+            ),
+        };
+        let mut val = serde_json::to_value(&res)
+            .map_err(|_| failure("goal_storage", "Step verification cannot be encoded"))?;
+        soyo_core::redaction::redact(&mut val, &known_secrets)?;
+        res = serde_json::from_value(val)
+            .map_err(|_| failure("goal_storage", "Step verification cannot be decoded"))?;
+        return Ok(res);
+    }
+
+    let remaining_budget = goal
+        .budget
+        .max_active_seconds
+        .saturating_sub(goal.usage.active_seconds);
+    if remaining_budget == 0 {
+        let mut res = StepVerificationResult {
+            step_id: step.id,
+            attempt,
+            run_id,
+            argv: verifier.argv.clone(),
+            cwd: verifier.cwd.clone(),
+            status: StepVerificationStatus::TimedOut,
+            exit_code: None,
+            stdout_excerpt: String::new(),
+            stderr_excerpt: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            duration_ms: 0,
+            recorded_at: timestamp()?,
+            error_code: Some("goal_budget".into()),
+            error_message: Some(
+                "Goal active time budget was exhausted before executing step verifier".into(),
+            ),
+        };
+        let mut val = serde_json::to_value(&res)
+            .map_err(|_| failure("goal_storage", "Step verification cannot be encoded"))?;
+        soyo_core::redaction::redact(&mut val, &known_secrets)?;
+        res = serde_json::from_value(val)
+            .map_err(|_| failure("goal_storage", "Step verification cannot be decoded"))?;
+        return Ok(res);
+    }
+
+    let mut effective_verifier = verifier.clone();
+    effective_verifier.timeout_seconds = effective_verifier
+        .timeout_seconds
+        .min(remaining_budget)
+        .max(1);
+
+    let policy = Arc::new(Policy::new(&goal.workspace, config.permissions.clone())?);
+    let lim = &config.limits;
+    let files = Arc::new(
+        ReadTools::new(
+            &goal.workspace,
+            &config.permissions.additional_roots,
+            permissions == PermissionMode::Bypass,
+            ReadLimits {
+                read_return_bytes: lim.read_return_max_bytes,
+                file_bytes: lim.read_file_max_bytes,
+                search_results: lim.search_max_results,
+                search_bytes: lim.search_return_max_bytes,
+                list_entries: lim.list_max_entries,
+                list_bytes: lim.list_return_max_bytes,
+            },
+        )
+        .map_err(|error| failure(error.code, &error.message))?,
+    );
+
+    let (mut sandbox, broker) = config
+        .sandbox
+        .resolve_with_environment(&goal.workspace, config.environment())?;
+    let private_paths = crate::configure_host_sandbox(config, &goal.workspace, &mut sandbox)
+        .map_err(|error| failure("sandbox_unavailable", &error.to_string()))?;
+
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut broker_directory = None::<std::path::PathBuf>;
+    let mut broker_handle = None;
+    if let Some(broker_policy) = broker {
+        #[cfg(target_os = "linux")]
+        let mut broker_policy = broker_policy;
+        #[cfg(target_os = "linux")]
+        if broker_policy.unix_socket.is_none() {
+            use std::os::unix::fs::DirBuilderExt;
+            let workspace = sandbox.workspace.canonicalize().map_err(|_| {
+                failure(
+                    "invalid_workspace",
+                    "Broker workspace could not be resolved",
+                )
+            })?;
+            let roots = sandbox
+                .write_roots
+                .iter()
+                .map(|root| root.canonicalize())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    failure(
+                        "invalid_sandbox_policy",
+                        "Broker writable roots could not be resolved",
+                    )
+                })?;
+            let base = [std::env::temp_dir(), std::path::PathBuf::from("/var/tmp")]
+                .into_iter()
+                .filter_map(|path| path.canonicalize().ok())
+                .find(|path| {
+                    !path.starts_with(&workspace)
+                        && !roots.iter().any(|root| path.starts_with(root))
+                })
+                .ok_or_else(|| {
+                    failure(
+                        "sandbox_unavailable",
+                        "Private broker storage is unavailable outside writable roots",
+                    )
+                })?;
+            let directory = base.join(format!("saya-goal-broker-{}", RunId::new().0));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .map_err(|_| {
+                    failure(
+                        "sandbox_unavailable",
+                        "Private broker directory could not be created",
+                    )
+                })?;
+            broker_policy.unix_socket = Some(directory.join("proxy.sock"));
+            broker_directory = Some(directory);
+        }
+        let handle = soyo_core::network::NetworkBroker::start(broker_policy, cancel.clone())
+            .await
+            .map_err(|_| failure("sandbox_unavailable", "Verifier network broker failed"))?;
+        sandbox.network =
+            soyo_core::execution::NetworkPolicy::Proxy(soyo_core::execution::ProxyEndpoint {
+                endpoint: handle.tcp_endpoint(),
+                unix_socket: handle.unix_socket().map(std::path::Path::to_path_buf),
+            });
+        broker_handle = Some(handle);
+    }
+
+    let prepared_env = Arc::new(soyo_core::execution::prepare(&sandbox)?);
+    let exec_config = ExecConfig {
+        execution: Some(prepared_env.as_ref().clone()),
+        environment: config.environment().clone(),
+        default_timeout: Duration::from_secs(effective_verifier.timeout_seconds),
+        max_timeout: Duration::from_secs(effective_verifier.timeout_seconds)
+            .max(Duration::from_secs(lim.max_command_timeout_seconds)),
+        stdout_max: effective_verifier.max_output_bytes,
+        stderr_max: effective_verifier.max_output_bytes,
+        inherit_extra: config.commands.inherit_env.clone(),
+        secret_env_names: config.secret_env_names(),
+    };
+
+    let work_mode = if goal.mode == WorkMode::Plan || step.mode == WorkMode::Plan {
+        WorkMode::Plan
+    } else {
+        step.mode
+    };
+    let outcome = execute_host_verifier(HostVerifierRequest {
+        workspace: &goal.workspace,
+        files,
+        policy,
+        protected_paths: private_paths,
+        config: exec_config,
+        work_mode,
+        permissions,
+        run_id,
+        step_id: step.id,
+        attempt,
+        verifier: &effective_verifier,
+        confirmation,
+        secrets: &known_secrets,
+        cancel: cancel.as_ref(),
+        recorded_at: timestamp()?,
+    })
+    .await;
+
+    let _ = prepared_env.wait_for_process_cleanup().await;
+    let _ = prepared_env.cleanup();
+    if let Some(handle) = broker_handle {
+        let _ = handle.shutdown().await;
+    }
+    if let Some(directory) = broker_directory {
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    outcome
 }

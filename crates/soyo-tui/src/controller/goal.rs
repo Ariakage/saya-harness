@@ -95,6 +95,7 @@ fn goal_lines(goal: &GoalRecord) -> Vec<String> {
     }
     lines.push(String::new());
     lines.push("Steps".into());
+    let verifiers_confirmed = goal.verifiers_confirmed();
     for step in &goal.steps {
         lines.push(format!(
             "{}. {:?} · {} · attempts {} · {}",
@@ -107,12 +108,34 @@ fn goal_lines(goal: &GoalRecord) -> Vec<String> {
                 .unwrap_or_else(|| "no Run".into())
         ));
         lines.push(format!("   {}", step.instruction));
+        if let Some(verifier) = &step.verifier {
+            let state = if verifiers_confirmed {
+                text::GOAL_VERIFIER_CONFIRMED
+            } else {
+                text::GOAL_VERIFIER_UNCONFIRMED
+            };
+            lines.push(format!(
+                "   Verifier ({state}): {:?} · timeout {}s",
+                verifier.argv, verifier.timeout_seconds
+            ));
+        }
         if let Some(result) = &step.last_result {
             lines.push(format!(
                 "   Result {:?} · persisted {} · {} artifacts",
                 result.status,
                 result.persistence_saved,
                 result.artifacts.len()
+            ));
+        }
+        if let Some(verification) = &step.last_verification {
+            lines.push(format!(
+                "   Host verifier {:?} · exit {} · {}ms",
+                verification.status,
+                verification
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                verification.duration_ms
             ));
         }
     }

@@ -33,6 +33,14 @@ pub const MAX_GOAL_TITLE_BYTES: usize = 256;
 pub const MAX_GOAL_INSTRUCTION_BYTES: usize = 32 * 1024;
 pub const MAX_GOAL_EVIDENCE_BYTES: usize = 16 * 1024;
 const MAX_GOAL_EVIDENCE_FILE_BYTES: u64 = 32 * 1024 * 1024;
+pub const DEFAULT_VERIFIER_TIMEOUT_SECONDS: u64 = 120;
+pub const MAX_VERIFIER_TIMEOUT_SECONDS: u64 = 600;
+pub const DEFAULT_VERIFIER_OUTPUT_BYTES: usize = 8 * 1024;
+pub const MIN_VERIFIER_OUTPUT_BYTES: usize = 256;
+pub const MAX_VERIFIER_OUTPUT_BYTES: usize = 32 * 1024;
+pub const MAX_VERIFIER_ARGS: usize = 64;
+pub const MAX_VERIFIER_ARG_BYTES: usize = 4 * 1024;
+const MAX_VERIFIER_TOTAL_ARGV_BYTES: usize = 32 * 1024;
 
 fn failure(code: &str, message: &str) -> BoundaryError {
     BoundaryError(
@@ -419,6 +427,59 @@ pub fn goal_report_markdown(record: &GoalRecord) -> Result<Vec<u8>, BoundaryErro
                 result.status, result.persistence_saved
             ));
         }
+        if let Some(verifier) = &step.verifier {
+            report.push_str(&format!(
+                "- Step verifier: `{}` (timeout {}s, max output {}B{})\n",
+                report_text(&verifier.argv.join(" "), 1024),
+                verifier.timeout_seconds,
+                verifier.max_output_bytes,
+                verifier
+                    .cwd
+                    .as_deref()
+                    .map(|cwd| format!(", cwd `{}`", report_text(cwd, 256)))
+                    .unwrap_or_default()
+            ));
+        }
+        if let Some(verification) = &step.last_verification {
+            report.push_str(&format!(
+                "- Host verification outcome: `{:?}` · Exit code: `{}` · Duration: {}ms\n",
+                verification.status,
+                verification
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                verification.duration_ms
+            ));
+            if let Some(message) = &verification.error_message {
+                report.push_str(&format!(
+                    "- Host verification note: {}\n",
+                    report_text(message, 1024)
+                ));
+            }
+            if !verification.stdout_excerpt.trim().is_empty() {
+                report.push_str(&format!(
+                    "- Host verification stdout{}: `{}`\n",
+                    if verification.stdout_truncated {
+                        " (truncated)"
+                    } else {
+                        ""
+                    },
+                    report_text(&verification.stdout_excerpt, MAX_VERIFIER_OUTPUT_BYTES)
+                ));
+            }
+            if !verification.stderr_excerpt.trim().is_empty() {
+                report.push_str(&format!(
+                    "- Host verification stderr{}: `{}`\n",
+                    if verification.stderr_truncated {
+                        " (truncated)"
+                    } else {
+                        ""
+                    },
+                    report_text(&verification.stderr_excerpt, MAX_VERIFIER_OUTPUT_BYTES)
+                ));
+            }
+            report.push('\n');
+        }
     }
     report.push_str("## Evidence\n\n");
     for evidence in &record.evidence {
@@ -520,6 +581,165 @@ impl GoalRunSummary {
     }
 }
 
+fn default_verifier_timeout_seconds() -> u64 {
+    DEFAULT_VERIFIER_TIMEOUT_SECONDS
+}
+
+fn default_verifier_output_bytes() -> usize {
+    DEFAULT_VERIFIER_OUTPUT_BYTES
+}
+
+fn truncate_utf8_with_flag(text: &mut String, limit: usize, truncated: &mut bool) {
+    if text.len() > limit {
+        let mut end = limit;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        *truncated = true;
+    }
+}
+
+/// Host-executed structured command verifier attached to one Goal step.
+/// Only direct argv execution is allowed; shell string concatenation is forbidden.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepVerifier {
+    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default = "default_verifier_timeout_seconds")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_verifier_output_bytes")]
+    pub max_output_bytes: usize,
+}
+
+impl StepVerifier {
+    pub fn validate(&self) -> Result<(), BoundaryError> {
+        let total_argv_bytes: usize = self.argv.iter().map(String::len).sum();
+        if self.argv.is_empty()
+            || self.argv.len() > MAX_VERIFIER_ARGS
+            || self.argv[0].trim().is_empty()
+            || total_argv_bytes > MAX_VERIFIER_TOTAL_ARGV_BYTES
+            || self.argv.iter().any(|arg| {
+                arg.len() > MAX_VERIFIER_ARG_BYTES
+                    || arg.contains('\0')
+                    || arg.chars().any(text::is_terminal_control)
+            })
+        {
+            return Err(failure(
+                "invalid_goal",
+                "Goal step verifier argv is invalid or exceeds bounds",
+            ));
+        }
+        if let Some(cwd) = &self.cwd {
+            let path = Path::new(cwd);
+            if cwd.is_empty()
+                || cwd.len() > 1024
+                || cwd.contains('\0')
+                || cwd.chars().any(text::is_terminal_control)
+                || !valid_relative_path(path)
+                || crate::permissions::is_repository_control_path(path)
+            {
+                return Err(failure(
+                    "invalid_goal",
+                    "Goal step verifier cwd must be a safe workspace-relative path",
+                ));
+            }
+        }
+        if self.timeout_seconds == 0
+            || self.timeout_seconds > MAX_VERIFIER_TIMEOUT_SECONDS
+            || self.max_output_bytes < MIN_VERIFIER_OUTPUT_BYTES
+            || self.max_output_bytes > MAX_VERIFIER_OUTPUT_BYTES
+        {
+            return Err(failure(
+                "invalid_goal",
+                "Goal step verifier timeout or output limit is outside supported bounds",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepVerificationStatus {
+    Passed,
+    Failed,
+    TimedOut,
+    Cancelled,
+    Denied,
+    SkippedPlan,
+    Unknown,
+}
+
+/// Persisted host outcome for a single step verifier execution, strictly separate from model prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepVerificationResult {
+    pub step_id: StepId,
+    pub attempt: u32,
+    pub run_id: RunId,
+    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    pub status: StepVerificationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub stdout_excerpt: String,
+    #[serde(default)]
+    pub stderr_excerpt: String,
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    #[serde(default)]
+    pub stderr_truncated: bool,
+    pub duration_ms: u64,
+    pub recorded_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+impl StepVerificationResult {
+    pub(crate) fn bound_outputs(&mut self, limit: usize) {
+        let cap = limit.min(MAX_VERIFIER_OUTPUT_BYTES);
+        truncate_utf8_with_flag(&mut self.stdout_excerpt, cap, &mut self.stdout_truncated);
+        truncate_utf8_with_flag(&mut self.stderr_excerpt, cap, &mut self.stderr_truncated);
+        if let Some(message) = &mut self.error_message
+            && message.len() > MAX_GOAL_EVIDENCE_BYTES
+        {
+            let mut dummy = false;
+            truncate_utf8_with_flag(message, MAX_GOAL_EVIDENCE_BYTES, &mut dummy);
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), BoundaryError> {
+        if self.argv.is_empty()
+            || self.argv.len() > MAX_VERIFIER_ARGS
+            || self.stdout_excerpt.len() > MAX_VERIFIER_OUTPUT_BYTES
+            || self.stderr_excerpt.len() > MAX_VERIFIER_OUTPUT_BYTES
+            || self.recorded_at.trim().is_empty()
+            || self.recorded_at.len() > 128
+            || self
+                .error_code
+                .as_deref()
+                .is_some_and(|code| code.is_empty() || code.len() > 128)
+            || self
+                .error_message
+                .as_deref()
+                .is_some_and(|msg| msg.len() > MAX_GOAL_EVIDENCE_BYTES)
+            || (self.status == StepVerificationStatus::Passed && self.exit_code != Some(0))
+        {
+            return Err(failure(
+                "invalid_goal",
+                "Goal step verification result violates storage invariants",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoalStep {
     pub id: StepId,
@@ -529,10 +749,14 @@ pub struct GoalStep {
     pub mode: WorkMode,
     #[serde(default)]
     pub depends_on: Vec<StepId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier: Option<StepVerifier>,
     pub status: StepStatus,
     pub attempts: u32,
     pub run_id: Option<RunId>,
     pub last_result: Option<GoalRunSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_verification: Option<StepVerificationResult>,
 }
 
 impl GoalStep {
@@ -551,6 +775,9 @@ impl GoalStep {
                 "Goal step identity, text, ordering or dependency is invalid",
             ));
         }
+        if let Some(verifier) = &self.verifier {
+            verifier.validate()?;
+        }
         if self.status == StepStatus::Running && self.run_id.is_none() {
             return Err(failure(
                 "invalid_goal",
@@ -565,6 +792,27 @@ impl GoalStep {
                     "Goal step Run and result identity differ",
                 ));
             }
+        }
+        if let Some(verification) = &self.last_verification {
+            verification.validate()?;
+            if verification.step_id != self.id || self.run_id != Some(verification.run_id) {
+                return Err(failure(
+                    "invalid_goal",
+                    "Goal step verification identity differs from Run",
+                ));
+            }
+        }
+        if self.verifier.is_some()
+            && self.status == StepStatus::Completed
+            && !self.last_verification.as_ref().is_some_and(|verification| {
+                verification.status == StepVerificationStatus::Passed
+                    && verification.exit_code == Some(0)
+            })
+        {
+            return Err(failure(
+                "goal_not_verified",
+                "Goal step with a verifier cannot complete without passing host verification evidence",
+            ));
         }
         Ok(())
     }
@@ -755,6 +1003,8 @@ pub struct GoalRecord {
     pub wait_reason: Option<GoalWaitReason>,
     pub failure: Option<ErrorInfo>,
     pub authorization: Option<GoalAuthorization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed_verifiers_digest: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub revision: u64,
@@ -779,6 +1029,8 @@ pub struct PlannedStep {
     pub instruction: String,
     #[serde(default)]
     pub depends_on: Vec<StepId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier: Option<StepVerifier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,12 +1107,101 @@ impl GoalRecord {
             wait_reason: None,
             failure: None,
             authorization: None,
+            confirmed_verifiers_digest: None,
             created_at: seed.now.clone(),
             updated_at: seed.now,
             revision: 0,
         };
         record.validate()?;
         Ok(record)
+    }
+
+    pub fn has_step_verifiers(&self) -> bool {
+        self.steps.iter().any(|step| step.verifier.is_some())
+    }
+
+    pub fn verifiers_digest(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"soyo-goal-verifiers-v1\0");
+        digest.update((self.steps.len() as u64).to_be_bytes());
+        for step in &self.steps {
+            digest.update(step.id.0.as_bytes());
+            match &step.verifier {
+                None => digest.update([0]),
+                Some(verifier) => {
+                    digest.update([1]);
+                    digest.update((verifier.argv.len() as u64).to_be_bytes());
+                    for arg in &verifier.argv {
+                        digest.update((arg.len() as u64).to_be_bytes());
+                        digest.update(arg.as_bytes());
+                    }
+                    match &verifier.cwd {
+                        None => digest.update([0]),
+                        Some(cwd) => {
+                            digest.update([1]);
+                            digest.update((cwd.len() as u64).to_be_bytes());
+                            digest.update(cwd.as_bytes());
+                        }
+                    }
+                    digest.update(verifier.timeout_seconds.to_be_bytes());
+                    digest.update((verifier.max_output_bytes as u64).to_be_bytes());
+                }
+            }
+        }
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    pub fn verifiers_confirmed(&self) -> bool {
+        !self.has_step_verifiers()
+            || self.confirmed_verifiers_digest.as_deref() == Some(self.verifiers_digest().as_str())
+    }
+
+    pub fn set_step_verifier(
+        &mut self,
+        step_id: StepId,
+        verifier: Option<StepVerifier>,
+        now: String,
+    ) -> Result<(), BoundaryError> {
+        if matches!(
+            self.status,
+            GoalStatus::Completed
+                | GoalStatus::Cancelled
+                | GoalStatus::Running
+                | GoalStatus::LimitReached
+        ) || self.current_step.is_some()
+        {
+            return Err(failure(
+                "invalid_goal_state",
+                "Goal step verifiers cannot be modified in the current Goal state",
+            ));
+        }
+        if let Some(verifier) = &verifier {
+            verifier.validate()?;
+        }
+        let step = self
+            .steps
+            .iter_mut()
+            .find(|step| step.id == step_id)
+            .ok_or_else(|| failure("goal_not_found", "Goal step was not found"))?;
+        step.verifier = verifier;
+        step.last_verification = None;
+        if step.status == StepStatus::Completed {
+            step.status = StepStatus::Pending;
+            step.run_id = None;
+            step.last_result = None;
+        }
+        self.confirmed_verifiers_digest = None;
+        self.authorization = None;
+        self.status = GoalStatus::Waiting;
+        self.phase = GoalPhase::Planning;
+        self.wait_reason = Some(GoalWaitReason::PlanConfirmation);
+        self.failure = None;
+        self.updated_at = now;
+        self.validate()
     }
 
     pub fn validate(&self) -> Result<(), BoundaryError> {
@@ -896,16 +1237,14 @@ impl GoalRecord {
             .iter()
             .map(|step| step.id)
             .collect::<HashSet<_>>();
-        if step_ids.len() != self.steps.len()
-            || self
-                .steps
-                .iter()
-                .any(|step| step.validate(&step_ids).is_err())
-        {
+        if step_ids.len() != self.steps.len() {
             return Err(failure(
                 "invalid_goal",
                 "Goal steps are invalid or repeated",
             ));
+        }
+        for step in &self.steps {
+            step.validate(&step_ids)?;
         }
         validate_acyclic(&self.steps)?;
         if self.evidence.iter().any(|evidence| {
@@ -950,6 +1289,18 @@ impl GoalRecord {
                 ));
             }
         }
+        if self.has_step_verifiers()
+            && matches!(
+                self.status,
+                GoalStatus::Ready | GoalStatus::Running | GoalStatus::Completed
+            )
+            && !self.verifiers_confirmed()
+        {
+            return Err(failure(
+                "goal_verifier_unconfirmed",
+                "Goal step verifiers must be explicitly confirmed before execution",
+            ));
+        }
         if self.status == GoalStatus::Waiting && self.wait_reason.is_none() {
             return Err(failure(
                 "invalid_goal",
@@ -991,15 +1342,19 @@ impl GoalRecord {
                 instruction: planned.instruction,
                 mode: self.mode,
                 depends_on: planned.depends_on,
+                verifier: planned.verifier,
                 status: StepStatus::Pending,
                 attempts: 0,
                 run_id: None,
                 last_result: None,
+                last_verification: None,
             });
         }
         self.acceptance = plan.acceptance;
         self.steps = steps;
         self.evidence.clear();
+        self.confirmed_verifiers_digest = None;
+        self.authorization = None;
         self.status = GoalStatus::Waiting;
         self.phase = GoalPhase::Planning;
         self.wait_reason = Some(GoalWaitReason::PlanConfirmation);
@@ -1018,6 +1373,7 @@ impl GoalRecord {
                 "Goal has no plan awaiting confirmation",
             ));
         }
+        self.confirmed_verifiers_digest = Some(self.verifiers_digest());
         self.status = GoalStatus::Ready;
         self.phase = GoalPhase::Executing;
         self.wait_reason = None;

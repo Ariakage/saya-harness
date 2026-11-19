@@ -428,29 +428,8 @@ pub fn build_runtime(
     let (mut sandbox, broker) = config
         .sandbox
         .resolve_with_environment(&session.workspace, config.environment())?;
-    sandbox
-        .read_roots
-        .extend(config.permissions.additional_roots.iter().cloned());
-    sandbox
-        .write_roots
-        .extend(config.permissions.additional_roots.iter().cloned());
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    // Repository control data stays readable for ordinary Git inspection but
-    // cannot be modified by payloads or model-facing file tools.
-    let git_control =
-        soyo_core::execution::enumerate_git_control_paths(&sandbox.write_roots, home.as_deref());
-    if sandbox.backend != soyo_core::execution::BackendKind::Host {
-        sandbox
-            .write_denied_paths
-            .extend(git_control.write_denied.iter().cloned());
-    }
+    let mut private_paths = configure_host_sandbox(config, &session.workspace, &mut sandbox)?;
     let credential_path = config.state_dir.join("credentials");
-    let secrets_dir = config.state_dir.join("secrets");
-    let secrets_env_path = secrets_dir.join("env");
-    let helper_runtime_dir = config.state_dir.join("helper");
-    let legacy_secrets_env_path = home.as_ref().map(|h| h.join(".soyo/env"));
     let credential_backed = config.mcp.servers.values().any(|server| {
         server.enabled
             && matches!(
@@ -459,50 +438,9 @@ pub fn build_runtime(
                     if settings.credential_ref.is_some()
             )
     });
-    if sandbox.backend != soyo_core::execution::BackendKind::Host {
-        for path in [
-            config.config_path.clone(),
-            config.data_dir.clone(),
-            config.state_dir.clone(),
-            secrets_dir.clone(),
-            secrets_env_path.clone(),
-            helper_runtime_dir.clone(),
-            config.cache_dir.clone(),
-        ] {
-            if path.try_exists()? {
-                sandbox.protected_paths.push(path);
-            }
-        }
-        if let Some(legacy_env) = &legacy_secrets_env_path
-            && legacy_env.try_exists()?
-        {
-            sandbox.protected_paths.push(legacy_env.clone());
-        }
-        for name in [".saya/local", ".soyo/local"] {
-            let project_control = session.workspace.join(name);
-            if project_control.try_exists()? {
-                sandbox.protected_paths.push(project_control);
-            }
-        }
-    } else if credential_backed || credential_path.exists() {
-        return Err("host execution cannot protect the credential store".into());
-    } else if secrets_env_path.exists()
-        || legacy_secrets_env_path
-            .as_ref()
-            .is_some_and(|path| path.exists())
-    {
-        return Err("host execution cannot protect the stored secret environment overlay".into());
-    }
-    if config.browser.credentials.enabled
-        && let Some(store) = config.browser.credentials.store.as_ref()
-    {
-        // Credential material is protected whenever it is configured, even if
-        // the browser surface itself is disabled for this run.
-        if sandbox.backend == soyo_core::execution::BackendKind::Host {
-            return Err("host execution cannot protect the browser credential store".into());
-        }
-        sandbox.protected_paths.push(store.clone());
-    }
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
     let authorizer: Option<Arc<dyn soyo_core::mcp::config::McpHttpAuthorizer>> =
         if credential_backed {
             std::fs::create_dir_all(&config.state_dir)?;
@@ -510,9 +448,9 @@ pub fn build_runtime(
                 &credential_path,
                 registry.clone(),
             )?;
-            sandbox
-                .protected_paths
-                .push(credentials.protected_path().to_owned());
+            let protected = credentials.protected_path().to_owned();
+            sandbox.protected_paths.push(protected.clone());
+            private_paths.push(protected);
             Some(Arc::new(mcp::StoredMcpAuthorizer::new(credentials)))
         } else {
             None
@@ -522,6 +460,7 @@ pub fn build_runtime(
         config.output_capture.limits,
         registry.clone(),
     )?);
+    private_paths.push(outputs.protected_path().to_owned());
     if sandbox.backend != soyo_core::execution::BackendKind::Host {
         sandbox
             .protected_paths
@@ -541,32 +480,7 @@ pub fn build_runtime(
         soyo_core::global_memory::MemoryLimits::default(),
         registry.clone(),
     )?);
-    let memory_paths = vec![
-        memory_root.join("MEMORY.md"),
-        memory_root.join("memory"),
-        memory_root.join(".soyo-memory.lock"),
-    ];
-    if sandbox.backend != soyo_core::execution::BackendKind::Host {
-        sandbox.protected_paths.extend(memory_paths.iter().cloned());
-    }
     runtime = runtime.with_global_memory(memory, config.memory.clone())?;
-    let mut private_paths = vec![
-        config.config_path.clone(),
-        config.data_dir.clone(),
-        config.state_dir.clone(),
-        secrets_dir,
-        secrets_env_path,
-        helper_runtime_dir,
-        config.cache_dir.clone(),
-        session.workspace.join(".saya/local"),
-        session.workspace.join(".soyo/local"),
-    ];
-    if let Some(legacy_env) = legacy_secrets_env_path {
-        private_paths.push(legacy_env);
-    }
-    private_paths.extend(memory_paths);
-    private_paths.extend(sandbox.protected_paths.iter().cloned());
-    private_paths.extend(git_control.private_paths.iter().cloned());
     runtime = runtime.with_private_paths(private_paths.clone())?;
     let checkpoints = Arc::new(soyo_core::checkpoint::CheckpointStore::open(
         config.data_dir.join("checkpoints"),
@@ -628,4 +542,111 @@ pub fn build_runtime(
     }
     runtime = runtime.with_personal_context(launch.personal_context);
     Ok((runtime, streamed))
+}
+
+pub(crate) fn configure_host_sandbox(
+    config: &Config,
+    workspace: &std::path::Path,
+    sandbox: &mut soyo_core::execution::SandboxPolicy,
+) -> Result<Vec<PathBuf>, SharedError> {
+    sandbox
+        .read_roots
+        .extend(config.permissions.additional_roots.iter().cloned());
+    sandbox
+        .write_roots
+        .extend(config.permissions.additional_roots.iter().cloned());
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    // Repository control data stays readable for ordinary Git inspection but
+    // cannot be modified by payloads or host verifiers.
+    let git_control =
+        soyo_core::execution::enumerate_git_control_paths(&sandbox.write_roots, home.as_deref());
+    if sandbox.backend != soyo_core::execution::BackendKind::Host {
+        sandbox
+            .write_denied_paths
+            .extend(git_control.write_denied.iter().cloned());
+    }
+    let credential_path = config.state_dir.join("credentials");
+    let secrets_dir = config.state_dir.join("secrets");
+    let secrets_env_path = secrets_dir.join("env");
+    let helper_runtime_dir = config.state_dir.join("helper");
+    let legacy_secrets_env_path = home.as_ref().map(|h| h.join(".soyo/env"));
+    let credential_backed = config.mcp.servers.values().any(|server| {
+        server.enabled
+            && matches!(
+                &server.transport,
+                soyo_core::mcp::config::McpTransportSettings::Http(settings)
+                    if settings.credential_ref.is_some()
+            )
+    });
+    if sandbox.backend != soyo_core::execution::BackendKind::Host {
+        for path in [
+            config.config_path.clone(),
+            config.data_dir.clone(),
+            config.state_dir.clone(),
+            secrets_dir.clone(),
+            secrets_env_path.clone(),
+            helper_runtime_dir.clone(),
+            config.cache_dir.clone(),
+        ] {
+            if path.try_exists()? {
+                sandbox.protected_paths.push(path);
+            }
+        }
+        if let Some(legacy_env) = &legacy_secrets_env_path
+            && legacy_env.try_exists()?
+        {
+            sandbox.protected_paths.push(legacy_env.clone());
+        }
+        for name in [".saya/local", ".soyo/local"] {
+            let project_control = workspace.join(name);
+            if project_control.try_exists()? {
+                sandbox.protected_paths.push(project_control);
+            }
+        }
+    } else if credential_backed || credential_path.exists() {
+        return Err("host execution cannot protect the credential store".into());
+    } else if secrets_env_path.exists()
+        || legacy_secrets_env_path
+            .as_ref()
+            .is_some_and(|path| path.exists())
+    {
+        return Err("host execution cannot protect the stored secret environment overlay".into());
+    }
+    if config.browser.credentials.enabled
+        && let Some(store) = config.browser.credentials.store.as_ref()
+    {
+        if sandbox.backend == soyo_core::execution::BackendKind::Host {
+            return Err("host execution cannot protect the browser credential store".into());
+        }
+        sandbox.protected_paths.push(store.clone());
+    }
+    let memory_root = config.memory_root()?;
+    let memory_paths = vec![
+        memory_root.join("MEMORY.md"),
+        memory_root.join("memory"),
+        memory_root.join(".soyo-memory.lock"),
+    ];
+    if sandbox.backend != soyo_core::execution::BackendKind::Host {
+        sandbox.protected_paths.extend(memory_paths.iter().cloned());
+    }
+    let mut private_paths = vec![
+        config.config_path.clone(),
+        config.data_dir.clone(),
+        config.state_dir.clone(),
+        secrets_dir,
+        secrets_env_path,
+        helper_runtime_dir,
+        config.cache_dir.clone(),
+        workspace.join(".saya/local"),
+        workspace.join(".soyo/local"),
+    ];
+    if let Some(legacy_env) = legacy_secrets_env_path {
+        private_paths.push(legacy_env);
+    }
+    private_paths.extend(memory_paths);
+    private_paths.extend(sandbox.protected_paths.iter().cloned());
+    private_paths.extend(git_control.private_paths);
+    Ok(private_paths)
 }

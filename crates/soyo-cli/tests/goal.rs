@@ -1028,3 +1028,86 @@ fn cancelling_an_active_goal_cancels_the_in_flight_model_run() {
         json_output(command(root.path(), home.path(), &config).args(["goal", "status", goal_id]));
     assert_eq!(status["data"]["goal"]["status"], "cancelled");
 }
+
+#[test]
+fn set_verifier_locks_through_confirm_and_clear_requires_reconfirm() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let config = config(root.path(), "http://127.0.0.1:9/v1");
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Attach and confirm step verifier",
+        "--accept",
+        "The result is verified",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let step_id = "018bcfe5-6800-7000-8000-000000000095";
+    let plan_path = root.path().join("verifier-plan.json");
+    fs::write(&plan_path, plan(&[step_id], "criterion-1")).unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+
+    let updated = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "set-verifier",
+        goal_id,
+        step_id,
+        "--timeout-seconds",
+        "30",
+        "--",
+        "/bin/test",
+        "-f",
+        "ready.txt",
+    ]));
+    assert_eq!(updated["data"]["confirmation_required"], true);
+    assert_eq!(updated["data"]["goal"]["status"], "waiting");
+    assert_eq!(
+        updated["data"]["goal"]["wait_reason"]["kind"],
+        "plan_confirmation"
+    );
+    assert_eq!(
+        updated["data"]["goal"]["steps"][0]["verifier"]["argv"],
+        json!(["/bin/test", "-f", "ready.txt"])
+    );
+
+    let unconfirmed_status = text_command(root.path(), home.path(), &config)
+        .args(["goal", "status", goal_id])
+        .output()
+        .unwrap();
+    assert!(unconfirmed_status.status.success());
+    let unconfirmed_text = String::from_utf8(unconfirmed_status.stdout).unwrap();
+    assert!(unconfirmed_text.contains("unconfirmed"));
+    assert!(unconfirmed_text.contains("/bin/test"));
+
+    let confirmed =
+        json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+    assert_eq!(confirmed["data"]["goal"]["status"], "ready");
+    assert!(confirmed["data"]["goal"]["confirmed_verifiers_digest"].is_string());
+
+    let confirmed_status = text_command(root.path(), home.path(), &config)
+        .args(["goal", "status", goal_id])
+        .output()
+        .unwrap();
+    assert!(confirmed_status.status.success());
+    let confirmed_text = String::from_utf8(confirmed_status.stdout).unwrap();
+    assert!(confirmed_text.contains("Verifier (confirmed)"));
+
+    let cleared = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "set-verifier",
+        goal_id,
+        step_id,
+        "--clear",
+    ]));
+    assert!(cleared["data"]["goal"]["steps"][0]["verifier"].is_null());
+    assert_eq!(cleared["data"]["goal"]["status"], "waiting");
+    assert_eq!(
+        cleared["data"]["goal"]["wait_reason"]["kind"],
+        "plan_confirmation"
+    );
+}

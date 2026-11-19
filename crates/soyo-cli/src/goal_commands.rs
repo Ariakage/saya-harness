@@ -17,8 +17,8 @@ use soyo_core::{
     contract::{BoundaryError, ErrorInfo, PermissionMode},
     goal::{
         AcceptanceCriterion, GoalAuthorization, GoalBudget, GoalId, GoalPhase, GoalPlan,
-        GoalRecord, GoalSeed, GoalStatus, GoalStore, StepId, VerificationSpec, goal_report_json,
-        goal_report_markdown,
+        GoalRecord, GoalSeed, GoalStatus, GoalStore, StepId, StepVerifier, VerificationSpec,
+        goal_report_json, goal_report_markdown,
     },
 };
 use std::{
@@ -114,6 +114,26 @@ pub enum GoalAction {
     },
     /// Confirm the current plan and make its first dependency-ready step runnable.
     Confirm { goal_id: String },
+    /// Attach or clear a structured host verifier command on one Goal step (requires confirm).
+    SetVerifier {
+        goal_id: String,
+        step_id: String,
+        /// Optional workspace-relative working directory for the verifier command.
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Timeout in seconds (1-600, default 120).
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        /// Bounded stdout/stderr excerpt cap in bytes (256-32768, default 8192).
+        #[arg(long)]
+        max_output_bytes: Option<usize>,
+        /// Clear any configured step verifier instead of setting one.
+        #[arg(long)]
+        clear: bool,
+        /// Direct argv tokens for the verifier executable (after `--`).
+        #[arg(last = true)]
+        argv: Vec<String>,
+    },
     /// List saved Goals.
     List,
     /// Show one complete Goal record.
@@ -237,10 +257,12 @@ fn goal_text(goal: &GoalRecord) {
             criterion.text
         );
     }
+    let verifiers_confirmed = goal.verifiers_confirmed();
     for step in &goal.steps {
         println!(
-            "{}. {:?} · {} · {} attempt(s) · {}",
+            "{}. [{}] {:?} · {} · {} attempt(s) · {}",
             step.ordinal,
+            step.id.0,
             step.status,
             step.title,
             step.attempts,
@@ -248,6 +270,49 @@ fn goal_text(goal: &GoalRecord) {
                 .map(|run| run.0.to_string())
                 .unwrap_or_else(|| "no Run".into())
         );
+        if let Some(verifier) = &step.verifier {
+            println!(
+                "   Verifier ({}): {:?} (timeout {}s{})",
+                if verifiers_confirmed {
+                    "confirmed"
+                } else {
+                    "unconfirmed - run `goal confirm`"
+                },
+                verifier.argv,
+                verifier.timeout_seconds,
+                verifier
+                    .cwd
+                    .as_deref()
+                    .map(|cwd| format!(", cwd {cwd}"))
+                    .unwrap_or_default()
+            );
+        }
+        if let Some(verification) = &step.last_verification {
+            println!(
+                "   Last host verification: {:?} · exit {} · {}ms",
+                verification.status,
+                verification
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                verification.duration_ms
+            );
+            if let Some(message) = &verification.error_message {
+                println!("   Host verification note: {message}");
+            }
+            if !verification.stdout_excerpt.trim().is_empty() {
+                println!(
+                    "   Host verification stdout: {}",
+                    verification.stdout_excerpt.trim()
+                );
+            }
+            if !verification.stderr_excerpt.trim().is_empty() {
+                println!(
+                    "   Host verification stderr: {}",
+                    verification.stderr_excerpt.trim()
+                );
+            }
+        }
     }
 }
 
@@ -380,6 +445,54 @@ async fn confirm(goal_id: GoalId, config: &Config) -> Result<Value, BoundaryErro
     let revision = goal.revision;
     let goal = store.save(goal, revision).await?;
     Ok(json!({"schema_version":1,"data":{"goal":goal}}))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn set_verifier(
+    goal_id: GoalId,
+    step_id: StepId,
+    cwd: Option<String>,
+    timeout_seconds: Option<u64>,
+    max_output_bytes: Option<usize>,
+    clear: bool,
+    argv: Vec<String>,
+    config: &Config,
+) -> Result<Value, BoundaryError> {
+    let verifier = if clear {
+        if !argv.is_empty()
+            || cwd.is_some()
+            || timeout_seconds.is_some()
+            || max_output_bytes.is_some()
+        {
+            return Err(failure(
+                "invalid_goal",
+                "--clear cannot be combined with verifier command arguments or options",
+            ));
+        }
+        None
+    } else {
+        if argv.is_empty() {
+            return Err(failure(
+                "invalid_goal",
+                "Provide verifier argv after `--` or pass --clear",
+            ));
+        }
+        let defaults = soyo_core::goal::DEFAULT_VERIFIER_TIMEOUT_SECONDS;
+        let verifier = StepVerifier {
+            argv,
+            cwd,
+            timeout_seconds: timeout_seconds.unwrap_or(defaults),
+            max_output_bytes: max_output_bytes
+                .unwrap_or(soyo_core::goal::DEFAULT_VERIFIER_OUTPUT_BYTES),
+        };
+        verifier.validate()?;
+        Some(verifier)
+    };
+    let store = store(config)?;
+    let goal = store
+        .set_step_verifier(goal_id, step_id, verifier, soyo_app::events::timestamp()?)
+        .await?;
+    Ok(json!({"schema_version":1,"data":{"goal":goal,"confirmation_required":true}}))
 }
 
 fn terminal(config: &Config) -> Result<Option<Arc<Terminal>>, BoundaryError> {
@@ -717,6 +830,27 @@ pub async fn run(action: &GoalAction, cli: &Cli, config: &Config) -> Result<u8, 
             plan(parse_goal(goal_id)?, plan_file.as_ref(), config).await?
         }
         GoalAction::Confirm { goal_id } => confirm(parse_goal(goal_id)?, config).await?,
+        GoalAction::SetVerifier {
+            goal_id,
+            step_id,
+            cwd,
+            timeout_seconds,
+            max_output_bytes,
+            clear,
+            argv,
+        } => {
+            set_verifier(
+                parse_goal(goal_id)?,
+                parse_step(step_id)?,
+                cwd.clone(),
+                *timeout_seconds,
+                *max_output_bytes,
+                *clear,
+                argv.clone(),
+                config,
+            )
+            .await?
+        }
         GoalAction::List => {
             let goals = store(config)?.list().await?;
             let value = json!({"schema_version":1,"data":{"goals":goals.clone()}});

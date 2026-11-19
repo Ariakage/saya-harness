@@ -1,6 +1,6 @@
 # Goal 目标编排设计
 
-**状态：DEV-069 至 DEV-074 已实现并通过本机受控验收。能力编号 F-20；跨平台固定源码证据和发行版本仍按验收记录单独维护。**
+**状态：DEV-069 至 DEV-074 已实现并通过本机受控验收；`DEV-091`（S3/D-080 步骤验证器模型、v2 存储、`set-verifier` 与沙箱化 `run_step_verifier`）已实现，自动推进门禁与重规划接线（`DEV-092`）待实现。能力编号 F-20；跨平台固定源码证据和发行版本仍按验收记录单独维护。**
 
 ## 当前实现
 
@@ -13,6 +13,7 @@ CLI 与 TUI 共用 `soyo-core::goal` 数据／存储和 `soyo-app::goal` 计划�
 ```sh
 soyo goal create "OBJECTIVE" [--accept TEXT]...
 soyo goal plan GOAL_ID [--plan-file PLAN.json]
+soyo goal set-verifier GOAL_ID STEP_ID [--cwd REL] [--timeout-seconds S] [--max-output-bytes B] [--clear] [-- ARGV...]
 soyo goal confirm GOAL_ID
 soyo goal list
 soyo goal status GOAL_ID
@@ -54,9 +55,14 @@ G1 可在共享基础稳定后单独开发，G2 的执行依赖按[后续开发�
 
 | 对象 | 主要字段 |
 | --- | --- |
-| Goal | UUID、专属 Session、objective、acceptance criteria、工作区、profile、模式、状态／阶段、预算／usage、当前 Step、wait／failure、auto authorization、revision、创建／更新时间 |
-| Step | UUID、ordinal、依赖、标题／指令、运行模式、状态、尝试次数、关联 Run、最近结构化 Run 结果 |
-| Evidence | UUID、验收项 ID、来源 Step／Run、manual／file-exists／file-digest／artifact 类型、摘要、相对路径、SHA-256、核验时间 |
+| Goal | UUID、专属 Session、objective、acceptance criteria、工作区、profile、模式、状态／阶段、预算／usage、当前 Step、wait／failure、auto authorization、confirmed_verifiers_digest、revision、创建／更新时间 |
+| Step | UUID、ordinal、依赖、标题／指令、可选结构化 `verifier`、运行模式、状态、尝试次数、关联 Run、最近结构化 Run 结果与最近 `last_verification` 宿主验证证据 |
+| Evidence | UUID、验收项 ID、来源 Step／Run、manual／file-exists／file-digest／artifact 类型、摘要、相对路径、SHA-256、核验时间（v2 `step_verifications` 表另行审计保存步骤验证器退出码与有界摘录） |
+
+### 步骤宿主验证器（D-080 / DEV-091）
+
+- **结构与确认锁定**：`PlannedStep.verifier` 与 `GoalStep.verifier` 仅接受结构化 `argv`（禁止隐式 shell 字符串拼接）、可选工作区相对 `cwd`（禁止绝对路径、`..`、控制字符与 `.git` 控制路径）、有界超时（`1–600s`，默认 `120s`）与流摘录上限（`256B–32KiB`，默认 `8KiB`）。`goal plan` 草案与 `--plan-file` 可提议 verifier，亦可经 `soyo goal set-verifier`（或 `--clear`）调整；任何更改均清除 `confirmed_verifiers_digest` 并使 Goal 回到 `Waiting(PlanConfirmation)`，必须经 `goal confirm` 人工核对锁定后方可进入可执行状态。
+- **沙箱执行与不变量**：宿主侧 `run_step_verifier` / `execute_host_verifier` 校验 `verifiers_confirmed()`、剩余活跃时间预算、`PLAN` 跳过、`[permissions]` `deny`/`ask`/`Manual` 确认、`ExecutionBackend`（原生沙箱＋受保护宿主路径）与 `SecretRegistry` 脱敏。`goals.sqlite3`（schema v2，含 v1→v2 原子迁移）持久化 `step_verifications` 审计记录，`GoalRecord::validate` 强制约束带 verifier 的步骤不得在缺少退出码 `0` 且状态 `passed` 的宿主验证证据时标记为 `Completed`。（注：在 `run_step` / `start --auto` / `replan_failed_step` 串联自动推进门禁属后续 `DEV-092`。）
 | Continuation | 显式 auto 标记、模式、权限模式、配置指纹、授权时间、worker owner／过期租约及持久 dispatch 状态 |
 
 当前实现将一个 Goal 绑定到一个专属 Session，步骤关联多个 Run；跨 Session 关联及子 Goal 按后续需求扩展。工具调用继续使用 `(run_id, call_id)` 关联。

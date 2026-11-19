@@ -41,12 +41,14 @@ fn plan(first: StepId, second: StepId) -> GoalPlan {
                 title: "Implement API".into(),
                 instruction: "Implement and test the API".into(),
                 depends_on: vec![],
+                verifier: None,
             },
             PlannedStep {
                 id: second,
                 title: "Document API".into(),
                 instruction: "Document the API".into(),
                 depends_on: vec![first],
+                verifier: None,
             },
         ],
     }
@@ -67,6 +69,7 @@ fn single_manual_goal() -> (GoalRecord, StepId) {
                 title: "Step".into(),
                 instruction: "Perform bounded work".into(),
                 depends_on: vec![],
+                verifier: None,
             }],
         },
         "2026-11-12T04:00:00Z".into(),
@@ -285,6 +288,7 @@ async fn goal_worker_lease_excludes_another_goal_in_the_same_workspace() {
                     title: "Step".into(),
                     instruction: "Do work".into(),
                     depends_on: vec![],
+                    verifier: None,
                 }],
             },
             format!("2026-11-12T03:0{index}:00Z"),
@@ -492,6 +496,7 @@ async fn failed_known_work_is_replanned_once_but_unknown_side_effects_wait() {
                     title: "Attempt work".into(),
                     instruction: "Perform the work".into(),
                     depends_on: vec![],
+                    verifier: None,
                 }],
             },
             format!("2026-11-12T01:0{index}:00Z"),
@@ -753,4 +758,393 @@ fn digest_reading_enforces_the_actual_byte_limit() {
         bounded_file_digest(std::io::Cursor::new(b"hello")).unwrap(),
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     );
+}
+
+#[test]
+fn step_verifier_validates_argv_cwd_limits_and_denies_unknown_fields() {
+    let valid = StepVerifier {
+        argv: vec!["cargo".into(), "test".into(), "--lib".into()],
+        cwd: Some("crates/soyo-core".into()),
+        timeout_seconds: 60,
+        max_output_bytes: 4096,
+    };
+    assert!(valid.validate().is_ok());
+
+    for invalid in [
+        StepVerifier {
+            argv: vec![],
+            cwd: None,
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["   ".into()],
+            cwd: None,
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["echo".into(), "a\0b".into()],
+            cwd: None,
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["echo".into(), "bad\x1b[31m".into()],
+            cwd: None,
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: Some("../outside".into()),
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: Some("/tmp".into()),
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: Some(".git/hooks".into()),
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: None,
+            timeout_seconds: 0,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: None,
+            timeout_seconds: MAX_VERIFIER_TIMEOUT_SECONDS + 1,
+            max_output_bytes: 4096,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: None,
+            timeout_seconds: 60,
+            max_output_bytes: MIN_VERIFIER_OUTPUT_BYTES - 1,
+        },
+        StepVerifier {
+            argv: vec!["true".into()],
+            cwd: None,
+            timeout_seconds: 60,
+            max_output_bytes: MAX_VERIFIER_OUTPUT_BYTES + 1,
+        },
+    ] {
+        assert!(invalid.validate().is_err());
+    }
+
+    assert!(serde_json::from_str::<StepVerifier>(r#"{"argv":["true"],"shell":true}"#).is_err());
+}
+
+#[test]
+fn goal_invariants_reject_unverified_completion_and_unconfirmed_verifiers() {
+    let mut goal = record();
+    let step_id = StepId::new();
+    let verifier = StepVerifier {
+        argv: vec!["/bin/test".into(), "-f".into(), "ready.txt".into()],
+        cwd: None,
+        timeout_seconds: 30,
+        max_output_bytes: 4096,
+    };
+    goal.apply_plan(
+        GoalPlan {
+            acceptance: vec![AcceptanceCriterion {
+                id: "criterion-1".into(),
+                text: "Verified".into(),
+                verification: VerificationSpec::Manual,
+            }],
+            steps: vec![PlannedStep {
+                id: step_id,
+                title: "Build artifact".into(),
+                instruction: "Create ready.txt".into(),
+                depends_on: vec![],
+                verifier: Some(verifier.clone()),
+            }],
+        },
+        "2026-11-19T00:00:00Z".into(),
+    )
+    .unwrap();
+    assert!(!goal.verifiers_confirmed());
+    assert_eq!(goal.wait_reason, Some(GoalWaitReason::PlanConfirmation));
+
+    // Unconfirmed verifier cannot enter Ready directly.
+    let mut unconfirmed_ready = goal.clone();
+    unconfirmed_ready.status = GoalStatus::Ready;
+    unconfirmed_ready.wait_reason = None;
+    assert_eq!(
+        unconfirmed_ready.validate().unwrap_err().0.code,
+        "goal_verifier_unconfirmed"
+    );
+
+    goal.confirm_plan("2026-11-19T00:01:00Z".into()).unwrap();
+    assert!(goal.verifiers_confirmed());
+
+    // Step with verifier cannot be marked Completed without passing host verification.
+    let mut bad_complete = goal.clone();
+    bad_complete.steps[0].status = StepStatus::Completed;
+    assert_eq!(
+        bad_complete.validate().unwrap_err().0.code,
+        "goal_not_verified"
+    );
+
+    let run_id = RunId::new();
+    bad_complete.steps[0].run_id = Some(run_id);
+    bad_complete.steps[0].last_verification = Some(StepVerificationResult {
+        step_id,
+        attempt: 1,
+        run_id,
+        argv: verifier.argv.clone(),
+        cwd: None,
+        status: StepVerificationStatus::Failed,
+        exit_code: Some(1),
+        stdout_excerpt: String::new(),
+        stderr_excerpt: "missing ready.txt".into(),
+        stdout_truncated: false,
+        stderr_truncated: false,
+        duration_ms: 12,
+        recorded_at: "2026-11-19T00:02:00Z".into(),
+        error_code: Some("command_failed".into()),
+        error_message: Some("Step verifier exited with code 1".into()),
+    });
+    assert_eq!(
+        bad_complete.validate().unwrap_err().0.code,
+        "goal_not_verified"
+    );
+
+    // Passing verification satisfies step completion invariant and appears in Markdown report.
+    bad_complete.steps[0]
+        .last_verification
+        .as_mut()
+        .unwrap()
+        .status = StepVerificationStatus::Passed;
+    bad_complete.steps[0]
+        .last_verification
+        .as_mut()
+        .unwrap()
+        .exit_code = Some(0);
+    assert!(bad_complete.validate().is_ok());
+    let md = String::from_utf8(goal_report_markdown(&bad_complete).unwrap()).unwrap();
+    assert!(md.contains("/bin/test -f ready.txt"));
+    assert!(md.contains("Passed"));
+
+    // Updating verifier via set_step_verifier resets confirmation digest and returns to PlanConfirmation.
+    goal.set_step_verifier(
+        step_id,
+        Some(StepVerifier {
+            argv: vec!["/bin/true".into()],
+            cwd: None,
+            timeout_seconds: 15,
+            max_output_bytes: 2048,
+        }),
+        "2026-11-19T00:03:00Z".into(),
+    )
+    .unwrap();
+    assert!(!goal.verifiers_confirmed());
+    assert_eq!(goal.status, GoalStatus::Waiting);
+    assert_eq!(goal.wait_reason, Some(GoalWaitReason::PlanConfirmation));
+}
+
+#[tokio::test]
+async fn sqlite_v1_migrates_to_v2_and_persists_step_verifications() {
+    let root = tempfile::tempdir().unwrap();
+    let data_dir = root.path().join("data");
+    let goals_dir = data_dir.join("goals");
+    fs::create_dir_all(&goals_dir).unwrap();
+    let db_path = goals_dir.join("goals.sqlite3");
+
+    // Seed a real v1 database and legacy v1 Goal JSON lacking new fields.
+    let (legacy_goal, _) = single_manual_goal();
+    let mut legacy_value = serde_json::to_value(&legacy_goal).unwrap();
+    legacy_value
+        .as_object_mut()
+        .unwrap()
+        .remove("confirmed_verifiers_digest");
+    for step in legacy_value["steps"].as_array_mut().unwrap() {
+        step.as_object_mut().unwrap().remove("verifier");
+        step.as_object_mut().unwrap().remove("last_verification");
+    }
+    let legacy_raw = serde_json::to_string(&legacy_value).unwrap();
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE goals (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                workspace TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                status TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                record TEXT NOT NULL
+            );
+            CREATE INDEX goals_status ON goals(status, revision);
+            CREATE TABLE leases (
+                goal_id TEXT PRIMARY KEY REFERENCES goals(id) ON DELETE CASCADE,
+                owner TEXT NOT NULL,
+                expires_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE workspace_leases (
+                workspace TEXT PRIMARY KEY,
+                goal_id TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                expires_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE dispatches (
+                goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                step_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                run_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                PRIMARY KEY(goal_id, step_id, attempt)
+            );
+            CREATE INDEX dispatches_state ON dispatches(state);
+            PRAGMA application_id = 1397182257;
+            PRAGMA user_version = 1;
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO goals(id,session_id,workspace,profile,status,revision,record) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            rusqlite::params![
+                legacy_goal.id.0.to_string(),
+                legacy_goal.session_id.0.to_string(),
+                legacy_goal.workspace.to_string_lossy().into_owned(),
+                legacy_goal.profile,
+                "ready",
+                i64::try_from(legacy_goal.revision).unwrap(),
+                legacy_raw,
+            ],
+        )
+        .unwrap();
+    }
+    fs::set_permissions(&db_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let store = GoalStore::open(&data_dir, vec!["super-secret-token".into()]).unwrap();
+    let loaded = store.load(legacy_goal.id).await.unwrap();
+    assert_eq!(loaded.id, legacy_goal.id);
+    assert!(loaded.verifiers_confirmed());
+
+    // Confirm user_version upgraded to 2 and step_verifications table exists.
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let ver: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(ver, 2);
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='step_verifications'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1);
+    }
+
+    // Create a second Goal with a StepVerifier, lock via confirm_plan, and persist redacted failure + pass.
+    let mut goal = record();
+    goal.workspace = root.path().join("ws2");
+    let step_id = StepId::new();
+    goal.apply_plan(
+        GoalPlan {
+            acceptance: vec![AcceptanceCriterion {
+                id: "criterion-1".into(),
+                text: "Verified".into(),
+                verification: VerificationSpec::Manual,
+            }],
+            steps: vec![PlannedStep {
+                id: step_id,
+                title: "Verify step".into(),
+                instruction: "Run task".into(),
+                depends_on: vec![],
+                verifier: Some(StepVerifier {
+                    argv: vec!["/bin/true".into()],
+                    cwd: None,
+                    timeout_seconds: 30,
+                    max_output_bytes: 1024,
+                }),
+            }],
+        },
+        "2026-11-19T00:00:00Z".into(),
+    )
+    .unwrap();
+    let goal = store.create(goal).await.unwrap();
+    let updated = store
+        .set_step_verifier(
+            goal.id,
+            step_id,
+            Some(StepVerifier {
+                argv: vec!["/bin/test".into(), "-f".into(), "ok".into()],
+                cwd: None,
+                timeout_seconds: 20,
+                max_output_bytes: 1024,
+            }),
+            "2026-11-19T00:01:00Z".into(),
+        )
+        .await
+        .unwrap();
+    assert!(!updated.verifiers_confirmed());
+    let mut confirmed = updated;
+    confirmed
+        .confirm_plan("2026-11-19T00:02:00Z".into())
+        .unwrap();
+    let rev = confirmed.revision;
+    let confirmed = store.save(confirmed, rev).await.unwrap();
+    assert!(confirmed.verifiers_confirmed());
+
+    let lease = store
+        .acquire_lease(confirmed.id, "v2-worker".into(), 1_000, Some(60_000))
+        .await
+        .unwrap();
+    let dispatch = store
+        .begin_dispatch(&lease, RunId::new(), 1_001, "2026-11-19T00:03:00Z".into())
+        .await
+        .unwrap();
+    store.mark_running(&dispatch, &lease, 1_002).await.unwrap();
+    let failed_goal = store
+        .finish_dispatch_with_verification(
+            &lease,
+            &dispatch,
+            summary(dispatch.run_id, "2026-11-19T00:04:00Z"),
+            Some(StepVerificationResult {
+                step_id,
+                attempt: dispatch.attempt,
+                run_id: dispatch.run_id,
+                argv: vec!["/bin/test".into(), "-f".into(), "ok".into()],
+                cwd: None,
+                status: StepVerificationStatus::Failed,
+                exit_code: Some(1),
+                stdout_excerpt: "leaked super-secret-token here".into(),
+                stderr_excerpt: "err super-secret-token".into(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                duration_ms: 15,
+                recorded_at: "2026-11-19T00:04:01Z".into(),
+                error_code: Some("command_failed".into()),
+                error_message: Some("exited 1".into()),
+            }),
+            &metrics(),
+            "2026-11-19T00:04:02Z".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed_goal.status, GoalStatus::Blocked);
+    assert_eq!(failed_goal.wait_reason, Some(GoalWaitReason::ExternalInput));
+    assert_eq!(failed_goal.steps[0].status, StepStatus::Failed);
+    let logged = failed_goal.steps[0].last_verification.as_ref().unwrap();
+    assert!(!logged.stdout_excerpt.contains("super-secret-token"));
+    assert!(logged.stdout_excerpt.contains("[REDACTED]"));
+
+    let history = store.step_verifications(confirmed.id).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, StepVerificationStatus::Failed);
+    assert!(!history[0].stderr_excerpt.contains("super-secret-token"));
 }

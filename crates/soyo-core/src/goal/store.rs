@@ -1,8 +1,9 @@
 //! Independent versioned SQLite storage for Goal lifecycle and dispatch intents.
 
 use super::{
-    DispatchState, GoalDispatch, GoalId, GoalRecord, GoalStatus, GoalWaitReason, StepStatus,
-    VerificationSpec, failure,
+    DispatchState, GoalDispatch, GoalId, GoalRecord, GoalStatus, GoalWaitReason, StepId,
+    StepStatus, StepVerificationResult, StepVerificationStatus, StepVerifier, VerificationSpec,
+    failure,
 };
 use crate::{
     contract::{BoundaryError, ErrorInfo, RunId},
@@ -20,9 +21,24 @@ use std::{
 };
 
 const DATABASE_NAME: &str = "goals.sqlite3";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const APPLICATION_ID: i64 = 0x5347_4f31;
 const MAX_GOAL_ROWS: usize = 512;
+const V1_TO_V2_MIGRATION: &str = r#"
+CREATE TABLE IF NOT EXISTS step_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    step_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER,
+    record_json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS step_verifications_lookup
+    ON step_verifications(goal_id, step_id, attempt DESC, id DESC);
+"#;
 const SCHEMA: &str = r#"
 CREATE TABLE goals (
     id TEXT PRIMARY KEY,
@@ -54,6 +70,19 @@ CREATE TABLE dispatches (
     PRIMARY KEY(goal_id, step_id, attempt)
 );
 CREATE INDEX dispatches_state ON dispatches(state);
+CREATE TABLE step_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    step_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER,
+    record_json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX step_verifications_lookup
+    ON step_verifications(goal_id, step_id, attempt DESC, id DESC);
 "#;
 
 fn storage(code: &str, message: &str) -> BoundaryError {
@@ -100,6 +129,38 @@ pub struct GoalStore {
 
 fn id(value: impl std::fmt::Display) -> String {
     value.to_string()
+}
+
+fn redact_verification(
+    mut verification: StepVerificationResult,
+    secrets: &[String],
+    limit: usize,
+) -> Result<StepVerificationResult, BoundaryError> {
+    let mut value = serde_json::to_value(&verification)
+        .map_err(|_| storage("goal_storage", "Step verification cannot be encoded"))?;
+    redaction::redact(&mut value, secrets).map_err(|_| {
+        storage(
+            "storage_sensitive_data",
+            "Step verification contains protected data",
+        )
+    })?;
+    verification = serde_json::from_value(value)
+        .map_err(|_| storage("goal_storage", "Step verification cannot be decoded"))?;
+    verification.bound_outputs(limit);
+    verification.validate()?;
+    Ok(verification)
+}
+
+fn verification_status_label(status: StepVerificationStatus) -> &'static str {
+    match status {
+        StepVerificationStatus::Passed => "passed",
+        StepVerificationStatus::Failed => "failed",
+        StepVerificationStatus::TimedOut => "timed_out",
+        StepVerificationStatus::Cancelled => "cancelled",
+        StepVerificationStatus::Denied => "denied",
+        StepVerificationStatus::SkippedPlan => "skipped_plan",
+        StepVerificationStatus::Unknown => "unknown",
+    }
 }
 
 fn encode(record: &GoalRecord, secrets: &[String]) -> Result<String, BoundaryError> {
@@ -349,6 +410,17 @@ impl GoalStore {
             transaction.execute_batch(SCHEMA).map_err(sql_error)?;
             transaction
                 .pragma_update(None, "application_id", APPLICATION_ID)
+                .map_err(sql_error)?;
+            transaction
+                .pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(sql_error)?;
+            transaction.commit().map_err(sql_error)?;
+        } else if application == APPLICATION_ID && version == 1 {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            transaction
+                .execute_batch(V1_TO_V2_MIGRATION)
                 .map_err(sql_error)?;
             transaction
                 .pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -752,6 +824,19 @@ impl GoalStore {
         metrics: &RunMetrics,
         now: String,
     ) -> Result<GoalRecord, BoundaryError> {
+        self.finish_dispatch_with_verification(lease, dispatch, summary, None, metrics, now)
+            .await
+    }
+
+    pub async fn finish_dispatch_with_verification(
+        &self,
+        lease: &GoalLease,
+        dispatch: &GoalDispatch,
+        summary: super::GoalRunSummary,
+        verification: Option<StepVerificationResult>,
+        metrics: &RunMetrics,
+        now: String,
+    ) -> Result<GoalRecord, BoundaryError> {
         summary.validate()?;
         let connection = self.connection.clone();
         let secrets = self.secrets.clone();
@@ -805,9 +890,9 @@ impl GoalStore {
                 .usage
                 .active_seconds
                 .saturating_add(metrics.duration_ms.div_ceil(1000));
-            let completed = summary.status == crate::contract::RunStatus::Completed
+            let run_completed = summary.status == crate::contract::RunStatus::Completed
                 && summary.persistence_saved;
-            if completed {
+            if run_completed {
                 record.usage.add_usage(summary.usage.as_ref());
             } else {
                 record.usage.add_incomplete_usage(summary.usage.as_ref());
@@ -817,22 +902,76 @@ impl GoalStore {
                 .iter()
                 .position(|step| step.id == step_id)
                 .ok_or_else(|| storage("goal_corrupt", "Goal step disappeared"))?;
-            let step_status = if completed {
+            let verifier_limit = record.steps[index]
+                .verifier
+                .as_ref()
+                .map_or(super::MAX_VERIFIER_OUTPUT_BYTES, |verifier| {
+                    verifier.max_output_bytes
+                });
+            let verification = verification
+                .map(|item| redact_verification(item, &secrets, verifier_limit))
+                .transpose()?;
+            if let Some(item) = &verification {
+                if item.step_id != step_id
+                    || item.attempt != attempt
+                    || item.run_id != summary.run_id
+                {
+                    return Err(storage(
+                        "goal_dispatch_conflict",
+                        "Goal step verification identity differs from active dispatch",
+                    ));
+                }
+                record.usage.active_seconds = record
+                    .usage
+                    .active_seconds
+                    .saturating_add(item.duration_ms.div_ceil(1000));
+                let encoded = serde_json::to_string(item)
+                    .map_err(|_| storage("goal_storage", "Step verification cannot be encoded"))?;
+                if redaction::contains_secret(&encoded, &secrets) {
+                    return Err(storage(
+                        "storage_sensitive_data",
+                        "Step verification contains a configured credential",
+                    ));
+                }
+                transaction
+                    .execute(
+                        "INSERT INTO step_verifications(goal_id,step_id,attempt,run_id,status,exit_code,record_json,recorded_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                        params![
+                            id(goal_id.0),
+                            id(step_id.0),
+                            i64::from(attempt),
+                            id(summary.run_id.0),
+                            verification_status_label(item.status),
+                            item.exit_code,
+                            encoded,
+                            item.recorded_at,
+                        ],
+                    )
+                    .map_err(sql_error)?;
+            }
+            let has_verifier = record.steps[index].verifier.is_some();
+            let verifier_passed = !has_verifier
+                || verification.as_ref().is_some_and(|item| {
+                    item.status == StepVerificationStatus::Passed && item.exit_code == Some(0)
+                });
+            let step_completed = run_completed && verifier_passed;
+            let step_status = if step_completed {
                 StepStatus::Completed
             } else {
                 StepStatus::Failed
             };
             record.steps[index].status = step_status;
             record.steps[index].last_result = Some(summary.clone());
+            record.steps[index].last_verification = verification.clone();
             record.current_step = None;
             record.updated_at = now;
-            let dispatch_state = if completed {
+            let mut dispatch_state = if step_completed {
                 DispatchState::Completed
             } else {
                 DispatchState::Failed
             };
             let requested_status = record.status;
-            if completed
+            if step_completed
                 && record
                     .steps
                     .iter()
@@ -841,11 +980,13 @@ impl GoalStore {
                 record.status = GoalStatus::Waiting;
                 record.phase = crate::goal::GoalPhase::Verifying;
                 record.wait_reason = Some(GoalWaitReason::Verification);
-            } else if completed {
+                record.failure = None;
+            } else if step_completed {
                 record.status = GoalStatus::Ready;
                 record.phase = crate::goal::GoalPhase::Executing;
                 record.wait_reason = None;
-            } else {
+                record.failure = None;
+            } else if !run_completed {
                 record.status = GoalStatus::Blocked;
                 record.phase = crate::goal::GoalPhase::Executing;
                 record.failure = summary.stop_reason.clone().map(|message| ErrorInfo {
@@ -853,8 +994,81 @@ impl GoalStore {
                     message,
                 });
                 record.wait_reason = Some(GoalWaitReason::ExternalInput);
+            } else {
+                match verification.as_ref().map(|item| item.status) {
+                    Some(StepVerificationStatus::Failed) => {
+                        let code_suffix = verification
+                            .as_ref()
+                            .and_then(|item| item.exit_code)
+                            .map(|code| format!("with exit code {code}"))
+                            .unwrap_or_else(|| "without exit status".into());
+                        record.status = GoalStatus::Blocked;
+                        record.phase = crate::goal::GoalPhase::Executing;
+                        record.wait_reason = Some(GoalWaitReason::ExternalInput);
+                        record.failure = Some(ErrorInfo {
+                            code: "goal_step_verifier_failed".into(),
+                            message: verification
+                                .as_ref()
+                                .and_then(|item| item.error_message.clone())
+                                .unwrap_or_else(|| format!("Step host verifier failed {code_suffix}")),
+                        });
+                    }
+                    Some(StepVerificationStatus::Denied | StepVerificationStatus::SkippedPlan) => {
+                        record.status = GoalStatus::Blocked;
+                        record.phase = crate::goal::GoalPhase::Executing;
+                        record.wait_reason = Some(GoalWaitReason::Authorization);
+                        record.failure = Some(ErrorInfo {
+                            code: verification
+                                .as_ref()
+                                .and_then(|item| item.error_code.clone())
+                                .unwrap_or_else(|| "permission_denied".into()),
+                            message: verification
+                                .as_ref()
+                                .and_then(|item| item.error_message.clone())
+                                .unwrap_or_else(|| "Step verifier execution was denied".into()),
+                        });
+                    }
+                    Some(StepVerificationStatus::TimedOut | StepVerificationStatus::Unknown) => {
+                        dispatch_state = DispatchState::Unknown;
+                        record.status = GoalStatus::Waiting;
+                        record.phase = crate::goal::GoalPhase::Verifying;
+                        record.wait_reason = Some(GoalWaitReason::UnknownSideEffect { step_id });
+                        record.failure = Some(ErrorInfo {
+                            code: verification
+                                .as_ref()
+                                .and_then(|item| item.error_code.clone())
+                                .unwrap_or_else(|| "goal_verifier_unknown".into()),
+                            message: verification
+                                .as_ref()
+                                .and_then(|item| item.error_message.clone())
+                                .unwrap_or_else(|| {
+                                    "Step verifier timed out or ended with an unknown outcome".into()
+                                }),
+                        });
+                    }
+                    Some(StepVerificationStatus::Cancelled) => {
+                        record.status = GoalStatus::Waiting;
+                        record.phase = crate::goal::GoalPhase::Verifying;
+                        record.wait_reason = Some(GoalWaitReason::UnknownSideEffect { step_id });
+                        record.failure = Some(ErrorInfo {
+                            code: "cancelled".into(),
+                            message: "Step verifier was cancelled".into(),
+                        });
+                    }
+                    Some(StepVerificationStatus::Passed) | None => {
+                        record.status = GoalStatus::Blocked;
+                        record.phase = crate::goal::GoalPhase::Executing;
+                        record.wait_reason = Some(GoalWaitReason::Authorization);
+                        record.failure = Some(ErrorInfo {
+                            code: "goal_not_verified".into(),
+                            message: "Step verifier did not produce passing host evidence".into(),
+                        });
+                    }
+                }
             }
-            if record.budget_exhausted() {
+            if record.budget_exhausted()
+                && !matches!(record.wait_reason, Some(GoalWaitReason::UnknownSideEffect { .. }))
+            {
                 record.status = GoalStatus::LimitReached;
                 record.phase = crate::goal::GoalPhase::Finished;
             }
@@ -873,6 +1087,13 @@ impl GoalStore {
                     {
                         record.phase = crate::goal::GoalPhase::Verifying;
                         record.wait_reason = Some(GoalWaitReason::Verification);
+                    } else if matches!(
+                        record.wait_reason,
+                        Some(GoalWaitReason::UnknownSideEffect { .. })
+                    ) {
+                        record.phase = crate::goal::GoalPhase::Verifying;
+                    } else if matches!(record.wait_reason, Some(GoalWaitReason::Authorization)) {
+                        record.phase = crate::goal::GoalPhase::Executing;
                     } else if step_status == StepStatus::Failed {
                         record.phase = crate::goal::GoalPhase::Executing;
                         record.wait_reason = Some(GoalWaitReason::ExternalInput);
@@ -905,6 +1126,83 @@ impl GoalStore {
                 .map_err(sql_error)?;
             transaction.commit().map_err(sql_error)?;
             Ok(record)
+        })
+        .await
+        .map_err(|_| storage("goal_storage", "Goal storage worker failed"))?
+    }
+
+    pub async fn set_step_verifier(
+        &self,
+        goal_id: GoalId,
+        step_id: StepId,
+        verifier: Option<StepVerifier>,
+        now: String,
+    ) -> Result<GoalRecord, BoundaryError> {
+        let connection = self.connection.clone();
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut connection = connection
+                .lock()
+                .map_err(|_| storage("goal_storage", "Goal database lock poisoned"))?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(sql_error)?;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or_default();
+            let leased: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM leases WHERE goal_id=?1 AND expires_at_ms>?2",
+                    params![id(goal_id.0), i64::try_from(now_ms).unwrap_or(i64::MAX)],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            if leased != 0 {
+                return Err(storage(
+                    "goal_running",
+                    "Goal has an active worker; wait for it to finish before editing verifiers",
+                ));
+            }
+            let mut record = load_connection(&transaction, goal_id)?;
+            record.set_step_verifier(step_id, verifier, now)?;
+            record.revision = record.revision.saturating_add(1);
+            record.validate()?;
+            write_connection(&transaction, &record, &secrets, None)?;
+            transaction.commit().map_err(sql_error)?;
+            Ok(record)
+        })
+        .await
+        .map_err(|_| storage("goal_storage", "Goal storage worker failed"))?
+    }
+
+    pub async fn step_verifications(
+        &self,
+        goal_id: GoalId,
+    ) -> Result<Vec<StepVerificationResult>, BoundaryError> {
+        let connection = self.connection.clone();
+        tokio::task::spawn_blocking(move || {
+            let connection = connection
+                .lock()
+                .map_err(|_| storage("goal_storage", "Goal database lock poisoned"))?;
+            let mut statement = connection
+                .prepare("SELECT record_json FROM step_verifications WHERE goal_id=?1 ORDER BY id")
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map([id(goal_id.0)], |row| row.get::<_, String>(0))
+                .map_err(sql_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sql_error)?;
+            rows.into_iter()
+                .map(|raw| {
+                    let parsed: StepVerificationResult =
+                        serde_json::from_str(&raw).map_err(|_| {
+                            storage("goal_corrupt", "Step verification record is invalid")
+                        })?;
+                    parsed.validate()?;
+                    Ok(parsed)
+                })
+                .collect()
         })
         .await
         .map_err(|_| storage("goal_storage", "Goal storage worker failed"))?
@@ -1112,6 +1410,7 @@ impl GoalStore {
                 step.status = StepStatus::Pending;
                 step.run_id = None;
                 step.last_result = None;
+                step.last_verification = None;
                 record.status = GoalStatus::Ready;
                 record.phase = crate::goal::GoalPhase::Executing;
                 record.wait_reason = None;

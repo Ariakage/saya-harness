@@ -623,6 +623,8 @@ pub(crate) mod services {
     pub const GOAL_PLAN_BUDGET: &str = "Goal planning budget is exhausted";
     pub const GOAL_REPORT_EXPORTED: &str = "Goal report · exported";
     pub const GOAL_REPORT_ENCODE_FAILED: &str = "Goal report receipt cannot be encoded";
+    pub const GOAL_VERIFIER_CONFIRMED: &str = "confirmed";
+    pub const GOAL_VERIFIER_UNCONFIRMED: &str = "unconfirmed";
     pub const HISTORY_OMITTED: &str = "Earlier stored history is omitted from this view. Use session export to inspect the full history.";
     pub const SESSION_RESTORED: &str = "Session restored. Waiting for new input.";
     pub const NEW_SESSION_READY: &str = "New session ready. Waiting for your message.";

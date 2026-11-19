@@ -279,117 +279,125 @@ impl ExecTool {
         context: &ToolContext,
         allowed_secret_refs: &BTreeSet<String>,
     ) -> Result<(ExecPlan, cap_std::fs::Dir, BTreeMap<OsString, OsString>), BoundaryError> {
-        if args.argv.is_empty()
-            || args.argv[0].is_empty()
-            || args.argv.iter().any(|a| a.contains('\0'))
+        prepare_exec_with_refs(
+            &self.files,
+            &self.config,
+            args,
+            &context.workspace,
+            allowed_secret_refs,
+        )
+    }
+}
+
+fn prepare_exec_with_refs(
+    files: &ReadTools,
+    config: &ExecConfig,
+    args: &ExecArgs,
+    workspace: &Path,
+    allowed_secret_refs: &BTreeSet<String>,
+) -> Result<(ExecPlan, cap_std::fs::Dir, BTreeMap<OsString, OsString>), BoundaryError> {
+    if args.argv.is_empty() || args.argv[0].is_empty() || args.argv.iter().any(|a| a.contains('\0'))
+    {
+        return Err(failure(
+            "invalid_args",
+            "argv must contain a nonempty executable and no NUL",
+        ));
+    }
+    if config.max_timeout.is_zero()
+        || config.default_timeout.is_zero()
+        || config.default_timeout > config.max_timeout
+    {
+        return Err(failure(
+            "invalid_config",
+            "invalid command timeout configuration",
+        ));
+    }
+    let command_timeout = args
+        .timeout_seconds
+        .map(Duration::from_secs)
+        .unwrap_or(config.default_timeout);
+    if command_timeout.is_zero() || command_timeout > config.max_timeout {
+        return Err(failure(
+            "invalid_args",
+            "command timeout exceeds configured limit",
+        ));
+    }
+    let requested_cwd = args.cwd.as_deref().unwrap_or(workspace);
+    if requested_cwd.as_os_str().as_bytes().contains(&0) {
+        return Err(failure("invalid_args", "command cwd must not contain NUL"));
+    }
+    let requested_cwd = std::fs::canonicalize(workspace.join(requested_cwd)).map_err(cwd_error)?;
+    let (cwd, root, relative) = files
+        .resolve(&requested_cwd)
+        .map_err(|e| failure(e.code, e.message))?;
+    let cwd_dir = root.dir.open_dir(relative).map_err(cwd_error)?;
+    let mut env = BTreeMap::new();
+    for (key, value) in config.environment.iter() {
+        if let Some(name) = key.to_str()
+            && !config.secret_env_names.contains(name)
+            && (is_base(name) || config.inherit_extra.contains(name))
         {
+            env.insert(key.clone(), value.clone());
+        }
+    }
+    for (key, value) in &args.env {
+        let selected_reference =
+            matches!(value, EnvValue::Reference(name) if allowed_secret_refs.contains(name));
+        if !valid_env_name(key) || (config.secret_env_names.contains(key) && !selected_reference) {
             return Err(failure(
                 "invalid_args",
-                "argv must contain a nonempty executable and no NUL",
+                "invalid or forbidden environment key",
             ));
         }
-        if self.config.max_timeout.is_zero()
-            || self.config.default_timeout.is_zero()
-            || self.config.default_timeout > self.config.max_timeout
-        {
-            return Err(failure(
-                "invalid_config",
-                "invalid command timeout configuration",
-            ));
-        }
-        let command_timeout = args
-            .timeout_seconds
-            .map(Duration::from_secs)
-            .unwrap_or(self.config.default_timeout);
-        if command_timeout.is_zero() || command_timeout > self.config.max_timeout {
-            return Err(failure(
-                "invalid_args",
-                "command timeout exceeds configured limit",
-            ));
-        }
-        let requested_cwd = args.cwd.as_deref().unwrap_or(&context.workspace);
-        if requested_cwd.as_os_str().as_bytes().contains(&0) {
-            return Err(failure("invalid_args", "command cwd must not contain NUL"));
-        }
-        let requested_cwd =
-            std::fs::canonicalize(context.workspace.join(requested_cwd)).map_err(cwd_error)?;
-        let (cwd, root, relative) = self
-            .files
-            .resolve(&requested_cwd)
-            .map_err(|e| failure(e.code, e.message))?;
-        let cwd_dir = root.dir.open_dir(relative).map_err(cwd_error)?;
-        let mut env = BTreeMap::new();
-        for (key, value) in self.config.environment.iter() {
-            if let Some(name) = key.to_str()
-                && !self.config.secret_env_names.contains(name)
-                && (is_base(name) || self.config.inherit_extra.contains(name))
+        let value = match value {
+            EnvValue::Literal(value) if !value.contains('\0') => OsString::from(value),
+            EnvValue::Reference(name)
+                if valid_env_name(name)
+                    && (selected_reference
+                        || (!config.secret_env_names.contains(name)
+                            && (is_base(name) || config.inherit_extra.contains(name)))) =>
             {
-                env.insert(key.clone(), value.clone());
+                config
+                    .environment
+                    .get_os(name)
+                    .map(OsStr::to_owned)
+                    .ok_or_else(|| {
+                        failure(
+                            "invalid_args",
+                            "referenced environment variable is unavailable",
+                        )
+                    })?
             }
-        }
-        for (key, value) in &args.env {
-            let selected_reference =
-                matches!(value, EnvValue::Reference(name) if allowed_secret_refs.contains(name));
-            if !valid_env_name(key)
-                || (self.config.secret_env_names.contains(key) && !selected_reference)
-            {
+            _ => {
                 return Err(failure(
                     "invalid_args",
-                    "invalid or forbidden environment key",
+                    "invalid or unauthorized environment value",
                 ));
             }
-            let value = match value {
-                EnvValue::Literal(value) if !value.contains('\0') => OsString::from(value),
-                EnvValue::Reference(name)
-                    if valid_env_name(name)
-                        && (selected_reference
-                            || (!self.config.secret_env_names.contains(name)
-                                && (is_base(name)
-                                    || self.config.inherit_extra.contains(name)))) =>
-                {
-                    self.config
-                        .environment
-                        .get_os(name)
-                        .map(OsStr::to_owned)
-                        .ok_or_else(|| {
-                            failure(
-                                "invalid_args",
-                                "referenced environment variable is unavailable",
-                            )
-                        })?
-                }
-                _ => {
-                    return Err(failure(
-                        "invalid_args",
-                        "invalid or unauthorized environment value",
-                    ));
-                }
-            };
-            env.insert(key.into(), value);
-        }
-        if let Some(execution) = &self.config.execution {
-            execution.apply_environment(&mut env)?;
-        }
-        let executable =
-            resolve_executable_identity(&args.argv[0], &cwd, env.get(OsStr::new("PATH")))?;
-        let mut argv = args.argv.clone();
-        argv[0] = executable
-            .invoked
-            .to_str()
-            .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?
-            .to_owned();
-        let environment_digest = environment_digest(&env, self.config.execution.as_ref());
-        Ok((
-            ExecPlan {
-                argv,
-                cwd,
-                timeout: command_timeout,
-                environment_digest,
-            },
-            cwd_dir,
-            env,
-        ))
+        };
+        env.insert(key.into(), value);
     }
+    if let Some(execution) = &config.execution {
+        execution.apply_environment(&mut env)?;
+    }
+    let executable = resolve_executable_identity(&args.argv[0], &cwd, env.get(OsStr::new("PATH")))?;
+    let mut argv = args.argv.clone();
+    argv[0] = executable
+        .invoked
+        .to_str()
+        .ok_or_else(|| failure("invalid_path", "executable path is not UTF-8"))?
+        .to_owned();
+    let environment_digest = environment_digest(&env, config.execution.as_ref());
+    Ok((
+        ExecPlan {
+            argv,
+            cwd,
+            timeout: command_timeout,
+            environment_digest,
+        },
+        cwd_dir,
+        env,
+    ))
 }
 pub(crate) fn environment_digest(
     env: &BTreeMap<OsString, OsString>,
@@ -1134,6 +1142,400 @@ fn bound_output(value: &mut String, limit: usize, truncated: &mut bool) {
         }
         value.truncate(end);
         *truncated = true;
+    }
+}
+
+/// Host-initiated execution parameters for a human-confirmed Goal step verifier.
+pub struct HostVerifierRequest<'a> {
+    pub workspace: &'a Path,
+    pub files: Arc<ReadTools>,
+    pub policy: Arc<crate::permissions::Policy>,
+    pub protected_paths: Vec<PathBuf>,
+    pub config: ExecConfig,
+    pub work_mode: WorkMode,
+    pub permissions: PermissionMode,
+    pub run_id: crate::contract::RunId,
+    pub step_id: crate::goal::StepId,
+    pub attempt: u32,
+    pub verifier: &'a crate::goal::StepVerifier,
+    pub confirmation: Option<Arc<dyn crate::runtime::ApprovalHandler>>,
+    pub secrets: &'a [String],
+    pub cancel: &'a dyn Cancellation,
+    pub recorded_at: String,
+}
+
+fn redact_string(value: String, secrets: &[String]) -> Result<String, BoundaryError> {
+    if value.is_empty() || secrets.is_empty() {
+        return Ok(value);
+    }
+    let mut json_value = serde_json::Value::String(value);
+    crate::redaction::redact(&mut json_value, secrets)?;
+    Ok(json_value.as_str().unwrap_or_default().to_owned())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_verification_result(
+    req: &HostVerifierRequest<'_>,
+    status: crate::goal::StepVerificationStatus,
+    exit_code: Option<i32>,
+    stdout: String,
+    stdout_truncated: bool,
+    stderr: String,
+    stderr_truncated: bool,
+    duration_ms: u64,
+    error_code: Option<String>,
+    error_message: Option<String>,
+) -> Result<crate::goal::StepVerificationResult, BoundaryError> {
+    let argv = req
+        .verifier
+        .argv
+        .iter()
+        .map(|arg| redact_string(arg.clone(), req.secrets))
+        .collect::<Result<Vec<_>, _>>()?;
+    let cwd = req
+        .verifier
+        .cwd
+        .clone()
+        .map(|path| redact_string(path, req.secrets))
+        .transpose()?;
+    let stdout_excerpt = redact_string(stdout, req.secrets)?;
+    let stderr_excerpt = redact_string(stderr, req.secrets)?;
+    let error_message = error_message
+        .map(|msg| redact_string(msg, req.secrets))
+        .transpose()?;
+    let mut result = crate::goal::StepVerificationResult {
+        step_id: req.step_id,
+        attempt: req.attempt,
+        run_id: req.run_id,
+        argv,
+        cwd,
+        status,
+        exit_code,
+        stdout_excerpt,
+        stderr_excerpt,
+        stdout_truncated,
+        stderr_truncated,
+        duration_ms,
+        recorded_at: req.recorded_at.clone(),
+        error_code,
+        error_message,
+    };
+    result.bound_outputs(req.verifier.max_output_bytes);
+    result.validate()?;
+    Ok(result)
+}
+
+/// Execute a locked structured-argv Goal step verifier under `ExecutionBackend`
+/// and active permission policy, returning bounded host-redacted evidence.
+pub async fn execute_host_verifier(
+    req: HostVerifierRequest<'_>,
+) -> Result<crate::goal::StepVerificationResult, BoundaryError> {
+    use crate::goal::StepVerificationStatus;
+    use crate::permissions::Decision;
+
+    let started = std::time::Instant::now();
+    let elapsed_ms = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    req.verifier.validate()?;
+    if !req.protected_paths.is_empty() {
+        req.policy.protect_host_paths(req.protected_paths.clone())?;
+        req.files
+            .protect_paths(req.protected_paths.clone())
+            .map_err(|_| failure("permission_error", "Cannot protect host paths"))?;
+    }
+
+    if req.cancel.is_cancelled() {
+        return build_verification_result(
+            &req,
+            StepVerificationStatus::Cancelled,
+            None,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            elapsed_ms(),
+            Some("cancelled".into()),
+            Some("Step verifier cancelled before execution".into()),
+        );
+    }
+    if req.work_mode == WorkMode::Plan {
+        return build_verification_result(
+            &req,
+            StepVerificationStatus::SkippedPlan,
+            None,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            elapsed_ms(),
+            Some("mode_denied".into()),
+            Some("PLAN mode does not execute Goal step verifiers".into()),
+        );
+    }
+    if std::fs::canonicalize(req.workspace)
+        .map_err(|e| failure("invalid_workspace", e.to_string()))?
+        != req.files.workspace
+    {
+        return build_verification_result(
+            &req,
+            StepVerificationStatus::Denied,
+            None,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            elapsed_ms(),
+            Some("invalid_workspace".into()),
+            Some("Step verifier workspace differs from configured root".into()),
+        );
+    }
+    if req.files.bypass && req.permissions != PermissionMode::Bypass {
+        return build_verification_result(
+            &req,
+            StepVerificationStatus::Denied,
+            None,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            elapsed_ms(),
+            Some("path_denied".into()),
+            Some("Unrestricted roots require bypass permissions".into()),
+        );
+    }
+
+    let args = ExecArgs {
+        argv: req.verifier.argv.clone(),
+        cwd: req.verifier.cwd.as_deref().map(PathBuf::from),
+        timeout_seconds: Some(req.verifier.timeout_seconds),
+        env: BTreeMap::new(),
+    };
+    let verifier_config = ExecConfig {
+        default_timeout: Duration::from_secs(req.verifier.timeout_seconds),
+        max_timeout: Duration::from_secs(req.verifier.timeout_seconds).max(req.config.max_timeout),
+        stdout_max: req.verifier.max_output_bytes,
+        stderr_max: req.verifier.max_output_bytes,
+        ..req.config.clone()
+    };
+
+    let (plan, cwd_dir, env) = match prepare_exec_with_refs(
+        &req.files,
+        &verifier_config,
+        &args,
+        req.workspace,
+        &BTreeSet::new(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let status = if matches!(
+                error.0.code.as_str(),
+                "path_denied" | "invalid_workspace" | "permission_denied"
+            ) {
+                StepVerificationStatus::Denied
+            } else {
+                StepVerificationStatus::Failed
+            };
+            return build_verification_result(
+                &req,
+                status,
+                None,
+                String::new(),
+                false,
+                String::new(),
+                false,
+                elapsed_ms(),
+                Some(error.0.code),
+                Some(error.0.message),
+            );
+        }
+    };
+
+    let env_keys: Vec<String> = env
+        .keys()
+        .filter_map(|key| key.to_str().map(str::to_owned))
+        .collect();
+    let operation = crate::permissions::Operation::exec_with_environment_keys(&plan, &env_keys)?;
+    let decision = req
+        .policy
+        .evaluate(req.work_mode, req.permissions, &operation);
+    match decision.decision {
+        Decision::Deny => {
+            return build_verification_result(
+                &req,
+                StepVerificationStatus::Denied,
+                None,
+                String::new(),
+                false,
+                String::new(),
+                false,
+                elapsed_ms(),
+                Some("permission_denied".into()),
+                Some(format!(
+                    "Step verifier blocked by permission policy ({})",
+                    decision.reason
+                )),
+            );
+        }
+        Decision::Ask => {
+            let Some(handler) = &req.confirmation else {
+                return build_verification_result(
+                    &req,
+                    StepVerificationStatus::Denied,
+                    None,
+                    String::new(),
+                    false,
+                    String::new(),
+                    false,
+                    elapsed_ms(),
+                    Some("permission_denied".into()),
+                    Some("Manual confirmation is required for step verifier execution".into()),
+                );
+            };
+            let summary = redact_string(
+                format!("Step verifier: {}", req.verifier.argv.join(" ")),
+                req.secrets,
+            )?;
+            let mut arguments = serde_json::json!({
+                "argv": req.verifier.argv,
+                "cwd": req.verifier.cwd,
+                "timeout_seconds": req.verifier.timeout_seconds,
+            });
+            crate::redaction::redact(&mut arguments, req.secrets)?;
+            let approval = crate::contract::ApprovalRequest {
+                approval_id: uuid::Uuid::now_v7().to_string(),
+                call_id: format!("step-verifier:{}:{}", req.step_id.0, req.attempt),
+                run_id: req.run_id,
+                tool: "exec".into(),
+                operation_summary: summary,
+                arguments,
+                cwd: plan.cwd.clone(),
+                work_mode: req.work_mode,
+            };
+            match handler.confirm(&approval, req.cancel).await {
+                Ok(Some(true)) => {}
+                Ok(Some(false) | None) => {
+                    return build_verification_result(
+                        &req,
+                        StepVerificationStatus::Denied,
+                        None,
+                        String::new(),
+                        false,
+                        String::new(),
+                        false,
+                        elapsed_ms(),
+                        Some("permission_denied".into()),
+                        Some("Step verifier confirmation was denied or omitted".into()),
+                    );
+                }
+                Err(error) => {
+                    let status = if error.0.code == "cancelled" {
+                        StepVerificationStatus::Cancelled
+                    } else {
+                        StepVerificationStatus::Denied
+                    };
+                    return build_verification_result(
+                        &req,
+                        status,
+                        None,
+                        String::new(),
+                        false,
+                        String::new(),
+                        false,
+                        elapsed_ms(),
+                        Some(error.0.code),
+                        Some(error.0.message),
+                    );
+                }
+            }
+        }
+        Decision::Allow | Decision::ModelReview => {}
+    }
+
+    match run_process(
+        &plan,
+        cwd_dir,
+        env,
+        &verifier_config,
+        req.cancel,
+        ProcessIo::default(),
+    )
+    .await
+    {
+        Ok(capture) => {
+            let mut process = capture.process;
+            bound_output(
+                &mut process.stdout,
+                req.verifier.max_output_bytes,
+                &mut process.stdout_truncated,
+            );
+            bound_output(
+                &mut process.stderr,
+                req.verifier.max_output_bytes,
+                &mut process.stderr_truncated,
+            );
+            let (status, error_code, error_message) = if process.cancelled {
+                (
+                    StepVerificationStatus::Cancelled,
+                    Some("cancelled".into()),
+                    Some("Step verifier was cancelled".into()),
+                )
+            } else if process.timed_out {
+                (
+                    StepVerificationStatus::TimedOut,
+                    Some("timeout".into()),
+                    Some("Step verifier exceeded its timeout".into()),
+                )
+            } else if process.exit_code == Some(0) {
+                (StepVerificationStatus::Passed, None, None)
+            } else {
+                (
+                    StepVerificationStatus::Failed,
+                    Some("command_failed".into()),
+                    Some(match process.exit_code {
+                        Some(code) => format!("Step verifier exited with code {code}"),
+                        None => "Step verifier terminated by signal without exit code".into(),
+                    }),
+                )
+            };
+            build_verification_result(
+                &req,
+                status,
+                process.exit_code,
+                process.stdout,
+                process.stdout_truncated,
+                process.stderr,
+                process.stderr_truncated,
+                elapsed_ms(),
+                error_code,
+                error_message,
+            )
+        }
+        Err(error) => {
+            let status = if error.0.code == "cancelled" {
+                StepVerificationStatus::Cancelled
+            } else if matches!(
+                error.0.code.as_str(),
+                "process_error"
+                    | "process_io_error"
+                    | "process_cleanup_error"
+                    | "sandbox_launch_failed"
+            ) {
+                StepVerificationStatus::Unknown
+            } else {
+                StepVerificationStatus::Failed
+            };
+            build_verification_result(
+                &req,
+                status,
+                None,
+                String::new(),
+                false,
+                String::new(),
+                false,
+                elapsed_ms(),
+                Some(error.0.code),
+                Some(error.0.message),
+            )
+        }
     }
 }
 
