@@ -89,11 +89,64 @@ impl ReplLimits {
     }
 }
 
+/// JavaScript engine selected for the sandboxed worker. `Quickjs` is the
+/// embedded default; `Node` is the controlled external runtime retained as
+/// the B2 extension point by D-083 and never discovered implicitly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplEngine {
+    /// `__soyo-js-worker` same-binary subprocess with embedded QuickJS.
+    Quickjs,
+    /// External `node` binary spawned inside the same prepared sandbox. The
+    /// program path is host-validated and mounted read-only.
+    Node { program: std::path::PathBuf },
+}
+/// Fully resolved `js_repl` configuration: limits, engine and the extra
+/// read-only filesystem exposure an external runtime needs inside the
+/// sandbox. `read_files`/`read_roots` must be folded into the sandbox policy
+/// before the prepared environment is created.
+#[derive(Debug, Clone)]
+pub struct JsReplConfig {
+    pub limits: ReplLimits,
+    pub engine: ReplEngine,
+    pub read_files: Vec<std::path::PathBuf>,
+    pub read_roots: Vec<std::path::PathBuf>,
+}
+impl JsReplConfig {
+    /// Embedded-QuickJS configuration for embedders that set limits directly;
+    /// no extra filesystem exposure is required.
+    pub fn quickjs(limits: ReplLimits) -> Self {
+        Self {
+            limits,
+            engine: ReplEngine::Quickjs,
+            read_files: Vec::new(),
+            read_roots: Vec::new(),
+        }
+    }
+}
+/// `[js_repl] engine = "…"` selection in host configuration.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JsEngine {
+    #[default]
+    Quickjs,
+    Node,
+}
+/// `[js_repl.node]` external runtime pinning. `path` is required whenever
+/// `engine = "node"`; `roots` exposes additional install directories a
+/// non-self-contained Node build needs for its shared libraries.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JsNodeSettings {
+    pub path: Option<std::path::PathBuf>,
+    pub roots: Vec<std::path::PathBuf>,
+}
 /// Host configuration section `[js_repl]`; disabled unless `enabled = true`.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct JsReplSettings {
     pub enabled: bool,
+    pub engine: JsEngine,
+    pub node: JsNodeSettings,
     pub max_calls: Option<u32>,
     pub memory_bytes: Option<u64>,
     pub stack_bytes: Option<u64>,
@@ -103,8 +156,11 @@ pub struct JsReplSettings {
     pub max_timeout_seconds: Option<u64>,
 }
 impl JsReplSettings {
-    /// Validate and resolve the effective limits. `Ok(None)` when disabled.
-    pub fn limits(&self) -> Result<Option<ReplLimits>, BoundaryError> {
+    /// Validate and resolve the effective configuration. `Ok(None)` when
+    /// disabled. Engine-specific pinning is fail-closed: the `node` section
+    /// without `engine = "node"`, a missing/non-absolute binary path and any
+    /// non-existent read root are configuration errors, never silent skips.
+    pub fn resolve(&self) -> Result<Option<JsReplConfig>, BoundaryError> {
         if !self.enabled {
             return Ok(None);
         }
@@ -130,7 +186,67 @@ impl JsReplSettings {
             ),
         };
         limits.validate()?;
-        Ok(Some(limits))
+        let mut read_files = Vec::new();
+        let mut read_roots = Vec::new();
+        let engine = match self.engine {
+            JsEngine::Quickjs => {
+                if self.node.path.is_some() || !self.node.roots.is_empty() {
+                    return Err(failure(
+                        "invalid_config",
+                        "[js_repl.node] settings require engine = \"node\"",
+                    ));
+                }
+                ReplEngine::Quickjs
+            }
+            JsEngine::Node => {
+                let path = self.node.path.as_ref().ok_or_else(|| {
+                    failure(
+                        "invalid_config",
+                        "engine = \"node\" requires [js_repl.node] path",
+                    )
+                })?;
+                if !path.is_absolute() {
+                    return Err(failure(
+                        "invalid_config",
+                        "[js_repl.node] path must be an absolute path",
+                    ));
+                }
+                let program = std::fs::canonicalize(path)
+                    .map_err(|_| failure("invalid_config", "[js_repl.node] path does not exist"))?;
+                if !program.is_file() {
+                    return Err(failure(
+                        "invalid_config",
+                        "[js_repl.node] path is not a regular file",
+                    ));
+                }
+                read_files.push(program.clone());
+                for root in &self.node.roots {
+                    if !root.is_absolute() {
+                        return Err(failure(
+                            "invalid_config",
+                            "[js_repl.node] roots must be absolute paths",
+                        ));
+                    }
+                    let root = std::fs::canonicalize(root).map_err(|_| {
+                        failure("invalid_config", "[js_repl.node] roots must exist")
+                    })?;
+                    if !root.is_dir() {
+                        return Err(failure(
+                            "invalid_config",
+                            "[js_repl.node] roots must be directories",
+                        ));
+                    }
+                    read_roots.push(root);
+                }
+                ReplEngine::Node { program }
+            }
+        };
+        Ok(Some(JsReplConfig {
+            limits,
+            engine,
+            read_files,
+            read_roots,
+        }))
     }
 }
 
@@ -309,12 +425,62 @@ mod tests {
 
     #[test]
     fn settings_stay_disabled_by_default() {
-        assert!(JsReplSettings::default().limits().unwrap().is_none());
+        assert!(JsReplSettings::default().resolve().unwrap().is_none());
         let enabled = JsReplSettings {
             enabled: true,
             ..Default::default()
         };
-        assert_eq!(enabled.limits().unwrap(), Some(ReplLimits::default()));
+        let resolved = enabled.resolve().unwrap().unwrap();
+        assert_eq!(resolved.limits, ReplLimits::default());
+        assert_eq!(resolved.engine, ReplEngine::Quickjs);
+        assert!(resolved.read_files.is_empty() && resolved.read_roots.is_empty());
+    }
+
+    #[test]
+    fn node_engine_requires_a_pinned_binary() {
+        let enabled_node = |node: JsNodeSettings| JsReplSettings {
+            enabled: true,
+            engine: JsEngine::Node,
+            node,
+            ..Default::default()
+        };
+        assert!(enabled_node(JsNodeSettings::default()).resolve().is_err());
+        assert!(
+            enabled_node(JsNodeSettings {
+                path: Some("relative/node".into()),
+                ..Default::default()
+            })
+            .resolve()
+            .is_err()
+        );
+        assert!(
+            enabled_node(JsNodeSettings {
+                path: Some("/definitely/missing/node".into()),
+                ..Default::default()
+            })
+            .resolve()
+            .is_err()
+        );
+        let with_binary = enabled_node(JsNodeSettings {
+            path: Some(std::path::PathBuf::from("/bin/sh")),
+            roots: vec!["/usr/lib".into()],
+        });
+        let resolved = with_binary.resolve().unwrap().unwrap();
+        let ReplEngine::Node { program } = resolved.engine else {
+            panic!("expected a node engine")
+        };
+        assert!(program.is_absolute() && program.is_file());
+        assert_eq!(resolved.read_files, vec![program]);
+        assert_eq!(resolved.read_roots.len(), 1);
+        let misplaced = JsReplSettings {
+            enabled: true,
+            node: JsNodeSettings {
+                path: Some("/bin/sh".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(misplaced.resolve().is_err());
     }
 
     #[test]
@@ -327,7 +493,7 @@ mod tests {
             max_timeout_seconds: Some(60),
             ..Default::default()
         };
-        let limits = settings.limits().unwrap().unwrap();
+        let limits = settings.resolve().unwrap().unwrap().limits;
         assert_eq!(limits.max_calls, 4);
         assert_eq!(limits.memory_bytes, 8 * 1024 * 1024);
         assert_eq!(limits.default_timeout, Duration::from_secs(10));
@@ -349,7 +515,7 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            assert!(bad.limits().is_err());
+            assert!(bad.resolve().is_err());
         }
     }
 

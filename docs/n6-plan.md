@@ -1,6 +1,6 @@
 # N6 目标与提案规划（工具发现、步骤验证与程序化编排）
 
-**状态：核心契约已由 `D-079` 至 `D-083` 确认；`DEV-090`（S2）、`DEV-091`／`DEV-092`（S3：步骤验证器模型、v2 存储、沙箱执行、自动推进门禁与有界重规划）与 `DEV-093`（S5：调用样例校验与双路径投影）已完成本机验证，`DEV-094` 已产出 [JS 运行时与沙箱接合评估报告](reports/n6-js-runtime-eval-2026-11-20.md) 并经 `D-083` 拍板（B1 沙箱 worker＋rquickjs，保留 B2 扩展点），`DEV-095`（S1 只读 JS REPL）与 `DEV-096`（N6 联合验收）已完成本机验证，见[N6 验收记录](n6-validation.md) · 更新于 2026-11-20。本文整理并收敛 S1、S2、S3、S5 四项新增目标与能力，拆分为 `DEV-090` 至 `DEV-096`（归属阶段 N6，新增能力 `F-21` 并扩展 `F-02`、`F-06`、`F-20`）。其中 S1 的 JS 运行时与沙箱接合方案按 `D-082` 保留为 `DEV-094` 评估后的拍板门禁；其余实施中若需变更已确认契约或默认值，须另行记入[决策记录](decisions.md)。**
+**状态：核心契约已由 `D-079` 至 `D-083` 确认；`DEV-090`（S2）、`DEV-091`／`DEV-092`（S3：步骤验证器模型、v2 存储、沙箱执行、自动推进门禁与有界重规划）与 `DEV-093`（S5：调用样例校验与双路径投影）已完成本机验证，`DEV-094` 已产出 [JS 运行时与沙箱接合评估报告](reports/n6-js-runtime-eval-2026-11-20.md) 并经 `D-083` 拍板（B1 沙箱 worker＋rquickjs，保留 B2 扩展点），`DEV-095`（S1 只读 JS REPL）与 `DEV-096`（N6 联合验收）已完成验证，`D-084` 落地 B2 受控外部 Node 引擎并经 macOS Seatbelt 与 Linux Bubblewrap 两端实测，见[N6 验收记录](n6-validation.md) · 更新于 2026-11-20。本文整理并收敛 S1、S2、S3、S5 四项新增目标与能力，拆分为 `DEV-090` 至 `DEV-096`（归属阶段 N6，新增能力 `F-21` 并扩展 `F-02`、`F-06`、`F-20`）。其中 S1 的 JS 运行时与沙箱接合方案按 `D-082` 保留为 `DEV-094` 评估后的拍板门禁；其余实施中若需变更已确认契约或默认值，须另行记入[决策记录](decisions.md)。**
 
 > 进度与状态跟踪入口见[开发进度](progress.md)，任务编号与依赖关系见[后续开发计划](post-mvp-plan.md)，能力定位见[能力路线图](capability-roadmap.md)，已确认决策见[决策记录](decisions.md#当前基线与变更管理)。
 
@@ -11,8 +11,8 @@
 | **S2** | MCP／大工具目录的按需发现（`search + describe`） | **P1** | 实现主线 | 第 2 | 中 | `F-02`、`F-06` | `D-079` | `DEV-090` | 已完成本机验证（已发现 MCP `> 8` 自动延迟） |
 | **S3** | 给 Goal 步骤绑定宿主验证器（不重做 Goal） | **P1** | 可靠性线 | 第 3 | 中 | `F-20` | `D-080` | `DEV-091`、`DEV-092` | `DEV-091`、`DEV-092` 已完成本机验证 |
 | **S5** | 在工具 schema 里加少量真实调用样例 | **P2** | 可并行附带 | 第 5 | 低 | `F-02` | `D-081` | `DEV-093` | 已完成本机验证（`ToolDefinition.examples` + 双路径投影） |
-| **S1** | 实验性程序化工具编排（只读 Code Mode 风格 REPL） | **P2** | 实现主线（S2 之后） | 第 1 | 高 | **新增 `F-21`** | `D-082`、`D-083` | `DEV-094`、`DEV-095` | `D-083` 已定案 B1＋rquickjs，`DEV-095` 本机验证完成 |
-| **—** | N6 跨能力联合验收与双语增量说明 | — | 联合验收 | — | — | `F-02`、`F-20`、`F-21` | `D-079`–`D-082` | `DEV-096` | 完成，见[N6 验收记录](n6-validation.md) |
+| **S1** | 实验性程序化工具编排（只读 Code Mode 风格 REPL） | **P2** | 实现主线（S2 之后） | 第 1 | 高 | **新增 `F-21`** | `D-082`、`D-083`、`D-084` | `DEV-094`、`DEV-095` | `D-083` 已定案 B1＋rquickjs，`DEV-095` 本机验证完成；`D-084` 落地 B2 Node 引擎 |
+| **—** | N6 跨能力联合验收与双语增量说明 | — | 联合验收 | — | — | `F-02`、`F-20`、`F-21` | `D-079`–`D-084` | `DEV-096` | 完成，见[N6 验收记录](n6-validation.md) |
 
 ---
 
@@ -101,8 +101,8 @@
 
 ## S1 · 实验性程序化工具编排：只读 Code Mode 风格 REPL（`F-21` · `DEV-094`、`DEV-095` · `D-082`）
 
-- **状态／成本／轨道**：`D-082` 已定案安全边界与评估停靠门禁；`DEV-094` 评估报告已产出（[报告](reports/n6-js-runtime-eval-2026-11-20.md)），`D-083` 已定案 B1 沙箱 worker＋rquickjs（B2 外部运行时保留为扩展点）；`DEV-095` 已完成本机验证 · 成本高 · P2 实现主线（价值第 1，排在 **S2 之后**）
-- **`DEV-095` 落地摘要**：新增 `js_repl` 模块——`__soyo-js-worker` 同二进制私有 argv 经 `internal_worker_argv` 进入 Seatbelt／Bubblewrap 沙箱，worker 内以 rquickjs（QuickJS）求值，脚本经 `await soyo.callTool(name, args)` 逐次经有界换行 JSON RPC 回宿主；宿主为每个桥接调用生成 `外层:repl:N` 合成调用，完整过 `tool.before_dispatch` Hooks → `authorize`（含人工确认）→ 一次性许可 → `execute` → `tool.finished` 与脱敏，证据经 `ReplStore` 持久化但不写 `History`；只读 allowlist（`FileRead`、`WebRead`、发现与输出查询、`ExternalReadOnly`）外的工具、`exec`、写入、交互、多智能体与 `js_repl` 自身在授权前 fail-closed；`[js_repl]` 配置默认关闭，引擎内存／栈／抢占、脚本字节、桥消息、底层调用数与墙钟超时均有硬上界。验证：`js_repl` 模块单测 14 项、`soyo-cli --test js_repl` 12 项（真二进制 stdio 协议＋原生 Seatbelt 沙箱内桥接 `read_file`、deny 注入、check Hook 逐调用门禁、动态构造调用拦截、多文件开关对照、超时清理、无历史污染）与 `RUST_TEST_THREADS=1 just check`。
+- **状态／成本／轨道**：`D-082` 已定案安全边界与评估停靠门禁；`DEV-094` 评估报告已产出（[报告](reports/n6-js-runtime-eval-2026-11-20.md)），`D-083` 已定案 B1 沙箱 worker＋rquickjs（B2 外部运行时保留为扩展点）；`DEV-095` 已完成双原生后端验证（macOS Seatbelt＋Linux Bubblewrap）；`D-084` 按保留位实现 B2 受控外部 Node 引擎 · 成本高 · P2 实现主线（价值第 1，排在 **S2 之后**）
+- **`DEV-095` 落地摘要**：新增 `js_repl` 模块——`__soyo-js-worker` 同二进制私有 argv 经 `internal_worker_argv` 进入 Seatbelt／Bubblewrap 沙箱，worker 内以 rquickjs（QuickJS）求值，脚本经 `await soyo.callTool(name, args)` 逐次经有界换行 JSON RPC 回宿主；宿主为每个桥接调用生成 `外层:repl:N` 合成调用，完整过 `tool.before_dispatch` Hooks → `authorize`（含人工确认）→ 一次性许可 → `execute` → `tool.finished` 与脱敏，证据经 `ReplStore` 持久化但不写 `History`；只读 allowlist（`FileRead`、`WebRead`、发现与输出查询、`ExternalReadOnly`）外的工具、`exec`、写入、交互、多智能体与 `js_repl` 自身在授权前 fail-closed；`[js_repl]` 配置默认关闭，引擎内存／栈／抢占、脚本字节、桥消息、底层调用数与墙钟超时均有硬上界。验证：`js_repl` 模块单测 15 项、`soyo-cli --test js_repl` 14 项（真二进制 stdio 协议＋原生沙箱内桥接 `read_file`、deny 注入、check Hook 逐调用门禁、动态构造调用拦截、多文件开关对照、超时清理、无历史污染、Node 引擎沙箱执行与失败映射）与 `RUST_TEST_THREADS=1 just check`；macOS Seatbelt 与 aarch64 Linux Bubblewrap 两端各 14 项全绿。
 - **外部机制与演进核实**：
   - 模型编写一段 JavaScript，将宿主允许的工具当作函数调用（支持并行或将上一步结果传给下一步），中间结果停留在脚本执行环境中，只把最终返回值送回模型上下文。
   - 外部参考背景（Claude Code 文档与发布记录核实）：官方定位为「默认关闭、实验性、可能变更或撤回」；在 `auto` 模式下，前置审查看到的是整段脚本，而非脚本内每次运行时计算出的工具参数／路径。2026-11-16 的 `v2.1.326` 允许与 agent teams 同时启用，2026-11-18 的 `v2.1.327` 放开「不再因已安装 mod 会 hook 工具调用而拒绝启动」，且管理员仍可在托管设置中关闭——这属于在实验边界内扩展并收紧，而非撤回，也不改变「默认关闭、实验性」定位。

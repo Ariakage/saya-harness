@@ -331,7 +331,7 @@ pub struct AgentRuntime {
     services: Arc<services::RuntimeServices>,
     media_store: Option<Arc<crate::output_store::OutputStore>>,
     media_capabilities: crate::config::MediaCapabilities,
-    js_repl: Option<crate::js_repl::ReplLimits>,
+    js_repl: Option<crate::js_repl::JsReplConfig>,
     started_at: std::time::SystemTime,
 }
 
@@ -734,20 +734,23 @@ impl AgentRuntime {
         Ok(self)
     }
     /// Enable the experimental opt-in read-only JS REPL for this run. The
-    /// validated limits come from configuration; `None` keeps the tool
-    /// unregistered and any fabricated `js_repl` call fails as unknown.
+    /// validated configuration (limits plus engine) comes from host
+    /// configuration; `None` keeps the tool unregistered and any fabricated
+    /// `js_repl` call fails as unknown. When the engine is an external
+    /// runtime, its pinned read-only files and roots must already be part of
+    /// the sandbox policy passed to `with_execution_settings`.
     pub fn with_js_repl(
         mut self,
-        settings: Option<crate::js_repl::ReplLimits>,
+        settings: Option<crate::js_repl::JsReplConfig>,
     ) -> Result<Self, BoundaryError> {
-        let Some(limits) = settings else {
+        let Some(config) = settings else {
             return Ok(self);
         };
-        limits.validate()?;
+        config.limits.validate()?;
         self.dispatcher
             .register_control_definition(crate::js_repl::definition())?;
-        self.dispatcher.set_js_repl(limits.clone())?;
-        self.js_repl = Some(limits);
+        self.dispatcher.set_js_repl(config.limits.clone())?;
+        self.js_repl = Some(config);
         Ok(self)
     }
     /// Apply a finite execution window and its resolved output target.
@@ -1868,7 +1871,7 @@ impl AgentRuntime {
                 "permit belongs to another dispatcher",
             ));
         }
-        let Some(limits) = self.js_repl.clone() else {
+        let Some(config) = self.js_repl.clone() else {
             return self
                 .save_local(
                     session,
@@ -1877,7 +1880,7 @@ impl AgentRuntime {
                 )
                 .await;
         };
-        let args = match crate::js_repl::parse_args(call, &limits) {
+        let args = match crate::js_repl::parse_args(call, &config.limits) {
             Ok(args) => args,
             Err(error) => {
                 return self
@@ -1898,7 +1901,7 @@ impl AgentRuntime {
             .await?;
         *progress = CallProgress::Dispatched;
         let outcome = self
-            .run_js_repl(session, call, context, &limits, &args)
+            .run_js_repl(session, call, context, &config, &args)
             .await;
         let mut result = match outcome {
             Ok(result) => result,
@@ -1923,7 +1926,7 @@ impl AgentRuntime {
         session: &mut Session,
         call: &ToolCall,
         context: &ToolContext,
-        limits: &crate::js_repl::ReplLimits,
+        config: &crate::js_repl::JsReplConfig,
         args: &crate::js_repl::ReplArgs,
     ) -> Result<ToolResult, BoundaryError> {
         let environment = self.dispatcher.execution_environment()?.ok_or_else(|| {
@@ -1938,6 +1941,8 @@ impl AgentRuntime {
                     &environment,
                     &context.workspace,
                     args.timeout,
+                    &config.engine,
+                    &config.limits,
                 ) {
                     Ok(worker) => worker,
                     Err(error) => {
@@ -1957,7 +1962,15 @@ impl AgentRuntime {
         };
         let deadline = Instant::now() + args.timeout;
         let outcome = self
-            .drive_js_repl(&mut worker, session, call, context, limits, args, deadline)
+            .drive_js_repl(
+                &mut worker,
+                session,
+                call,
+                context,
+                &config.limits,
+                args,
+                deadline,
+            )
             .await;
         let shutdown = worker.shutdown(self.cancel.as_ref()).await;
         shutdown.and(outcome)

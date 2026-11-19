@@ -425,10 +425,22 @@ pub fn build_runtime(
         config.context.auto_compact,
         compact,
     )?;
-    runtime = runtime.with_js_repl(config.js_repl.limits()?)?;
+    let js_repl = config.js_repl.resolve()?;
+    runtime = runtime.with_js_repl(js_repl.clone())?;
     let (mut sandbox, broker) = config
         .sandbox
         .resolve_with_environment(&session.workspace, config.environment())?;
+    // A controlled external JS runtime must already be visible inside the
+    // prepared sandbox before the environment is created: the pinned binary
+    // and any extra install roots are read-only exposures, never writable.
+    if let Some(js_repl) = &js_repl {
+        sandbox
+            .read_files
+            .extend(js_repl.read_files.iter().cloned());
+        sandbox
+            .read_roots
+            .extend(js_repl.read_roots.iter().cloned());
+    }
     let mut private_paths = configure_host_sandbox(config, &session.workspace, &mut sandbox)?;
     let credential_path = config.state_dir.join("credentials");
     let credential_backed = config.mcp.servers.values().any(|server| {

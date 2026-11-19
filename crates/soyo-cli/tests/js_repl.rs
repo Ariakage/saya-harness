@@ -303,6 +303,23 @@ fn native_environment(runtime: AgentRuntime, workspace: &Path) -> AgentRuntime {
         )
         .unwrap()
 }
+fn native_environment_with(
+    runtime: AgentRuntime,
+    policy: soyo_core::execution::SandboxPolicy,
+) -> AgentRuntime {
+    soyo_core::execution::pin_launcher_image_from(Path::new(env!("CARGO_BIN_EXE_soyo"))).unwrap();
+    runtime.with_execution_settings(policy, None).unwrap()
+}
+/// Locate a `node` binary on PATH for the optional B2 engine coverage. The
+/// test is skipped silently on hosts without Node.
+fn node_program() -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join("node"))
+            .find(|candidate| candidate.is_file())
+            .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+    })
+}
 
 #[tokio::test]
 async fn js_repl_stays_unknown_when_not_enabled() {
@@ -340,7 +357,9 @@ async fn js_repl_requires_a_native_environment() {
     });
     let mut runtime = runtime(workspace.path(), run, model)
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let result = runtime.run(&mut session).await.unwrap();
     assert_eq!(result.status, RunStatus::Completed);
@@ -370,7 +389,9 @@ async fn js_repl_runs_scripts_and_bridges_read_only_tools_inside_the_sandbox() {
     });
     let runtime = runtime(workspace.path(), run, model)
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let mut runtime = native_environment(runtime, workspace.path());
     let result = runtime.run(&mut session).await.unwrap();
@@ -412,7 +433,9 @@ async fn js_repl_bridged_denials_reach_the_script_as_failures() {
     });
     let runtime = runtime(workspace.path(), run, model)
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let mut runtime = native_environment(runtime, workspace.path());
     let result = runtime.run(&mut session).await.unwrap();
@@ -451,7 +474,9 @@ async fn js_repl_malformed_arguments_and_timeout_fail_closed() {
     });
     let runtime = runtime(workspace.path(), run, model)
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let mut runtime = native_environment(runtime, workspace.path());
     let result = runtime.run(&mut session).await.unwrap();
@@ -579,7 +604,9 @@ async fn js_repl_dynamically_computed_calls_still_face_the_gate() {
     let store = Arc::new(RecordingStore::default());
     let runtime = recording_runtime(workspace.path(), run, model, store.clone())
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let mut runtime = native_environment(runtime, workspace.path());
     let result = runtime.run(&mut session).await.unwrap();
@@ -702,7 +729,9 @@ async fn js_repl_bridged_calls_pass_check_hooks_individually() {
     let store = Arc::new(RecordingStore::default());
     let runtime = recording_runtime(workspace.path(), run, model, store.clone())
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap()
         .with_plugins(
             hooks.store.clone(),
@@ -763,7 +792,9 @@ async fn js_repl_multi_file_comparison_against_per_call_dispatch() {
     let store = Arc::new(RecordingStore::default());
     let runtime = recording_runtime(workspace.path(), run, model, store.clone())
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let mut runtime = native_environment(runtime, workspace.path());
     let result = runtime.run(&mut session).await.unwrap();
@@ -832,7 +863,9 @@ async fn js_repl_bridged_calls_carry_durable_evidence_without_history() {
     });
     let runtime = runtime(workspace.path(), run, model)
         .unwrap()
-        .with_js_repl(Some(soyo_core::js_repl::ReplLimits::default()))
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig::quickjs(
+            soyo_core::js_repl::ReplLimits::default(),
+        )))
         .unwrap();
     let mut runtime = native_environment(runtime, workspace.path());
     let result = runtime.run(&mut session).await.unwrap();
@@ -845,4 +878,109 @@ async fn js_repl_bridged_calls_carry_durable_evidence_without_history() {
         _ => false,
     });
     assert!(!child_in_history);
+}
+
+// ---- B2 controlled external Node engine (D-083 extension point) ----
+
+#[tokio::test]
+async fn js_repl_node_engine_runs_inside_the_sandbox() {
+    let Some(program) = node_program() else {
+        eprintln!("skipping: no node binary on PATH");
+        return;
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("seed.txt"), "NODE-SEED-7").unwrap();
+    let (mut session, run) = fixture(workspace.path(), PermissionMode::Bypass);
+    let script = concat!(
+        "const hit = await soyo.callTool('read_file', {path: 'seed.txt', start_line: 1, line_count: 10});",
+        "const denied = await soyo.callTool('exec', {argv: ['/bin/id']});",
+        "const via_soyo = (() => { try { return typeof soyo.constructor.constructor('return process')(); }",
+        " catch (error) { return 'blocked:' + error.name; } })();",
+        "const via_bridge = (() => { try { return typeof __soyo_bridge.constructor('return process')(); }",
+        " catch (error) { return 'blocked:' + error.name; } })();",
+        "return {content: hit.data.content, denied: denied.error.code,",
+        " has_require: typeof require, has_process: typeof process,",
+        " via_soyo: via_soyo, via_bridge: via_bridge};",
+    );
+    let model = Arc::new(FakeModel {
+        turns: Mutex::new(
+            vec![
+                vec![script_call("repl-1", script)],
+                vec![HistoryItem::AssistantText("done".into())],
+            ]
+            .into(),
+        ),
+    });
+    let store = Arc::new(RecordingStore::default());
+    let runtime = recording_runtime(workspace.path(), run, model, store.clone())
+        .unwrap()
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig {
+            limits: soyo_core::js_repl::ReplLimits::default(),
+            engine: soyo_core::js_repl::ReplEngine::Node {
+                program: program.clone(),
+            },
+            read_files: vec![program.clone()],
+            read_roots: Vec::new(),
+        }))
+        .unwrap();
+    let mut policy = soyo_core::execution::SandboxPolicy::workspace(workspace.path().into());
+    policy.read_files.push(program);
+    let mut runtime = native_environment_with(runtime, policy);
+    let result = runtime.run(&mut session).await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed, "{result:?}");
+    let result = tool_result(&session, "repl-1").expect("tool result recorded");
+    assert!(result.ok, "repl result: {result:?}");
+    let data = result.data.as_ref().unwrap();
+    assert_eq!(data["content"], "NODE-SEED-7");
+    assert_eq!(data["denied"], "permission_denied");
+    assert_eq!(data["has_require"], "undefined");
+    assert_eq!(data["has_process"], "undefined");
+    assert_eq!(data["via_soyo"], "blocked:ReferenceError");
+    assert_eq!(data["via_bridge"], "blocked:TypeError");
+    assert_eq!(child_intents(&store, "repl-1:repl:").len(), 2);
+    assert!(!session.history.iter().any(
+        |item| matches!(item, HistoryItem::ToolResult { call_id, .. } if call_id.contains(":repl:"))
+    ));
+}
+
+#[tokio::test]
+async fn js_repl_node_engine_reports_script_failures() {
+    let Some(program) = node_program() else {
+        eprintln!("skipping: no node binary on PATH");
+        return;
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut session, run) = fixture(workspace.path(), PermissionMode::Bypass);
+    let model = Arc::new(FakeModel {
+        turns: Mutex::new(
+            vec![
+                vec![script_call("repl-1", "throw new Error('node-boom');")],
+                vec![HistoryItem::AssistantText("done".into())],
+            ]
+            .into(),
+        ),
+    });
+    let store = Arc::new(RecordingStore::default());
+    let runtime = recording_runtime(workspace.path(), run, model, store)
+        .unwrap()
+        .with_js_repl(Some(soyo_core::js_repl::JsReplConfig {
+            limits: soyo_core::js_repl::ReplLimits::default(),
+            engine: soyo_core::js_repl::ReplEngine::Node {
+                program: program.clone(),
+            },
+            read_files: vec![program.clone()],
+            read_roots: Vec::new(),
+        }))
+        .unwrap();
+    let mut policy = soyo_core::execution::SandboxPolicy::workspace(workspace.path().into());
+    policy.read_files.push(program);
+    let mut runtime = native_environment_with(runtime, policy);
+    let result = runtime.run(&mut session).await.unwrap();
+    assert_eq!(result.status, RunStatus::Completed);
+    let result = tool_result(&session, "repl-1").expect("tool result recorded");
+    assert!(!result.ok);
+    assert!(
+        result.error.as_ref().unwrap().message.contains("node-boom"),
+        "{result:?}"
+    );
 }

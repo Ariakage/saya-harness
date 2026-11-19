@@ -339,6 +339,18 @@ enabled = false
 # 默认与最大墙钟超时（秒；默认 ≤ 最大，最大 ≤ 600）。
 # default_timeout_seconds = 120
 # max_timeout_seconds = 600
+# 引擎选择："quickjs"（默认，沙箱内嵌引擎同二进制 worker）或
+# "node"（受控外部运行时，B2 扩展点；不做隐式发现、不自动安装）。
+# engine = "quickjs"
+
+# engine = "node" 时必须显式固定：[js_repl.node] path 为绝对路径、存在且
+# 为常规文件的 node 二进制，规范化后以 read_files 精确只读暴露进沙箱；
+# roots 追加只读目录（非自包含安装的共享库依赖，如 /opt/homebrew/lib）。
+# Node 引擎以 --max-old-space-size/--stack-size 加宿主墙钟超时近似引擎级
+# 限额，无引擎中断回调；逐调用门禁、Hooks、审批与只读边界与 quickjs 一致。
+# [js_repl.node]
+# path = "/usr/local/bin/node"
+# roots = []
 ```
 
 ## 输出捕获与上下文预算

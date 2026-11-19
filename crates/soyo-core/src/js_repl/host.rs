@@ -3,7 +3,11 @@
 //! the deadline/cancellation race. Permission decisions never happen here:
 //! each bridged call is handed to the caller's gate one message at a time.
 
-use super::{MAX_WIRE_BYTES, WORKER_COMMAND, WorkerInit, WorkerMessage, protocol};
+use super::{
+    MAX_WIRE_BYTES, ReplEngine, ReplLimits, WORKER_COMMAND, WorkerInit, WorkerMessage, protocol,
+};
+/// Embedded CommonJS bootstrap evaluated by `node -e` inside the sandbox.
+const NODE_BOOTSTRAP: &str = include_str!("node_bootstrap.js");
 use crate::{
     boundary::Cancellation,
     contract::{BoundaryError, ErrorInfo, ToolResult, error_codes},
@@ -37,10 +41,15 @@ impl ReplWorker {
     /// policy. No tool call is dispatched here; the process only receives the
     /// bounded init frame afterwards. The explicit-host compatibility backend
     /// is rejected: F-21 requires the native isolation selected by D-082/083.
+    /// `engine` selects the embedded QuickJS worker (`B1`) or the controlled
+    /// external Node runtime (`B2`); the Node program must already be exposed
+    /// to the sandbox policy as a read-only file.
     pub(crate) fn spawn(
         environment: &PreparedEnvironment,
         workspace: &Path,
         timeout: Duration,
+        engine: &ReplEngine,
+        limits: &ReplLimits,
     ) -> Result<Self, BoundaryError> {
         if environment.identity().backend == BackendKind::Host {
             return Err(failure(
@@ -48,7 +57,20 @@ impl ReplWorker {
                 "js_repl requires a native isolated backend, not the host compatibility mode",
             ));
         }
-        let argv = environment.internal_worker_argv(WORKER_COMMAND)?;
+        let argv = match engine {
+            ReplEngine::Quickjs => environment.internal_worker_argv(WORKER_COMMAND)?,
+            ReplEngine::Node { program } => vec![
+                program.as_os_str().to_owned(),
+                format!(
+                    "--max-old-space-size={}",
+                    (limits.memory_bytes / (1024 * 1024)).max(1)
+                )
+                .into(),
+                format!("--stack-size={}", (limits.stack_bytes / 1024).max(1)).into(),
+                "-e".into(),
+                NODE_BOOTSTRAP.into(),
+            ],
+        };
         let argv = argv
             .iter()
             .map(|value| {
