@@ -320,6 +320,72 @@ fn node_program() -> Option<std::path::PathBuf> {
             .and_then(|candidate| std::fs::canonicalize(candidate).ok())
     })
 }
+/// Read-only sandbox exposures a real Node install needs beyond the pinned
+/// binary. Self-contained builds need nothing extra; keg/distro layouts
+/// (Homebrew `node@22`, prefix installs) link shared libraries the sandbox
+/// must expose explicitly — the same surface `[js_repl.node] roots` models.
+/// Enumerate `otool -L`/`ldd` dependencies and expose every existing
+/// non-system file exactly, including canonicalized symlink targets.
+fn node_exposure(program: &std::path::Path) -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    let mut files = std::collections::BTreeSet::from([program.to_path_buf()]);
+    let mut roots = std::collections::BTreeSet::new();
+    let bin_dir = program.parent().map(std::path::Path::to_path_buf);
+    let mut expose = |candidate: std::path::PathBuf| {
+        if let Ok(real) = std::fs::canonicalize(&candidate) {
+            if real.is_dir() {
+                roots.insert(real);
+            } else {
+                // The recorded path and its resolved target both need literal
+                // exposure when a keg `opt/` symlink points into `Cellar/`.
+                files.insert(candidate);
+                files.insert(real);
+            }
+        } else if candidate.is_file() {
+            files.insert(candidate);
+        }
+    };
+    if let Some(bin) = &bin_dir {
+        expose(bin.join("../lib").components().collect());
+        expose(bin.join("lib"));
+    }
+    let listing = if cfg!(target_os = "macos") {
+        std::process::Command::new("otool")
+            .arg("-L")
+            .arg(program)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        std::process::Command::new("ldd")
+            .arg(program)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    if let Some(text) = listing {
+        for token in text.split_whitespace() {
+            let dep = if token.starts_with('@') {
+                bin_dir.as_ref().map(|bin| {
+                    let basename = token.rsplit('/').next().unwrap_or(token);
+                    bin.join("../lib").join(basename).components().collect()
+                })
+            } else if token.starts_with('/') {
+                Some(std::path::PathBuf::from(token))
+            } else {
+                None
+            };
+            let Some(dep) = dep else { continue };
+            let text = dep.to_string_lossy();
+            if text.starts_with("/usr/lib") || text.starts_with("/System") {
+                continue;
+            }
+            expose(dep);
+        }
+    }
+    (files.into_iter().collect(), roots.into_iter().collect())
+}
 
 #[tokio::test]
 async fn js_repl_stays_unknown_when_not_enabled() {
@@ -912,6 +978,7 @@ async fn js_repl_node_engine_runs_inside_the_sandbox() {
         ),
     });
     let store = Arc::new(RecordingStore::default());
+    let (read_files, read_roots) = node_exposure(&program);
     let runtime = recording_runtime(workspace.path(), run, model, store.clone())
         .unwrap()
         .with_js_repl(Some(soyo_core::js_repl::JsReplConfig {
@@ -919,12 +986,13 @@ async fn js_repl_node_engine_runs_inside_the_sandbox() {
             engine: soyo_core::js_repl::ReplEngine::Node {
                 program: program.clone(),
             },
-            read_files: vec![program.clone()],
-            read_roots: Vec::new(),
+            read_files: read_files.clone(),
+            read_roots: read_roots.clone(),
         }))
         .unwrap();
     let mut policy = soyo_core::execution::SandboxPolicy::workspace(workspace.path().into());
-    policy.read_files.push(program);
+    policy.read_files.extend(read_files);
+    policy.read_roots.extend(read_roots);
     let mut runtime = native_environment_with(runtime, policy);
     let result = runtime.run(&mut session).await.unwrap();
     assert_eq!(result.status, RunStatus::Completed, "{result:?}");
@@ -961,6 +1029,7 @@ async fn js_repl_node_engine_reports_script_failures() {
         ),
     });
     let store = Arc::new(RecordingStore::default());
+    let (read_files, read_roots) = node_exposure(&program);
     let runtime = recording_runtime(workspace.path(), run, model, store)
         .unwrap()
         .with_js_repl(Some(soyo_core::js_repl::JsReplConfig {
@@ -968,12 +1037,13 @@ async fn js_repl_node_engine_reports_script_failures() {
             engine: soyo_core::js_repl::ReplEngine::Node {
                 program: program.clone(),
             },
-            read_files: vec![program.clone()],
-            read_roots: Vec::new(),
+            read_files: read_files.clone(),
+            read_roots: read_roots.clone(),
         }))
         .unwrap();
     let mut policy = soyo_core::execution::SandboxPolicy::workspace(workspace.path().into());
-    policy.read_files.push(program);
+    policy.read_files.extend(read_files);
+    policy.read_roots.extend(read_roots);
     let mut runtime = native_environment_with(runtime, policy);
     let result = runtime.run(&mut session).await.unwrap();
     assert_eq!(result.status, RunStatus::Completed);
