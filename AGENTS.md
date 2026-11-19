@@ -2,12 +2,12 @@
 
 本文件指导在 Soyo Harness 仓库中工作的编码 Agent。
 
-> **更名说明**：本项目原名 **Saya Harness**，自提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0` 之后更名为 **Soyo Harness**。二进制 `saya`→`soyo`、crate `saya-*`→`soyo-*`；数据目录 `.saya`→`.soyo`（`.soyo` 优先、`.saya` 回退），环境变量 `SAYA_*`→`SOYO_*`（`SOYO_*` 优先、`SAYA_*` 回退）。存储与线缆格式标识符（`saya_*_v1`、`SAYAENV1`、`saya_capture_*`、`saya/browser/*` 等）保留旧拼写以维持兼容。
+> **更名说明**：本项目原名 **Saya Harness**，自提交 `1452a0b851ad40b385bf00e3765a4186509c4dd0` 之后更名为 **Soyo Harness**。二进制 `saya`→`soyo`、crate `saya-*`→`soyo-*`；数据目录 `.saya`→`.soyo`（`.soyo` 优先、`.saya` 回退），环境变量 `SAYA_*`→`SOYO_*`（`SOYO_*` 优先、`SAYA_*` 回退）。存储与线缆标识符已分批迁移为新名（`soyo_*_v1`、`SOYOENV1`/`SOYOOUT1`/`SOYOMED1`、`soyo_capture_*`、`soyo/browser/*`、`__soyo_*`），读取侧继续接受存储中的 `saya_*` 旧拼写以保持既有数据兼容；哈希绑定域常量（`saya-*-v1` 等）与记忆内部文件名永久保留旧拼写以保护既有摘要身份。
 
 ## 项目定位
 
 - Soyo Harness 是使用 Rust 构建的 Agent Runtime Harness。
-- MVP 交付 CLI，后续扩展 TUI 和 GUI。
+- 交付物包括 CLI、默认 TUI、桌面端 GUI（`desktop/`，Tauri）与站点（`site/`）；CLI、TUI 与桌面端复用同一运行时，后端能力由 `soyo helper` 守护进程（`crates/soyo-host`＋`crates/soyo-ipc`）承载。
 - Soyo 自己驱动 Agent 循环：调用模型、执行工具、将结果交回模型，直到结束。
 - 同时支持编程任务与通用任务，提供 PLAN、BUILD、CODE、WORK 四个可切换的运行模式。
 - PLAN 负责需求分析与规划；BUILD 负责端到端实现和交付；CODE 聚焦代码编写、修改与调试；WORK 负责通用任务执行。具体规则见[工作模式](docs/modes.md)。
@@ -15,7 +15,7 @@
 - 权限模式分别为 `auto`、`bypass permissions`、`Manual Approval`，默认 `auto`。Manual Approval 对每次工具调用要求人工批准，模型请求不单独确认。PLAN 在三种权限模式下均只读调查并输出计划，不修改工作区文件。
 - 权限、预授权、输出与会话恢复的具体规则见[执行与恢复契约](docs/execution.md)。工作模式和权限模式分别处理，不混用。
 - MVP 的确定接口、默认值、边界与工程选型以[完整基线](docs/mvp-baseline.md) B-01 至 B-24 为准，已由项目负责人整套确认，见 D-027；macOS 最低支持版本经 D-035 调整为 15。
-- N2 已接入原生隔离、MCP 与凭据组件，实际完成状态和平台证据见[开发进度](docs/progress.md)与[N2 验收](docs/n2-validation.md)。后续增量见[能力路线图](docs/capability-roadmap.md)，功能规划与历史 MVP 发行范围分别处理。
+- N2 及之后里程碑（原生隔离／MCP／凭据、上下文、Goal、Browser、桌面端等）的实际完成状态和平台证据见[开发进度](docs/progress.md)及其 `docs/progress/` 分卷与对应验收记录（[N2](docs/n2-validation.md)、[N3](docs/n3-validation.md)、[N4](docs/n4-validation.md)、[N5](docs/n5-validation.md)）。后续增量见[能力路线图](docs/capability-roadmap.md)，功能规划与历史发行范围分别处理。
 - 0.1.0 之后的任务分解见[后续开发计划](docs/post-mvp-plan.md)，日志、Session Export、默认 TUI 和 Goal 的细节在对应设计草案中维护。
 - 原生后端按 D-040 使用 Linux Bubblewrap + Seccomp + socat，macOS 将 sandbox-exec 封装为独立 SeatbeltBackend，统一接口预留容器／VM 实现。D-050 确认默认原生隔离，必需约束无法满足时明确失败。修改匿名 Unix 通道、内核能力或凭据边界时保留实际平台回归与失败关闭约定。实施时读取[原生隔离](docs/sandbox.md)、[MCP](docs/mcp.md)、[上下文](docs/context-management.md)、[Browser](docs/browser.md)与[插件规范](docs/soyo-plugin.md)。
 - 产品方向与实现状态见 [README.md](README.md)、[项目范围](docs/vision.md)和[决策记录](docs/decisions.md)。已确定与已实现必须分开描述。
@@ -28,6 +28,8 @@
 4. 在已授权范围内推进工作。普通、可逆的实现选择可以自行处理；会改变产品方向或公共契约的问题先说明影响并向用户确认。
 
 实现任务开始时读取[开发进度](docs/progress.md)，按对应版本的任务依赖选择工作。MVP 定义见[实施任务](docs/implementation-plan.md)，后续任务见[后续开发计划](docs/post-mvp-plan.md)。任务完成后同步实际状态与验证证据，完成状态依据实际验收结果维护。
+
+常用文档按主题定位：架构与运行时（[架构](docs/architecture.md)、[运行时](docs/runtime.md)、[存储](docs/storage.md)）；使用与配置（[使用指南](docs/usage.md)、[配置](docs/configuration.md)）；界面（[TUI](docs/tui.md)、[桌面端](docs/desktop.md)、[UI/UX 设计规范](docs/design/desktop-ui.md)）；能力专项（[记忆](docs/memory.md)、[Goal](docs/goal.md)、[会话导出](docs/session-export.md)、[可观测性](docs/observability.md)、[工具注册表](docs/tool-registry.md)、[项目上下文](docs/project-context.md)、[模型协议](docs/model-protocols.md)、[命令分析](docs/command-analysis.md)）；提示词（[提示词定制](docs/prompts.md)）；审查、发行与证据（`docs/reviews/`、`docs/releases/`、`docs/reports/`、`docs/schemas/`）。
 
 本版 MVP 没有需要重新选择的产品阻塞项。按基线推进，普通内部实现细节自行决定；不要把已确认的决定重新拆成偏好问题询问。
 
@@ -79,31 +81,46 @@
 
 ## 运行时与界面边界
 
-- CLI、后续 TUI 和 GUI 应复用运行时能力。运行时业务逻辑不应依赖终端渲染或某个 GUI 框架。
+- CLI、TUI、桌面端与站点复用运行时能力。`crates/` 下的运行时与后端 crate 不依赖终端渲染、Tauri 或前端框架；`soyo-desktop` 位于 `desktop/src-tauri`，是独立 workspace member，桌面端契约见[桌面端设计](docs/desktop.md)。
 - 模型接入、Agent 循环和工具执行保持清晰边界；具体模块和 Rust 类型以实现时确认的设计为准。
 - 工作模式、权限模式与人工确认流程属于 Soyo 的产品设计，不自动改变修改本仓库的编码 Agent 的工作方式。实现时遵守已确认规则，不自行扩大权限。
-- 不把托管外部 Agent 进程当作 MVP 的默认实现路径。
-- 不提前实现尚未确认的 TUI、GUI、插件系统或分布式能力。
+- 不把托管外部 Agent 进程当作默认实现路径。
+- 不提前实现尚未确认的能力；已实现界面与插件体系的扩展以对应设计文档与决策记录为准。
 - 模型响应、工具参数和工具输出均可能失败或不完整；沿边界返回明确错误。
 - 调用模型、运行工具以及循环本身遵循基线 B-08、B-15、B-16 的取消、超时与预算，不取消上限或默默改变默认值。
 - 日志、错误和示例不得泄露密钥或令牌；不要提交实际凭据。
 
 ## Rust 实现约定
 
-- 遵循基线 B-02 的 Rust 1.99.1／edition 2024、core＋CLI workspace 和依赖职责；实际引入版本由 Cargo.lock 记录。没有对应文件时不得声称工程已建立。
+- 遵循基线 B-02 的 Rust 1.99.1（`rust-toolchain.toml` 固定）／edition 2024 与依赖职责；workspace 默认成员为 `soyo-ipc`、`soyo-host`、`soyo-contract`、`soyo-fs`、`soyo-core`、`soyo-cli`、`soyo-app`、`soyo-tui`，`desktop/src-tauri`（`soyo-desktop`）为独立成员、不在 default-members，常规 `cargo build`／`cargo test` 与 `just check` 不覆盖它。实际引入版本由 Cargo.lock 记录。没有对应文件时不得声称工程已建立。
 - 优先使用清楚的类型、所有权和显式错误处理，避免为未知需求堆叠抽象。
 - 对模型或工具等外部输入，不以 `unwrap`、`expect` 或 panic 代替错误处理。
 - 新增依赖应解决当前明确需求；说明用途，避免引入承担相同职责的多个库。
 - 公共接口应说明输入、输出、错误、取消和副作用；实现细节无需机械添加注释。
 
+## 提示词与界面文案
+
+- 运行时 prompt 源文件位于 `crates/soyo-core/prompts/v1/`，经 `include_str!` 嵌入，修改后须重新构建；`docs/prompt/v1/` 是同步维护的可读快照，新增或修改 prompt 时同步快照，装配与定制规则见[提示词定制](docs/prompts.md)。
+- 使用 `just prompt <type>`（`work`／`plan`／`code`／`build`／`compact`／`memory`／`review`／`all`）离线预览完整装配请求；预览输出包含工作区路径与发现的指令片段，仅本地审阅，不直接提交或外发。
+- 用户可见界面文本集中到 i18n 单源：`crates/soyo-tui/src/i18n.rs`、`desktop/src/lib/i18n.ts`（`en-US`／`zh-CN`／`zh-TW`）、`site/src/lib/i18n.tsx`（`en`／`zh-CN`），不在组件中硬编码文案；各界面语言集合以对应单源为准。
+- `desktop/src/bindings.ts` 由 tauri-specta 生成，禁止手工修改；改动 Tauri 命令或共享类型后运行 `cargo test -p soyo-desktop export_specta_bindings` 重新生成并随改动提交。
+
+## 版本与发布
+
+- 发布流程、验收要求与历史说明见 `docs/releases/`（[发布检查单](docs/releases/release-checklist.md)、[发行验证](docs/releases/release-validation.md)）与 `scripts/release/`。
+- 版本号在多处同步：根 `Cargo.toml` 的 `workspace.package.version`、`desktop/package.json`、`desktop/src-tauri/tauri.conf.json` 与 `CITATION.cff`；调整版本时逐项核对保持一致。
+- 桌面端安装包由 `.github/workflows/desktop-release.yml` 经 `desktop-v*` 标签触发，发行候选见 `release-candidates.yml`；不在用户未要求时打标签或触发发布。
+
 ## 验证
 
 - 检查方式见 [开发指南](docs/development.md)，先判断命令是否适用于当前仓库。
-- 常用开发任务统一通过根目录 `justfile` 运行。使用 `just` 查看任务，`just check` 执行完整 Rust 检查，`just test-tooling` 执行 Python 工具回归。
+- 常用开发任务统一通过根目录 `justfile` 运行，使用 `just` 查看任务：`just check` 执行完整 Rust 检查（格式＋严格 Clippy＋默认成员测试＋优化构建），`just test-tooling` 执行 Python 工具回归，`just smoke <binary>` 对显式指定的 release 二进制执行 CLI、会话、审查与 TUI 旅程回归。开发环境需要 Rust 1.99.1、`just` 与 Python 3，`desktop/`／`site/` 前端另需 Node 与 pnpm（CI 使用 Node 22／pnpm 10）。
+- 桌面端改动另须执行 `just desktop-check`（`soyo-desktop` Clippy／Rust 测试＋`pnpm --dir desktop run check`：tsc、Vitest、Vite 构建）；`just desktop-preview` 启动 Vite 浏览器实时预览。`soyo-desktop` 不属于默认成员，`just check` 不覆盖它。
+- CI 门禁见 `.github/workflows/ci.yml`：四平台矩阵执行 `scripts/check.sh`、`scripts/test-tooling.sh`、macOS 最低版本校验与 release smoke 套件，另有 `cargo audit` 与 desktop-frontend 任务。提交前本地至少跑通 `just check` 与 `just test-tooling`，改动桌面端时补 `just desktop-check`。
 - 只修改文档时，检查链接、示例和事实一致性；不为此初始化 Rust 工程。
 - Rust 工程建立后，执行适用的格式、静态检查和测试。
 - 为有意义的行为边界补充测试，重点关注循环结束、工具调用、失败传播与取消；避免只复写实现的测试。
-- 自动化测试默认使用可控的模型与工具替身；不默认依赖真实 API、网络或付费额度。
+- 自动化测试默认使用可控的模型与工具替身；不默认依赖真实 API、网络或付费额度。`scripts/live_*_smoke.py` 与 `scripts/prompt_eval.py` 是显式触发的真实端点评测，不属于默认离线回归。
 - 无法执行必要检查时，说明具体阻碍与未验证范围。
 - 涉及桌面端（`desktop`）或前端 UI 修改时，更新 UI 的同时须通过 Pencil MCP 同步更新 `docs/design/` 中的对应 `.pen` 设计文件（如 `docs/design/desktop-ui.pen`）并保存，且在完成后保留实际渲染的 UI 改动截图至 `docs/design/` 目录下的对应位置（如 `docs/design/screenshots/`），覆盖相关主题与关键视图/断点并在交付说明中提供链接。
 
