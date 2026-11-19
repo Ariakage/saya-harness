@@ -1,186 +1,138 @@
-# Soyo Desktop 设计规范（Soyo Dark）
+# Soyo Desktop 设计规范（Soyo Dark / Soyo Light）
 
-本文档定义 `soyo-desktop` 的视觉语言、窗口布局、组件约定、动效规范与图标资产清单，对应实现位于 [`desktop/src/`](../../desktop/src/) 与 [`desktop/src-tauri/`](../../desktop/src-tauri/)。
+本文档定义 `soyo-desktop` 的视觉语言、双主题 Token、响应式布局、核心组件、动效规范与设计资产，对应实现位于 [`desktop/src/`](../../desktop/src/) 与 [`desktop/src-tauri/`](../../desktop/src-tauri/)。
 
-> **状态**：§1–§7 描述现行实现，目前只有 Soyo Dark。D-075（2026-11-19）已确认视觉修正方案与 Soyo Light 亮色主题，目标规范见 [§8](#8-d-075-目标规范已确认待实施)，尚未实施；各阶段落地后改写 §1–§7 的对应条目。
-
----
-
-## 1. 设计语言与命名约定
-
-- **主题名称**：`Soyo Dark`（`soyo-dark`），在 [desktop/src/index.css](../../desktop/src/index.css) 的 `:root` 中通过 `color-scheme: dark` 与语义 CSS 变量声明。
-- **类名前缀**：自定义控件、排版与动效类名统一使用 `.soyo-*`（例如 `.soyo-pill`、`.soyo-input`、`.soyo-diff`、`.soyo-switch`）；禁止重新引入历史命名。
-- **渲染约束**：
-  - 全部图标使用 `lucide-react` 或纯 CSS 几何图形，禁止在 `desktop/src/**/*.ts(x)` 中手写内联 `<svg>`（由 [scripts/release/test_desktop_packaging.py](../../scripts/release/test_desktop_packaging.py) 强制检查）。
-  - 禁止使用 `localStorage`、`sessionStorage` 或 `indexedDB`；桌面状态由 Zustand 与 Tauri 命令通道维护。
-  - 默认应用字体栈为 `-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif`，代码与单行 Diff 使用 `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`。
+> **状态**：D-075 与 D-076（2026-11-19）已全面落地；§1–§7 已按现行实现更新，§8 保留为本轮设计决策基线与参照边界记录。实机渲染截图归档于 [screenshots/desktop/](screenshots/desktop/)。
 
 ---
 
-## 2. 色彩与语义 Token
+## 1. 设计语言与工程约定
 
-以下 Token 均直接定义于 [desktop/src/index.css](../../desktop/src/index.css) 与 [desktop/src/lib/sanitize.ts](../../desktop/src/lib/sanitize.ts)。
+- **双主题名称**：`Soyo Dark`（`soyo-dark`）与 `Soyo Light`（`soyo-light`），均由 [desktop/src/theme/tokens.css](../../desktop/src/theme/tokens.css) 的 `:root, :root[data-theme="dark"]` 与 `:root[data-theme="light"]` 及 Tailwind v4 `@theme` 单一声明，并按用户偏好（`System` / `Light` / `Dark`）切换 `<html data-theme>`、`color-scheme` 与 Tauri 窗口主题。
+- **类名前缀**：自定义控件、排版与动效类名统一使用 `.soyo-*`（例如 `.soyo-pill`、`.soyo-input`、`.soyo-diff`、`.soyo-switch`、`.soyo-squares-loader`）；禁止在 TSX 组件中写入任意十六进制色值或未定义 CSS 变量。
+- **渲染与存储约束**：
+  - 全部图标统一使用 `lucide-react`（默认 `14px`／`16px`、`strokeWidth: 1.75`）或纯 CSS 几何图形；`desktop/src/**/*.{ts,tsx}` 中严格禁止内联 `<svg>`（由 [scripts/release/test_desktop_packaging.py](../../scripts/release/test_desktop_packaging.py) 强制检查）。
+  - 所有正在执行／思考／加载状态指示器统一使用纯 HTML/CSS `div`/`span` 的 [SquaresLoader](../../desktop/src/components/SquaresLoader.tsx)（2×2 滑块方块动效），禁用旧脉动圆点与旋转 Unicode/SVG loader。
+  - 禁止使用 `sessionStorage` 或 `indexedDB`；`localStorage` 仅限缓存无敏感性的 `"soyo.theme"`（`"dark"` 或 `"light"`），供 [desktop/public/theme-init.js](../../desktop/public/theme-init.js) 在首帧渲染前同步设置 `data-theme` 与 `color-scheme` 以消除启动闪烁，桌面偏好本体持久于 `~/.soyo/desktop_prefs.json`。
+  - 默认控件与正文使用系统无衬线字体栈；Home 问候语与可选衬线对话字体使用随包打包、SIL OFL 1.1 授权的 Latin 可变字体 [SourceSerif4-Variable.woff2](../../desktop/src/assets/fonts/SourceSerif4-Variable.woff2)（`Source Serif 4`，中文回退 `"Songti SC", "Songti TC", "Noto Serif CJK SC", "Noto Serif CJK TC", serif`）；代码与 Diff 使用 `ui-monospace` 栈。
 
-### 2.1 表面与边框层次
+---
 
-| 用途 | Token / CSS 变量 | 色值 | 说明 |
+## 2. 色彩、语义 Token 与排版层级
+
+所有 Token 定义于 [desktop/src/theme/tokens.css](../../desktop/src/theme/tokens.css)、[desktop/src/lib/sanitize.ts](../../desktop/src/lib/sanitize.ts) 与 [desktop/src/index.css](../../desktop/src/index.css)。文字 Token 在本主题全部表面上的 WCAG 最小对比度均 ≥ 4.5:1，交互控件边界 ≥ 3:1；Light 主题各 Token 与参照品牌色值的 RGB 分量差之和均 ≥ 12。
+
+### 2.1 表面、边框、文字与语义色 Token
+
+| Token | Soyo Dark | Soyo Light | 用途 |
 | :--- | :--- | :--- | :--- |
-| 窗口底色 / `--background` | — | `#101010` | 根容器背景 |
-| Primary Rail 背景 | `--bg-rail` | `#0d0d0d` | 最左侧 `48px` 主导轨与顶栏左侧区域 |
-| Sidebar 背景 | `--bg-sidebar` | `#0f0f0f` | `248px` 次级栏与右侧 Inspector 背景 |
-| 主画布背景 | `--bg-main` | `#141414` | 对话主区域、Home 空态画布及顶栏主区域 |
-| 卡片 / 输入槽位 | `--bg-card` | `#1a1a1a` | 消息卡片、下拉触发与次级面板 |
-| 悬浮弹窗 / 对话框 | `--bg-dialog` | `#181818` | Dialog 容器背景 |
-| 胶囊 / 浮动菜单 | `--bg-pill` | `#1c1c1c` | `.soyo-pill`、`.soyo-pill-btn` 与弹出菜单 |
-| Composer 卡片 | `--bg-composer` | `#1d1d1d` | 底部与 Home 居中输入框表面 |
-| 细分隔线 | `--border-subtle` | `#1f1f1f` | 顶栏底边与各列分界线 |
-| 卡片边框 | `--border-card` | `#262626` | 常规边框与通配 `* { border-color }` |
-| 胶囊边框 | `--border-pill` | `#2e2e2e` | `.soyo-pill` / `.soyo-pill-btn` 默认描边 |
+| `--surface-sidebar` | `#1b1a18` | `#efece5` | 侧栏、折叠导轨、统一顶栏 |
+| `--surface-app` | `#201f1d` | `#f7f5ef` | 主画布与内容底色 |
+| `--surface-raised` | `#282725` | `#ffffff` | 卡片、输入框、菜单、胶囊 |
+| `--surface-overlay` | `#2d2c29` | `#ffffff`（配合 `--shadow-dialog`） | 模态弹窗、悬浮菜单 |
+| `--surface-hover` | `#34322f` | `#e3dfd5` | 悬停、选中行 |
+| `--surface-code` / `--surface-code-inline` | `#171614` / `#2e2d2a` | `#efece5` / `#e6e2d8` | 代码块、Diff 与行内代码底板 |
+| `--border-subtle` / `--border` / `--border-strong` | `#2f2d2a` / `#3a3835` / `#76716a` | `#dfdbd1` / `#d3cec3` / `#8c877d` | 分隔线、常规描边与控件强边界 |
+| `--text-primary` / `--text-secondary` / `--text-tertiary` | `#ecebe6` / `#bdb9b0` / `#a09b92` | `#1f1e1b` / `#4f4c46` / `#66625b` | 正文、标签、时间与占位符（`prefers-contrast: more` 时 `--text-tertiary` 自动升为 `--text-secondary`） |
+| `--accent` / `--accent-hover` / `--accent-pressed` | `#d9a08e` / `#e4b3a3` / `#cf9480` | `#a9583f` / `#9a4e36` / `#8c452f` | 主按钮填充、选中竖条、焦点环与开关开启态 |
+| `--accent-text` / `--on-accent` / `--accent-surface` | `#d9a08e` / `#1f140f` / `rgba(217,160,142,.14)` | `#964f36` / `#ffffff` / `rgba(169,88,63,.10)` | 强调文字、主按钮文字与柔化底面 |
+| `--info` / `--success` / `--warning` / `--danger` | `#9db6e0` / `#86cfa0` / `#e9b762` / `#f08a80` | `#2b5ea7` / `#2a6e45` / `#88580b` / `#b2352b` | 信息／新增／警告／危险语义；背景叠加 Dark 12%、Light 10% |
+| `--ultra` / `--ultra-bright` / `--ultra-surface` | `#8a7bd8` / `#a096eb` / `rgba(160,150,235,.16)` | `#6d45c2` / `#5b37a8` / `rgba(109,69,194,.10)` | `EffortPopover` Ultracode 档位与能量网格 |
+| `--loader-primary` / `--loader-secondary` | `#fafafa` / `#83838a` | `#1f1e1b` / `#83838a` | `SquaresLoader` 前景主块与轨迹底块 |
 
-### 2.2 文本、强调与语义色
+### 2.2 工作模式与权限配色（`WORK_MODE_STYLES` / `PERMISSION_MODE_LABELS`）
 
-| 类别 | Token / CSS 变量 | 色值 | 用途 |
+- 四种工作模式色值与 `crates/soyo-tui/src/theme.rs` 的 Dark 列完全一致，且仅用于模式圆点与文字（不与强调色共用）：
+  - `WORK`：Dark `#6aaefc` ／ Light `#235fbb`
+  - `CODE`：Dark `#86cfa0` ／ Light `#2a6e45`
+  - `PLAN`：Dark `#bea3f5` ／ Light `#6d45c2`
+  - `BUILD`：Dark `#efb25e` ／ Light `#88580b`
+- 三种权限模式视觉信号：
+  - `Auto`：中性 `--text-secondary`，不额外着色。
+  - `Manual approval`：`--info` 配 `lucide` `Hand` 图标。
+  - `Bypass permissions`：`--danger` 配 `ShieldAlert` 图标、完整文字与 `--danger-surface` 背景，并在顶栏（`data-testid="bypass-mode-badge"`）及 Composer 胶囊中常驻显示。
+
+### 2.3 字号、圆角、阴影与内容适配
+
+- **字号体系（6 级，最小 `11px`，字重仅用 `400`/`500`/`600`）**：caption `11/16px`、small `12/18px`、ui `13/20px`、body `14/22px`（Appearance 支持 `13`/`14`/`16px` 切换）、title `16/24px`、display `28/36px`（衬线 Home 问候语）。
+- **圆角体系（5 级）**：`--radius-sm: 4px`、`--radius-md: 8px`、`--radius-lg: 12px`、`--radius-xl: 16px`、`--radius-full: 9999px`（应用图标外框保留 macOS squircle `rounded-[22%]`）。
+- **阴影体系（2 级）**：`--shadow-popover` 与 `--shadow-dialog`。
+- **随主题联动适配**：[MarkdownRenderer](../../desktop/src/components/MarkdownRenderer.tsx) 随 `resolvedTheme` 同步切换 Shiki（`github-dark` / `github-light`）与 Mermaid（`dark` / `default`）；[EffortPopover](../../desktop/src/components/EffortPopover.tsx) 通过 `GridField.setTheme()` 切换 WebGL2 能量网格配色（减弱动效下改为单帧静态绘制）；Diff 增删色与选中文本背景（30% 透明度 `--accent`）自动适配双主题。
+
+---
+
+## 3. 窗口外壳与响应式布局
+
+### 3.1 Tauri 窗口配置与统一顶栏（`38px`）
+
+[desktop/src-tauri/tauri.conf.json](../../desktop/src-tauri/tauri.conf.json) 配置 `titleBarStyle: "Overlay"`、`hiddenTitle: true`、`trafficLightPosition: { "x": 15, "y": 21 }`、默认尺寸 `1280 × 840`、最小尺寸 `900 × 620`、macOS 最低系统版本 `15.0`。
+
+顶部 `38px`（`h-[38px]`）统一标题栏 `<header data-tauri-drag-region>` 分为左右两区：
+
+1. **左区**：macOS Overlay 避让红绿灯（`pl-[88px]`）；侧栏展开时固定 `w-[248px] justify-between border-r border-[var(--border-subtle)]`，与下方 `248px` 侧栏竖缝对齐。含侧栏折展按钮（`PanelLeft`）与两段视图切换器（`Rendered` / `Source` Markdown 视图）。
+2. **右区**：当前会话标题／`Home · {project}`（点击打开 `SessionBrowserDialog`）、中间可拖拽留白、右侧状态与控制簇——浏览预览调试栏（可通过 `?chrome=clean` 隐藏）、Goal 状态胶囊、常驻 `Bypass permissions` 危险徽标、工作模式下拉、`Auto` / `Manual approval` 下拉、`PanelRight`（切换 Inspector）、`Globe`（切换 Split Browser Preview）、`Gear`（打开 Settings）与溢出菜单。
+
+### 3.2 单一可折叠侧栏与三档窗口断点
+
+顶栏下方仅保留**单一左侧导航栏**（`data-testid="sidebar-panel"`，取消旧双栏结构），按窗口宽度自动响应式适配：
+
+| 窗口断点 | 侧栏（Sidebar） | 右侧 Inspector（ContextSidebar） | 说明 |
 | :--- | :--- | :--- | :--- |
-| 主文字 | `--text-primary` | `#e8e8e8` | 标题、正文、激活按钮文字 |
-| 次文字 | `--text-secondary` | `#a3a3a3` | 顶栏描述、次级按钮、标签 |
-| 弱文字 | `--text-muted` | `#6e6e6e` | 占位符、分隔符、辅注时间 |
-| 主强调色 | `--accent` | `#d9a08e` | 激活指示竖条、`+ New session`、开关开启态、焦点描边 |
-| 强调链接 | `--accent-link` | `#e2a68f` | 行内强调链接 |
-| 信息蓝 / Markdown 链接 | `--md-link` / `--info-blue` | `#8aa8d8` / `#7aa2f7` | 文档链接、恢复提示、Diff hunk 标题 |
-| 成功 / Code | `--semantic-green` | `#4ade80` | Diff 新增标记、`CODE` 模式、选中勾号 |
-| 警告 / Manual / Build | `--semantic-amber` | `#fac454` | Manual Approval、`BUILD` 模式、`next` 待切换标记 |
-| 错误 / 删除 | `--semantic-red` | `#f87171` | 错误横幅、Diff 删除标记 |
-| Ultracode / Plan | `--ultracode` / `--ultracode-bright` | `#8a7bd8` / `#a096eb` | Ultracode 开关与 `PLAN` 模式标识 |
+| `>= 1280px` | 展开 `248px`（含 Home 空态，可用按钮或 `⌘B` 折叠为 `48px` 图标导轨） | 右侧常驻分栏（首启默认展开，记忆于 `desktop_prefs.inspector_open`） | 默认桌面窗口布局 |
+| `1024px – 1279px` | 展开 `248px` | 覆盖式右抽屉（默认关闭，仅在非 Home 显式开关展开） | 保证主内容宽度充足 |
+| `< 1024px`（最小 `900×620`） | 自动折叠为 `48px` 图标导轨（仍可通过按钮/`⌘B` 临时展开） | 覆盖式右抽屉（默认关闭） | 900px 窄屏不挤压对话与 Composer |
 
-### 2.3 工作模式与权限配色（`WORK_MODE_STYLES` / `PERMISSION_MODE_LABELS`）
-
-- `work` → 标签 `WORK`，颜色 `#d9a08e`
-- `code` → 标签 `CODE`，颜色 `#4ade80`
-- `plan` → 标签 `PLAN`，颜色 `#a096eb`
-- `build` → 标签 `BUILD`，颜色 `#fac454`
-- 权限模式展示标签：`auto` → `auto`（`#8aa8d8`）、`bypass` → `bypass permissions`（`#8aa8d8`）、`manual` → `Manual Approval`（`#fac454`）。
+- **248px 侧栏内容**：顶部带文字导航（`New session ⌘N`、`Search ⌘K`、`Sessions`、`Memory`、`MCP & credentials`、`Export`、`Customize`），中部 `Recents` 按项目分组（每组最多 5 条、总计最多 30 条，超出折叠为 `+ N more` / `View all`），底部为用户行（头像、用户名 · 当前 profile），点击向上弹出 User Menu（主题 `System` / `Light` / `Dark` 快捷切换、`Language`、`Settings ⌘,`、`Usage`、`About`）。
+- **全局快捷键**：`⌘N` 新建会话、`⌘K` 打开覆盖式搜索弹窗（按标题、工作区或当前会话正文过滤）、`⌘B` 开合侧栏、`⌘,` 打开 Settings。
 
 ---
 
-## 3. 窗口外壳与全局布局
+## 4. 核心组件与设置信息架构
 
-### 3.1 Tauri 窗口配置与 Overlay 标题栏
+### 4.1 基础界面原语（`desktop/src/components/ui/`）
 
-[desktop/src-tauri/tauri.conf.json](../../desktop/src-tauri/tauri.conf.json) 为桌面主窗口配置：
+- **[Button.tsx](../../desktop/src/components/ui/Button.tsx)**：统一 `primary`（`--accent` 填充 + `--on-accent` 文字 + hover/pressed 状态）、`secondary`（`--surface-raised` + `--border-strong`）、`ghost`（透明 + hover 底）、`danger`（`--danger` 描边与文字）四种变体；[ApprovalDialog](../../desktop/src/components/ApprovalDialog.tsx) 内 `Allow (Y)` 使用 `primary`，`Deny (N)` 使用 `secondary`。
+- **[Pill.tsx](../../desktop/src/components/ui/Pill.tsx)**：8px 圆角（`--radius-md`）、`whitespace-nowrap`，支持 `neutral`/`accent`/`info`/`success`/`warning`/`danger` 与 `interactive` 属性。
+- **[DialogShell.tsx](../../desktop/src/components/ui/DialogShell.tsx)**：16px 圆角（`--radius-xl`）、`--surface-overlay` 背景、`--border` 描边、`--shadow-dialog`，统一三档宽度 `sm`（`480px`）、`md`（`640px`）、`lg`（`760px`），支持 `Escape` 与遮罩关闭。
 
-- `titleBarStyle: "Overlay"`、`hiddenTitle: true`、`trafficLightPosition: { "x": 15, "y": 21 }`
-- 默认尺寸 `1280 × 840`，最小约束 `900 × 620`
-- macOS 最低系统版本 `15.0`
+### 4.2 Composer 与消息排版
 
-其中 `trafficLightPosition: { x: 15, y: 21 }` 在 macOS AppKit / `tao` 的坐标映射下使三颗 `14pt` 红绿灯按钮位于 `top = 12px`、`bottom = 26px`（距离顶部与底部分界线各 `12px`），从而在 `38px` 统一顶栏内精确垂直居中，水平占据 `x = 15..75px`。前端在 [desktop/src/App.tsx](../../desktop/src/App.tsx) 中通过 `TITLEBAR_OVERLAY` 判断当前是否运行于 macOS Tauri 打包环境。
+- **单卡片 Composer（[Composer.tsx](../../desktop/src/components/Composer.tsx)）**：16px 圆角卡片（`--surface-raised` + `--shadow-popover`），底栏严格单行 `whitespace-nowrap shrink-0`。左侧 `+` 弹出菜单统一收纳 `Add files or photos`、`Paste path or media`、`Insert @ mention`、`Insert / command`、`Compact context` 与 `Web search` 开关（开启后在底栏显示可关闭标签）；右侧为合并式 `Mode · Permission` 胶囊、合并式 `Model · Effort` 胶囊、ContextRing 与发送／停止圆形按钮。运行或暂存时左侧显示 `12px` `SquaresLoader`。当 `[data-main-pane]` 宽度 `< 640px` 时，`Model · Effort` 胶囊自动截断模型名前 16 字并隐藏行内 Effort 文字（完整名称仍在 `title` 与 Model 弹出层内展示）。
+- **消息排版与 Diff**：用户消息采用右对齐气泡（`--surface-raised`、`12px` 圆角），助手回复直接平铺于 `--surface-app` 主画布上，悬停展示时间戳与复制／重试／编辑操作；Diff 预览使用 `.soyo-diff`（12px 圆角、`--surface-code`、`--success-surface` / `--danger-surface` 增删行）。
 
-### 3.2 统一顶栏（`38px`）架构
+### 4.3 三组 9 项 Settings（[SettingsDialog.tsx](../../desktop/src/components/SettingsDialog.tsx)）与辅助弹窗
 
-窗口顶部全宽部署一条固定高度 `38px`（`h-[38px]`）的统一标题栏 `<header data-tauri-drag-region>`（底色 `#0f0f0f`、底边框 `#1f1f1f`），消除红绿灯未居中及报错横幅挤占标题栏拖拽区的冲突：
-
-1. **左区（对齐红绿灯安全区与侧栏竖缝）**：
-   - macOS Overlay 模式下应用 `pl-[88px]` 避让红绿灯（与 `x = 75px` 绿灯右缘保持 `13px` 间距）；非 macOS/浏览器预览使用水平对称内边距。
-   - 当 Column 2（Sidebar）展开时固定宽度 `w-[296px] justify-between border-r border-[#1f1f1f] bg-[#0f0f0f]`（`48px` Rail + `248px` Sidebar = `296px`），使顶栏竖线与下方侧栏分界线连续对齐；当 Column 2 收起（含 Home 状态）时取消 `w-[296px]` 与右边框，改以 `gap-1.5` 紧凑排布，并在右侧通过 `1px × 14px` 细竖分隔线（`bg-[#222222]`）与会话标题区分隔。
-   - 内置控件统一 `26px`（`h-[26px]`）高度中线：
-     - **侧栏折叠按钮**（`PanelLeft`，`26 × 26px`，`rounded-[6px]`，`aria-label="Toggle sidebar"`）：在对话态切换 Column 2 显隐；在 Home 态按下则保留 Home 画布同时展开 `Sessions` 栏。
-     - **两段视图切换器**（`role="group"`，`aria-label="View mode"`，`h-[26px]`）：左段 `MessageSquare`（`Rendered conversation view`），右段 `Code2`（`Markdown source view`），直接调用 `setMarkdownMode("render" | "source")`。
-2. **右区（会话标题、拖拽留白与状态/动作控制簇）**：
-   - 左侧会话/Home 切换按钮（`h-[26px]`，纯文字排版无重复图标）：显示当前标题（Home 时为 `"Home"`，会话态为 `sessionTitle`）、工作区短名（`· {currentProject}`）及 `ChevronDown`，点击打开 `SessionBrowserDialog`。
-   - 中间弹性拖拽空白（`<div data-tauri-drag-region className="h-full min-w-[16px] flex-1" />`）：保证拖拽空白顶栏即可移动窗口，不误触按钮。
-   - 右侧控制簇：浏览器预览场景切换条（仅预览模式）、Goal 运行状态胶囊（`data-testid="goal-topbar-pill"`，琥珀色 `#1c1a16` / `#3d3527` / `#e8d9b0`）、工作模式胶囊与权限模式胶囊（统一 `h-[26px] rounded-[6px] border-[#262626] bg-[#181818]`）、`26 × 26px` 快捷图标按钮组（非 Home 时显示 `PanelRight` 切换 Inspector、`Globe` 切换 Split Browser、`Folder` 打开设置）以及 `More actions` 溢出菜单。
-
-### 3.3 多列工作区与 Home 侧栏自动收起规则
-
-统一顶栏之下为 `<div className="flex min-h-0 flex-1 overflow-hidden">`，按需呈现以下列：
-
-- **Column 1 — Primary Rail（`48px`，`#0d0d0d`）**：
-  - 顶部导航图标依次为：`Home`（`"nav"`）、`Sessions`（`"sessions"`）、`Search`（`"search"`）、`Memory`（`"memory"`）、`MCP & Credentials`（`"mcp"`）、`Export`（`"export"`）、`Customize`（`"customize"`），选中项左侧渲染 `2px` 宽 `#d9a08e` 指示条。
-  - 底部固定区放置 `Usage overview`（`HelpCircle`）与**唯一用户头像菜单触发器**（`aria-label="User menu"`，弹出 `data-testid="user-menu-popover"` 向右侧 `left-[calc(100%+10px)]` 展开）。将该菜单锚定在 Primary Rail 底部，保证 Home 状态或手动收起 Column 2 后仍可稳定访问账户与偏好设置。
-- **Column 2 — Sidebar Panel（`248px`，`#0f0f0f`）**：
-  - 仅在 `sidebarVisible = activePanel !== "nav" && !sidebarCollapsed` 为真时渲染（`data-testid="sidebar-panel"`）。
-  - **Home 收起约定**：进入 Home 空态（或点击 Rail `Home`）时 `activePanel === "nav"`，Column 2 自动收起，主区域与 `48px` Primary Rail 直接衔接；从 Home 提交首个 Prompt、恢复历史会话或点击 Rail 任一功能面板（`Sessions` / `Search` / `Memory` / `MCP` / `Export` / `Customize`）或点击顶栏 `Toggle sidebar` 时，自动切换并展开对应面板。
-- **Column 3 — Main Surface（`#141414`，`flex-1`）**：
-  - `UpdaterBanner`、错误横幅、`Configuration incomplete` 配置提示条与 `recoveryBanner` 统一放在顶栏下方、工作区上方，避免占用系统顶栏热区。
-  - 内部支持 Conversation 与右侧 `Split Browser Preview`（`w-[44%] min-w-[320px]`，`data-testid="split-browser-pane"`）并排分栏。
-- **Column 4 — Right Inspector（`ContextSidebar`）**：
-  - 仅在 `inspectorOpen && !isHomeEmpty && !browserPaneOpen` 时显示。
-
----
-
-## 4. 核心组件规范
-
-### 4.1 统一胶囊与表单控件
-
-定义于 [desktop/src/index.css](../../desktop/src/index.css)：
-
-- **`.soyo-pill`**：静态/下拉信息胶囊，背景 `#1c1c1c`、边框 `1px solid #2e2e2e`、圆角 `8px`、`padding: 3px 10px`、`font-size: 12px`（在 `38px` 顶栏内收紧为 `h-[26px]`、`rounded-[6px]`、`px-2.5 py-0`、`text-[11.5px]` 统一中线）。
-- **`.soyo-pill-btn`**：交互动作胶囊按钮，`padding: 5px 14px`，悬停背景 `#242424` / 边框 `#3a3a3a`，按下微缩 `scale(0.98)`。
-- **`.soyo-input`**：深色输入域（`#161616` 底、`#2b2b2b` 框、`8px` 圆角），聚焦时边框变为 `#d9a08e` 并附 `0 0 0 2px rgba(217, 160, 142, 0.14)` 光晕。
-- **`.soyo-select` 与 `.soyo-select.is-inline`**：使用双线性渐变渲染纯 CSS 向下箭头（无 `<svg>` data URI）。
-- **`.soyo-checkbox`**：`15 × 15px`、`4px` 圆角、勾选填充 `#d9a08e` 并以纯 CSS 边框旋转生成深色对勾。
-- **`.soyo-switch`**：矩形滑块开关（`34 × 20px` 轨道 `border-radius: 5px`、`15 × 15px` 白色滑块 `border-radius: 4px`）；常规开启色 `#d9a08e`，Ultracode 开启态（`.is-ultra`）使用 `#8a7bd8`。
-- **`.soyo-composer-card`**：输入框卡片聚焦时过渡边框 `#3d3d3d` 与强调晕影。
-
-### 4.2 内联 Diff 预览（`.soyo-diff*`）
-
-工具结果中检测到统一 Diff 块时渲染 `.soyo-diff` 容器（圆角 `10px`，底色 `#131313`，边框 `#262626`）：
-
-- 顶栏 `.soyo-diff-header`（底 `#161616`）展示文件名、新增/删减行数徽标与 hunk 摘要。
-- 行级样式 `.soyo-diff-line` 含 `36px` 行号槽（`.soyo-diff-line__ln`）、`16px` 符号槽（`.soyo-diff-line__sg`）与代码主体（`.soyo-diff-line__code`）：
-  - 新增行 `.is-add`：浅绿背景 `rgba(74, 222, 128, 0.07)`、符号 `#4ade80`。
-  - 删除行 `.is-del`：浅红背景 `rgba(248, 113, 113, 0.06)`、符号 `#f87171`。
-  - Hunk 头部 `.is-hunk`：底色 `#181818`、文字 `#7aa2f7`。
-
-### 4.3 Usage 统计卡片与堆叠柱状图（`SettingsDialog`）
-
-在 [desktop/src/components/SettingsDialog.tsx](../../desktop/src/components/SettingsDialog.tsx) 的 Usage 面板中：
-
-- **Token 数量格式化**：[desktop/src/lib/sanitize.ts](../../desktop/src/lib/sanitize.ts) 的 `formatTokenCount` 按量级缩放，防止百万/十亿级数值退化为过长的 `k` 单位：
-  - `>= 1_000_000_000` → `.toFixed(1) + "B"`
-  - `>= 1_000_000` → `.toFixed(1) + "M"`
-  - `>= 1000` → `.toFixed(1) + "k"`
-  - `< 1000` → 原样数字字符串
-- **堆叠柱状图 Tooltip 层级与边缘对齐**：
-  - 若直接把 `hover:brightness-110` 写在含 Tooltip 的 `.group` 外层容器上，CSS `filter` 会新建堆叠上下文，导致相邻后续柱子遮挡当前 Tooltip。
-  - 修复约定：外层柱容器只保留定位与提升层级的 `hover:z-30 focus-within:z-30`；仅将 `group-hover:brightness-110` 与 `overflow-hidden rounded-[2px]` 应用在包裹三色堆叠段（input `#d9a08e`、output `#8aa8d8`、cache read `#6b6b6b`）的内层 `<div>` 上。
-  - Tooltip 使用 `z-50 border-[#383838] bg-[#161616] shadow-[0_12px_32px_rgba(0,0,0,0.8)]`，并根据索引边缘自适应水平对齐（前 3 根 `left-0`、后 3 根 `right-0`、其余 `left-1/2 -translate-x-1/2`），避免贴边裁切。
-
-### 4.4 语言切换与本地化（`i18n` / `LanguageDialog`）
-
-- **首版支持语言**：定义于 [desktop/src/lib/i18n.ts](../../desktop/src/lib/i18n.ts)，支持 `en-US`（`English (United States)`，默认）、`zh-CN`（`简体中文 (中国)`）与 `zh-TW`（`繁體中文 (台灣)`），由 `useAppStore` 维护并在切换时同步写入 `document.documentElement.lang`（不使用 `localStorage` 等禁止存储 API）。
-- **入口 1 — User Menu `Language` 项**：在左下角 Primary Rail 的 `User menu` 弹出菜单中，`Settings`（带 `⌘,` 快捷键标识）下方提供带 `Globe` 图标的 `Language` 入口（`data-testid="user-menu-language"`），点击打开 [desktop/src/components/LanguageDialog.tsx](../../desktop/src/components/LanguageDialog.tsx)。
-- **入口 2 — Settings `General` 标签页**：在 [desktop/src/components/SettingsDialog.tsx](../../desktop/src/components/SettingsDialog.tsx) 的常规设置中提供 `<select aria-label="Interface language">` 同步切换。
-- **选择弹窗规范（`LanguageDialog`）**：居中模态窗宽 `max-w-[580px]`（底色 `#1e1e1e`、边框 `#2b2b2b`、圆角 `14px`），使用 `grid-cols-1 sm:grid-cols-3` 三列单选网格展示双行语言卡片（母语名称 + 副标题）；当前选中卡片使用 `#242c3a` 背景、`#38465e` 边框与 `#6ea1f7` 勾选标记，支持点击空白遮罩或 `Escape` 键关闭。
-- **全页面本地化覆盖**：除主框架（顶栏、侧栏、Home、Composer、ContextSidebar、Split Browser Preview）与设置弹窗（含 Usage 统计标签与堆叠图提示）外，同步覆盖所有次级弹窗与状态视图——[SessionBrowserDialog](../../desktop/src/components/SessionBrowserDialog.tsx)、[McpCredentialsDialog](../../desktop/src/components/McpCredentialsDialog.tsx)、[MemoryDialog](../../desktop/src/components/MemoryDialog.tsx)、[ExportDialog](../../desktop/src/components/ExportDialog.tsx)、[ModulesPanel](../../desktop/src/components/ModulesPanel.tsx)、[ApprovalDialog](../../desktop/src/components/ApprovalDialog.tsx)、[ClarificationDialog](../../desktop/src/components/ClarificationDialog.tsx)、[EffortPopover](../../desktop/src/components/EffortPopover.tsx)、[ThinkingCardView](../../desktop/src/components/ThinkingCardView.tsx)、[ToolCardView](../../desktop/src/components/ToolCardView.tsx)、[AttachmentPreview](../../desktop/src/components/AttachmentPreview.tsx) 与 [UpdaterBanner](../../desktop/src/components/UpdaterBanner.tsx)。
-- **Home 问候语（`home.greetings` / `pickGreeting`）**：问候语按时段与随机池抽取，挂载时抽取一次、切换语言时重新抽取。时段分桶各存 3 条候选：05–12 `morning`、12–18 `afternoon`、18–23 `evening`、23–05 `night`，桶内均匀抽取；另有 15% 概率从 `anytime` 池（20+ 条，如 `You're here!`、`How can I help, {name}?`、`今天在想什么？`）抽取以制造变化。`{name}` 由 `formatGreeting` 按 `昵称 → OS 账户名 → 本地化兜底词`（`friend` / `朋友`）解析。Figma 各帧展示不同取值（`Good morning` / `Good evening` / `You're here!`）以覆盖该可变状态。
-
-### 4.5 个人资料与全局指令（`desktop_prefs` / `~/.soyo/AGENTS.md`）
-
-- **个人资料卡**（Settings → General）：头像更换使用原生图片选择器（PNG/JPEG/WebP/GIF，≤4 MB），图片以 data URL 存入 `~/.soyo/desktop_prefs.json`，`Reset` 恢复应用图标；昵称可覆盖问候语与 User menu 显示名，留空回退 OS 账户名。
-- **全局指令卡**（Settings → General）：textarea 直接编辑用户级 `~/.soyo/AGENTS.md`；该文件由运行时作为 `user` 作用域指令注入所有会话，**不读写项目内 `AGENTS.md`**。读取按 `.soyo → .saya → .agents` 顺序兼容旧路径，写入固定 `.soyo`。
+- **导航结构（三组 9 项，已移除独立 `System` 页）**：
+  1. `General` · `Appearance` · `Model & profiles` · `Permissions`
+  2. `Modules` · `MCP & credentials` · `Memory`
+  3. `Usage` · `Import & export`
+- **`General › About`**：内嵌版本信息（`0.3.0`）、实时 `soyo helper` 连接状态（`get_helper_status`：PID、活跃 Run、连接客户端数、手动刷新）与 `Check for updates`。
+- **`Appearance`**：集中提供主题（`System` / `Light` / `Dark`）、语言切换（与 `LanguageDialog` 共享状态，`en-US` / `zh-CN` / `zh-TW`）、正文字号（`13` / `14` / `16px`）、对话字体（`Default sans` / `Serif (Source Serif 4)` / `System UI`）及 `Reduce motion` 开关。
+- **`Usage`**：由客户端传入本地 `-new Date().getTimezoneOffset()` 作为 `utc_offset_minutes`，按客户端本地日期分桶绘制按用途拆分的卡片与 30 天堆叠柱状图（Tooltip 使用内部亮度层避免遮挡邻居柱子）。
+- **全局 `i18n` 与 sentence case**：全部用户可见文本、`aria-label` 与 `title` 均通过 [i18n.ts](../../desktop/src/lib/i18n.ts) 本地化并遵循 sentence case（工作模式简称 `WORK`/`CODE`/`PLAN`/`BUILD` 与专有缩写除外）；[SessionBrowserDialog](../../desktop/src/components/SessionBrowserDialog.tsx) 支持按工作区项目与状态（`All` / `In progress` / `Completed` / `Failed`）过滤。
 
 ---
 
 ## 5. 动效规范与可访问性
 
-### 5.1 窗口内动效原语（`index.css`）
+### 5.1 `.soyo-squares-loader` 与窗口动效原语（`index.css`）
+
+- **`SquaresLoader`（`.soyo-squares-loader`）**：3 颗 `39.1304% × 39.1304%`、圆角 `27.778%` 的绝对定位方块（`--loader-secondary` + `--loader-primary`），沿 2×2 网格作 12 步 `4.8s cubic-bezier(0.65, 0, 0.35, 1)` 循环滑行（`soyo-sq-a`/`b`/`c`）；当 `reduceMotion` 为真或匹配 `@media (prefers-reduced-motion: reduce)` 时冻结为静止三格构图，不退化为旋转圆环或脉冲点。
 
 | 类名 | 关键帧 | 时长与曲线 | 用途 |
 | :--- | :--- | :--- | :--- |
+| `.soyo-squares-loader__sq` | `soyo-sq-a` / `soyo-sq-b` / `soyo-sq-c` | `4.8s cubic-bezier(0.65, 0, 0.35, 1) infinite` | 运行中／思考中／加载态 2×2 方块指示 |
 | `.soyo-backdrop-enter` | `soyo-fade-in` | `160ms cubic-bezier(0.16, 1, 0.3, 1)` | 对话框半透明遮罩入场 |
 | `.soyo-dialog-enter` | `soyo-dialog-in` | `200ms cubic-bezier(0.16, 1, 0.3, 1)` | 模态弹窗轻位移（`6px`）与缩放（`0.975 -> 1`） |
-| `.soyo-popover-up` | `soyo-popover-up` | `150ms cubic-bezier(0.16, 1, 0.3, 1)` | 底部向上弹出菜单（User / Composer） |
-| `.soyo-popover-down` | `soyo-popover-down` | `150ms cubic-bezier(0.16, 1, 0.3, 1)` | 顶栏向下弹出菜单（Mode / Perm / More） |
-| `.soyo-panel-enter` | `soyo-panel-in` | `160ms cubic-bezier(0.16, 1, 0.3, 1)` | Column 2、Goal 胶囊与分栏切换入场 |
-| `.soyo-msg-enter` | `soyo-msg-in` | `180ms cubic-bezier(0.16, 1, 0.3, 1)` | 对话消息气泡入场 |
-| `.soyo-pulse-dot` | `soyo-pulse-soft` | `1.6s ease-in-out infinite` | 活跃/思考状态脉动圆点 |
-| `.soyo-switch__knob` | — | `transform 180ms cubic-bezier(0.34, 1.3, 0.64, 1)` | 开关滑块轻微过冲位移动画 |
+| `.soyo-popover-up` / `.soyo-popover-down` | `soyo-popover-*` | `150ms cubic-bezier(0.16, 1, 0.3, 1)` | 上下弹出菜单 |
+| `.soyo-panel-enter` / `.soyo-msg-enter` | `soyo-panel-in` / `soyo-msg-in` | `160ms` / `180ms` `cubic-bezier(0.16, 1, 0.3, 1)` | 主视图、Goal 胶囊与消息入场 |
+| `.soyo-switch__knob` | — | `transform 180ms cubic-bezier(0.34, 1.3, 0.64, 1)` | 开关滑块过冲位移 |
 
 ### 5.2 无障碍与键盘约定
 
-- **减弱动效降级**：在 `@media (prefers-reduced-motion: reduce)` 下全面将 `.soyo-*` 及 `.ccs-*` 的 `transition` 与 `animation` 设为 `none`。
-- **焦点环**：全局交互控件的 `:focus-visible` 统一采用 `1.5px solid rgba(217, 160, 142, 0.55)`，`outline-offset: 1.5px`。
-- **键盘导航**：非阻塞对话框支持 `Escape` 快速关闭；顶栏菜单失焦或外部点击自动收起。
+- **减弱动效降级**：在 `[data-reduce-motion="true"]` 与 `@media (prefers-reduced-motion: reduce)` 下全面关闭 `.soyo-*` 过渡、冻结 `SquaresLoader` 与 `EffortPopover` WebGL 网格帧。
+- **对比度增强与焦点环**：`@media (prefers-contrast: more)` 自动提升弱文字与常规边框；全局交互元素 `:focus-visible` 统一为 `2px solid var(--accent)`（`outline-offset: 2px`）；滚动条宽 `6px`、滑块 `--border-strong`、轨道透明。
+- **键盘导航**：非阻塞对话框支持 `Escape` 关闭，`⌘N` / `⌘K` / `⌘B` / `⌘,` 覆盖新建、搜索、侧栏折叠与设置。
 
 ---
 
@@ -196,53 +148,49 @@
 
 ### 6.1 运行时与打包目标规格
 
-由上述母版衍生并受 [scripts/release/test_desktop_packaging.py](../../scripts/release/test_desktop_packaging.py) 校验的运行时图标资产：
+由上述母版衍生并受 [scripts/release/test_desktop_packaging.py](../../scripts/release/test_desktop_packaging.py) 校验的运行时图标资产（D-078 暂停 Windows NSIS 分发，`icon.ico` 作为打包清单资源保留于图标目录）：
 
 | 目标路径 | 尺寸 / 格式 | 用途 |
 | :--- | :--- | :--- |
-| [desktop/public/app-icon.png](../../desktop/public/app-icon.png) | `256 × 256` 8-bit RGBA PNG | 前端顶栏、Home 欢迎标题与左下角头像展示（统一使用 `rounded-[22%]` 圆角矩形裁切） |
-| [desktop/src-tauri/icons/icon.png](../../desktop/src-tauri/icons/icon.png) | `512 × 512` 8-bit RGBA PNG | 通用桌面应用图标 |
+| [desktop/public/app-icon.png](../../desktop/public/app-icon.png) | `256 × 256` 8-bit RGBA PNG | 前端 Home 问候标题与左下角用户头像（`rounded-[22%]`） |
+| [desktop/src-tauri/icons/icon.png](../../desktop/src-tauri/icons/icon.png) | `512 × 512` 8-bit RGBA PNG | 通用桌面应用图标（Linux AppImage） |
 | [desktop/src-tauri/icons/128x128@2x.png](../../desktop/src-tauri/icons/128x128@2x.png) | `256 × 256` 8-bit RGBA PNG | Tauri 高分屏 Bundle 图标 |
 | [desktop/src-tauri/icons/128x128.png](../../desktop/src-tauri/icons/128x128.png) | `128 × 128` 8-bit RGBA PNG | Tauri 标准分辨率 Bundle 图标 |
-| [desktop/src-tauri/icons/32x32.png](../../desktop/src-tauri/icons/32x32.png) | `32 × 32` 8-bit RGBA PNG | 小尺寸窗口 / 托盘图标 |
+| [desktop/src-tauri/icons/32x32.png](../../desktop/src-tauri/icons/32x32.png) | `32 × 32` 8-bit RGBA PNG | 小尺寸窗口图标 |
 | [desktop/src-tauri/icons/icon.icns](../../desktop/src-tauri/icons/icon.icns) | macOS `.icns` 集合 | 遵循 macOS HIG `824 / 1024` 安全区边距 |
-| [desktop/src-tauri/icons/icon.ico](../../desktop/src-tauri/icons/icon.ico) | Windows 多尺寸 `.ico` | Windows NSIS 安装包与应用可执行文件图标 |
+| [desktop/src-tauri/icons/icon.ico](../../desktop/src-tauri/icons/icon.ico) | Windows `.ico` 资源 | Tauri Bundle 清单保留图标（当前不产出 NSIS 目标） |
 
 ---
 
-## 7. Figma 设计稿同步工具
+## 7. 设计稿同步与实机渲染截图
 
-设计原稿维护在 Figma 文件 `ocT9XcOCUCifMHyta771gs` 的 `Theme` 页（节点 `20:4`），14 个 `1520 × 980` frame 按 `1520 / 980` 步长网格排列。
+### 7.1 单源生成器与 `.pen` 设计文档
 
-[devin_theme_gen.py](devin_theme_gen.py) 是全部 frame 的单源生成器：运行后把每个 frame 写成独立 HTML（内嵌 base64 图标与样式），再经 html_to_figma 导入替换同名 frame。
+- **[devin_theme_gen.py](devin_theme_gen.py)**：直接解析 [desktop/src/theme/tokens.css](../../desktop/src/theme/tokens.css) 的 Dark / Light Token 并内嵌 `SourceSerif4-Variable.woff2`，支持 `--theme dark|light` 生成与现行 248px 侧栏、合并胶囊 Composer、三组 9 项 Settings 与 `SquaresLoader` 对齐的 14 帧 standalone HTML：
+  ```bash
+  python3 docs/design/devin_theme_gen.py --theme dark /tmp/soyo_theme_dark
+  python3 docs/design/devin_theme_gen.py --theme light /tmp/soyo_theme_light
+  ```
+- **[desktop-ui.pen](desktop-ui.pen)**：经 Pencil MCP 维护的仓库内 `.pen` 设计源文件（`mode: ["dark", "light"]` 48 项设计 Token 变量、绑定率 100%，含 14 帧 Soyo Dark 与右移 `+4560px` 并排的 14 帧 Soyo Light 共 **28 个画板**；`.pen` 为加密格式，须通过 Pencil MCP 编辑并调用 `save` 落盘，不可用文本工具直改）。
 
-```bash
-python3 docs/design/devin_theme_gen.py            # 输出到 /tmp/soyo_devin_theme/
-python3 docs/design/devin_theme_gen.py <out_dir>  # 自定义输出目录
-```
+### 7.2 桌面 UI 实机渲染截图（`docs/design/screenshots/desktop/`）
 
-- 脚本以自身位置解析仓库根目录，读取 `desktop/public/app-icon.png` 注入各 frame；任意目录下均可运行。
-- 修改设计时改脚本后重新生成，再对变更 frame 执行导入替换；不要直接在 Figma 里手改样式以免与单源失同步。
+以下 10 张 PNG 均在无头 Chromium CDP 中以 Vite 预览服务（`?preview=1&chrome=clean`）按 `deviceScaleFactor=2` 实际渲染并完成控制台零错误、零横向溢出、Composer 工具栏零折行／零裁切检查：
 
-### .pen 迁移
-
-同一套设计稿已迁移为仓库内的 pen.dev 文档 [`desktop-ui.pen`](desktop-ui.pen)：单个 `.pen` 文件包含全部 14 个 frame（4 列网格排布），内嵌图片资源落在 [`assets/`](assets/) 并以 `./assets/<hash>.png` 相对引用。节点为绝对定位的 `frame`/`rectangle`/`text`/`path`（SVG 保留 `viewBox` 与 path 几何、lucide 描边色与线宽按缩放还原），渐变与阴影按 .pen fill/effect 结构映射；虚线描边、分侧描边色等 CSS 特性按最接近形式打平。
-
-[html_to_pen.py](html_to_pen.py) 是迁移转换器：重新生成方式与 Figma 同步一致——先跑 `devin_theme_gen.py` 得到各 frame 的 HTML，再经本脚本（playwright + 系统 Chrome 计算布局）输出 `.pen`：
-
-```bash
-python3 docs/design/devin_theme_gen.py /tmp/soyo_frames
-python3 docs/design/html_to_pen.py /tmp/soyo_frames docs/design/desktop-ui.pen
-```
-
-转换器依赖 `playwright`（venv 中安装即可，`playwright install` 不需要——直接驱动系统 Chrome）。`.pen` 与 Figma 设计稿同源于生成脚本，修改设计仍以生成器为准，改完同时重跑两条同步路径。
-- 当前 frame 序列：`01 Home · 02 Session+Context · 03 Approval · 04 Settings · 05 User Menu · 06 Sessions · 07 Attach Menu · 08 Browser Preview · 09 Subagent & Goal · 10 Usage & Tokens · 11 Slash Commands · 12 Attachments Preview · 13 Model & Effort · 14 Language`。
+| 场景与断点 | Soyo Dark | Soyo Light |
+| :--- | :--- | :--- |
+| Home 空态（`1280×840`） | [home-dark-1280x840.png](screenshots/desktop/home-dark-1280x840.png) | [home-light-1280x840.png](screenshots/desktop/home-light-1280x840.png) |
+| 对话态 + Diff + 常驻 Inspector（`1280×840`） | [conversation-dark-1280x840.png](screenshots/desktop/conversation-dark-1280x840.png) | [conversation-light-1280x840.png](screenshots/desktop/conversation-light-1280x840.png) |
+| 窄窗折叠侧栏（`900×620`） | [conversation-dark-900x620.png](screenshots/desktop/conversation-dark-900x620.png) | [conversation-light-900x620.png](screenshots/desktop/conversation-light-900x620.png) |
+| 审批请求卡片（`1280×840`） | [approval-dark-1280x840.png](screenshots/desktop/approval-dark-1280x840.png) | — |
+| Settings › Appearance（`1280×840`） | [settings-appearance-dark-1280x840.png](screenshots/desktop/settings-appearance-dark-1280x840.png) | [settings-appearance-light-1280x840.png](screenshots/desktop/settings-appearance-light-1280x840.png) |
+| Settings › Usage（`1280×840`） | [settings-usage-dark-1280x840.png](screenshots/desktop/settings-usage-dark-1280x840.png) | — |
 
 ---
 
-## 8. D-075 目标规范（已确认，待实施）
+## 8. D-075／D-076 设计基线（已实施）
 
-本节是 D-075 确认的目标规范，来源是[第二轮审查报告](../reviews/review-2026-11-19.md)第 6 节，并在此基础上追加 Soyo Light 亮色主题。代码尚未按本节修改；§1–§7 仍描述现行实现，每个阶段落地后再改写对应条目。
+本节记录 D-075／D-076 确立的目标规范、对比度计算基线、Claude 参照边界与 D-076 定稿细则，已于本轮全部落地至代码与 §1–§7；后续界面迭代须继续遵守下列数值与约束。
 
 ### 8.1 参照与原则
 
