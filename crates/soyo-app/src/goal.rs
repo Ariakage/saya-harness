@@ -375,6 +375,76 @@ async fn run_step(
         .run(&mut session)
         .await
         .unwrap_or_else(|error| failed_result(session.id, run_id, error));
+    let metrics = prepared
+        .store
+        .run_metrics(session.id)
+        .await?
+        .into_iter()
+        .rev()
+        .find(|record| record.run_id == run_id)
+        .map(|record| record.metrics)
+        .unwrap_or_default();
+    let verification = if step.verifier.is_some()
+        && result.status == RunStatus::Completed
+        && result
+            .persistence
+            .as_ref()
+            .is_some_and(|persistence| persistence.saved)
+    {
+        if let Some(error) = heartbeat_error
+            .lock()
+            .ok()
+            .and_then(|mut failure| failure.take())
+        {
+            heartbeat.abort();
+            control.abort();
+            let _ = heartbeat.await;
+            let _ = control.await;
+            return Err(error);
+        }
+        let mut verifier_goal = dispatch.goal.clone();
+        verifier_goal.usage.active_seconds = verifier_goal
+            .usage
+            .active_seconds
+            .saturating_add(metrics.duration_ms.div_ceil(1000));
+        match run_step_verifier(
+            config,
+            &verifier_goal,
+            step,
+            dispatch.attempt,
+            run_id,
+            context.permissions,
+            context.confirmation.clone(),
+            context.cancellation.clone(),
+        )
+        .await
+        {
+            Ok(outcome) => Some(outcome),
+            Err(error) => Some(StepVerificationResult {
+                step_id: step.id,
+                attempt: dispatch.attempt,
+                run_id,
+                argv: step
+                    .verifier
+                    .as_ref()
+                    .map(|v| v.argv.clone())
+                    .unwrap_or_default(),
+                cwd: step.verifier.as_ref().and_then(|v| v.cwd.clone()),
+                status: StepVerificationStatus::Unknown,
+                exit_code: None,
+                stdout_excerpt: String::new(),
+                stderr_excerpt: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                duration_ms: 0,
+                recorded_at: timestamp()?,
+                error_code: Some(error.0.code),
+                error_message: Some(error.0.message),
+            }),
+        }
+    } else {
+        None
+    };
     heartbeat.abort();
     control.abort();
     let _ = heartbeat.await;
@@ -386,20 +456,12 @@ async fn run_step(
     {
         return Err(error);
     }
-    let metrics = prepared
-        .store
-        .run_metrics(session.id)
-        .await?
-        .into_iter()
-        .rev()
-        .find(|record| record.run_id == run_id)
-        .map(|record| record.metrics)
-        .unwrap_or_default();
     let goal = store
-        .finish_dispatch(
+        .finish_dispatch_with_verification(
             lease,
             &dispatch,
             GoalRunSummary::from_result(&result, timestamp()?)?,
+            verification,
             &metrics,
             timestamp()?,
         )
@@ -462,6 +524,12 @@ pub async fn continue_once(
     let lease = store.acquire_lease(goal_id, owner, now, Some(ttl)).await?;
     let result = async {
         let goal = store.load(goal_id).await?;
+        if !goal.verifiers_confirmed() {
+            return Err(failure(
+                "goal_verifier_unconfirmed",
+                "Goal step verifiers require explicit confirmation before continuing",
+            ));
+        }
         if goal.status != GoalStatus::Ready {
             return Err(failure(
                 "invalid_goal_state",

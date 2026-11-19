@@ -17,8 +17,8 @@ use soyo_core::{
     contract::{BoundaryError, ErrorInfo, PermissionMode},
     goal::{
         AcceptanceCriterion, GoalAuthorization, GoalBudget, GoalId, GoalPhase, GoalPlan,
-        GoalRecord, GoalSeed, GoalStatus, GoalStore, StepId, StepVerifier, VerificationSpec,
-        goal_report_json, goal_report_markdown,
+        GoalRecord, GoalSeed, GoalStatus, GoalStore, GoalWaitReason, StepId, StepVerifier,
+        VerificationSpec, goal_report_json, goal_report_markdown,
     },
 };
 use std::{
@@ -634,7 +634,9 @@ async fn auto_loop(
         if cancel.is_cancelled() {
             break;
         }
-        if goal.status == GoalStatus::Blocked {
+        if goal.status == GoalStatus::Blocked
+            && goal.wait_reason == Some(GoalWaitReason::ExternalInput)
+        {
             goal = store
                 .replan_failed_step(goal.id, soyo_app::events::timestamp()?)
                 .await?;
@@ -668,6 +670,12 @@ async fn start(
     }
     let store = store(config)?;
     let mut goal = store.load(goal_id).await?;
+    if !goal.verifiers_confirmed() {
+        return Err(failure(
+            "goal_verifier_unconfirmed",
+            "Goal step verifiers require explicit confirmation before automatic start",
+        ));
+    }
     if goal.status != GoalStatus::Ready {
         return Err(failure(
             "invalid_goal_state",

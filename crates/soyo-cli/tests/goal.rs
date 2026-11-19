@@ -1111,3 +1111,372 @@ fn set_verifier_locks_through_confirm_and_clear_requires_reconfirm() {
         "plan_confirmation"
     );
 }
+
+fn native_config(root: &Path, url: &str, extra_toml: &str) -> std::path::PathBuf {
+    let path = root.join("native-config.toml");
+    fs::write(
+        &path,
+        format!(
+            r#"schema_version = 1
+[defaults]
+profile = "fixture"
+mode = "build"
+permissions = "auto"
+[profiles.fixture]
+protocol = "openai-chat-completions"
+base_url = "{url}"
+model = "fixture"
+auth = "none"
+context_window_tokens = 128000
+stream = false
+{extra_toml}
+"#
+        ),
+    )
+    .unwrap();
+    path
+}
+
+fn test_exe() -> &'static str {
+    if Path::new("/bin/test").exists() {
+        "/bin/test"
+    } else {
+        "/usr/bin/test"
+    }
+}
+
+fn sleep_exe() -> &'static str {
+    if Path::new("/bin/sleep").exists() {
+        "/bin/sleep"
+    } else {
+        "/usr/bin/sleep"
+    }
+}
+
+#[test]
+fn start_auto_gates_progression_on_native_sandboxed_step_verifier_and_replans() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let (url, requests) = fixture::server(vec![
+        // Attempt 1 on step 1: model claims completion without creating ready.txt.
+        (
+            "application/json",
+            completion("All tests pass and ready.txt is complete."),
+        ),
+        // Attempt 2 on step 1 after replan: model writes ready.txt and completes.
+        (
+            "application/json",
+            tool_call(
+                "w1",
+                "write_file",
+                json!({"path":"ready.txt","content":"verified\n","expected_version":null}),
+            ),
+        ),
+        (
+            "application/json",
+            completion("Created ready.txt and verified."),
+        ),
+        // Step 2 completes.
+        ("application/json", completion("Step 2 finished.")),
+    ])
+    .unwrap();
+    let config = native_config(root.path(), &url, "");
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Deliver verified ready.txt via step verifier",
+        "--max-replans",
+        "1",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let s1 = "018bcfe5-6800-7000-8000-000000000101";
+    let s2 = "018bcfe5-6800-7000-8000-000000000102";
+    let plan_path = root.path().join("native-verifier-plan.json");
+    fs::write(
+        &plan_path,
+        serde_json::to_string_pretty(&json!({
+            "acceptance": [{
+                "id": "ready-file",
+                "text": "ready.txt exists in workspace",
+                "verification": {"kind": "file_exists", "path": "ready.txt"}
+            }],
+            "steps": [
+                {
+                    "id": s1,
+                    "title": "Create ready file",
+                    "instruction": "Create ready.txt in workspace",
+                    "depends_on": [],
+                    "verifier": {
+                        "argv": [test_exe(), "-f", "ready.txt"],
+                        "timeout_seconds": 30
+                    }
+                },
+                {
+                    "id": s2,
+                    "title": "Finalize delivery",
+                    "instruction": "Report completion",
+                    "depends_on": [s1]
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+
+    let started = json_output(
+        command(root.path(), home.path(), &config).args(["goal", "start", goal_id, "--auto"]),
+    );
+    let goal = &started["data"]["goal"];
+    assert_eq!(goal["status"], "completed");
+    assert_eq!(goal["usage"]["replans"], 1);
+    assert_eq!(goal["steps"][0]["status"], "completed");
+    assert_eq!(goal["steps"][0]["last_verification"]["status"], "passed");
+    assert_eq!(goal["steps"][0]["last_verification"]["exit_code"], 0);
+    assert_eq!(goal["steps"][1]["status"], "completed");
+
+    // Verify attempt 2 prompt actually received host verifier failure evidence.
+    let _req1 = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+    let req2 = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+    let req2_str = req2.to_string();
+    assert!(req2_str.contains("Host step verifier"));
+    assert!(req2_str.contains("exit 1"));
+}
+
+#[test]
+fn exhausted_step_verifier_replans_stop_at_limit_reached_never_completed() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let (url, _requests) = fixture::server(vec![
+        (
+            "application/json",
+            completion("Attempt 1: everything passes!"),
+        ),
+        (
+            "application/json",
+            completion("Attempt 2: everything passes!"),
+        ),
+    ])
+    .unwrap();
+    let config = native_config(root.path(), &url, "");
+    let created = json_output(command(root.path(), home.path(), &config).args([
+        "goal",
+        "create",
+        "Fail verifier when model lies about completion",
+        "--max-replans",
+        "1",
+        "--accept",
+        "Tests pass",
+    ]));
+    let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+    let s1 = "018bcfe5-6800-7000-8000-000000000103";
+    let plan_path = root.path().join("lying-plan.json");
+    fs::write(
+        &plan_path,
+        serde_json::to_string_pretty(&json!({
+            "acceptance": [{
+                "id": "criterion-1",
+                "text": "Tests pass",
+                "verification": {"kind": "manual"}
+            }],
+            "steps": [{
+                "id": s1,
+                "title": "Verify build",
+                "instruction": "Ensure missing-artifact.txt exists",
+                "depends_on": [],
+                "verifier": {
+                    "argv": [test_exe(), "-f", "missing-artifact.txt"],
+                    "timeout_seconds": 15
+                }
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    json_output(
+        command(root.path(), home.path(), &config)
+            .args(["goal", "plan", goal_id, "--plan-file"])
+            .arg(&plan_path),
+    );
+    json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+
+    let output = command(root.path(), home.path(), &config)
+        .args(["goal", "start", goal_id, "--auto"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let goal = &body["data"]["goal"];
+    assert_eq!(goal["status"], "limit_reached");
+    assert_ne!(goal["status"], "completed");
+    assert_eq!(goal["usage"]["replans"], 1);
+    assert_eq!(goal["steps"][0]["status"], "failed");
+    assert_eq!(goal["steps"][0]["last_verification"]["status"], "failed");
+    assert_eq!(goal["steps"][0]["last_verification"]["exit_code"], 1);
+}
+
+#[test]
+fn denied_timed_out_and_unconfirmed_step_verifiers_fail_closed() {
+    // 1. Explicit deny rule stops at blocked/authorization with zero replans.
+    {
+        let root = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        let (url, _requests) =
+            fixture::server(vec![("application/json", completion("done"))]).unwrap();
+        let exe = test_exe();
+        let config = native_config(
+            root.path(),
+            &url,
+            &format!(
+                r#"
+[[permissions.rules]]
+effect = "deny"
+tool = "exec"
+executable = "{exe}"
+"#
+            ),
+        );
+        let created = json_output(command(root.path(), home.path(), &config).args([
+            "goal",
+            "create",
+            "Denied step verifier must block",
+            "--accept",
+            "Verified",
+            "--max-replans",
+            "2",
+        ]));
+        let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+        let s1 = "018bcfe5-6800-7000-8000-000000000104";
+        let plan_path = root.path().join("deny-plan.json");
+        fs::write(
+            &plan_path,
+            serde_json::to_string_pretty(&json!({
+                "acceptance": [{"id": "criterion-1", "text": "Verified", "verification": {"kind": "manual"}}],
+                "steps": [{
+                    "id": s1,
+                    "title": "Blocked verifier",
+                    "instruction": "Do work",
+                    "depends_on": [],
+                    "verifier": {"argv": [exe, "-d", "."], "timeout_seconds": 10}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        json_output(
+            command(root.path(), home.path(), &config)
+                .args(["goal", "plan", goal_id, "--plan-file"])
+                .arg(&plan_path),
+        );
+        json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+
+        let output = command(root.path(), home.path(), &config)
+            .args(["goal", "start", goal_id, "--auto"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let goal = &body["data"]["goal"];
+        assert_eq!(goal["status"], "blocked");
+        assert_eq!(goal["wait_reason"]["kind"], "authorization");
+        assert_eq!(goal["usage"]["replans"], 0);
+        assert_eq!(goal["steps"][0]["status"], "failed");
+        assert_eq!(goal["steps"][0]["last_verification"]["status"], "denied");
+    }
+
+    // 2. Verifier timeout enters waiting/unknown_side_effect and never auto-replans.
+    {
+        let root = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        let (url, _requests) =
+            fixture::server(vec![("application/json", completion("done"))]).unwrap();
+        let config = native_config(root.path(), &url, "");
+        let created = json_output(command(root.path(), home.path(), &config).args([
+            "goal",
+            "create",
+            "Timed out step verifier waits unknown",
+            "--accept",
+            "Verified",
+            "--max-replans",
+            "2",
+        ]));
+        let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+        let s1 = "018bcfe5-6800-7000-8000-000000000105";
+        let plan_path = root.path().join("timeout-plan.json");
+        fs::write(
+            &plan_path,
+            serde_json::to_string_pretty(&json!({
+                "acceptance": [{"id": "criterion-1", "text": "Verified", "verification": {"kind": "manual"}}],
+                "steps": [{
+                    "id": s1,
+                    "title": "Slow verifier",
+                    "instruction": "Do work",
+                    "depends_on": [],
+                    "verifier": {"argv": [sleep_exe(), "3"], "timeout_seconds": 1}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        json_output(
+            command(root.path(), home.path(), &config)
+                .args(["goal", "plan", goal_id, "--plan-file"])
+                .arg(&plan_path),
+        );
+        json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+
+        let started = json_output(
+            command(root.path(), home.path(), &config).args(["goal", "start", goal_id, "--auto"]),
+        );
+        let goal = &started["data"]["goal"];
+        assert_eq!(goal["status"], "waiting");
+        assert_eq!(goal["wait_reason"]["kind"], "unknown_side_effect");
+        assert_eq!(goal["usage"]["replans"], 0);
+        assert_eq!(goal["steps"][0]["status"], "failed");
+        assert_eq!(goal["steps"][0]["last_verification"]["status"], "timed_out");
+    }
+
+    // 3. After set-verifier modifies a verifier, start --auto refuses until re-confirmed.
+    {
+        let root = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        let config = native_config(root.path(), "http://127.0.0.1:9/v1", "");
+        let created = json_output(command(root.path(), home.path(), &config).args([
+            "goal",
+            "create",
+            "Unconfirmed verifier cannot start",
+            "--accept",
+            "The result is verified",
+        ]));
+        let goal_id = created["data"]["goal"]["id"].as_str().unwrap();
+        let s1 = "018bcfe5-6800-7000-8000-000000000106";
+        let plan_path = root.path().join("unconfirmed-plan.json");
+        fs::write(&plan_path, plan(&[s1], "criterion-1")).unwrap();
+        json_output(
+            command(root.path(), home.path(), &config)
+                .args(["goal", "plan", goal_id, "--plan-file"])
+                .arg(&plan_path),
+        );
+        json_output(command(root.path(), home.path(), &config).args(["goal", "confirm", goal_id]));
+        json_output(command(root.path(), home.path(), &config).args([
+            "goal",
+            "set-verifier",
+            goal_id,
+            s1,
+            "--",
+            test_exe(),
+            "-d",
+            ".",
+        ]));
+        let rejected = command(root.path(), home.path(), &config)
+            .args(["goal", "start", goal_id, "--auto"])
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+    }
+}

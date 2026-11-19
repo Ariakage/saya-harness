@@ -1479,8 +1479,20 @@ impl GoalStore {
                     .error_code
                     .as_deref()
                     .is_some_and(|code| code.contains("unknown"))
+                || record.steps[step_index]
+                    .last_verification
+                    .as_ref()
+                    .is_some_and(|verification| {
+                        matches!(
+                            verification.status,
+                            StepVerificationStatus::TimedOut
+                                | StepVerificationStatus::Cancelled
+                                | StepVerificationStatus::Unknown
+                        )
+                    })
             {
                 record.status = GoalStatus::Waiting;
+                record.phase = crate::goal::GoalPhase::Verifying;
                 record.wait_reason = Some(GoalWaitReason::UnknownSideEffect {
                     step_id: record.steps[step_index].id,
                 });
@@ -1490,13 +1502,78 @@ impl GoalStore {
                 transaction.commit().map_err(sql_error)?;
                 return Ok(record);
             }
-            let reason = result
-                .stop_reason
-                .clone()
-                .or_else(|| result.error_code.clone())
-                .unwrap_or_else(|| "the previous attempt failed".into());
+            if record.steps[step_index]
+                .last_verification
+                .as_ref()
+                .is_some_and(|verification| {
+                    matches!(
+                        verification.status,
+                        StepVerificationStatus::Denied | StepVerificationStatus::SkippedPlan
+                    )
+                })
+            {
+                return Err(storage(
+                    "invalid_goal_state",
+                    "Denied or PLAN-skipped step verifiers cannot be automatically replanned",
+                ));
+            }
+            let sanitize_inline = |raw: &str| -> String {
+                raw.chars()
+                    .map(|ch| {
+                        if crate::text::is_terminal_control(ch) {
+                            ' '
+                        } else {
+                            ch
+                        }
+                    })
+                    .collect()
+            };
+            let reason = if let Some(verification) = &record.steps[step_index].last_verification {
+                let mut detail = format!(
+                    "Host step verifier `{}` failed (exit {})",
+                    verification.argv.join(" "),
+                    verification
+                        .exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "none".into()),
+                );
+                if let Some(msg) = &verification.error_message {
+                    detail.push_str(&format!(": {}", sanitize_inline(msg)));
+                }
+                let excerpt = |label: &str, text: &str| -> String {
+                    let clean = sanitize_inline(text);
+                    let trimmed = clean.trim();
+                    if trimmed.is_empty() {
+                        return String::new();
+                    }
+                    let mut out = trimmed.to_owned();
+                    if out.len() > 1024 {
+                        out.truncate(1024);
+                        while !out.is_char_boundary(out.len()) {
+                            out.pop();
+                        }
+                        out.push('…');
+                    }
+                    format!(" [{label}: {out}]")
+                };
+                detail.push_str(&excerpt("stdout", &verification.stdout_excerpt));
+                detail.push_str(&excerpt("stderr", &verification.stderr_excerpt));
+                detail
+            } else {
+                sanitize_inline(
+                    &result
+                        .stop_reason
+                        .clone()
+                        .or_else(|| result.error_code.clone())
+                        .unwrap_or_else(|| "the previous attempt failed".into()),
+                )
+            };
             let step = &mut record.steps[step_index];
-            let original = step.instruction.clone();
+            let original = step
+                .instruction
+                .split_once(" Original task: ")
+                .map(|(_, core)| core.to_owned())
+                .unwrap_or_else(|| step.instruction.clone());
             step.instruction = format!(
                 "Previous attempt failed: {reason}. Re-inspect current state before acting, preserve completed work, and do not replay an unconfirmed side effect. Original task: {original}"
             );
@@ -1509,6 +1586,7 @@ impl GoalStore {
             step.status = StepStatus::Pending;
             step.run_id = None;
             step.last_result = None;
+            step.last_verification = None;
             record.usage.replans = record.usage.replans.saturating_add(1);
             record.status = GoalStatus::Ready;
             record.phase = crate::goal::GoalPhase::Replanning;

@@ -1,6 +1,6 @@
 # Goal 目标编排设计
 
-**状态：DEV-069 至 DEV-074 已实现并通过本机受控验收；`DEV-091`（S3/D-080 步骤验证器模型、v2 存储、`set-verifier` 与沙箱化 `run_step_verifier`）已实现，自动推进门禁与重规划接线（`DEV-092`）待实现。能力编号 F-20；跨平台固定源码证据和发行版本仍按验收记录单独维护。**
+**状态：DEV-069 至 DEV-074 已实现并通过本机受控验收；`DEV-091`（S3/D-080 步骤验证器模型、v2 存储、`set-verifier` 与沙箱化 `run_step_verifier`）与 `DEV-092`（`run_step` 验证门禁、`start --auto` 仅在验证通过后前进、失败有界重规划）已实现并通过本机验证。能力编号 F-20；跨平台固定源码证据和发行版本仍按验收记录单独维护。**
 
 ## 当前实现
 
@@ -62,7 +62,14 @@ G1 可在共享基础稳定后单独开发，G2 的执行依赖按[后续开发�
 ### 步骤宿主验证器（D-080 / DEV-091）
 
 - **结构与确认锁定**：`PlannedStep.verifier` 与 `GoalStep.verifier` 仅接受结构化 `argv`（禁止隐式 shell 字符串拼接）、可选工作区相对 `cwd`（禁止绝对路径、`..`、控制字符与 `.git` 控制路径）、有界超时（`1–600s`，默认 `120s`）与流摘录上限（`256B–32KiB`，默认 `8KiB`）。`goal plan` 草案与 `--plan-file` 可提议 verifier，亦可经 `soyo goal set-verifier`（或 `--clear`）调整；任何更改均清除 `confirmed_verifiers_digest` 并使 Goal 回到 `Waiting(PlanConfirmation)`，必须经 `goal confirm` 人工核对锁定后方可进入可执行状态。
-- **沙箱执行与不变量**：宿主侧 `run_step_verifier` / `execute_host_verifier` 校验 `verifiers_confirmed()`、剩余活跃时间预算、`PLAN` 跳过、`[permissions]` `deny`/`ask`/`Manual` 确认、`ExecutionBackend`（原生沙箱＋受保护宿主路径）与 `SecretRegistry` 脱敏。`goals.sqlite3`（schema v2，含 v1→v2 原子迁移）持久化 `step_verifications` 审计记录，`GoalRecord::validate` 强制约束带 verifier 的步骤不得在缺少退出码 `0` 且状态 `passed` 的宿主验证证据时标记为 `Completed`。（注：在 `run_step` / `start --auto` / `replan_failed_step` 串联自动推进门禁属后续 `DEV-092`。）
+- **沙箱执行与不变量**：宿主侧 `run_step_verifier` / `execute_host_verifier` 校验 `verifiers_confirmed()`、剩余活跃时间预算、`PLAN` 跳过、`[permissions]` `deny`/`ask`/`Manual` 确认、`ExecutionBackend`（原生沙箱＋受保护宿主路径）与 `SecretRegistry` 脱敏。`goals.sqlite3`（schema v2，含 v1→v2 原子迁移）持久化 `step_verifications` 审计记录，`GoalRecord::validate` 强制约束带 verifier 的步骤不得在缺少退出码 `0` 且状态 `passed` 的宿主验证证据时标记为 `Completed`。
+
+### 自动推进门禁与有界重规划（D-080 / DEV-092）
+
+- **验证门禁**：`soyo-app::goal::run_step` 在步骤的 Run 结束后、同一 Goal 租约与心跳内执行已确认的 verifier，并经 `finish_dispatch_with_verification` 在同一事务写入 `StepVerificationResult`。仅当宿主退出码为 `0` 且状态为 `passed` 时步骤才为 `Completed`；模型文字声称完成、Run 成功均不足以关闭步骤或 Goal。`start --auto`、`continue` 与 TUI `/goal start` 在 `!verifiers_confirmed()`（verifier 被修改而未重新 `goal confirm`）时拒绝推进。
+- **失败重规划**：verifier 退出非 `0` 时，`replan_failed_step` 在 `max_replans` 内把经 `SecretRegistry` 脱敏、控制字符替换为空格的单行宿主输出摘录写入该步骤的修正指令，保留已锁定的 verifier 并清除旧 `last_verification`，随后 `--auto` 继续重试；`max_replans` 耗尽后 Goal 进入 `limit_reached`（退出码 5），绝不 `completed`。
+- **保守停止**：`deny` 规则或权限拒绝进入 `Blocked(Authorization)` 且不重规划；超时、取消与未知基础设施错误进入 `Waiting(UnknownSideEffect)`，不自动重放；`PLAN` 跳过执行，步骤不会被视为通过。
+- **验收证据**：`crates/soyo-cli/tests/goal.rs` 以原生 Seatbelt（不设 `backend = "host"`）端到端覆盖：模型第一次谎称完成 → verifier 退出 1 → 重规划 → 第二次通过 → Goal `completed`；`max_replans = 1` 且持续谎报 → `limit_reached`；`deny`／超时／未确认分别 fail-closed。
 | Continuation | 显式 auto 标记、模式、权限模式、配置指纹、授权时间、worker owner／过期租约及持久 dispatch 状态 |
 
 当前实现将一个 Goal 绑定到一个专属 Session，步骤关联多个 Run；跨 Session 关联及子 Goal 按后续需求扩展。工具调用继续使用 `(run_id, call_id)` 关联。

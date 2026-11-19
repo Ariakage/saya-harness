@@ -481,6 +481,12 @@ impl App {
                 let join = tokio::spawn(async move {
                     let goal_store = store(&config)?;
                     let mut goal = goal_store.load(goal_id).await?;
+                    if !goal.verifiers_confirmed() {
+                        return Err(failure(
+                            "goal_verifier_unconfirmed",
+                            text::GOAL_VERIFIER_UNCONFIRMED_START,
+                        ));
+                    }
                     if goal.status != GoalStatus::Ready {
                         return Err(failure("invalid_goal_state", text::GOAL_NOT_READY));
                     }
@@ -538,7 +544,10 @@ impl App {
                         if checking.is_cancelled() {
                             break;
                         }
-                        if goal.status == GoalStatus::Blocked {
+                        if goal.status == GoalStatus::Blocked
+                            && goal.wait_reason
+                                == Some(soyo_core::goal::GoalWaitReason::ExternalInput)
+                        {
                             goal = goal_store
                                 .replan_failed_step(goal.id, soyo_app::events::timestamp()?)
                                 .await?;

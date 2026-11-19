@@ -1148,3 +1148,190 @@ async fn sqlite_v1_migrates_to_v2_and_persists_step_verifications() {
     assert_eq!(history[0].status, StepVerificationStatus::Failed);
     assert!(!history[0].stderr_excerpt.contains("super-secret-token"));
 }
+
+#[tokio::test]
+async fn replan_handles_failed_timed_out_and_denied_step_verifiers_appropriately() {
+    let root = tempfile::tempdir().unwrap();
+    let data_dir = root.path().join("data");
+    let store = GoalStore::open(&data_dir, vec!["super-secret-token".into()]).unwrap();
+
+    // 1. Failed host verifier replans cleanly with bounded redacted excerpt and keeps verifier.
+    let mut failed_goal = record();
+    failed_goal.workspace = root.path().join("ws-fail");
+    failed_goal.budget.max_replans = 2;
+    let step_id = StepId::new();
+    failed_goal
+        .apply_plan(
+            GoalPlan {
+                acceptance: vec![AcceptanceCriterion {
+                    id: "criterion-1".into(),
+                    text: "Verified".into(),
+                    verification: VerificationSpec::Manual,
+                }],
+                steps: vec![PlannedStep {
+                    id: step_id,
+                    title: "Fix tests".into(),
+                    instruction: "Implement feature".into(),
+                    depends_on: vec![],
+                    verifier: Some(StepVerifier {
+                        argv: vec!["/bin/test".into(), "-f".into(), "ready.txt".into()],
+                        cwd: None,
+                        timeout_seconds: 30,
+                        max_output_bytes: 1024,
+                    }),
+                }],
+            },
+            "2026-11-19T00:00:00Z".into(),
+        )
+        .unwrap();
+    failed_goal
+        .confirm_plan("2026-11-19T00:01:00Z".into())
+        .unwrap();
+    let failed_goal = store.create(failed_goal).await.unwrap();
+    let lease = store
+        .acquire_lease(failed_goal.id, "w1".into(), 1_000, Some(60_000))
+        .await
+        .unwrap();
+    let dispatch = store
+        .begin_dispatch(&lease, RunId::new(), 1_001, "2026-11-19T00:02:00Z".into())
+        .await
+        .unwrap();
+    store.mark_running(&dispatch, &lease, 1_002).await.unwrap();
+    let blocked = store
+        .finish_dispatch_with_verification(
+            &lease,
+            &dispatch,
+            summary(dispatch.run_id, "2026-11-19T00:03:00Z"),
+            Some(StepVerificationResult {
+                step_id,
+                attempt: dispatch.attempt,
+                run_id: dispatch.run_id,
+                argv: vec!["/bin/test".into(), "-f".into(), "ready.txt".into()],
+                cwd: None,
+                status: StepVerificationStatus::Failed,
+                exit_code: Some(1),
+                stdout_excerpt: String::new(),
+                stderr_excerpt: "missing ready.txt near super-secret-token".into(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                duration_ms: 10,
+                recorded_at: "2026-11-19T00:03:01Z".into(),
+                error_code: Some("command_failed".into()),
+                error_message: Some("Step verifier exited with code 1".into()),
+            }),
+            &metrics(),
+            "2026-11-19T00:03:02Z".into(),
+        )
+        .await
+        .unwrap();
+    store.release_lease(&lease).await.unwrap();
+    assert_eq!(blocked.status, GoalStatus::Blocked);
+    assert_eq!(blocked.wait_reason, Some(GoalWaitReason::ExternalInput));
+
+    let replanned = store
+        .replan_failed_step(failed_goal.id, "2026-11-19T00:04:00Z".into())
+        .await
+        .unwrap();
+    assert_eq!(replanned.status, GoalStatus::Ready);
+    assert_eq!(replanned.phase, GoalPhase::Replanning);
+    assert_eq!(replanned.usage.replans, 1);
+    assert!(replanned.verifiers_confirmed());
+    assert!(replanned.steps[0].verifier.is_some());
+    assert!(replanned.steps[0].last_verification.is_none());
+    assert!(
+        replanned.steps[0]
+            .instruction
+            .contains("Host step verifier")
+    );
+    assert!(replanned.steps[0].instruction.contains("[REDACTED]"));
+    assert!(
+        !replanned.steps[0]
+            .instruction
+            .contains("super-secret-token")
+    );
+    assert!(
+        replanned.steps[0]
+            .instruction
+            .ends_with("Original task: Implement feature")
+    );
+
+    // 2. Denied verifier cannot be auto-replanned (Blocked/Authorization stops before replan).
+    let mut denied_goal = record();
+    denied_goal.workspace = root.path().join("ws-deny");
+    let deny_step = StepId::new();
+    denied_goal
+        .apply_plan(
+            GoalPlan {
+                acceptance: vec![AcceptanceCriterion {
+                    id: "criterion-1".into(),
+                    text: "Verified".into(),
+                    verification: VerificationSpec::Manual,
+                }],
+                steps: vec![PlannedStep {
+                    id: deny_step,
+                    title: "Denied".into(),
+                    instruction: "Run task".into(),
+                    depends_on: vec![],
+                    verifier: Some(StepVerifier {
+                        argv: vec!["/bin/echo".into()],
+                        cwd: None,
+                        timeout_seconds: 10,
+                        max_output_bytes: 1024,
+                    }),
+                }],
+            },
+            "2026-11-19T00:00:00Z".into(),
+        )
+        .unwrap();
+    denied_goal
+        .confirm_plan("2026-11-19T00:01:00Z".into())
+        .unwrap();
+    let denied_goal = store.create(denied_goal).await.unwrap();
+    let lease = store
+        .acquire_lease(denied_goal.id, "w2".into(), 1_000, Some(60_000))
+        .await
+        .unwrap();
+    let dispatch = store
+        .begin_dispatch(&lease, RunId::new(), 1_001, "2026-11-19T00:02:00Z".into())
+        .await
+        .unwrap();
+    store.mark_running(&dispatch, &lease, 1_002).await.unwrap();
+    let blocked_auth = store
+        .finish_dispatch_with_verification(
+            &lease,
+            &dispatch,
+            summary(dispatch.run_id, "2026-11-19T00:03:00Z"),
+            Some(StepVerificationResult {
+                step_id: deny_step,
+                attempt: dispatch.attempt,
+                run_id: dispatch.run_id,
+                argv: vec!["/bin/echo".into()],
+                cwd: None,
+                status: StepVerificationStatus::Denied,
+                exit_code: None,
+                stdout_excerpt: String::new(),
+                stderr_excerpt: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+                duration_ms: 1,
+                recorded_at: "2026-11-19T00:03:01Z".into(),
+                error_code: Some("permission_denied".into()),
+                error_message: Some("denied".into()),
+            }),
+            &metrics(),
+            "2026-11-19T00:03:02Z".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(blocked_auth.status, GoalStatus::Blocked);
+    assert_eq!(
+        blocked_auth.wait_reason,
+        Some(GoalWaitReason::Authorization)
+    );
+    assert!(
+        store
+            .replan_failed_step(denied_goal.id, "2026-11-19T00:04:00Z".into())
+            .await
+            .is_err()
+    );
+}
