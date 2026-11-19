@@ -139,7 +139,8 @@ just tui-preview syntax
 | [SQLite 存储组件](docs/storage.md) | 事务、数据路径、持久化与当前边界 |
 | [soyo-plugin 规范](docs/soyo-plugin.md) | manifest v1、结构 schema、本地管理、权限与运行生命周期 |
 | [后续能力路线图](docs/capability-roadmap.md) | 已有扩展基础、N3 实现范围与多 Agent 等后续规划 |
-| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 发行范围、已完成的 N3 与后续阶段，DEV-038 至 DEV-089 |
+| [后续开发计划](docs/post-mvp-plan.md) | 0.2.0 发行范围、已完成的 N3–N5 与后续 N6 阶段，DEV-038 至 DEV-096 |
+| [N6 目标与提案规划](docs/n6-plan.md) | S2 按需工具发现、S3 Goal 步骤验证器、S5 调用样例与 S1 只读程序化编排（DEV-090 至 DEV-096，待开始） |
 | [全局记忆](docs/memory.md) | 可读 MEMORY.md、专用工具、审阅、更正／遗忘与回滚 |
 | [原生 Sandbox](docs/sandbox.md) | Seatbelt、Bubblewrap／Seccomp／socat、HTTP／CONNECT broker 和 CST 边界 |
 | [MCP 与凭据管理](docs/mcp.md) | stdio／HTTP 工具、服务生命周期、私有凭据与 OAuth |
