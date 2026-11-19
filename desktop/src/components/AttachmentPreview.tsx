@@ -13,6 +13,9 @@ export function StagedAttachmentsStrip({
   items,
   onRemove,
 }: StagedAttachmentsStripProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
+
   if (items.length === 0) {
     return null;
   }
@@ -27,7 +30,7 @@ export function StagedAttachmentsStrip({
         return (
           <div
             key={item.id}
-            className="soyo-panel-enter flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#222222] px-[9px] py-[6px] text-[11.5px] text-[#c9c9c9]"
+            className="soyo-panel-enter flex items-center gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] px-[9px] py-[6px] text-[11.5px] text-[var(--text-secondary)]"
           >
             {isImage ? (
               <img
@@ -36,21 +39,21 @@ export function StagedAttachmentsStrip({
                 className="h-[26px] w-[26px] rounded-[6px] object-cover"
               />
             ) : (
-              <FileText className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
+              <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
             )}
             <div className="flex items-baseline gap-1.5 max-w-[200px]">
-              <span className="truncate font-medium text-[#e8e8e8]">
+              <span className="truncate font-medium text-[var(--text-primary)]">
                 {sanitizeDisplayText(item.filename)}
               </span>
-              <span className="shrink-0 font-mono text-[10.5px] text-[#6e6e6e]">
+              <span className="shrink-0 font-mono text-[11px] text-[var(--text-tertiary)]">
                 {Math.max(1, Math.round(item.size_bytes / 1024))} KB
               </span>
             </div>
             <button
               type="button"
               onClick={() => onRemove(item.id)}
-              aria-label={`Remove ${item.filename}`}
-              className="rounded p-0.5 text-[#6e6e6e] hover:bg-[#2c2c2c] hover:text-[#e8e8e8]"
+              aria-label={t.a11y.removeAttachment(item.filename)}
+              className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
             >
               <X className="h-3 w-3" />
             </button>
@@ -83,7 +86,7 @@ export function SessionMediaPreview({
 
   return (
     <div className="space-y-1.5" data-testid="session-media-preview">
-      <div className="text-[10px] uppercase tracking-wider text-[#6e6e6e]">
+      <div className="text-[11px] uppercase tracking-wider text-[var(--text-tertiary)]">
         {t.cards.attachmentsHeader(mediaRefs.length)}
       </div>
       <div className="flex flex-wrap gap-2">
@@ -94,25 +97,25 @@ export function SessionMediaPreview({
           return (
             <div
               key={ref}
-              className="flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#1a1a1a] p-1.5 text-[11px]"
+              className="flex items-center gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] p-1.5 text-[11px]"
             >
               {likelyImage ? (
                 <img
                   src={url}
                   alt={ref}
-                  className="h-12 w-12 rounded-[6px] border border-[#2e2e2e] object-cover"
+                  className="h-12 w-12 rounded-[6px] border border-[var(--border)] object-cover"
                 />
               ) : (
-                <Paperclip className="h-4 w-4 shrink-0 text-[#d9a08e]" />
+                <Paperclip className="h-4 w-4 shrink-0 text-[var(--accent-text)]" />
               )}
               <div className="max-w-[200px]">
-                <div className="flex items-center gap-1 truncate font-mono text-[10.5px] text-[#e8e8e8]">
+                <div className="flex items-center gap-1 truncate font-mono text-[11px] text-[var(--text-primary)]">
                   {likelyImage && (
-                    <ImageIcon className="h-3 w-3 shrink-0 text-[#4ade80]" />
+                    <ImageIcon className="h-3 w-3 shrink-0 text-[var(--success)]" />
                   )}
                   <span className="truncate">{sanitizeDisplayText(ref)}</span>
                 </div>
-                <div className="truncate font-mono text-[9.5px] text-[#6e6e6e]">
+                <div className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
                   {url}
                 </div>
               </div>

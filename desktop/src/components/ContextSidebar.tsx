@@ -64,15 +64,14 @@ function extractOutputPaths(messages: DesktopMessage[]): string[] {
   return results.slice(0, 6);
 }
 
-// Color rules (§3.2 & Soyo Dark Frame 02):
-// Messages primary segment uses #d9a08e, followed by orange/green/ochre/neutral free space.
+// Color rules (desktop-ui.md §8 / Soyo theme tokens):
 const CONTEXT_BAR_COLORS = [
-  "#d9a08e",
-  "#e07b3f",
-  "#3fbf7f",
-  "#bf9f3f",
-  "#8aa8d8",
-  "#6b6b6b",
+  "var(--accent)",
+  "var(--mode-build)",
+  "var(--mode-code)",
+  "var(--warning)",
+  "var(--info)",
+  "var(--border-strong)",
 ];
 
 function basenameFromWorkspace(path: string | undefined): string {
@@ -114,44 +113,43 @@ export function ContextSidebar({
 
   return (
     <aside
-      className="flex w-[308px] shrink-0 flex-col gap-3.5 overflow-y-auto border-l border-[#1f1f1f] bg-[#0f0f0f] p-3.5 text-xs"
+      className="flex w-[308px] shrink-0 flex-col gap-3.5 overflow-y-auto border-l border-[var(--border-subtle)] bg-[var(--surface-code)] p-3.5 text-xs"
       data-testid="context-sidebar"
     >
       {/* Runtime */}
       <section className="space-y-1.5">
-        <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
+        <div className="flex items-center justify-between text-[12px] font-medium text-[var(--text-tertiary)]">
           <span>{t.inspector.runtime}</span>
           <span
-            className="text-[10px]"
-            style={{ color: modeStyle.color }}
-            title={`Active mode: ${modeStyle.label}`}
-          >
-            ●
-          </span>
+            className="inline-block h-2 w-2 rounded-full"
+            style={{ backgroundColor: modeStyle.color }}
+            title={`${t.inspector.runtime}: ${modeStyle.label}`}
+            aria-hidden="true"
+          />
         </div>
         <div className="space-y-1 text-[12px]">
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">{t.inspector.profile}</span>
-            <span className="truncate font-mono text-[11.5px] text-[#c9c9c9]">
+            <span className="text-[var(--text-tertiary)]">{t.inspector.profile}</span>
+            <span className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]">
               {bootstrap?.selected_profile ?? t.inspector.unset}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">{t.inspector.model}</span>
-            <span className="truncate font-mono text-[11.5px] text-[#c9c9c9]">
+            <span className="text-[var(--text-tertiary)]">{t.inspector.model}</span>
+            <span className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]">
               {bootstrap?.selected_model ?? t.inspector.unset}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">{t.inspector.sandbox}</span>
-            <span className="truncate font-mono text-[11.5px] text-[#c9c9c9]">
+            <span className="text-[var(--text-tertiary)]">{t.inspector.sandbox}</span>
+            <span className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]">
               {bootstrap?.sandbox_backend ?? "default"}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 py-0.5">
-            <span className="text-[#7a7a7a]">{t.inspector.workspace}</span>
+            <span className="text-[var(--text-tertiary)]">{t.inspector.workspace}</span>
             <span
-              className="truncate font-mono text-[11px] text-[#c9c9c9]"
+              className="truncate font-mono text-[11px] text-[var(--text-secondary)]"
               title={bootstrap?.workspace}
             >
               {basenameFromWorkspace(bootstrap?.workspace) || t.inspector.unset}
@@ -160,13 +158,13 @@ export function ContextSidebar({
         </div>
       </section>
 
-      <div className="h-px bg-[#1f1f1f]" />
+      <div className="h-px bg-[var(--surface-raised)]" />
 
       {/* Context window */}
       <section className="space-y-2">
-        <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
+        <div className="flex items-center justify-between text-[12px] font-medium text-[var(--text-tertiary)]">
           <span>{t.inspector.contextWindow}</span>
-          <span className="font-mono text-[11.5px] text-[#6e6e6e]">
+          <span className="font-mono text-[11.5px] text-[var(--text-tertiary)]">
             {contextEstimated ? "~" : ""}
             {formatTokenCount(totalContextTokens)}
             {windowTokens
@@ -176,12 +174,12 @@ export function ContextSidebar({
         </div>
 
         {contextEntries.length === 0 ? (
-          <div className="text-[11.5px] text-[#6e6e6e]">
+          <div className="text-[11.5px] text-[var(--text-tertiary)]">
             {t.inspector.contextEmpty}
           </div>
         ) : (
           <div className="space-y-2.5">
-            <div className="flex h-[6px] w-full overflow-hidden rounded-[3px] bg-[#2a2a2a]">
+            <div className="flex h-[6px] w-full overflow-hidden rounded-[3px] bg-[var(--surface-hover)]">
               {contextEntries.map((entry, idx) => {
                 const denom =
                   windowTokens && windowTokens > 0
@@ -209,9 +207,9 @@ export function ContextSidebar({
                   className="transition-[width] duration-300 ease-out"
                   style={{
                     width: `${Math.max(0, 100 - usagePercent)}%`,
-                    backgroundColor: "#3a3a3a",
+                    backgroundColor: "var(--border-strong)",
                   }}
-                  title={`Free space: ${freeTokens} tokens`}
+                  title={`${t.inspector.freeSpace}: ${freeTokens}`}
                 />
               )}
             </div>
@@ -226,7 +224,7 @@ export function ContextSidebar({
                 return (
                   <li
                     key={entry.label}
-                    className="flex items-center justify-between text-[#a3a3a3]"
+                    className="flex items-center justify-between text-[var(--text-secondary)]"
                   >
                     <span className="inline-flex items-center gap-1.5">
                       <span
@@ -238,7 +236,7 @@ export function ContextSidebar({
                       />
                       <span>{entry.label}</span>
                     </span>
-                    <span className="font-mono text-[#7a7a7a]">
+                    <span className="font-mono text-[var(--text-tertiary)]">
                       {formatTokenCount(entry.tokens)}
                       {windowTokens ? ` · ${pct}%` : ""}
                     </span>
@@ -246,12 +244,12 @@ export function ContextSidebar({
                 );
               })}
               {freeTokens > 0 && windowTokens && (
-                <li className="flex items-center justify-between text-[#a3a3a3]">
+                <li className="flex items-center justify-between text-[var(--text-secondary)]">
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-[2px] bg-[#3a3a3a]" />
+                    <span className="h-2 w-2 rounded-[2px] bg-[var(--surface-hover)]" />
                     <span>{t.inspector.freeSpace}</span>
                   </span>
-                  <span className="font-mono text-[#7a7a7a]">
+                  <span className="font-mono text-[var(--text-tertiary)]">
                     {formatTokenCount(freeTokens)} · {Math.max(0, 100 - usagePercent)}%
                   </span>
                 </li>
@@ -259,7 +257,7 @@ export function ContextSidebar({
             </ul>
 
             {contextSkillsCount != null && (
-              <div className="text-[11px] text-[#6e6e6e]">
+              <div className="text-[11px] text-[var(--text-tertiary)]">
                 {t.inspector.activeSkills(contextSkillsCount)}
               </div>
             )}
@@ -267,36 +265,36 @@ export function ContextSidebar({
         )}
       </section>
 
-      <div className="h-px bg-[#1f1f1f]" />
+      <div className="h-px bg-[var(--surface-raised)]" />
 
       {/* Tasks */}
       <section className="space-y-1.5">
-        <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
+        <div className="flex items-center justify-between text-[12px] font-medium text-[var(--text-tertiary)]">
           <span>{t.inspector.tasks}</span>
-          <span className="font-mono text-[11px] text-[#6e6e6e]">
+          <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
             {todos.filter((t) => t.status === "completed").length}/{todos.length}
           </span>
         </div>
         {todos.length === 0 ? (
-          <div className="text-[11.5px] text-[#6e6e6e]">{t.inspector.noActiveTasks}</div>
+          <div className="text-[11.5px] text-[var(--text-tertiary)]">{t.inspector.noActiveTasks}</div>
         ) : (
           <ul className="space-y-1.5 pt-0.5 text-[12px]">
             {todos.map((item) => (
               <li key={item.id} className="flex items-start gap-2">
                 {item.status === "completed" ? (
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#4ade80]" />
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
                 ) : item.status === "in_progress" ? (
-                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#fac454]" />
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[var(--warning)]" />
                 ) : (
-                  <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
+                  <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                 )}
                 <span
                   className={
                     item.status === "completed"
-                      ? "text-[#6e6e6e] line-through"
+                      ? "text-[var(--text-tertiary)] line-through"
                       : item.status === "in_progress"
-                        ? "text-[#fac454]"
-                        : "text-[#a3a3a3]"
+                        ? "text-[var(--warning)]"
+                        : "text-[var(--text-secondary)]"
                   }
                 >
                   {item.content}
@@ -309,14 +307,14 @@ export function ContextSidebar({
 
       {mcpServers.length > 0 && (
         <>
-          <div className="h-px bg-[#1f1f1f]" />
+          <div className="h-px bg-[var(--surface-raised)]" />
           <section className="space-y-1.5">
-            <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
+            <div className="flex items-center justify-between text-[12px] font-medium text-[var(--text-tertiary)]">
               <span className="inline-flex items-center gap-1.5">
-                <Plug className="h-3 w-3 text-[#8a8a8a]" />
+                <Plug className="h-3 w-3 text-[var(--text-tertiary)]" />
                 <span>MCP</span>
               </span>
-              <span className="font-mono text-[11px] text-[#6e6e6e]">
+              <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
                 {mcpServers.length}
               </span>
             </div>
@@ -324,10 +322,10 @@ export function ContextSidebar({
               {mcpServers.map((srv) => (
                 <li
                   key={srv.server}
-                  className="flex items-center justify-between gap-2 text-[#a3a3a3]"
+                  className="flex items-center justify-between gap-2 text-[var(--text-secondary)]"
                 >
                   <span className="truncate">{srv.server}</span>
-                  <span className="shrink-0 font-mono text-[10.5px] text-[#6e6e6e]">
+                  <span className="shrink-0 font-mono text-[11px] text-[var(--text-tertiary)]">
                     {srv.state} · {srv.tools}t
                   </span>
                 </li>
@@ -337,13 +335,13 @@ export function ContextSidebar({
         </>
       )}
 
-      <div className="h-px bg-[#1f1f1f]" />
+      <div className="h-px bg-[var(--surface-raised)]" />
 
       {/* Outputs & Recent */}
       <section className="space-y-1.5">
-        <div className="flex items-center justify-between text-[12px] font-medium text-[#8a8a8a]">
+        <div className="flex items-center justify-between text-[12px] font-medium text-[var(--text-tertiary)]">
           <span>{outputPaths.length > 0 ? t.inspector.outputs : t.inspector.outputsAndRecent}</span>
-          <span className="font-mono text-[11px] text-[#6e6e6e]">
+          <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
             {outputPaths.length > 0 ? outputPaths.length : recentSessions.length}
           </span>
         </div>
@@ -353,15 +351,15 @@ export function ContextSidebar({
               <li
                 key={filePath}
                 title={filePath}
-                className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-[11.5px] text-[#a3a3a3] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                className="flex items-center gap-2 rounded-[7px] px-2 py-1 text-[11.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]"
               >
-                <FileText className="h-3 w-3 shrink-0 text-[#6e6e6e]" />
+                <FileText className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
                 <span className="truncate font-mono text-[11px]">{filePath}</span>
               </li>
             ))}
           </ul>
         ) : recentSessions.length === 0 ? (
-          <div className="text-[11.5px] text-[#6e6e6e]">{t.inspector.noSavedSessions}</div>
+          <div className="text-[11.5px] text-[var(--text-tertiary)]">{t.inspector.noSavedSessions}</div>
         ) : (
           <ul className="space-y-1">
             {recentSessions.slice(0, 5).map((item) => {
@@ -371,16 +369,16 @@ export function ContextSidebar({
                   key={item.id}
                   className={`flex items-start gap-2 rounded-[7px] px-2 py-1.5 text-[11.5px] transition-colors ${
                     isCurrent
-                      ? "bg-[#1c1c1c] text-[#e8e8e8]"
-                      : "text-[#a3a3a3]"
+                      ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+                      : "text-[var(--text-secondary)]"
                   }`}
                 >
-                  <FileText className="mt-0.5 h-3 w-3 shrink-0 text-[#6e6e6e]" />
+                  <FileText className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">
                       {item.title ?? "Untitled session"}
                     </div>
-                    <div className="truncate text-[10.5px] text-[#6e6e6e]">
+                    <div className="truncate text-[11px] text-[var(--text-tertiary)]">
                       {item.work_mode.toUpperCase()} · {item.profile}
                     </div>
                   </div>

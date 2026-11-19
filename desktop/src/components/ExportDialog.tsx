@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Download, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   commands,
   type ExportFormatDto,
@@ -10,9 +10,13 @@ import {
 } from "../bindings";
 import { getMessages } from "../lib/i18n";
 import { useAppStore } from "../store/useAppStore";
+import { SquaresLoader } from "./SquaresLoader";
+import { Button } from "./ui/Button";
+import { DialogShell } from "./ui/DialogShell";
 
 export interface ExportDialogProps {
   open: boolean;
+  embedded?: boolean;
   sessionId: string | null;
   workspace: string;
   onClose: () => void;
@@ -20,6 +24,7 @@ export interface ExportDialogProps {
 
 export function ExportDialog({
   open,
+  embedded = false,
   sessionId,
   workspace,
   onClose,
@@ -33,18 +38,6 @@ export function ExportDialog({
   const [result, setResult] = useState<ExportResultDto | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose]);
 
   if (!open) {
     return null;
@@ -73,169 +66,193 @@ export function ExportDialog({
     }
   };
 
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Export Session"
-      data-testid="export-dialog"
-      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
-    >
-      <div className="soyo-dialog-enter w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
-        <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Download className="h-4 w-4 text-[#d9a08e]" />
-            <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-              {t.exportDialog.title}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close export dialog"
-            className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
-          >
-            <X className="h-4 w-4" />
-          </button>
+  const body = (
+    <div className="space-y-3 text-xs">
+      {!sessionId && (
+        <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2 text-[var(--text-secondary)]">
+          {t.extra.exportUnavailableHint}
         </div>
+      )}
 
-        <div className="space-y-3 p-4 text-xs">
-          {errorMsg && (
-            <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
-              {errorMsg}
-            </div>
-          )}
+      {errorMsg && (
+        <div className="rounded-[var(--radius-md)] border border-[var(--danger)] bg-[var(--danger-surface)] px-3 py-2 text-[var(--danger)]">
+          {errorMsg}
+        </div>
+      )}
 
-          {result && (
-            <div className="space-y-1 rounded-[9px] border border-[#4ade80]/35 bg-[#161c17] p-2.5 text-[#4ade80]">
-              <div className="font-medium">{t.exportDialog.published}</div>
-              <div className="truncate font-mono text-[11px]">
-                {result.path} ({result.bytes} bytes · {result.format})
-              </div>
-            </div>
-          )}
+      {result && (
+        <div className="space-y-1 rounded-[var(--radius-md)] border border-[var(--success)] bg-[var(--success-surface)] p-2.5 text-[var(--success)]">
+          <div className="font-medium">{t.exportDialog.published}</div>
+          <div className="truncate font-mono text-[11px]">
+            {result.path} ({t.exportDialog.resultSummary(String(result.bytes), result.format)})
+          </div>
+        </div>
+      )}
 
-          <div className="space-y-1">
-            <label
-              htmlFor="export-target-path"
-              className="block text-[12px] text-[#a3a3a3]"
+      <div className="space-y-1">
+        <label
+          htmlFor="export-target-path"
+          className="block text-[12px] text-[var(--text-secondary)]"
+        >
+          {t.exportDialog.outputPathLabel(workspace || t.inspector.workspace)}
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="export-target-path"
+            type="text"
+            value={targetPath}
+            onChange={(e) => setTargetPath(e.target.value)}
+            className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
+          />
+          {isTauri() && (
+            <Button
+              variant="secondary"
+              size="sm"
+              title={t.exportDialog.chooseLocation}
+              onClick={() => {
+                void saveDialog({
+                  defaultPath: targetPath || undefined,
+                  title: t.exportDialog.title,
+                  filters: [
+                    format === "json"
+                      ? { name: "JSON", extensions: ["json"] }
+                      : { name: "Markdown", extensions: ["md"] },
+                  ],
+                }).then((picked) => {
+                  if (picked) setTargetPath(picked);
+                });
+              }}
             >
-              {t.exportDialog.outputPathLabel(workspace || t.inspector.workspace)}
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="export-target-path"
-                type="text"
-                value={targetPath}
-                onChange={(e) => setTargetPath(e.target.value)}
-                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
-              />
-              {isTauri() && (
-                <button
-                  type="button"
-                  title="Choose output location"
-                  onClick={() => {
-                    void saveDialog({
-                      defaultPath: targetPath || undefined,
-                      title: t.exportDialog.title,
-                      filters: [
-                        format === "json"
-                          ? { name: "JSON", extensions: ["json"] }
-                          : { name: "Markdown", extensions: ["md"] },
-                      ],
-                    }).then((picked) => {
-                      if (picked) setTargetPath(picked);
-                    });
-                  }}
-                  className="soyo-pill-btn shrink-0 font-medium text-[#c9c9c9]"
-                >
-                  {t.exportDialog.browse}
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label
-                htmlFor="export-format-select"
-                className="block text-[12px] text-[#a3a3a3]"
-              >
-                {t.exportDialog.format}
-              </label>
-              <select
-                id="export-format-select"
-                value={format}
-                onChange={(e) => {
-                  const next = e.target.value as ExportFormatDto;
-                  setFormat(next);
-                  setTargetPath((prev) =>
-                    prev.replace(/\.(md|json)$/i, next === "json" ? ".json" : ".md")
-                  );
-                }}
-                className="soyo-select w-full px-2.5 py-1.5 text-xs"
-              >
-                <option value="markdown" className="bg-[#181818]">
-                  Markdown (.md)
-                </option>
-                <option value="json" className="bg-[#181818]">
-                  JSON v1 (.json)
-                </option>
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label
-                htmlFor="export-scope-select"
-                className="block text-[12px] text-[#a3a3a3]"
-              >
-                {t.exportDialog.scope}
-              </label>
-              <select
-                id="export-scope-select"
-                value={scope}
-                onChange={(e) => setScope(e.target.value as ExportScopeDto)}
-                className="soyo-select w-full px-2.5 py-1.5 text-xs"
-              >
-                <option value="transcript" className="bg-[#181818]">
-                  {t.exportDialog.scopeTranscript}
-                </option>
-                <option value="full" className="bg-[#181818]">
-                  {t.exportDialog.scopeFull}
-                </option>
-              </select>
-            </div>
-          </div>
-
-          <label className="inline-flex cursor-pointer items-center gap-2 text-[#c9c9c9]">
-            <input
-              type="checkbox"
-              checked={includeTools}
-              onChange={(e) => setIncludeTools(e.target.checked)}
-              className="soyo-checkbox"
-            />
-            {t.exportDialog.includeTools}
-          </label>
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-[#232323] px-4 py-3 text-xs">
-          <button
-            type="button"
-            onClick={onClose}
-            className="soyo-pill-btn text-[#c9c9c9]"
-          >
-            {t.exportDialog.close}
-          </button>
-          <button
-            type="button"
-            disabled={busy || !sessionId || !targetPath.trim()}
-            onClick={() => void handleExport()}
-            className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
-          >
-            {busy ? t.exportDialog.exporting : t.exportDialog.publishBtn}
-          </button>
+              {t.exportDialog.browse}
+            </Button>
+          )}
         </div>
       </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label
+            htmlFor="export-format-select"
+            className="block text-[12px] text-[var(--text-secondary)]"
+          >
+            {t.exportDialog.format}
+          </label>
+          <select
+            id="export-format-select"
+            value={format}
+            onChange={(e) => {
+              const next = e.target.value as ExportFormatDto;
+              setFormat(next);
+              setTargetPath((prev) =>
+                prev.replace(/\.(md|json)$/i, next === "json" ? ".json" : ".md")
+              );
+            }}
+            className="soyo-select w-full px-2.5 py-1.5 text-xs"
+          >
+            <option value="markdown" className="bg-[var(--surface-overlay)]">
+              Markdown (.md)
+            </option>
+            <option value="json" className="bg-[var(--surface-overlay)]">
+              JSON v1 (.json)
+            </option>
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label
+            htmlFor="export-scope-select"
+            className="block text-[12px] text-[var(--text-secondary)]"
+          >
+            {t.exportDialog.scope}
+          </label>
+          <select
+            id="export-scope-select"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as ExportScopeDto)}
+            className="soyo-select w-full px-2.5 py-1.5 text-xs"
+          >
+            <option value="transcript" className="bg-[var(--surface-overlay)]">
+              {t.exportDialog.scopeTranscript}
+            </option>
+            <option value="full" className="bg-[var(--surface-overlay)]">
+              {t.exportDialog.scopeFull}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <label className="inline-flex cursor-pointer items-center gap-2 text-[var(--text-secondary)]">
+        <input
+          type="checkbox"
+          checked={includeTools}
+          onChange={(e) => setIncludeTools(e.target.checked)}
+          className="soyo-checkbox"
+        />
+        {t.exportDialog.includeTools}
+      </label>
+
+      {embedded && (
+        <div className="flex justify-end pt-2">
+          <Button
+            variant="primary"
+            size="md"
+            disabled={busy || !sessionId || !targetPath.trim()}
+            onClick={() => void handleExport()}
+          >
+            {busy && <SquaresLoader size={12} />}
+            {busy ? t.exportDialog.exporting : t.exportDialog.publishBtn}
+          </Button>
+        </div>
+      )}
     </div>
+  );
+
+  if (embedded) {
+    return <div data-testid="export-embedded-panel">{body}</div>;
+  }
+
+  return (
+    <DialogShell
+      open={open}
+      onClose={onClose}
+      ariaLabel={t.exportDialog.title}
+      testId="export-dialog"
+      size="sm"
+      panelClassName="max-w-lg"
+    >
+      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Download className="h-4 w-4 text-[var(--accent-text)]" strokeWidth={1.75} />
+          <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">
+            {t.exportDialog.title}
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t.a11y.closeExport}
+          className="rounded-[var(--radius-sm)] p-1 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+        >
+          <X className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      </div>
+
+      <div className="p-4">{body}</div>
+
+      <div className="flex justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3 text-xs">
+        <Button variant="secondary" size="sm" onClick={onClose}>
+          {t.exportDialog.close}
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
+          disabled={busy || !sessionId || !targetPath.trim()}
+          onClick={() => void handleExport()}
+        >
+          {busy && <SquaresLoader size={12} />}
+          {busy ? t.exportDialog.exporting : t.exportDialog.publishBtn}
+        </Button>
+      </div>
+    </DialogShell>
   );
 }

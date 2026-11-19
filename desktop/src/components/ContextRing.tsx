@@ -1,4 +1,6 @@
+import { getMessages } from "../lib/i18n";
 import { formatTokenCount } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 
 export interface ContextRingProps {
   /** Tokens currently occupying the context window, when known. */
@@ -12,9 +14,9 @@ export interface ContextRingProps {
 }
 
 function arcColor(percent: number): string {
-  if (percent >= 90) return "#f87171";
-  if (percent >= 70) return "#fac454";
-  return "#d9a08e";
+  if (percent >= 90) return "var(--danger)";
+  if (percent >= 70) return "var(--warning)";
+  return "var(--accent)";
 }
 
 /** Circular context-window fill indicator rendered in the composer toolbar. */
@@ -24,6 +26,9 @@ export function ContextRing({
   estimated = false,
   size = 20,
 }: ContextRingProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
+
   if (!windowTokens || windowTokens <= 0) {
     return null;
   }
@@ -35,18 +40,18 @@ export function ContextRing({
   return (
     <span
       role="img"
-      aria-label={`Context usage ${percent}%`}
-      title={`Context: ${tooltip}`}
+      aria-label={t.a11y.contextUsage(percent)}
+      title={t.a11y.contextTitle(tooltip)}
       className="relative inline-flex shrink-0 items-center justify-center rounded-full transition-[background] duration-300 ease-out"
       style={{
         width: size,
         height: size,
         // Conic-gradient arc drawn as a ring via a radial mask: the colored
         // arc covers `percent` of the circle, the rest stays the track color.
-        background: `conic-gradient(${color} ${percent}%, #3a3a3a ${percent}% 100%)`,
+        background: `conic-gradient(${color} ${percent}%, var(--border-strong) ${percent}% 100%)`,
         WebkitMask:
-          "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.6px))",
-        mask: "radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.6px))",
+          "radial-gradient(farthest-side, transparent calc(100% - 3px), black calc(100% - 2.6px))",
+        mask: "radial-gradient(farthest-side, transparent calc(100% - 3px), black calc(100% - 2.6px))",
       }}
     />
   );

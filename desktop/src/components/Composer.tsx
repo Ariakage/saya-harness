@@ -1,11 +1,14 @@
 import {
   ArrowUp,
+  AtSign,
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardPaste,
   Cpu,
   FileText,
   FolderOpen,
+  Gauge,
   Globe,
   Layers,
   List,
@@ -13,6 +16,7 @@ import {
   Paperclip,
   Plus,
   Puzzle,
+  ShieldAlert,
   SlidersHorizontal,
   Square,
   X,
@@ -40,6 +44,9 @@ import { StagedAttachmentsStrip } from "./AttachmentPreview";
 import { ContextRing } from "./ContextRing";
 import { EffortPill, EffortPopover } from "./EffortPopover";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { SquaresLoader } from "./SquaresLoader";
+import { Button } from "./ui/Button";
+import { Pill } from "./ui/Pill";
 
 export interface ComposerProps {
   disabled: boolean;
@@ -76,6 +83,7 @@ export interface ComposerProps {
   onPasteAttachments?: (items: PastedAttachmentItem[]) => Promise<boolean>;
   onRemoveAttachment?: (id: string) => void;
   onOpenSettings?: () => void;
+  onOpenPermissions?: () => void;
   onOpenSessions?: () => void;
   onOpenMemory?: () => void;
   onOpenMcp?: () => void;
@@ -153,6 +161,7 @@ export function Composer({
   onPasteAttachments,
   onRemoveAttachment,
   onOpenSettings,
+  onOpenPermissions,
   onOpenSessions,
   onOpenMemory,
   onOpenMcp,
@@ -168,6 +177,7 @@ export function Composer({
   const [attachPath, setAttachPath] = useState("");
   const [staging, setStaging] = useState(false);
   const [webSearchActive, setWebSearchActive] = useState(false);
+  const [narrowComposer, setNarrowComposer] = useState(false);
   const [activePopover, setActivePopover] = useState<
     "attach" | "commands" | "effort" | "model" | null
   >(forcePopover);
@@ -179,6 +189,19 @@ export function Composer({
   useEffect(() => {
     setActivePopover(forcePopover);
   }, [forcePopover]);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const updateWidth = () => {
+      const w = el.clientWidth;
+      setNarrowComposer(w > 0 && w < 640);
+    };
+    updateWidth();
+    const ro = new ResizeObserver(() => updateWidth());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Lazily load mentionable items the first time "@" opens the palette.
   useEffect(() => {
@@ -396,8 +419,12 @@ export function Composer({
     try {
       const picked = await openDialog(
         directory
-          ? { directory: true, multiple: false, title: "Attach folder" }
-          : { multiple: true, title: "Attach files" }
+          ? {
+              directory: true,
+              multiple: false,
+              title: t.composer.addFolder,
+            }
+          : { multiple: true, title: t.composer.addFilesOrPhotos }
       );
       const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
       if (paths.length === 0) return;
@@ -505,21 +532,68 @@ export function Composer({
     }
   };
 
+  const insertMentionTrigger = () => {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? draft.length;
+    const end = el?.selectionEnd ?? draft.length;
+    const prefix = start > 0 && !/\s$/.test(draft.slice(0, start)) ? " @" : "@";
+    const next = `${draft.slice(0, start)}${prefix}${draft.slice(end)}`;
+    const caret = start + prefix.length;
+    setDraft(next);
+    setMention(detectMention(next, caret));
+    setActivePopover(null);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
+  const handlePasteAction = async () => {
+    setActivePopover(null);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          const el = textareaRef.current;
+          const start = el?.selectionStart ?? draft.length;
+          const end = el?.selectionEnd ?? draft.length;
+          const next = `${draft.slice(0, start)}${text}${draft.slice(end)}`;
+          setDraft(next);
+        }
+      }
+    } catch {
+      // Clipboard read may require permission; fall back to focusing textarea.
+    } finally {
+      textareaRef.current?.focus();
+    }
+  };
+
   const modeStyle = WORK_MODE_STYLES[workMode];
+  const fullModelName = selectedModel ?? "claude-sonnet-4-5";
+  const compactModelName =
+    fullModelName.length > 16
+      ? `${fullModelName.slice(0, 16)}…`
+      : fullModelName;
+  const normalizedEffortLabel = thinkingEffort
+    ? `${thinkingEffort.charAt(0).toUpperCase()}${thinkingEffort.slice(1)}`
+    : null;
+  const openPermissionsHandler = onOpenPermissions ?? onOpenSettings;
   const permissionTextColor =
-    permissionMode === "manual"
-      ? "text-[#fac454]"
-      : "text-[#8aa8d8]";
+    permissionMode === "bypass"
+      ? "text-[var(--danger)]"
+      : permissionMode === "manual"
+        ? "text-[var(--warning)]"
+        : "text-[var(--info)]";
 
   const cardInner = (
     <div ref={rootRef} className="relative w-full">
-      {/* Slash Command Palette (Frame 11) */}
+      {/* Slash Command Palette */}
       {slashOpen && (
         <div
           data-testid="slash-command-palette"
-          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[11px] border border-[#2c2c2c] bg-[#1c1c1c] p-1.5 shadow-[0_-8px_32px_rgba(0,0,0,0.45)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 shadow-[var(--shadow-popover)]"
         >
-          <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
+          <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[var(--text-tertiary)]">
             {t.composer.commandsHeader}
           </div>
           {slashCommands
@@ -533,30 +607,32 @@ export function Composer({
                 key={item.cmd}
                 type="button"
                 onClick={item.action}
-                className={`flex w-full items-baseline gap-2.5 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[#262626] ${
-                  idx === 0 ? "bg-[#262626]/60" : ""
+                className={`flex w-full items-baseline gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)] ${
+                  idx === 0 ? "bg-[var(--surface-raised)]" : ""
                 }`}
               >
-                <span className="min-w-[110px] font-mono text-[#8aa8d8]">
+                <span className="min-w-[110px] font-mono text-[var(--info)]">
                   {item.cmd}
                 </span>
-                <span className="text-[12px] text-[#8a8a8a]">{item.desc}</span>
+                <span className="text-[12px] text-[var(--text-secondary)]">
+                  {item.desc}
+                </span>
               </button>
             ))}
         </div>
       )}
 
-      {/* Mention Palette — "@" references a skill, plugin, or MCP server */}
+      {/* Mention Palette */}
       {mention && !slashOpen && (
         <div
           data-testid="mention-palette"
-          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[11px] border border-[#2c2c2c] bg-[#1c1c1c] p-1.5 shadow-[0_-8px_32px_rgba(0,0,0,0.45)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 shadow-[var(--shadow-popover)]"
         >
-          <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
+          <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[var(--text-tertiary)]">
             {t.composer.mentionHeader}
           </div>
           {mentionItems !== null && mentionMatches.length === 0 ? (
-            <div className="px-2.5 py-1.5 text-[12px] text-[#6e6e6e]">
+            <div className="px-2.5 py-1.5 text-[12px] text-[var(--text-tertiary)]">
               {t.composer.mentionEmpty}
             </div>
           ) : (
@@ -576,18 +652,21 @@ export function Composer({
                     e.preventDefault();
                     applyMention(item);
                   }}
-                  className={`flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[#262626] ${
-                    idx === mentionActiveIdx ? "bg-[#262626]/60" : ""
+                  className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)] ${
+                    idx === mentionActiveIdx ? "bg-[var(--surface-raised)]" : ""
                   }`}
                 >
-                  <Icon className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
-                  <span className="font-mono text-[#8aa8d8]">
+                  <Icon
+                    className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]"
+                    strokeWidth={1.75}
+                  />
+                  <span className="font-mono text-[var(--info)]">
                     @{item.name}
                   </span>
-                  <span className="truncate text-[12px] text-[#8a8a8a]">
+                  <span className="truncate text-[12px] text-[var(--text-secondary)]">
                     {item.desc}
                   </span>
-                  <span className="ml-auto shrink-0 text-[10px] uppercase tracking-[0.05em] text-[#6e6e6e]">
+                  <span className="ml-auto shrink-0 text-[11px] uppercase tracking-[0.05em] text-[var(--text-tertiary)]">
                     {kindLabel}
                   </span>
                 </button>
@@ -601,58 +680,118 @@ export function Composer({
       {dragOver && (
         <div
           data-testid="composer-drop-overlay"
-          className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[14px] border border-dashed border-[#d9a08e] bg-[#181818]/85 text-[12px] font-medium text-[#d9a08e]"
+          className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[var(--radius-xl)] border border-dashed border-[var(--accent)] bg-[var(--scrim)] text-[12px] font-medium text-[var(--accent-text)]"
         >
           {t.composer.dropHint}
         </div>
       )}
 
-      {/* Attach Menu (Frame 07) */}
+      {/* Left `+` Context & Tool Menu */}
       {activePopover === "attach" && (
         <div
           data-testid="attach-menu"
-          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 z-30 w-[210px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+8px)] left-0 z-30 w-[230px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 shadow-[var(--shadow-popover)]"
         >
+          {onStageAttachments && (
+            <>
+              <button
+                type="button"
+                onClick={() => void handleBrowse(false)}
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+              >
+                <Paperclip className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                <span>{t.composer.addFilesOrPhotos}</span>
+                <span className="ml-auto text-[11px] text-[var(--text-tertiary)]">
+                  ⌘U
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleBrowse(true)}
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+              >
+                <FolderOpen className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                <span>{t.composer.addFolder}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActivePopover(null);
+                  setAttachInputOpen(true);
+                }}
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+              >
+                <FileText className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                <span>{t.composer.enterPathManually}</span>
+              </button>
+            </>
+          )}
           <button
             type="button"
-            onClick={() => void handleBrowse(false)}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
+            onClick={() => void handlePasteAction()}
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <Paperclip className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>{t.composer.addFilesOrPhotos}</span>
-            <span className="ml-auto text-[11px] text-[#6e6e6e]">⌘U</span>
+            <ClipboardPaste className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+            <span>{t.extra.pasteAction}</span>
           </button>
           <button
             type="button"
-            onClick={() => void handleBrowse(true)}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
+            onClick={insertMentionTrigger}
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <FolderOpen className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>{t.composer.addFolder}</span>
+            <AtSign className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+            <span>{t.extra.mentionAction}</span>
           </button>
           <button
             type="button"
-            onClick={() => {
-              setActivePopover(null);
-              setAttachInputOpen(true);
-            }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
+            onClick={() => setActivePopover("commands")}
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
-            <span>{t.composer.enterPathManually}</span>
+            <List className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+            <span>{t.extra.slashAction}</span>
           </button>
-          <div className="my-1 h-px bg-[#2a2a2a]" />
+          {variant !== "home" && hasSession && !runActive && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                setActivePopover(null);
+                void onCompact();
+              }}
+              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40"
+            >
+              <Minimize2 className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+              <span>{t.composer.compact}</span>
+            </button>
+          )}
+          {variant !== "home" && (
+            <button
+              type="button"
+              onClick={() => {
+                setWebSearchActive((v) => !v);
+                setActivePopover(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+            >
+              <Globe className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+              <span>{t.composer.webSearch}</span>
+              {webSearchActive && (
+                <Check className="ml-auto h-3.5 w-3.5 text-[var(--accent-text)]" strokeWidth={1.75} />
+              )}
+            </button>
+          )}
+          <div className="my-1 h-px bg-[var(--border-subtle)]" />
           <button
             type="button"
             onClick={() => {
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <FileText className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <FileText className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.composer.skills}</span>
-            <ChevronRight className="ml-auto h-3 w-3 text-[#6e6e6e]" />
+            <ChevronRight className="ml-auto h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
           </button>
           <button
             type="button"
@@ -660,11 +799,11 @@ export function Composer({
               setActivePopover(null);
               onOpenMcp?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <Layers className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <Layers className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.composer.connectors}</span>
-            <ChevronRight className="ml-auto h-3 w-3 text-[#6e6e6e]" />
+            <ChevronRight className="ml-auto h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
           </button>
           <button
             type="button"
@@ -672,25 +811,25 @@ export function Composer({
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9d9d9] transition-colors hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <Puzzle className="h-3.5 w-3.5 text-[#8a8a8a]" />
+            <Puzzle className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
             <span>{t.composer.addPlugins}</span>
           </button>
         </div>
       )}
 
-      {/* Model Profile Menu (Frame 13) */}
+      {/* Model Profile Menu */}
       {activePopover === "model" && (
         <div
           data-testid="model-profile-menu"
-          className="soyo-popover-up absolute bottom-[calc(100%+12px)] right-16 z-30 w-[240px] rounded-[11px] border border-[#2c2c2c] bg-[#1d1d1d] p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
+          className="soyo-popover-up absolute bottom-[calc(100%+12px)] right-12 z-30 w-[250px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 shadow-[var(--shadow-popover)]"
         >
-          <div className="px-2.5 pb-1.5 pt-1 text-[10.5px] text-[#6e6e6e]">
+          <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[var(--text-tertiary)]">
             {t.composer.modelProfileHeader}
           </div>
           {profiles.length === 0 ? (
-            <div className="px-2.5 py-1.5 text-[12px] text-[#8a8a8a]">
+            <div className="px-2.5 py-1.5 text-[12px] text-[var(--text-secondary)]">
               {selectedModel ?? "default"}
             </div>
           ) : (
@@ -705,38 +844,63 @@ export function Composer({
                     setActivePopover(null);
                     void onSelectProfile?.(prof.name);
                   }}
-                  className={`flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[#262626] disabled:opacity-50 ${
-                    active ? "bg-[#262626] text-[#e8e8e8]" : "text-[#c9c9c9]"
+                  className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50 ${
+                    active
+                      ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+                      : "text-[var(--text-secondary)]"
                   }`}
                 >
-                  <Cpu className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
+                  <Cpu className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                   <span className="truncate font-mono text-[12px]">
                     {prof.name}
                   </span>
-                  <span className="ml-auto flex items-center gap-1 text-[11px] text-[#6e6e6e]">
+                  <span className="ml-auto flex items-center gap-1 text-[11px] text-[var(--text-tertiary)]">
                     {prof.model}
-                    {active && <Check className="h-3 w-3 text-[#d9a08e]" />}
+                    {active && (
+                      <Check className="h-3 w-3 text-[var(--accent-text)]" strokeWidth={1.75} />
+                    )}
                   </span>
                 </button>
               );
             })
           )}
-          <div className="my-1.5 h-px bg-[#2a2a2a]" />
+          {narrowComposer && variant !== "home" && onSelectEffort && (
+            <>
+              <div className="my-1.5 h-px bg-[var(--border-subtle)]" />
+              <button
+                type="button"
+                disabled={runActive}
+                onClick={() => setActivePopover("effort")}
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40"
+              >
+                <Gauge className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                <span>{t.extra.selectEffortHeader}</span>
+                {normalizedEffortLabel && (
+                  <span className="ml-auto text-[11px] text-[var(--text-tertiary)]">
+                    {ultracodeEnabled
+                      ? t.effort.levels.ultracode.name
+                      : normalizedEffortLabel}
+                  </span>
+                )}
+              </button>
+            </>
+          )}
+          <div className="my-1.5 h-px bg-[var(--border-subtle)]" />
           <button
             type="button"
             onClick={() => {
               setActivePopover(null);
               onOpenSettings?.();
             }}
-            className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-[#d9a08e] transition-colors hover:bg-[#262626]"
+            className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[12.5px] text-[var(--accent-text)] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
+            <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
             <span>{t.composer.manageProfiles}</span>
           </button>
         </div>
       )}
 
-      {/* Effort Popover (Frame 13 + cc_eff WebGL2 energy grid) */}
+      {/* Effort Popover */}
       <div className="absolute bottom-[calc(100%+12px)] right-0 z-30">
         <EffortPopover
           open={activePopover === "effort"}
@@ -753,18 +917,18 @@ export function Composer({
         />
       </div>
 
-      {/* Composer Card */}
-      <div className="soyo-composer-card rounded-[14px] border border-[#2b2b2b] bg-[#1d1d1d] px-[14px] py-[12px] shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
+      {/* Single 16px-radius Composer Card (§8.6) */}
+      <div className="soyo-composer-card rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-composer)] px-[14px] py-[12px] shadow-[var(--shadow-sm)]">
         <StagedAttachmentsStrip
           items={stagedAttachments}
           onRemove={(id) => onRemoveAttachment?.(id)}
         />
 
         {attachInputOpen && (
-          <div className="soyo-panel-enter mb-2.5 flex items-center gap-2 rounded-[9px] border border-[#2e2e2e] bg-[#141414] p-2 text-xs">
+          <div className="soyo-panel-enter mb-2.5 flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-main)] p-2 text-xs">
             <input
               type="text"
-              aria-label="Attachment file path"
+              aria-label={t.a11y.attachmentPathInput}
               value={attachPath}
               disabled={disabled || staging}
               onChange={(e) => setAttachPath(e.target.value)}
@@ -777,21 +941,25 @@ export function Composer({
               placeholder={t.composer.stagePathPlaceholder}
               className="soyo-input flex-1 px-2.5 py-1 font-mono text-xs"
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               disabled={disabled || staging || attachPath.trim().length === 0}
               onClick={() => void handleStage()}
-              className="inline-flex items-center gap-1 rounded-[7px] bg-[#d9a08e] px-2.5 py-1 text-[11px] font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
             >
-              <Plus className="h-3 w-3" />
+              {staging ? (
+                <SquaresLoader size={12} />
+              ) : (
+                <Plus className="h-3 w-3" strokeWidth={1.75} />
+              )}
               {t.composer.stageBtn}
-            </button>
+            </Button>
           </div>
         )}
 
         <textarea
           ref={textareaRef}
-          aria-label="Prompt input"
+          aria-label={t.a11y.promptInput}
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
@@ -803,8 +971,6 @@ export function Composer({
             );
           }}
           onPaste={(e) => {
-            // Clipboard files (screenshots, copied files) carry no usable
-            // path in a webview — stage their bytes via the paste pipeline.
             const files = Array.from(e.clipboardData?.files ?? []);
             if (
               files.length === 0 ||
@@ -830,7 +996,7 @@ export function Composer({
           }}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          rows={variant === "home" ? 2 : 2}
+          rows={2}
           placeholder={
             approvalPending
               ? t.composer.placeholderApproval
@@ -840,23 +1006,23 @@ export function Composer({
                   ? t.composer.placeholderHome
                   : t.composer.placeholderDefault
           }
-          className="max-h-40 min-h-[26px] w-full resize-none bg-transparent text-[13.5px] leading-[1.45] text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:outline-none disabled:opacity-50"
+          className="max-h-40 min-h-[26px] w-full resize-none bg-transparent text-[13.5px] leading-[1.45] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none disabled:opacity-50"
         />
 
-        {/* Dashed Message Preview when staging attachments with draft (Frame 12) */}
+        {/* Message Preview when staging attachments with draft */}
         {stagedAttachments.length > 0 && hasInput && (
           <div
             data-testid="composer-message-preview"
-            className="soyo-panel-enter mt-2 rounded-[10px] border border-dashed border-[#3a3a3a] px-3 py-2 text-[12px]"
+            className="soyo-panel-enter mt-2 rounded-[var(--radius-md)] border border-dashed border-[var(--border-strong)] px-3 py-2 text-[12px]"
           >
-            <div className="mb-1 text-[10px] uppercase tracking-[0.06em] text-[#6e6e6e]">
+            <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-[var(--text-tertiary)]">
               {t.composer.messagePreview}
             </div>
-            <div className="text-[#c9c9c9]">
+            <div className="text-[var(--text-secondary)]">
               <MarkdownRenderer content={draft} mode="render" />
             </div>
-            <div className="mt-1 text-[11px] text-[#6e6e6e]">
-              {stagedAttachments.length} attachment(s) ·{" "}
+            <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+              {t.cards.attachmentsHeader(stagedAttachments.length)} ·{" "}
               {stagedAttachments
                 .map((a) => sanitizeDisplayText(a.filename))
                 .join(" · ")}
@@ -864,163 +1030,176 @@ export function Composer({
           </div>
         )}
 
-        {/* Composer Toolbar — Frame 01 home keeps a single minimal row (+ · model · send) */}
-        <div className="mt-2.5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
+        {/* Single-row non-wrapping Toolbar */}
+        <div
+          data-testid="composer-toolbar"
+          className="mt-2.5 flex items-center justify-between gap-2 overflow-hidden"
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
             <button
               type="button"
-              aria-label="Add context menu"
+              aria-label={t.a11y.addContextMenu}
               disabled={disabled || runActive}
               onClick={() =>
                 setActivePopover((p) => (p === "attach" ? null : "attach"))
               }
-              className={`inline-flex h-[26px] w-[26px] items-center justify-center rounded-[8px] border text-[#a3a3a3] transition-colors disabled:opacity-40 ${
+              className={`inline-flex h-[28px] w-[28px] shrink-0 items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] border text-[var(--text-secondary)] transition-colors disabled:opacity-40 ${
                 activePopover === "attach"
-                  ? "border-[#3a3a3a] bg-[#2a2a2a] text-[#e8e8e8]"
-                  : "border-transparent hover:bg-[#262626] hover:text-[#e8e8e8]"
+                  ? "border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                  : "border-transparent hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               }`}
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
 
-            {variant !== "home" && onStageAttachments && (
-              <button
-                type="button"
-                onClick={() => setAttachInputOpen((prev) => !prev)}
-                disabled={disabled || runActive}
-                title="Stage local attachment"
-                className="inline-flex h-[26px] items-center gap-1 rounded-[8px] px-2 text-[12px] text-[#a3a3a3] hover:bg-[#262626] hover:text-[#e8e8e8] disabled:opacity-40"
+            {webSearchActive && (
+              <span
+                data-testid="active-web-search-chip"
+                className="inline-flex h-[26px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--surface-hover)] px-2 text-[11.5px] text-[var(--text-primary)]"
               >
-                <Paperclip className="h-3.5 w-3.5" />
-                <span>{t.composer.attach}</span>
-              </button>
+                <Globe className="h-3 w-3 text-[var(--accent-text)]" strokeWidth={1.75} />
+                <span>{t.composer.webSearch}</span>
+                <button
+                  type="button"
+                  onClick={() => setWebSearchActive(false)}
+                  aria-label={t.a11y.removeToolChip(t.composer.webSearch)}
+                  className="rounded p-0.5 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                >
+                  <X className="h-3 w-3" strokeWidth={1.75} />
+                </button>
+              </span>
             )}
 
-            {variant !== "home" && (
-            <button
-              type="button"
-              onClick={() => setWebSearchActive((v) => !v)}
-              className={`inline-flex h-[26px] items-center gap-1.5 rounded-[8px] border px-2.5 text-[12px] transition-colors ${
-                webSearchActive
-                  ? "border-[#3a3a3a] bg-[#262626] text-[#e8e8e8]"
-                  : "border-[#2e2e2e] bg-[#1c1c1c] text-[#a3a3a3] hover:text-[#e8e8e8]"
-              }`}
-            >
-              <Globe className="h-3 w-3 text-[#8a8a8a]" />
-              <span>{t.composer.webSearch}</span>
-            </button>
-            )}
-
-            {variant !== "home" && (
-            <button
-              type="button"
-              aria-label="Slash commands"
-              onClick={() =>
-                setActivePopover((p) => (p === "commands" ? null : "commands"))
-              }
-              className={`inline-flex h-[26px] w-[26px] items-center justify-center rounded-[8px] border transition-colors ${
-                slashOpen
-                  ? "border-[#3a3a3a] bg-[#262626] text-[#e8e8e8]"
-                  : "border-[#2e2e2e] bg-[#1c1c1c] text-[#a3a3a3] hover:text-[#e8e8e8]"
-              }`}
-            >
-              <List className="h-3.5 w-3.5" />
-            </button>
-            )}
-
-            {variant !== "home" && hasSession && !runActive && (
-              <button
-                type="button"
-                onClick={() => void onCompact()}
-                disabled={disabled}
-                title="Compact session history"
-                className="inline-flex h-[26px] items-center gap-1 rounded-[8px] border border-[#2e2e2e] bg-[#1c1c1c] px-2.5 text-[12px] text-[#c9c9c9] hover:border-[#3a3a3a] disabled:opacity-40"
+            {(runActive || staging) && (
+              <span
+                data-testid="composer-working-loader"
+                className="inline-flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap px-1 text-[11px] text-[var(--text-tertiary)]"
               >
-                <Minimize2 className="h-3 w-3 text-[#8a8a8a]" />
-                <span>{t.composer.compact}</span>
-              </button>
+                <SquaresLoader size={12} />
+                {!narrowComposer && (
+                  <span>{runActive ? t.home.streaming : t.composer.stageBtn}</span>
+                )}
+              </span>
             )}
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
             {approvalPending && (
-              <span className="soyo-pill text-[#fac454]">
+              <Pill tone="warning" className="shrink-0 whitespace-nowrap">
                 {t.composer.pausedApproval}
-              </span>
+              </Pill>
             )}
 
-            {variant !== "home" && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void onCycleMode?.()}
-                  title="Cycle work mode"
-                  className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-2 text-[11.5px] text-[#c9c9c9] transition-colors hover:bg-[#262626]"
-                >
-                  <span
-                    className="h-1.5 w-1.5 rounded-full transition-colors"
-                    style={{ backgroundColor: modeStyle.color }}
-                  />
-                  <span>{modeStyle.label}</span>
-                </button>
+            {(variant !== "home" || permissionMode === "bypass") && (
+              <div
+                className={`inline-flex h-[28px] shrink-0 items-center overflow-hidden rounded-[var(--radius-md)] border bg-[var(--surface-raised)] whitespace-nowrap ${
+                  permissionMode === "bypass"
+                    ? "border-[var(--danger)]"
+                    : "border-[var(--border)]"
+                }`}
+              >
+                {variant !== "home" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void onCycleMode?.()}
+                      title={t.a11y.cycleWorkMode}
+                      className="inline-flex h-full shrink-0 items-center gap-1.5 whitespace-nowrap px-2 text-[11.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                    >
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full transition-colors"
+                        style={{ backgroundColor: modeStyle.color }}
+                      />
+                      <span>{modeStyle.label}</span>
+                    </button>
+                    <span className="h-3.5 w-px shrink-0 bg-[var(--border)]" aria-hidden="true" />
+                  </>
+                )}
 
                 <button
                   type="button"
-                  onClick={() => onOpenSettings?.()}
-                  className={`inline-flex h-[26px] items-center rounded-[7px] px-2 text-[11.5px] transition-colors hover:bg-[#262626] ${permissionTextColor}`}
+                  data-testid={
+                    permissionMode === "bypass" ? "composer-bypass-badge" : undefined
+                  }
+                  onClick={() => openPermissionsHandler?.()}
+                  className={`inline-flex h-full shrink-0 items-center gap-1 whitespace-nowrap px-2 text-[11.5px] transition-colors ${
+                    permissionMode === "bypass"
+                      ? "bg-[var(--danger-surface)] font-medium text-[var(--danger)]"
+                      : `${permissionTextColor} hover:bg-[var(--surface-hover)]`
+                  }`}
                 >
-                  {PERMISSION_MODE_LABELS[permissionMode]}
+                  {permissionMode === "bypass" && (
+                    <ShieldAlert className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                  )}
+                  <span>{PERMISSION_MODE_LABELS[permissionMode]}</span>
                 </button>
-              </>
+              </div>
             )}
 
-            <button
-              type="button"
-              onClick={() =>
-                setActivePopover((p) => (p === "model" ? null : "model"))
-              }
-              className="inline-flex h-[26px] items-center rounded-[7px] border border-transparent px-2 text-[11.5px] text-[#a3a3a3] transition-colors hover:border-[#2e2e2e] hover:bg-[#262626] hover:text-[#e8e8e8]"
-            >
-              <span className="max-w-[140px] truncate">
-                {selectedModel ?? "claude-sonnet-4-5"}
-                {variant === "home" && thinkingEffort
-                  ? ` · ${thinkingEffort.charAt(0).toUpperCase()}${thinkingEffort.slice(1)}`
-                  : ""}
-              </span>
-            </button>
-
-            {variant !== "home" && onSelectEffort && (
-              <EffortPill
-                effort={thinkingEffort}
-                ultracodeEnabled={ultracodeEnabled}
-                open={activePopover === "effort"}
-                disabled={runActive}
-                onClick={() =>
-                  setActivePopover((p) => (p === "effort" ? null : "effort"))
+            {/* Merged Model · Effort Capsule */}
+            <div className="inline-flex h-[28px] shrink-0 items-center overflow-hidden rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] whitespace-nowrap">
+              <button
+                type="button"
+                aria-label={t.a11y.modelAndEffort}
+                title={
+                  normalizedEffortLabel
+                    ? `${fullModelName} · ${
+                        ultracodeEnabled
+                          ? t.effort.levels.ultracode.name
+                          : normalizedEffortLabel
+                      }`
+                    : fullModelName
                 }
-              />
-            )}
+                onClick={() =>
+                  setActivePopover((p) => (p === "model" ? null : "model"))
+                }
+                className="inline-flex h-full shrink-0 items-center whitespace-nowrap px-2 text-[11.5px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                <span className="max-w-[160px] truncate">
+                  {narrowComposer ? compactModelName : fullModelName}
+                  {variant === "home" && !narrowComposer && normalizedEffortLabel
+                    ? ` · ${normalizedEffortLabel}`
+                    : ""}
+                </span>
+              </button>
+
+              {!narrowComposer && variant !== "home" && onSelectEffort && (
+                <>
+                  <span className="h-3.5 w-px shrink-0 bg-[var(--border)]" aria-hidden="true" />
+                  <EffortPill
+                    embedded
+                    effort={thinkingEffort}
+                    ultracodeEnabled={ultracodeEnabled}
+                    open={activePopover === "effort"}
+                    disabled={runActive}
+                    onClick={() =>
+                      setActivePopover((p) => (p === "effort" ? null : "effort"))
+                    }
+                  />
+                </>
+              )}
+            </div>
 
             {runActive && (
               <button
                 type="button"
                 onClick={onToggleSubmitMode}
-                title="Switch run guidance mode (Steer / Queue)"
-                className="inline-flex h-[26px] items-center gap-1 rounded-[7px] border border-[#2e2e2e] bg-[#1c1c1c] px-2 text-[11px] text-[#c9c9c9] transition-colors hover:border-[#3a3a3a]"
+                title={t.a11y.switchGuidanceMode}
+                className="inline-flex h-[28px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 text-[11px] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)]"
               >
                 <span>{submitMode === "queue" ? t.composer.queue : t.composer.steer}</span>
-                <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
+                <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
               </button>
             )}
 
             {compactionPending && !queuedPromptPreview && (
-              <span
-                title={t.composer.compactionQueued}
-                className="inline-flex h-[26px] items-center gap-1 rounded-[7px] border border-[#3a3a3a] bg-[#1c1c1c] px-2 text-[11px] text-[#8aa8d8]"
+              <Pill
+                tone="info"
+                className="h-[28px] shrink-0 whitespace-nowrap"
               >
-                <Minimize2 className="h-3 w-3" />
+                <Minimize2 className="h-3 w-3" strokeWidth={1.75} />
                 <span>{t.composer.compactionQueued}</span>
-              </span>
+              </Pill>
             )}
 
             {queuedPromptPreview && (
@@ -1028,10 +1207,10 @@ export function Composer({
                 type="button"
                 onClick={onClearQueuedPrompt}
                 title={`${t.composer.queuedPrompt}: ${queuedPromptPreview}`}
-                className="inline-flex h-[26px] max-w-[140px] items-center gap-1 rounded-[7px] border border-[#3a3a3a] bg-[#242019] px-2 text-[11px] text-[#fac454] transition-colors hover:border-[#4a4a3a]"
+                className="inline-flex h-[28px] max-w-[140px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-md)] border border-[var(--warning)] bg-[var(--warning-surface)] px-2 text-[11px] text-[var(--warning)] transition-colors hover:opacity-90"
               >
                 <span className="truncate">{t.composer.queuedPrompt}</span>
-                <X className="h-3 w-3 shrink-0" />
+                <X className="h-3 w-3 shrink-0" strokeWidth={1.75} />
               </button>
             )}
 
@@ -1044,38 +1223,25 @@ export function Composer({
               />
             )}
 
-            <button
-              type="button"
+            <Button
+              variant={isStopState || canSend ? "primary" : "secondary"}
+              size="icon"
               onClick={() => void handleActionClick()}
               disabled={isStopState ? cancelling : !canSend}
               aria-label={
-                isStopState
-                  ? cancelling
-                    ? "Cancelling"
-                    : "Cancel"
-                  : "Send"
+                isStopState ? t.a11y.cancelRun : t.a11y.sendPrompt
               }
               title={
-                isStopState
-                  ? cancelling
-                    ? "Cancelling..."
-                    : "Stop active run"
-                  : runActive
-                    ? "Steer active run"
-                    : "Send prompt"
+                isStopState ? t.a11y.cancelRun : t.a11y.sendPrompt
               }
-              className={`ml-0.5 grid h-[28px] w-[28px] shrink-0 place-items-center rounded-full transition-all duration-200 ease-out active:scale-95 disabled:cursor-not-allowed ${
-                isStopState || canSend
-                  ? "bg-[#d9a08e] text-[#1c120e] hover:bg-[#e2a68f]"
-                  : "bg-[#2e2e2e] text-[#7a7a7a] opacity-70"
-              }`}
+              className="ml-0.5 h-[28px] w-[28px] shrink-0 rounded-full"
             >
               {isStopState ? (
                 <Square className="h-2.5 w-2.5 fill-current" />
               ) : (
-                <ArrowUp className="h-3.5 w-3.5 stroke-[2.3]" />
+                <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.2} />
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -1087,10 +1253,10 @@ export function Composer({
   }
 
   return (
-    <div className="bg-[#141414] px-6 pb-3.5 pt-2">
+    <div className="bg-[var(--surface-main)] px-6 pb-3.5 pt-2">
       <div className="mx-auto flex max-w-[840px] flex-col gap-2">
         {cardInner}
-        <div className="flex items-center justify-center gap-4 text-[11px] text-[#5e5e5e]">
+        <div className="flex items-center justify-center gap-4 text-[11px] text-[var(--text-tertiary)]">
           <span>{t.composer.hintEnter}</span>
           <span>{t.composer.hintShiftEnter}</span>
           <span>{t.composer.hintTab}</span>

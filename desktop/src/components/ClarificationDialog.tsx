@@ -4,6 +4,8 @@ import type { InputRequestDto } from "../bindings";
 import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
 import { useAppStore } from "../store/useAppStore";
+import { Button } from "./ui/Button";
+import { DialogShell } from "./ui/DialogShell";
 
 export interface ClarificationDialogProps {
   request: InputRequestDto;
@@ -31,84 +33,82 @@ export function ClarificationDialog({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Clarification Needed"
-      data-testid="clarification-dialog"
-      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+    <DialogShell
+      open
+      ariaLabel={t.a11y.clarificationDialog}
+      testId="clarification-dialog"
+      size="sm"
+      panelClassName="max-w-lg"
     >
-      <div className="soyo-dialog-enter w-full max-w-lg overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
-        <div className="flex items-center gap-2 border-b border-[#232323] px-4 py-3">
-          <MessageSquareMore className="h-4 w-4 text-[#d9a08e]" />
-          <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-            {t.clarification.title}
-          </h2>
-        </div>
+      <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3">
+        <MessageSquareMore className="h-4 w-4 text-[var(--accent-text)]" />
+        <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">
+          {t.clarification.title}
+        </h2>
+      </div>
 
-        <div className="space-y-3 p-4 text-xs">
-          <p className="text-sm leading-relaxed text-[#e8e8e8]">
-            {sanitizeDisplayText(request.question)}
-          </p>
+      <div className="space-y-3 p-4 text-xs">
+        <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+          {sanitizeDisplayText(request.question)}
+        </p>
 
-          {request.options.length > 0 && (
-            <div className="space-y-1.5">
-              <div className="text-[10px] uppercase tracking-wider text-[#6e6e6e]">
-                {t.clarification.suggestedOptions}
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {request.options.map((opt, idx) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => void submitAnswer(opt)}
-                    className="flex items-center gap-2 rounded-[9px] border border-[#262626] bg-[#1a1a1a] px-3 py-2 text-left text-xs text-[#e8e8e8] transition-colors hover:border-[#d9a08e]/50 hover:bg-[#222222] disabled:opacity-50"
-                  >
-                    <span className="soyo-pill py-0 font-mono text-[10px] text-[#7aa2f7]">
-                      {idx + 1}
-                    </span>
-                    <span>{sanitizeDisplayText(opt)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
+        {request.options.length > 0 && (
           <div className="space-y-1.5">
-            <label
-              htmlFor="clarification-custom-input"
-              className="block text-[10px] uppercase tracking-wider text-[#6e6e6e]"
-            >
-              {t.clarification.customAnswer}
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="clarification-custom-input"
-                type="text"
-                value={customAnswer}
-                onChange={(e) => setCustomAnswer(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void submitAnswer(customAnswer);
-                  }
-                }}
-                placeholder={t.clarification.placeholder}
-                className="soyo-input flex-1 px-3 py-1.5 text-xs"
-              />
-              <button
-                type="button"
-                disabled={submitting || customAnswer.trim().length === 0}
-                onClick={() => void submitAnswer(customAnswer)}
-                className="rounded-[8px] bg-[#d9a08e] px-3.5 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
-              >
-                {t.clarification.submitBtn}
-              </button>
+            <div className="text-[11px] uppercase tracking-wider text-[var(--text-tertiary)]">
+              {t.clarification.suggestedOptions}
             </div>
+            <div className="flex flex-col gap-1.5">
+              {request.options.map((opt, idx) => (
+                <button
+                  key={opt}
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => void submitAnswer(opt)}
+                  className="flex items-center gap-2 rounded-[9px] border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-2 text-left text-xs text-[var(--text-primary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                >
+                  <span className="soyo-pill py-0 font-mono text-[11px] text-[var(--info)]">
+                    {idx + 1}
+                  </span>
+                  <span>{sanitizeDisplayText(opt)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="clarification-custom-input"
+            className="block text-[11px] uppercase tracking-wider text-[var(--text-tertiary)]"
+          >
+            {t.clarification.customAnswer}
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="clarification-custom-input"
+              type="text"
+              value={customAnswer}
+              onChange={(e) => setCustomAnswer(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void submitAnswer(customAnswer);
+                }
+              }}
+              placeholder={t.clarification.placeholder}
+              className="soyo-input flex-1 px-3 py-1.5 text-xs"
+            />
+            <Button
+              variant="primary"
+              size="md"
+              disabled={submitting || customAnswer.trim().length === 0}
+              onClick={() => void submitAnswer(customAnswer)}
+            >
+              {t.clarification.submitBtn}
+            </Button>
           </div>
         </div>
       </div>
-    </div>
+    </DialogShell>
   );
 }

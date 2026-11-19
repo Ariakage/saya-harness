@@ -7,14 +7,23 @@ import {
 } from "../bindings";
 import { getMessages } from "../lib/i18n";
 import { useAppStore } from "../store/useAppStore";
+import { SquaresLoader } from "./SquaresLoader";
+import { Button } from "./ui/Button";
+import { DialogShell } from "./ui/DialogShell";
 
 export interface MemoryDialogProps {
   open: boolean;
+  embedded?: boolean;
   runActive: boolean;
   onClose: () => void;
 }
 
-export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
+export function MemoryDialog({
+  open,
+  embedded = false,
+  runActive,
+  onClose,
+}: MemoryDialogProps) {
   const locale = useAppStore((s) => s.locale);
   const t = getMessages(locale);
   const [queryCmd, setQueryCmd] = useState("list");
@@ -43,18 +52,6 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
     setConfirmMsg(null);
     void runQuery("list");
   }, [open, runQuery]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose]);
 
   if (!open) {
     return null;
@@ -97,127 +94,135 @@ export function MemoryDialog({ open, runActive, onClose }: MemoryDialogProps) {
     }
   };
 
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Global Memory Manager"
-      data-testid="memory-dialog"
-      className="soyo-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
-    >
-      <div className="soyo-dialog-enter flex max-h-[85vh] w-full max-w-[700px] flex-col overflow-hidden rounded-[14px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
-        <div className="flex items-center justify-between border-b border-[#232323] px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Database className="h-4 w-4 text-[#d9a08e]" />
-            <h2 className="text-[14px] font-semibold text-[#e8e8e8]">
-              {t.memoryDialog.title}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close memory manager"
-            className="rounded-[7px] p-1 text-[#8a8a8a] transition-colors hover:bg-[#222222] hover:text-[#e8e8e8]"
+  const body = (
+    <div className="space-y-4 text-xs">
+      {errorMsg && (
+        <div className="rounded-[var(--radius-md)] border border-[var(--danger)] bg-[var(--danger-surface)] px-3 py-2 text-[var(--danger)]">
+          {errorMsg}
+        </div>
+      )}
+      {confirmMsg && (
+        <div className="rounded-[var(--radius-md)] border border-[var(--success)] bg-[var(--success-surface)] px-3 py-2 text-[var(--success)]">
+          {confirmMsg}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            aria-label={t.a11y.memoryQueryInput}
+            value={queryCmd}
+            onChange={(e) => setQueryCmd(e.target.value)}
+            placeholder={t.memoryDialog.queryPlaceholder}
+            className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
+          />
+          <Button variant="secondary" size="sm" onClick={() => void runQuery(queryCmd)}>
+            <Search className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+            {t.memoryDialog.queryBtn}
+          </Button>
+        </div>
+        {queryResult && (
+          <pre className="max-h-56 overflow-auto rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-main)] p-3 font-mono text-[11px] text-[var(--text-secondary)]">
+            {JSON.stringify(queryResult.data, null, 2)}
+          </pre>
+        )}
+      </div>
+
+      <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-main)] p-3">
+        <div className="font-medium text-[var(--text-primary)]">
+          {t.memoryDialog.prepareTitle}
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            aria-label={t.a11y.memoryActionInput}
+            value={actionCmd}
+            disabled={runActive || busy}
+            onChange={(e) => setActionCmd(e.target.value)}
+            placeholder={t.memoryDialog.preparePlaceholder}
+            className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
+          />
+          <Button
+            variant="primary"
+            size="md"
+            disabled={runActive || busy || !actionCmd.trim()}
+            onClick={() => void handlePrepare()}
           >
-            <X className="h-4 w-4" />
-          </button>
+            {busy && <SquaresLoader size={12} />}
+            {t.memoryDialog.prepareBtn}
+          </Button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs">
-          {errorMsg && (
-            <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
-              {errorMsg}
+        {prepared && (
+          <div className="soyo-panel-enter mt-2 space-y-2 rounded-[var(--radius-md)] border border-[var(--warning)] bg-[var(--warning-surface)] p-3">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-mono text-[var(--warning)]">
+                {t.memoryDialog.operationSummary(
+                  prepared.operation_id,
+                  prepared.expected_revision
+                )}
+              </span>
             </div>
-          )}
-          {confirmMsg && (
-            <div className="rounded-[8px] border border-[#4ade80]/35 bg-[#161c17] px-3 py-2 text-[#4ade80]">
-              {confirmMsg}
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                aria-label="Memory query command"
-                value={queryCmd}
-                onChange={(e) => setQueryCmd(e.target.value)}
-                placeholder="list | search <query> | show <id> | sources | history"
-                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
-              />
-              <button
-                type="button"
-                onClick={() => void runQuery(queryCmd)}
-                className="soyo-pill-btn font-medium text-[#e8e8e8]"
+            <pre className="max-h-40 overflow-auto rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] p-2 font-mono text-[11px] text-[var(--text-primary)]">
+              {JSON.stringify(prepared.review, null, 2)}
+            </pre>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setPrepared(null)}>
+                {t.memoryDialog.discardBtn}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() => void handleConfirm()}
+                className="font-semibold text-[var(--success)]"
               >
-                <Search className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                {t.memoryDialog.queryBtn}
-              </button>
+                {busy ? (
+                  <SquaresLoader size={12} />
+                ) : (
+                  <Check className="h-3.5 w-3.5" strokeWidth={1.75} />
+                )}
+                {t.memoryDialog.confirmBtn}
+              </Button>
             </div>
-            {queryResult && (
-              <pre className="max-h-56 overflow-auto rounded-[10px] border border-[#262626] bg-[#141414] p-3 font-mono text-[11px] text-[#c9d1d9]">
-                {JSON.stringify(queryResult.data, null, 2)}
-              </pre>
-            )}
           </div>
-
-          <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#141414] p-3">
-            <div className="font-medium text-[#e8e8e8]">
-              {t.memoryDialog.prepareTitle}
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                aria-label="Prepare memory command"
-                value={actionCmd}
-                disabled={runActive || busy}
-                onChange={(e) => setActionCmd(e.target.value)}
-                placeholder={t.memoryDialog.preparePlaceholder}
-                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs"
-              />
-              <button
-                type="button"
-                disabled={runActive || busy || !actionCmd.trim()}
-                onClick={() => void handlePrepare()}
-                className="rounded-[8px] bg-[#d9a08e] px-3 py-1.5 font-semibold text-[#1c120e] transition-colors hover:bg-[#e2a68f] disabled:opacity-40"
-              >
-                {t.memoryDialog.prepareBtn}
-              </button>
-            </div>
-
-            {prepared && (
-              <div className="soyo-panel-enter mt-2 space-y-2 rounded-[9px] border border-[#4a3f2a] bg-[#1c1a15] p-3">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-mono text-[#e8d9b0]">
-                    op: {prepared.operation_id} · rev: {prepared.expected_revision}
-                  </span>
-                </div>
-                <pre className="max-h-40 overflow-auto rounded-[8px] border border-[#2e2820] bg-[#121110] p-2 font-mono text-[11px] text-[#d9d9d9]">
-                  {JSON.stringify(prepared.review, null, 2)}
-                </pre>
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPrepared(null)}
-                    className="soyo-pill-btn text-[#c9c9c9]"
-                  >
-                    {t.memoryDialog.discardBtn}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void handleConfirm()}
-                    className="soyo-pill-btn font-semibold text-[#4ade80]"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    {t.memoryDialog.confirmBtn}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </div>
     </div>
+  );
+
+  if (embedded) {
+    return <div data-testid="memory-embedded-panel">{body}</div>;
+  }
+
+  return (
+    <DialogShell
+      open={open}
+      onClose={onClose}
+      ariaLabel={t.memoryDialog.title}
+      testId="memory-dialog"
+      size="md"
+      panelClassName="flex max-h-[85vh] max-w-[700px] flex-col"
+    >
+      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-[var(--accent-text)]" strokeWidth={1.75} />
+          <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">
+            {t.memoryDialog.title}
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t.a11y.closeMemoryDialog}
+          className="rounded-[var(--radius-sm)] p-1 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+        >
+          <X className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4">{body}</div>
+    </DialogShell>
   );
 }

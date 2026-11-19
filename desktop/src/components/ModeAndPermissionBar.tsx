@@ -1,6 +1,8 @@
-import { Shield } from "lucide-react";
+import { ArrowRight, Shield, ShieldAlert } from "lucide-react";
 import type { PermissionModeDto, WorkModeDto } from "../bindings";
+import { getMessages } from "../lib/i18n";
 import { PERMISSION_MODE_LABELS, WORK_MODE_STYLES } from "../lib/sanitize";
+import { useAppStore } from "../store/useAppStore";
 
 export interface ModeAndPermissionBarProps {
   workMode: WorkModeDto;
@@ -22,12 +24,21 @@ export function ModeAndPermissionBar({
   onSelectMode,
   onSelectPermission,
 }: ModeAndPermissionBarProps) {
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
+  const isBypass = permissionMode === "bypass";
+  const permissionTone = isBypass
+    ? "text-[var(--danger)]"
+    : permissionMode === "manual"
+      ? "text-[var(--warning)]"
+      : "text-[var(--info)]";
+
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-testid="mode-permission-bar">
       <div
         role="group"
-        aria-label="Work mode"
-        className="flex items-center gap-0.5 rounded-[8px] border border-[#2b2b2b] bg-[#1a1a1a] p-0.5"
+        aria-label={t.a11y.workMode}
+        className="flex items-center gap-0.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] p-0.5"
       >
         {MODES.map((mode) => {
           const style = WORK_MODE_STYLES[mode];
@@ -38,18 +49,19 @@ export function ModeAndPermissionBar({
               key={mode}
               type="button"
               onClick={() => void onSelectMode(mode)}
-              className={`rounded-[6px] px-2 py-0.5 text-[11px] font-medium transition-colors ${
+              aria-pressed={isCurrent}
+              className={`rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] leading-[16px] font-medium transition-colors ${
                 isCurrent
-                  ? "bg-[#262626] font-semibold"
+                  ? "bg-[var(--surface-hover)] font-semibold"
                   : isPending
-                    ? "border border-dashed border-[#6e6e6e] text-[#e8e8e8]"
-                    : "text-[#8a8a8a] hover:text-[#e8e8e8]"
+                    ? "border border-dashed border-[var(--border-strong)] text-[var(--text-primary)]"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
               }`}
               style={isCurrent ? { color: style.color } : undefined}
               title={
                 isPending
-                  ? `Queued ${style.label} for next turn`
-                  : `Switch to ${style.label} mode`
+                  ? t.a11y.queuedModeTip(style.label)
+                  : t.a11y.switchModeTip(style.label)
               }
             >
               {style.label}
@@ -60,26 +72,43 @@ export function ModeAndPermissionBar({
       </div>
 
       {pendingMode && pendingMode !== workMode && (
-        <span className="soyo-pill text-[#8a8a8a]">
-          → {WORK_MODE_STYLES[pendingMode].label} next
+        <span className="soyo-pill text-[var(--text-tertiary)]">
+          <ArrowRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
+          {WORK_MODE_STYLES[pendingMode].label}
         </span>
       )}
 
-      <div className="soyo-pill">
-        <Shield className="h-3 w-3 text-[#7a7a7a]" />
+      <div
+        className={`soyo-pill ${isBypass ? "border-[var(--danger)] bg-[var(--danger-surface)]" : ""}`}
+      >
+        {isBypass ? (
+          <ShieldAlert
+            className="h-3 w-3 text-[var(--danger)]"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+        ) : (
+          <Shield
+            className="h-3 w-3 text-[var(--text-tertiary)]"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+        )}
         <select
-          aria-label="Permission mode"
+          aria-label={t.a11y.permissionMode}
           value={permissionMode}
           disabled={runActive}
           onChange={(e) =>
             void onSelectPermission(e.target.value as PermissionModeDto)
           }
-          className={`soyo-select is-inline text-[12px] font-medium ${
-            permissionMode === "manual" ? "text-[#fac454]" : "text-[#8aa8d8]"
-          }`}
+          className={`soyo-select is-inline text-[12px] font-medium ${permissionTone}`}
         >
           {PERMISSIONS.map((perm) => (
-            <option key={perm} value={perm} className="bg-[#181818] text-[#e8e8e8]">
+            <option
+              key={perm}
+              value={perm}
+              className="bg-[var(--surface-overlay)] text-[var(--text-primary)]"
+            >
               {PERMISSION_MODE_LABELS[perm]}
             </option>
           ))}

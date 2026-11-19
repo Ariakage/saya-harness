@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { getMessages } from "../lib/i18n";
 import { type DesktopMessage, useAppStore } from "../store/useAppStore";
 import { SessionMediaPreview } from "./AttachmentPreview";
+import { SquaresLoader } from "./SquaresLoader";
 
 export interface ToolCardViewProps {
   message: DesktopMessage;
@@ -182,21 +183,21 @@ function renderStepStatusBadge(status: string | null) {
   if (!status) return null;
   const normalized = status.toLowerCase();
   if (normalized === "done" || normalized === "ok" || normalized === "completed") {
-    return <span className="soyo-pill py-0 text-[10.5px] text-[#4ade80]">{status}</span>;
+    return <span className="soyo-pill py-0 text-[11px] text-[var(--success)]">{status}</span>;
   }
   if (normalized === "running" || normalized === "in_progress") {
     return (
-      <span className="soyo-pill py-0 text-[10.5px] text-[#fac454]">
-        <span className="h-1.5 w-1.5 rounded-full bg-[#fac454] soyo-pulse-dot" />
+      <span className="soyo-pill py-0 text-[11px] text-[var(--warning)]">
+        <SquaresLoader size={12} />
         {status}
       </span>
     );
   }
   if (normalized === "error" || normalized === "failed") {
-    return <span className="soyo-pill py-0 text-[10.5px] text-[#f87171]">{status}</span>;
+    return <span className="soyo-pill py-0 text-[11px] text-[var(--danger)]">{status}</span>;
   }
   return (
-    <span className="ml-auto shrink-0 font-mono text-[11px] text-[#6e6e6e]">
+    <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--text-tertiary)]">
       {status}
     </span>
   );
@@ -235,25 +236,25 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
   const statusPill = (() => {
     switch (message.toolState) {
       case "requested":
-        return <span className="soyo-pill text-[#7aa2f7]">{t.cards.requested}</span>;
+        return <span className="soyo-pill text-[var(--info)]">{t.cards.requested}</span>;
       case "running":
         return (
-          <span className="soyo-pill text-[#fac454]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#fac454] soyo-pulse-dot" />
+          <span className="soyo-pill text-[var(--warning)]">
+            <SquaresLoader size={12} />
             {t.cards.running}
           </span>
         );
       case "error":
-        return <span className="soyo-pill text-[#f87171]">{t.cards.error}</span>;
+        return <span className="soyo-pill text-[var(--danger)]">{t.cards.error}</span>;
       case "ok":
-        return <span className="soyo-pill text-[#4ade80]">{t.cards.done}</span>;
+        return <span className="soyo-pill text-[var(--success)]">{t.cards.done}</span>;
       default:
         return message.toolOk === true ? (
-          <span className="soyo-pill text-[#4ade80]">{t.cards.done}</span>
+          <span className="soyo-pill text-[var(--success)]">{t.cards.done}</span>
         ) : message.toolOk === false ? (
-          <span className="soyo-pill text-[#f87171]">{t.cards.error}</span>
+          <span className="soyo-pill text-[var(--danger)]">{t.cards.error}</span>
         ) : (
-          <span className="soyo-pill text-[#a3a3a3]">{t.cards.tool}</span>
+          <span className="soyo-pill text-[var(--text-secondary)]">{t.cards.tool}</span>
         );
     }
   })();
@@ -262,7 +263,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
     return (
       <div
         data-testid="tool-card"
-        className="soyo-msg-enter rounded-[10px] border border-[#2c2c2c] border-l-2 border-l-[#d9a08e] bg-[#171717] px-3 py-2.5 text-[12.5px] transition-colors hover:border-[#383838] hover:border-l-[#d9a08e]"
+        className="soyo-msg-enter rounded-[var(--radius-lg)] border border-[var(--border)] border-l-2 border-l-[var(--accent)] bg-[var(--surface-raised)] px-3 py-2.5 text-[13px] transition-colors hover:border-[var(--border-strong)] hover:border-l-[var(--accent)]"
       >
         <button
           type="button"
@@ -270,34 +271,35 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
           aria-expanded={expanded}
           className="flex w-full items-center gap-2 text-left"
         >
-          <Bot className="h-3.5 w-3.5 shrink-0 text-[#d9a08e]" />
-          <span className="font-medium text-[#e8e8e8]">
+          <Bot className="h-3.5 w-3.5 shrink-0 text-[var(--accent-text)]" />
+          <span className="font-medium text-[var(--text-primary)]">
             {message.toolName ?? "Subagent"}
           </span>
-          <span className="soyo-pill py-0 text-[11px] text-[#7aa2f7]">{t.cards.subagent}</span>
+          <span className="soyo-pill py-0 text-[11px] text-[var(--info)]">{t.cards.subagent}</span>
           {statusPill}
           <span className="flex-1" />
           {message.toolSummary && (
-            <span className="max-w-xs truncate font-mono text-[11.5px] text-[#6e6e6e]">
+            <span className="max-w-xs truncate font-mono text-[12px] text-[var(--text-tertiary)]">
               {message.toolSummary}
             </span>
           )}
           <ChevronRight
-            className={`h-3.5 w-3.5 shrink-0 text-[#6e6e6e] transition-transform duration-200 ease-out ${
+            strokeWidth={1.75}
+            className={`h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform duration-200 ease-out ${
               expanded ? "rotate-90" : ""
             }`}
           />
         </button>
 
         {expanded && (
-          <div className="soyo-panel-enter ml-[15px] mt-2 space-y-2 border-l border-[#2c2c2c] pl-3 text-xs text-[#8a8a8a]">
+          <div className="soyo-panel-enter ml-[15px] mt-2 space-y-2 border-l border-[var(--border)] pl-3 text-xs text-[var(--text-tertiary)]">
             {message.toolRequestFormatted && !subagentSteps && (
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[#262626] bg-[#121212] p-2 font-mono text-[11px] text-[#c9c9c9]">
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] p-2 font-mono text-[11px] text-[var(--text-secondary)]">
                 {message.toolRequestFormatted}
               </pre>
             )}
             {message.toolError && (
-              <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-2.5 py-1.5 text-[11px] text-[#f87171]">
+              <div className="rounded-[var(--radius-md)] border border-[var(--danger)] bg-[var(--danger-surface)] px-2.5 py-1.5 text-[11px] text-[var(--danger)]">
                 {message.toolError.code}: {message.toolError.message}
               </div>
             )}
@@ -306,12 +308,12 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
                 {subagentSteps.map((step, idx) => (
                   <div
                     key={`${step.tool}-${idx}`}
-                    className="flex items-center gap-2 text-[12px] text-[#8a8a8a]"
+                    className="flex items-center gap-2 text-[12px] text-[var(--text-tertiary)]"
                   >
-                    <Terminal className="h-3 w-3 shrink-0 text-[#6e6e6e]" />
-                    <span className="font-mono text-[#c9c9c9]">{step.tool}</span>
+                    <Terminal className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                    <span className="font-mono text-[var(--text-secondary)]">{step.tool}</span>
                     {step.detail && (
-                      <span className="truncate font-mono text-[11.5px] text-[#8a8a8a]">
+                      <span className="truncate font-mono text-[12px] text-[var(--text-tertiary)]">
                         {step.detail}
                       </span>
                     )}
@@ -321,7 +323,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
               </div>
             ) : (
               message.text && (
-                <pre className="max-h-56 overflow-auto whitespace-pre-wrap font-mono text-[11.5px] text-[#c9c9c9]">
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap font-mono text-[12px] text-[var(--text-secondary)]">
                   {message.text}
                 </pre>
               )
@@ -352,62 +354,63 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
     : 0;
 
   return (
-    <div className="soyo-msg-enter text-[12.5px]" data-testid="tool-card">
+    <div className="soyo-msg-enter text-[13px]" data-testid="tool-card">
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
-        className="group flex w-full items-center gap-2.5 rounded-[8px] px-1 py-[6px] text-left text-[#9a9a9a] transition-colors hover:bg-[#1a1a1a]/60 hover:text-[#e8e8e8]"
+        className="group flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-1 py-[6px] text-left text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]"
       >
-        <RowIcon className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a] transition-colors group-hover:text-[#c9c9c9]" />
-        <span className="truncate font-mono text-[#e8e8e8]">
+        <RowIcon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-secondary)]" />
+        <span className="truncate font-mono text-[var(--text-primary)]">
           {message.toolName ?? message.label}
         </span>
         {statusPill}
         {message.truncated && (
-          <span className="soyo-pill text-[#fac454]">{t.cards.truncated}</span>
+          <span className="soyo-pill text-[var(--warning)]">{t.cards.truncated}</span>
         )}
         <span className="flex-1" />
         {parsedDiff ? (
-          <span className="flex items-center gap-2 font-mono text-[11.5px]">
-            <span className="max-w-[220px] truncate text-[#6e6e6e]">
+          <span className="flex items-center gap-2 font-mono text-[12px]">
+            <span className="max-w-[220px] truncate text-[var(--text-tertiary)]">
               {parsedDiff.filePath}
             </span>
             {parsedDiff.addCount > 0 && (
-              <span className="font-semibold text-[#4ade80]">
+              <span className="font-semibold text-[var(--success)]">
                 +{parsedDiff.addCount}
               </span>
             )}
             {parsedDiff.delCount > 0 && (
-              <span className="font-semibold text-[#f87171]">
+              <span className="font-semibold text-[var(--danger)]">
                 -{parsedDiff.delCount}
               </span>
             )}
           </span>
         ) : (
           message.toolSummary && (
-            <span className="max-w-sm truncate font-mono text-[11.5px] text-[#6e6e6e]">
+            <span className="max-w-sm truncate font-mono text-[12px] text-[var(--text-tertiary)]">
               {message.toolSummary}
             </span>
           )
         )}
         <ChevronRight
-          className={`h-3.5 w-3.5 shrink-0 text-[#6e6e6e] transition-transform duration-200 ease-out ${
+          strokeWidth={1.75}
+          className={`h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform duration-200 ease-out ${
             expanded ? "rotate-90" : ""
           }`}
         />
       </button>
 
       {expanded && (
-        <div className="soyo-panel-enter ml-[7px] mt-1 space-y-2 border-l-2 border-[#2c2c2c] pb-1.5 pl-3.5 text-xs">
+        <div className="soyo-panel-enter ml-[7px] mt-1 space-y-2 border-l-2 border-[var(--border)] pb-1.5 pl-3.5 text-xs">
           {message.toolReviewNote && (
-            <div className="rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-2.5 py-1.5 text-[11px] text-[#a3a3a3]">
+            <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-1.5 text-[11px] text-[var(--text-secondary)]">
               {t.cards.reviewPrefix} {message.toolReviewNote}
             </div>
           )}
 
           {message.toolError && (
-            <div className="rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-2.5 py-1.5 text-[11px] text-[#f87171]">
+            <div className="rounded-[var(--radius-md)] border border-[var(--danger)] bg-[var(--danger-surface)] px-2.5 py-1.5 text-[11px] text-[var(--danger)]">
               {message.toolError.code}: {message.toolError.message}
             </div>
           )}
@@ -415,20 +418,21 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
           {parsedDiff ? (
             <div className="soyo-diff" data-testid="inline-diff-card">
               <div className="soyo-diff-header">
-                <span className="truncate text-[#c9c9c9]">{parsedDiff.filePath}</span>
+                <span className="truncate text-[var(--text-secondary)]">{parsedDiff.filePath}</span>
                 {parsedDiff.addCount > 0 && (
-                  <span className="font-semibold text-[#4ade80]">
+                  <span className="font-semibold text-[var(--success)]">
                     +{parsedDiff.addCount}
                   </span>
                 )}
                 {parsedDiff.delCount > 0 && (
-                  <span className="font-semibold text-[#f87171]">
+                  <span className="font-semibold text-[var(--danger)]">
                     -{parsedDiff.delCount}
                   </span>
                 )}
                 <span className="flex-1" />
-                <span className="text-[#5e5e5e]">
-                  {t.cards.hunkCount(parsedDiff.hunkCount)} ›
+                <span className="inline-flex items-center gap-0.5 text-[var(--text-tertiary)]">
+                  {t.cards.hunkCount(parsedDiff.hunkCount)}
+                  <ChevronRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
                 </span>
               </div>
               <div className="soyo-diff-body">
@@ -458,7 +462,7 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
                   <button
                     type="button"
                     onClick={() => setShowAllDiffLines((prev) => !prev)}
-                    className="w-full border-t border-[#1f1f1f] px-3 py-1.5 text-center text-[11px] text-[#6e6e6e] transition-colors hover:bg-[#181818] hover:text-[#c9c9c9]"
+                    className="w-full border-t border-[var(--border-subtle)] px-3 py-1.5 text-center text-[11px] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-raised)] hover:text-[var(--text-secondary)]"
                   >
                     {showAllDiffLines
                       ? t.cards.collapseDiff
@@ -471,20 +475,20 @@ export function ToolCardView({ message, sessionId = null }: ToolCardViewProps) {
               {message.toolRequestFormatted &&
                 message.toolRequestFormatted !== message.text && (
                   <div>
-                    <div className="mb-1 text-[10px] uppercase tracking-wider text-[#6e6e6e]">
+                    <div className="mb-1 text-[11px] uppercase tracking-wider text-[var(--text-tertiary)]">
                       {t.cards.requestHeader}
                     </div>
-                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[#262626] bg-[#161616] p-2 font-mono text-[11px] text-[#c9d1d9]">
+                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] p-2 font-mono text-[11px] text-[var(--text-primary)]">
                       {message.toolRequestFormatted}
                     </pre>
                   </div>
                 )}
               {message.text && (
                 <div>
-                  <div className="mb-1 text-[10px] uppercase tracking-wider text-[#6e6e6e]">
+                  <div className="mb-1 text-[11px] uppercase tracking-wider text-[var(--text-tertiary)]">
                     {t.cards.outputHeader}
                   </div>
-                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-[8px] border border-[#262626] bg-[#161616] p-2 font-mono text-[11px] text-[#c9d1d9]">
+                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-code)] p-2 font-mono text-[11px] text-[var(--text-primary)]">
                     {message.text}
                   </pre>
                 </div>

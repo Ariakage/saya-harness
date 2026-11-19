@@ -1,9 +1,13 @@
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   Bookmark,
   Box,
+  Check,
   ChevronDown,
+  ChevronsUpDown,
   Clock,
   Code2,
   Copy,
@@ -15,27 +19,26 @@ import {
   Folder,
   GitBranch,
   Globe,
-  HelpCircle,
   History,
-  Home,
   KeyRound,
   Lock,
   MessageSquare,
   MoreHorizontal,
+  Palette,
   PanelLeft,
   PanelRight,
   Pause,
   Pencil,
-  Pin,
   Plus,
   RotateCw,
   Search,
   Settings,
   Share2,
-  Shield,
+  ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   Square,
+  SunMoon,
   X,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
@@ -48,52 +51,91 @@ import { ContextSidebar } from "./components/ContextSidebar";
 import { ExportDialog } from "./components/ExportDialog";
 import { LanguageDialog } from "./components/LanguageDialog";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
-import { McpCredentialsDialog } from "./components/McpCredentialsDialog";
-import { MemoryDialog } from "./components/MemoryDialog";
+import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
+import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
+import { SetupWizard } from "./components/SetupWizard";
+import { SquaresLoader } from "./components/SquaresLoader";
+import { ThinkingCardView } from "./components/ThinkingCardView";
+import { ToolCardView } from "./components/ToolCardView";
+import { UpdaterBanner } from "./components/UpdaterBanner";
+import { Button } from "./components/ui/Button";
+import { DialogShell } from "./components/ui/DialogShell";
 import { getMessages, pickGreeting } from "./lib/i18n";
 import {
   PERMISSION_MODE_LABELS,
   WORK_MODE_STYLES,
   formatTokenCount,
+  sanitizeDisplayText,
 } from "./lib/sanitize";
-import { SessionBrowserDialog } from "./components/SessionBrowserDialog";
-import { SettingsDialog, type SettingsTab } from "./components/SettingsDialog";
-import { SetupWizard } from "./components/SetupWizard";
-import { ThinkingCardView } from "./components/ThinkingCardView";
-import { ToolCardView } from "./components/ToolCardView";
-import { UpdaterBanner } from "./components/UpdaterBanner";
 import {
   PREVIEW_APPROVAL_REQUEST,
   PREVIEW_INPUT_REQUEST,
   type PreviewScene,
   getPreviewScene,
+  getPreviewTab,
   isBrowserPreview,
   setPreviewScene,
 } from "./preview/browserPreview";
-import { useAppStore } from "./store/useAppStore";
+import { type ThemePreference, useAppStore } from "./store/useAppStore";
 
-// Overlay titlebar only applies inside the packaged app on macOS.
-// Traffic lights overlay the top-left ~72×28px of the content area.
 const TITLEBAR_OVERLAY =
   isTauri() && /mac/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "");
 
-function workspaceBase(workspace: string | null | undefined): string {
-  if (!workspace) return "workspace";
+const MAX_RECENTS_PER_PROJECT = 5;
+const MAX_RECENTS_TOTAL = 30;
+
+const VALID_SETTINGS_TABS: readonly SettingsTab[] = [
+  "general",
+  "appearance",
+  "profiles",
+  "permissions",
+  "modules",
+  "mcp",
+  "memory",
+  "usage",
+  "export",
+];
+
+function isSettingsTab(value: string | null): value is SettingsTab {
+  return value !== null && (VALID_SETTINGS_TABS as readonly string[]).includes(value);
+}
+
+function workspaceBase(workspace: string | null | undefined, fallback: string): string {
+  if (!workspace) return fallback;
   const trimmed = workspace.replace(/\/+$/, "");
   return trimmed.split("/").pop() || workspace;
 }
 
-function groupSessionsByProject(
-  sessions: SessionItemDto_Serialize[]
-): Array<[string, SessionItemDto_Serialize[]]> {
-  const map = new Map<string, SessionItemDto_Serialize[]>();
+function groupRecentsByProject(
+  sessions: SessionItemDto_Serialize[],
+  workspaceFallback: string
+): {
+  groups: Array<[string, SessionItemDto_Serialize[]]>;
+  omittedCount: number;
+} {
+  const byProject = new Map<string, SessionItemDto_Serialize[]>();
   for (const item of sessions) {
-    const project = workspaceBase(item.workspace);
-    const list = map.get(project) ?? [];
+    const project = workspaceBase(item.workspace, workspaceFallback);
+    const list = byProject.get(project) ?? [];
     list.push(item);
-    map.set(project, list);
+    byProject.set(project, list);
   }
-  return Array.from(map.entries());
+
+  const groups: Array<[string, SessionItemDto_Serialize[]]> = [];
+  let shown = 0;
+  for (const [project, list] of byProject.entries()) {
+    if (shown >= MAX_RECENTS_TOTAL) break;
+    const budget = Math.min(MAX_RECENTS_PER_PROJECT, MAX_RECENTS_TOTAL - shown);
+    const slice = list.slice(0, budget);
+    if (slice.length > 0) {
+      groups.push([project, slice]);
+      shown += slice.length;
+    }
+  }
+  return {
+    groups,
+    omittedCount: Math.max(0, sessions.length - shown),
+  };
 }
 
 const PREVIEW_SCENES: PreviewScene[] = [
@@ -141,6 +183,9 @@ export function App() {
   const configChangeSessionId = useAppStore((s) => s.configChangeSessionId);
   const recoveryBanner = useAppStore((s) => s.recoveryBanner);
   const error = useAppStore((s) => s.error);
+  const theme = useAppStore((s) => s.theme);
+  const inspectorOpenPref = useAppStore((s) => s.inspectorOpenPref);
+  const helperReconnecting = useAppStore((s) => s.helperReconnecting);
 
   const initApp = useAppStore((s) => s.initApp);
   const applyBootstrap = useAppStore((s) => s.applyBootstrap);
@@ -166,6 +211,10 @@ export function App() {
   const toggleMarkdownMode = useAppStore((s) => s.toggleMarkdownMode);
   const locale = useAppStore((s) => s.locale);
   const setLocale = useAppStore((s) => s.setLocale);
+  const setTheme = useAppStore((s) => s.setTheme);
+  const applySystemThemeChange = useAppStore((s) => s.applySystemThemeChange);
+  const setInspectorOpenPref = useAppStore((s) => s.setInspectorOpenPref);
+  const reconnectHelper = useAppStore((s) => s.reconnectHelper);
   const clearError = useAppStore((s) => s.clearError);
   const t = getMessages(locale);
   const userName = useAppStore((s) => s.userName);
@@ -175,47 +224,50 @@ export function App() {
   const greeting = useMemo(
     () => pickGreeting(t.home, displayName),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [locale, displayName],
+    [locale, displayName]
   );
 
   const previewMode = isBrowserPreview();
   const [scene, setScene] = useState<PreviewScene>(() => getPreviewScene());
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1280
+  );
+  const [userSidebarCollapsed, setUserSidebarCollapsed] = useState<boolean | null>(
+    null
+  );
+  const [drawerInspectorOpen, setDrawerInspectorOpen] = useState(false);
+
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupDismissed, setSetupDismissed] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [languageOpen, setLanguageOpen] = useState(false);
-  const [mcpCredsOpen, setMcpCredsOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [searchOverlayOpen, setSearchOverlayOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [browserPaneOpen, setBrowserPaneOpen] = useState(false);
   const [browserMiniTab, setBrowserMiniTab] = useState<
     "new" | "search" | "sessions" | "memory" | "customize"
   >("new");
   const [browserRefreshTick, setBrowserRefreshTick] = useState(0);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<{
     text: string;
     nonce: number;
   } | null>(null);
   const [forceHome, setForceHome] = useState(false);
-  type SidebarPanel =
-    | "nav"
-    | "search"
-    | "sessions"
-    | "memory"
-    | "mcp"
-    | "export"
-    | "customize";
-  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [topMenu, setTopMenu] = useState<"mode" | "perm" | "more" | null>(null);
   const [sessionQuery, setSessionQuery] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const topbarClusterRef = useRef<HTMLDivElement | null>(null);
+
+  const isWideViewport = viewportWidth >= 1280;
+  const isNarrowViewport = viewportWidth < 1024;
+  const sidebarCollapsed = userSidebarCollapsed ?? isNarrowViewport;
+  const inspectorOpen = isWideViewport
+    ? (inspectorOpenPref ?? true)
+    : drawerInspectorOpen;
 
   const applyPreviewOverlay = (targetScene: PreviewScene) => {
     if (!previewMode) return;
@@ -226,10 +278,12 @@ export function App() {
         targetScene === "clarification" ? PREVIEW_INPUT_REQUEST : null,
     });
     setForceHome(targetScene === "home");
-    setSidebarPanel(null);
-    setSidebarCollapsed(false);
     setBrowserPaneOpen(targetScene === "browser");
-    if (targetScene === "peripheral") {
+    const urlTab = getPreviewTab();
+    if (isSettingsTab(urlTab)) {
+      setSettingsTab(urlTab);
+      setSettingsOpen(true);
+    } else if (targetScene === "peripheral") {
       setSettingsTab("general");
       setSettingsOpen(true);
     } else if (targetScene === "usage") {
@@ -238,8 +292,6 @@ export function App() {
     } else {
       setSettingsOpen(false);
     }
-    setMcpCredsOpen(false);
-    setMemoryOpen(false);
     setExportOpen(false);
   };
 
@@ -249,6 +301,37 @@ export function App() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initApp]);
+
+  // Follow system light/dark changes when theme preference is "system".
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => applySystemThemeChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, [applySystemThemeChange]);
+
+  // Track responsive breakpoints: >=1280 / 1024-1279 / <1024.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let prevNarrow = window.innerWidth < 1024;
+    const onResize = () => {
+      const nextWidth = window.innerWidth;
+      setViewportWidth(nextWidth);
+      const nextNarrow = nextWidth < 1024;
+      if (nextNarrow !== prevNarrow) {
+        prevNarrow = nextNarrow;
+        setUserSidebarCollapsed(null);
+      }
+      if (nextWidth < 1280) {
+        setDrawerInspectorOpen(false);
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -271,22 +354,58 @@ export function App() {
     setUserMenuOpen(false);
   };
 
+  const handleToggleSidebar = () => {
+    setUserSidebarCollapsed(!(userSidebarCollapsed ?? isNarrowViewport));
+  };
+
+  const handleToggleInspector = () => {
+    if (isWideViewport) {
+      void setInspectorOpenPref(!(inspectorOpenPref ?? true));
+    } else {
+      setDrawerInspectorOpen((v) => !v);
+    }
+  };
+
+  // Global desktop shortcuts: ⌘N new, ⌘K search overlay, ⌘B toggle sidebar, ⌘, settings.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "b") {
+        e.preventDefault();
+        setUserSidebarCollapsed((prev) => !(prev ?? viewportWidth < 1024));
+      } else if (key === "k") {
+        e.preventDefault();
+        setSearchOverlayOpen((v) => !v);
+      } else if (key === ",") {
+        e.preventDefault();
+        handleOpenSettings("general");
+      } else if (key === "n" && !runActive) {
+        e.preventDefault();
+        setForceHome(false);
+        void startNewSession();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [viewportWidth, runActive, startNewSession]);
+
   // Close lightweight popovers (topbar menus, user menu) on outside press.
   useEffect(() => {
     if (!topMenu && !userMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
+      const target = e.target as Node;
       if (
         topMenu &&
         topbarClusterRef.current &&
-        !topbarClusterRef.current.contains(t)
+        !topbarClusterRef.current.contains(target)
       ) {
         setTopMenu(null);
       }
       if (
         userMenuOpen &&
         userMenuRef.current &&
-        !userMenuRef.current.contains(t)
+        !userMenuRef.current.contains(target)
       ) {
         setUserMenuOpen(false);
       }
@@ -315,40 +434,33 @@ export function App() {
       thinkingEntries.length === 0 &&
       !pendingApproval);
 
-  const currentProject = workspaceBase(bootstrap?.workspace);
-  const groupedSessions = groupSessionsByProject(recentSessions);
-  const activePanel: SidebarPanel =
-    sidebarPanel ?? (isHomeEmpty ? "nav" : "sessions");
-  const sidebarVisible = activePanel !== "nav" && !sidebarCollapsed;
-  const sidebarContentKey = activePanel;
-  const openPanel = (panel: SidebarPanel) => {
-    setSidebarPanel(panel);
-    setSidebarCollapsed(false);
-    if (panel === "nav") setForceHome(true);
-    if (panel === "sessions") setForceHome(false);
-  };
-  const handleToggleSidebar = () => {
-    if (activePanel === "nav") {
-      setSidebarPanel("sessions");
-      setSidebarCollapsed(false);
-    } else {
-      setSidebarCollapsed((prev) => !prev);
-    }
-  };
+  const currentProject = workspaceBase(
+    bootstrap?.workspace,
+    t.sessionBrowser.workspaceFallback
+  );
+  const { groups: recentGroups, omittedCount: recentsOmittedCount } =
+    groupRecentsByProject(recentSessions, t.sessionBrowser.workspaceFallback);
+
   const query = sessionQuery.trim().toLowerCase();
   const filteredSessions = query
-    ? recentSessions.filter(
-        (item) =>
-          (item.title ?? "").toLowerCase().includes(query) ||
-          workspaceBase(item.workspace).toLowerCase().includes(query)
-      )
+    ? recentSessions.filter((item) => {
+        const titleHit = (item.title ?? "").toLowerCase().includes(query);
+        const projHit = workspaceBase(
+          item.workspace,
+          t.sessionBrowser.workspaceFallback
+        )
+          .toLowerCase()
+          .includes(query);
+        const contentHit =
+          item.id === sessionId &&
+          messages.some((m) => m.text.toLowerCase().includes(query));
+        return titleHit || projHit || contentHit;
+      })
     : recentSessions;
+
   const forceComposerPopover =
     previewMode && scene === "effort" ? "effort" : null;
 
-  // Context-window fill: prefer the snapshot streamed during runs; fall back
-  // to the last request's reported input tokens so idle sessions still show a
-  // reasonable estimate in the composer ring.
   const contextEntriesTotal = contextEntries.reduce(
     (acc, entry) => acc + entry.tokens,
     0
@@ -361,19 +473,78 @@ export function App() {
   const composerContextEstimated =
     contextEntriesTotal === 0 || contextEstimated;
 
+  const sidebarNavItems: Array<{
+    id: string;
+    label: string;
+    shortcut?: string;
+    icon: typeof Plus;
+    disabled?: boolean;
+    onClick: () => void;
+  }> = [
+    {
+      id: "new",
+      label: t.sidebar.newSession,
+      shortcut: "⌘N",
+      icon: Plus,
+      disabled: runActive,
+      onClick: () => {
+        setForceHome(false);
+        void startNewSession();
+      },
+    },
+    {
+      id: "search",
+      label: t.sidebar.searchTitle,
+      shortcut: "⌘K",
+      icon: Search,
+      onClick: () => setSearchOverlayOpen(true),
+    },
+    {
+      id: "sessions",
+      label: t.sidebar.sessionsTitle,
+      icon: History,
+      onClick: () => setSessionsOpen(true),
+    },
+    {
+      id: "memory",
+      label: t.sidebar.memoryTitle,
+      icon: Database,
+      onClick: () => handleOpenSettings("memory"),
+    },
+    {
+      id: "mcp",
+      label: t.sidebar.mcpTitle,
+      icon: KeyRound,
+      onClick: () => handleOpenSettings("mcp"),
+    },
+    {
+      id: "export",
+      label: t.sidebar.exportTitle,
+      icon: Download,
+      disabled: sessionId === null,
+      onClick: () => setExportOpen(true),
+    },
+    {
+      id: "customize",
+      label: t.sidebar.customizeTitle,
+      icon: Palette,
+      onClick: () => handleOpenSettings("appearance"),
+    },
+  ];
+
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#101010] text-[#e8e8e8]">
-      {/* Unified Overlay Titlebar (38px, §2): vertically aligned with macOS traffic lights (y=21 -> 12px top/bottom margin) */}
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--surface-app)] text-[var(--text-primary)]">
+      {/* Unified Overlay Titlebar (38px) */}
       <header
         data-tauri-drag-region
-        className="relative z-30 flex h-[38px] w-full shrink-0 select-none items-center border-b border-[#1f1f1f] bg-[#0f0f0f]"
+        className="relative z-30 flex h-[38px] w-full shrink-0 select-none items-center border-b border-[var(--border-subtle)] bg-[var(--surface-sidebar)]"
       >
-        {/* Left Titlebar Zone: clears traffic lights (~88px) & aligns with Column 1 + 2 seam (296px) when sidebar open */}
+        {/* Left Titlebar Zone: clears macOS traffic lights & aligns with 248px expanded sidebar */}
         <div
           data-tauri-drag-region
           className={`flex h-full shrink-0 items-center ${
-            sidebarVisible
-              ? `w-[296px] justify-between border-r border-[#1f1f1f] bg-[#0f0f0f] ${
+            !sidebarCollapsed
+              ? `w-[248px] justify-between border-r border-[var(--border-subtle)] bg-[var(--surface-sidebar)] ${
                   TITLEBAR_OVERLAY ? "pl-[88px] pr-2.5" : "px-2.5"
                 }`
               : `gap-1.5 ${TITLEBAR_OVERLAY ? "pl-[88px] pr-1" : "pl-2.5 pr-1"}`
@@ -382,72 +553,74 @@ export function App() {
           <button
             type="button"
             onClick={handleToggleSidebar}
-            aria-label="Toggle sidebar"
-            aria-pressed={sidebarVisible}
-            title={sidebarVisible ? "Collapse sidebar" : "Expand sidebar"}
-            className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#8a8a8a] transition-colors hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
+            aria-label={t.a11y.toggleSidebar}
+            aria-pressed={!sidebarCollapsed}
+            title={
+              sidebarCollapsed ? t.a11y.expandSidebar : t.a11y.collapseSidebar
+            }
+            className="flex h-[26px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           >
-            <PanelLeft className="h-4 w-4" />
+            <PanelLeft className="h-4 w-4" strokeWidth={1.75} />
           </button>
 
           <div
             role="group"
-            aria-label="View mode"
-            className="inline-flex h-[26px] items-center rounded-[7px] border border-[#242424] bg-[#161616] p-0.5"
+            aria-label={t.a11y.viewMode}
+            className="inline-flex h-[26px] items-center rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] p-0.5"
           >
             <button
               type="button"
               onClick={() => setMarkdownMode("render")}
-              aria-label="Rendered conversation view"
+              aria-label={t.a11y.renderedView}
               aria-pressed={markdownMode === "render"}
-              title="Rendered conversation view"
-              className={`flex h-[20px] w-[26px] items-center justify-center rounded-[5px] transition-colors ${
+              title={t.a11y.renderedView}
+              className={`flex h-[20px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
                 markdownMode === "render"
-                  ? "bg-[#262626] text-[#e8e8e8] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-                  : "text-[#6e6e6e] hover:text-[#c9c9c9]"
+                  ? "bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
               }`}
             >
-              <MessageSquare className="h-3.5 w-3.5" />
+              <MessageSquare className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
             <button
               type="button"
               onClick={() => setMarkdownMode("source")}
-              aria-label="Markdown source view"
+              aria-label={t.a11y.sourceView}
               aria-pressed={markdownMode === "source"}
-              title="Markdown source view"
-              className={`flex h-[20px] w-[26px] items-center justify-center rounded-[5px] transition-colors ${
+              title={t.a11y.sourceView}
+              className={`flex h-[20px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
                 markdownMode === "source"
-                  ? "bg-[#262626] text-[#e8e8e8] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-                  : "text-[#6e6e6e] hover:text-[#c9c9c9]"
+                  ? "bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
               }`}
             >
-              <Code2 className="h-3.5 w-3.5" />
+              <Code2 className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
           </div>
         </div>
 
-        {!sidebarVisible && (
-          <div className="mx-1 h-3.5 w-px bg-[#222222]" aria-hidden="true" />
+        {sidebarCollapsed && (
+          <div className="mx-1 h-3.5 w-px bg-[var(--border-subtle)]" aria-hidden="true" />
         )}
 
-        {/* Right Titlebar Zone: session switcher + draggable space + mode/perm & quick actions */}
+        {/* Right Titlebar Zone */}
         <div
           data-tauri-drag-region
-          className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-[12.5px] text-[#a3a3a3]"
+          className="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-[12.5px] text-[var(--text-secondary)]"
         >
           <button
             type="button"
             onClick={() => setSessionsOpen(true)}
-            title="Switch or browse sessions"
-            className="flex h-[26px] min-w-0 max-w-[380px] items-center gap-1.5 rounded-[6px] px-2 text-left text-[12.5px] transition-colors hover:bg-[#1a1a1a]"
+            title={t.a11y.switchOrBrowseSessions}
+            className="flex h-[26px] min-w-0 max-w-[380px] items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-left text-[12.5px] transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <span className="truncate font-medium text-[#d9d9d9]">
+            <span className="truncate font-medium text-[var(--text-primary)]">
               {isHomeEmpty ? t.topbar.home : sessionTitle}
             </span>
-            <span className="hidden shrink-0 text-[#6b6b6b] sm:inline">
+            <span className="hidden shrink-0 text-[var(--text-tertiary)] sm:inline">
               · {currentProject}
             </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" strokeWidth={1.75} />
           </button>
 
           <div data-tauri-drag-region className="h-full min-w-[16px] flex-1" />
@@ -462,9 +635,9 @@ export function App() {
             }}
           >
             {previewMode && (
-              <div className="flex flex-wrap items-center gap-1 rounded-[8px] border border-[#2e2e2e] bg-[#1a1a1a] px-2 py-0.5 text-[10.5px]">
-                <Sparkles className="h-3 w-3 text-[#d9a08e]" />
-                <span className="mr-0.5 text-[#d9a08e]">Preview</span>
+              <div className="flex flex-wrap items-center gap-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-0.5 text-[11px]">
+                <Sparkles className="h-3 w-3 text-[var(--accent-text)]" strokeWidth={1.75} />
+                <span className="mr-0.5 text-[var(--accent-text)]">Preview</span>
                 {PREVIEW_SCENES.map((item) => (
                   <button
                     key={item}
@@ -472,8 +645,8 @@ export function App() {
                     onClick={() => handleSceneChange(item)}
                     className={`rounded px-1.5 py-0.5 ${
                       scene === item
-                        ? "bg-[#d9a08e] font-semibold text-[#1c120e]"
-                        : "text-[#a3a3a3] hover:bg-[#242424] hover:text-[#e8e8e8]"
+                        ? "bg-[var(--accent)] font-semibold text-[var(--on-accent)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                     }`}
                   >
                     {item}
@@ -482,42 +655,57 @@ export function App() {
               </div>
             )}
 
-            {/* Goal Permanent Topbar Pill (§4.8, amber palette #1c1a16 / #3d3527 / #e8d9b0) */}
+            {/* Goal Topbar Pill */}
             {(runActive || (previewMode && scene === "subagent")) && (
               <div
                 data-testid="goal-topbar-pill"
-                className="soyo-panel-enter inline-flex items-center gap-2 rounded-[8px] border border-[#3d3527] bg-[#1c1a16] px-2.5 py-1 text-[11.5px] text-[#e8d9b0]"
+                className="soyo-panel-enter inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--warning)] bg-[var(--warning-surface)] px-2.5 py-1 text-[11.5px] text-[var(--warning)]"
               >
-                <Flag className="h-3 w-3 text-[#e8d9b0]" />
+                <Flag className="h-3 w-3 shrink-0" strokeWidth={1.75} />
                 <span className="max-w-[140px] truncate">{sessionTitle}</span>
                 <button
                   type="button"
                   onClick={() => void cancelActiveRun()}
-                  title="Pause / interrupt active run"
-                  aria-label="Pause goal run"
-                  className="flex h-4 w-4 items-center justify-center rounded-[5px] border border-[#3d3527] bg-[#262019] text-[#c9b890] transition-colors hover:bg-[#332b22] hover:text-[#e8d9b0]"
+                  title={t.a11y.cancelRun}
+                  aria-label={t.a11y.cancelRun}
+                  className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--warning)] bg-[var(--surface-raised)] text-[var(--warning)] transition-colors hover:bg-[var(--surface-hover)]"
                 >
-                  <Pause className="h-2.5 w-2.5" />
+                  <Pause className="h-2.5 w-2.5" strokeWidth={1.75} />
                 </button>
                 <button
                   type="button"
                   onClick={() => void cancelActiveRun()}
-                  title="Stop active run"
-                  aria-label="Stop goal run"
-                  className="flex h-4 w-4 items-center justify-center rounded-[5px] border border-[#3d3527] bg-[#262019] text-[#c9b890] transition-colors hover:bg-[#332b22] hover:text-[#e8d9b0]"
+                  title={t.a11y.cancelRun}
+                  aria-label={t.a11y.cancelRun}
+                  className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--warning)] bg-[var(--surface-raised)] text-[var(--warning)] transition-colors hover:bg-[var(--surface-hover)]"
                 >
                   <Square className="h-2 w-2 fill-current" />
                 </button>
               </div>
             )}
 
-            {/* Mode pill — opens mode picker */}
+            {/* Permanent Bypass Permissions Warning Badge (R-20, always visible) */}
+            {permissionMode === "bypass" && (
+              <button
+                type="button"
+                data-testid="bypass-mode-badge"
+                onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
+                title={t.a11y.permissionMode}
+                className="soyo-pill h-[26px] border-[var(--danger)] bg-[var(--danger-surface)] px-2.5 py-0 text-[11.5px] font-medium text-[var(--danger)]"
+              >
+                <ShieldAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                <span>{PERMISSION_MODE_LABELS.bypass}</span>
+              </button>
+            )}
+
+            {/* Mode pill */}
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "mode" ? null : "mode")}
-                className="soyo-pill h-[26px] rounded-[6px] border-[#262626] bg-[#181818] px-2.5 py-0 text-[11.5px] hover:border-[#343434] hover:bg-[#202020]"
-                title="Work mode"
+                className="soyo-pill h-[26px] rounded-[var(--radius-sm)] border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-0 text-[11.5px] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
+                title={t.a11y.workMode}
+                aria-label={t.a11y.workMode}
                 aria-haspopup="menu"
               >
                 <span
@@ -528,64 +716,118 @@ export function App() {
                   {WORK_MODE_STYLES[workMode].label}
                 </span>
                 {pendingMode && pendingMode !== workMode && (
-                  <span className="text-[#8a8a8a]">
-                    → {WORK_MODE_STYLES[pendingMode].label}
+                  <span className="inline-flex items-center gap-0.5 text-[var(--text-secondary)]">
+                    <ArrowRight className="h-3 w-3" strokeWidth={1.75} />
+                    {WORK_MODE_STYLES[pendingMode].label}
                   </span>
                 )}
-                <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
+                <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
               </button>
               {topMenu === "mode" && (
                 <div
                   role="menu"
-                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
                 >
-                  {(Object.keys(WORK_MODE_STYLES) as Array<keyof typeof WORK_MODE_STYLES>).map(
-                    (mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => {
-                          void setWorkMode(mode);
-                          setTopMenu(null);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
-                      >
-                        <span
-                          className="h-1.5 w-1.5 rounded-full"
-                          style={{ backgroundColor: WORK_MODE_STYLES[mode].color }}
-                        />
-                        <span>{WORK_MODE_STYLES[mode].label}</span>
-                        {mode === workMode && (
-                          <span className="ml-auto text-[#4ade80]">✓</span>
-                        )}
-                        {pendingMode === mode && pendingMode !== workMode && (
-                          <span className="ml-auto text-[#fac454]">next</span>
-                        )}
-                      </button>
-                    )
-                  )}
+                  {(
+                    Object.keys(WORK_MODE_STYLES) as Array<
+                      keyof typeof WORK_MODE_STYLES
+                    >
+                  ).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        void setWorkMode(mode);
+                        setTopMenu(null);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                    >
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: WORK_MODE_STYLES[mode].color }}
+                      />
+                      <span>{WORK_MODE_STYLES[mode].label}</span>
+                      {mode === workMode && (
+                        <Check className="ml-auto h-3.5 w-3.5 text-[var(--success)]" strokeWidth={1.75} />
+                      )}
+                      {pendingMode === mode && pendingMode !== workMode && (
+                        <span className="ml-auto text-[11px] text-[var(--warning)]">
+                          {t.composer.queue}
+                        </span>
+                      )}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
 
-            {/* Permission pill */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
-                className="soyo-pill h-[26px] rounded-[6px] border-[#262626] bg-[#181818] px-2.5 py-0 text-[11.5px] text-[#a3a3a3] hover:border-[#343434] hover:bg-[#202020]"
-                title="Permission mode"
-                aria-haspopup="menu"
-              >
-                <span className={permissionMode === "manual" ? "text-[#fac454]" : "text-[#8aa8d8]"}>
-                  {PERMISSION_MODE_LABELS[permissionMode]}
-                </span>
-                <ChevronDown className="h-3 w-3 text-[#6e6e6e]" />
-              </button>
-              {topMenu === "perm" && (
+            {/* Permission pill (when not already shown via prominent bypass badge, still accessible via menu) */}
+            {permissionMode !== "bypass" && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setTopMenu(topMenu === "perm" ? null : "perm")}
+                  className="soyo-pill h-[26px] rounded-[var(--radius-sm)] border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-0 text-[11.5px] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
+                  title={t.a11y.permissionMode}
+                  aria-label={t.a11y.permissionMode}
+                  aria-haspopup="menu"
+                >
+                  <span
+                    className={
+                      permissionMode === "manual"
+                        ? "text-[var(--warning)]"
+                        : "text-[var(--info)]"
+                    }
+                  >
+                    {PERMISSION_MODE_LABELS[permissionMode]}
+                  </span>
+                  <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                </button>
+                {topMenu === "perm" && (
+                  <div
+                    role="menu"
+                    className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[196px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
+                  >
+                    {(
+                      ["auto", "bypass", "manual"] as Array<
+                        keyof typeof PERMISSION_MODE_LABELS
+                      >
+                    ).map((perm) => (
+                      <button
+                        key={perm}
+                        type="button"
+                        disabled={runActive}
+                        onClick={() => {
+                          void setPermissionMode(perm);
+                          setTopMenu(null);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40 ${
+                          perm === "bypass"
+                            ? "text-[var(--danger)]"
+                            : perm === "manual"
+                              ? "text-[var(--warning)]"
+                              : "text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {perm === "bypass" && (
+                          <ShieldAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                        )}
+                        <span>{PERMISSION_MODE_LABELS[perm]}</span>
+                        {perm === permissionMode && (
+                          <Check className="ml-auto h-3.5 w-3.5 text-[var(--success)]" strokeWidth={1.75} />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {permissionMode === "bypass" && topMenu === "perm" && (
+              <div className="relative">
                 <div
                   role="menu"
-                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[180px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[196px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
                 >
                   {(
                     ["auto", "bypass", "manual"] as Array<
@@ -600,76 +842,89 @@ export function App() {
                         void setPermissionMode(perm);
                         setTopMenu(null);
                       }}
-                      className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626] disabled:opacity-40"
+                      className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40 ${
+                        perm === "bypass"
+                          ? "text-[var(--danger)]"
+                          : perm === "manual"
+                            ? "text-[var(--warning)]"
+                            : "text-[var(--text-secondary)]"
+                      }`}
                     >
+                      {perm === "bypass" && (
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                      )}
                       <span>{PERMISSION_MODE_LABELS[perm]}</span>
                       {perm === permissionMode && (
-                        <span className="ml-auto text-[#4ade80]">✓</span>
+                        <Check className="ml-auto h-3.5 w-3.5 text-[var(--success)]" strokeWidth={1.75} />
                       )}
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Quick Titlebar Action Icons */}
             {!isHomeEmpty && (
               <button
                 type="button"
-                onClick={() => setInspectorOpen((v) => !v)}
-                aria-label="Toggle inspector"
+                onClick={handleToggleInspector}
+                aria-label={
+                  inspectorOpen ? t.a11y.closeInspector : t.a11y.openInspector
+                }
                 aria-pressed={inspectorOpen && !browserPaneOpen}
-                title="Toggle inspector panel"
-                className={`flex h-[26px] w-[26px] items-center justify-center rounded-[6px] transition-colors ${
+                title={
+                  inspectorOpen ? t.a11y.closeInspector : t.a11y.openInspector
+                }
+                className={`flex h-[26px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
                   inspectorOpen && !browserPaneOpen
-                    ? "bg-[#1e1e1e] text-[#e8e8e8]"
-                    : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                    ? "bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                    : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 }`}
               >
-                <PanelRight className="h-3.5 w-3.5" />
+                <PanelRight className="h-3.5 w-3.5" strokeWidth={1.75} />
               </button>
             )}
 
             <button
               type="button"
               onClick={() => setBrowserPaneOpen((v) => !v)}
-              aria-label="Toggle browser preview"
+              aria-label={t.topbar.browserPreview}
               aria-pressed={browserPaneOpen}
-              title="Toggle split browser preview"
-              className={`flex h-[26px] w-[26px] items-center justify-center rounded-[6px] transition-colors ${
+              title={t.topbar.browserPreview}
+              className={`flex h-[26px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
                 browserPaneOpen
-                  ? "bg-[#1e1e1e] text-[#d9a08e]"
-                  : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                  ? "bg-[var(--surface-hover)] text-[var(--accent-text)]"
+                  : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               }`}
             >
-              <Globe className="h-3.5 w-3.5" />
+              <Globe className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
 
             <button
               type="button"
               onClick={() => handleOpenSettings("general")}
-              aria-label="Workspace settings"
-              title="Workspace & general settings"
-              className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+              aria-label={t.settings.titleGeneral}
+              title={t.settings.titleGeneral}
+              className="flex h-[26px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
             >
-              <Folder className="h-3.5 w-3.5" />
+              <Settings className="h-3.5 w-3.5" strokeWidth={1.75} />
             </button>
 
-            {/* ⋯ overflow menu */}
+            {/* Overflow menu */}
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setTopMenu(topMenu === "more" ? null : "more")}
-                aria-label="More actions"
+                aria-label={t.a11y.moreSessionActions}
                 aria-haspopup="menu"
-                className="flex h-[26px] w-[26px] items-center justify-center rounded-[6px] text-[#a3a3a3] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                className="flex h-[26px] w-[26px] items-center justify-center rounded-[var(--radius-sm)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <MoreHorizontal className="h-4 w-4" strokeWidth={1.75} />
               </button>
               {topMenu === "more" && (
                 <div
                   role="menu"
-                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.55)]"
+                  className="soyo-popover-down absolute right-0 top-full z-50 mt-1 w-[210px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)]"
                 >
                   <button
                     type="button"
@@ -677,12 +932,11 @@ export function App() {
                     onClick={() => {
                       setTopMenu(null);
                       setForceHome(false);
-                      setSidebarPanel("sessions");
                       void startNewSession();
                     }}
-                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#d9a08e] hover:bg-[#262626] disabled:opacity-40"
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--accent-text)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
                   >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
                     <span>{t.topbar.newSession}</span>
                   </button>
                   <button
@@ -691,12 +945,12 @@ export function App() {
                       toggleMarkdownMode();
                       setTopMenu(null);
                     }}
-                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                   >
                     {markdownMode === "render" ? (
-                      <Code2 className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                      <Code2 className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     ) : (
-                      <Eye className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                      <Eye className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     )}
                     <span>
                       {markdownMode === "render"
@@ -710,38 +964,39 @@ export function App() {
                       setBrowserPaneOpen((v) => !v);
                       setTopMenu(null);
                     }}
-                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                   >
-                    <Globe className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <Globe className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     <span>{t.topbar.browserPreview}</span>
                     {browserPaneOpen && (
-                      <span className="ml-auto text-[#4ade80]">✓</span>
+                      <Check className="ml-auto h-3.5 w-3.5 text-[var(--success)]" strokeWidth={1.75} />
                     )}
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setInspectorOpen((v) => !v);
+                      handleToggleInspector();
                       setTopMenu(null);
                     }}
-                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                   >
-                    <PanelRight className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <PanelRight className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     <span>{t.topbar.inspector}</span>
                     {inspectorOpen && (
-                      <span className="ml-auto text-[#4ade80]">✓</span>
+                      <Check className="ml-auto h-3.5 w-3.5 text-[var(--success)]" strokeWidth={1.75} />
                     )}
                   </button>
-                  <div className="my-1 h-px bg-[#2a2a2a]" />
+                  <div className="my-1 h-px bg-[var(--border-subtle)]" />
                   <button
                     type="button"
+                    disabled={sessionId === null}
                     onClick={() => {
                       setTopMenu(null);
                       setExportOpen(true);
                     }}
-                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-40"
                   >
-                    <Download className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <Download className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     <span>{t.topbar.exportSession}</span>
                   </button>
                   <button
@@ -750,9 +1005,9 @@ export function App() {
                       setTopMenu(null);
                       setSessionsOpen(true);
                     }}
-                    className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] hover:bg-[#262626]"
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                   >
-                    <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                    <History className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                     <span>{t.topbar.browseSessions}</span>
                   </button>
                 </div>
@@ -762,119 +1017,236 @@ export function App() {
         </div>
       </header>
 
-      {/* Workspace Body below Unified Titlebar */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-      {/* Column 1: Left Icon Rail (48px, #0d0d0d, §2 & Frame 02) */}
-      <aside
-        aria-label="Primary rail"
-        className="relative z-20 flex w-[48px] shrink-0 flex-col items-center gap-0.5 border-r border-[#1f1f1f] bg-[#0d0d0d] py-2.5"
-      >
-        {(
-          [
-            { panel: "nav", title: "Home", icon: <Home className="h-4 w-4" /> },
-            {
-              panel: "sessions",
-              title: "Sessions",
-              icon: <MessageSquare className="h-4 w-4" />,
-            },
-            {
-              panel: "search",
-              title: "Search",
-              icon: <Search className="h-4 w-4" />,
-            },
-            {
-              panel: "memory",
-              title: "Memory",
-              icon: <Database className="h-4 w-4" />,
-            },
-            {
-              panel: "mcp",
-              title: "MCP & Credentials",
-              icon: <Shield className="h-4 w-4" />,
-            },
-            {
-              panel: "export",
-              title: "Export",
-              icon: <Download className="h-4 w-4" />,
-            },
-            {
-              panel: "customize",
-              title: "Customize",
-              icon: <Settings className="h-4 w-4" />,
-            },
-          ] as const
-        ).map(({ panel, title, icon }) => (
-          <button
-            key={panel}
-            type="button"
-            onClick={() => openPanel(panel)}
-            title={title}
-            aria-label={`Rail ${title}`}
-            className={`relative flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors duration-150 ${
-              activePanel === panel
-                ? "bg-[#1e1e1e] text-[#e8e8e8]"
-                : "text-[#8a8a8a] hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-            }`}
+      {/* Workspace Body */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {/* Single Collapsible Sidebar (248px expanded / 48px rail collapsed) */}
+        <aside
+          data-testid="sidebar-panel"
+          className={`relative z-20 flex shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--surface-sidebar)] transition-[width] duration-150 ${
+            sidebarCollapsed ? "w-[48px] items-center py-2.5" : "w-[248px] p-2.5"
+          }`}
+        >
+          {/* Top Navigation */}
+          <nav
+            aria-label={t.a11y.sidebarNav}
+            className={
+              sidebarCollapsed
+                ? "flex flex-col items-center gap-1"
+                : "flex flex-col gap-0.5"
+            }
           >
-            {activePanel === panel && (
-              <span
-                aria-hidden="true"
-                className="absolute -left-[5px] h-4 w-[2px] rounded-r-full bg-[#d9a08e]"
-              />
-            )}
-            {icon}
-          </button>
-        ))}
+            {sidebarNavItems.map((item) => {
+              const Icon = item.icon;
+              if (sidebarCollapsed) {
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    disabled={item.disabled}
+                    onClick={item.onClick}
+                    title={item.label}
+                    aria-label={item.label}
+                    className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-40"
+                  >
+                    <Icon className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                );
+              }
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  disabled={item.disabled}
+                  onClick={item.onClick}
+                  className={`flex items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-40 ${
+                    item.id === "new"
+                      ? "font-medium text-[var(--accent-text)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                  <span className="truncate">{item.label}</span>
+                  {item.shortcut && (
+                    <span className="ml-auto text-[11px] text-[var(--text-tertiary)]">
+                      {item.shortcut}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
 
-        <div className="mt-auto flex flex-col items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => handleOpenSettings("usage")}
-            title="Usage & Tokens"
-            aria-label="Usage overview"
-            className="flex h-9 w-9 items-center justify-center rounded-[9px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+          {/* Recents List (expanded sidebar only, max 5/project max 30 total) */}
+          {!sidebarCollapsed && (
+            <div className="mt-3 flex min-h-0 flex-1 flex-col">
+              <div className="flex items-center justify-between px-2 pb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
+                <span>{t.extra.recentsTitle}</span>
+                <button
+                  type="button"
+                  onClick={() => setSessionsOpen(true)}
+                  aria-label={t.topbar.browseSessions}
+                  className="rounded-[var(--radius-sm)] p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={1.75} />
+                </button>
+              </div>
+
+              <div className="flex-1 space-y-2.5 overflow-y-auto pr-0.5 text-xs">
+                {recentGroups.length === 0 ? (
+                  <div className="px-2 py-2 text-[11px] text-[var(--text-tertiary)]">
+                    {t.sidebar.noRecentSessions}
+                  </div>
+                ) : (
+                  recentGroups.map(([proj, items]) => (
+                    <div key={proj} className="space-y-0.5">
+                      <div className="flex items-center justify-between px-2 py-1 text-[11px] text-[var(--text-tertiary)]">
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          <Folder className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                          <span className="truncate">{proj}</span>
+                        </span>
+                        <span>{items.length}</span>
+                      </div>
+                      {items.map((item) => {
+                        const isCurrent = item.id === sessionId;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            disabled={runActive}
+                            onClick={() => {
+                              setForceHome(false);
+                              void resumeSession(item.id, false);
+                            }}
+                            className={`flex w-full flex-col gap-0.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
+                              isCurrent
+                                ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+                                : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                            }`}
+                          >
+                            <span className="truncate text-[12.5px] font-medium">
+                              {item.title ?? t.sidebar.untitledSession}
+                            </span>
+                            <span className="truncate text-[11px] text-[var(--text-tertiary)]">
+                              {item.work_mode} · {item.last_status ?? t.sidebar.savedStatus}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-1 flex items-center justify-between px-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setSessionsOpen(true)}
+                  className="text-left text-[12px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                >
+                  {t.sidebar.viewAll}
+                </button>
+                {recentsOmittedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSessionsOpen(true)}
+                    className="text-[11px] text-[var(--accent-text)] hover:underline"
+                  >
+                    {t.extra.moreCount(recentsOmittedCount)}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Bottom User Row & User Menu */}
+          <div
+            ref={userMenuRef}
+            className={`relative mt-auto ${sidebarCollapsed ? "" : "pt-2 border-t border-[var(--border-subtle)]"}`}
           >
-            <HelpCircle className="h-4 w-4" />
-          </button>
-
-          {/* User Avatar Chip + Popover (in Rail so it persists when sidebar collapses) */}
-          <div ref={userMenuRef} className="relative">
             <button
               type="button"
               onClick={() => setUserMenuOpen((prev) => !prev)}
-              title={`Account & Profile Menu (${bootstrap?.selected_profile ?? "anthropic-official"})`}
-              aria-label="User menu"
-              className="flex h-9 w-9 items-center justify-center rounded-[9px] transition-colors hover:bg-[#1a1a1a]"
+              title={t.a11y.userMenuTitle(bootstrap?.selected_profile ?? "default")}
+              aria-label={t.a11y.userMenu}
+              className={
+                sidebarCollapsed
+                  ? "flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] transition-colors hover:bg-[var(--surface-hover)]"
+                  : "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--surface-hover)]"
+              }
             >
               <img
                 src={avatarData ?? "/app-icon.png"}
-                alt="Soyo"
-                className="h-6 w-6 rounded-[22%] object-cover ring-1 ring-[#2a2a2a]"
+                alt={displayName ?? t.about.productName}
+                className="h-6 w-6 shrink-0 rounded-[22%] object-cover ring-1 ring-[var(--border)]"
               />
+              {!sidebarCollapsed && (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12.5px] font-medium text-[var(--text-primary)]">
+                      {displayName ?? "soyo-desktop"}
+                    </div>
+                    <div className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
+                      {bootstrap?.selected_profile ?? "default"}
+                    </div>
+                  </div>
+                  <ChevronsUpDown
+                    className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]"
+                    strokeWidth={1.75}
+                  />
+                </>
+              )}
             </button>
 
             {userMenuOpen && (
               <div
                 data-testid="user-menu-popover"
-                className="soyo-popover-up absolute bottom-0 left-[calc(100%+10px)] z-50 w-[220px] origin-bottom-left rounded-[11px] border border-[#2b2b2b] bg-[#1c1c1c] p-1.5 text-[12.5px] shadow-[0_12px_40px_rgba(0,0,0,0.65)]"
+                className={`soyo-popover-up absolute z-50 w-[232px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 text-[12.5px] shadow-[var(--shadow-popover)] ${
+                  sidebarCollapsed
+                    ? "bottom-0 left-[calc(100%+10px)] origin-bottom-left"
+                    : "bottom-[calc(100%+6px)] left-0 origin-bottom"
+                }`}
               >
-                <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[#6e6e6e]">
-                  <div className="font-medium text-[#e8e8e8]">
+                <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-[var(--text-tertiary)]">
+                  <div className="font-medium text-[var(--text-primary)]">
                     {displayName ?? "soyo-desktop"}
                   </div>
-                  <div className="truncate font-mono text-[10.5px]">
+                  <div className="truncate font-mono text-[11px]">
                     {bootstrap?.selected_profile ?? "default"}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleOpenSettings("general")}
-                  className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
-                >
-                  <Settings className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>{t.userMenu.settings}</span>
-                  <span className="ml-auto text-[11px] text-[#6e6e6e]">⌘,</span>
-                </button>
+
+                {/* Theme selector inline (§8.11/§8.12) */}
+                <div className="px-2 py-1.5">
+                  <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
+                    <SunMoon className="h-3 w-3" strokeWidth={1.75} />
+                    <span>{t.extra.themeAction}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(
+                      [
+                        ["system", t.appearance.themeSystem],
+                        ["light", t.appearance.themeLight],
+                        ["dark", t.appearance.themeDark],
+                      ] as [ThemePreference, string][]
+                    ).map(([opt, label]) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => void setTheme(opt)}
+                        className={`rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] transition-colors ${
+                          theme === opt
+                            ? "bg-[var(--accent)] font-semibold text-[var(--on-accent)]"
+                            : "bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="my-1 h-px bg-[var(--border-subtle)]" />
+
                 <button
                   type="button"
                   data-testid="user-menu-language"
@@ -882,434 +1254,429 @@ export function App() {
                     setUserMenuOpen(false);
                     setLanguageOpen(true);
                   }}
-                  className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 >
-                  <Globe className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                  <Globe className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                   <span>{t.userMenu.language}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleOpenSettings("usage")}
-                  className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
+                  onClick={() => handleOpenSettings("general")}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 >
-                  <SlidersHorizontal className="h-3.5 w-3.5 text-[#8a8a8a]" />
+                  <Settings className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                  <span>{t.userMenu.settings}</span>
+                  <span className="ml-auto text-[11px] text-[var(--text-tertiary)]">
+                    ⌘,
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenSettings("usage")}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
                   <span>{t.userMenu.usage}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleOpenSettings("profiles")}
-                  className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#262626]"
+                  onClick={() => handleOpenSettings("general")}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 >
-                  <Bookmark className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>{t.userMenu.profiles}</span>
+                  <Bookmark className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                  <span>{t.extra.aboutAction}</span>
                 </button>
-                <div className="my-1 h-px bg-[#2a2a2a]" />
+                <div className="my-1 h-px bg-[var(--border-subtle)]" />
                 <button
                   type="button"
                   onClick={() => setUserMenuOpen(false)}
-                  className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[#8a8a8a] transition-colors hover:bg-[#262626] hover:text-[#e8e8e8]"
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3.5 w-3.5" strokeWidth={1.75} />
                   <span>{t.userMenu.close}</span>
                 </button>
               </div>
             )}
           </div>
-        </div>
-      </aside>
+        </aside>
 
-      {/* Column 2: Sidebar Panel (~248px, #0f0f0f); automatically collapsed on Home */}
-      {sidebarVisible && (
-      <aside
-        data-testid="sidebar-panel"
-        className="soyo-panel-enter flex w-[248px] shrink-0 flex-col border-r border-[#1f1f1f] bg-[#0f0f0f] p-2.5 text-xs"
-      >
-        <div
-          key={sidebarContentKey}
-          className="soyo-panel-enter flex min-h-0 flex-1 flex-col"
-        >
-        {activePanel === "sessions" && (
-          <>
-            <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
-              <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                {t.sidebar.sessionsTitle}
+        {/* Main Content Surface */}
+        <div className="flex min-w-0 flex-1 flex-col bg-[var(--surface-main)]">
+          <UpdaterBanner />
+
+          {helperReconnecting && (
+            <div
+              data-testid="helper-reconnect-banner"
+              className="flex items-center justify-between gap-2 border-b border-[var(--warning)] bg-[var(--warning-surface)] px-4 py-1.5 text-xs text-[var(--warning)]"
+            >
+              <span className="inline-flex items-center gap-2">
+                <SquaresLoader size={12} />
+                <span>{t.extra.reconnectBanner}</span>
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void reconnectHelper()}
+              >
+                {t.extra.reconnectBtn}
+              </Button>
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--danger)] bg-[var(--danger-surface)] px-4 py-2 text-xs text-[var(--danger)]">
+              <span>
+                <strong>{error.code}:</strong> {error.message}
               </span>
               <button
                 type="button"
-                onClick={() => setSessionsOpen(true)}
-                aria-label="More session actions"
-                className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[#8a8a8a] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                onClick={clearError}
+                aria-label={t.a11y.dismissError}
+                className="rounded p-0.5 hover:bg-[var(--surface-hover)]"
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <X className="h-3.5 w-3.5" strokeWidth={1.75} />
               </button>
             </div>
+          )}
 
-            {/* + New session accent link (§3.2) */}
-            <button
-              type="button"
-              disabled={runActive}
-              onClick={() => {
-                setForceHome(false);
-                setSidebarPanel("sessions");
-                void startNewSession();
-              }}
-              className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a] disabled:opacity-40"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>{t.sidebar.newSession}</span>
-            </button>
+          {bootstrap && !bootstrap.config_ready && (
+            <div className="border-b border-[var(--warning)] bg-[var(--warning-surface)] px-4 py-2 text-xs text-[var(--warning)]">
+              {t.home.configIncomplete}
+              {bootstrap.config_path ? ` (${bootstrap.config_path})` : ""}:{" "}
+              {bootstrap.config_error ?? t.home.configFallback}
+            </div>
+          )}
 
-            {/* Pinned & Project-Grouped Recent Sessions (§2 & Frame 02) */}
-            <div className="mt-2 flex-1 space-y-2.5 overflow-y-auto pr-0.5">
-              <div>
-                <div className="px-2 py-1 text-[11px] text-[#6b6b6b]">
-                  {t.sidebar.pinned}
-                </div>
-                <div className="rounded-[8px] px-2.5 py-1.5 transition-colors hover:bg-[#1a1a1a]">
-                  <div className="flex items-center gap-1.5 text-[12.5px] text-[#d9d9d9]">
-                    <Pin className="h-3 w-3 shrink-0 text-[#8a8a8a]" />
-                    <span className="truncate">Hi, I&apos;m Soyo…</span>
+          {recoveryBanner && (
+            <div className="border-b border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-1.5 text-xs text-[var(--info)]">
+              {recoveryBanner}
+            </div>
+          )}
+
+          {/* Split Area */}
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-w-0 flex-1 flex-col">
+              {isHomeEmpty ? (
+                /* Home Empty State (§8) */
+                <div
+                  data-testid="home-empty-state"
+                  data-tauri-drag-region
+                  className="soyo-panel-enter flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 pb-10"
+                >
+                  <div className="mb-8 flex items-center gap-3 text-[var(--text-primary)]">
+                    <img
+                      src="/app-icon.png"
+                      alt={t.about.productName}
+                      className="h-[30px] w-[30px] rounded-[22%] object-cover"
+                    />
+                    <h1 className="soyo-font-display text-[28px] leading-[36px] tracking-tight">
+                      {greeting}
+                    </h1>
                   </div>
-                  <div className="mt-0.5 pl-[18px] text-[11px] text-[#d9a08e]">
-                    {t.sidebar.answerQuestions}
-                  </div>
-                </div>
-              </div>
 
-              {groupedSessions.length === 0 ? (
-                <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
-                  {t.sidebar.noRecentSessions}
-                </div>
-              ) : (
-                groupedSessions.map(([proj, items]) => (
-                  <div key={proj} className="space-y-0.5">
-                    <div className="flex items-center justify-between px-2 py-1 text-[11px] text-[#6b6b6b]">
-                      <span className="inline-flex items-center gap-1.5 truncate">
-                        <Folder className="h-3 w-3 shrink-0" />
-                        <span className="truncate">{proj}</span>
+                  <Composer
+                    variant="home"
+                    disabled={!bootstrap?.config_ready && !previewMode}
+                    runActive={runActive}
+                    cancelling={cancelling}
+                    hasSession={sessionId !== null}
+                    approvalPending={Boolean(pendingApproval)}
+                    workMode={workMode}
+                    permissionMode={permissionMode}
+                    selectedProfile={bootstrap?.selected_profile}
+                    selectedModel={bootstrap?.selected_model}
+                    profiles={bootstrap?.profiles ?? []}
+                    thinkingEffort={bootstrap?.thinking_effort}
+                    ultracodeEnabled={ultracodeEnabled}
+                    submitMode={submitMode}
+                    stagedAttachments={stagedAttachments}
+                    forcePopover={forceComposerPopover}
+                    onSubmit={async (prompt) => {
+                      setForceHome(false);
+                      return submitPrompt(prompt);
+                    }}
+                    onCancel={cancelActiveRun}
+                    onCompact={compactCurrentSession}
+                    onCycleMode={cycleWorkMode}
+                    onSelectProfile={selectProfile}
+                    onSelectEffort={(eff, ultra) => setThinkingEffort(eff, ultra)}
+                    onToggleSubmitMode={() =>
+                      setSubmitMode(submitMode === "steer" ? "queue" : "steer")
+                    }
+                    onStageAttachments={stageAttachments}
+                    onPasteAttachments={stagePastedAttachments}
+                    onRemoveAttachment={removeStagedAttachment}
+                    onOpenSettings={() => handleOpenSettings("general")}
+                    onOpenPermissions={() => handleOpenSettings("permissions")}
+                    onOpenSessions={() => setSessionsOpen(true)}
+                    onOpenMemory={() => handleOpenSettings("memory")}
+                    onOpenMcp={() => handleOpenSettings("mcp")}
+                    onOpenExport={() => setExportOpen(true)}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenSettings("general")}
+                    className="-mt-px flex w-full max-w-[592px] items-center justify-between gap-2 rounded-b-[var(--radius-lg)] border border-t-0 border-[var(--border)] bg-[var(--surface-raised)] px-3.5 py-2 text-[12px] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    <span className="inline-flex min-w-0 items-center gap-1.5">
+                      <Folder className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                      <span className="truncate font-medium">
+                        {currentProject || t.home.projectOrFolder}
                       </span>
-                      <span>{items.length}</span>
+                    </span>
+                    {bootstrap?.workspace && (
+                      <span className="max-w-[300px] truncate font-mono text-[11px] text-[var(--text-tertiary)]">
+                        {bootstrap.workspace}
+                      </span>
+                    )}
+                  </button>
+
+                  <div className="mt-8 w-full max-w-[620px] space-y-0.5">
+                    <div className="px-3 py-1 text-[11.5px] text-[var(--text-tertiary)]">
+                      {t.home.ideasForYou}
                     </div>
-                    {items.map((item) => {
-                      const isCurrent = item.id === sessionId;
+                    {[
+                      {
+                        icon: Clock,
+                        text: t.home.ideaSummarize,
+                        action: () =>
+                          sessionId ? setExportOpen(true) : setSessionsOpen(true),
+                      },
+                      {
+                        icon: Box,
+                        text: t.home.ideaAuditMcp,
+                        action: () => handleOpenSettings("mcp"),
+                      },
+                      {
+                        icon: SlidersHorizontal,
+                        text: t.home.ideaCustomize,
+                        action: () => handleOpenSettings("appearance"),
+                      },
+                    ].map((idea) => {
+                      const Icon = idea.icon;
                       return (
                         <button
-                          key={item.id}
+                          key={idea.text}
                           type="button"
-                          disabled={runActive}
-                          onClick={() => {
-                            setForceHome(false);
-                            setSidebarPanel("sessions");
-                            void resumeSession(item.id, false);
-                          }}
-                          className={`flex w-full flex-col gap-0.5 rounded-[8px] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
-                            isCurrent
-                              ? "bg-[#1c1c1c] text-[#e8e8e8]"
-                              : "text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#d9d9d9]"
-                          }`}
+                          onClick={idea.action}
+                          className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left text-[13px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                         >
-                          <span className="truncate text-[12.5px] font-medium">
-                            {item.title ?? t.sidebar.untitledSession}
+                          <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-tertiary)] transition-colors group-hover:border-[var(--border-strong)] group-hover:text-[var(--accent-text)]">
+                            <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
                           </span>
-                          <span className="truncate text-[11px] text-[#6e6e6e]">
-                            {item.work_mode} · {item.last_status ?? "saved"}
-                          </span>
+                          <span>{idea.text}</span>
                         </button>
                       );
                     })}
                   </div>
-                ))
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => setSessionsOpen(true)}
-              className="px-2.5 py-1.5 text-left text-[12px] text-[#6e6e6e] transition-colors hover:text-[#a3a3a3]"
-            >
-              {t.sidebar.viewAll}
-            </button>
-          </>
-        )}
-
-        {activePanel === "search" && (
-          <>
-            <div className="flex items-center justify-between px-1 pb-2 pt-0.5">
-              <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                {t.sidebar.searchTitle}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 rounded-[8px] border border-[#2b2b2b] bg-[#161616] px-2.5 py-1.5 transition-colors focus-within:border-[#d9a08e]">
-              <Search className="h-3.5 w-3.5 shrink-0 text-[#6e6e6e]" />
-              <input
-                value={sessionQuery}
-                onChange={(e) => setSessionQuery(e.target.value)}
-                placeholder={t.sidebar.searchPlaceholder}
-                aria-label="Search sessions"
-                className="w-full bg-transparent text-[12.5px] text-[#e8e8e8] placeholder:text-[#6e6e6e] focus:outline-none"
-              />
-            </div>
-            <div className="mt-2 flex-1 space-y-0.5 overflow-y-auto pr-0.5">
-              {filteredSessions.length === 0 ? (
-                <div className="px-2 py-2 text-[11px] text-[#6e6e6e]">
-                  {t.sidebar.noMatchingSessions}
                 </div>
               ) : (
-                filteredSessions.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    disabled={runActive}
-                    onClick={() => {
-                      setForceHome(false);
-                      void resumeSession(item.id, false);
-                    }}
-                    className={`flex w-full flex-col gap-0.5 rounded-[8px] px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 ${
-                      item.id === sessionId
-                        ? "bg-[#1c1c1c] text-[#e8e8e8]"
-                        : "text-[#a3a3a3] hover:bg-[#1a1a1a] hover:text-[#d9d9d9]"
-                    }`}
-                  >
-                    <span className="truncate text-[12.5px] font-medium">
-                      {item.title ?? t.sidebar.untitledSession}
-                    </span>
-                    <span className="truncate text-[11px] text-[#6e6e6e]">
-                      {workspaceBase(item.workspace)} · {item.work_mode} ·{" "}
-                      {item.last_status ?? "saved"}
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => setSessionsOpen(true)}
-              className="px-2.5 py-1.5 text-left text-[12px] text-[#6e6e6e] hover:text-[#a3a3a3]"
-            >
-              {t.sidebar.browseAllSessions}
-            </button>
-          </>
-        )}
-
-        {activePanel === "memory" && (
-          <>
-            <div className="px-1 pb-2 pt-0.5">
-              <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                {t.sidebar.memoryTitle}
-              </span>
-            </div>
-            <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
-              <div className="flex items-center justify-between text-[11.5px]">
-                <span className="font-medium text-[#e8e8e8]">{t.sidebar.globalStore}</span>
-                <span className="soyo-pill py-0 text-[10px] text-[#4ade80]">
-                  {t.sidebar.twoPhase}
-                </span>
-              </div>
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-[#8a8a8a]">
-                {t.sidebar.memoryDesc}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setMemoryOpen(true)}
-              className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
-            >
-              <Database className="h-3.5 w-3.5" />
-              <span>{t.sidebar.openMemory}</span>
-            </button>
-            <div className="flex-1" />
-          </>
-        )}
-
-        {activePanel === "mcp" && (
-          <>
-            <div className="px-1 pb-2 pt-0.5">
-              <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                {t.sidebar.mcpTitle}
-              </span>
-            </div>
-            <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
-              <div className="flex items-center justify-between text-[11.5px]">
-                <span className="font-medium text-[#e8e8e8]">
-                  {t.sidebar.workspaceBridges}
-                </span>
-                <span className="font-mono text-[10.5px] text-[#7aa2f7]">
-                  {mcpServers.length}
-                </span>
-              </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-[#8a8a8a]">
-                {mcpServers.length === 0
-                  ? t.sidebar.noMcpActive
-                  : t.sidebar.mcpActiveCount(mcpServers.length)}
-              </p>
-            </div>
-            {mcpServers.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {mcpServers.slice(0, 4).map((server) => (
-                  <div
-                    key={server.server}
-                    className="flex items-center gap-2 rounded-[8px] border border-[#222222] bg-[#151515] px-2.5 py-1.5 text-[12px] text-[#c9c9c9]"
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        server.state === "ready" || server.state === "connected"
-                          ? "bg-[#4ade80]"
-                          : "bg-[#fac454]"
-                      }`}
-                    />
-                    <span className="truncate font-mono text-[11.5px]">
-                      {server.server}
-                    </span>
-                    <span className="ml-auto shrink-0 text-[10.5px] text-[#6e6e6e]">
-                      {server.state}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => setMcpCredsOpen(true)}
-              className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
-            >
-              <KeyRound className="h-3.5 w-3.5" />
-              <span>{t.sidebar.manageMcp}</span>
-            </button>
-            <div className="flex-1" />
-          </>
-        )}
-
-        {activePanel === "export" && (
-          <>
-            <div className="px-1 pb-2 pt-0.5">
-              <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                {t.sidebar.exportTitle}
-              </span>
-            </div>
-            <div className="rounded-[9px] border border-[#242424] bg-[#141414] p-2.5">
-              <div className="truncate text-[12px] font-medium text-[#e8e8e8]">
-                {sessionTitle}
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[#6e6e6e]">
-                <span style={{ color: WORK_MODE_STYLES[workMode].color }}>
-                  {WORK_MODE_STYLES[workMode].label}
-                </span>
-                <span>·</span>
-                <span className="truncate font-mono">{currentProject}</span>
-              </div>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-[#8a8a8a]">
-                {t.sidebar.exportDesc}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setExportOpen(true)}
-              className="mt-2 flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] font-medium text-[#d9a08e] transition-colors hover:bg-[#1a1a1a]"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>{t.sidebar.exportSession}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setSessionsOpen(true)}
-              className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-            >
-              <History className="h-3.5 w-3.5 text-[#8a8a8a]" />
-              <span>{t.sidebar.browseToExport}</span>
-            </button>
-            <div className="flex-1" />
-          </>
-        )}
-
-        {activePanel === "customize" && (
-          <>
-            <div className="px-1 pb-2 pt-0.5">
-              <span className="text-[14px] font-semibold text-[#e8e8e8]">
-                {t.sidebar.customizeTitle}
-              </span>
-            </div>
-            <nav className="grid grid-cols-1 gap-0.5 text-[12.5px]">
-              {(
-                [
-                  ["general", t.sidebar.customizeGeneral],
-                  ["profiles", t.sidebar.customizeProfiles],
-                  ["permissions", t.sidebar.customizePermissions],
-                  ["modules", t.sidebar.customizeModules],
-                  ["usage", t.sidebar.customizeUsage],
-                ] as const
-              ).map(([tab, label]) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => handleOpenSettings(tab)}
-                  className="flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[#c9c9c9] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                /* Conversation Stream */
+                <div
+                  ref={scrollRef}
+                  className="soyo-conv-prose flex-1 overflow-y-auto px-6 pb-3 pt-4"
                 >
-                  <SlidersHorizontal className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </nav>
-            <div className="flex-1" />
-          </>
-        )}
-        </div>
-      </aside>
-      )}
+                  <div className="mx-auto flex max-w-[840px] flex-col gap-3.5">
+                    {historyOmitted && (
+                      <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-1.5 text-[11.5px] text-[var(--text-tertiary)]">
+                        {t.home.historyOmitted}
+                      </div>
+                    )}
 
-      {/* Column 3: Main Surface (#141414) — banners render cleanly below the unified 40px titlebar */}
-      <div className="flex min-w-0 flex-1 flex-col bg-[#141414]">
-        <UpdaterBanner />
+                    {loading && messages.length === 0 && (
+                      <div className="flex items-center justify-center gap-2 py-16 text-xs text-[var(--text-tertiary)]">
+                        <SquaresLoader size={12} />
+                        <span>{t.home.loadingRuntime}</span>
+                      </div>
+                    )}
 
-        {error && (
-          <div className="flex items-center justify-between gap-2 border-b border-[#f87171]/35 bg-[#1c1515] px-4 py-2 text-xs text-[#f87171]">
-            <span>
-              <strong>{error.code}:</strong> {error.message}
-            </span>
-            <button
-              type="button"
-              onClick={clearError}
-              aria-label="Dismiss error"
-              className="rounded p-0.5 hover:bg-[#2a1b1b]"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
+                    {messages.map((msg) => {
+                      if (msg.role === "user") {
+                        return (
+                          <div
+                            key={msg.id}
+                            className="soyo-msg-enter group flex max-w-[640px] flex-col items-end self-end"
+                          >
+                            <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-raised)] px-3.5 py-2 text-[var(--text-primary)]">
+                              <pre className="whitespace-pre-wrap font-sans">
+                                {msg.text}
+                              </pre>
+                            </div>
+                            <div className="mt-1 flex items-center gap-2.5 px-2 text-[11px] text-[var(--text-tertiary)] opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                              <span>{msg.label}</span>
+                              <button
+                                type="button"
+                                disabled
+                                title={t.home.branchUnsupported}
+                                className="opacity-40"
+                              >
+                                <GitBranch className="h-3 w-3" strokeWidth={1.75} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void submitPrompt(msg.text)}
+                                disabled={runActive}
+                                title={t.home.retryPrompt}
+                                className="hover:text-[var(--text-primary)] disabled:opacity-40"
+                              >
+                                <RotateCw className="h-3 w-3" strokeWidth={1.75} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditDraft({
+                                    text: msg.text,
+                                    nonce: Date.now(),
+                                  })
+                                }
+                                title={t.home.editMessage}
+                                className="hover:text-[var(--text-primary)]"
+                              >
+                                <Pencil className="h-3 w-3" strokeWidth={1.75} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleCopyMessage(msg.id, msg.text)
+                                }
+                                title={t.home.copyMessage}
+                                className="inline-flex items-center gap-1 hover:text-[var(--text-primary)]"
+                              >
+                                <Copy className="h-3 w-3" strokeWidth={1.75} />
+                                {copiedId === msg.id && <span>{t.home.copied}</span>}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setExportOpen(true)}
+                                title={t.home.exportShare}
+                                className="hover:text-[var(--text-primary)]"
+                              >
+                                <Share2 className="h-3 w-3" strokeWidth={1.75} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
 
-        {bootstrap && !bootstrap.config_ready && (
-          <div className="border-b border-[#4a3f2a] bg-[#1c1a15] px-4 py-2 text-xs text-[#e8d9b0]">
-            {t.home.configIncomplete}
-            {bootstrap.config_path ? ` (${bootstrap.config_path})` : ""}:{" "}
-            {bootstrap.config_error ?? t.home.configFallback}
-          </div>
-        )}
+                      if (msg.role === "tool") {
+                        return (
+                          <ToolCardView
+                            key={msg.id}
+                            message={msg}
+                            sessionId={sessionId}
+                          />
+                        );
+                      }
 
-        {recoveryBanner && (
-          <div className="border-b border-[#2e2e2e] bg-[#1a1a1a] px-4 py-1.5 text-xs text-[#8aa8d8]">
-            {recoveryBanner}
-          </div>
-        )}
+                      if (msg.role === "run_summary") {
+                        return (
+                          <div
+                            key={msg.id}
+                            className="flex items-center justify-between px-1 py-0.5 text-[11.5px] text-[var(--text-tertiary)]"
+                          >
+                            <span className="font-mono uppercase text-[var(--text-secondary)]">
+                              {msg.label}
+                            </span>
+                            <span className="font-mono">{msg.text}</span>
+                          </div>
+                        );
+                      }
 
-        {/* Main Workspace Split Area */}
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          <div className="flex min-w-0 flex-1 flex-col">
-            {isHomeEmpty ? (
-              /* Frame 01: Home Empty State */
-              <div
-                data-testid="home-empty-state"
-                data-tauri-drag-region
-                className="soyo-panel-enter flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 pb-10"
-              >
-                <div className="mb-8 flex items-center gap-3 font-serif text-[30px] tracking-tight text-[#e8e8e8]">
-                  <img
-                    src="/app-icon.png"
-                    alt="Soyo"
-                    className="h-[30px] w-[30px] rounded-[22%] object-cover"
-                  />
-                  <span>{greeting}</span>
+                      if (msg.role === "system") {
+                        return (
+                          <div
+                            key={msg.id}
+                            className="px-3 py-0.5 text-[12px] text-[var(--text-tertiary)]"
+                          >
+                            {msg.text}
+                          </div>
+                        );
+                      }
+
+                      /* Assistant replies render unbubbled directly on --surface-main with hover actions (§8.12) */
+                      return (
+                        <article key={msg.id} className="soyo-msg-enter group py-0.5">
+                          <MarkdownRenderer
+                            content={msg.text}
+                            mode={markdownMode}
+                            streaming={msg.streaming}
+                          />
+                          {!msg.streaming && msg.text.trim().length > 0 && (
+                            <div className="mt-1 flex items-center gap-2.5 text-[11px] text-[var(--text-tertiary)] opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleCopyMessage(msg.id, msg.text)
+                                }
+                                title={t.home.copyMessage}
+                                className="inline-flex items-center gap-1 hover:text-[var(--text-primary)]"
+                              >
+                                <Copy className="h-3 w-3" strokeWidth={1.75} />
+                                {copiedId === msg.id ? t.home.copied : t.a11y.copyMessage}
+                              </button>
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+
+                    {thinkingEntries.length > 0 && (
+                      <ThinkingCardView entries={thinkingEntries} />
+                    )}
+
+                    {pendingApproval && (
+                      <ApprovalDialog
+                        request={pendingApproval}
+                        onReply={replyApproval}
+                      />
+                    )}
+
+                    {(runActive || summaryLine) && (
+                      <div className="flex flex-wrap items-center gap-3.5 px-1 pt-1 font-mono text-[11px] tabular-nums text-[var(--text-tertiary)]">
+                        {runActive ? (
+                          <span
+                            data-testid="run-working-indicator"
+                            className="inline-flex items-center gap-1.5 text-[var(--success)]"
+                          >
+                            <SquaresLoader size={12} />
+                            <span>{t.home.streaming}</span>
+                          </span>
+                        ) : null}
+                        {summaryLine && <span>{summaryLine}</span>}
+                        {lastUsage && (
+                          <span
+                            className="inline-flex items-center gap-1.5"
+                            title={`${
+                              lastUsage.estimated
+                                ? t.settings.usageEstimated
+                                : t.settings.usageSubtitle
+                            }${
+                              lastUsage.cached_input_tokens
+                                ? ` · ${t.settings.cacheReadLower} ${formatTokenCount(lastUsage.cached_input_tokens)}`
+                                : ""
+                            }`}
+                          >
+                            <span>{lastUsage.estimated ? "~" : ""}</span>
+                            <span className="inline-flex items-center gap-0.5">
+                              <ArrowUp className="h-3 w-3" strokeWidth={1.75} />
+                              {formatTokenCount(lastUsage.input_tokens)}
+                            </span>
+                            <span className="inline-flex items-center gap-0.5">
+                              <ArrowDown className="h-3 w-3" strokeWidth={1.75} />
+                              {formatTokenCount(lastUsage.output_tokens)}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+              )}
 
+              {!isHomeEmpty && (
                 <Composer
-                  variant="home"
+                  variant="docked"
                   disabled={!bootstrap?.config_ready && !previewMode}
                   runActive={runActive}
                   cancelling={cancelling}
@@ -1323,13 +1690,15 @@ export function App() {
                   thinkingEffort={bootstrap?.thinking_effort}
                   ultracodeEnabled={ultracodeEnabled}
                   submitMode={submitMode}
+                  queuedPromptPreview={queuedPrompt?.prompt ?? null}
+                  compactionPending={compactionPending}
+                  contextUsedTokens={contextUsedTokens}
+                  contextWindowTokens={contextWindowTokens}
+                  contextEstimated={composerContextEstimated}
                   stagedAttachments={stagedAttachments}
                   forcePopover={forceComposerPopover}
-                  onSubmit={async (prompt) => {
-                    setForceHome(false);
-                    setSidebarPanel("sessions");
-                    return submitPrompt(prompt);
-                  }}
+                  draftSeed={editDraft}
+                  onSubmit={(prompt) => submitPrompt(prompt)}
                   onCancel={cancelActiveRun}
                   onCompact={compactCurrentSession}
                   onCycleMode={cycleWorkMode}
@@ -1338,438 +1707,291 @@ export function App() {
                   onToggleSubmitMode={() =>
                     setSubmitMode(submitMode === "steer" ? "queue" : "steer")
                   }
+                  onClearQueuedPrompt={clearQueuedPrompt}
                   onStageAttachments={stageAttachments}
                   onPasteAttachments={stagePastedAttachments}
                   onRemoveAttachment={removeStagedAttachment}
                   onOpenSettings={() => handleOpenSettings("general")}
+                  onOpenPermissions={() => handleOpenSettings("permissions")}
                   onOpenSessions={() => setSessionsOpen(true)}
-                  onOpenMemory={() => setMemoryOpen(true)}
-                  onOpenMcp={() => setMcpCredsOpen(true)}
+                  onOpenMemory={() => handleOpenSettings("memory")}
+                  onOpenMcp={() => handleOpenSettings("mcp")}
                   onOpenExport={() => setExportOpen(true)}
                 />
+              )}
+            </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleOpenSettings("general")}
-                  className="-mt-px flex w-full max-w-[592px] items-center justify-between gap-2 rounded-b-[11px] border border-t-0 border-[#2b2b2b] bg-[#181818] px-3.5 py-2 text-[12px] text-[#a3a3a3] transition-colors hover:border-[#3a3a3a] hover:bg-[#1c1c1c] hover:text-[#e8e8e8]"
-                >
-                  <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <Folder className="h-3.5 w-3.5 shrink-0 text-[#8a8a8a]" />
-                    <span className="truncate font-medium">
-                      {currentProject || t.home.projectOrFolder}
+            {/* Split Browser Preview Pane */}
+            {browserPaneOpen && (
+              <section
+                data-testid="split-browser-pane"
+                className="soyo-panel-enter flex w-[44%] min-w-[320px] flex-col border-l border-[var(--border-subtle)] bg-[var(--surface-sidebar)]"
+              >
+                <div className="flex h-[44px] shrink-0 items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 text-[var(--text-tertiary)]">
+                  <button
+                    type="button"
+                    onClick={() => setBrowserMiniTab("new")}
+                    title={t.a11y.browserBack}
+                    aria-label={t.a11y.browserBack}
+                    className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBrowserMiniTab("sessions")}
+                    title={t.a11y.browserForward}
+                    aria-label={t.a11y.browserForward}
+                    className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBrowserRefreshTick((tick) => tick + 1)}
+                    title={t.a11y.reloadPreview}
+                    aria-label={t.a11y.reloadPreview}
+                    className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                  <div className="flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-1 text-[11.5px] text-[var(--text-secondary)]">
+                    <Lock className="h-3 w-3 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                    <span className="truncate font-mono text-[11px]">
+                      localhost:1420
                     </span>
-                  </span>
-                  {bootstrap?.workspace && (
-                    <span className="max-w-[300px] truncate font-mono text-[10.5px] text-[#6e6e6e]">
-                      {bootstrap.workspace}
-                    </span>
-                  )}
-                </button>
-
-                <div className="mt-8 w-full max-w-[620px] space-y-0.5">
-                  <div className="px-3 py-1 text-[11.5px] text-[#6b6b6b]">
-                    {t.home.ideasForYou}
                   </div>
-                  {[
-                    {
-                      icon: Clock,
-                      text: t.home.ideaSummarize,
-                      action: () => setExportOpen(true),
-                    },
-                    {
-                      icon: Box,
-                      text: t.home.ideaAuditMcp,
-                      action: () => setMcpCredsOpen(true),
-                    },
-                    {
-                      icon: SlidersHorizontal,
-                      text: t.home.ideaCustomize,
-                      action: () => handleOpenSettings("general"),
-                    },
-                  ].map((idea) => {
-                    const Icon = idea.icon;
-                    return (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenSettings("general")}
+                    title={t.a11y.openExternalSettings}
+                    aria-label={t.a11y.openExternalSettings}
+                    className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBrowserPaneOpen(false)}
+                    aria-label={t.a11y.closeSplitBrowser}
+                    className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                </div>
+                <div
+                  key={browserRefreshTick}
+                  className="soyo-panel-enter flex min-h-0 flex-1 bg-[var(--surface-main)] text-[11px]"
+                >
+                  <div className="flex w-[118px] shrink-0 flex-col gap-0.5 border-r border-[var(--border-subtle)] bg-[var(--surface-sidebar)] p-2">
+                    {(
+                      [
+                        ["new", t.home.browserNew],
+                        ["search", t.sidebar.searchTitle],
+                        ["sessions", t.sidebar.sessionsTitle],
+                        ["memory", t.sidebar.memoryTitle],
+                        ["customize", t.sidebar.customizeTitle],
+                      ] as const
+                    ).map(([id, label]) => (
                       <button
-                        key={idea.text}
+                        key={id}
                         type="button"
-                        onClick={idea.action}
-                        className="group flex w-full items-center gap-3 rounded-[9px] px-3 py-2 text-left text-[13px] text-[#bdbdbd] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
+                        onClick={() => setBrowserMiniTab(id)}
+                        className={`rounded-[var(--radius-sm)] px-2 py-1 text-left text-[11px] transition-colors ${
+                          browserMiniTab === id
+                            ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+                            : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                        }`}
                       >
-                        <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] border border-[#2b2b2b] bg-[#1d1d1d] text-[#8a8a8a] transition-colors group-hover:border-[#3a3a3a] group-hover:text-[#d9a08e]">
-                          <Icon className="h-3.5 w-3.5" />
-                        </span>
-                        <span>{idea.text}</span>
+                        {label}
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              /* Frames 02, 03, 09: Message Stream */
-              <div
-                ref={scrollRef}
-                className="flex-1 overflow-y-auto px-6 pb-3 pt-4"
-              >
-                <div className="mx-auto flex max-w-[840px] flex-col gap-3.5">
-                  {historyOmitted && (
-                    <div className="rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-3 py-1.5 text-[11.5px] text-[#8a8a8a]">
-                      {t.home.historyOmitted}
-                    </div>
-                  )}
-
-                  {loading && messages.length === 0 && (
-                    <div className="py-16 text-center text-xs text-[#6e6e6e]">
-                      {t.home.loadingRuntime}
-                    </div>
-                  )}
-
-                  {messages.map((msg) => {
-                    if (msg.role === "user") {
-                      return (
-                        <div
-                          key={msg.id}
-                          className="soyo-msg-enter group flex flex-col items-end self-end max-w-[640px]"
-                        >
-                          <div className="rounded-[14px] border border-[#2e2e2e] bg-[#242424] px-3.5 py-2 text-[13.5px] leading-relaxed text-[#ececec]">
-                            <pre className="whitespace-pre-wrap font-sans">
-                              {msg.text}
-                            </pre>
-                          </div>
-                          {/* Hover actions row (§4.2): timestamp · branch · retry · edit · copy */}
-                          <div className="mt-1 flex items-center gap-2.5 px-2 text-[11px] text-[#6e6e6e] opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-                            <span>{msg.label}</span>
-                            <button
-                              type="button"
-                              disabled
-                              title={t.home.branchUnsupported}
-                              className="opacity-40"
-                            >
-                              <GitBranch className="h-3 w-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void submitPrompt(msg.text)}
-                              disabled={runActive}
-                              title={t.home.retryPrompt}
-                              className="hover:text-[#e8e8e8] disabled:opacity-40"
-                            >
-                              <RotateCw className="h-3 w-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditDraft({ text: msg.text, nonce: Date.now() })
-                              }
-                              title={t.home.editMessage}
-                              className="hover:text-[#e8e8e8]"
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyMessage(msg.id, msg.text)}
-                              title={t.home.copyMessage}
-                              className="inline-flex items-center gap-1 hover:text-[#e8e8e8]"
-                            >
-                              <Copy className="h-3 w-3" />
-                              {copiedId === msg.id && <span>{t.home.copied}</span>}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setExportOpen(true)}
-                              title={t.home.exportShare}
-                              className="hover:text-[#e8e8e8]"
-                            >
-                              <Share2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    if (msg.role === "tool") {
-                      return (
-                        <ToolCardView
-                          key={msg.id}
-                          message={msg}
-                          sessionId={sessionId}
-                        />
-                      );
-                    }
-
-                    if (msg.role === "run_summary") {
-                      return (
-                        <div
-                          key={msg.id}
-                          className="flex items-center justify-between px-1 py-0.5 text-[11.5px] text-[#6e6e6e]"
-                        >
-                          <span className="font-mono uppercase text-[#8a8a8a]">
-                            {msg.label}
-                          </span>
-                          <span className="font-mono">{msg.text}</span>
-                        </div>
-                      );
-                    }
-
-                    if (msg.role === "system") {
-                      return (
-                        <div
-                          key={msg.id}
-                          className="px-3 py-0.5 text-[12px] text-[#6e6e6e]"
-                        >
-                          {msg.text}
-                        </div>
-                      );
-                    }
-
-                    /* Hard Rule (§4.2): Assistant messages render borderless directly on #141414 */
-                    return (
-                      <article key={msg.id} className="soyo-msg-enter py-0.5">
-                        <MarkdownRenderer
-                          content={msg.text}
-                          mode={markdownMode}
-                          streaming={msg.streaming}
-                        />
-                      </article>
-                    );
-                  })}
-
-                  {thinkingEntries.length > 0 && (
-                    <ThinkingCardView entries={thinkingEntries} />
-                  )}
-
-                  {/* Inline Approval Card in stream (§4.4, Frame 03) */}
-                  {pendingApproval && (
-                    <ApprovalDialog
-                      request={pendingApproval}
-                      onReply={replyApproval}
-                    />
-                  )}
-
-                  {(runActive || summaryLine) && (
-                    <div className="flex flex-wrap items-center gap-3.5 px-1 pt-1 font-mono text-[11px] tabular-nums text-[#6e6e6e]">
-                      {runActive ? (
-                        <span className="inline-flex items-center gap-1.5 text-[#4ade80]">
-                          <span className="h-1.5 w-1.5 rounded-full bg-[#4ade80] soyo-pulse-dot" />
-                          {t.home.streaming}
-                        </span>
-                      ) : null}
-                      {summaryLine && <span>{summaryLine}</span>}
-                      {lastUsage && (
-                        <span
-                          title={`${
-                            lastUsage.estimated
-                              ? "Estimated token usage"
-                              : "Reported token usage"
-                          }${
-                            lastUsage.cached_input_tokens
-                              ? ` · cached ${formatTokenCount(lastUsage.cached_input_tokens)}`
-                              : ""
-                          }`}
-                        >
-                          {lastUsage.estimated ? "~" : ""}↑
-                          {formatTokenCount(lastUsage.input_tokens)} ↓
-                          {formatTokenCount(lastUsage.output_tokens)}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {!isHomeEmpty && (
-              <Composer
-                variant="docked"
-                disabled={!bootstrap?.config_ready && !previewMode}
-                runActive={runActive}
-                cancelling={cancelling}
-                hasSession={sessionId !== null}
-                approvalPending={Boolean(pendingApproval)}
-                workMode={workMode}
-                permissionMode={permissionMode}
-                selectedProfile={bootstrap?.selected_profile}
-                selectedModel={bootstrap?.selected_model}
-                profiles={bootstrap?.profiles ?? []}
-                thinkingEffort={bootstrap?.thinking_effort}
-                ultracodeEnabled={ultracodeEnabled}
-                submitMode={submitMode}
-                queuedPromptPreview={queuedPrompt?.prompt ?? null}
-                compactionPending={compactionPending}
-                contextUsedTokens={contextUsedTokens}
-                contextWindowTokens={contextWindowTokens}
-                contextEstimated={composerContextEstimated}
-                stagedAttachments={stagedAttachments}
-                forcePopover={forceComposerPopover}
-                draftSeed={editDraft}
-                onSubmit={(prompt) => submitPrompt(prompt)}
-                onCancel={cancelActiveRun}
-                onCompact={compactCurrentSession}
-                onCycleMode={cycleWorkMode}
-                onSelectProfile={selectProfile}
-                onSelectEffort={(eff, ultra) => setThinkingEffort(eff, ultra)}
-                onToggleSubmitMode={() =>
-                  setSubmitMode(submitMode === "steer" ? "queue" : "steer")
-                }
-                onClearQueuedPrompt={clearQueuedPrompt}
-                onStageAttachments={stageAttachments}
-                onPasteAttachments={stagePastedAttachments}
-                onRemoveAttachment={removeStagedAttachment}
-                onOpenSettings={() => handleOpenSettings("general")}
-                onOpenSessions={() => setSessionsOpen(true)}
-                onOpenMemory={() => setMemoryOpen(true)}
-                onOpenMcp={() => setMcpCredsOpen(true)}
-                onOpenExport={() => setExportOpen(true)}
-              />
-            )}
-          </div>
-
-          {/* Split Browser Preview Pane (Frame 08, §4.9) */}
-          {browserPaneOpen && (
-            <section
-              data-testid="split-browser-pane"
-              className="soyo-panel-enter flex w-[44%] min-w-[320px] flex-col border-l border-[#1f1f1f] bg-[#0e0e0e]"
-            >
-              <div className="flex h-[44px] shrink-0 items-center gap-1.5 border-b border-[#1f1f1f] px-3 text-[#8a8a8a]">
-                <button
-                  type="button"
-                  onClick={() => setBrowserMiniTab("new")}
-                  title="Back"
-                  aria-label="Browser back"
-                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBrowserMiniTab("sessions")}
-                  title="Forward"
-                  aria-label="Browser forward"
-                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-                >
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBrowserRefreshTick((t) => t + 1)}
-                  title="Reload preview"
-                  aria-label="Reload preview"
-                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-                >
-                  <RotateCw className="h-3.5 w-3.5" />
-                </button>
-                <div className="flex flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-[#262626] bg-[#1a1a1a] px-2.5 py-1 text-[11.5px] text-[#a3a3a3]">
-                  <Lock className="h-3 w-3 text-[#6e6e6e]" />
-                  <span className="truncate font-mono text-[11px]">
-                    localhost:1420
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleOpenSettings("general")}
-                  title="Open external settings"
-                  aria-label="Open external preview"
-                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBrowserPaneOpen(false)}
-                  aria-label="Close split browser"
-                  className="flex h-6 w-6 items-center justify-center rounded-[6px] transition-colors hover:bg-[#1a1a1a] hover:text-[#e8e8e8]"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div
-                key={browserRefreshTick}
-                className="soyo-panel-enter flex min-h-0 flex-1 bg-[#141414] text-[11px]"
-              >
-                <div className="flex w-[118px] shrink-0 flex-col gap-0.5 border-r border-[#1f1f1f] bg-[#0d0d0d] p-2">
-                  {(
-                    [
-                      ["new", t.home.browserNew],
-                      ["search", t.sidebar.searchTitle],
-                      ["sessions", t.sidebar.sessionsTitle],
-                      ["memory", t.sidebar.memoryTitle],
-                      ["customize", t.sidebar.customizeTitle],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => setBrowserMiniTab(id)}
-                      className={`rounded-[6px] px-2 py-1 text-left text-[10.5px] transition-colors ${
-                        browserMiniTab === id
-                          ? "bg-[#1c1c1c] text-[#e8e8e8]"
-                          : "text-[#a3a3a3] hover:bg-[#161616] hover:text-[#d9d9d9]"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 p-5 text-center">
-                  <div className="flex items-center gap-2 font-serif text-[17px] text-[#e8e8e8]">
-                    <img
-                      src="/app-icon.png"
-                      alt="Soyo"
-                      className="h-[18px] w-[18px] rounded-[22%] object-cover"
-                    />
-                    <span>{greeting}</span>
+                    ))}
                   </div>
-                  <div className="w-full max-w-[320px] rounded-[10px] border border-[#2b2b2b] bg-[#1d1d1d] p-2.5 text-left text-[10.5px] text-[#6e6e6e]">
-                    <div>{t.composer.placeholderHome}</div>
-                    <div className="mt-2.5 flex items-center justify-between">
-                      <span className="rounded-[5px] bg-[#262626] px-1.5 py-0.5 text-[10px] text-[#a3a3a3]">
-                        +
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="rounded-[5px] bg-[#262626] px-1.5 py-0.5 text-[9.5px] text-[#a3a3a3]">
-                          {bootstrap?.selected_model ?? "claude-sonnet-4-5"}
+                  <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 p-5 text-center">
+                    <div className="flex items-center gap-2 text-[var(--text-primary)]">
+                      <img
+                        src="/app-icon.png"
+                        alt={t.about.productName}
+                        className="h-[18px] w-[18px] rounded-[22%] object-cover"
+                      />
+                      <span className="soyo-font-display text-[17px]">{greeting}</span>
+                    </div>
+                    <div className="w-full max-w-[320px] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-composer)] p-2.5 text-left text-[11px] text-[var(--text-tertiary)]">
+                      <div>{t.composer.placeholderHome}</div>
+                      <div className="mt-2.5 flex items-center justify-between">
+                        <span className="rounded-[var(--radius-xs)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
+                          +
                         </span>
-                        <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#d9a08e] text-[#1c120e]">
-                          <ArrowLeft className="h-2.5 w-2.5 rotate-90" />
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="rounded-[var(--radius-xs)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
+                            {bootstrap?.selected_model ?? "claude-sonnet-4-5"}
+                          </span>
+                          <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[var(--accent)] text-[var(--on-accent)]">
+                            <ArrowUp className="h-2.5 w-2.5" strokeWidth={2} />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex w-full max-w-[320px] flex-col gap-1 text-left">
+                      <div className="px-1.5 py-0.5 text-[11px] text-[var(--text-tertiary)]">
+                        {t.home.ideasForYou}
+                      </div>
+                      <div className="rounded-[var(--radius-sm)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-secondary)]">
+                        {t.home.ideaSummarize}
+                      </div>
+                      <div className="rounded-[var(--radius-sm)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-secondary)]">
+                        {t.home.ideaAuditMcp}
                       </div>
                     </div>
                   </div>
-                  <div className="flex w-full max-w-[320px] flex-col gap-1 text-left">
-                    <div className="px-1.5 py-0.5 text-[9.5px] text-[#6e6e6e]">
-                      {t.home.ideasForYou}
-                    </div>
-                    <div className="rounded-[6px] bg-[#1a1a1a] px-2 py-1.5 text-[10.5px] text-[#bdbdbd]">
-                      {t.home.ideaSummarize}
-                    </div>
-                    <div className="rounded-[6px] bg-[#1a1a1a] px-2 py-1.5 text-[10.5px] text-[#bdbdbd]">
-                      {t.home.ideaAuditMcp}
-                    </div>
-                  </div>
                 </div>
-              </div>
-            </section>
-          )}
+              </section>
+            )}
+          </div>
         </div>
+
+        {/* Right Inspector: docked >=1280px, overlay drawer 1024-1279px & <1024px */}
+        {inspectorOpen && !isHomeEmpty && !browserPaneOpen && (
+          isWideViewport ? (
+            <ContextSidebar
+              bootstrap={bootstrap}
+              workMode={workMode}
+              contextEntries={contextEntries}
+              contextSkillsCount={contextSkillsCount}
+              contextEstimated={composerContextEstimated}
+              contextUsedTokens={contextUsedTokens}
+              todos={todos}
+              mcpServers={mcpServers}
+              recentSessions={recentSessions}
+              activeSessionId={sessionId}
+              messages={messages}
+            />
+          ) : (
+            <div
+              data-testid="inspector-drawer-backdrop"
+              onClick={() => setDrawerInspectorOpen(false)}
+              className="fixed inset-x-0 bottom-0 top-[38px] z-40 flex justify-end bg-[var(--scrim)]"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="flex h-full shadow-[var(--shadow-dialog)]"
+              >
+                <ContextSidebar
+                  bootstrap={bootstrap}
+                  workMode={workMode}
+                  contextEntries={contextEntries}
+                  contextSkillsCount={contextSkillsCount}
+                  contextEstimated={composerContextEstimated}
+                  contextUsedTokens={contextUsedTokens}
+                  todos={todos}
+                  mcpServers={mcpServers}
+                  recentSessions={recentSessions}
+                  activeSessionId={sessionId}
+                  messages={messages}
+                />
+              </div>
+            </div>
+          )
+        )}
       </div>
 
-      {/* Column 4: Right Inspector (308px, #0f0f0f, §2) */}
-      {inspectorOpen && !isHomeEmpty && !browserPaneOpen && (
-        <ContextSidebar
-          bootstrap={bootstrap}
-          workMode={workMode}
-          contextEntries={contextEntries}
-          contextSkillsCount={contextSkillsCount}
-          contextEstimated={composerContextEstimated}
-          contextUsedTokens={contextUsedTokens}
-          todos={todos}
-          mcpServers={mcpServers}
-          recentSessions={recentSessions}
-          activeSessionId={sessionId}
-          messages={messages}
-        />
-      )}
-      </div>
+      {/* Search Overlay Modal (⌘K) */}
+      <DialogShell
+        open={searchOverlayOpen}
+        onClose={() => setSearchOverlayOpen(false)}
+        ariaLabel={t.extra.searchOverlayTitle}
+        testId="search-overlay-modal"
+        size="md"
+        panelClassName="flex max-h-[75vh] flex-col"
+      >
+        <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-4 py-3">
+          <Search className="h-4 w-4 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+          <input
+            type="text"
+            autoFocus
+            value={sessionQuery}
+            onChange={(e) => setSessionQuery(e.target.value)}
+            placeholder={t.extra.searchOverlayPlaceholder}
+            aria-label={t.a11y.searchSessions}
+            className="flex-1 bg-transparent text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => setSearchOverlayOpen(false)}
+            aria-label={t.a11y.searchOverlayClose}
+            className="rounded-[var(--radius-sm)] p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          >
+            <X className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3">
+          {filteredSessions.length === 0 ? (
+            <div className="py-8 text-center text-xs text-[var(--text-tertiary)]">
+              {t.extra.searchOverlayEmpty}
+            </div>
+          ) : (
+            <ul className="space-y-1">
+              {filteredSessions.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    disabled={runActive}
+                    onClick={() => {
+                      setSearchOverlayOpen(false);
+                      setForceHome(false);
+                      void resumeSession(item.id, false);
+                    }}
+                    className={`flex w-full items-center justify-between gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50 ${
+                      item.id === sessionId
+                        ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+                        : "text-[var(--text-secondary)]"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-[var(--text-primary)]">
+                        {sanitizeDisplayText(
+                          item.title ?? t.sidebar.untitledSession
+                        )}
+                      </div>
+                      <div className="truncate text-[11px] text-[var(--text-tertiary)]">
+                        {workspaceBase(
+                          item.workspace,
+                          t.sessionBrowser.workspaceFallback
+                        )}{" "}
+                        · {item.work_mode} ·{" "}
+                        {item.last_status ?? t.sidebar.savedStatus}
+                      </div>
+                    </div>
+                    <span
+                      style={{ color: WORK_MODE_STYLES[item.work_mode].color }}
+                      className="shrink-0 font-mono text-[11px]"
+                    >
+                      {WORK_MODE_STYLES[item.work_mode].label}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-2.5 text-xs">
+          <span className="text-[11px] text-[var(--text-tertiary)]">
+            {t.extra.searchOverlayTitle}
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setSearchOverlayOpen(false);
+              setSessionsOpen(true);
+            }}
+          >
+            {t.sidebar.browseAllSessions}
+          </Button>
+        </div>
+      </DialogShell>
 
       {/* Dialogs */}
       {pendingInput && (
@@ -1783,7 +2005,6 @@ export function App() {
         onClose={() => setSessionsOpen(false)}
         onResume={(id, accept) => {
           setForceHome(false);
-          setSidebarPanel("sessions");
           return resumeSession(id, accept);
         }}
         onClearConfigChange={clearConfigChangePrompt}
@@ -1800,19 +2021,6 @@ export function App() {
         onBootstrapUpdated={applyBootstrap}
         onSelectMode={setWorkMode}
         onSelectPermission={setPermissionMode}
-        onOpenMcpCreds={() => setMcpCredsOpen(true)}
-        onOpenMemory={() => setMemoryOpen(true)}
-        onOpenExport={() => setExportOpen(true)}
-      />
-      <McpCredentialsDialog
-        open={mcpCredsOpen}
-        runActive={runActive}
-        onClose={() => setMcpCredsOpen(false)}
-      />
-      <MemoryDialog
-        open={memoryOpen}
-        runActive={runActive}
-        onClose={() => setMemoryOpen(false)}
       />
       <ExportDialog
         open={exportOpen}

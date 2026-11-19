@@ -270,6 +270,9 @@ export interface UiMessages {
     continueLabel: string;
     finishLabel: string;
     applyingLabel: string;
+    workspaceInputLabel: string;
+    chooseWorkspaceTitle: string;
+    dialogLabel: string;
   };
   sessionBrowser: {
     title: string;
@@ -291,6 +294,7 @@ export interface UiMessages {
     pageLabel: (p: number) => string;
     prev: string;
     next: string;
+    workspaceFallback: string;
   };
   mcpDialog: {
     title: string;
@@ -309,6 +313,7 @@ export interface UiMessages {
     scopesPlaceholder: string;
     approveScopesLabel: string;
     importBtn: string;
+    revisionLabel: (rev: string) => string;
   };
   memoryDialog: {
     title: string;
@@ -319,6 +324,8 @@ export interface UiMessages {
     discardBtn: string;
     confirmBtn: string;
     appliedMsg: (opId: string) => string;
+    queryPlaceholder: string;
+    operationSummary: (op: string, rev: string) => string;
   };
   exportDialog: {
     title: string;
@@ -333,6 +340,8 @@ export interface UiMessages {
     close: string;
     exporting: string;
     publishBtn: string;
+    chooseLocation: string;
+    resultSummary: (bytes: string, format: string) => string;
   };
   modulesPanel: {
     runtimeModules: string;
@@ -345,6 +354,7 @@ export interface UiMessages {
     noJobs: string;
     stateLabel: string;
     cancel: string;
+    jobFallback: string;
   };
   approval: {
     title: string;
@@ -841,6 +851,9 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       continueLabel: "Continue",
       finishLabel: "Finish setup",
       applyingLabel: "Applying…",
+      workspaceInputLabel: "Workspace directory",
+      chooseWorkspaceTitle: "Choose workspace directory",
+      dialogLabel: "Soyo setup",
     },
     sessionBrowser: {
       title: "Sessions & Project History",
@@ -862,6 +875,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       pageLabel: (p) => `Page ${p}`,
       prev: "Prev",
       next: "Next",
+      workspaceFallback: "workspace",
     },
     mcpDialog: {
       title: "MCP Servers & Credentials (Redacted Metadata Only)",
@@ -881,6 +895,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       scopesPlaceholder: "Optional comma-separated scopes",
       approveScopesLabel: "Explicitly approve endpoint & scopes",
       importBtn: "Import Reference",
+      revisionLabel: (rev) => `rev ${rev}`,
     },
     memoryDialog: {
       title: "Global Memory Administration (Two-Phase Review)",
@@ -892,6 +907,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       discardBtn: "Discard",
       confirmBtn: "Confirm Apply",
       appliedMsg: (opId) => `Applied memory operation ${opId}`,
+      queryPlaceholder: "list | search <query> | show <id> | sources | history",
+      operationSummary: (op, rev) => `op: ${op} · rev: ${rev}`,
     },
     exportDialog: {
       title: "Export Session Transcript",
@@ -906,6 +923,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       close: "Close",
       exporting: "Exporting...",
       publishBtn: "Publish Export",
+      chooseLocation: "Choose output location",
+      resultSummary: (bytes, format) => `${bytes} bytes · ${format}`,
     },
     modulesPanel: {
       runtimeModules: "Runtime Modules",
@@ -918,6 +937,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       noJobs: "No background jobs recorded in active session.",
       stateLabel: "state",
       cancel: "Cancel",
+      jobFallback: "job",
     },
     approval: {
       title: "Approval required",
@@ -1435,6 +1455,9 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       continueLabel: "继续",
       finishLabel: "完成设置",
       applyingLabel: "应用中…",
+      workspaceInputLabel: "工作区目录",
+      chooseWorkspaceTitle: "选择工作区目录",
+      dialogLabel: "Soyo 初始设置",
     },
     sessionBrowser: {
       title: "会话与项目历史",
@@ -1456,6 +1479,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       pageLabel: (p) => `第 ${p} 页`,
       prev: "上一页",
       next: "下一页",
+      workspaceFallback: "工作区",
     },
     mcpDialog: {
       title: "MCP 服务器与凭据（仅脱敏元数据）",
@@ -1474,6 +1498,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       scopesPlaceholder: "可选逗号分隔的作用域列表",
       approveScopesLabel: "明确批准服务端点与权限作用域",
       importBtn: "导入凭据引用",
+      revisionLabel: (rev) => `版本 ${rev}`,
     },
     memoryDialog: {
       title: "全局记忆管理（两阶段复核）",
@@ -1485,6 +1510,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       discardBtn: "放弃",
       confirmBtn: "确认应用",
       appliedMsg: (opId) => `已应用记忆操作 ${opId}`,
+      queryPlaceholder: "list | search <query> | show <id> | sources | history",
+      operationSummary: (op, rev) => `操作：${op} · 版本：${rev}`,
     },
     exportDialog: {
       title: "导出会话记录",
@@ -1499,6 +1526,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       close: "关闭",
       exporting: "正在导出…",
       publishBtn: "确认导出",
+      chooseLocation: "选择输出位置",
+      resultSummary: (bytes, format) => `${bytes} 字节 · ${format}`,
     },
     modulesPanel: {
       runtimeModules: "运行时模块",
@@ -1511,6 +1540,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       noJobs: "当前活动会话没有后台任务记录。",
       stateLabel: "状态",
       cancel: "取消",
+      jobFallback: "任务",
     },
     approval: {
       title: "需要人工批准",
@@ -2026,6 +2056,9 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       continueLabel: "繼續",
       finishLabel: "完成設定",
       applyingLabel: "套用中…",
+      workspaceInputLabel: "工作區目錄",
+      chooseWorkspaceTitle: "選擇工作區目錄",
+      dialogLabel: "Soyo 初始設定",
     },
     sessionBrowser: {
       title: "工作階段與專案歷史",
@@ -2047,6 +2080,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       pageLabel: (p) => `第 ${p} 頁`,
       prev: "上一頁",
       next: "下一頁",
+      workspaceFallback: "工作區",
     },
     mcpDialog: {
       title: "MCP 伺服器與憑證（僅去識別化中繼資料）",
@@ -2065,6 +2099,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       scopesPlaceholder: "選填以逗號分隔的權限範圍",
       approveScopesLabel: "明確核准端點與權限範圍",
       importBtn: "匯入憑證參照",
+      revisionLabel: (rev) => `版本 ${rev}`,
     },
     memoryDialog: {
       title: "全域記憶管理（兩階段複核）",
@@ -2076,6 +2111,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       discardBtn: "捨棄",
       confirmBtn: "確認套用",
       appliedMsg: (opId) => `已套用記憶操作 ${opId}`,
+      queryPlaceholder: "list | search <query> | show <id> | sources | history",
+      operationSummary: (op, rev) => `操作：${op} · 版本：${rev}`,
     },
     exportDialog: {
       title: "匯出工作階段紀錄",
@@ -2090,6 +2127,8 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       close: "關閉",
       exporting: "正在匯出…",
       publishBtn: "發佈匯出",
+      chooseLocation: "選擇輸出位置",
+      resultSummary: (bytes, format) => `${bytes} 位元組 · ${format}`,
     },
     modulesPanel: {
       runtimeModules: "執行階段模組",
@@ -2102,6 +2141,7 @@ const MESSAGES: Record<LocaleId, UiMessages> = {
       noJobs: "目前作用中工作階段沒有背景任務紀錄。",
       stateLabel: "狀態",
       cancel: "取消",
+      jobFallback: "任務",
     },
     approval: {
       title: "需要人工核准",

@@ -5,6 +5,8 @@ import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
 import { isBrowserPreview } from "../preview/browserPreview";
 import { useAppStore } from "../store/useAppStore";
+import { Button } from "./ui/Button";
+import { SquaresLoader } from "./SquaresLoader";
 
 export function UpdaterBanner() {
   const locale = useAppStore((s) => s.locale);
@@ -106,45 +108,47 @@ export function UpdaterBanner() {
   return (
     <div
       data-testid="updater-banner"
-      className="soyo-panel-enter flex flex-wrap items-center justify-between gap-2 border-b border-[#2e2e2e] bg-[#1a1a1a] px-4 py-1.5 text-xs text-[#e8e8e8]"
+      className="soyo-panel-enter flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-raised)] px-4 py-1.5 text-[12px] text-[var(--text-primary)]"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <Download className="h-3.5 w-3.5 shrink-0 text-[#d9a08e]" />
+        <Download className="h-3.5 w-3.5 shrink-0 text-[var(--accent-text)]" />
         <span className="font-medium">
           {t.updater.available(sanitizeDisplayText(update.version))}
         </span>
-        <span className="font-mono text-[11px] text-[#7a7a7a]">
+        <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
           {t.updater.current(sanitizeDisplayText(update.currentVersion))}
         </span>
         {progressText && (
-          <span className="font-mono text-[11px] text-[#4ade80]">
+          <span className="font-mono text-[11px] text-[var(--success)]">
             {progressText}
           </span>
         )}
         {errorMsg && (
-          <span className="text-[11px] text-[#f87171]">{errorMsg}</span>
+          <span className="text-[11px] text-[var(--danger)]">{errorMsg}</span>
         )}
       </div>
 
       <div className="flex items-center gap-2">
         {!installed && (
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            size="sm"
             disabled={installing}
             onClick={() => void handleInstall()}
-            className="inline-flex items-center gap-1 rounded-[7px] bg-[#d9a08e] px-2.5 py-1 text-[11px] font-semibold text-[#1c120e] hover:bg-[#e2a68f] disabled:opacity-50"
           >
-            <RefreshCw
-              className={`h-3 w-3 ${installing ? "animate-spin" : ""}`}
-            />
+            {installing ? (
+              <SquaresLoader size={12} />
+            ) : (
+              <RefreshCw className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
+            )}
             {installing ? t.updater.installingBtn : t.updater.installRestartBtn}
-          </button>
+          </Button>
         )}
         <button
           type="button"
           onClick={() => void handleDismiss()}
-          aria-label="Dismiss update banner"
-          className="rounded p-0.5 text-[#7a7a7a] hover:bg-[#242424] hover:text-[#e8e8e8]"
+          aria-label={t.a11y.dismissUpdater}
+          className="rounded-[var(--radius-sm)] p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           <X className="h-3.5 w-3.5" />
         </button>

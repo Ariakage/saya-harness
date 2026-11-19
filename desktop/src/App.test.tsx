@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -61,7 +62,7 @@ import { useAppStore } from "./store/useAppStore";
 
 function sampleBootstrap(): BootstrapStateDto_Serialize {
   return {
-    version: "0.2.0",
+    version: "0.3.0",
     config_ready: true,
     config_path: "/tmp/soyo/config.toml",
     config_error: null,
@@ -142,7 +143,20 @@ describe("App Stage 3 runtime integration", () => {
     checkUpdateMock.mockResolvedValue(null);
     isTauriMock.mockReset();
     isTauriMock.mockReturnValue(false);
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 1280,
+    });
+    document.documentElement.dataset.theme = "dark";
     useAppStore.setState({
+      theme: "system",
+      resolvedTheme: "dark",
+      fontSize: 14,
+      conversationFont: "default",
+      reduceMotion: false,
+      inspectorOpenPref: null,
+      helperReconnecting: false,
       initialized: false,
       loading: false,
       bootstrap: null,
@@ -294,8 +308,8 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.getByTestId("tool-card")).toBeTruthy();
     });
 
-    const cancelBtn = screen.getByRole("button", { name: "Cancel" });
-    fireEvent.click(cancelBtn);
+    const stopButtons = screen.getAllByRole("button", { name: "Stop" });
+    fireEvent.click(stopButtons[stopButtons.length - 1]);
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("cancel_run");
@@ -305,7 +319,7 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Global Markdown Source / Render toggle lives in the topbar overflow menu.
-    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Show markdown source" })
     );
@@ -467,9 +481,7 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Open session browser and resume with config change confirmation
-    fireEvent.click(
-      screen.getByRole("button", { name: "More session actions" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
     await waitFor(() => {
       expect(screen.getByTestId("session-browser-dialog")).toBeTruthy();
     });
@@ -603,15 +615,13 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Settings + Modules
-    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "General & preferences" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     await waitFor(() => {
       expect(screen.getByTestId("settings-dialog")).toBeTruthy();
-      expect(screen.getByTestId("modules-panel")).toBeTruthy();
     });
 
+    const settingsDialog = screen.getByTestId("settings-dialog");
+    fireEvent.click(within(settingsDialog).getByRole("button", { name: "General" }));
     const wsInput = screen.getByLabelText("Workspace Directory");
     fireEvent.change(wsInput, { target: { value: "/workspace/updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -621,6 +631,10 @@ describe("App Stage 3 runtime integration", () => {
       });
     });
 
+    fireEvent.click(within(settingsDialog).getByRole("button", { name: "Modules" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("modules-panel")).toBeTruthy();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Enabled" }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_module_enabled", {
@@ -628,21 +642,17 @@ describe("App Stage 3 runtime integration", () => {
         enabled: false,
       });
     });
-    fireEvent.click(screen.getByLabelText("Close settings"));
 
-    // MCP & Credentials
+    // MCP & Credentials (embedded tab inside Settings)
     fireEvent.click(
-      screen.getByRole("button", { name: "Rail MCP & Credentials" })
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Manage servers & credentials" })
+      within(settingsDialog).getByRole("button", { name: "MCP & Credentials" })
     );
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-credentials-dialog")).toBeTruthy();
+      expect(screen.getByTestId("mcp-embedded-panel")).toBeTruthy();
       expect(screen.getByText(/docs-http \(bearer_env\)/)).toBeTruthy();
     });
 
-    fireEvent.change(screen.getByLabelText("Secret environment variable"), {
+    fireEvent.change(screen.getByLabelText("Environment variable name"), {
       target: { value: "DOCS_BEARER_TOKEN" },
     });
     fireEvent.change(screen.getByLabelText("Credential scopes"), {
@@ -662,17 +672,15 @@ describe("App Stage 3 runtime integration", () => {
         approveScopes: true,
       });
     });
-    fireEvent.click(screen.getByLabelText("Close MCP and credentials dialog"));
 
-    // Memory two-phase review/confirm
-    fireEvent.click(screen.getByRole("button", { name: "Rail Memory" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
+    // Memory two-phase review/confirm (embedded tab inside Settings)
+    fireEvent.click(within(settingsDialog).getByRole("button", { name: "Memory" }));
     await waitFor(() => {
-      expect(screen.getByTestId("memory-dialog")).toBeTruthy();
+      expect(screen.getByTestId("memory-embedded-panel")).toBeTruthy();
       expect(invokeMock).toHaveBeenCalledWith("query_memory", { command: "list" });
     });
 
-    fireEvent.change(screen.getByLabelText("Prepare memory command"), {
+    fireEvent.change(screen.getByLabelText("Memory action command"), {
       target: { value: "forget fact_1" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Prepare Review" }));
@@ -689,6 +697,7 @@ describe("App Stage 3 runtime integration", () => {
         actionId: "mem_act_1",
       });
     });
+    fireEvent.click(screen.getByLabelText("Close settings"));
   });
 
   it("exports sessions, stages composer attachments, and renders session media previews", async () => {
@@ -758,7 +767,7 @@ describe("App Stage 3 runtime integration", () => {
     );
 
     // Export session
-    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Export session…" })
     );
@@ -778,9 +787,12 @@ describe("App Stage 3 runtime integration", () => {
     });
     fireEvent.click(screen.getByLabelText("Close export dialog"));
 
-    // Stage attachment & submit
-    fireEvent.click(screen.getByRole("button", { name: "Attach" }));
-    fireEvent.change(screen.getByLabelText("Attachment file path"), {
+    // Stage attachment via + context menu & submit
+    fireEvent.click(screen.getByRole("button", { name: "Add context menu" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enter path manually" })
+    );
+    fireEvent.change(screen.getByLabelText("Local attachment file path"), {
       target: { value: "/workspace/demo/preview.png" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Stage" }));
@@ -843,7 +855,7 @@ describe("App Stage 3 runtime integration", () => {
         ).toBeTruthy();
       });
 
-      fireEvent.click(screen.getByLabelText("Dismiss update banner"));
+      fireEvent.click(screen.getByLabelText("Dismiss update notification"));
       await waitFor(() => {
         expect(screen.queryByTestId("updater-banner")).toBeNull();
       });
@@ -914,10 +926,7 @@ describe("App Stage 3 runtime integration", () => {
     });
 
     // Settings Usage tab
-    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Usage & tokens" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
     await waitFor(() => {
       expect(screen.getByTestId("settings-dialog")).toBeTruthy();
     });
@@ -1024,8 +1033,11 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.getByLabelText("Prompt input")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
-    fireEvent.click(screen.getByRole("button", { name: "Usage & tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Customize" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-dialog")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     await waitFor(() => {
       expect(screen.getByTestId("usage-panel")).toBeTruthy();
     });
@@ -1097,7 +1109,7 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.getByTestId("inline-diff-card")).toBeTruthy();
       expect(screen.getAllByText("+2").length).toBeGreaterThan(0);
       expect(screen.getAllByText("-1").length).toBeGreaterThan(0);
-      expect(screen.getByText("1 hunk ›")).toBeTruthy();
+      expect(screen.getByText(/1 hunk/i)).toBeTruthy();
       expect(screen.getByText("restore_session")).toBeTruthy();
       expect(screen.getByText("session_store.rs")).toBeTruthy();
       expect(screen.getByTestId("context-sidebar").textContent).toContain(
@@ -1106,7 +1118,7 @@ describe("App Stage 3 runtime integration", () => {
     });
   });
 
-  it("collapses sidebar on Home, exposes unified titlebar controls, and formats large token counts", async () => {
+  it("keeps single collapsible sidebar expanded on Home, exposes unified titlebar controls, and formats large token counts", async () => {
     expect(formatTokenCount(850)).toBe("850");
     expect(formatTokenCount(12_400)).toBe("12.4k");
     expect(formatTokenCount(152_300_000)).toBe("152.3M");
@@ -1126,17 +1138,20 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.getByTestId("home-empty-state")).toBeTruthy();
     });
 
-    // Home state collapses Column 2 sidebar instead of keeping Sessions expanded
-    expect(screen.queryByTestId("sidebar-panel")).toBeNull();
-    expect(screen.queryByRole("button", { name: "More session actions" })).toBeNull();
-    // User avatar menu stays accessible from the primary rail while collapsed
+    // D-075: Single 248px sidebar stays expanded on Home and collapses to 48px rail on toggle
+    const sidebar = screen.getByTestId("sidebar-panel");
+    expect(sidebar.className).toContain("w-[248px]");
     expect(screen.getByRole("button", { name: "User menu" })).toBeTruthy();
 
-    // Unified titlebar toggle expands Column 2 on demand; clicking Rail Home collapses it again
+    // Titlebar toggle collapses sidebar to 48px icon rail and restores it back
     fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sidebar-panel")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "More session actions" })).toBeTruthy();
+      expect(screen.getByTestId("sidebar-panel").className).toContain("w-[48px]");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar-panel").className).toContain("w-[248px]");
     });
 
     // Segmented markdown view switcher in the unified titlebar updates store state
@@ -1144,11 +1159,6 @@ describe("App Stage 3 runtime integration", () => {
     expect(useAppStore.getState().markdownMode).toBe("source");
     fireEvent.click(screen.getByRole("button", { name: "Rendered conversation view" }));
     expect(useAppStore.getState().markdownMode).toBe("render");
-
-    fireEvent.click(screen.getByRole("button", { name: "Rail Home" }));
-    await waitFor(() => {
-      expect(screen.queryByTestId("sidebar-panel")).toBeNull();
-    });
   });
 
   it("opens Choose your language from user menu and switches en-US, zh-CN, and zh-TW", async () => {
@@ -1213,50 +1223,44 @@ describe("App Stage 3 runtime integration", () => {
       expect(screen.queryByTestId("language-dialog")).toBeNull();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Rail Customize" }));
-    fireEvent.click(screen.getByRole("button", { name: "常规与偏好设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "自定义" }));
     await waitFor(() => {
       expect(screen.getByTestId("settings-dialog")).toBeTruthy();
-      expect(screen.getByText("工作区目录")).toBeTruthy();
       expect(screen.getByText("界面语言")).toBeTruthy();
     });
-    fireEvent.click(screen.getByLabelText("Close settings"));
+    const zhSettings = screen.getByTestId("settings-dialog");
+    fireEvent.click(within(zhSettings).getByRole("button", { name: "常规" }));
+    await waitFor(() => {
+      expect(screen.getByText("工作区目录")).toBeTruthy();
+    });
+    fireEvent.click(within(zhSettings).getByRole("button", { name: "MCP 与凭据" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-embedded-panel")).toBeTruthy();
+      expect(screen.getByText("已配置的 MCP 服务器")).toBeTruthy();
+    });
+    fireEvent.click(within(zhSettings).getByRole("button", { name: "记忆" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("memory-embedded-panel")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText("关闭设置"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Rail Sessions" }));
-    fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "会话" }));
     await waitFor(() => {
       expect(screen.getByTestId("session-browser-dialog")).toBeTruthy();
       expect(screen.getByText("会话与项目历史")).toBeTruthy();
       expect(screen.getByText("会话详情")).toBeTruthy();
     });
-    fireEvent.click(screen.getByLabelText("Close session browser"));
+    fireEvent.click(screen.getByLabelText("关闭会话浏览器"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Rail MCP & Credentials" }));
-    fireEvent.click(screen.getByRole("button", { name: "管理服务器与凭据" }));
-    await waitFor(() => {
-      expect(screen.getByTestId("mcp-credentials-dialog")).toBeTruthy();
-      expect(screen.getByText("已配置的 MCP 服务器")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByLabelText("Close MCP and credentials dialog"));
-
-    fireEvent.click(screen.getByRole("button", { name: "Rail Memory" }));
-    fireEvent.click(screen.getByRole("button", { name: "打开记忆管理" }));
-    await waitFor(() => {
-      expect(screen.getByTestId("memory-dialog")).toBeTruthy();
-      expect(screen.getByText("全局记忆管理（两阶段复核）")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByLabelText("Close memory manager"));
-
-    fireEvent.click(screen.getByRole("button", { name: "Rail Export" }));
-    fireEvent.click(screen.getByRole("button", { name: "导出会话…" }));
+    fireEvent.click(screen.getByRole("button", { name: "导出" }));
     await waitFor(() => {
       expect(screen.getByTestId("export-dialog")).toBeTruthy();
       expect(screen.getByText("导出会话记录")).toBeTruthy();
     });
-    fireEvent.click(screen.getByLabelText("Close export dialog"));
+    fireEvent.click(screen.getByLabelText("关闭导出对话框"));
 
     // Switch to Traditional Chinese and verify LanguageDialog + SettingsDialog
-    fireEvent.click(screen.getByRole("button", { name: "User menu" }));
+    fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
     fireEvent.click(await screen.findByTestId("user-menu-language"));
     fireEvent.click(await screen.findByTestId("language-option-zh-TW"));
     await waitFor(() => {
@@ -1362,8 +1366,9 @@ describe("App Stage 3 runtime integration", () => {
       expect(
         screen.getByRole("img", { name: "Context usage 30%" })
       ).toBeTruthy();
-      const usage = screen.getByTitle(/Estimated token usage/);
-      expect(usage.textContent).toContain("~↑61.0k");
+      const usage = screen.getByTitle(/Includes estimated values/i);
+      expect(usage.textContent).toContain("~");
+      expect(usage.textContent).toContain("61.0k");
     });
 
     // Queue mode holds the next prompt locally instead of steering.
@@ -1733,6 +1738,153 @@ describe("App Stage 3 runtime integration", () => {
     ]);
     await waitFor(() => {
       expect(document.body.textContent).toContain("screenshot.png");
+    });
+  });
+
+  it("shows permanent danger Bypass badges, SquaresLoader during active run, and pins sessionId on submit_prompt", async () => {
+    const boot = {
+      ...sampleBootstrap(),
+      permission_mode: "bypass" as const,
+    };
+    const submittedArgs: Record<string, unknown>[] = [];
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_bootstrap_state") return boot;
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "submit_prompt") {
+        submittedArgs.push(args ?? {});
+        return {
+          action: "started",
+          session_id: boot.session!.id,
+          run_id: "run_bypass_1",
+        };
+      }
+      return null;
+    });
+
+    const { container } = render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-mode-badge")).toBeTruthy();
+      expect(screen.getByTestId("composer-bypass-badge")).toBeTruthy();
+    });
+
+    expect(screen.getByTestId("bypass-mode-badge").className).toContain("--danger");
+    expect(screen.getByTestId("composer-bypass-badge").className).toContain("--danger");
+
+    fireEvent.change(screen.getByLabelText("Prompt input"), {
+      target: { value: "Verify session pinning" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(submittedArgs.length).toBe(1);
+      expect(submittedArgs[0]).toMatchObject({
+        prompt: "Verify session pinning",
+        sessionId: boot.session!.id,
+      });
+      expect(container.querySelector(".soyo-squares-loader")).toBeTruthy();
+    });
+  });
+
+  it("switches Light/Dark theme, persists desktop prefs, passes utcOffsetMinutes on usage stats, and handles shortcuts & 900px breakpoint", async () => {
+    isTauriMock.mockReturnValue(true);
+    const updatedPrefs: Record<string, unknown>[] = [];
+    const usageCalls: Record<string, unknown>[] = [];
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_bootstrap_state") return sampleBootstrap();
+      if (cmd === "list_sessions") return samplePage();
+      if (cmd === "get_global_prompt")
+        return { content: "", path: "/tmp/AGENTS.md", source_path: null };
+      if (cmd === "get_helper_status") {
+        return {
+          connected: true,
+          version: "0.3.0",
+          pid: 1234,
+          active_runs: 0,
+          active_clients: 1,
+          detail: null,
+        };
+      }
+      if (cmd === "update_desktop_prefs") {
+        updatedPrefs.push((args as { params: Record<string, unknown> }).params);
+        return {
+          nickname: null,
+          avatar_data: null,
+          theme: "light",
+          font_size: 14,
+          conversation_font: "default",
+          reduce_motion: false,
+          inspector_open: true,
+        };
+      }
+      if (cmd === "get_usage_stats") {
+        usageCalls.push(args ?? {});
+        return {
+          days_requested: 30,
+          since: 1700000000,
+          totals: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, runs: 0, requests: 0, estimated: false },
+          by_purpose: [],
+          days: [],
+        };
+      }
+      return null;
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId("context-sidebar")).toBeTruthy();
+      expect(screen.getByTestId("sidebar-panel").className).toContain("w-[248px]");
+    });
+
+    // ⌘B toggles sidebar
+    fireEvent.keyDown(window, { key: "b", metaKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar-panel").className).toContain("w-[48px]");
+    });
+
+    // ⌘K opens Search overlay modal
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId("search-overlay-modal")).toBeTruthy();
+    });
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await waitFor(() => {
+      expect(screen.queryByTestId("search-overlay-modal")).toBeNull();
+    });
+
+    // ⌘, opens SettingsDialog
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-dialog")).toBeTruthy();
+    });
+
+    // Switch to Appearance -> Light updates data-theme & persists via update_desktop_prefs
+    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    await waitFor(() => {
+      expect(document.documentElement.dataset.theme).toBe("light");
+      expect(updatedPrefs.some((p) => p.theme === "light")).toBe(true);
+    });
+
+    // Usage tab sends numeric utcOffsetMinutes (D-078)
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    await waitFor(() => {
+      expect(usageCalls.length).toBeGreaterThan(0);
+      expect(typeof usageCalls[0].utcOffsetMinutes).toBe("number");
+    });
+    fireEvent.click(screen.getByLabelText("Close settings"));
+
+    // Narrow 900px viewport collapses sidebar to 48px rail and hides docked inspector
+    act(() => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: 900,
+      });
+      window.dispatchEvent(new Event("resize"));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar-panel").className).toContain("w-[48px]");
+      expect(screen.queryByTestId("context-sidebar")).toBeNull();
     });
   });
 });

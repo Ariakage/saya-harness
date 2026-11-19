@@ -18,6 +18,9 @@ import {
 } from "../bindings";
 import { LANGUAGE_OPTIONS, getMessages } from "../lib/i18n";
 import { useAppStore } from "../store/useAppStore";
+import { SquaresLoader } from "./SquaresLoader";
+import { Button } from "./ui/Button";
+import { DialogShell } from "./ui/DialogShell";
 
 export interface SetupWizardProps {
   bootstrap: BootstrapStateDto_Serialize;
@@ -171,363 +174,381 @@ export function SetupWizard({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Soyo setup"
-      data-testid="setup-wizard"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0d0d0d] p-6"
+    <DialogShell
+      open
+      ariaLabel={t.setup.dialogLabel}
+      testId="setup-wizard"
+      size="md"
+      panelClassName="flex max-w-[520px] flex-col"
     >
-      <div className="soyo-dialog-enter flex w-full max-w-[520px] flex-col rounded-[16px] border border-[#2b2b2b] bg-[#181818] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
-        {/* Header */}
-        <div className="flex items-center gap-3 border-b border-[#232323] px-6 py-4">
-          <img
-            src="/app-icon.png"
-            alt="Soyo"
-            className="h-8 w-8 rounded-[22%] object-cover"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="text-[15px] font-semibold text-[#e8e8e8]">
-              {t.setup.welcome}
-            </div>
-            <div className="text-[11.5px] text-[#8a8a8a]">
-              {t.setup.welcomeSubtitle}
-            </div>
+      {/* Header */}
+      <div className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-6 py-4">
+        <img
+          src="/app-icon.png"
+          alt={t.about.productName}
+          className="h-8 w-8 rounded-[22%] object-cover"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="text-[15px] font-semibold text-[var(--text-primary)]">
+            {t.setup.welcome}
           </div>
-          <button
-            type="button"
-            onClick={onSkip}
-            className="text-[11px] text-[#6e6e6e] transition-colors hover:text-[#a3a3a3]"
-          >
-            {t.setup.skipLabel}
-          </button>
+          <div className="text-[11.5px] text-[var(--text-tertiary)]">
+            {t.setup.welcomeSubtitle}
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={onSkip}
+          className="text-[11px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+        >
+          {t.setup.skipLabel}
+        </button>
+      </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center gap-1.5 px-6 pt-4">
-          {STEPS.map((s, i) => (
-            <div key={s} className="flex items-center gap-1.5">
-              <span
-                className={`flex h-5.5 w-5.5 items-center justify-center rounded-full text-[10px] ${
-                  i < stepIdx
-                    ? "bg-[#d9a08e] text-[#181818]"
-                    : i === stepIdx
-                      ? "border border-[#d9a08e] text-[#d9a08e]"
-                      : "border border-[#3a3a3a] text-[#5e5e5e]"
+      {/* Step indicator */}
+      <div className="flex items-center gap-1.5 px-6 pt-4">
+        {STEPS.map((s, i) => (
+          <div key={s} className="flex items-center gap-1.5">
+            <span
+              className={`flex h-5.5 w-5.5 items-center justify-center rounded-full text-[11px] ${
+                i < stepIdx
+                  ? "bg-[var(--accent)] text-[var(--on-accent)]"
+                  : i === stepIdx
+                    ? "border border-[var(--accent)] text-[var(--accent-text)]"
+                    : "border border-[var(--border)] text-[var(--text-tertiary)]"
+              }`}
+            >
+              {i < stepIdx ? (
+                <Check className="h-3 w-3" strokeWidth={1.75} />
+              ) : (
+                stepIcon(s)
+              )}
+            </span>
+            {i < STEPS.length - 1 && (
+              <span className="h-px w-6 bg-[var(--border)]" />
+            )}
+          </div>
+        ))}
+        <span className="ml-auto text-[11px] text-[var(--text-tertiary)]">
+          {t.setup.stepOf(stepIdx + 1, STEPS.length)}
+        </span>
+      </div>
+
+      {/* Body */}
+      <div className="min-h-[300px] px-6 py-5 text-xs">
+        {bootstrap.config_error && !errorMsg && (
+          <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--warning)] bg-[var(--warning-surface)] px-3 py-2 text-[var(--warning)]">
+            {bootstrap.config_error}
+          </div>
+        )}
+        {errorMsg && (
+          <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--danger)] bg-[var(--danger-surface)] px-3 py-2 text-[var(--danger)]">
+            {errorMsg}
+          </div>
+        )}
+
+        {step === "language" && (
+          <div className="space-y-2" data-testid="setup-step-language">
+            <div className="mb-3 text-[12px] text-[var(--text-secondary)]">
+              {t.setup.stepLanguage}
+            </div>
+            {LANGUAGE_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setLocale(opt.id)}
+                className={`flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3.5 py-2.5 text-left transition-colors ${
+                  locale === opt.id
+                    ? "border-[var(--accent)] bg-[var(--accent-surface)] text-[var(--text-primary)]"
+                    : "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
                 }`}
               >
-                {i < stepIdx ? <Check className="h-3 w-3" /> : stepIcon(s)}
-              </span>
-              {i < STEPS.length - 1 && (
-                <span className="h-px w-6 bg-[#2e2e2e]" />
-              )}
-            </div>
-          ))}
-          <span className="ml-auto text-[10.5px] text-[#6e6e6e]">
-            {t.setup.stepOf(stepIdx + 1, STEPS.length)}
-          </span>
-        </div>
+                <span className="text-[12.5px]">{opt.nativeLabel}</span>
+                {locale === opt.id && (
+                  <Check
+                    className="h-3.5 w-3.5 text-[var(--accent-text)]"
+                    strokeWidth={1.75}
+                  />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
 
-        {/* Body */}
-        <div className="min-h-[300px] px-6 py-5 text-xs">
-          {bootstrap.config_error && !errorMsg && (
-            <div className="mb-3 rounded-[8px] border border-[#4a3f2a] bg-[#1c1a15] px-3 py-2 text-[#e8d9b0]">
-              {bootstrap.config_error}
-            </div>
-          )}
-          {errorMsg && (
-            <div className="mb-3 rounded-[8px] border border-[#f87171]/35 bg-[#1c1515] px-3 py-2 text-[#f87171]">
-              {errorMsg}
-            </div>
-          )}
-
-          {step === "language" && (
-            <div className="space-y-2" data-testid="setup-step-language">
-              <div className="mb-3 text-[12px] text-[#a3a3a3]">
-                {t.setup.stepLanguage}
+        {step === "workspace" && (
+          <div className="space-y-3" data-testid="setup-step-workspace">
+            <div>
+              <div className="text-[12px] text-[var(--text-secondary)]">
+                {t.setup.stepWorkspace}
               </div>
-              {LANGUAGE_OPTIONS.map((opt) => (
+              <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                {t.setup.workspaceHint}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={workspace}
+                onChange={(e) => setWorkspace(e.target.value)}
+                className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
+                aria-label={t.setup.workspaceInputLabel}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!isTauri()}
+                onClick={() => {
+                  void openDialog({
+                    directory: true,
+                    defaultPath: workspace || undefined,
+                    title: t.setup.chooseWorkspaceTitle,
+                  }).then((picked) => {
+                    const path = Array.isArray(picked) ? picked[0] : picked;
+                    if (path) setWorkspace(path);
+                  });
+                }}
+              >
+                {t.setup.browse}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === "model" && (
+          <div className="space-y-3" data-testid="setup-step-model">
+            <div className="text-[12px] text-[var(--text-secondary)]">
+              {t.setup.stepModel}
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {PRESETS.map((p) => (
                 <button
-                  key={opt.id}
+                  key={p.id}
                   type="button"
-                  onClick={() => setLocale(opt.id)}
-                  className={`flex w-full items-center justify-between rounded-[9px] border px-3.5 py-2.5 text-left transition-colors ${
-                    locale === opt.id
-                      ? "border-[#d9a08e] bg-[#211d1b] text-[#e8e8e8]"
-                      : "border-[#2b2b2b] bg-[#1a1a1a] text-[#c9c9c9] hover:border-[#3a3a3a]"
+                  onClick={() => choosePreset(p.id)}
+                  className={`rounded-[var(--radius-md)] border px-2 py-1.5 text-[11px] transition-colors ${
+                    presetId === p.id
+                      ? "border-[var(--accent)] bg-[var(--accent-surface)] text-[var(--text-primary)]"
+                      : "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
                   }`}
                 >
-                  <span className="text-[12.5px]">{opt.nativeLabel}</span>
-                  {locale === opt.id && (
-                    <Check className="h-3.5 w-3.5 text-[#d9a08e]" />
-                  )}
+                  {t.setup.presets[p.id as keyof typeof t.setup.presets] ?? p.id}
                 </button>
               ))}
             </div>
-          )}
-
-          {step === "workspace" && (
-            <div className="space-y-3" data-testid="setup-step-workspace">
-              <div>
-                <div className="text-[12px] text-[#a3a3a3]">
-                  {t.setup.stepWorkspace}
-                </div>
-                <div className="mt-1 text-[11px] text-[#6e6e6e]">
-                  {t.setup.workspaceHint}
-                </div>
-              </div>
-              <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-[var(--text-tertiary)]">
+                  {t.setup.profileName}
+                </span>
                 <input
                   type="text"
-                  value={workspace}
-                  onChange={(e) => setWorkspace(e.target.value)}
-                  className="soyo-input flex-1 px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
-                  aria-label="Workspace directory"
+                  value={profileName}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
                 />
-                <button
-                  type="button"
-                  disabled={!isTauri()}
-                  onClick={() => {
-                    void openDialog({
-                      directory: true,
-                      defaultPath: workspace || undefined,
-                      title: "Choose workspace directory",
-                    }).then((picked) => {
-                      const path = Array.isArray(picked) ? picked[0] : picked;
-                      if (path) setWorkspace(path);
-                    });
-                  }}
-                  className="soyo-pill-btn font-medium text-[#c9c9c9] disabled:opacity-40"
-                >
-                  {t.setup.browse}
-                </button>
-              </div>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-[var(--text-tertiary)]">
+                  {t.setup.contextWindow}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={contextWindow}
+                  onChange={(e) => setContextWindow(e.target.value)}
+                  className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
+                />
+              </label>
             </div>
-          )}
+            <label className="block">
+              <span className="mb-1 block text-[11px] text-[var(--text-tertiary)]">
+                {t.setup.baseUrl}
+              </span>
+              <input
+                type="text"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://api.openai.com/v1"
+                className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[11px] text-[var(--text-tertiary)]">
+                {t.setup.modelName}
+              </span>
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="gpt-5 / claude-sonnet-4-5 / …"
+                className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
+              />
+            </label>
 
-          {step === "model" && (
-            <div className="space-y-3" data-testid="setup-step-model">
-              <div className="text-[12px] text-[#a3a3a3]">
-                {t.setup.stepModel}
-              </div>
-              <div className="grid grid-cols-4 gap-1.5">
-                {PRESETS.map((p) => (
+            {needsKey ? (
+              <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-3">
+                <div className="flex items-center gap-2 text-[11.5px] text-[var(--text-secondary)]">
+                  <KeyRound className="h-3.5 w-3.5 text-[var(--text-tertiary)]" strokeWidth={1.75} />
+                  {t.setup.apiKeyLabel}
+                </div>
+                <div className="flex gap-1.5 text-[11px]">
                   <button
-                    key={p.id}
                     type="button"
-                    onClick={() => choosePreset(p.id)}
-                    className={`rounded-[8px] border px-2 py-1.5 text-[11px] transition-colors ${
-                      presetId === p.id
-                        ? "border-[#d9a08e] bg-[#211d1b] text-[#e8e8e8]"
-                        : "border-[#2b2b2b] bg-[#1a1a1a] text-[#a3a3a3] hover:border-[#3a3a3a]"
+                    onClick={() => setKeyMode("paste")}
+                    className={`rounded-[var(--radius-sm)] px-2.5 py-1 ${
+                      keyMode === "paste"
+                        ? "bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                        : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
                     }`}
                   >
-                    {t.setup.presets[p.id as keyof typeof t.setup.presets] ??
-                      p.id}
+                    {t.setup.pasteKeyLabel}
                   </button>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setKeyMode("env")}
+                    className={`rounded-[var(--radius-sm)] px-2.5 py-1 ${
+                      keyMode === "env"
+                        ? "bg-[var(--surface-hover)] text-[var(--text-primary)]"
+                        : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                    }`}
+                  >
+                    {t.setup.useEnvVarLabel}
+                  </button>
+                </div>
                 <label className="block">
-                  <span className="mb-1 block text-[11px] text-[#8a8a8a]">
-                    {t.setup.profileName}
+                  <span className="mb-1 block text-[11px] text-[var(--text-tertiary)]">
+                    {t.setup.envVarNameLabel}
                   </span>
                   <input
                     type="text"
-                    value={profileName}
-                    onChange={(e) => setProfileName(e.target.value)}
-                    className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
+                    value={envName}
+                    onChange={(e) => setEnvName(e.target.value)}
+                    className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
                   />
                 </label>
-                <label className="block">
-                  <span className="mb-1 block text-[11px] text-[#8a8a8a]">
-                    {t.setup.contextWindow}
-                  </span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={contextWindow}
-                    onChange={(e) => setContextWindow(e.target.value)}
-                    className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
-                  />
-                </label>
-              </div>
-              <label className="block">
-                <span className="mb-1 block text-[11px] text-[#8a8a8a]">
-                  {t.setup.baseUrl}
-                </span>
-                <input
-                  type="text"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.openai.com/v1"
-                  className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[11px] text-[#8a8a8a]">
-                  {t.setup.modelName}
-                </span>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="gpt-5 / claude-sonnet-4-5 / …"
-                  className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
-                />
-              </label>
-
-              {needsKey ? (
-                <div className="space-y-2 rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3">
-                  <div className="flex items-center gap-2 text-[11.5px] text-[#c9c9c9]">
-                    <KeyRound className="h-3.5 w-3.5 text-[#8a8a8a]" />
-                    {t.setup.apiKeyLabel}
-                  </div>
-                  <div className="flex gap-1.5 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => setKeyMode("paste")}
-                      className={`rounded-[6px] px-2.5 py-1 ${
-                        keyMode === "paste"
-                          ? "bg-[#2e2e2e] text-[#e8e8e8]"
-                          : "text-[#8a8a8a] hover:text-[#c9c9c9]"
-                      }`}
-                    >
-                      {t.setup.pasteKeyLabel}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setKeyMode("env")}
-                      className={`rounded-[6px] px-2.5 py-1 ${
-                        keyMode === "env"
-                          ? "bg-[#2e2e2e] text-[#e8e8e8]"
-                          : "text-[#8a8a8a] hover:text-[#c9c9c9]"
-                      }`}
-                    >
-                      {t.setup.useEnvVarLabel}
-                    </button>
-                  </div>
-                  <label className="block">
-                    <span className="mb-1 block text-[11px] text-[#8a8a8a]">
-                      {t.setup.envVarNameLabel}
-                    </span>
+                {keyMode === "paste" && (
+                  <>
                     <input
-                      type="text"
-                      value={envName}
-                      onChange={(e) => setEnvName(e.target.value)}
-                      className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="sk-…"
+                      aria-label={t.setup.apiKeyLabel}
+                      className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]"
                     />
-                  </label>
-                  {keyMode === "paste" && (
-                    <>
-                      <input
-                        type="password"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder="sk-…"
-                        aria-label="API key"
-                        className="soyo-input w-full px-2.5 py-1.5 font-mono text-xs text-[#d9d9d9]"
-                      />
-                      <div className="text-[10.5px] leading-relaxed text-[#6e6e6e]">
-                        {t.setup.apiKeyHint}
-                      </div>
-                    </>
-                  )}
-                </div>
-              ) : (
-                <div className="rounded-[10px] border border-[#262626] bg-[#1a1a1a] p-3 text-[11px] text-[#8a8a8a]">
-                  {t.setup.noKeyNeeded}
-                </div>
-              )}
-            </div>
-          )}
-
-          {step === "permissions" && (
-            <div className="space-y-2" data-testid="setup-step-permissions">
-              <div className="mb-3 text-[12px] text-[#a3a3a3]">
-                {t.setup.stepPermissions}
+                    <div className="text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+                      {t.setup.apiKeyHint}
+                    </div>
+                  </>
+                )}
               </div>
-              {(
-                [
-                  ["auto", t.setup.permAuto, t.setup.permAutoHint],
-                  ["manual", t.setup.permManual, t.setup.permManualHint],
-                  ["bypass", t.setup.permBypass, t.setup.permBypassHint],
-                ] as const
-              ).map(([id, label, hint]) => (
+            ) : (
+              <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-3 text-[11px] text-[var(--text-tertiary)]">
+                {t.setup.noKeyNeeded}
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === "permissions" && (
+          <div className="space-y-2" data-testid="setup-step-permissions">
+            <div className="mb-3 text-[12px] text-[var(--text-secondary)]">
+              {t.setup.stepPermissions}
+            </div>
+            {(
+              [
+                ["auto", t.setup.permAuto, t.setup.permAutoHint],
+                ["manual", t.setup.permManual, t.setup.permManualHint],
+                ["bypass", t.setup.permBypass, t.setup.permBypassHint],
+              ] as const
+            ).map(([id, label, hint]) => {
+              const selected = permission === id;
+              const isBypass = id === "bypass";
+              return (
                 <button
                   key={id}
                   type="button"
                   onClick={() => setPermission(id)}
-                  className={`flex w-full items-start gap-3 rounded-[9px] border px-3.5 py-2.5 text-left transition-colors ${
-                    permission === id
-                      ? "border-[#d9a08e] bg-[#211d1b]"
-                      : "border-[#2b2b2b] bg-[#1a1a1a] hover:border-[#3a3a3a]"
+                  className={`flex w-full items-start gap-3 rounded-[var(--radius-md)] border px-3.5 py-2.5 text-left transition-colors ${
+                    selected
+                      ? isBypass
+                        ? "border-[var(--danger)] bg-[var(--danger-surface)]"
+                        : "border-[var(--accent)] bg-[var(--accent-surface)]"
+                      : "border-[var(--border)] bg-[var(--surface-raised)] hover:border-[var(--border-strong)]"
                   }`}
                 >
                   <span
                     className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ${
-                      permission === id
-                        ? "border-[#d9a08e] bg-[#d9a08e]"
-                        : "border-[#4a4a4a]"
+                      selected
+                        ? isBypass
+                          ? "border-[var(--danger)] bg-[var(--danger)] text-[var(--on-accent)]"
+                          : "border-[var(--accent)] bg-[var(--accent)] text-[var(--on-accent)]"
+                        : "border-[var(--border-strong)]"
                     }`}
                   >
-                    {permission === id && (
-                      <Check className="h-2.5 w-2.5 text-[#181818]" />
-                    )}
+                    {selected && <Check className="h-2.5 w-2.5" strokeWidth={2.2} />}
                   </span>
                   <span>
-                    <span className="block text-[12.5px] text-[#e8e8e8]">
+                    <span
+                      className={`block text-[12.5px] ${
+                        isBypass && selected
+                          ? "font-medium text-[var(--danger)]"
+                          : "text-[var(--text-primary)]"
+                      }`}
+                    >
                       {label}
                     </span>
-                    <span className="mt-0.5 block text-[11px] text-[#8a8a8a]">
+                    <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
                       {hint}
                     </span>
                   </span>
                 </button>
-              ))}
-            </div>
-          )}
-        </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between border-t border-[#232323] px-6 py-4">
-          <button
-            type="button"
-            disabled={stepIdx === 0 || applying}
+      {/* Footer */}
+      <div className="flex items-center justify-between border-t border-[var(--border-subtle)] px-6 py-4">
+        <button
+          type="button"
+          disabled={stepIdx === 0 || applying}
+          onClick={() => {
+            setErrorMsg(null);
+            setStepIdx((i) => Math.max(0, i - 1));
+          }}
+          className="inline-flex items-center gap-1.5 text-[12px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-30"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {t.setup.backLabel}
+        </button>
+        {stepIdx < STEPS.length - 1 ? (
+          <Button
+            variant="secondary"
+            size="md"
+            disabled={!canContinue}
             onClick={() => {
               setErrorMsg(null);
-              setStepIdx((i) => Math.max(0, i - 1));
+              setStepIdx((i) => Math.min(STEPS.length - 1, i + 1));
             }}
-            className="inline-flex items-center gap-1.5 text-[12px] text-[#8a8a8a] transition-colors hover:text-[#e8e8e8] disabled:opacity-30"
+            className="text-[var(--accent-text)]"
           >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {t.setup.backLabel}
-          </button>
-          {stepIdx < STEPS.length - 1 ? (
-            <button
-              type="button"
-              disabled={!canContinue}
-              onClick={() => {
-                setErrorMsg(null);
-                setStepIdx((i) => Math.min(STEPS.length - 1, i + 1));
-              }}
-              className="soyo-pill-btn inline-flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium text-[#d9a08e] disabled:opacity-40"
-            >
-              {t.setup.continueLabel}
-              <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={applying || !isTauri()}
-              onClick={() => void finish()}
-              className="inline-flex items-center gap-1.5 rounded-[8px] bg-[#d9a08e] px-4 py-1.5 text-[12px] font-semibold text-[#181818] transition-colors hover:bg-[#e2b3a4] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {applying ? t.setup.applyingLabel : t.setup.finishLabel}
-            </button>
-          )}
-        </div>
+            {t.setup.continueLabel}
+            <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            size="md"
+            disabled={applying || !isTauri()}
+            onClick={() => void finish()}
+          >
+            {applying && <SquaresLoader size={12} />}
+            {applying ? t.setup.applyingLabel : t.setup.finishLabel}
+          </Button>
+        )}
       </div>
-    </div>
+    </DialogShell>
   );
 }

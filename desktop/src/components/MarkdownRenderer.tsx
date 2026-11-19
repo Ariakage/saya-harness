@@ -4,8 +4,9 @@ import { createMermaidPlugin } from "@streamdown/mermaid";
 import { AlertTriangle, Code2, Eye, GitBranch } from "lucide-react";
 import { type ComponentProps, type ReactNode, useMemo } from "react";
 import { Streamdown, type MermaidErrorComponentProps } from "streamdown";
+import { getMessages } from "../lib/i18n";
 import { sanitizeDisplayText } from "../lib/sanitize";
-import type { MarkdownDisplayMode } from "../store/useAppStore";
+import { type MarkdownDisplayMode, useAppStore } from "../store/useAppStore";
 
 const MAX_MERMAID_BYTES = 8192;
 const MAX_MERMAID_LINES = 128;
@@ -23,17 +24,28 @@ const ALLOWED_MERMAID_STARTERS = [
   "erdiagram",
 ];
 
-const codePlugin = createCodePlugin({
+const codePluginDark = createCodePlugin({
   themes: ["github-dark", "github-dark"],
+});
+
+const codePluginLight = createCodePlugin({
+  themes: ["github-light", "github-light"],
 });
 
 const mathPlugin = createMathPlugin({
   singleDollarTextMath: true,
 });
 
-const mermaidPlugin = createMermaidPlugin({
+const mermaidPluginDark = createMermaidPlugin({
   config: {
     theme: "dark",
+    securityLevel: "strict",
+  },
+});
+
+const mermaidPluginLight = createMermaidPlugin({
+  config: {
+    theme: "default",
     securityLevel: "strict",
   },
 });
@@ -142,23 +154,23 @@ export function preprocessMarkdownForDisplay(raw: string): string {
 
 function MermaidFallbackCard({ chart, error }: MermaidErrorComponentProps) {
   return (
-    <div className="my-2 rounded-[10px] border border-[#4a3f2a] bg-[#1c1a15] p-3 text-xs">
-      <div className="mb-2 flex items-center justify-between gap-2 text-[#fac454]">
+    <div className="my-2 rounded-[10px] border border-[var(--warning)] bg-[var(--warning-surface)] p-3 text-xs">
+      <div className="mb-2 flex items-center justify-between gap-2 text-[var(--warning)]">
         <span className="inline-flex items-center gap-1.5 font-medium">
           <GitBranch className="h-3.5 w-3.5" />
           Mermaid
         </span>
-        <span className="soyo-pill py-0 text-[10px] uppercase tracking-wide text-[#fac454]">
+        <span className="soyo-pill py-0 text-[11px] uppercase tracking-wide text-[var(--warning)]">
           source fallback
         </span>
       </div>
       {error && (
-        <div className="mb-2 flex items-center gap-1 text-[11px] text-[#a3a3a3]">
-          <AlertTriangle className="h-3 w-3 shrink-0 text-[#fac454]" />
+        <div className="mb-2 flex items-center gap-1 text-[11px] text-[var(--text-secondary)]">
+          <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--warning)]" />
           <span>{sanitizeDisplayText(error)}</span>
         </div>
       )}
-      <pre className="overflow-x-auto rounded-[8px] border border-[#2e2820] bg-[#121110] p-2.5 text-xs text-[#c9c9c9]">
+      <pre className="overflow-x-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-code)] p-2.5 text-xs text-[var(--text-secondary)]">
         <code>{sanitizeDisplayText(chart)}</code>
       </pre>
     </div>
@@ -197,6 +209,9 @@ export function MarkdownRenderer({
   onToggleMode,
   showModeToggle = false,
 }: MarkdownRendererProps) {
+  const resolvedTheme = useAppStore((s) => s.resolvedTheme);
+  const locale = useAppStore((s) => s.locale);
+  const t = getMessages(locale);
   const sanitized = useMemo(() => sanitizeDisplayText(content), [content]);
   const prepared = useMemo(
     () => (mode === "render" ? preprocessMarkdownForDisplay(content) : sanitized),
@@ -211,14 +226,14 @@ export function MarkdownRenderer({
             <button
               type="button"
               onClick={onToggleMode}
-              className="soyo-pill-btn text-[11px] text-[#c9c9c9] hover:text-[#e8e8e8]"
+              className="soyo-pill-btn text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
               <Eye className="h-3 w-3" />
-              Render
+              {t.a11y.renderedView}
             </button>
           </div>
         )}
-        <pre className="overflow-x-auto whitespace-pre-wrap rounded-[10px] border border-[#262626] bg-[#161616] p-3 text-xs leading-relaxed text-[#c9d1d9]">
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-[10px] border border-[var(--border)] bg-[var(--surface-raised)] p-3 text-xs leading-relaxed text-[var(--text-primary)]">
           <code>{sanitized}</code>
         </pre>
       </div>
@@ -232,24 +247,33 @@ export function MarkdownRenderer({
           <button
             type="button"
             onClick={onToggleMode}
-            className="soyo-pill-btn text-[11px] text-[#a3a3a3] hover:text-[#e8e8e8]"
+            className="soyo-pill-btn text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           >
             <Code2 className="h-3 w-3" />
-            Source
+            {t.a11y.sourceView}
           </button>
         </div>
       )}
       <Streamdown
+        key={resolvedTheme}
         mode={streaming ? "streaming" : "static"}
         isAnimating={streaming}
         plugins={{
-          code: codePlugin,
-          mermaid: mermaidPlugin,
+          code: resolvedTheme === "light" ? codePluginLight : codePluginDark,
+          mermaid:
+            resolvedTheme === "light" ? mermaidPluginLight : mermaidPluginDark,
           math: mathPlugin,
         }}
-        shikiTheme={["github-dark", "github-dark"]}
+        shikiTheme={
+          resolvedTheme === "light"
+            ? ["github-light", "github-light"]
+            : ["github-dark", "github-dark"]
+        }
         mermaid={{
-          config: { theme: "dark", securityLevel: "strict" },
+          config: {
+            theme: resolvedTheme === "light" ? "default" : "dark",
+            securityLevel: "strict",
+          },
           errorComponent: MermaidFallbackCard,
         }}
         components={{
@@ -266,14 +290,14 @@ export function MarkdownRenderer({
                   ? "Math"
                   : "Code";
               return (
-                <div className="my-2 rounded-[10px] border border-[#4a3f2a] bg-[#1c1a15] p-3 text-xs">
-                  <div className="mb-1.5 flex items-center justify-between text-[#fac454]">
+                <div className="my-2 rounded-[10px] border border-[var(--warning)] bg-[var(--warning-surface)] p-3 text-xs">
+                  <div className="mb-1.5 flex items-center justify-between text-[var(--warning)]">
                     <span className="font-medium">{kindLabel}</span>
-                    <span className="soyo-pill text-[10px] uppercase tracking-wide text-[#fac454]">
+                    <span className="soyo-pill text-[11px] uppercase tracking-wide text-[var(--warning)]">
                       source fallback
                     </span>
                   </div>
-                  <pre className="overflow-x-auto rounded-[8px] border border-[#2e2820] bg-[#121110] p-2 text-xs text-[#c9c9c9]">
+                  <pre className="overflow-x-auto rounded-[8px] border border-[var(--border)] bg-[var(--surface-code)] p-2 text-xs text-[var(--text-secondary)]">
                     <code>{rawText}</code>
                   </pre>
                 </div>

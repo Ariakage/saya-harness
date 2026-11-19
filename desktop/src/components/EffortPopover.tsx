@@ -1,4 +1,4 @@
-import { ChevronUp, Gauge } from "lucide-react";
+import { AlertCircle, ChevronUp, Gauge } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -236,7 +236,7 @@ class GridField {
   burstCenters = new Float32Array(16);
   burstGains = new Float32Array(8).fill(0);
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, theme: "dark" | "light" = "dark") {
     this.canvas = canvas;
     const gl = canvas.getContext("webgl2", {
       alpha: true,
@@ -305,11 +305,25 @@ class GridField {
     this.buffer = buffer;
 
     gl.useProgram(program);
-    gl.uniform3f(this.u.uHot, 0.627, 0.588, 0.922);
-    gl.uniform3f(this.u.uCool, 1.0, 1.0, 1.0);
-    gl.uniform4f(this.u.uCharge0, 0.62, 0.5, 0.92, 1.0);
-    gl.uniform4f(this.u.uCharge1, 0.35, 0.25, 0.6, 1.0);
+    this.setTheme(theme);
     this.resize(1, 1, 1);
+  }
+
+  setTheme(theme: "dark" | "light") {
+    const { gl } = this;
+    gl.useProgram(this.program);
+    if (theme === "light") {
+      gl.uniform3f(this.u.uHot, 0.376, 0.278, 0.722);
+      gl.uniform3f(this.u.uCool, 0.118, 0.11, 0.102);
+      gl.uniform4f(this.u.uCharge0, 0.4, 0.3, 0.76, 1.0);
+      gl.uniform4f(this.u.uCharge1, 0.62, 0.55, 0.88, 1.0);
+    } else {
+      gl.uniform3f(this.u.uHot, 0.627, 0.588, 0.922);
+      gl.uniform3f(this.u.uCool, 1.0, 1.0, 1.0);
+      gl.uniform4f(this.u.uCharge0, 0.62, 0.5, 0.92, 1.0);
+      gl.uniform4f(this.u.uCharge1, 0.35, 0.25, 0.6, 1.0);
+    }
+    this.drawn = false;
   }
 
   private compile(type: number, source: string): WebGLShader {
@@ -455,6 +469,7 @@ export interface EffortPillProps {
   ultracodeEnabled: boolean;
   open: boolean;
   disabled?: boolean;
+  embedded?: boolean;
   onClick: () => void;
 }
 
@@ -463,6 +478,7 @@ export function EffortPill({
   ultracodeEnabled,
   open,
   disabled,
+  embedded = false,
   onClick,
 }: EffortPillProps) {
   const locale = useAppStore((s) => s.locale);
@@ -480,15 +496,21 @@ export function EffortPill({
       aria-expanded={open}
       aria-label={`${t.effort.pillPrefix}: ${levelText.name}`}
       data-testid="effort-pill"
-      className={`inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-[9px] text-[11px] transition-colors disabled:opacity-40 ${
-        isUltra
-          ? "border-[#a096eb]/30 bg-[#a096eb]/10 text-[#d5ceff] shadow-[0_0_20px_-9px_rgba(160,150,235,0.65)]"
-          : "border-[#2e2e2e] bg-[#1c1c1c] text-[#c9c9c9] hover:border-[#3e3e3e] hover:text-[#e8e8e8]"
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap px-[9px] text-[11px] transition-colors disabled:opacity-40 ${
+        embedded
+          ? isUltra
+            ? "h-full rounded-r-[var(--radius-md)] bg-[var(--ultra-surface)] text-[var(--ultra-bright)]"
+            : "h-full rounded-r-[var(--radius-md)] bg-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          : `h-[26px] rounded-[var(--radius-md)] border ${
+              isUltra
+                ? "border-[var(--ultra)] bg-[var(--ultra-surface)] text-[var(--ultra-bright)] shadow-[var(--shadow-sm)]"
+                : "border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+            }`
       }`}
     >
       <Gauge
         className={`h-3 w-3 shrink-0 ${
-          isUltra ? "text-[#b9aeff]" : "text-[#8a8a8a]"
+          isUltra ? "text-[var(--ultra-bright)]" : "text-[var(--text-tertiary)]"
         }`}
       />
       <span>{t.effort.pillPrefix}: {levelText.name}</span>
@@ -519,6 +541,8 @@ export function EffortPopover({
   onClose,
 }: EffortPopoverProps) {
   const locale = useAppStore((s) => s.locale);
+  const resolvedTheme = useAppStore((s) => s.resolvedTheme);
+  const reduceMotionPref = useAppStore((s) => s.reduceMotion);
   const t = getMessages(locale);
   const externalIndex = resolveEffortIndex(effort, ultracodeEnabled);
   const [selectedIndex, setSelectedIndex] = useState(externalIndex);
@@ -553,10 +577,11 @@ export function EffortPopover({
     travel: 224,
   });
 
-  const reduceMotion =
+  const prefersReducedMotion =
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const reduceMotion = reduceMotionPref || prefersReducedMotion;
 
   const updateGeometryState = useCallback(() => {
     const geom = geometryRef.current;
@@ -566,8 +591,11 @@ export function EffortPopover({
     setFillEndPx(fe);
     if (gridRef.current) {
       gridRef.current.setPos(fe / Math.max(1, geom.width));
+      if (reduceMotion) {
+        gridRef.current.render(0, 0.016);
+      }
     }
-  }, []);
+  }, [reduceMotion]);
 
   const measure = useCallback(() => {
     const trackEl = trackRef.current;
@@ -669,11 +697,11 @@ export function EffortPopover({
 
     measure();
 
-    if (reduceMotion || isJsdom) {
+    if (isJsdom) {
       setNoWebgl(true);
     } else if (canvasRef.current) {
       try {
-        const gf = new GridField(canvasRef.current);
+        const gf = new GridField(canvasRef.current, resolvedTheme);
         const geom = geometryRef.current;
         gf.resize(
           geom.width,
@@ -684,6 +712,9 @@ export function EffortPopover({
         gf.setLit(selectedRef.current === ULTRA_INDEX);
         gridRef.current = gf;
         setNoWebgl(false);
+        if (reduceMotion) {
+          gf.render(0, 0.016);
+        }
       } catch {
         gridRef.current = null;
         setNoWebgl(true);
@@ -740,7 +771,9 @@ export function EffortPopover({
       rafId = requestAnimationFrame(stepFrame);
     };
 
-    rafId = requestAnimationFrame(stepFrame);
+    if (!reduceMotion) {
+      rafId = requestAnimationFrame(stepFrame);
+    }
 
     let observer: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined" && trackRef.current) {
@@ -756,7 +789,15 @@ export function EffortPopover({
       gridRef.current?.dispose();
       gridRef.current = null;
     };
-  }, [open, measure, reduceMotion, isJsdom, updateGeometryState]);
+  }, [open, measure, reduceMotion, isJsdom, resolvedTheme, updateGeometryState]);
+
+  useEffect(() => {
+    if (!gridRef.current) return;
+    gridRef.current.setTheme(resolvedTheme);
+    if (reduceMotion) {
+      gridRef.current.render(0, 0.016);
+    }
+  }, [resolvedTheme, reduceMotion]);
 
   if (!open) {
     return null;
@@ -891,7 +932,7 @@ export function EffortPopover({
   return (
     <section
       ref={popoverRef}
-      aria-label="Effort settings"
+      aria-label={t.effort.header}
       data-testid="effort-popover"
       style={
         {
@@ -905,7 +946,7 @@ export function EffortPopover({
     >
       <div className="mb-3 flex min-h-[18px] items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-[12px] font-medium tracking-[0.005em] text-[#8a8a8a]">
+          <span className="text-[12px] font-medium tracking-[0.005em] text-[var(--text-tertiary)]">
             {t.effort.header}
           </span>
           <span className="ccs-level" data-testid="effort-level-label">
@@ -915,7 +956,7 @@ export function EffortPopover({
         <button
           type="button"
           className="ccs-help"
-          aria-label="About effort"
+          aria-label={t.a11y.aboutEffort}
           data-tip={t.effort.helpTip}
         >
           ?
@@ -923,7 +964,7 @@ export function EffortPopover({
       </div>
 
       <div
-        className="mx-[2px] mb-[7px] flex items-center justify-between gap-2 text-[11px] text-[#8a8a8a]"
+        className="mx-[2px] mb-[7px] flex items-center justify-between gap-2 text-[11px] text-[var(--text-tertiary)]"
         aria-hidden="true"
       >
         <span>{t.effort.faster}</span>
@@ -934,7 +975,7 @@ export function EffortPopover({
         ref={sliderRef}
         role="slider"
         tabIndex={0}
-        aria-label="Effort slider"
+        aria-label={t.a11y.effortSlider}
         aria-valuemin={0}
         aria-valuemax={ULTRA_INDEX}
         aria-valuenow={selectedIndex}
@@ -961,7 +1002,7 @@ export function EffortPopover({
                 key={lvl.id}
                 type="button"
                 title={t.effort.levels[lvl.id].name}
-                aria-label={`Set effort to ${lvl.name}`}
+                aria-label={t.a11y.setEffort(t.effort.levels[lvl.id].name)}
                 style={{ left: `${stopCenters[idx] ?? 10}px` }}
                 onPointerDown={(ev) => {
                   ev.stopPropagation();
@@ -987,27 +1028,29 @@ export function EffortPopover({
 
       <p
         className={`mx-[2px] mt-[10px] min-h-[34px] text-[11.5px] leading-[1.45] ${
-          activeLevelText.warning ? "text-[#fac454]" : "text-[#8a8a8a]"
+          activeLevelText.warning ? "text-[var(--warning)]" : "text-[var(--text-tertiary)]"
         }`}
       >
         {activeLevelText.warning ? (
-          <span className="mr-1.5 inline-grid h-[11px] w-[11px] place-items-center rounded-full border border-current text-[8px] font-semibold leading-none">
-            !
-          </span>
+          <AlertCircle
+            className="mr-1.5 inline h-3.5 w-3.5 shrink-0 align-text-bottom"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
         ) : null}
         {activeLevelText.warning ?? activeLevelText.desc}
       </p>
 
-      <div className="mt-3 flex items-center justify-between gap-3 border-t border-[#282828] pt-3">
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-[var(--border)] pt-3">
         <div className="min-w-0">
           <div
             className={`text-[12px] font-medium transition-colors ${
-              isUltra ? "text-[#b9aeff]" : "text-[#c9c9c9]"
+              isUltra ? "text-[var(--ultra-bright)]" : "text-[var(--text-secondary)]"
             }`}
           >
             {t.effort.ultracodeTitle}
           </div>
-          <p className="mt-0.5 text-[10.5px] leading-[1.4] text-[#8a8a8a]">
+          <p className="mt-0.5 text-[11px] leading-[1.4] text-[var(--text-tertiary)]">
             {t.effort.ultracodeDesc}
           </p>
         </div>
@@ -1015,7 +1058,7 @@ export function EffortPopover({
           type="button"
           role="switch"
           aria-checked={isUltra}
-          aria-label="Ultracode toggle"
+          aria-label={t.a11y.ultracodeToggle}
           disabled={disabled}
           onClick={() => startSpring(isUltra ? MAX_INDEX : ULTRA_INDEX, true)}
           className={`soyo-switch ${isUltra ? "is-ultra" : ""}`}

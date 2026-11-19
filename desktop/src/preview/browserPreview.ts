@@ -28,7 +28,8 @@ export type PreviewScene =
   | "usage"
   | "effort"
   | "browser"
-  | "subagent";
+  | "subagent"
+  | "settings";
 
 let installed = false;
 let currentScene: PreviewScene = "conversation";
@@ -312,12 +313,18 @@ export function getPreviewScene(): PreviewScene {
       param === "usage" ||
       param === "effort" ||
       param === "browser" ||
-      param === "subagent"
+      param === "subagent" ||
+      param === "settings"
     ) {
       currentScene = param;
     }
   }
   return currentScene;
+}
+
+export function getPreviewTab(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("tab");
 }
 
 export function setPreviewScene(scene: PreviewScene): void {
@@ -339,7 +346,7 @@ function buildBootstrap(scene: PreviewScene): BootstrapStateDto_Serialize {
           ? MARKDOWN_SHOWCASE_SESSION
           : CONVERSATION_SESSION;
   return {
-    version: "0.2.0",
+    version: "0.3.0",
     config_ready: true,
     config_path: "~/.config/soyo/config.toml",
     config_error: null,
@@ -707,10 +714,16 @@ export function installBrowserPreviewMock(): boolean {
     },
   ];
 
+  const initialThemeParam =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("theme")
+      : null;
   let previewPrefs = {
     nickname: "ariakage" as string | null,
     avatar_data: null as string | null,
-    theme: "system" as string | null,
+    theme: (initialThemeParam === "light" || initialThemeParam === "dark"
+      ? initialThemeParam
+      : "system") as string | null,
     font_size: 14 as number | null,
     conversation_font: "default" as string | null,
     reduce_motion: false as boolean | null,
