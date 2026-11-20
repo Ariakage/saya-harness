@@ -1,6 +1,6 @@
 # N6 工具发现、步骤验证与程序化编排验收
 
-**2026-11-20：DEV-090 至 DEV-096 已完成实现与双平台原生后端实测。联合矩阵（S2 按需发现 × S5 调用样例 × S3 步骤验证 × S1 默认关闭只读 REPL）通过；多文件只读任务开关对照实测完成；deny 动态注入与 check Hook 逐调用门禁均有持久化拒绝证据。S1 在 macOS Seatbelt 与 Linux Bubblewrap（aarch64 Ubuntu 24.04，bwrap 0.13.1）两端实跑通过；B2 受控外部 Node 引擎按 D-084 落地并在两个后端下实测。四平台远端 CI 以本记录提交后的推送结果为准。**
+**2026-11-20：DEV-090 至 DEV-096 已完成实现与双平台原生后端实测。联合矩阵（S2 按需发现 × S5 调用样例 × S3 步骤验证 × S1 默认关闭只读 REPL）通过；多文件只读任务开关对照实测完成；deny 动态注入与 check Hook 逐调用门禁均有持久化拒绝证据。S1 在 macOS Seatbelt 与 Linux Bubblewrap（aarch64 Ubuntu 24.04，bwrap 0.13.1）两端实跑通过；B2 受控外部 Node 引擎按 D-084 落地并在两个后端下实测。四平台远端 CI（run `44640448903`）六项任务全部 success。**
 
 任务范围见 [N6 规划](n6-plan.md)；安全契约与拍板见 `D-079`～`D-084`（[决策记录](decisions.md)）；JS 运行时评估见 [DEV-094 报告](reports/n6-js-runtime-eval-2026-11-20.md)。
 
@@ -52,9 +52,33 @@ Colima（macOS VZ）aarch64 Ubuntu 24.04 特权容器内实跑：Bubblewrap 0.13
 - `cargo test -p soyo-cli --test js_repl -- --test-threads=1`：**14 passed**（75.72s），覆盖 QuickJS 与 Node 双引擎在 Bubblewrap+Seccomp 下的全栈用例，含 Node 引擎沙箱内执行与桥接。
 - 低版本 bwrap 0.8（发行版默认包）按 `sandbox_capability_unavailable` 明确拒绝，符合 D-050 失败关闭约定。
 
+## 四平台远端矩阵（CI run 44640448903）
+
+推送 `1bef2da..89ca997` 触发的 CI run `44640448903` 六项任务全部 success：
+
+| 任务 | 结果 |
+| --- | --- |
+| macos-15（Apple Silicon） | success：含 `js_repl` 14 项（QuickJS＋Node 引擎 Seatbelt 内执行）、release smoke／journey／review_regressions／tui_journey |
+| macos-15-intel | success：同上 |
+| ubuntu-22.04（x86_64） | success：含 `js_repl` 14 项（Bubblewrap）与全部 journey 套件 |
+| ubuntu-22.04-arm | success：同上 |
+| Desktop frontend | success |
+| Advisory audit | success |
+
+矩阵收集期间发现并修复的**既有回归**（属 helper 迁移与 D-075/D-077 提交组，与 js_repl 无关，修复提交 `b016463`、`ba881c8`）：
+
+- helper socket 采用 `<state_dir>/helper/<fp>.sock`（D-077）后，journey 深层临时目录下路径超出 macOS `sun_path` 上限，helper 无法绑定 → `chat_via_helper` 回落 in-process 时遗留首个 `Console` reader，两个 tty 读者分尸输入并满 CPU 空转；`chat` 回落前 `drop(console)`，journey 改用 `SOYO_HELPER_DIR` 短路径（既有逃逸口）。
+- `tui_journey` 的 `MODE_COLORS` 仍是 D-075 调色板落地前的旧值（`13f2eef` 未同步），动画颜色断言必然失败 → 对齐新色板。
+- TUI `/new` 经 helper 的 `new_session` IPC 不携带模式，`--mode` 未持久化（`work_mode` 恒为 `work`）→ 远端建会话后按 `config.mode` 调 `set_work_mode` 对齐。
+- TUI `/permissions` 发送参数名 `mode`，与服务端契约 `permissions` 漂移 → 对齐。
+- helper `resume_session_for` 对已驻留空闲会话槽直接绑定新连接、不检查 `owner_conn_id` → `session_busy` 语义缺失，第二客户端可静默夺权；补 busy 检查并在接管时转移所有权。
+- 远端运行启动即被校验拒绝（如 `invalid_config`）时草稿不回填编辑器，与本地 `start_run` 同步失败语义不一致 → `finish` 在无观察结果失败时恢复草稿。
+
+更早几轮 run（`44614004687` 起）中 js_repl 相关用例在四平台均已通过；期间的 Node keg 依赖暴露与 merged-usr 顶层符号链接问题已分别由 `47dbc48`/`8487cfd`/`06f0e16`/`2ab5a93`/`1bef2da` 修复，ubuntu 的 `crashed_background_command` 时序失败为既有偶发 flake，本地与本轮均通过。
+
 ## 未覆盖边界
 
-- Windows／其余三平台以远端 CI 矩阵结果为准，本记录提交后补记。
+- Windows 未在矩阵内；Node 引擎在 Windows 平台未实测。
 - Node 引擎无 QuickJS 的引擎级抢占／内存硬中断，`--max-old-space-size`/`--stack-size`＋宿主墙钟与 SIGKILL 近似；CPU 死循环仅靠内核限额与宿主超时回收（D-084）。
 - 脚本内 `Promise.all` 可书写但桥接调用保持串行；写操作、`exec`、交互、多智能体协作显式排除在最小版本之外。
 
